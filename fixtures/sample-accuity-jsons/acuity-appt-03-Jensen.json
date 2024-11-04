@@ -1,0 +1,246 @@
+{
+    "id": 1354121133,
+    "firstName": "Jane",
+    "lastName": "Doh",
+    "phone": "5021234567",
+    "email": "jdoh@gmail.com",
+    "date": "November 5, 2024",
+    "time": "8:00pm",
+    "endTime": "8:45pm",
+    "dateCreated": "October 23, 2024",
+    "datetimeCreated": "2024-10-23T00:39:03-0500",
+    "datetime": "2024-11-05T20:00:00-0600",
+    "price": "0.00",
+    "priceSold": "0.00",
+    "paid": "no",
+    "amountPaid": "0.00",
+    "type": "Women\u2019s Fertility Care & Gynecology \u2502 Follow-Up",
+    "appointmentTypeID": 43702479,
+    "classID": null,
+    "addonIDs": [
+    ],
+    "category": " Women\u2019s Fertility Care & Gynecology",
+    "duration": "45",
+    "calendar": "Teresa Jensen, M.D.",
+    "calendarID": 6105112,
+    "certificate": null,
+    "confirmationPage": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "confirmationPagePaymentLink": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "location": "https:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ",
+    "notes": "",
+    "timezone": "America\/Chicago",
+    "calendarTimezone": "America\/Chicago",
+    "canceled": false,
+    "canClientCancel": true,
+    "canClientReschedule": true,
+    "labels": [
+        {
+            "id": 13627140,
+            "name": "\u2713 Ins",
+            "color": "pink"
+        }
+    ],
+    "forms": [
+        {
+            "id": 2151156,
+            "name": "Licensed States",
+            "values": [
+                {
+                    "id": 5407436727,
+                    "fieldID": 12016909,
+                    "value": "Illinois - IL",
+                    "name": "Please confirm the state you will be located in at the time of the appointment:"
+                }
+            ]
+        },
+        {
+            "id": 1252863,
+            "name": "Patient DOB, Gender, Height, & Weight",
+            "values": [
+                {
+                    "id": 5407436728,
+                    "fieldID": 6851254,
+                    "value": "01111992",
+                    "name": "Patient Date of Birth (MM\/DD\/YYYY)"
+                },
+                {
+                    "id": 5407436729,
+                    "fieldID": 8786185,
+                    "value": "Female",
+                    "name": "Patient Sex"
+                },
+                {
+                    "id": 5407436730,
+                    "fieldID": 13188233,
+                    "value": "5'10",
+                    "name": "Patient Height"
+                },
+                {
+                    "id": 5407436731,
+                    "fieldID": 13188234,
+                    "value": "150",
+                    "name": "Patient Weight"
+                }
+            ]
+        },
+        {
+            "id": 1249290,
+            "name": "Billing Address (Required)",
+            "values": [
+                {
+                    "id": 5407436732,
+                    "fieldID": 6829675,
+                    "value": "123 Main Street",
+                    "name": "Address"
+                },
+                {
+                    "id": 5407436733,
+                    "fieldID": 6829676,
+                    "value": "Apt 1",
+                    "name": "Address 2"
+                },
+                {
+                    "id": 5407436734,
+                    "fieldID": 6829677,
+                    "value": "Chicago",
+                    "name": "City"
+                },
+                {
+                    "id": 5407436735,
+                    "fieldID": 6829678,
+                    "value": "Illinois - IL",
+                    "name": "State"
+                },
+                {
+                    "id": 5407436736,
+                    "fieldID": 6829679,
+                    "value": "60613",
+                    "name": "Zip"
+                },
+                {
+                    "id": 5407436737,
+                    "fieldID": 7485296,
+                    "value": "infertility",
+                    "name": "What is the primary reason for making this appointment?"
+                },
+                {
+                    "id": 5407436738,
+                    "fieldID": 7485306,
+                    "value": "Internet search",
+                    "name": "How did you hear about MyCatholicDoctor?"
+                }
+            ]
+        },
+        {
+            "id": 1897939,
+            "name": "Payment Information",
+            "values": [
+                {
+                    "id": 5407436739,
+                    "fieldID": 10570320,
+                    "value": "yes",
+                    "name": "I have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/"
+                },
+                {
+                    "id": 5407436740,
+                    "fieldID": 11396379,
+                    "value": "\u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.",
+                    "name": "How do you wish to pay for your visit?"
+                },
+                {
+                    "id": 5407436741,
+                    "fieldID": 11408399,
+                    "value": "no",
+                    "name": "Do you have Medicare or Medicaid?"
+                }
+            ]
+        },
+        {
+            "id": 2047628,
+            "name": "Insurance Requirements",
+            "values": [
+                {
+                    "id": 5407436742,
+                    "fieldID": 11409448,
+                    "value": "yes",
+                    "name": "I agree with these requirements, which apply if I pay with insurance."
+                }
+            ]
+        },
+        {
+            "id": 1249288,
+            "name": "Insurance Information",
+            "values": [
+                {
+                    "id": 5407436743,
+                    "fieldID": 6829655,
+                    "value": "",
+                    "name": "Insurance Card(s) - FRONT"
+                },
+                {
+                    "id": 5407436744,
+                    "fieldID": 6829656,
+                    "value": "",
+                    "name": "Insurance Card(s) - BACK"
+                },
+                {
+                    "id": 5407436745,
+                    "fieldID": 10313278,
+                    "value": "",
+                    "name": "Policy Holder's Name (required)"
+                },
+                {
+                    "id": 5407436746,
+                    "fieldID": 10313279,
+                    "value": "",
+                    "name": "Policy Holder's Date of Birth (required)"
+                }
+            ]
+        },
+        {
+            "id": 1246783,
+            "name": "Terms & Conditions (Required)",
+            "values": [
+                {
+                    "id": 5407436747,
+                    "fieldID": 11019657,
+                    "value": "Jane Dohh",
+                    "name": "By typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment"
+                },
+                {
+                    "id": 5407436750,
+                    "fieldID": 7066090,
+                    "value": "",
+                    "name": "Add me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time."
+                }
+            ]
+        },
+        {
+            "id": 2047550,
+            "name": "What Happens After Scheduling:",
+            "values": [
+                {
+                    "id": 5407436748,
+                    "fieldID": 11408926,
+                    "value": "yes",
+                    "name": "I understand that I must enter a credit card on file in the intake forms which will be emailed to me. "
+                }
+            ]
+        },
+        {
+            "id": 2101181,
+            "name": "How long have you been married?",
+            "values": [
+                {
+                    "id": 5407436749,
+                    "fieldID": 11719207,
+                    "value": "2 yeares",
+                    "name": "How long have you been married?"
+                }
+            ]
+        }
+    ],
+    "formsText": "Name: Jane Doh\nPhone: (502) 123-4567\nEmail: jdoh@gmail.com\n\nLocation\n============\nhttps:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ\n\n\nLicensed States\n============\nPlease confirm the state you will be located in at the time of the appointment:: Illinois - IL\n\n\n\nPatient DOB, Gender, Height, & Weight\n============\nPatient Date of Birth (MM\/DD\/YYYY): 01111992\n\nPatient Sex: Female\n\nPatient Height: 5'10\n\nPatient Weight: 150\n\n\n\nBilling Address (Required)\n============\nAddress: 123 Main Street\n\nAddress 2: Apt 1\n\nCity: Chicago\n\nState: Illinois - IL\n\nZip: 60613\n\nWhat is the primary reason for making this appointment?: infertility\n\nHow did you hear about MyCatholicDoctor?: Internet search\n\n\n\nPayment Information\n============\nI have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/: yes\n\nHow do you wish to pay for your visit?: \u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.\n\nDo you have Medicare or Medicaid?: no\n\n\n\nInsurance Requirements\n============\nI agree with these requirements, which apply if I pay with insurance.: yes\n\n\n\nInsurance Information\n============\nInsurance Card(s) - FRONT: \n\nInsurance Card(s) - BACK: \n\nPolicy Holder's Name (required): \n\nPolicy Holder's Date of Birth (required): \n\n\n\nTerms & Conditions (Required)\n============\nBy typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment: Jane Dohh\n\nAdd me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time.: \n\n\n\nWhat Happens After Scheduling:\n============\nI understand that I must enter a credit card on file in the intake forms which will be emailed to me. : yes\n\n\n\nHow long have you been married?\n============\nHow long have you been married?: 2 yeares\n\n",
+    "isVerified": false,
+    "scheduledBy": null
+}

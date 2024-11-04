@@ -1,0 +1,246 @@
+{
+    "id": 1315251601,
+    "firstName": "Jane",
+    "lastName": "Cosmo",
+    "phone": "4061234567",
+    "email": "Jane.cosmo.s@myemail.com",
+    "date": "November 5, 2024",
+    "time": "5:00pm",
+    "endTime": "6:00pm",
+    "dateCreated": "August 16, 2024",
+    "datetimeCreated": "2024-08-16T15:05:37-0500",
+    "datetime": "2024-11-05T17:00:00-0500",
+    "price": "0.00",
+    "priceSold": "0.00",
+    "paid": "no",
+    "amountPaid": "0.00",
+    "type": "Women\u2019s Fertility Care & Gynecology \u2502 NaProTechnology: Initial Consult",
+    "appointmentTypeID": 11792340,
+    "classID": null,
+    "addonIDs": [
+    ],
+    "category": " Women\u2019s Fertility Care & Gynecology",
+    "duration": "60",
+    "calendar": "Megan Kreft, PA-C",
+    "calendarID": 4462252,
+    "certificate": null,
+    "confirmationPage": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "confirmationPagePaymentLink": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "location": "https:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ",
+    "notes": "",
+    "timezone": "America\/Denver",
+    "calendarTimezone": "America\/New_York",
+    "canceled": false,
+    "canClientCancel": true,
+    "canClientReschedule": true,
+    "labels": [
+        {
+            "id": 9041979,
+            "name": "\u2713\u2713",
+            "color": "green"
+        }
+    ],
+    "forms": [
+        {
+            "id": 2151156,
+            "name": "Licensed States",
+            "values": [
+                {
+                    "id": 5261128958,
+                    "fieldID": 12016909,
+                    "value": "Montana - MT",
+                    "name": "Please confirm the state you will be located in at the time of the appointment:"
+                }
+            ]
+        },
+        {
+            "id": 1252863,
+            "name": "Patient DOB, Gender, Height, & Weight",
+            "values": [
+                {
+                    "id": 5261128962,
+                    "fieldID": 6851254,
+                    "value": "02\/19\/2001",
+                    "name": "Patient Date of Birth (MM\/DD\/YYYY)"
+                },
+                {
+                    "id": 5261128965,
+                    "fieldID": 8786185,
+                    "value": "Female",
+                    "name": "Patient Sex"
+                },
+                {
+                    "id": 5261128968,
+                    "fieldID": 13188233,
+                    "value": "5ft4in",
+                    "name": "Patient Height"
+                },
+                {
+                    "id": 5261128971,
+                    "fieldID": 13188234,
+                    "value": "140",
+                    "name": "Patient Weight"
+                }
+            ]
+        },
+        {
+            "id": 1249290,
+            "name": "Billing Address (Required)",
+            "values": [
+                {
+                    "id": 5261128973,
+                    "fieldID": 6829675,
+                    "value": "123 Main St.",
+                    "name": "Address"
+                },
+                {
+                    "id": 5261128975,
+                    "fieldID": 6829676,
+                    "value": "",
+                    "name": "Address 2"
+                },
+                {
+                    "id": 5261128976,
+                    "fieldID": 6829677,
+                    "value": "SomeCity",
+                    "name": "City"
+                },
+                {
+                    "id": 5261128977,
+                    "fieldID": 6829678,
+                    "value": "Montana - MT",
+                    "name": "State"
+                },
+                {
+                    "id": 5261128978,
+                    "fieldID": 6829679,
+                    "value": "12345",
+                    "name": "Zip"
+                },
+                {
+                    "id": 5261128979,
+                    "fieldID": 7485296,
+                    "value": "Initial consult after Crms instructor saw potential problems in my cycle",
+                    "name": "What is the primary reason for making this appointment?"
+                },
+                {
+                    "id": 5261128980,
+                    "fieldID": 7485306,
+                    "value": "Friend or family member",
+                    "name": "How did you hear about MyCatholicDoctor?"
+                }
+            ]
+        },
+        {
+            "id": 1897939,
+            "name": "Payment Information",
+            "values": [
+                {
+                    "id": 5261128981,
+                    "fieldID": 10570320,
+                    "value": "yes",
+                    "name": "I have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/"
+                },
+                {
+                    "id": 5261128982,
+                    "fieldID": 11396379,
+                    "value": "\u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.",
+                    "name": "How do you wish to pay for your visit?"
+                },
+                {
+                    "id": 5261128983,
+                    "fieldID": 11408399,
+                    "value": "no",
+                    "name": "Do you have Medicare or Medicaid?"
+                }
+            ]
+        },
+        {
+            "id": 2047628,
+            "name": "Insurance Requirements",
+            "values": [
+                {
+                    "id": 5261128984,
+                    "fieldID": 11409448,
+                    "value": "yes",
+                    "name": "I agree with these requirements, which apply if I pay with insurance."
+                }
+            ]
+        },
+        {
+            "id": 1249288,
+            "name": "Insurance Information",
+            "values": [
+                {
+                    "id": 5261128985,
+                    "fieldID": 6829655,
+                    "value": "https:\/\/acuityscheduling-client-assets-us-west-2.s3.us-west-2.amazonaws.com\/XYZ",
+                    "name": "Insurance Card(s) - FRONT"
+                },
+                {
+                    "id": 5261128986,
+                    "fieldID": 6829656,
+                    "value": "https:\/\/acuityscheduling-client-assets-us-west-2.s3.us-west-2.amazonaws.com\/XYZ",
+                    "name": "Insurance Card(s) - BACK"
+                },
+                {
+                    "id": 5261128987,
+                    "fieldID": 10313278,
+                    "value": "BOBBY Cosmo",
+                    "name": "Policy Holder's Name (required)"
+                },
+                {
+                    "id": 5261128988,
+                    "fieldID": 10313279,
+                    "value": "01\/17\/2000",
+                    "name": "Policy Holder's Date of Birth (required)"
+                }
+            ]
+        },
+        {
+            "id": 1246783,
+            "name": "Terms & Conditions (Required)",
+            "values": [
+                {
+                    "id": 5261128989,
+                    "fieldID": 11019657,
+                    "value": "Jane Cosmo",
+                    "name": "By typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment"
+                },
+                {
+                    "id": 5261128992,
+                    "fieldID": 7066090,
+                    "value": "",
+                    "name": "Add me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time."
+                }
+            ]
+        },
+        {
+            "id": 2047550,
+            "name": "What Happens After Scheduling:",
+            "values": [
+                {
+                    "id": 5261128990,
+                    "fieldID": 11408926,
+                    "value": "yes",
+                    "name": "I understand that I must enter a credit card on file in the intake forms which will be emailed to me. "
+                }
+            ]
+        },
+        {
+            "id": 2101181,
+            "name": "How long have you been married?",
+            "values": [
+                {
+                    "id": 5261128991,
+                    "fieldID": 11719207,
+                    "value": "2",
+                    "name": "How long have you been married?"
+                }
+            ]
+        }
+    ],
+    "formsText": "Name: Jane Cosmo\nPhone: (406) 123-4567\nEmail: Jane.cosmo.s@myemail.com\n\nLocation\n============\nhttps:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ\n\n\nLicensed States\n============\nPlease confirm the state you will be located in at the time of the appointment:: Montana - MT\n\n\n\nPatient DOB, Gender, Height, & Weight\n============\nPatient Date of Birth (MM\/DD\/YYYY): 02\/19\/2001\n\nPatient Sex: Female\n\nPatient Height: 5ft4in\n\nPatient Weight: 140\n\n\n\nBilling Address (Required)\n============\nAddress: 123 Main St.\n\nAddress 2: \n\nCity: SomeCity\n\nState: Montana - MT\n\nZip: 12345\n\nWhat is the primary reason for making this appointment?: Initial consult after Crms instructor saw potential problems in my cycle\n\nHow did you hear about MyCatholicDoctor?: Friend or family member\n\n\n\nPayment Information\n============\nI have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/: yes\n\nHow do you wish to pay for your visit?: \u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.\n\nDo you have Medicare or Medicaid?: no\n\n\n\nInsurance Requirements\n============\nI agree with these requirements, which apply if I pay with insurance.: yes\n\n\n\nInsurance Information\n============\nInsurance Card(s) - FRONT: https:\/\/secure.acuityscheduling.com\/admin\/intake-form-values?key=XYZ%3D\n\nInsurance Card(s) - BACK: https:\/\/secure.acuityscheduling.com\/admin\/intake-form-values?key=XYZ%3D\n\nPolicy Holder's Name (required): BOBBY Cosmo\n\nPolicy Holder's Date of Birth (required): 01\/17\/2000\n\n\n\nTerms & Conditions (Required)\n============\nBy typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment: Jane Cosmo\n\nAdd me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time.: \n\n\n\nWhat Happens After Scheduling:\n============\nI understand that I must enter a credit card on file in the intake forms which will be emailed to me. : yes\n\n\n\nHow long have you been married?\n============\nHow long have you been married?: 2\n\n",
+    "isVerified": false,
+    "scheduledBy": null
+}

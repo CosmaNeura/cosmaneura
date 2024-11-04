@@ -1,0 +1,234 @@
+{
+    "id": 1356089949,
+    "firstName": "Bob Smith",
+    "lastName": "Smith",
+    "phone": "6031234567",
+    "email": "bsmith@yahoo.com",
+    "date": "November 1, 2024",
+    "time": "4:00pm",
+    "endTime": "5:00pm",
+    "dateCreated": "October 26, 2024",
+    "datetimeCreated": "2024-10-26T13:23:49-0500",
+    "datetime": "2024-11-01T16:00:00-0400",
+    "price": "0.00",
+    "priceSold": "0.00",
+    "paid": "no",
+    "amountPaid": "0.00",
+    "type": "Virtual Primary Care \u2502 Follow-Up: Established Clients",
+    "appointmentTypeID": 11779154,
+    "classID": null,
+    "addonIDs": [
+    ],
+    "category": " Virtual Primary Care",
+    "duration": "60",
+    "calendar": "Terrance Hanlon, MD",
+    "calendarID": 6974004,
+    "certificate": null,
+    "confirmationPage": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "confirmationPagePaymentLink": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "location": "https:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ",
+    "notes": "",
+    "timezone": "America\/New_York",
+    "calendarTimezone": "America\/New_York",
+    "canceled": false,
+    "canClientCancel": true,
+    "canClientReschedule": true,
+    "labels": [
+        {
+            "id": 13627140,
+            "name": "\u2713 Ins",
+            "color": "pink"
+        }
+    ],
+    "forms": [
+        {
+            "id": 2151156,
+            "name": "Licensed States",
+            "values": [
+                {
+                    "id": 5415097775,
+                    "fieldID": 12016909,
+                    "value": "",
+                    "name": "Please confirm the state you will be located in at the time of the appointment:"
+                }
+            ]
+        },
+        {
+            "id": 1252863,
+            "name": "Patient DOB, Gender, Height, & Weight",
+            "values": [
+                {
+                    "id": 5415097776,
+                    "fieldID": 6851254,
+                    "value": "",
+                    "name": "Patient Date of Birth (MM\/DD\/YYYY)"
+                },
+                {
+                    "id": 5415097777,
+                    "fieldID": 8786185,
+                    "value": "",
+                    "name": "Patient Sex"
+                },
+                {
+                    "id": 5415097778,
+                    "fieldID": 13188233,
+                    "value": "",
+                    "name": "Patient Height"
+                },
+                {
+                    "id": 5415097779,
+                    "fieldID": 13188234,
+                    "value": "",
+                    "name": "Patient Weight"
+                }
+            ]
+        },
+        {
+            "id": 1249290,
+            "name": "Billing Address (Required)",
+            "values": [
+                {
+                    "id": 5415097780,
+                    "fieldID": 6829675,
+                    "value": "",
+                    "name": "Address"
+                },
+                {
+                    "id": 5415097781,
+                    "fieldID": 6829676,
+                    "value": "",
+                    "name": "Address 2"
+                },
+                {
+                    "id": 5415097782,
+                    "fieldID": 6829677,
+                    "value": "",
+                    "name": "City"
+                },
+                {
+                    "id": 5415097783,
+                    "fieldID": 6829678,
+                    "value": "",
+                    "name": "State"
+                },
+                {
+                    "id": 5415097784,
+                    "fieldID": 6829679,
+                    "value": "",
+                    "name": "Zip"
+                },
+                {
+                    "id": 5415097785,
+                    "fieldID": 7485296,
+                    "value": "",
+                    "name": "What is the primary reason for making this appointment?"
+                },
+                {
+                    "id": 5415097786,
+                    "fieldID": 7485306,
+                    "value": "",
+                    "name": "How did you hear about MyCatholicDoctor?"
+                }
+            ]
+        },
+        {
+            "id": 1897939,
+            "name": "Payment Information",
+            "values": [
+                {
+                    "id": 5415097787,
+                    "fieldID": 11396379,
+                    "value": "",
+                    "name": "How do you wish to pay for your visit?"
+                },
+                {
+                    "id": 5415097793,
+                    "fieldID": 10570320,
+                    "value": "",
+                    "name": "I have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/"
+                },
+                {
+                    "id": 5415097794,
+                    "fieldID": 11408399,
+                    "value": "",
+                    "name": "Do you have Medicare or Medicaid?"
+                }
+            ]
+        },
+        {
+            "id": 1249288,
+            "name": "Insurance Information",
+            "values": [
+                {
+                    "id": 5415097788,
+                    "fieldID": 6829655,
+                    "value": "",
+                    "name": "Insurance Card(s) - FRONT"
+                },
+                {
+                    "id": 5415097789,
+                    "fieldID": 6829656,
+                    "value": "",
+                    "name": "Insurance Card(s) - BACK"
+                },
+                {
+                    "id": 5415097790,
+                    "fieldID": 10313278,
+                    "value": "",
+                    "name": "Policy Holder's Name (required)"
+                },
+                {
+                    "id": 5415097791,
+                    "fieldID": 10313279,
+                    "value": "",
+                    "name": "Policy Holder's Date of Birth (required)"
+                }
+            ]
+        },
+        {
+            "id": 1246783,
+            "name": "Terms & Conditions (Required)",
+            "values": [
+                {
+                    "id": 5415097792,
+                    "fieldID": 11019657,
+                    "value": "",
+                    "name": "By typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment"
+                },
+                {
+                    "id": 5415097796,
+                    "fieldID": 7066090,
+                    "value": "",
+                    "name": "Add me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time."
+                }
+            ]
+        },
+        {
+            "id": 2047628,
+            "name": "Insurance Requirements",
+            "values": [
+                {
+                    "id": 5415097795,
+                    "fieldID": 11409448,
+                    "value": "",
+                    "name": "I agree with these requirements, which apply if I pay with insurance."
+                }
+            ]
+        },
+        {
+            "id": 2047550,
+            "name": "What Happens After Scheduling:",
+            "values": [
+                {
+                    "id": 5415097797,
+                    "fieldID": 11408926,
+                    "value": "",
+                    "name": "I understand that I must enter a credit card on file in the intake forms which will be emailed to me. "
+                }
+            ]
+        }
+    ],
+    "formsText": "Name: Bob Smith Smith\nPhone: (603) 123-4567\nEmail: bsmith@yahoo.com\n\nLocation\n============\nhttps:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ\n\n\nLicensed States\n============\nPlease confirm the state you will be located in at the time of the appointment:: \n\n\n\nPatient DOB, Gender, Height, & Weight\n============\nPatient Date of Birth (MM\/DD\/YYYY): \n\nPatient Sex: \n\nPatient Height: \n\nPatient Weight: \n\n\n\nBilling Address (Required)\n============\nAddress: \n\nAddress 2: \n\nCity: \n\nState: \n\nZip: \n\nWhat is the primary reason for making this appointment?: \n\nHow did you hear about MyCatholicDoctor?: \n\n\n\nPayment Information\n============\nHow do you wish to pay for your visit?: \n\nI have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/: \n\nDo you have Medicare or Medicaid?: \n\n\n\nInsurance Information\n============\nInsurance Card(s) - FRONT: \n\nInsurance Card(s) - BACK: \n\nPolicy Holder's Name (required): \n\nPolicy Holder's Date of Birth (required): \n\n\n\nTerms & Conditions (Required)\n============\nBy typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment: \n\nAdd me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time.: \n\n\n\nInsurance Requirements\n============\nI agree with these requirements, which apply if I pay with insurance.: \n\n\n\nWhat Happens After Scheduling:\n============\nI understand that I must enter a credit card on file in the intake forms which will be emailed to me. : \n\n",
+    "isVerified": false,
+    "scheduledBy": "terrance.hanlon@mycatholicdoctor.com"
+}

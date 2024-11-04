@@ -1,0 +1,337 @@
+{
+    "id": 1353039148,
+    "firstName": "Cathy",
+    "lastName": "Chatty",
+    "phone": "6151234567",
+    "email": "CathyChatty18@yahoo.com",
+    "date": "November 11, 2024",
+    "time": "4:30pm",
+    "endTime": "5:00pm",
+    "dateCreated": "October 21, 2024",
+    "datetimeCreated": "2024-10-21T11:37:16-0500",
+    "datetime": "2024-11-11T16:30:00-0500",
+    "price": "0.00",
+    "priceSold": "0.00",
+    "paid": "no",
+    "amountPaid": "0.00",
+    "type": "TEACHING\/EDUCATION (Virtual): New Patient [30 minutes]",
+    "appointmentTypeID": 46814224,
+    "classID": null,
+    "addonIDs": [
+    ],
+    "category": "Dr. Bazger Life Flows - Appointments for ALL NEW PATIENTS",
+    "duration": "30",
+    "calendar": "Dr. Nickole Bazger",
+    "calendarID": 6439304,
+    "certificate": null,
+    "confirmationPage": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "confirmationPagePaymentLink": "https:\/\/app.acuityscheduling.com\/schedule.php?owner=XYZ",
+    "location": "https:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ",
+    "notes": "",
+    "timezone": "America\/Los_Angeles",
+    "calendarTimezone": "America\/New_York",
+    "canceled": false,
+    "canClientCancel": true,
+    "canClientReschedule": true,
+    "labels": [
+        {
+            "id": 13627224,
+            "name": "Insurance?",
+            "color": "pink"
+        }
+    ],
+    "forms": [
+        {
+            "id": 2151156,
+            "name": "Licensed States",
+            "values": [
+                {
+                    "id": 5403279395,
+                    "fieldID": 12016909,
+                    "value": "Michigan - MI",
+                    "name": "Please confirm the state you will be located in at the time of the appointment:"
+                }
+            ]
+        },
+        {
+            "id": 1252863,
+            "name": "Patient DOB, Gender, Height, & Weight",
+            "values": [
+                {
+                    "id": 5403279396,
+                    "fieldID": 6851254,
+                    "value": "09\/30\/2000",
+                    "name": "Patient Date of Birth (MM\/DD\/YYYY)"
+                },
+                {
+                    "id": 5403279397,
+                    "fieldID": 8786185,
+                    "value": "Female",
+                    "name": "Patient Sex"
+                },
+                {
+                    "id": 5403279398,
+                    "fieldID": 13188233,
+                    "value": "5\u20194",
+                    "name": "Patient Height"
+                },
+                {
+                    "id": 5403279399,
+                    "fieldID": 13188234,
+                    "value": "150",
+                    "name": "Patient Weight"
+                }
+            ]
+        },
+        {
+            "id": 1249290,
+            "name": "Billing Address (Required)",
+            "values": [
+                {
+                    "id": 5403279400,
+                    "fieldID": 6829675,
+                    "value": "123 Main Ave.",
+                    "name": "Address"
+                },
+                {
+                    "id": 5403279401,
+                    "fieldID": 6829676,
+                    "value": "",
+                    "name": "Address 2"
+                },
+                {
+                    "id": 5403279402,
+                    "fieldID": 6829677,
+                    "value": "Smallville",
+                    "name": "City"
+                },
+                {
+                    "id": 5403279403,
+                    "fieldID": 6829678,
+                    "value": "Michigan - MI",
+                    "name": "State"
+                },
+                {
+                    "id": 5403279404,
+                    "fieldID": 6829679,
+                    "value": "12345",
+                    "name": "Zip"
+                },
+                {
+                    "id": 5403279405,
+                    "fieldID": 7485296,
+                    "value": "I have seen Dr bazker in the past for my endometriosis. ",
+                    "name": "What is the primary reason for making this appointment?"
+                },
+                {
+                    "id": 5403279406,
+                    "fieldID": 7485306,
+                    "value": "Other",
+                    "name": "How did you hear about MyCatholicDoctor?"
+                }
+            ]
+        },
+        {
+            "id": 1897939,
+            "name": "Payment Information",
+            "values": [
+                {
+                    "id": 5403279407,
+                    "fieldID": 10570320,
+                    "value": "yes",
+                    "name": "I have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/"
+                },
+                {
+                    "id": 5403279408,
+                    "fieldID": 11396379,
+                    "value": "\u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.",
+                    "name": "How do you wish to pay for your visit?"
+                },
+                {
+                    "id": 5403279409,
+                    "fieldID": 11408399,
+                    "value": "yes",
+                    "name": "Do you have Medicare or Medicaid?"
+                }
+            ]
+        },
+        {
+            "id": 2047628,
+            "name": "Insurance Requirements",
+            "values": [
+                {
+                    "id": 5403279410,
+                    "fieldID": 11409448,
+                    "value": "yes",
+                    "name": "I agree with these requirements, which apply if I pay with insurance."
+                }
+            ]
+        },
+        {
+            "id": 1249288,
+            "name": "Insurance Information",
+            "values": [
+                {
+                    "id": 5403279411,
+                    "fieldID": 6829655,
+                    "value": "https:\/\/acuityscheduling-client-assets-us-west-2.s3.us-west-2.amazonaws.com\/XYZ",
+                    "name": "Insurance Card(s) - FRONT"
+                },
+                {
+                    "id": 5403279412,
+                    "fieldID": 6829656,
+                    "value": "https:\/\/acuityscheduling-client-assets-us-west-2.s3.us-west-2.amazonaws.com\/XYZ",
+                    "name": "Insurance Card(s) - BACK"
+                },
+                {
+                    "id": 5403279413,
+                    "fieldID": 10313278,
+                    "value": "Cathy Chatty",
+                    "name": "Policy Holder's Name (required)"
+                },
+                {
+                    "id": 5403279414,
+                    "fieldID": 10313279,
+                    "value": "09\/30\/2000",
+                    "name": "Policy Holder's Date of Birth (required)"
+                }
+            ]
+        },
+        {
+            "id": 1246783,
+            "name": "Terms & Conditions (Required)",
+            "values": [
+                {
+                    "id": 5403279415,
+                    "fieldID": 11019657,
+                    "value": "Cathy Chatty",
+                    "name": "By typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment"
+                },
+                {
+                    "id": 5403279450,
+                    "fieldID": 7066090,
+                    "value": "",
+                    "name": "Add me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time."
+                }
+            ]
+        },
+        {
+            "id": 2047550,
+            "name": "What Happens After Scheduling:",
+            "values": [
+                {
+                    "id": 5403279416,
+                    "fieldID": 11408926,
+                    "value": "yes",
+                    "name": "I understand that I must enter a credit card on file in the intake forms which will be emailed to me. "
+                }
+            ]
+        },
+        {
+            "id": 1993551,
+            "name": "Dr. Bazger Intake (Initial)",
+            "values": [
+                {
+                    "id": 5403279417,
+                    "fieldID": 11099602,
+                    "value": "Cycle Analysis or Chart Review",
+                    "name": "What is the primary purpose for this appointment?"
+                },
+                {
+                    "id": 5403279418,
+                    "fieldID": 11099603,
+                    "value": "September 20",
+                    "name": "Date of Last Menstrual Period:"
+                },
+                {
+                    "id": 5403279419,
+                    "fieldID": 11099604,
+                    "value": "3 months. ",
+                    "name": "How far apart are your periods?"
+                },
+                {
+                    "id": 5403279420,
+                    "fieldID": 11099605,
+                    "value": "5\u20194",
+                    "name": "Please list your height:"
+                },
+                {
+                    "id": 5403279421,
+                    "fieldID": 11099606,
+                    "value": "150",
+                    "name": "Please estimate your weight:"
+                },
+                {
+                    "id": 5403279422,
+                    "fieldID": 11099607,
+                    "value": "Endometriosis and PCOS. ",
+                    "name": "Any medical problems you have seen a doctor for:"
+                },
+                {
+                    "id": 5403279423,
+                    "fieldID": 11099608,
+                    "value": "Birth control ",
+                    "name": "Names and dosages of Medications:"
+                },
+                {
+                    "id": 5403279424,
+                    "fieldID": 11099609,
+                    "value": "Probiotic and tumeric ",
+                    "name": "Any supplements you are taking:"
+                },
+                {
+                    "id": 5403279426,
+                    "fieldID": 11099610,
+                    "value": "None ",
+                    "name": "Any allergies to medications:"
+                },
+                {
+                    "id": 5403279428,
+                    "fieldID": 11099611,
+                    "value": "Yes ",
+                    "name": "Any family history of breast, ovarian, uterine\/endometrial, or colon cancer:"
+                },
+                {
+                    "id": 5403279430,
+                    "fieldID": 11099612,
+                    "value": "Yes 3 ",
+                    "name": "Have you ever had a surgery?"
+                },
+                {
+                    "id": 5403279431,
+                    "fieldID": 11099613,
+                    "value": "Vegan",
+                    "name": "Do you follow a special diet?"
+                },
+                {
+                    "id": 5403279433,
+                    "fieldID": 11099614,
+                    "value": "Yes ",
+                    "name": "Do you have a regular exercise routine?"
+                },
+                {
+                    "id": 5403279437,
+                    "fieldID": 11099615,
+                    "value": "no",
+                    "name": "Have you ever achieved a pregnancy before?"
+                },
+                {
+                    "id": 5403279440,
+                    "fieldID": 11099616,
+                    "value": "no",
+                    "name": "Are you hoping to conceive at this time?"
+                },
+                {
+                    "id": 5403279443,
+                    "fieldID": 11099617,
+                    "value": "April 2024 ",
+                    "name": "When was your last annual exam (pap\/pelvic\/breast exam)?"
+                }
+            ]
+        }
+    ],
+    "formsText": "Name: Cathy Chatty\nPhone: (615) 123-4567\nEmail: CathyChatty18@yahoo.com\n\nLocation\n============\nhttps:\/\/mycatholicdoctor.com\/zoom\/meeting.php?m=XYZ\n\n\nLicensed States\n============\nPlease confirm the state you will be located in at the time of the appointment:: Michigan - MI\n\n\n\nPatient DOB, Gender, Height, & Weight\n============\nPatient Date of Birth (MM\/DD\/YYYY): 09\/30\/2000\n\nPatient Sex: Female\n\nPatient Height: 5\u20194\n\nPatient Weight: 150\n\n\n\nBilling Address (Required)\n============\nAddress: 123 Main Ave.\n\nAddress 2: \n\nCity: Smallville\n\nState: Michigan - MI\n\nZip: 12345\n\nWhat is the primary reason for making this appointment?: I have seen Dr bazker in the past for my endometriosis. \n\nHow did you hear about MyCatholicDoctor?: Other\n\n\n\nPayment Information\n============\nI have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\/mycatholicdoctor.com\/billing-payment\/: yes\n\nHow do you wish to pay for your visit?: \u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.\n\nDo you have Medicare or Medicaid?: yes\n\n\n\nInsurance Requirements\n============\nI agree with these requirements, which apply if I pay with insurance.: yes\n\n\n\nInsurance Information\n============\nInsurance Card(s) - FRONT: https:\/\/secure.acuityscheduling.com\/admin\/intake-form-values?key=XYZ%3D\n\nInsurance Card(s) - BACK: https:\/\/secure.acuityscheduling.com\/admin\/intake-form-values?key=XYZ%3D\n\nPolicy Holder's Name (required): Cathy Chatty\n\nPolicy Holder's Date of Birth (required): 09\/30\/2000\n\n\n\nTerms & Conditions (Required)\n============\nBy typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment: Cathy Chatty\n\nAdd me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time.: \n\n\n\nWhat Happens After Scheduling:\n============\nI understand that I must enter a credit card on file in the intake forms which will be emailed to me. : yes\n\n\n\nDr. Bazger Intake (Initial)\n============\nWhat is the primary purpose for this appointment?: Cycle Analysis or Chart Review\n\nDate of Last Menstrual Period:: September 20\n\nHow far apart are your periods?: 3 months. \n\nPlease list your height:: 5\u20194\n\nPlease estimate your weight:: 150\n\nAny medical problems you have seen a doctor for:: Endometriosis and PCOS. \n\nNames and dosages of Medications:: Birth control \n\nAny supplements you are taking:: Probiotic and tumeric \n\nAny allergies to medications:: None \n\nAny family history of breast, ovarian, uterine\/endometrial, or colon cancer:: Yes \n\nHave you ever had a surgery?: Yes 3 \n\nDo you follow a special diet?: Vegan\n\nDo you have a regular exercise routine?: Yes \n\nHave you ever achieved a pregnancy before?: no\n\nAre you hoping to conceive at this time?: no\n\nWhen was your last annual exam (pap\/pelvic\/breast exam)?: April 2024 \n\n",
+    "subCalendarID": 6442917,
+    "isVerified": false,
+    "scheduledBy": null
+}
