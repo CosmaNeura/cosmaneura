@@ -1,0 +1,24 @@
+• Please confirm the state you will be located in at the time of the appointment
+• Patient Date of Birth (MM/DD/YYYY)
+• Patient Sex
+• Patient Height
+• Patient Weight
+• Address
+• Address 2
+• City
+• State
+• Zip
+• What is the primary reason for making this appointment?
+• How did you hear about MyCatholicDoctor?
+• I have reviewed MyCatholicDoctor's Billing Policy?
+• How do you wish to pay for your visit?
+• Do you have Medicare or Medicaid?
+• I agree with these requirements, which apply if I pay with insurance?
+• Insurance Card(s) - FRONT
+• Insurance Card(s) - BACK
+• Policy Holder's Name
+• Policy Holder's Date of Birth
+• Agreement to terms of use, privacy policy and consent to treatment
+• Add me to your mailing list?
+• I understand that I must enter a credit card on file in the intake forms?
+• How long have you been married?

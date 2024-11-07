@@ -1,0 +1,39 @@
+* Please confirm the state you will be located in at the time of the appointment
+* Patient Date of Birth (MM/DD/YYYY)
+* Patient Sex
+* Patient Height
+* Patient Weight
+* Address
+* Address 2
+* City
+* State
+* Zip
+* What is the primary reason for making this appointment?
+* How did you hear about MyCatholicDoctor?
+* I have reviewed MyCatholicDoctor's Billing Policy?
+* How do you wish to pay for your visit?
+* Do you have Medicare or Medicaid?
+* I agree with these requirements, which apply if I pay with insurance?
+* Insurance Card(s) - FRONT
+* Insurance Card(s) - BACK
+* Policy Holder's Name
+* Policy Holder's Date of Birth
+* Electronic certification of terms of use, privacy policy and consent to treatment
+* Add me to your mailing list?
+* I understand that I must enter a credit card on file?
+* What is the primary purpose for this appointment?
+* Date of Last Menstrual Period
+* How far apart are your periods?
+* Please list your height
+* Please estimate your weight
+* Any medical problems you have seen a doctor for
+* Names and dosages of Medications
+* Any supplements you are taking
+* Any allergies to medications
+* Any family history of breast, ovarian, uterine/endometrial, or colon cancer
+* Have you ever had a surgery?
+* Do you follow a special diet?
+* Do you have a regular exercise routine?
+* Have you ever achieved a pregnancy before?
+* Are you hoping to conceive at this time?
+* When was your last annual exam (pap/pelvic/breast exam)?
