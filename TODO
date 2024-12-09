@@ -1,0 +1,32 @@
+# v1: note taking
+
+- [ ] confirm baa on azure + openai, make sure we are all set
+- [ ] merge in project template
+- [ ] file upload
+  - [ ] need FE friendly azure creds
+  - [ ] backend model for audio uploads
+  - [ ] upload via FE and post resulting token to backend API which kicks off transcription job
+    - [ ] I think FE upload is The Way? https://stackoverflow.com/questions/67986754/upload-a-file-in-azure-blob-storage-using-react
+  - [ ] need sweep job to clear out (a) files after they are processed / expired (b) unattached files
+- [ ] transcribe
+  - [ ] job can just be a py module/class/function whatever that accepts a file model ID
+    - [ ] i.e. don't worry about celery details, for the initial write
+  - [ ] backend models for transcription data, etc
+  - [ ] job to delete / soft delete transcriptions
+- [ ] summarization
+  - [ ] models
+- [ ] tie into celery, make sure to handle openai outages
+- [ ] job monitoring (flower)
+- [ ] eval tooling, would be great to have this too
+- [ ] merge in ui work
+- [ ] prod deployment on azure
+
+# v2: intake
+
+- [ ] accuity integration
+  - [ ] ingest webhooks to keep schedule up to date
+  - [ ] assoicate schedule items with drs, can hopefully just use email
+- [ ] chat ui beta / review for john + co
+- [ ] unique link gen for each patient, automatically expiring links
+- [ ] model for transcript data store
+- [ ] summarization job
