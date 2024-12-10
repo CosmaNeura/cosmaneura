@@ -1,13 +1,34 @@
-# v1: note taking
+# v0: manual upload
+
+## davidlaprade
+
+- [ ] sharepoint for each doctor for manually run via computer
+- [ ] doctor names audio file with name, name of patient, and event type
+  - [ ] "08/20 - John Doe"
+- [ ] log everything required for HIPPA
+- [ ] data model for the note
+- [ ] push locally run scripts to production database
+- [ ] job to hit the deidentification service
+
+## mbianco
+
+- [ ] azure terraform
+- [ ] staging environment
+- [ ] merge in project template
+- [ ] merge in ui work
+- [ ] prod deployment on azure
+- [ ] wire up the note taking ui to a data model
+
+# v1: automatic upload
 
 - [ ] confirm baa on azure + openai, make sure we are all set
-- [ ] merge in project template
-- [ ] file upload
+- [ ] file upload for recordings
   - [ ] need FE friendly azure creds
   - [ ] backend model for audio uploads
   - [ ] upload via FE and post resulting token to backend API which kicks off transcription job
     - [ ] I think FE upload is The Way? https://stackoverflow.com/questions/67986754/upload-a-file-in-azure-blob-storage-using-react
   - [ ] need sweep job to clear out (a) files after they are processed / expired (b) unattached files
+- [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
 - [ ] transcribe
   - [ ] job can just be a py module/class/function whatever that accepts a file model ID
     - [ ] i.e. don't worry about celery details, for the initial write
@@ -15,11 +36,17 @@
   - [ ] job to delete / soft delete transcriptions
 - [ ] summarization
   - [ ] models
-- [ ] tie into celery, make sure to handle openai outages
-- [ ] job monitoring (flower)
+- [ ] tie into celery, make sure to handle openai (And Assembly/Deepgram outages) outages
 - [ ] eval tooling, would be great to have this too
-- [ ] merge in ui work
-- [ ] prod deployment on azure
+- [ ] job monitoring (flower)
+
+## User Workflow
+
+1. User uploads audio in note taking inbox
+2. Upload goes to azure blob
+3. FE hits py API with blob ID
+4. py API kicks off transcription job
+5. job generates model which appears in the UI
 
 # v2: intake
 
@@ -30,3 +57,8 @@
 - [ ] unique link gen for each patient, automatically expiring links
 - [ ] model for transcript data store
 - [ ] summarization job
+
+# v3: example notes / settings
+
+- [ ] ui + jobs for uploading example notes
+- [ ] cost tracing for AI stuff?
