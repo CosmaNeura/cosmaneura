@@ -124,7 +124,7 @@ requirements *flags:
 
 # setup everything you need for local development
 [macos]
-setup: requirements && up py_setup db_seed js_build
+setup: requirements && py_setup db_seed js_build
 	# NOTE this task should be non-destructive, the user should opt-in to something like `nuke`
 
 	# some reasoning behind the logic here:
