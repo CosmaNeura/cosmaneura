@@ -41,7 +41,7 @@ set ignore-comments := true
 set unstable := true
 
 # used for image name, op vault access, etc
-PROJECT_NAME := "python-starter-template"
+PROJECT_NAME := "cosmaneura"
 
 # execute a command in the (nearly) exact same environment as CI
 EXECUTE_IN_TEST := "CI=true direnv exec ."
@@ -724,7 +724,7 @@ PYTHON_IMAGE_TAG := PYTHON_IMAGE_NAME + ":" + GIT_SHA
 JAVASCRIPT_IMAGE_NAME := PYTHON_IMAGE_NAME + "-javascript"
 JAVASCRIPT_IMAGE_TAG := JAVASCRIPT_IMAGE_NAME + ":" + GIT_SHA
 
-PYTHON_PRODUCTION_IMAGE_NAME := "ghcr.io/iloveitaly/python-starter-template"
+PYTHON_PRODUCTION_IMAGE_NAME := "ghcr.io/cosmaneura/cosmaneura"
 JAVASCRIPT_PRODUCTION_IMAGE_NAME := PYTHON_PRODUCTION_IMAGE_NAME + "-javascript"
 
 [script]
