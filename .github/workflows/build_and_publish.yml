@@ -9,9 +9,9 @@ on:
         description: "Run with tmate enabled (https://github.com/marketplace/actions/debugging-with-tmate)"
         required: false
         default: false
-  push:
-    branches: [master]
-  pull_request: {}
+  # push:
+  #   branches: [master]
+  # pull_request: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
