@@ -1,0 +1,26 @@
+.ipython_history
+.DS_Store
+.venv
+.pytest_cache
+.ruff_cache
+__pycache__
+.mypy_cache
+
+*.env.*.local
+
+/celerybeat-schedule
+
+/infra/.terraform*
+
+.nixpacks
+
+# for hacking on packages within this repo
+/pypi
+
+# for logs and other system-generated files that can be safely wiped
+/tmp/*
+
+# for scripts, dumps, etc that are strictly for personal use
+/playground/*
+
+/public

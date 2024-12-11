@@ -1,0 +1,75 @@
+# TODO OP config?
+
+_min_copier_version: 9.4.1
+
+_jinja_extensions:
+  - jinja2_shell_extension.ShellExtension
+
+_message_before_copy: >-
+  IMPORTANT!!
+
+  Install mise and docker before continuing.
+
+_message_after_copy: |
+  Next steps:
+
+    1. Configure all 1p secret references in .env.shared and friends
+    2. Run 'direnv exec . just setup' or 'direnv exec . just setup --extras'
+    3. Run 'direnv exec . just db_generate_migration "initial_commit"'
+    4. Run 'direnv exec . just py_dev' to start a dev server
+    5. Take a look at recommended shell hooks, etc
+
+
+project_slug:
+  type: str
+  help: Dash separated project slug
+  validator: >-
+    {% if not (project_slug | regex_search('^[a-z][a-z0-9-]+$')) %}
+    project_slug must start with a letter, followed one or more letters, digits or dashes all lowercase.
+    {% endif %}
+
+from_email:
+  type: str
+  help: The email account to send emails from, you can set it later in .env
+  default: noreply@example.com
+
+registry_base:
+  type: str
+  help: Base URL of the container registry to push to
+  default: "ghcr.io/{{ \"gh api user --jq '.login'\" | shell() | trim }}"
+
+production_image_name:
+  type: str
+  help: The production image name, with registry base, that the build system should push to
+  default: "{{ registry_base }}/{{ project_slug }}"
+
+one_password_account:
+  type: str
+  help: 'The domain of the 1password account to use. Example: "example.1password.com"'
+  default: "{{ \"op account list --format json | jq -r '.[0].url' || echo ''\" | shell() | trim }}"
+
+one_password_vault:
+  type: str
+  help: The UUID of the 1password vault to use
+  validator: >-
+    {% if not (one_password_vault | regex_search('^[a-zA-Z0-9]+$')) %}
+    one_password_vault must be a valid UUID from 1password
+    {% endif %}
+
+_exclude:
+  - metadata.json
+  - .github/workflows/repo-sync.yml
+  - TODO
+  - .git
+  - migrations/versions
+
+_tasks:
+  - git init
+  - rm README.md
+  - git add -A
+  - git commit -m "🎉 Initial commit"
+  - ["{{ _copier_python }}", .copier/bootstrap.py]
+  - git add -A
+
+# although it's annoying to have the .copier-answers.yml file in the root, it allows `copier update`
+# to work properly

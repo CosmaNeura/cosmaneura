@@ -1,0 +1,24 @@
+# NOTE yml config so we can use comments
+
+ignores:
+  - isbot
+  - react-router-devtools
+  - react-icons
+  # linting
+  - "@trivago/prettier-plugin-sort-imports"
+  - prettier
+  # referenced in eslint.config.js
+  - "@typescript-eslint/eslint-plugin"
+  # test
+  - "@vitest/coverage-v8"
+  # shadcn / styling
+  - postcss
+  - autoprefixer
+  # misc
+  - "@hey-api/client-fetch"
+  - "~"
+ignorePatterns:
+  - playground.ts
+specials:
+  - eslint
+  - prettier

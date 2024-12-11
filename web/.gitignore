@@ -1,0 +1,11 @@
+node_modules
+
+/.cache
+/build
+.env
+.react-router
+
+/client
+
+# TODO remove pending https://github.com/hey-api/openapi-ts/pull/1378
+openapi-ts-error*log

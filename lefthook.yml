@@ -1,0 +1,42 @@
+# Configuration: https://github.com/evilmartians/lefthook/blob/master/docs/configuration.md
+# Full list of hooks: https://git-scm.com/docs/githooks
+
+prepare-commit-msg:
+  commands:
+    aiautocommit:
+      run: aiautocommit commit --output-file "{1}"
+      interactive: true
+      env:
+        # without this, lefthook will run in an infinite loop
+        LEFTHOOK: 0
+        # ensures that LOG_LEVEL config of the current project does not interfere with aiautocommit
+        LOG_LEVEL: info
+        OPENAI_LOG: warn
+      skip:
+        merge:
+        rebase:
+        # only run this if the tool exists
+        run: ! which aiautocommit > /dev/null
+
+# Use this to validate commit messages
+commit-msg:
+  commands:
+    commitlint:
+      run: commitlint
+    skip:
+      # only run this if the tool exists, it's conditionally installed
+      # https://keisukeyamashita.github.io/commitlint-rs/
+      run: ! which commitlint > /dev/null
+
+
+# scripts cannot be to run Justfile recipes, they must reference a specific file
+pre-push:
+  parallel: true
+  commands:
+    py_lint:
+      glob: "*.py"
+      run: just py_lint {push_files}
+    js_lint:
+      # TODO because of the subdirectory, passing the file list here does not work as well :/ Need to prefix with ../ or something.
+      # run: just js_lint {push_files}
+      run: just js_lint
