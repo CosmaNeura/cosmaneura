@@ -1,0 +1,114 @@
+import { useState } from 'react';
+import { AppSidebar } from '@/components/app-sidebar';
+import { Download } from 'lucide-react';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '@/components/ui/breadcrumb';
+import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from '@/components/ui/sidebar';
+import { MessageContent } from '@/components/shared/MessageContent';
+import { SkeletonMessage } from '@/components/ui/skeleton-message';
+import { SkeletonMessageList } from '@/components/ui/skeleton-message-list';
+import { UploadRecordingButton } from '@/components/notes/UploadRecordingButton';
+import { useNavigation, useLoaderData } from 'react-router-dom';
+import { useOutletContext } from 'react-router-dom';
+import { PageTransition } from '@/components/page-transition';
+
+type ContextType = { onNavigate: (page: string) => void; currentPage: string };
+
+export default function NotePage() {
+  const { onNavigate, currentPage } = useOutletContext<ContextType>();
+  const { data } = useLoaderData() as { data: any };
+  const [isSOAPOpen, setIsSOAPOpen] = useState(false);
+  const [isNewPatientOpen, setIsNewPatientOpen] = useState(false);
+  const [isTelehealthSOAPOpen, setIsTelehealthSOAPOpen] = useState(false);
+  const [isTelehealthHPOpen, setIsTelehealthHPOpen] = useState(false);
+  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
+  const [selectedMail, setSelectedMail] = useState(null);
+  const navigation = useNavigation();
+  const isLoading = navigation.state === "loading";
+
+  const downloadNote = () => {
+    if (!selectedMail) return;
+    
+    const element = document.createElement('a');
+    const file = new Blob([selectedMail.content], { type: 'text/plain' });
+    element.href = URL.createObjectURL(file);
+    element.download = `${selectedMail.name.toLowerCase().replace(' ', '-')}-${selectedMail.date}.txt`;
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
+  };
+
+  return (
+    <PageTransition>
+      <SidebarProvider
+        style={
+          {
+            '--sidebar-width': '350px',
+          } as React.CSSProperties
+        }
+      >
+        <AppSidebar 
+          onMailSelect={setSelectedMail} 
+          selectedMail={selectedMail} 
+          onNavigate={onNavigate} 
+          currentPage={currentPage}
+          isLoading={isLoading}
+          loadingContent={<SkeletonMessageList />}
+          mails={data.mails}
+        />
+        <SidebarInset>
+          <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
+            <SidebarTrigger className="-ml-1" />
+            <Separator orientation="vertical" className="mr-2 h-4" />
+            <h1 className="text-lg font-semibold">
+              {selectedMail ? selectedMail.name : 'Select a patient'}
+            </h1>
+            <div className="ml-auto">
+              <UploadRecordingButton />
+            </div>
+          </header>
+          <div className="flex flex-col gap-4 p-4">
+            {isLoading ? (
+              <SkeletonMessage />
+            ) : selectedMail ? (
+              <div className="transition-all duration-300 ease-in-out transform translate-y-0 opacity-100">
+                <MessageContent
+                  mail={selectedMail}
+                  isSOAPOpen={isSOAPOpen}
+                  setIsSOAPOpen={setIsSOAPOpen}
+                  isNewPatientOpen={isNewPatientOpen}
+                  setIsNewPatientOpen={setIsNewPatientOpen}
+                  isTelehealthSOAPOpen={isTelehealthSOAPOpen}
+                  setIsTelehealthSOAPOpen={setIsTelehealthSOAPOpen}
+                  isTelehealthHPOpen={isTelehealthHPOpen}
+                  setIsTelehealthHPOpen={setIsTelehealthHPOpen}
+                  isTranscriptOpen={isTranscriptOpen}
+                  setIsTranscriptOpen={setIsTranscriptOpen}
+                />
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-[calc(100vh-5rem)]">
+                <div className="text-center text-muted-foreground">
+                  <h2 className="text-xl font-semibold mb-2">Select a patient</h2>
+                  <p className="text-sm">Choose a patient from the list to view their details</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </PageTransition>
+  );
+}

@@ -14,7 +14,7 @@
 
 - [ ] azure terraform
 - [ ] staging environment
-- [ ] merge in project template
+- [x] merge in project template
 - [ ] merge in ui work
 - [ ] prod deployment on azure
 - [ ] wire up the note taking ui to a data model
