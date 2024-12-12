@@ -1,4 +1,0 @@
-export PATH="$HOME/.local/bin:$PATH"
-
-eval "$(mise activate bash)"
-. .env.david
