@@ -4,6 +4,7 @@ import { useOutletContext } from "react-router"
 
 import { Send } from "lucide-react"
 
+import type { Route } from "./+types.home"
 import { AppSidebar } from "@/components/app-sidebar"
 import { PageTransition } from "@/components/page-transition"
 import { MessageContent } from "@/components/shared/MessageContent"
@@ -31,15 +32,22 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { mockData } from "@/data/mock"
 
-type ContextType = { onNavigate: (page: string) => void; currentPage: string }
+export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
+  return mockData
+}
 
-export default function IntakePage() {
-  const { onNavigate, currentPage } = useOutletContext<ContextType>()
-  const { data } = useLoaderData() as { data: any }
+// type ContextType = { onNavigate: (page: string) => void; currentPage: string }
+
+export default function IntakePage({ loaderData }: Route.ComponentProps) {
+  // const { onNavigate, currentPage } = useOutletContext<ContextType>()
+  // const { data } = useLoaderData() as { data: any }
+
   const [selectedMail, setSelectedMail] = useState(null)
   const [isAccuityIntakeOpen, setIsAccuityIntakeOpen] = useState(false)
   const [isIntakeTranscriptOpen, setIsIntakeTranscriptOpen] = useState(false)
+
   const navigation = useNavigation()
   const isLoading = navigation.state === "loading"
 
@@ -60,11 +68,11 @@ export default function IntakePage() {
         <AppSidebar
           onMailSelect={setSelectedMail}
           selectedMail={selectedMail}
-          onNavigate={onNavigate}
-          currentPage={currentPage}
+          // onNavigate={onNavigate}
+          // currentPage={currentPage}
           isLoading={isLoading}
           loadingContent={<SkeletonMessageList />}
-          mails={data.mails}
+          mails={loaderData && loaderData.mails}
         />
         <SidebarInset>
           <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
