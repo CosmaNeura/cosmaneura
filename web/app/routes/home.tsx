@@ -19,7 +19,7 @@ import {
 } from "~/components/ui/sidebar"
 import { getClient } from "~/configuration/clerk"
 import { applicationData } from "~/configuration/client"
-import IntakePage from "~/dashboard/intake"
+import IntakePage from "~/routes/intake"
 
 import type { Route } from "./+types.home"
 import { invariant } from "@epic-web/invariant"
