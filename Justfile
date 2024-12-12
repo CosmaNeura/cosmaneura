@@ -561,7 +561,7 @@ db_down:
 #######################
 
 # completely destroy the dev and test databases without running migrations
-db_reset: db_down db_up
+db_reset: db_down db_up db_migrate
 
 db_lint:
 	uv run alembic check
@@ -939,7 +939,7 @@ eval "$(just --completions $(basename $SHELL))"
 # export direnv variables as a bash script to avoid using direnv and mutating your environment configuration
 [macos]
 [script]
-bash_export:
+direnv_bash_export:
 	target_file=".env.$(whoami).local"
 
 	echo '{{BASH_EXPORT_PREAMBLE}}' > "$target_file"
