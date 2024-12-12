@@ -1,32 +1,37 @@
+import json
 import os
 import time
 import wave
-import json
-from openai import OpenAI
-from dotenv import load_dotenv
-from pydub import AudioSegment
 from textwrap import dedent
 
+import assemblyai as assembly
+from decouple import config
 from deepgram import (
     DeepgramClient,
-    PrerecordedOptions,
     FileSource,
+    PrerecordedOptions,
 )
+from openai import OpenAI
+from pydub import AudioSegment
 
-import assemblyai as assembly
+from app import log
 
-load_dotenv()
+log.info("hello, david", structure="me")
 
-deepgram_key = os.getenv("DEEPGRAM_API_KEY")
+deepgram_key = config("DEEPGRAM_API_KEY", cast=str)
 if not deepgram_key:
-    raise ValueError("API key not found. Please set DEEPGRAM_API_KEY in your .env file.")
+    raise ValueError(
+        "API key not found. Please set DEEPGRAM_API_KEY in your .env file."
+    )
 
-assembly_key = os.getenv("ASSEMBLY_API_KEY")
+assembly_key = config("ASSEMBLY_API_KEY", cast=str)
 if not assembly_key:
-    raise ValueError("API key not found. Please set ASSEMBLY_API_KEY in your .env file.")
+    raise ValueError(
+        "API key not found. Please set ASSEMBLY_API_KEY in your .env file."
+    )
 assembly.settings.api_key = assembly_key
 
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
@@ -44,15 +49,18 @@ openai = OpenAI(api_key=api_key)
 # - job 3
 #   - prompt 4o with transcript, example, and clinical note XML
 
+
 def convert_to_wav(input_file, output_file="converted.wav"):
     audio = AudioSegment.from_file(input_file)
     audio.export(output_file, format="wav")
     return output_file
 
+
 def extract_audio_from_mp4(mp4_path, output_audio_path="extracted_audio.wav"):
     audio = AudioSegment.from_file(mp4_path, format="mp4")
     audio.export(output_audio_path, format="wav")
     return output_audio_path
+
 
 # Split into 2 MB chunks.
 def split_audio(file_path, chunk_duration=10 * 1024 * 1024):
@@ -80,30 +88,29 @@ def split_audio(file_path, chunk_duration=10 * 1024 * 1024):
             frame_num += 1
         return chunks
 
+
 # Function to transcribe and concatenate results
 def transcribe_audio(file_path):
-    #----------------------------------------------------------
+    # ----------------------------------------------------------
     # ASSEMBLY AI Implementation
-    #----------------------------------------------------------
+    # ----------------------------------------------------------
     transcriber = assembly.Transcriber()
-    config = assembly.TranscriptionConfig(
-      speaker_labels=True,
-      speakers_expected=2
-    )
+    config = assembly.TranscriptionConfig(speaker_labels=True, speakers_expected=2)
 
-    print(f"Transcribing audio...")
+    print("Transcribing audio...")
     transcript = transcriber.transcribe(file_path, config)
     print(transcript)
 
-    if transcript.status == assembly.TranscriptStatus.error or transcript.utterances is None:
+    if (
+        transcript.status == assembly.TranscriptStatus.error
+        or transcript.utterances is None
+    ):
         print(f"Transcription failed: {transcript.error}")
         exit(1)
 
     # Identify speakers as doctor or patient.
-    print(f"Identifying speakers...")
-    sample = "\n".join([
-        f"{u.speaker}: {u.text}" for u in transcript.utterances[:10]
-    ])
+    print("Identifying speakers...")
+    sample = "\n".join([f"{u.speaker}: {u.text}" for u in transcript.utterances[:10]])
     classification = identify_doctor_from_transcript(sample)
     doctor_label = extract_doctor_classification(classification)
 
@@ -114,11 +121,11 @@ def transcribe_audio(file_path):
             label = "Doctor" if doctor_label == utterance.speaker else "Patient"
         full_transcription.append(f"{label}: {utterance.text}")
     return "\n".join(full_transcription)
-    #----------------------------------------------------------
+    # ----------------------------------------------------------
 
-    #----------------------------------------------------------
+    # ----------------------------------------------------------
     # DEEPGRAM Implementation
-    #----------------------------------------------------------
+    # ----------------------------------------------------------
     # try:
     #   # STEP 1 Create a Deepgram client using the API key
     #   deepgram = DeepgramClient(deepgram_key)
@@ -149,7 +156,7 @@ def transcribe_audio(file_path):
     #     print(f"Exception: {e}")
 
     # WHISPER implementation
-    #-------------------------------------------------------
+    # -------------------------------------------------------
     # if not file_path.lower().endswith(".wav"):
     #     print("Converting audio file to WAV format...")
     #     file_path = convert_to_wav(file_path)
@@ -173,7 +180,8 @@ def transcribe_audio(file_path):
     #     print(f"Error processing chunk: {e}")
     #     os.remove(chunk)
     # return " ".join(full_transcription)
-    #----------------------------------------------------------
+    # ----------------------------------------------------------
+
 
 def identify_doctor_from_transcript(transcript: str) -> str | None:
     prompt = dedent(f"""
@@ -195,8 +203,8 @@ def identify_doctor_from_transcript(transcript: str) -> str | None:
         model="gpt-4o-2024-08-06",
         messages=[
             {"role": "system", "content": "You are an assistant."},
-            {"role": "user", "content": prompt}
-        ]
+            {"role": "user", "content": prompt},
+        ],
     )
 
     reasoning = response.choices[0].message.content
@@ -204,7 +212,8 @@ def identify_doctor_from_transcript(transcript: str) -> str | None:
 
 
 def extract_doctor_classification(reasoning: str | None) -> str | None:
-    if reasoning is None: return None
+    if reasoning is None:
+        return None
     # TODO Use structured outputs instead of json mode. This allows for definition of
     # response schema with pydantic and better refusal handling.
     # https://platform.openai.com/docs/guides/structured-outputs
@@ -230,14 +239,16 @@ def extract_doctor_classification(reasoning: str | None) -> str | None:
         model="gpt-4o-2024-08-06",
         messages=[
             {"role": "system", "content": "You are an assistant."},
-            {"role": "user", "content": prompt}
+            {"role": "user", "content": prompt},
         ],
         response_format={"type": "json_object"},
     )
     # Parse and return the value of "doctor"
     response_content = response.choices[0].message.content
-    if response_content is None: return None
+    if response_content is None:
+        return None
     return json.loads(response_content)["doctor"]
+
 
 def save_transcription(transcript, output_path):
     try:
@@ -247,12 +258,17 @@ def save_transcription(transcript, output_path):
     except Exception as e:
         print(f"Error saving transcription: {e}")
 
+
 if __name__ == "__main__":
     import argparse
 
     # Command-line argument parsing
-    parser = argparse.ArgumentParser(description="Transcribe audio using OpenAI's Whisper API.")
-    parser.add_argument("audio_file", type=str, help="Path to the audio file to transcribe.")
+    parser = argparse.ArgumentParser(
+        description="Transcribe audio using OpenAI's Whisper API."
+    )
+    parser.add_argument(
+        "audio_file", type=str, help="Path to the audio file to transcribe."
+    )
     args = parser.parse_args()
     audio_file = args.audio_file
 
@@ -263,8 +279,7 @@ if __name__ == "__main__":
     if audio_file.lower().endswith(".mp4"):
         print("Extracting audio from MP4...")
         audio_file = extract_audio_from_mp4(
-          audio_file,
-          output_audio_path=f"temp_audio_{basename_no_ext}"
+            audio_file, output_audio_path=f"temp_audio_{basename_no_ext}"
         )
 
     transcript = transcribe_audio(audio_file)
@@ -281,5 +296,3 @@ if __name__ == "__main__":
         save_transcription(transcript, output_path)
     else:
         print("No transcription available.")
-
-

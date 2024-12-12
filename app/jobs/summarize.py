@@ -10,29 +10,26 @@
 # - add note to the information to indicate that the user consented to the call being recorded
 # - save the information to a file in a ./notes directory
 
+import json
 import os
 import time
-import json
 from textwrap import dedent
-from dotenv import load_dotenv
 
+from decouple import config
 from openai import OpenAI
 
-load_dotenv()
-
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
+
 
 # Build a structured prompt for creating a clinical note based on a transcript.
 # This is structured in the sense that it expects a JSON response with specific
 # fields. This may not be optimal for our usecase, but it's a good starting
 # point. See https://arxiv.org/html/2408.02442v3 for more information.
 def build_structured_prompt(
-    transcript: str,
-    example_note: dict[str, str],
-    note_schema: dict[str, str]
+    transcript: str, example_note: dict[str, str], note_schema: dict[str, str]
 ) -> str:
     return dedent(f"""
         You are a medical professional tasked with creating a clinical note based on a transcript from a medical encounter. Your goal is to accurately summarize the key information from the encounter in a structured, professional format.
@@ -70,10 +67,9 @@ def build_structured_prompt(
         Respond only in JSON format with the schema above.
     """)
 
+
 def write_clinical_note(
-    transcript: str,
-    example_note: dict[str, str],
-    note_schema: dict[str, str]
+    transcript: str, example_note: dict[str, str], note_schema: dict[str, str]
 ) -> dict[str, str] | None:
     prompt = build_structured_prompt(transcript, example_note, note_schema)
     print("Prompting 4o with:")
@@ -88,11 +84,12 @@ def write_clinical_note(
         messages=[{"role": "system", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0,
-        top_p=0.1
+        top_p=0.1,
     )
 
     content = response.choices[0].message.content
-    if content is None: return None
+    if content is None:
+        return None
 
     # TODO if content schema doesn't match note_schema, we need to retry.
 
@@ -100,6 +97,7 @@ def write_clinical_note(
     print(content)
 
     return json.loads(content)
+
 
 def save_note(note, output_path):
     try:
@@ -116,13 +114,16 @@ def save_note(note, output_path):
     except Exception as e:
         print(f"Error saving note: {e}")
 
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
         description="Create a draft clinical note from a call transcript and example note"
     )
-    parser.add_argument("schema", type=str, help="Path to desired note schema json file")
+    parser.add_argument(
+        "schema", type=str, help="Path to desired note schema json file"
+    )
     parser.add_argument("example", type=str, help="Path to the example note json file")
     parser.add_argument("transcript", type=str, help="Path to the transcript txt file")
     args = parser.parse_args()

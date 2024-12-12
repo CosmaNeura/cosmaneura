@@ -6,29 +6,29 @@
 
 import base64
 import io
-import os
 import json
+import os
 from textwrap import dedent
-from dotenv import load_dotenv
-from pdf2image import convert_from_path
+
 import PIL.Image
-
+from decouple import config
 from openai import OpenAI
+from pdf2image import convert_from_path
 
-load_dotenv()
-
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
+
 
 # Convert images to base64 in a data URI format so they can be sent via API.
 def get_img_uri(img: PIL.Image.Image) -> str:
     png_buffer = io.BytesIO()
     img.save(png_buffer, format="PNG")
     png_buffer.seek(0)
-    base64_png = base64.b64encode(png_buffer.read()).decode('utf-8')
+    base64_png = base64.b64encode(png_buffer.read()).decode("utf-8")
     return f"data:image/png;base64,{base64_png}"
+
 
 # Extract the fields from an example clinical note.
 def extract_note_fields(example_note: str) -> list[str] | None:
@@ -61,24 +61,22 @@ def extract_note_fields(example_note: str) -> list[str] | None:
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"{data_uri}"
-                       }
-                    } for data_uri in pdf_page_uris
-                ]
+                    {"type": "image_url", "image_url": {"url": f"{data_uri}"}}
+                    for data_uri in pdf_page_uris
+                ],
             },
         ],
         response_format={"type": "json_object"},
         # TODO I'm not sure if this is a good temperature or top_p.
         temperature=0,
-        top_p=0.1
+        top_p=0.1,
     )
 
     fields = response.choices[0].message.content
-    if fields is None: return None
+    if fields is None:
+        return None
     return json.loads(fields)["fields"]
+
 
 def explain_note_fields(fields: list[str]) -> dict[str, str] | None:
     prompt = dedent(f"""
@@ -109,12 +107,14 @@ def explain_note_fields(fields: list[str]) -> dict[str, str] | None:
         response_format={"type": "json_object"},
         # TODO I'm not sure if this is a good temperature or top_p.
         temperature=0,
-        top_p=0.1
+        top_p=0.1,
     )
 
     instructions = response.choices[0].message.content
-    if instructions is None: return None
+    if instructions is None:
+        return None
     return json.loads(instructions)
+
 
 def extract_note_content(example_note: str, fields: list[str]) -> dict[str, str] | None:
     # https://cookbook.openai.com/examples/parse_pdf_docs_for_rag
@@ -151,23 +151,20 @@ def extract_note_content(example_note: str, fields: list[str]) -> dict[str, str]
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"{data_uri}"
-                       }
-                    } for data_uri in pdf_page_uris
-                ]
+                    {"type": "image_url", "image_url": {"url": f"{data_uri}"}}
+                    for data_uri in pdf_page_uris
+                ],
             },
         ],
         response_format={"type": "json_object"},
         # TODO I'm not sure if this is a good temperature or top_p.
         temperature=0,
-        top_p=0.1
+        top_p=0.1,
     )
 
     content = response.choices[0].message.content
-    if content is None: return None
+    if content is None:
+        return None
     return json.loads(content)
 
 
@@ -177,7 +174,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Extract the schema and content from an example clinical note."
     )
-    parser.add_argument("example_note", type=str, help="Path to the example note pdf file")
+    parser.add_argument(
+        "example_note", type=str, help="Path to the example note pdf file"
+    )
     args = parser.parse_args()
 
     fields = extract_note_fields(args.example_note)
