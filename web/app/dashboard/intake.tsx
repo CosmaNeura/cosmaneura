@@ -1,6 +1,15 @@
-import { useState } from 'react';
-import { AppSidebar } from '@/components/app-sidebar';
-import { Send } from 'lucide-react';
+import { useState } from "react"
+import { useLoaderData, useNavigation } from "react-router"
+import { useOutletContext } from "react-router"
+
+import { Send } from "lucide-react"
+
+import { AppSidebar } from "@/components/app-sidebar"
+import { PageTransition } from "@/components/page-transition"
+import { MessageContent } from "@/components/shared/MessageContent"
+import { StatusBadge } from "@/components/shared/StatusBadge"
+import { SkeletonMessage } from "@/components/skeleton-message"
+import { SkeletonMessageList } from "@/components/skeleton-message-list"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -8,57 +17,50 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
+} from "@/components/ui/breadcrumb"
+import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
-} from '@/components/ui/sidebar';
-import { MessageContent } from '@/components/shared/MessageContent';
-import { SkeletonMessage } from '@/components/ui/skeleton-message';
-import { SkeletonMessageList } from '@/components/ui/skeleton-message-list';
-import { useNavigation, useLoaderData } from 'react-router-dom';
-import { useOutletContext } from 'react-router-dom';
-import { PageTransition } from '@/components/page-transition';
-import { StatusBadge } from '@/components/shared/StatusBadge';
+} from "@/components/ui/sidebar"
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/components/ui/tooltip"
 
-type ContextType = { onNavigate: (page: string) => void; currentPage: string };
+type ContextType = { onNavigate: (page: string) => void; currentPage: string }
 
 export default function IntakePage() {
-  const { onNavigate, currentPage } = useOutletContext<ContextType>();
-  const { data } = useLoaderData() as { data: any };
-  const [selectedMail, setSelectedMail] = useState(null);
-  const [isAccuityIntakeOpen, setIsAccuityIntakeOpen] = useState(false);
-  const [isIntakeTranscriptOpen, setIsIntakeTranscriptOpen] = useState(false);
-  const navigation = useNavigation();
-  const isLoading = navigation.state === "loading";
+  const { onNavigate, currentPage } = useOutletContext<ContextType>()
+  const { data } = useLoaderData() as { data: any }
+  const [selectedMail, setSelectedMail] = useState(null)
+  const [isAccuityIntakeOpen, setIsAccuityIntakeOpen] = useState(false)
+  const [isIntakeTranscriptOpen, setIsIntakeTranscriptOpen] = useState(false)
+  const navigation = useNavigation()
+  const isLoading = navigation.state === "loading"
 
   const resendIntake = () => {
     // Implement resend logic here
-    console.log('Resending intake...');
-  };
+    console.log("Resending intake...")
+  }
 
   return (
     <PageTransition>
       <SidebarProvider
         style={
           {
-            '--sidebar-width': '350px',
+            "--sidebar-width": "350px",
           } as React.CSSProperties
         }
       >
-        <AppSidebar 
-          onMailSelect={setSelectedMail} 
-          selectedMail={selectedMail} 
-          onNavigate={onNavigate} 
+        <AppSidebar
+          onMailSelect={setSelectedMail}
+          selectedMail={selectedMail}
+          onNavigate={onNavigate}
           currentPage={currentPage}
           isLoading={isLoading}
           loadingContent={<SkeletonMessageList />}
@@ -70,7 +72,7 @@ export default function IntakePage() {
             <Separator orientation="vertical" className="mr-2 h-4" />
             <Breadcrumb>
               <h1 className="text-lg font-semibold">
-                {selectedMail ? selectedMail.name : 'Select a patient'}
+                {selectedMail ? selectedMail.name : "Select a patient"}
               </h1>
             </Breadcrumb>
             <div className="ml-auto flex gap-2">
@@ -90,7 +92,8 @@ export default function IntakePage() {
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        Send an email or text to the patient asking them to fill out the intake form again
+                        Send an email or text to the patient asking them to fill
+                        out the intake form again
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -121,8 +124,12 @@ export default function IntakePage() {
             ) : (
               <div className="flex items-center justify-center h-[calc(100vh-5rem)]">
                 <div className="text-center text-muted-foreground">
-                  <h2 className="text-xl font-semibold mb-2">Select a patient</h2>
-                  <p className="text-sm">Choose a patient from the list to view their details</p>
+                  <h2 className="text-xl font-semibold mb-2">
+                    Select a patient
+                  </h2>
+                  <p className="text-sm">
+                    Choose a patient from the list to view their details
+                  </p>
                 </div>
               </div>
             )}
@@ -130,5 +137,5 @@ export default function IntakePage() {
         </SidebarInset>
       </SidebarProvider>
     </PageTransition>
-  );
+  )
 }

@@ -1,26 +1,28 @@
-import { AppSidebar } from '@/components/app-sidebar';
-import { Upload } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
+import { useOutletContext } from "react-router"
+
+import { Upload } from "lucide-react"
+
+import { AppSidebar } from "@/components/app-sidebar"
+import { PageTransition } from "@/components/page-transition"
+import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
-} from '@/components/ui/sidebar';
-import { useOutletContext } from 'react-router-dom';
-import { PageTransition } from '@/components/page-transition';
+} from "@/components/ui/sidebar"
 
-type ContextType = { onNavigate: (page: string) => void; currentPage: string };
+type ContextType = { onNavigate: (page: string) => void; currentPage: string }
 
 export default function SettingsPage() {
-  const { onNavigate, currentPage } = useOutletContext<ContextType>();
+  const { onNavigate, currentPage } = useOutletContext<ContextType>()
 
   return (
     <PageTransition>
       <SidebarProvider
         style={
           {
-            '--sidebar-width': '350px',
+            "--sidebar-width": "350px",
           } as React.CSSProperties
         }
       >
@@ -36,8 +38,9 @@ export default function SettingsPage() {
               <div className="space-y-2">
                 <h2 className="text-xl font-semibold text-left">Intake</h2>
                 <p className="text-sm text-muted-foreground text-left">
-                  Upload the best intake notes that patients have provided you in the past. 
-                  This will be used to create an intake process for each appointment type.
+                  Upload the best intake notes that patients have provided you
+                  in the past. This will be used to create an intake process for
+                  each appointment type.
                 </p>
               </div>
               <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-8">
@@ -46,7 +49,9 @@ export default function SettingsPage() {
                     <Upload className="h-4 w-4" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium">Drag & drop files here</p>
+                    <p className="text-sm font-medium">
+                      Drag & drop files here
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       or click to browse files
                     </p>
@@ -62,14 +67,16 @@ export default function SettingsPage() {
               <div className="space-y-2">
                 <h2 className="text-xl font-semibold text-left">Notetaking</h2>
                 <p className="text-sm text-muted-foreground text-left">
-                  Upload high quality examples of the different types of notes that you use. 
-                  These examples will be used to generate future notes for your patients, 
-                  so make sure they are a great representation of the structure and quality 
-                  of note that you want to see from your personalized AI!
+                  Upload high quality examples of the different types of notes
+                  that you use. These examples will be used to generate future
+                  notes for your patients, so make sure they are a great
+                  representation of the structure and quality of note that you
+                  want to see from your personalized AI!
                 </p>
                 <p className="text-sm text-muted-foreground text-left">
-                  For example: if you use the telehealth SOAP note, pick a high-quality note 
-                  for that note type and upload a PDF version of this note type.
+                  For example: if you use the telehealth SOAP note, pick a
+                  high-quality note for that note type and upload a PDF version
+                  of this note type.
                 </p>
               </div>
               <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border p-8">
@@ -78,7 +85,9 @@ export default function SettingsPage() {
                     <Upload className="h-4 w-4" />
                   </div>
                   <div className="text-center">
-                    <p className="text-sm font-medium">Drag & drop files here</p>
+                    <p className="text-sm font-medium">
+                      Drag & drop files here
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       or click to browse files
                     </p>
@@ -93,5 +102,5 @@ export default function SettingsPage() {
         </SidebarInset>
       </SidebarProvider>
     </PageTransition>
-  );
+  )
 }

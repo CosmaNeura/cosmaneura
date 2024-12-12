@@ -1,8 +1,19 @@
-import * as React from 'react';
-import { ArchiveX, Command, File, Inbox, Settings, Send, Trash2 } from 'lucide-react';
+import * as React from "react"
+import { useLocation } from "react-router"
 
-import { NavUser } from '@/components/nav-user';
-import { Label } from '@/components/ui/label';
+import {
+  ArchiveX,
+  Command,
+  File,
+  Inbox,
+  Send,
+  Settings,
+  Trash2,
+} from "lucide-react"
+
+import { StatusBadge } from "./status-badge"
+import { NavUser } from "@/components/nav-user"
+import { Label } from "@/components/ui/label"
 import {
   Sidebar,
   SidebarContent,
@@ -15,53 +26,51 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   useSidebar,
-} from '@/components/ui/sidebar';
-import { Switch } from '@/components/ui/switch';
-import { cn } from '@/lib/utils';
-import { mockData } from '@/data/mock';
-import { StatusBadge } from './status-badge';
-import { useLocation } from 'react-router-dom';
+} from "@/components/ui/sidebar"
+import { Switch } from "@/components/ui/switch"
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/components/ui/tooltip";
+} from "@/components/ui/tooltip"
+import { mockData } from "@/data/mock"
+import { cn } from "@/lib/utils"
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
-  onMailSelect?: (mail: any) => void;
-  selectedMail?: any;
-  onNavigate?: (page: string) => void;
-  currentPage?: string;
-  isLoading?: boolean;
-  loadingContent?: React.ReactNode;
+  onMailSelect?: (mail: any) => void
+  selectedMail?: any
+  onNavigate?: (page: string) => void
+  currentPage?: string
+  isLoading?: boolean
+  loadingContent?: React.ReactNode
 }
 
-export function AppSidebar({ 
-  onMailSelect, 
-  selectedMail, 
+export function AppSidebar({
+  onMailSelect,
+  selectedMail,
   onNavigate,
-  currentPage = 'intake',
+  currentPage = "intake",
   isLoading,
   loadingContent,
-  ...props 
+  ...props
 }: AppSidebarProps) {
-  const location = useLocation();
-  const { setOpen } = useSidebar();
-  const [mails, setMails] = React.useState(mockData.mails);
+  const location = useLocation()
+  const { setOpen } = useSidebar()
+  const [mails, setMails] = React.useState(mockData.mails)
 
   const getIcon = (iconName: string) => {
     switch (iconName) {
-      case 'Inbox':
-        return Inbox;
-      case 'File':
-        return File;
-      case 'Settings':
-        return Settings;
+      case "Inbox":
+        return Inbox
+      case "File":
+        return File
+      case "Settings":
+        return Settings
       default:
-        return File;
+        return File
     }
-  };
+  }
 
   return (
     <Sidebar
@@ -96,7 +105,7 @@ export function AppSidebar({
             <SidebarGroupContent className="px-1.5 md:px-0">
               <SidebarMenu>
                 {mockData.navMain.map((item) => {
-                  const Icon = getIcon(item.icon);
+                  const Icon = getIcon(item.icon)
                   return (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
@@ -106,10 +115,10 @@ export function AppSidebar({
                         }}
                         onClick={() => {
                           if (onNavigate) {
-                            onNavigate(item.page);
+                            onNavigate(item.page)
                           }
-                          if (location.pathname !== '/settings') {
-                            setOpen(true);
+                          if (location.pathname !== "/settings") {
+                            setOpen(true)
                           }
                         }}
                         isActive={currentPage === item.page}
@@ -119,7 +128,7 @@ export function AppSidebar({
                         <span>{item.title}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
-                  );
+                  )
                 })}
               </SidebarMenu>
             </SidebarGroupContent>
@@ -131,12 +140,12 @@ export function AppSidebar({
       </Sidebar>
 
       {/* Second sidebar - message list */}
-      {currentPage !== 'settings' && (
+      {currentPage !== "settings" && (
         <Sidebar collapsible="none" className="hidden flex-1 md:flex">
           <SidebarHeader className="gap-3.5 border-b p-4">
             <div className="flex w-full items-center justify-between">
               <div className="text-base font-medium text-foreground">
-                {currentPage === 'intake' ? 'Intake' : 'Notes'}
+                {currentPage === "intake" ? "Intake" : "Notes"}
               </div>
               <Label className="flex items-center gap-2 text-sm">
                 <span>Today</span>
@@ -148,40 +157,45 @@ export function AppSidebar({
           <SidebarContent>
             <SidebarGroup className="px-0">
               <SidebarGroupContent>
-                {isLoading ? (
-                  loadingContent
-                ) : (
-                  mails.map((mail) => (
-                    <button
-                      key={mail.email}
-                      onClick={() => onMailSelect?.(mail)}
-                      className={cn(
-                        "w-full flex flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                        selectedMail?.email === mail.email && "bg-sidebar-accent text-sidebar-accent-foreground"
-                      )}
-                    >
-                      <div className="flex w-full items-center justify-between gap-2">
-                        <span className="font-medium">{mail.name}</span>
-                        <span className="text-xs text-slate-500">{mail.date}</span>
-                      </div>
-                      <div className="flex w-full items-center justify-between gap-2">
-                        <span className="text-xs text-slate-500">{mail.location}</span>
-                        {currentPage === 'intake' && (
-                          <StatusBadge status={mail.status || "not-started"} />
+                {isLoading
+                  ? loadingContent
+                  : mails.map((mail) => (
+                      <button
+                        key={mail.email}
+                        onClick={() => onMailSelect?.(mail)}
+                        className={cn(
+                          "w-full flex flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                          selectedMail?.email === mail.email &&
+                            "bg-sidebar-accent text-sidebar-accent-foreground",
                         )}
-                      </div>
-                      <span className="font-medium">{mail.subject}</span>
-                      <span className="line-clamp-2 text-left w-[260px] whitespace-break-spaces text-xs text-slate-500">
-                        {mail.teaser}
-                      </span>
-                    </button>
-                  ))
-                )}
+                      >
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="font-medium">{mail.name}</span>
+                          <span className="text-xs text-slate-500">
+                            {mail.date}
+                          </span>
+                        </div>
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="text-xs text-slate-500">
+                            {mail.location}
+                          </span>
+                          {currentPage === "intake" && (
+                            <StatusBadge
+                              status={mail.status || "not-started"}
+                            />
+                          )}
+                        </div>
+                        <span className="font-medium">{mail.subject}</span>
+                        <span className="line-clamp-2 text-left w-[260px] whitespace-break-spaces text-xs text-slate-500">
+                          {mail.teaser}
+                        </span>
+                      </button>
+                    ))}
               </SidebarGroupContent>
             </SidebarGroup>
           </SidebarContent>
         </Sidebar>
       )}
     </Sidebar>
-  );
+  )
 }

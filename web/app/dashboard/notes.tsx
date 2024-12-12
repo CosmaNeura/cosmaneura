@@ -1,6 +1,14 @@
-import { useState } from 'react';
-import { AppSidebar } from '@/components/app-sidebar';
-import { Download } from 'lucide-react';
+import { useState } from "react"
+import { useLoaderData, useNavigation } from "react-router"
+import { useOutletContext } from "react-router"
+
+import { Download } from "lucide-react"
+
+import { AppSidebar } from "@/components/app-sidebar"
+import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
+import { PageTransition } from "@/components/page-transition"
+import { MessageContent } from "@/components/shared/MessageContent"
+import { SkeletonMessageList } from "@/components/skeleton-message-list"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -8,61 +16,55 @@ import {
   BreadcrumbList,
   BreadcrumbPage,
   BreadcrumbSeparator,
-} from '@/components/ui/breadcrumb';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
+} from "@/components/ui/breadcrumb"
+import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
-} from '@/components/ui/sidebar';
-import { MessageContent } from '@/components/shared/MessageContent';
-import { SkeletonMessage } from '@/components/ui/skeleton-message';
-import { SkeletonMessageList } from '@/components/ui/skeleton-message-list';
-import { UploadRecordingButton } from '@/components/notes/UploadRecordingButton';
-import { useNavigation, useLoaderData } from 'react-router-dom';
-import { useOutletContext } from 'react-router-dom';
-import { PageTransition } from '@/components/page-transition';
+} from "@/components/ui/sidebar"
+import { SkeletonMessage } from "@/components/ui/skeleton-message"
 
-type ContextType = { onNavigate: (page: string) => void; currentPage: string };
+type ContextType = { onNavigate: (page: string) => void; currentPage: string }
 
 export default function NotePage() {
-  const { onNavigate, currentPage } = useOutletContext<ContextType>();
-  const { data } = useLoaderData() as { data: any };
-  const [isSOAPOpen, setIsSOAPOpen] = useState(false);
-  const [isNewPatientOpen, setIsNewPatientOpen] = useState(false);
-  const [isTelehealthSOAPOpen, setIsTelehealthSOAPOpen] = useState(false);
-  const [isTelehealthHPOpen, setIsTelehealthHPOpen] = useState(false);
-  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false);
-  const [selectedMail, setSelectedMail] = useState(null);
-  const navigation = useNavigation();
-  const isLoading = navigation.state === "loading";
+  const { onNavigate, currentPage } = useOutletContext<ContextType>()
+  const { data } = useLoaderData() as { data: any }
+  const [isSOAPOpen, setIsSOAPOpen] = useState(false)
+  const [isNewPatientOpen, setIsNewPatientOpen] = useState(false)
+  const [isTelehealthSOAPOpen, setIsTelehealthSOAPOpen] = useState(false)
+  const [isTelehealthHPOpen, setIsTelehealthHPOpen] = useState(false)
+  const [isTranscriptOpen, setIsTranscriptOpen] = useState(false)
+  const [selectedMail, setSelectedMail] = useState(null)
+  const navigation = useNavigation()
+  const isLoading = navigation.state === "loading"
 
   const downloadNote = () => {
-    if (!selectedMail) return;
-    
-    const element = document.createElement('a');
-    const file = new Blob([selectedMail.content], { type: 'text/plain' });
-    element.href = URL.createObjectURL(file);
-    element.download = `${selectedMail.name.toLowerCase().replace(' ', '-')}-${selectedMail.date}.txt`;
-    document.body.appendChild(element);
-    element.click();
-    document.body.removeChild(element);
-  };
+    if (!selectedMail) return
+
+    const element = document.createElement("a")
+    const file = new Blob([selectedMail.content], { type: "text/plain" })
+    element.href = URL.createObjectURL(file)
+    element.download = `${selectedMail.name.toLowerCase().replace(" ", "-")}-${selectedMail.date}.txt`
+    document.body.appendChild(element)
+    element.click()
+    document.body.removeChild(element)
+  }
 
   return (
     <PageTransition>
       <SidebarProvider
         style={
           {
-            '--sidebar-width': '350px',
+            "--sidebar-width": "350px",
           } as React.CSSProperties
         }
       >
-        <AppSidebar 
-          onMailSelect={setSelectedMail} 
-          selectedMail={selectedMail} 
-          onNavigate={onNavigate} 
+        <AppSidebar
+          onMailSelect={setSelectedMail}
+          selectedMail={selectedMail}
+          onNavigate={onNavigate}
           currentPage={currentPage}
           isLoading={isLoading}
           loadingContent={<SkeletonMessageList />}
@@ -73,7 +75,7 @@ export default function NotePage() {
             <SidebarTrigger className="-ml-1" />
             <Separator orientation="vertical" className="mr-2 h-4" />
             <h1 className="text-lg font-semibold">
-              {selectedMail ? selectedMail.name : 'Select a patient'}
+              {selectedMail ? selectedMail.name : "Select a patient"}
             </h1>
             <div className="ml-auto">
               <UploadRecordingButton />
@@ -101,8 +103,12 @@ export default function NotePage() {
             ) : (
               <div className="flex items-center justify-center h-[calc(100vh-5rem)]">
                 <div className="text-center text-muted-foreground">
-                  <h2 className="text-xl font-semibold mb-2">Select a patient</h2>
-                  <p className="text-sm">Choose a patient from the list to view their details</p>
+                  <h2 className="text-xl font-semibold mb-2">
+                    Select a patient
+                  </h2>
+                  <p className="text-sm">
+                    Choose a patient from the list to view their details
+                  </p>
                 </div>
               </div>
             )}
@@ -110,5 +116,5 @@ export default function NotePage() {
         </SidebarInset>
       </SidebarProvider>
     </PageTransition>
-  );
+  )
 }
