@@ -9,9 +9,9 @@ on:
         description: "Run with tmate enabled (https://github.com/marketplace/actions/debugging-with-tmate)"
         required: false
         default: false
-  # push:
-  #   branches: [master]
-  # pull_request: {}
+  push:
+    branches: [master]
+  pull_request: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -86,7 +86,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [web, app]
-    if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
+    # if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
+    if: false
     permissions:
       packages: write
     steps:
