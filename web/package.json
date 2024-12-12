@@ -84,9 +84,9 @@
     "importOrderGroupNamespaceSpecifiers": true,
     "importOrder": [
       "^~/configuration$",
-      "./+types",
       "^[:alpha].*$",
-      "^~/",
+      "\\+types",
+      "^(~|@)/",
       "./"
     ],
     "plugins": [

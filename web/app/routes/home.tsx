@@ -2,6 +2,8 @@
 // import * as Route from "/.react-router/types/app/+types.root"
 import { type MetaFunction } from "react-router"
 
+import type { Route } from "./+types.home"
+
 import { AppSidebar } from "~/components/app-sidebar"
 import {
   Breadcrumb,
@@ -21,7 +23,6 @@ import { getClient } from "~/configuration/clerk"
 import { applicationData } from "~/configuration/client"
 import IntakePage from "~/routes/intake"
 
-import type { Route } from "./+types.home"
 import { invariant } from "@epic-web/invariant"
 
 export const meta: MetaFunction = () => {

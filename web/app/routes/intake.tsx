@@ -1,24 +1,17 @@
 import { useState } from "react"
-import { useLoaderData, useNavigation } from "react-router"
+import { useNavigation } from "react-router"
 import { useOutletContext } from "react-router"
 
 import { Send } from "lucide-react"
 
 import type { Route } from "./+types.home"
+
 import { AppSidebar } from "@/components/app-sidebar"
 import { PageTransition } from "@/components/page-transition"
 import { MessageContent } from "@/components/shared/MessageContent"
-import { StatusBadge } from "@/components/shared/StatusBadge"
 import { SkeletonMessage } from "@/components/skeleton-message"
 import { SkeletonMessageList } from "@/components/skeleton-message-list"
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "@/components/ui/breadcrumb"
+import { Breadcrumb } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import {
