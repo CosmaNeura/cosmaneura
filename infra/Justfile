@@ -1,0 +1,43 @@
+install:
+# opentofu
+	@if ! brew list | grep -q opentofu; then \
+		echo "Installing opentofu"; \
+		brew install opentofu; \
+	fi
+
+# azure cli
+	@if ! brew list | grep -q azure-cli; then \
+		echo "Installing azure-cli"; \
+		brew install azure-cli; \
+	fi
+
+upgrade:
+	az upgrade --yes
+	brew upgrade opentofu
+	tofu init -upgrade
+
+#######################
+# Production Deployment
+#######################
+
+# init each run to make sure latest package versions are pulled
+azure_apply:
+	tofu -chdir=infra apply -auto-approve
+
+azure_output:
+	tofu -chdir=infra output -json
+
+azure_shell:
+	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command zsh
+
+AZURE_RESOURCE_GROUP := "cosmaneura"
+AZURE_CONTAINER := "chowmetrics-scheduler"
+
+# instead of `heroku logs` we have this insane command we have to remember
+azure_logs:
+	az containerapp logs show --follow -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}}
+
+azure_exec:
+	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command "bash -l"
+
+# clean:
