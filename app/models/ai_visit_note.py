@@ -3,7 +3,7 @@ import uuid
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlmodel import JSON, Field, Relationship
+from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
 from .user import User

@@ -6,11 +6,6 @@ from textwrap import dedent
 
 import assemblyai as assembly
 from decouple import config
-from deepgram import (
-    DeepgramClient,
-    FileSource,
-    PrerecordedOptions,
-)
 from openai import OpenAI
 from pydub import AudioSegment
 
