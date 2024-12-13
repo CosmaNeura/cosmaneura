@@ -1,18 +1,8 @@
 import * as React from "react"
 import { useLocation } from "react-router"
 
-import {
-  ArchiveX,
-  Command,
-  File,
-  Inbox,
-  Send,
-  Settings,
-  Trash2,
-} from "lucide-react"
+import { Command, File, Inbox, Settings } from "lucide-react"
 
-import { StatusBadge } from "./status-badge"
-import { NavUser } from "@/components/nav-user"
 import { Label } from "@/components/ui/label"
 import {
   Sidebar,
@@ -28,14 +18,11 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { mockData } from "@/data/mock"
 import { cn } from "@/lib/utils"
+
+import { StatusBadge } from "./status-badge"
+import { UserButton } from "@clerk/clerk-react"
 
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   onMailSelect?: (mail: any) => void
@@ -135,7 +122,7 @@ export function AppSidebar({
           </SidebarGroup>
         </SidebarContent>
         <SidebarFooter>
-          <NavUser user={mockData.user} />
+          <UserButton />
         </SidebarFooter>
       </Sidebar>
 
