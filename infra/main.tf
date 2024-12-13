@@ -158,21 +158,9 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
   }
 }
 
-# resource "azurerm_postgresql_flexible_server_database" "production" {
-#   server_id = azurerm_postgresql_flexible_server.main.id
-
-#   name      = "production"
-#   collation = "en_US.utf8"
-#   charset   = "utf8"
-
-#   lifecycle {
-#     prevent_destroy = true
-#   }
-# }
-
-# # the following is required in order to expose the azure db to the public internet
-# # > if you don't specify delegated_subnet_id and private_dns_zone_id the server will be configured with Public access, but you also need to configure firewall rules because by default everything is denied
-# # https://github.com/hashicorp/terraform-provider-azurerm/issues/14989#issuecomment-1109897547
+# the following is required in order to expose the azure db to the public internet
+# > if you don't specify delegated_subnet_id and private_dns_zone_id the server will be configured with Public access, but you also need to configure firewall rules because by default everything is denied
+# https://github.com/hashicorp/terraform-provider-azurerm/issues/14989#issuecomment-1109897547
 
 # resource "azurerm_postgresql_flexible_server_firewall_rule" "azure" {
 #   count = 1
@@ -256,34 +244,38 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
 #   }
 # }
 
-# resource "azurerm_log_analytics_workspace" "main" {
+resource "azurerm_log_analytics_workspace" "main" {
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+
+  name = "cosmaneura-scheduler-logs"
+
+  # I literally can't find a description for the SKU options anywhere
+  # sku               = "PerGB2018"
+  retention_in_days = 30
+}
+
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/data-sources/container_app_environment
+resource "azurerm_container_app_environment" "main" {
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+
+  name = "${azurerm_resource_group.main.name}-app-environment"
+
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  #   kube_environment_id = azurerm_kubernetes_cluster.main.id
+}
+
+# TODO why can't we use the external secrets we defined?
+locals {
+  # NOTE `postgres://` cannot be used with python! It must be `postgresql://`
+  postgresql_connection_string = "postgresql://${azurerm_postgresql_flexible_server.main.administrator_login}:${azurerm_postgresql_flexible_server.main.administrator_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/production?sslmode=prefer"
+  redis_connection_string      = "rediss://:${azurerm_redis_cache.main.primary_access_key}@${azurerm_redis_cache.main.hostname}:${azurerm_redis_cache.main.ssl_port}?ssl_cert_reqs=optional"
+}
+
+# resource "azurerm_container_app" "cosmaneura_app_web" {
+#   resource_group_name = azurerm_resource_group.main.name
 #   location            = azurerm_resource_group.main.location
-#   resource_group_name = azurerm_resource_group.main.name
-
-#   name = "cosmaneura-scheduler-logs"
-#   # I literally can't find a description for the SKU options anywhere
-#   sku               = "PerGB2018"
-#   retention_in_days = 30
-# }
-
-# resource "azurerm_container_app_environment" "main" {
-#   resource_group_name = azurerm_resource_group.main.name
-#   location            = azurerm_resource_group.main.location
-
-#   name                       = "cosmaneura-environment"
-#   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
-#   #   kube_environment_id = azurerm_kubernetes_cluster.main.id
-# }
-
-# locals {
-#   # NOTE `postgres://` cannot be used with python! It must be `postgresql://`
-#   postgresql_connection_string = "postgresql://${azurerm_postgresql_flexible_server.main.administrator_login}:${azurerm_postgresql_flexible_server.main.administrator_password}@${azurerm_postgresql_flexible_server.main.fqdn}:5432/production?sslmode=prefer"
-#   redis_connection_string      = "rediss://:${azurerm_redis_cache.main.primary_access_key}@${azurerm_redis_cache.main.hostname}:${azurerm_redis_cache.main.ssl_port}?ssl_cert_reqs=optional"
-# }
-
-# resource "azurerm_container_app" "cosmaneura_scheduler" {
-#   resource_group_name = azurerm_resource_group.main.name
-#   # location            = azurerm_resource_group.main.location
 
 #   name                         = "cosmaneura-scheduler"
 #   container_app_environment_id = azurerm_container_app_environment.main.id
@@ -291,30 +283,25 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
 
 #   template {
 #     container {
-#       name  = "cosmaneura-scheduler"
+#       name  = "cosmaneura-web"
 #       image = "ghcr.io/cosmaneura/cosmaneura:latest"
 
 #       # args = [
 #       #   "celery",
 #       #   "-A", "tasks", "beat", "--loglevel=INFO"
 #       # ]
-#       args = [
-#         "celery -A tasks beat --loglevel=INFO"
-#       ]
+#       # args = [
+#       #   "celery -A tasks beat --loglevel=INFO"
+#       # ]
 
 #       # args = ["-A", "tasks", "beat", "--loglevel=INFO"]
 
 #       # in order to trigger a release each time you apply the terraform
 #       # without this, the latest version of a tag will not be deployed :/
-#       env {
-#         name  = "RELEASE_TIMESTAMP"
-#         value = timestamp()
-#       }
-
-#       env {
-#         name  = "LOG_LEVEL"
-#         value = "INFO"
-#       }
+#       # env {
+#       #   name  = "RELEASE_TIMESTAMP"
+#       #   value = timestamp()
+#       # }
 
 #       env {
 #         name  = "DATABASE_URL"
@@ -326,25 +313,10 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
 #         value = local.redis_connection_string
 #       }
 
-#       env {
-#         name  = "IPINFO_API_KEY"
-#         value = data.external.IPINFO_API_KEY.result["password"]
-#       }
-
-#       env {
-#         name  = "OPENAI_API_KEY"
-#         value = data.external.OPENAI_API_KEY.result["password"]
-#       }
-
-#       env {
-#         name  = "SENTRY_DSN"
-#         value = data.external.SENTRY_DSN.result["password"]
-#       }
-
-#       env {
-#         name  = "RADAR_API_KEY"
-#         value = data.external.RADAR_API_KEY.result["password"]
-#       }
+#       # env {
+#       #   name  = "IPINFO_API_KEY"
+#       #   value = data.external.IPINFO_API_KEY.result["password"]
+#       # }
 
 #       # yes, memory is defined as a string and CPU is defined as a float
 #       cpu    = 0.5
@@ -352,18 +324,18 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
 #     }
 #   }
 
-#   registry {
-#     # unlike other registry configs, this does NOT contain a protocol
-#     server   = "ghcr.io"
-#     username = "iloveitaly"
-#     # why do I need to register a secret separately?
-#     password_secret_name = "registry-secret"
-#   }
+#   # registry {
+#   #   # unlike other registry configs, this does NOT contain a protocol
+#   #   server   = "ghcr.io"
+#   #   username = "iloveitaly"
+#   #   # why do I need to register a secret separately?
+#   #   password_secret_name = "registry-secret"
+#   # }
 
-#   secret {
-#     name  = "registry-secret"
-#     value = var.GH_GHCR_TOKEN
-#   }
+#   # secret {
+#   #   name  = "registry-secret"
+#   #   value = var.GH_GHCR_TOKEN
+#   # }
 
 #   tags = var.tags
 
