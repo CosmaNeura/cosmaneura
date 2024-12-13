@@ -281,6 +281,16 @@ resource "azurerm_container_app" "cosmaneura_app_web" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   revision_mode                = "Single"
 
+  ingress {
+    external_enabled = true
+    target_port      = 8000
+
+    traffic_weight {
+      percentage      = 100
+      latest_revision = true
+    }
+  }
+
   template {
     container {
       name = "cosmaneura-web"
