@@ -182,6 +182,8 @@ if __name__ == "__main__":
     fields = extract_note_fields(args.example_note)
     print(fields)
 
+    assert fields
+
     instructions = explain_note_fields(fields)
     print(json.dumps(instructions, indent=2))
 

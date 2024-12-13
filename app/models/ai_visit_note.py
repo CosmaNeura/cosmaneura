@@ -35,4 +35,4 @@ class AIVisitNote(
 
     note_schema_id: uuid.UUID
 
-    note: dict = Field(sa_type=JSONB())
+    note: dict = Field(sa_type=JSONB())  # type: ignore
