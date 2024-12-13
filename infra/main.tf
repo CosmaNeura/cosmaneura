@@ -273,73 +273,73 @@ locals {
   redis_connection_string      = "rediss://:${azurerm_redis_cache.main.primary_access_key}@${azurerm_redis_cache.main.hostname}:${azurerm_redis_cache.main.ssl_port}?ssl_cert_reqs=optional"
 }
 
-# resource "azurerm_container_app" "cosmaneura_app_web" {
-#   resource_group_name = azurerm_resource_group.main.name
-#   location            = azurerm_resource_group.main.location
+resource "azurerm_container_app" "cosmaneura_app_web" {
+  resource_group_name = azurerm_resource_group.main.name
+  # location            = azurerm_resource_group.main.location
 
-#   name                         = "cosmaneura-scheduler"
-#   container_app_environment_id = azurerm_container_app_environment.main.id
-#   revision_mode                = "Single"
+  name                         = "${azurerm_resource_group.main.name}-app-web"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  revision_mode                = "Single"
 
-#   template {
-#     container {
-#       name  = "cosmaneura-web"
-#       image = "ghcr.io/cosmaneura/cosmaneura:latest"
+  template {
+    container {
+      name = "cosmaneura-web"
+      # image = "ghcr.io/cosmaneura/cosmaneura:latest"
+      image = "crccheck/hello-world:latest"
 
-#       # args = [
-#       #   "celery",
-#       #   "-A", "tasks", "beat", "--loglevel=INFO"
-#       # ]
-#       # args = [
-#       #   "celery -A tasks beat --loglevel=INFO"
-#       # ]
+      # args = [
+      #   "celery",
+      #   "-A", "tasks", "beat", "--loglevel=INFO"
+      # ]
+      # args = [
+      #   "celery -A tasks beat --loglevel=INFO"
+      # ]
 
-#       # args = ["-A", "tasks", "beat", "--loglevel=INFO"]
+      # args = ["-A", "tasks", "beat", "--loglevel=INFO"]
 
-#       # in order to trigger a release each time you apply the terraform
-#       # without this, the latest version of a tag will not be deployed :/
-#       # env {
-#       #   name  = "RELEASE_TIMESTAMP"
-#       #   value = timestamp()
-#       # }
+      # in order to trigger a release each time you apply the terraform
+      # without this, the latest version of a tag will not be deployed :/
+      # env {
+      #   name  = "RELEASE_TIMESTAMP"
+      #   value = timestamp()
+      # }
 
-#       env {
-#         name  = "DATABASE_URL"
-#         value = local.postgresql_connection_string
-#       }
+      env {
+        name  = "DATABASE_URL"
+        value = local.postgresql_connection_string
+      }
 
-#       env {
-#         name  = "REDIS_URL"
-#         value = local.redis_connection_string
-#       }
+      env {
+        name  = "REDIS_URL"
+        value = local.redis_connection_string
+      }
 
-#       # env {
-#       #   name  = "IPINFO_API_KEY"
-#       #   value = data.external.IPINFO_API_KEY.result["password"]
-#       # }
+      # env {
+      #   name  = "IPINFO_API_KEY"
+      #   value = data.external.IPINFO_API_KEY.result["password"]
+      # }
 
-#       # yes, memory is defined as a string and CPU is defined as a float
-#       cpu    = 0.5
-#       memory = "1Gi"
-#     }
-#   }
+      # yes, memory is defined as a string and CPU is defined as a float
+      cpu    = 0.5
+      memory = "1Gi"
+    }
+  }
 
-#   # registry {
-#   #   # unlike other registry configs, this does NOT contain a protocol
-#   #   server   = "ghcr.io"
-#   #   username = "iloveitaly"
-#   #   # why do I need to register a secret separately?
-#   #   password_secret_name = "registry-secret"
-#   # }
+  # registry {
+  #   # unlike other registry configs, this does NOT contain a protocol
+  #   server   = "ghcr.io"
+  #   username = "iloveitaly"
+  #   # why do I need to register a secret separately?
+  #   password_secret_name = "registry-secret"
+  # }
 
-#   # secret {
-#   #   name  = "registry-secret"
-#   #   value = var.GH_GHCR_TOKEN
-#   # }
+  # secret {
+  #   name  = "registry-secret"
+  #   value = var.GH_GHCR_TOKEN
+  # }
 
-#   tags = var.tags
-
-# }
+  tags = var.tags
+}
 
 # resource "azurerm_container_app" "cosmaneura_worker" {
 #   resource_group_name          = azurerm_resource_group.main.name
