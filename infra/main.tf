@@ -127,8 +127,8 @@ resource "azurerm_postgresql_flexible_server" "main" {
 
   # changing this forces a new resource to be created!
   # "Admin username cannot start with numbers and must only contain characters and numbers."
-  administrator_login    = ""
-  administrator_password = ""
+  administrator_login    = data.external.secrets.result["POSTGRES_USERNAME"]
+  administrator_password = data.external.secrets.result["POSTGRES_PASSWORD"]
 
   # in the API docs, only 14 is indicated, but 16 was released
   # https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-supported-versions
@@ -138,20 +138,25 @@ resource "azurerm_postgresql_flexible_server" "main" {
   tags = var.tags
 }
 
-# # https://support.hashicorp.com/hc/en-us/articles/4548903433235-Terraform-Enterprise-External-Services-mode-with-Azure-Database-for-PostgreSQL-Flexible-Server-Failed-to-Initialize-Plugins
-# # resource "azurerm_postgresql_flexible_server_configuration" "metabaseExtensions" {
-# #   name      = "azure.extensions"
-# #   server_id = azurerm_postgresql_flexible_server.main.id
-# #   value     = "CITEXT,HSTORE,UUID-OSSP"
-# # }
-
-# resource "azurerm_postgresql_flexible_server_database" "cosmaneura" {
+# https://support.hashicorp.com/hc/en-us/articles/4548903433235-Terraform-Enterprise-External-Services-mode-with-Azure-Database-for-PostgreSQL-Flexible-Server-Failed-to-Initialize-Plugins
+# resource "azurerm_postgresql_flexible_server_configuration" "metabaseExtensions" {
+#   name      = "azure.extensions"
 #   server_id = azurerm_postgresql_flexible_server.main.id
-
-#   name      = "metabase"
-#   collation = "en_US.utf8"
-#   charset   = "utf8"
+#   value     = "CITEXT,HSTORE,UUID-OSSP"
 # }
+
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server_database
+resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
+  server_id = azurerm_postgresql_flexible_server.main.id
+
+  name      = "production"
+  collation = "en_US.utf8"
+  charset   = "utf8"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
 
 # resource "azurerm_postgresql_flexible_server_database" "production" {
 #   server_id = azurerm_postgresql_flexible_server.main.id

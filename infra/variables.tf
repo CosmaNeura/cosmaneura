@@ -12,6 +12,11 @@ variable "tags" {
   }
 }
 
+data "external" "secrets" {
+  program     = ["just", "direnv_export", ".env.production.backend"]
+  working_dir = "${path.module}/.."
+}
+
 # TODO this is not ideal, should be a better way to do this
 
 # data "external" "IPINFO_API_KEY" {
