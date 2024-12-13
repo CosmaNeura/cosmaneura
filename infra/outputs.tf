@@ -8,11 +8,11 @@
 #   }
 # }
 
-# output "redis_url" {
-#   sensitive = true
-#   # the extra `s` is really important! When `enable_non_ssl_port = false` non-secure access will not work
-#   value = "rediss://:${azurerm_redis_cache.main.primary_access_key}@${azurerm_redis_cache.main.hostname}:${azurerm_redis_cache.main.ssl_port}?ssl_cert_reqs=optional"
-# }
+output "redis_url" {
+  sensitive = true
+  # the extra `s` is really important! When `enable_non_ssl_port = false` non-secure access will not work
+  value = "rediss://:${azurerm_redis_cache.main.primary_access_key}@${azurerm_redis_cache.main.hostname}:${azurerm_redis_cache.main.ssl_port}?ssl_cert_reqs=optional"
+}
 
 # output "postgres_credentials" {
 #   sensitive = true

@@ -93,33 +93,50 @@ resource "azurerm_redis_cache" "main" {
   tags = var.tags
 }
 
-# # https://library.tf/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server#azurerm_postgresql_flexible_server
-# # https://azure.microsoft.com/en-us/pricing/details/postgresql/flexible-server/
-# resource "azurerm_postgresql_flexible_server" "main" {
-#   location            = azurerm_resource_group.main.location
-#   resource_group_name = azurerm_resource_group.main.name
+# https://library.tf/providers/hashicorp/azurerm/latest/docs/resources/s#azurerm_postgresql_flexible_server
+# https://azure.microsoft.com/en-us/pricing/details/postgresql/flexible-server/
+resource "azurerm_postgresql_flexible_server" "main" {
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
 
-#   name = "cosmaneurapg"
+  name = "${azurerm_resource_group.main.name}-postgres"
 
-#   # https://learn.microsoft.com/en-us/rest/api/postgresql/flexibleserver/servers/create?view=rest-postgresql-flexibleserver-2022-12-01&tabs=HTTP#server
-#   # https://cloudprice.net/vm/Standard_B2ms
-#   # note that sku name is not the same as what is reported above
-#   sku_name = "B_Standard_B2ms"
+  # the only way to determine pricing and options is go to to azure portal, create a flexible service, and then configure server
+  # https://cloudprice.net/vm/Standard_B2ms
+  # note that sku name is not the same as what is reported in the azure portal
+  # Extracted options from portal:
+  # Standard_B1ms (1 vCore, 2 GiB memory, 640 max iops) [~$25]
+  # Standard_B2s (2 vCores, 4 GiB memory, 1280 max iops) [~$65]
+  # Standard_B2ms (2 vCores, 8 GiB memory, 1920 max iops)
+  # Standard_B4ms (4 vCores, 16 GiB memory, 2880 max iops)
+  sku_name = "B_Standard_B1ms"
 
-#   # 32gb is the min
-#   storage_mb            = 32768
-#   auto_grow_enabled     = true
-#   backup_retention_days = 7
+  # 32gb is the min
+  storage_mb            = 32768
+  auto_grow_enabled     = true
+  backup_retention_days = 30
 
-#   # changing this forces a new resource to be created!
-#   administrator_login    = "charbelmetrics"
-#   administrator_password = "zaxThf-welfyf-hzqo8g"
+  # for development, we should lock this down later on
+  public_network_access_enabled = true
 
-#   # in the API docs, only 14 is indicated, but 16 was released
-#   # https://techcommunity.microsoft.com/t5/azure-database-for-postgresql/general-availability-of-postgresql-16-on-azure-database-for/ba-p/3980354#:~:text=PostgreSQL%2016%20introduces%20a%20feature,replication%20directly%20from%20read%20replicas.
-#   # https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-supported-versions
-#   version = "17"
-# }
+  authentication {
+    password_auth_enabled = true
+  }
+
+  # TODO I need to pull this from 1p
+
+  # changing this forces a new resource to be created!
+  # "Admin username cannot start with numbers and must only contain characters and numbers."
+  administrator_login    = ""
+  administrator_password = ""
+
+  # in the API docs, only 14 is indicated, but 16 was released
+  # https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-supported-versions
+  # https://techcommunity.microsoft.com/t5/azure-database-for-postgresql/general-availability-of-postgresql-16-on-azure-database-for/ba-p/3980354#:~:text=PostgreSQL%2016%20introduces%20a%20feature,replication%20directly%20from%20read%20replicas.
+  version = "16"
+
+  tags = var.tags
+}
 
 # # https://support.hashicorp.com/hc/en-us/articles/4548903433235-Terraform-Enterprise-External-Services-mode-with-Azure-Database-for-PostgreSQL-Flexible-Server-Failed-to-Initialize-Plugins
 # # resource "azurerm_postgresql_flexible_server_configuration" "metabaseExtensions" {

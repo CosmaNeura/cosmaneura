@@ -20,17 +20,20 @@ upgrade:
 # Production Deployment
 #######################
 
-# INFRA_DIRECTORY := "infra"
-INFRA_DIRECTORY := ""
+# TOFU_GLOBAL_OPTIONS := "-chdir=infra"
+TOFU_GLOBAL_OPTIONS := ""
+
+azure_open:
+	open "https://portal.azure.com/$(az account show --query tenantId -o tsv)/"
 
 azure_init:
 	tofu init
 # init each run to make sure latest package versions are pulled
 azure_apply:
-	tofu -chdir={{INFRA_DIRECTORY}} apply -auto-approve
+	tofu {{TOFU_GLOBAL_OPTIONS}} apply -auto-approve
 
 azure_output:
-	tofu -chdir={{INFRA_DIRECTORY}} output -json
+	tofu {{TOFU_GLOBAL_OPTIONS}} output -json
 
 azure_shell:
 	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command zsh
