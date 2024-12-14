@@ -1,7 +1,5 @@
 import { Outlet, useLocation, useNavigate } from "react-router"
 
-import { RedirectToSignIn, SignedIn, SignedOut } from "@clerk/clerk-react"
-
 export default function AuthenticatedLayout() {
   const navigate = useNavigate()
   const location = useLocation()
