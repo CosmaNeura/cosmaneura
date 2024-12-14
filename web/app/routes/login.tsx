@@ -14,7 +14,7 @@ export default function Index() {
       <SignedIn>
         {/* <Navigate to="/home" /> https://discord.com/channels/856971667393609759/1311386772520960182 */}
         <p>
-          <Link to="/home">Go Home</Link>
+          <Link to="/intake">Go Home</Link>
         </p>
         <p>You are signed in!</p>
         <div>

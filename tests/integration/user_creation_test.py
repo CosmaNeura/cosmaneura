@@ -25,7 +25,9 @@ def test_signin(server, page: Page, assert_snapshot) -> None:
     page.get_by_label("Password", exact=True).fill(password)
     page.get_by_role("button", name="Continue").click()
 
-    expect(page.locator("body")).to_contain_text("Hello From Internal Python")
+    expect(page.locator("body")).to_contain_text("Select a patient")
+
+    wait_for_loading(page)
 
     # assert_snapshot(page)
 
@@ -77,7 +79,7 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
 
     # assert_snapshot(page)
 
-    expect(page.locator("body")).to_contain_text("Hello From Internal Python")
+    expect(page.locator("body")).to_contain_text("Select a patient")
 
     wait_for_loading(page)
 
