@@ -1,37 +1,17 @@
 import pytest
+
 from activemodel.pytest.truncate import database_reset_truncate
 
-from app import log
-
-
-def report_localias_status():
-    """
-    For integration tests, we require localalias to be running in the background since we use https.
-    """
-    import os
-    import subprocess
-    import sys
-
-    command = ["localias", "status"]
-
-    # on CI we need to run localalias on sudo
-    if os.getenv("CI") and sys.platform != "darwin":
-        command.insert(0, "sudo")
-
-    result = subprocess.run(command, capture_output=True, text=True)
-    log.debug("localias Status", output=result.stdout)
-
-    if "daemon running" not in result.stdout:
-        log.error(
-            "localias daemon is not running. Integration tests may fail.",
-            output=result.stdout,
-        )
+# server is imported to expose that fixture to the tests, but keep it all organized in the server file
+from tests.integration.server import report_localias_status, server  # noqa: F401
 
 
 def pytest_configure(config):
     report_localias_status()
 
 
+# transaction truncation cannot be used with integration tests since the forked server does not retain the same
+# db connection in memory and therefore the transaction rollback does not work.
 database_reset_truncate = pytest.fixture(scope="function", autouse=True)(
     database_reset_truncate
 )

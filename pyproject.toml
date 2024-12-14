@@ -39,8 +39,6 @@ dependencies = [
     "typeid-python>=0.3.1",
     "typer>=0.14.0",
     "uvicorn>=0.32.0",
-    # TODO 1.x is breaking fastapi right now
-    "watchfiles==0.24.0",
 ]
 
 [dependency-groups]
@@ -122,6 +120,23 @@ ignore = "H030,H031"
 [tool.ruff.lint]
 extend-select = ["I"]
 
+[tool.ruff.lint.isort]
+section-order = [
+    # https://docs.astral.sh/ruff/settings/#lint_isort_section-order
+    "future",
+    "standard-library",
+    "third-party",
+    "first-party",
+    # custom ordering
+    "orm",
+    "tests",
+    "local-folder",
+]
+
+[tool.ruff.lint.isort.sections]
+orm = ["sqlmodel", "activemodel", "sqlalchemy", "app.models.*"]
+tests = ["tests"]
+
 # NOTE prefer conftest.py over toml configuration for pytest
 [tool.pytest.ini_options]
 # Not sure entirely why, but without tee-sys, the builtin fd-based log capture breaks on CI (but not locally)
@@ -141,11 +156,11 @@ asyncio_default_fixture_loop_scope = "session"
 [tool.coverage.run]
 # data_file = "tmp/test-results/.coverage"
 
-[tool.uv.sources]
-j2lint = { git = "https://github.com/aristanetworks/j2lint.git" }
-
 # TODO https://github.com/astral-sh/uv/issues/9258
 # https://docs.astral.sh/uv/reference/settings/#override-dependencies
+
+[tool.uv.sources]
+j2lint = { git = "https://github.com/aristanetworks/j2lint.git" }
 
 [tool.uv.sources.activemodel]
 git = "https://github.com/iloveitaly/activemodel.git"
@@ -164,7 +179,3 @@ rev = "github-output"
 [tool.uv.sources.pytest-playwright-visual]
 git = "https://github.com/iloveitaly/pytest-playwright-visual.git"
 rev = "global-defaults"
-
-[tool.uv.sources.mailers]
-git = "https://github.com/iloveitaly/mailers.git"
-rev = "custom"
