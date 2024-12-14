@@ -1,3 +1,4 @@
+import { intake } from "client"
 import { useState } from "react"
 import { MetaFunction, useNavigation } from "react-router"
 import { useOutletContext } from "react-router"
@@ -26,21 +27,24 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { mockData } from "@/data/mock"
+import { getClient } from "~/configuration/clerk"
 
-// export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-//   const clerkClient = await getClient()
-//   invariant(clerkClient, "clerk client should always exist or redirect")
+import { invariant } from "@epic-web/invariant"
 
-//   // this route is authenticated
-//   const { data } = await applicationData()
+export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
+  const clerkClient = await getClient()
+  invariant(clerkClient, "clerk client should always exist or redirect")
 
-//   // TODO need idiomatic error handling here
-//   if (data === undefined) {
-//     throw new Error("Failed to load data")
-//   }
+  // this route is authenticated
+  const { data } = await intakeData()
 
-//   return data
-// }
+  // TODO need idiomatic error handling here
+  if (data === undefined) {
+    throw new Error("Failed to load data")
+  }
+
+  return mockData
+}
 
 export const meta: MetaFunction = () => {
   return [
@@ -50,10 +54,6 @@ export const meta: MetaFunction = () => {
       content: "Welcome to Starter Application Template",
     },
   ]
-}
-
-export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  return mockData
 }
 
 type ContextType = { onNavigate: (page: string) => void; currentPage: string }

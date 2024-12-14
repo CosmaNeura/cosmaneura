@@ -5,20 +5,72 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/internal/v1/": {
+    "/internal/v1/intake": {
       "get": {
         "tags": [
           "private"
         ],
-        "summary": "Application Data",
-        "operationId": "application_data",
+        "summary": "Intake Data",
+        "operationId": "intake_data",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AppData"
+                  "$ref": "#/components/schemas/IntakeData"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Note Data",
+        "operationId": "note_data",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotetakingData"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/settings": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Settings Data",
+        "operationId": "settings_data",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsData"
                 }
               }
             }
@@ -104,18 +156,6 @@
   },
   "components": {
     "schemas": {
-      "AppData": {
-        "properties": {
-          "message": {
-            "type": "string",
-            "title": "Message",
-            "default": "Hello From Internal Python"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "title": "AppData"
-      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -128,6 +168,54 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "IntakeData": {
+        "properties": {
+          "appointments": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Appointments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointments"
+        ],
+        "title": "IntakeData"
+      },
+      "NotetakingData": {
+        "properties": {
+          "notes": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "notes"
+        ],
+        "title": "NotetakingData"
+      },
+      "SettingsData": {
+        "properties": {
+          "settings": {
+            "type": "object",
+            "title": "Settings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "settings"
+        ],
+        "title": "SettingsData"
       },
       "ValidationError": {
         "properties": {

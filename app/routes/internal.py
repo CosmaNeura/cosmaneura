@@ -16,10 +16,28 @@ internal_api_app = APIRouter(
 )
 
 
-class AppData(BaseModel, extra="forbid"):
-    message: str = "Hello From Internal Python"
+class IntakeData(BaseModel, extra="forbid"):
+    appointments: list[dict]
 
 
-@internal_api_app.get("/")
-def application_data() -> AppData:
-    return AppData()
+class NotetakingData(BaseModel, extra="forbid"):
+    notes: list[dict]
+
+
+class SettingsData(BaseModel, extra="forbid"):
+    settings: dict
+
+
+@internal_api_app.get("/intake")
+def intake_data() -> IntakeData:
+    return IntakeData(appointments=[])
+
+
+@internal_api_app.get("/notes")
+def note_data() -> NotetakingData:
+    return NotetakingData(notes=[])
+
+
+@internal_api_app.get("/settings")
+def settings_data() -> SettingsData:
+    return SettingsData(settings={})
