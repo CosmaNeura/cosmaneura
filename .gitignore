@@ -22,3 +22,8 @@ __pycache__
 /playground/*
 
 /public
+
+# plugin installation folder
+infra/.terraform
+# this contains secrets!
+infra/terraform.tfstate*
