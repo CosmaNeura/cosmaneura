@@ -610,11 +610,14 @@ db_seed: db_migrate
 [script]
 db_generate_migration migration_name="":
 	if [ -z "{{migration_name}}" ]; then
-		echo "Enter the migration name: "
+		echo "Enter the migration name (use add/remove/update prefix): "
 		read name
 	else
 		name={{migration_name}}
 	fi
+
+	# underscores & alpha chars only
+	name=$(echo "$name" | tr ' ' '_' | tr '-' '_' | tr -cd '[:alnum:]_')
 
 	uv run alembic revision --autogenerate -m "$name"
 
