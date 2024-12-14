@@ -86,8 +86,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     needs: [web, app]
-    # if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
-    if: false
+    if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
     permissions:
       packages: write
     steps:
