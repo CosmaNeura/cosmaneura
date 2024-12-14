@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { useNavigation } from "react-router"
+import { MetaFunction, useNavigation } from "react-router"
 import { useOutletContext } from "react-router"
 
 import { Send } from "lucide-react"
@@ -26,6 +26,31 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { mockData } from "@/data/mock"
+
+// export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
+//   const clerkClient = await getClient()
+//   invariant(clerkClient, "clerk client should always exist or redirect")
+
+//   // this route is authenticated
+//   const { data } = await applicationData()
+
+//   // TODO need idiomatic error handling here
+//   if (data === undefined) {
+//     throw new Error("Failed to load data")
+//   }
+
+//   return data
+// }
+
+export const meta: MetaFunction = () => {
+  return [
+    { title: "Intake" },
+    {
+      name: "description",
+      content: "Welcome to Starter Application Template",
+    },
+  ]
+}
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   return mockData
