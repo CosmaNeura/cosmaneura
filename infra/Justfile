@@ -1,11 +1,11 @@
 install:
-# opentofu
+	# opentofu
 	@if ! brew list | grep -q opentofu; then \
 		echo "Installing opentofu"; \
 		brew install opentofu; \
 	fi
 
-# azure cli
+	# azure cli
 	@if ! brew list | grep -q azure-cli; then \
 		echo "Installing azure-cli"; \
 		brew install azure-cli; \
@@ -20,12 +20,17 @@ upgrade:
 # Production Deployment
 #######################
 
+# INFRA_DIRECTORY := "infra"
+INFRA_DIRECTORY := ""
+
+azure_init:
+	tofu init
 # init each run to make sure latest package versions are pulled
 azure_apply:
-	tofu -chdir=infra apply -auto-approve
+	tofu -chdir={{INFRA_DIRECTORY}} apply -auto-approve
 
 azure_output:
-	tofu -chdir=infra output -json
+	tofu -chdir={{INFRA_DIRECTORY}} output -json
 
 azure_shell:
 	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command zsh

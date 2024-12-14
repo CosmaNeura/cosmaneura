@@ -1,7 +1,7 @@
-variable "GH_GHCR_TOKEN" {
-  description = "The GitHub Container Registry token"
-  sensitive   = true
-}
+# variable "GH_GHCR_TOKEN" {
+#   description = "The GitHub Container Registry token"
+#   sensitive   = true
+# }
 
 variable "tags" {
   description = "A map of tags to add to all resources"
@@ -14,18 +14,18 @@ variable "tags" {
 
 # TODO this is not ideal, should be a better way to do this
 
-data "external" "IPINFO_API_KEY" {
-  program = ["${path.module}/bin/op_read.sh", "op://Knolbe/IPinfo/api"]
-}
+# data "external" "IPINFO_API_KEY" {
+#   program = ["${path.module}/bin/op_read.sh", "op://Knolbe/IPinfo/api"]
+# }
 
-data "external" "OPENAI_API_KEY" {
-  program = ["${path.module}/bin/op_read.sh", "op://Knolbe/cosmaneura OpenAI Key/credential"]
-}
+# data "external" "OPENAI_API_KEY" {
+#   program = ["${path.module}/bin/op_read.sh", "op://Knolbe/cosmaneura OpenAI Key/credential"]
+# }
 
-data "external" "SENTRY_DSN" {
-  program = ["${path.module}/bin/op_read.sh", "op://cosmaneura/Sentry/credentials"]
-}
+# data "external" "SENTRY_DSN" {
+#   program = ["${path.module}/bin/op_read.sh", "op://cosmaneura/Sentry/credentials"]
+# }
 
-data "external" "RADAR_API_KEY" {
-  program = ["${path.module}/bin/op_read.sh", "op://Knolbe/Radar API Key/credential"]
-}
+# data "external" "RADAR_API_KEY" {
+#   program = ["${path.module}/bin/op_read.sh", "op://Knolbe/Radar API Key/credential"]
+# }
