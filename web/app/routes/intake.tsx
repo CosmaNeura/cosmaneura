@@ -1,4 +1,4 @@
-import { intake } from "client"
+import { intakeData } from "client"
 import { useState } from "react"
 import { MetaFunction, useNavigation } from "react-router"
 import { useOutletContext } from "react-router"
@@ -129,7 +129,7 @@ export default function IntakePage({ loaderData }: Route.ComponentProps) {
             {isLoading ? (
               <SkeletonMessage />
             ) : selectedMail ? (
-              <div className="transition-all duration-300 ease-in-out transform translate-y-0 opacity-100">
+              <div className="translate-y-0 transform opacity-100 transition-all duration-300 ease-in-out">
                 <MessageContent
                   mail={{
                     ...selectedMail,
@@ -146,9 +146,9 @@ export default function IntakePage({ loaderData }: Route.ComponentProps) {
                 />
               </div>
             ) : (
-              <div className="flex items-center justify-center h-[calc(100vh-5rem)]">
+              <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
                 <div className="text-center text-muted-foreground">
-                  <h2 className="text-xl font-semibold mb-2">
+                  <h2 className="mb-2 text-xl font-semibold">
                     Select a patient
                   </h2>
                   <p className="text-sm">
