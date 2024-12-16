@@ -6,6 +6,7 @@ locals {
     key             = "prod.terraform.tfstate"
   }
 
+  name      = "cosmaneura"
   base_name = azurerm_resource_group.main.name
   # azure requires alpha numeric chars only in many places
   base_name_alphanumeric = replace(local.base_name, "/[^a-zA-Z0-9]/", "")
@@ -63,14 +64,30 @@ resource "azurerm_resource_group" "main" {
 # https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/container_registry
 resource "azurerm_container_registry" "main" {
   # only alphanumeric is allowed
-  name                = "${local.base_name_alphanumeric}ghcr"
+  name                = "${local.base_name_alphanumeric}registry"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
   sku                 = "Basic"
   tags                = var.tags
 
+  # in Basic, you do not have access to advanced registry tokens
+  admin_enabled = true
+
   # only supported in premium
   # data_endpoint_enabled = true
+}
+
+output "acr_login_server" {
+  value = azurerm_container_registry.main.login_server
+}
+
+output "acr_admin_username" {
+  value = azurerm_container_registry.main.admin_username
+}
+
+output "acr_admin_password" {
+  value     = azurerm_container_registry.main.admin_password
+  sensitive = true
 }
 
 # this should be done automatically when `skip_provider_registration = true`, which is the default, is set
