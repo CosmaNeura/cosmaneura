@@ -21,6 +21,10 @@ terraform {
       version = "=4.13.0"
     }
 
+    onepassword = {
+      source = "1password/onepassword"
+    }
+
     external = {
       source  = "hashicorp/external"
       version = ">=2.3.3"
@@ -35,6 +39,10 @@ terraform {
   #   container_name       = "tfstate"
   #   key                  = "prod.terraform.tfstate"
   # }
+}
+
+provider "onepassword" {
+  account = ""
 }
 
 provider "azurerm" {
@@ -52,6 +60,36 @@ resource "azurerm_resource_group" "main" {
   # my analysis or understanding of pricing is limited, so this may be incorrect
   location = "northcentralus"
   tags     = var.tags
+}
+
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/storage_account#attributes-reference
+resource "azurerm_storage_account" "uploads" {
+  name                = "${local.base_name_alphanumeric}uploads"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+
+  account_tier = "Standard"
+  # locally redundant storage is the cheapest
+  account_replication_type = "LRS"
+}
+
+resource "onepassword_item" "upload_blob_storage" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title    = "Azure Blob Storage File Uploads"
+  category = "login"
+
+  url = azurerm_storage_account.uploads.primary_blob_endpoint
+
+  # section {
+  #   label = "Example section"
+
+  #   field {
+  #     label = "Example field"
+  #     type  = "DATE"
+  #     value = "2024-01-31"
+  #   }
+  # }
 }
 
 # the ghcr.io container registry is quite expensive:

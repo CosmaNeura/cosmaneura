@@ -9,10 +9,13 @@ variable "tags" {
 
   default = {
     environment = "production"
+    managed     = true
   }
 }
 
+# use `data.external.secrets.result[KEY]` to access this data
 data "external" "secrets" {
+  # Run `just direnv_export .env.production.backend` to inspect results
   program     = ["just", "direnv_export", ".env.production.backend"]
   working_dir = "${path.module}/.."
 }
