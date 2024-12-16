@@ -392,6 +392,7 @@ resource "onepassword_item" "production_postgres" {
 }
 
 # https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/container_app
+# https://github.com/microsoft/NubesGen/blob/0d5d4896f5f2c93d1baca01807527bee56ff49b8/terraform/modules/container-apps/main.tf#L91
 resource "azurerm_container_app" "app" {
   resource_group_name = azurerm_resource_group.main.name
   # NOTE location is determined automatically by the resource group
@@ -404,10 +405,11 @@ resource "azurerm_container_app" "app" {
 
   ingress {
     external_enabled = true
-    target_port      = 8000
+    target_port      = 80
 
     traffic_weight {
-      percentage      = 100
+      percentage = 100
+      # "If a traffic splitting rule is configured with latestRevision set to true, traffic doesn't switch to the latest revision until it's ready"
       latest_revision = true
     }
   }
@@ -415,9 +417,28 @@ resource "azurerm_container_app" "app" {
   template {
     container {
       name = "${azurerm_resource_group.main.name}-app-web"
-      # image = "ghcr.io/cosmaneura/cosmaneura:latest"
-      # image = "crccheck/hello-world:latest"
-      image = "cosmaneura/cosmaneura:latest"
+
+      # https://github.com/crccheck/docker-hello-world/blob/master/Dockerfile
+      image = "crccheck/hello-world:latest"
+      # image = "cosmaneura/cosmaneura:latest"
+
+
+      # the docs state that these probes are automatically setup with the ingress port, so it's unclear why they need
+      # to be defined here. Additionally, the defaults used by terraform for these probes are not the same as the azure
+      # documentation.args =
+      readiness_probe {
+        port      = 80
+        transport = "TCP"
+      }
+
+      startup_probe {
+        port      = 80
+        transport = "TCP"
+      }
+
+      # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
+
+      # args = ["fastapi run"]
 
       # args = [
       #   "celery",
@@ -437,13 +458,18 @@ resource "azurerm_container_app" "app" {
       # }
 
       env {
-        name  = "DATABASE_URL"
-        value = local.postgresql_connection_string
+        name  = "PORT"
+        value = "80"
       }
 
       env {
-        name  = "REDIS_URL"
-        value = local.redis_connection_string
+        name        = "DATABASE_URL"
+        secret_name = "database-url"
+      }
+
+      env {
+        name        = "REDIS_URL"
+        secret_name = "redis-url"
       }
 
       # env {
@@ -457,18 +483,31 @@ resource "azurerm_container_app" "app" {
     }
   }
 
-  # registry {
-  # unlike other registry configs, this does NOT contain a protocol
-  # server = azurerm_container_registry.main.login_server
-  #   username = "iloveitaly"
-  #   # why do I need to register a secret separately?
-  #   password_secret_name = "registry-secret"
-  # }
+  secret {
+    name  = "redis-url"
+    value = local.redis_connection_string
+  }
 
-  # secret {
-  #   name  = "registry-secret"
-  #   value = var.GH_GHCR_TOKEN
-  # }
+  secret {
+    name  = "database-url"
+    value = local.postgresql_connection_string
+  }
+
+  # TODO could use identity based login in the future, but the Basic tier of acr doesn't support this
+  # https://github.com/microsoft/NubesGen/blob/0d5d4896f5f2c93d1baca01807527bee56ff49b8/terraform/modules/container-apps/main.tf#L91
+  registry {
+    # unlike other registry configs, this does NOT contain a protocol
+    server   = azurerm_container_registry.main.login_server
+    username = azurerm_container_registry.main.admin_username
+
+    # why is the password stored in a separate secret block? No idea. But, This is The Way.
+    password_secret_name = "registry-secret"
+  }
+
+  secret {
+    name  = "registry-secret"
+    value = azurerm_container_registry.main.admin_password
+  }
 
   tags = var.tags
 }
