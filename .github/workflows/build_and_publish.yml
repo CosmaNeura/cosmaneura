@@ -97,9 +97,8 @@ jobs:
       # login before building so previous build image can be pulled for nixpacks cache
       - uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          # password: ${{ secrets.GITHUB_TOKEN }}
-          password: ${{ github.token }}
+          registry: ${{ env.CONTAINER_REGISTRY_HOST }}
+          username: ${{ env.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
       - run: just build
       - run: just build_push
