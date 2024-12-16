@@ -5,6 +5,10 @@ locals {
     container       = "tfstate"
     key             = "prod.terraform.tfstate"
   }
+
+  base_name = azurerm_resource_group.main.name
+  # azure requires alpha numeric chars only in many places
+  base_name_alphanumeric = replace(local.base_name, "/[^a-zA-Z0-9]/", "")
 }
 
 terraform {
@@ -43,8 +47,30 @@ provider "azurerm" {
 
 resource "azurerm_resource_group" "main" {
   name = "cosmaneura-prod"
-  # this was the cheapest: https://cloudprice.net/regions
+  # this seemed to be the cheapest: https://cloudprice.net/regions
+  # my analysis or understanding of pricing is limited, so this may be incorrect
   location = "northcentralus"
+  tags     = var.tags
+}
+
+# the ghcr.io container registry is quite expensive:
+#  - our containers are ~1gb a piece
+#  - ghcr charges for data transfer, $0.25/gb, so we would pay $0.25 per deploy, which feels insane
+#  - ghcr seems poorly maintained
+#  - the auth story is poor on ghcr, seems like you have to use a PAT, which feels brittle
+#
+# for this reason, we are going to use an azure container registry instead.
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/container_registry
+resource "azurerm_container_registry" "main" {
+  # only alphanumeric is allowed
+  name                = "${local.base_name_alphanumeric}ghcr"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  sku                 = "Basic"
+  tags                = var.tags
+
+  # only supported in premium
+  # data_endpoint_enabled = true
 }
 
 # this should be done automatically when `skip_provider_registration = true`, which is the default, is set
@@ -275,7 +301,7 @@ locals {
 
 resource "azurerm_container_app" "cosmaneura_app_web" {
   resource_group_name = azurerm_resource_group.main.name
-  # location            = azurerm_resource_group.main.location
+  # NOTE location is determined automatically by the resource group
 
   name                         = "${azurerm_resource_group.main.name}-app-web"
   container_app_environment_id = azurerm_container_app_environment.main.id
