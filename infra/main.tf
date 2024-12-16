@@ -14,20 +14,22 @@ locals {
 
 terraform {
   required_providers {
+    # when changing provider versions, you must run `tofu init`
     azurerm = {
       source = "hashicorp/azurerm"
       # azurerm gets updates quite often! Check this page for the latest version:
       # https://github.com/hashicorp/terraform-provider-azurerm/blob/main/CHANGELOG.md
-      version = "=4.13.0"
+      version = ">=4.14.0"
     }
 
     onepassword = {
-      source = "1password/onepassword"
+      source  = "1password/onepassword"
+      version = ">=2.1.2"
     }
 
     external = {
       source  = "hashicorp/external"
-      version = ">=2.3.3"
+      version = ">=2.3.4"
     }
   }
 
@@ -73,6 +75,7 @@ resource "azurerm_storage_account" "uploads" {
   account_replication_type = "LRS"
 }
 
+# https://registry.terraform.io/providers/1Password/onepassword/latest/docs
 resource "onepassword_item" "upload_blob_storage" {
   vault = data.external.secrets.result["OP_VAULT_UID"]
 
@@ -113,19 +116,6 @@ resource "azurerm_container_registry" "main" {
 
   # only supported in premium
   # data_endpoint_enabled = true
-}
-
-output "acr_login_server" {
-  value = azurerm_container_registry.main.login_server
-}
-
-output "acr_admin_username" {
-  value = azurerm_container_registry.main.admin_username
-}
-
-output "acr_admin_password" {
-  value     = azurerm_container_registry.main.admin_password
-  sensitive = true
 }
 
 # this should be done automatically when `skip_provider_registration = true`, which is the default, is set
@@ -354,13 +344,51 @@ locals {
   redis_connection_string      = "rediss://:${azurerm_redis_cache.main.primary_access_key}@${azurerm_redis_cache.main.hostname}:${azurerm_redis_cache.main.ssl_port}?ssl_cert_reqs=optional"
 }
 
-resource "azurerm_container_app" "cosmaneura_app_web" {
+# # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
+# resource "onepassword_item" "upload_blob_storage" {
+#   vault = data.external.secrets.result["OP_VAULT_UID"]
+
+#   title    = "Azure Blob Storage File Uploads"
+#   category = "login"
+
+#   url = azurerm_storage_account.uploads.primary_blob_endpoint
+
+#   # section {
+#   #   label = "Example section"
+
+#   #   field {
+#   #     label = "Example field"
+#   #     type  = "DATE"
+#   #     value = "2024-01-31"
+#   #   }
+#   # }
+# }
+
+# https://registry.terraform.io/providers/1Password/onepassword/latest/docs
+resource "onepassword_item" "production_postgres" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title    = "Production Postgres Database"
+  category = "database"
+
+  hostname = azurerm_postgresql_flexible_server.main.fqdn
+  port     = 5432
+  username = azurerm_postgresql_flexible_server.main.administrator_login
+  password = azurerm_postgresql_flexible_server.main.administrator_password
+
+  tags = ["terraform-managed"]
+}
+
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/container_app
+resource "azurerm_container_app" "app" {
   resource_group_name = azurerm_resource_group.main.name
   # NOTE location is determined automatically by the resource group
 
-  name                         = "${azurerm_resource_group.main.name}-app-web"
+  name                         = "${azurerm_resource_group.main.name}-app"
   container_app_environment_id = azurerm_container_app_environment.main.id
-  revision_mode                = "Single"
+
+  # required for blue/green deployments
+  revision_mode = "Multiple"
 
   ingress {
     external_enabled = true
@@ -374,9 +402,10 @@ resource "azurerm_container_app" "cosmaneura_app_web" {
 
   template {
     container {
-      name = "cosmaneura-web"
+      name = "${azurerm_resource_group.main.name}-app-web"
       # image = "ghcr.io/cosmaneura/cosmaneura:latest"
       image = "crccheck/hello-world:latest"
+      # image = "cosmaneura/cosmaneura:latest"
 
       # args = [
       #   "celery",
@@ -417,8 +446,8 @@ resource "azurerm_container_app" "cosmaneura_app_web" {
   }
 
   # registry {
-  #   # unlike other registry configs, this does NOT contain a protocol
-  #   server   = "ghcr.io"
+  # unlike other registry configs, this does NOT contain a protocol
+  # server = azurerm_container_registry.main.login_server
   #   username = "iloveitaly"
   #   # why do I need to register a secret separately?
   #   password_secret_name = "registry-secret"
