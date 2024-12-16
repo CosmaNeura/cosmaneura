@@ -364,6 +364,7 @@ locals {
 #   # }
 # }
 
+# add postgres connection string to 1password
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
 resource "onepassword_item" "production_postgres" {
   vault = data.external.secrets.result["OP_VAULT_UID"]
@@ -375,6 +376,17 @@ resource "onepassword_item" "production_postgres" {
   port     = 5432
   username = azurerm_postgresql_flexible_server.main.administrator_login
   password = azurerm_postgresql_flexible_server.main.administrator_password
+
+  section {
+    # TODO how can i select the main section?
+    # https://1password-devs.slack.com/archives/C03NJV34SSC/p1734371096188749?thread_ts=1734112677.747919&cid=C03NJV34SSC
+    label = "main"
+
+    field {
+      label = "python-connection-string"
+      value = local.postgresql_connection_string
+    }
+  }
 
   tags = ["terraform-managed"]
 }
@@ -404,8 +416,8 @@ resource "azurerm_container_app" "app" {
     container {
       name = "${azurerm_resource_group.main.name}-app-web"
       # image = "ghcr.io/cosmaneura/cosmaneura:latest"
-      image = "crccheck/hello-world:latest"
-      # image = "cosmaneura/cosmaneura:latest"
+      # image = "crccheck/hello-world:latest"
+      image = "cosmaneura/cosmaneura:latest"
 
       # args = [
       #   "celery",
