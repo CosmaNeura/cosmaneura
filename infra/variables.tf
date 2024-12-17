@@ -13,6 +13,20 @@ variable "tags" {
   }
 }
 
+variable "onepassword_tags" {
+  description = "A map of tags to add to all opentofu-generated 1p items"
+  type        = list(string)
+
+  default = [
+    "terraform-managed"
+  ]
+}
+
+data "external" "procfile" {
+  program     = ["yq", "Procfile", "--output-format", "json"]
+  working_dir = "${path.module}/.."
+}
+
 # use `data.external.secrets.result[KEY]` to access this data
 data "external" "secrets" {
   # Run `just direnv_export .env.production.backend` to inspect results
