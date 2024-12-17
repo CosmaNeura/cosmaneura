@@ -1,3 +1,8 @@
+# tips on debugging issues:
+#
+#   - https://github.com/hashicorp/terraform-provider-azurerm is the best place to search for issues
+#   - https://github.com/hashicorp/terraform-provider-azurerm/blob/main/CHANGELOG.md
+
 locals {
   tfstate = {
     storage_account = "cosmaneuratfstate"
@@ -44,6 +49,7 @@ terraform {
 }
 
 provider "onepassword" {
+  # without this the OP_ACCOUNT password will be picked up and conflict with the OP_SERVICE_ACCOUNT_TOKEN, which is not what we want
   account = ""
 }
 
@@ -73,8 +79,64 @@ resource "azurerm_storage_account" "uploads" {
   account_tier = "Standard"
   # locally redundant storage is the cheapest
   account_replication_type = "LRS"
+
+  blob_properties {
+    cors_rule {
+      max_age_in_seconds = 86400
+      # TODO we should explicitly limit origins, but leaving wide open for development
+      allowed_origins = ["*"]
+      allowed_headers = [""]
+      allowed_methods = ["PUT"]
+      exposed_headers = [""]
+    }
+  }
 }
 
+resource "azurerm_storage_management_policy" "example" {
+  storage_account_id = azurerm_storage_account.uploads.id
+
+  rule {
+    name    = "delete-files"
+    enabled = true
+
+    filters {
+      #   prefix_match = ["container1/prefix1"]
+      blob_types = ["blockBlob"]
+      #   match_blob_index_tag {
+      #     name      = "tag1"
+      #     operation = "=="
+      #     value     = "val1"
+      #   }
+    }
+
+    actions {
+      base_blob {
+        # tier_to_cool_after_days_since_modification_greater_than    = 10
+        # tier_to_archive_after_days_since_modification_greater_than = 50
+        delete_after_days_since_creation_greater_than = 10
+      }
+
+      snapshot {
+        delete_after_days_since_creation_greater_than = 10
+      }
+    }
+  }
+}
+
+# like a bucket or folder
+resource "azurerm_storage_container" "uploads" {
+  name               = "uploads"
+  storage_account_id = azurerm_storage_account.uploads.id
+  # storage_account_name  = "uploads"
+  container_access_type = "private"
+
+  # lifecycle {
+
+  # }
+
+}
+
+# https://github.com/1Password/terraform-provider-onepassword/issues/17
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
 resource "onepassword_item" "upload_blob_storage" {
   vault = data.external.secrets.result["OP_VAULT_UID"]
@@ -335,6 +397,8 @@ resource "azurerm_container_app_environment" "main" {
 
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
   #   kube_environment_id = azurerm_kubernetes_cluster.main.id
+
+  # custom_domain_verification_id
 }
 
 # TODO why can't we use the external secrets we defined?
@@ -391,6 +455,33 @@ resource "onepassword_item" "production_postgres" {
   tags = ["terraform-managed"]
 }
 
+resource "onepassword_item" "production_redis" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title    = "Production Redis Database"
+  category = "database"
+
+  hostname = azurerm_redis_cache.main.hostname
+  port     = azurerm_redis_cache.main.ssl_port
+  password = azurerm_redis_cache.main.primary_access_key
+
+  section {
+    # TODO how can i select the main section?
+    # https://1password-devs.slack.com/archives/C03NJV34SSC/p1734371096188749?thread_ts=1734112677.747919&cid=C03NJV34SSC
+    label = "main"
+
+    field {
+      label = "python-connection-string"
+      value = local.redis_connection_string
+    }
+  }
+
+  tags = ["terraform-managed"]
+}
+
+# this module is very temperamental: if you fail to deploy it, it can get in a corrupt state that terraform can't get it out
+# of. The easiest escape hatch here is a full deletion.
+#
 # https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/container_app
 # https://github.com/microsoft/NubesGen/blob/0d5d4896f5f2c93d1baca01807527bee56ff49b8/terraform/modules/container-apps/main.tf#L91
 resource "azurerm_container_app" "app" {
@@ -415,12 +506,18 @@ resource "azurerm_container_app" "app" {
   }
 
   template {
+    # without this, if the container fails, it will not be restarted even if tf config is updated
+    min_replicas = 1
+
     container {
       name = "${azurerm_resource_group.main.name}-app-web"
 
       # https://github.com/crccheck/docker-hello-world/blob/master/Dockerfile
-      image = "crccheck/hello-world:latest"
-      # image = "cosmaneura/cosmaneura:latest"
+      # image = "crccheck/hello-world:latest"
+
+      # the amount of time I wasted realizing that private images must be fully qualified, but public images do not need to be
+      # https://github.com/hashicorp/terraform-provider-azurerm/issues/22459
+      image = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
 
 
       # the docs state that these probes are automatically setup with the ingress port, so it's unclear why they need
@@ -438,7 +535,7 @@ resource "azurerm_container_app" "app" {
 
       # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
 
-      # args = ["fastapi run"]
+      args = ["fastapi run"]
 
       # args = [
       #   "celery",
@@ -472,10 +569,14 @@ resource "azurerm_container_app" "app" {
         secret_name = "redis-url"
       }
 
-      # env {
-      #   name  = "IPINFO_API_KEY"
-      #   value = data.external.IPINFO_API_KEY.result["password"]
-      # }
+      dynamic "env" {
+        for_each = toset(["CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL", "EMAIL_FROM_ADDRESS"])
+
+        content {
+          name  = env.key
+          value = data.external.secrets.result[env.key]
+        }
+      }
 
       # yes, memory is defined as a string and CPU is defined as a float
       cpu    = 0.5
