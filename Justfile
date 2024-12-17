@@ -52,6 +52,8 @@ EXECUTE_IN_TEST := "CI=true direnv exec ."
 default:
 	just --list
 
+lint: js_lint py_lint db_lint
+
 # start all of the services you need for development in a single terminal
 [macos]
 [script]
@@ -645,13 +647,20 @@ db_debug_off:
 # Secrets
 #######################
 
-_secrets_service-token CONTEXT:
+_secrets_service-token CONTEXT WRITE_PERMISSION="false":
 	# if OP_SERVICE_ACCOUNT_TOKEN is set, the service-account API will not work
 	unset OP_SERVICE_ACCOUNT_TOKEN && \
+	write_permission=$([[ "{{WRITE_PERMISSION}}" == "true" ]] && echo ",write_items" || echo "") && \
 	op service-account create {{PROJECT_NAME}}-{{CONTEXT}} \
 			--expires-in '90d' \
-			--vault "${OP_VAULT_UID}:read_items" \
+			--vault "${OP_VAULT_UID}:read_items${write_permission}" \
 			--raw
+
+
+# for terraform and other tools which can create entries
+[macos]
+secrets_write-service-token:
+	just _secrets_service-token write true | jq -r -R '@sh "export OP_SERVICE_ACCOUNT_TOKEN=\(.)"'
 
 # generate service account token to be used locally for a developer
 [macos]
@@ -711,6 +720,7 @@ NIXPACKS_BUILD_METADATA := (
 PYTHON_NIXPACKS_BUILD_CMD := "nixpacks build ." + \
 	" --name " + PYTHON_IMAGE_TAG + \
 	" " + NIXPACKS_BUILD_METADATA + \
+	" --platform=linux/amd64" + \
 	" $(just direnv_export_docker '" + SHARED_ENV_FILE +"' --params)" + \
 	" --inline-cache --cache-from " + PYTHON_PRODUCTION_IMAGE_NAME + ":latest" + \
 	" --label org.opencontainers.image.revision='" + GIT_SHA + "'" + \
@@ -774,6 +784,7 @@ build_js-assets: _production_build_assertions
 	nixpacks build {{WEB_DIR}} \
 		--name "{{JAVASCRIPT_IMAGE_TAG}}" \
 		 {{NIXPACKS_BUILD_METADATA}} \
+		--platform=linux/amd64 \
 		--env VITE_BUILD_COMMIT="{{GIT_SHA}}" \
 		--cache-from "{{JAVASCRIPT_PRODUCTION_IMAGE_NAME}}:latest" --inline-cache \
 		$(just direnv_export_docker '{{JAVASCRIPT_SECRETS_FILE}}' --params) \
@@ -781,9 +792,11 @@ build_js-assets: _production_build_assertions
 		--label org.opencontainers.image.description="Used for building javascript assets, not for deployment" \
 
 	# you cannot extract files out of a image, only a container
+	# extract out the production-built javascript from the container
 	docker rm tmp-js-container || true
 	docker create --name tmp-js-container {{JAVASCRIPT_IMAGE_TAG}}
 	docker cp tmp-js-container:/app/build/production/client "{{JAVASCRIPT_PRODUCTION_BUILD_DIR}}"
+	tree "{{JAVASCRIPT_PRODUCTION_BUILD_DIR}}"
 
 # support non-macos installations for github actions
 _build_requirements:
@@ -859,14 +872,15 @@ build_shell: build
 build_shell-exec:
 	docker exec -it $(docker ps -q --filter "ancestor={{PYTHON_IMAGE_TAG}}") bash -l
 
+# TODO https://discord.com/channels/1106380155536035840/1318603119990538340/1318603119990538340
 # run the container locally, as if it were in production (against production DB, resources, etc)
-[script]
-build_run-as-production procname="":
+build_run-as-production procname="api" image_name=PYTHON_IMAGE_TAG:
 	# NOTE that resources are limited to a production-like environment, change if your production requirements are different
 	docker run -p 8202:80 \
 		--memory=1g --cpus=2 \
-		$(just direnv_export_docker "" --params) \
-		"{{PYTHON_IMAGE_TAG}}" \
+		$(just direnv_export_docker ".env.production.backend" --params) \
+		--platform linux/amd64 \
+		"{{image_name}}" \
 		"$(just extract_proc "{{procname}}")"
 
 # extract worker start command from Procfile
@@ -892,8 +906,7 @@ jq_script := """
 with_entries(
 	select((
 		(.key | startswith("DIRENV_") | not)
-		and (.key | startswith("OP_") | not)
-		and (.key | IN("VIRTUAL_ENV", "VENV_ACTIVE", "UV_ACTIVE", "PATH") | not)
+		and (.key | IN("VIRTUAL_ENV", "VENV_ACTIVE", "UV_ACTIVE", "PATH", "OP_SERVICE_ACCOUNT_TOKEN") | not)
 	))
 )
 """
