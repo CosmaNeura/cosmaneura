@@ -27,6 +27,11 @@ terraform {
       version = ">=4.14.0"
     }
 
+    azapi = {
+      source  = "Azure/azapi"
+      version = "2.1.0"
+    }
+
     onepassword = {
       source  = "1password/onepassword"
       version = ">=2.1.2"
@@ -281,9 +286,11 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
   lifecycle {
     prevent_destroy = true
   }
-
-  # TODO no tags here?
 }
+
+####################
+# Public DB Access
+####################
 
 # the following is required in order to expose the azure db to the public internet
 # > if you don't specify delegated_subnet_id and private_dns_zone_id the server will be configured with Public access\
@@ -393,22 +400,99 @@ resource "azurerm_container_app_environment" "main" {
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
   #   kube_environment_id = azurerm_kubernetes_cluster.main.id
 
-  # custom_domain_verification_id
+  # `custom_domain_verification_id` represents the TXT record that must be added to a `asuid.` record
+
+  tags = var.tags
 }
 
+# https://github.com/hashicorp/terraform-provider-azurerm/issues/21866#issuecomment-2455147510
 
-
+# the flow here is  wonky:
+#   - this operation will fail unless the correct record exists on the target name/host
+#   - you cannot know what is required until you run this command
+#   - therefore, apply this TF module, look at the error, update the DNS, and then rerun
+#   - after rerunning the domain will be successfully verified, but this module will async attempt to bind to the
+#     specified domain. This will fail if the CNAME of the targeted domain is not set to the fqdn of the container app
+#   - if you get into a failed state, you'll need to manually delete the domain.
+#   - although the app environment is not explicitly tied to the resources here, the certificate is generated through
+#     the application environment.
+#
+# https://learn.microsoft.com/en-us/azure/security/fundamentals/subdomain-takeover
 # https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/container_app_custom_domain
-# resource "azurerm_container_app_custom_domain" "main" {
-#   # name             = trimsuffix(trimprefix(azurerm_dns_txt_record.api.fqdn, "asuid."), ".")
-#   name             = "app.cosmaneura.com"
-#   container_app_id = azurerm_container_app.app.id
+resource "azurerm_container_app_custom_domain" "main" {
+  # name             = trimsuffix(trimprefix(azurerm_dns_txt_record.api.fqdn, "asuid."), ".")
+  # name is the hostname you want to generate a certificate for
+  name             = "app.cosmaneura.com"
+  container_app_id = azurerm_container_app.app.id
 
-#   lifecycle {
-#     // When using an Azure created Managed Certificate these values must be added to ignore_changes to prevent resource recreation.
-#     ignore_changes = [certificate_binding_type, container_app_environment_certificate_id]
-#   }
-# }
+  certificate_binding_type = "SniEnabled"
+
+  lifecycle {
+    // When using an Azure created Managed Certificate these values must be added to ignore_changes to prevent resource recreation.
+    ignore_changes = [certificate_binding_type, container_app_environment_certificate_id]
+  }
+}
+
+# generates a certificate for the custom domain in the container app environment
+resource "azapi_resource" "managed_certificate" {
+  # depends_on = [azurerm_dns_cname_record.api]
+  type      = "Microsoft.App/managedEnvironments/managedCertificates@2024-03-01"
+  name      = local.name
+  parent_id = azurerm_container_app_environment.main.id
+  location  = azurerm_resource_group.main.location
+
+  body = {
+    properties = {
+      subjectName             = azurerm_container_app_custom_domain.main.name
+      domainControlValidation = "CNAME"
+    }
+  }
+
+  response_export_values = ["*"]
+
+  tags = var.tags
+}
+
+# within the container app, this generates the "binding" between the custom domain and the container
+resource "azapi_resource_action" "apply_custom_domain_binding" {
+  resource_id = azurerm_container_app.app.id
+  when        = "apply"
+  type        = "Microsoft.App/containerApps@2024-03-01"
+  method      = "PATCH"
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          customDomains = [
+            {
+              bindingType   = "SniEnabled",
+              name          = azurerm_container_app_custom_domain.main.name,
+              certificateId = azapi_resource.managed_certificate.output.id
+            }
+          ]
+        }
+      }
+    }
+  }
+}
+
+resource "azapi_resource_action" "destroy_custom_domain_binding" {
+  depends_on  = [azurerm_container_app_custom_domain.main]
+  when        = "destroy"
+  resource_id = azurerm_container_app.app.id
+  #On destroy provisioner necessary to remove domain before removing Certificate see error in comments below
+  type   = "Microsoft.App/containerApps@2024-03-01"
+  method = "PATCH"
+  body = {
+    properties = {
+      configuration = {
+        ingress = {
+          customDomains = []
+        }
+      }
+    }
+  }
+}
 
 # https://github.com/xaviermignot/terraform-certificates/blob/main/main.tf
 
@@ -505,6 +589,9 @@ resource "azurerm_container_app" "app" {
   # required for blue/green deployments
   revision_mode = "Multiple"
 
+  # this is pretty important: without this an unbounded number of past versions can continue to run
+  max_inactive_revisions = 1
+
   ingress {
     external_enabled = true
     target_port      = 80
@@ -546,7 +633,7 @@ resource "azurerm_container_app" "app" {
 
       # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
 
-      args = ["fastapi run"]
+      args = ["fastapi run --port 80"]
 
       # args = [
       #   "celery",
@@ -581,7 +668,7 @@ resource "azurerm_container_app" "app" {
       }
 
       dynamic "env" {
-        for_each = toset(["CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL", "EMAIL_FROM_ADDRESS"])
+        for_each = toset(["CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL", "EMAIL_FROM_ADDRESS", "PYTHON_ENV"])
 
         content {
           name  = env.key
