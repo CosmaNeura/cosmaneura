@@ -591,22 +591,21 @@ resource "azurerm_container_app" "app" {
 
       args = [data.external.procfile.result["api"]]
 
-      env {
-        name        = "DATABASE_URL"
-        secret_name = "database-url"
-      }
-
-      env {
-        name        = "REDIS_URL"
-        secret_name = "redis-url"
-      }
-
       dynamic "env" {
-        for_each = toset(["CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL", "EMAIL_FROM_ADDRESS", "PORT"])
+        for_each = var.python_public_vars
 
         content {
           name  = env.key
           value = data.external.secrets.result[env.key]
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.python_secret_vars
+
+        content {
+          name        = env.key
+          secret_name = replace(lower(env.key), "_", "-")
         }
       }
 
@@ -616,14 +615,13 @@ resource "azurerm_container_app" "app" {
     }
   }
 
-  secret {
-    name  = "redis-url"
-    value = local.redis_connection_string
-  }
+  dynamic "secret" {
+    for_each = var.python_secret_vars
 
-  secret {
-    name  = "database-url"
-    value = local.postgresql_connection_string
+    content {
+      name  = replace(lower(secret.key), "_", "-")
+      value = data.external.secrets.result[secret.key]
+    }
   }
 
   # TODO could use identity based login in the future, but the Basic tier of acr doesn't support this
