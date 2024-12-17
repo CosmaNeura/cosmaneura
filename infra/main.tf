@@ -92,7 +92,7 @@ resource "azurerm_storage_account" "uploads" {
   }
 }
 
-resource "azurerm_storage_management_policy" "example" {
+resource "azurerm_storage_management_policy" "delete_uploads" {
   storage_account_id = azurerm_storage_account.uploads.id
 
   rule {
@@ -109,6 +109,7 @@ resource "azurerm_storage_management_policy" "example" {
       #   }
     }
 
+    # IMPORTANT: this ensures files are wiped automatically after uploaded
     actions {
       base_blob {
         # tier_to_cool_after_days_since_modification_greater_than    = 10
@@ -129,11 +130,6 @@ resource "azurerm_storage_container" "uploads" {
   storage_account_id = azurerm_storage_account.uploads.id
   # storage_account_name  = "uploads"
   container_access_type = "private"
-
-  # lifecycle {
-
-  # }
-
 }
 
 # https://github.com/1Password/terraform-provider-onepassword/issues/17
@@ -144,17 +140,20 @@ resource "onepassword_item" "upload_blob_storage" {
   title    = "Azure Blob Storage File Uploads"
   category = "login"
 
-  url = azurerm_storage_account.uploads.primary_blob_endpoint
+  url      = azurerm_storage_account.uploads.primary_blob_endpoint
+  password = azurerm_storage_account.uploads.primary_access_key
 
-  # section {
-  #   label = "Example section"
+  section {
+    label = "main"
 
-  #   field {
-  #     label = "Example field"
-  #     type  = "DATE"
-  #     value = "2024-01-31"
-  #   }
-  # }
+    field {
+      label = "account-name"
+      # type  = "STREI"
+      value = azurerm_storage_account.uploads.name
+    }
+  }
+
+  tags = var.onepassword_tags
 }
 
 # the ghcr.io container registry is quite expensive:
@@ -249,7 +248,7 @@ resource "azurerm_postgresql_flexible_server" "main" {
   auto_grow_enabled     = true
   backup_retention_days = 30
 
-  # for development, we should lock this down later on
+  # TODO for development, we should lock this down later on
   public_network_access_enabled = true
 
   authentication {
@@ -271,13 +270,6 @@ resource "azurerm_postgresql_flexible_server" "main" {
   tags = var.tags
 }
 
-# https://support.hashicorp.com/hc/en-us/articles/4548903433235-Terraform-Enterprise-External-Services-mode-with-Azure-Database-for-PostgreSQL-Flexible-Server-Failed-to-Initialize-Plugins
-# resource "azurerm_postgresql_flexible_server_configuration" "metabaseExtensions" {
-#   name      = "azure.extensions"
-#   server_id = azurerm_postgresql_flexible_server.main.id
-#   value     = "CITEXT,HSTORE,UUID-OSSP"
-# }
-
 # https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/postgresql_flexible_server_database
 resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
   server_id = azurerm_postgresql_flexible_server.main.id
@@ -289,29 +281,32 @@ resource "azurerm_postgresql_flexible_server_database" "cosmaneura-database" {
   lifecycle {
     prevent_destroy = true
   }
+
+  # TODO no tags here?
 }
 
 # the following is required in order to expose the azure db to the public internet
-# > if you don't specify delegated_subnet_id and private_dns_zone_id the server will be configured with Public access, but you also need to configure firewall rules because by default everything is denied
+# > if you don't specify delegated_subnet_id and private_dns_zone_id the server will be configured with Public access\
+# but you also need to configure firewall rules because by default everything is denied
 # https://github.com/hashicorp/terraform-provider-azurerm/issues/14989#issuecomment-1109897547
 
-# resource "azurerm_postgresql_flexible_server_firewall_rule" "azure" {
-#   count = 1
+resource "azurerm_postgresql_flexible_server_firewall_rule" "azure" {
+  # count = 1
 
-#   name             = "allow-access-from-azure-services"
-#   server_id        = azurerm_postgresql_flexible_server.main.id
-#   start_ip_address = "0.0.0.0"
-#   end_ip_address   = "0.0.0.0"
-# }
+  name             = "allow-access-from-azure-services"
+  server_id        = azurerm_postgresql_flexible_server.main.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "0.0.0.0"
+}
 
-# resource "azurerm_postgresql_flexible_server_firewall_rule" "all" {
-#   count = 1
+resource "azurerm_postgresql_flexible_server_firewall_rule" "all" {
+  # count = 1
 
-#   name             = "allow-all-ips"
-#   server_id        = azurerm_postgresql_flexible_server.main.id
-#   start_ip_address = "0.0.0.0"
-#   end_ip_address   = "255.255.255.255"
-# }
+  name             = "allow-all-ips"
+  server_id        = azurerm_postgresql_flexible_server.main.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "255.255.255.255"
+}
 
 # ################
 # # Metabase
@@ -400,6 +395,22 @@ resource "azurerm_container_app_environment" "main" {
 
   # custom_domain_verification_id
 }
+
+
+
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/container_app_custom_domain
+# resource "azurerm_container_app_custom_domain" "main" {
+#   # name             = trimsuffix(trimprefix(azurerm_dns_txt_record.api.fqdn, "asuid."), ".")
+#   name             = "app.cosmaneura.com"
+#   container_app_id = azurerm_container_app.app.id
+
+#   lifecycle {
+#     // When using an Azure created Managed Certificate these values must be added to ignore_changes to prevent resource recreation.
+#     ignore_changes = [certificate_binding_type, container_app_environment_certificate_id]
+#   }
+# }
+
+# https://github.com/xaviermignot/terraform-certificates/blob/main/main.tf
 
 # TODO why can't we use the external secrets we defined?
 locals {
