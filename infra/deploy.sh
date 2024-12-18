@@ -50,7 +50,7 @@ initiate_deployment() {
 	local image="${PRODUCTION_IMAGE}:${git_sha}"
 
 	echo "Initiating deployment for $container_name with image $image..."
-	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" -i "$image"
+	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" -i "$image" --revision-suffix "$REVISION_STRING"
 	# --set-environment-variables "REVISION=$REVISION_STRING"
 
 	if [[ $? -ne 0 ]]; then
@@ -77,16 +77,23 @@ check_deployment() {
 	while [[ $attempts -lt $max_attempts ]]; do
 		# Check provisioning state
 		provisioning_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.provisioningState" -o tsv)
-		current_image=$(az containerapp revision list -n "$container_name" -g "$RESOURCE_GROUP" --query "[0].properties.template.containers[0].image" -o tsv)
-		health_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.configuration.activeRevisions[0].properties.healthState" -o tsv)
+		current_image=$(az containerapp revision list -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv)
+		running_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.runningStatus" -o tsv)
+
+		# should never be empty, error if so
+		if [[ -z "$provisioning_state" ]] || [[ -z "$current_image" ]] || [[ -z "$health_state" ]]; then
+			echo "Error: Failed to get complete status information for $container_name"
+			return 1
+		fi
 
 		# Validate all conditions
-		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && "$health_state" == "Healthy" ]]; then
+		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && "$running_state" == "Running" ]]; then
 			echo "$container_name deployment is successful."
 			return 0
 		fi
 
-		echo "Retrying in 5 seconds... (Attempt $((attempts + 1))/$max_attempts)"
+		echo "Retrying deployment status for $container_name in 5 seconds... (Attempt $((attempts + 1))/$max_attempts)"
+
 		sleep 5
 		((attempts++))
 	done
@@ -96,34 +103,22 @@ check_deployment() {
 }
 
 # Deploy all containers first
-overall_status=0
 for container in $CONTAINERS; do
 	initiate_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
-		overall_status=1
+		echo "Deployment initiation failed. Exiting."
+		exit 1
 	fi
 done
 
-# Exit early if deployment initiation failed for any container
-if [[ $overall_status -ne 0 ]]; then
-	echo "One or more deployments failed to initiate. Aborting status checks."
-	exit 1
-fi
-
 # Check deployment status for all containers
-overall_status=0
 for container in $CONTAINERS; do
 	check_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
-		overall_status=1
+		echo "Deployment failed for $container. Exiting."
+		exit 1
 	fi
 done
 
-# Final result
-if [[ $overall_status -eq 0 ]]; then
-	echo "All deployments are successful for Git SHA $GIT_SHA."
-	exit 0
-else
-	echo "One or more deployments failed for Git SHA $GIT_SHA."
-	exit 1
-fi
+echo "All deployments are successful for Git SHA $GIT_SHA."
+exit 0

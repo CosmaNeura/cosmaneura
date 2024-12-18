@@ -1,3 +1,6 @@
+# https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.App/containerApps/cosmaneura-prod-app-web/ingress
+# requires yq
+
 install:
 	# opentofu
 	@if ! brew list | grep -q opentofu; then \
@@ -11,6 +14,8 @@ install:
 		brew install azure-cli; \
 	fi
 
+	brew install hashicorp/tap/terraform
+
 upgrade:
 	az upgrade --yes
 	brew upgrade opentofu
@@ -23,11 +28,18 @@ upgrade:
 # TOFU_GLOBAL_OPTIONS := "-chdir=infra"
 TOFU_GLOBAL_OPTIONS := ""
 
+# TODO we may be able to get rid of this with the federated creds
+# set the container registry password in GHA
+azure_gh-secrets:
+	registry_password=$(just azure_output | jq -r '.acr_admin_password.value') && \
+		gh secret set CONTAINER_REGISTRY_PASSWORD --app actions --body "$registry_password"
+
 azure_open:
 	open "https://portal.azure.com/$(az account show --query tenantId -o tsv)/"
 
 azure_init:
 	tofu init
+
 # init each run to make sure latest package versions are pulled
 azure_apply:
 	tofu {{TOFU_GLOBAL_OPTIONS}} apply -auto-approve
@@ -38,14 +50,26 @@ azure_output:
 azure_shell:
 	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command zsh
 
-AZURE_RESOURCE_GROUP := "cosmaneura"
-AZURE_CONTAINER := "chowmetrics-scheduler"
+AZURE_RESOURCE_GROUP := "cosmaneura-prod"
+AZURE_CONTAINER := "cosmaneura-prod-app"
 
 # instead of `heroku logs` we have this insane command we have to remember
 azure_logs:
 	az containerapp logs show --follow -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}}
 
 azure_exec:
-	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command "bash -l"
+	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command "sh -l"
+
+azure_db-migrate:
+	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command "bash -c 'alembic upgrade head'"
+
+azure_play:
+  tofu {{TOFU_GLOBAL_OPTIONS}} console
+
+azure_tags:
+	az acr repository show-tags --name cosmaneuraprodregistry.azurecr.io --repository 'cosmaneura/cosmaneura' --orderby time_desc
+
+
 
 # clean:
+

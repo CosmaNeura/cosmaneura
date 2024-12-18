@@ -118,13 +118,14 @@ resource "azurerm_storage_account" "uploads" {
   account_replication_type = "LRS"
 
   blob_properties {
+    #
     cors_rule {
       max_age_in_seconds = 86400
       # TODO we should explicitly limit origins, but leaving wide open for development
       allowed_origins = ["*"]
-      allowed_headers = [""]
+      allowed_headers = ["*"]
       allowed_methods = ["PUT"]
-      exposed_headers = [""]
+      exposed_headers = ["*"]
     }
   }
 
@@ -180,6 +181,11 @@ resource "onepassword_item" "upload_blob_storage" {
     field {
       label = "account-name"
       value = azurerm_storage_account.uploads.name
+    }
+
+    field {
+      label = "container-name"
+      value = azurerm_storage_container.uploads.name
     }
   }
 
@@ -722,6 +728,67 @@ resource "azurerm_container_app" "worker" {
   }
 
   tags = var.tags
+}
+
+####################
+# Hosting Metadata
+#
+# - There are some manual DNS records that must be set which cannot be done by terraform. This information is included
+#   in the note.
+# - Various key names required for various scripts. Resource group, container names, etc.
+#
+####################
+
+# https://registry.terraform.io/providers/1Password/onepassword/latest/docs/resources/item
+resource "onepassword_item" "squarespace_domain" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title      = "Azure ${local.environment} Hosting Metadata"
+  category   = "secure_note"
+  note_value = <<-EOT
+    ## DNS Settings
+
+    You must login to SquareSpace and ensure the domain values included here are properly set
+  EOT
+
+  section {
+    label = "DNS"
+
+    field {
+      label = "Validation Domain"
+      value = "asuid.${azurerm_container_app_custom_domain.main.name}"
+    }
+
+    field {
+      label = "Validation Key"
+      value = azurerm_container_app.app.custom_domain_verification_id
+    }
+
+    field {
+      label = "Domain CNAME"
+      value = azurerm_container_app.app.ingress[0].fqdn
+    }
+  }
+
+  tags = var.onepassword_tags
+}
+
+####################
+# Health Services Access
+####################
+
+resource "azurerm_user_assigned_identity" "health_services" {
+  resource_group_name = azurerm_resource_group.main.name
+  # location            = azurerm_resource_group.main.location
+  location = "eastus"
+  name     = "${local.base_name}-health-services"
+}
+
+# 'DeID Batch Data Owner' pulled from `az role definition list | ov` on `deid` related permissions
+resource "azurerm_role_assignment" "health_services_deid_access" {
+  scope                = azurerm_container_registry.main.id
+  role_definition_name = "DeID Batch Data Owner"
+  principal_id         = azurerm_user_assigned_identity.health_services.principal_id
 }
 
 ####################

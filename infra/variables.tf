@@ -1,8 +1,3 @@
-# variable "GH_GHCR_TOKEN" {
-#   description = "The GitHub Container Registry token"
-#   sensitive   = true
-# }
-
 variable "tags" {
   description = "A map of tags to add to all resources"
   type        = map(string)
@@ -22,32 +17,30 @@ variable "onepassword_tags" {
   ]
 }
 
+# variables which should be exposed publicly in the azure ui
+variable "python_secret_vars" {
+  description = "ENV vars which need to remain secret"
+  type        = set(string)
+  default     = ["DATABASE_URL", "REDIS_URL", "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL"]
+}
+
+# container configuration which does not need to be secret
+variable "python_public_vars" {
+  description = "ENV vars which can be public"
+  type        = set(string)
+  default     = ["LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT"]
+}
+
+# start commands for the container types
 data "external" "procfile" {
   program     = ["yq", "Procfile", "--output-format", "json"]
   working_dir = "${path.module}/.."
 }
 
+# contains all of the production secrets required for container configuration
 # use `data.external.secrets.result[KEY]` to access this data
 data "external" "secrets" {
   # Run `just direnv_export .env.production.backend` to inspect results
   program     = ["just", "direnv_export", ".env.production.backend"]
   working_dir = "${path.module}/.."
 }
-
-# TODO this is not ideal, should be a better way to do this
-
-# data "external" "IPINFO_API_KEY" {
-#   program = ["${path.module}/bin/op_read.sh", "op://Knolbe/IPinfo/api"]
-# }
-
-# data "external" "OPENAI_API_KEY" {
-#   program = ["${path.module}/bin/op_read.sh", "op://Knolbe/cosmaneura OpenAI Key/credential"]
-# }
-
-# data "external" "SENTRY_DSN" {
-#   program = ["${path.module}/bin/op_read.sh", "op://cosmaneura/Sentry/credentials"]
-# }
-
-# data "external" "RADAR_API_KEY" {
-#   program = ["${path.module}/bin/op_read.sh", "op://Knolbe/Radar API Key/credential"]
-# }
