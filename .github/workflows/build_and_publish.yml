@@ -88,8 +88,8 @@ jobs:
     needs: [web, app]
     if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
     permissions:
-      packages: write
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/common-setup
