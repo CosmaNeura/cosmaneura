@@ -115,6 +115,5 @@ jobs:
         with:
           azcliversion: latest
           inlineScript: |
-            az account show
-
-# az containerapp update -n cosmaneura-prod-app -g cosmaneura-prod -i cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:6070bd2b6327d8fbb8123acb85f480db0c68c10c --revision-suffix 12-17-2024-v3
+            az containerapp update -n cosmaneura-prod-app -g cosmaneura-prod -i cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest
+            az containerapp update -n cosmaneura-prod-worker -g cosmaneura-prod -i cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest
