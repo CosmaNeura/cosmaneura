@@ -11,8 +11,9 @@ locals {
     key             = "prod.terraform.tfstate"
   }
 
-  environment = "prod"
-  name        = "cosmaneura-${local.environment}"
+  azure_subscription_id = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+  environment           = "prod"
+  name                  = "cosmaneura-${local.environment}"
 
   base_name = azurerm_resource_group.main.name
   # azure requires alpha numeric chars only in many places
@@ -65,7 +66,7 @@ provider "onepassword" {
 
 provider "azurerm" {
   # a subscription (aka account) is a account ID, this is the `id` field on the `az account list`
-  subscription_id = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+  subscription_id = local.azure_subscription_id
 
   features {
     # skip_provider_registration = true
@@ -537,11 +538,9 @@ resource "azurerm_container_app" "app" {
   name                         = "${azurerm_resource_group.main.name}-app"
   container_app_environment_id = azurerm_container_app_environment.main.id
 
-  # required for blue/green deployments
-  revision_mode = "Multiple"
-
-  # this is pretty important: without this an unbounded number of past versions can continue to run
-  max_inactive_revisions = 1
+  # https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management
+  # > When in single revision mode, Container Apps handles the automatic switch between revisions to support zero downtime deployment.
+  revision_mode = "Single"
 
   ingress {
     external_enabled = true
@@ -643,31 +642,158 @@ resource "azurerm_container_app" "app" {
   tags = var.tags
 }
 
-# resource "azurerm_container_app" "cosmaneura_worker" {
-#   resource_group_name          = azurerm_resource_group.main.name
-#   container_app_environment_id = azurerm_container_app_environment.main.id
+resource "azurerm_container_app" "worker" {
+  resource_group_name = azurerm_resource_group.main.name
+  # NOTE location is determined automatically by the resource group
 
-#   name          = "cosmaneura-worker"
-#   revision_mode = "Single"
+  name                         = "${azurerm_resource_group.main.name}-worker"
+  container_app_environment_id = azurerm_container_app_environment.main.id
 
-#   template {
-#     container {
-#       name  = "cosmaneura-worker"
-#       image = "ghcr.io/cosmaneura/cosmaneura:latest"
+  # required for blue/green deployments
+  revision_mode = "Single"
 
-#       # in order to trigger a release each time you apply the terraform
-#       # without this, the latest version of a tag will not be deployed :/
-#       env {
-#         name  = "RELEASE_TIMESTAMP"
-#         value = timestamp()
-#       }
 
-#       env {
-#         name  = "CELERY_WORKER_CONCURRENCY"
-#         value = "1"
-#       }
+  template {
+    # without this, if the container fails, it will not be restarted even if tf config is updated
+    min_replicas = 1
 
-#       env {
-#         name  = "LOG_LEVEL"
-#         value = "INFO"
-#       }
+    container {
+      name = "${local.base_name}-app-worker"
+
+      # great starter image to just get something running
+      # https://github.com/crccheck/docker-hello-world/blob/master/Dockerfile
+      # image = "crccheck/hello-world:latest"
+
+      # the amount of time I wasted realizing that private images must be fully qualified, but public images do not need to be is embarrassing
+      # https://github.com/hashicorp/terraform-provider-azurerm/issues/22459
+      image = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
+
+      # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
+
+      args = [data.external.procfile.result["worker"]]
+
+      dynamic "env" {
+        for_each = var.python_public_vars
+
+        content {
+          name  = env.key
+          value = data.external.secrets.result[env.key]
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.python_secret_vars
+
+        content {
+          name        = env.key
+          secret_name = replace(lower(env.key), "_", "-")
+        }
+      }
+
+      # yes, memory is defined as a string and CPU is defined as a float
+      cpu    = 0.5
+      memory = "1Gi"
+    }
+  }
+
+  dynamic "secret" {
+    for_each = var.python_secret_vars
+
+    content {
+      name  = replace(lower(secret.key), "_", "-")
+      value = data.external.secrets.result[secret.key]
+    }
+  }
+
+  # TODO could use identity based login in the future, but the Basic tier of acr doesn't support this
+  # https://github.com/microsoft/NubesGen/blob/0d5d4896f5f2c93d1baca01807527bee56ff49b8/terraform/modules/container-apps/main.tf#L91
+  registry {
+    # unlike other registry configs, this does NOT contain a protocol
+    server   = azurerm_container_registry.main.login_server
+    username = azurerm_container_registry.main.admin_username
+
+    # why is the password stored in a separate secret block? No idea. But, This is The Way.
+    password_secret_name = "registry-secret"
+  }
+
+  secret {
+    name  = "registry-secret"
+    value = azurerm_container_registry.main.admin_password
+  }
+
+  tags = var.tags
+}
+
+####################
+# GHA Access
+#
+# Adapted from: https://github.com/likvid-bank/likvid-cloudfoundation/blob/86930f7b9aa538f7f8cb64074f351dfec81a4c84/kit/azure/buildingblocks/starterkit-composition/github-actions-terraform-setup/resources.azure.cicd.tf
+####################
+
+resource "azurerm_user_assigned_identity" "ghactions" {
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  name                = "${local.base_name}-gha-identity"
+}
+
+# see https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/configuring-openid-connect-in-azure#adding-the-federated-credentials-to-azure
+resource "azurerm_federated_identity_credential" "ghactions" {
+  parent_id           = azurerm_user_assigned_identity.ghactions.id
+  resource_group_name = azurerm_resource_group.main.name
+
+  name     = "github-actions"
+  audience = ["api://AzureADTokenExchange"]
+  issuer   = "https://token.actions.githubusercontent.com"
+
+  # TODO understand how these are constructed
+  # NOTE the casing here is very important, without the exact casing, this will fail
+  subject = "repo:CosmaNeura/cosmaneura:ref:refs/heads/master"
+}
+
+# push new containers to ACR
+resource "azurerm_role_assignment" "github_acr_push" {
+  scope                = azurerm_container_registry.main.id
+  role_definition_name = "AcrPush"
+  principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
+}
+
+resource "azurerm_role_assignment" "github_container_apps_operator" {
+  scope                = azurerm_container_app_environment.main.id
+  role_definition_name = "Container Apps Operator"
+  principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
+}
+
+# 'Container Apps Operator' is a built in role
+# you can view these roles using: az role definition list | ov
+# https://github.com/humanitec-architecture/reference-architecture-azure/blob/3de02801290cb8d49f5dfaa4565583e3945c7f2c/modules/github/azure.tf#L16
+# https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure#adding-the-federated-credentials-to-azure
+
+resource "onepassword_item" "azure_github_actions" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title    = "Azure ${local.environment} GitHub Actions Credentials"
+  category = "login"
+
+  section {
+    # TODO how can i select the main section?
+    # https://1password-devs.slack.com/archives/C03NJV34SSC/p1734371096188749?thread_ts=1734112677.747919&cid=C03NJV34SSC
+    label = "main"
+
+    field {
+      label = "client-id"
+      value = azurerm_user_assigned_identity.ghactions.client_id
+    }
+
+    field {
+      label = "tenant-id"
+      value = azurerm_user_assigned_identity.ghactions.tenant_id
+    }
+
+    field {
+      label = "subscription-id"
+      value = local.azure_subscription_id
+    }
+  }
+
+  tags = var.onepassword_tags
+}
