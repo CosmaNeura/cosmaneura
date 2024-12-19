@@ -18,6 +18,8 @@ class VisitAudioFile(
     """
 
     user_id: uuid.UUID = Field(
-        sa_type=TypeIDType("usr"), foreign_key="user.id", nullable=False
+        sa_type=TypeIDType("usr"),  # type: ignore
+        foreign_key="user.id",
+        nullable=False,
     )
     azure_file_name: str
