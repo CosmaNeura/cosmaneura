@@ -62,8 +62,8 @@
         "tags": [
           "private"
         ],
-        "summary": "Visit Audio File Get Signed Url",
-        "operationId": "visit_audio_file_get_signed_url",
+        "summary": "Generate Signed Upload Url",
+        "operationId": "generate_signed_upload_url",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -71,7 +71,7 @@
               "application/json": {
                 "schema": {
                   "type": "string",
-                  "title": "Response Visit Audio File Get Signed Url Internal V1 Visit Audio File Get Signed Url Post"
+                  "title": "Response Generate Signed Upload Url Internal V1 Visit Audio File Get Signed Url Post"
                 }
               }
             }
@@ -98,12 +98,12 @@
         ],
         "parameters": [
           {
-            "name": "blob_name",
+            "name": "file_name",
             "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "title": "Blob Name"
+              "title": "File Name"
             }
           }
         ],
