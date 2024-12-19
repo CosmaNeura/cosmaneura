@@ -30,7 +30,7 @@ def test_audio_file_upload(server, page: Page) -> None:
     page.get_by_role("button", name="Notetaking").click()
     page.get_by_role("button", name="Upload Recording").click()
     page.locator('[id="\\:rl\\:-form-item"]').set_input_files(
-        "/Users/mike/Downloads/recording (1).wav"
+        root / "tests/data/recording.wav"
     )
     page.get_by_role("button", name="Upload").click()
     page.get_by_role("status").click()
@@ -44,5 +44,3 @@ def test_audio_file_upload(server, page: Page) -> None:
     assert audio_file.azure_file_name.endswith("recording.wav")
     assert audio_file.user_id not None
     assert audio_file.id not None
-
-    breakpoint()
