@@ -1,13 +1,4 @@
-from datetime import datetime, timedelta
-from pathlib import Path
 
-from azure.storage.blob import (
-    AccountSasPermissions,
-    BlobServiceClient,
-    ContainerClient,
-    ResourceTypes,
-    generate_account_sas,
-)
 from decouple import config
 
 AZURE_UPLOADS_ACCOUNT_NAME = config("AZURE_UPLOADS_ACCOUNT_NAME", cast=str)

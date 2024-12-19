@@ -1,14 +1,11 @@
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from azure.storage.blob import (
     AccountSasPermissions,
-    BlobServiceClient,
     ContainerClient,
     ResourceTypes,
     generate_account_sas,
 )
-from decouple import config
 
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
