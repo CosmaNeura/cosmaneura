@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+import app.commands.uploads.sas
+
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .dependencies.clerk import AuthenticateRequest
 from .dependencies.user import inject_user_record
@@ -36,6 +38,16 @@ def intake_data() -> IntakeData:
 @internal_api_app.get("/notes")
 def note_data() -> NotetakingData:
     return NotetakingData(notes=[])
+
+
+@internal_api_app.post("/visit-audio-file/get-signed-url", response_model=str)
+def visit_audio_file_get_signed_url():
+    return app.commands.uploads.sas.perform()
+
+
+@internal_api_app.post("/visit-audio-file/upload-complete")
+def visit_audio_file_upload(blob_name: str) -> None:
+    return None
 
 
 @internal_api_app.get("/settings")

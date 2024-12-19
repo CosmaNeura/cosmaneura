@@ -31,7 +31,7 @@ import {
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
 import { getClient } from "~/configuration/clerk"
-import { noteData } from "~/configuration/client"
+import { noteData, visitAudioFileGetSignedUrl } from "~/configuration/client"
 
 import { invariant } from "@epic-web/invariant"
 
@@ -71,27 +71,21 @@ function TestFileForm() {
 
   // function onSubmit(values: z.infer<typeof formSchema>) {
   async function onSubmit(_values: z.infer<typeof formSchema>) {
-    // Do something with the form values.
-    // ✅ This will be type-safe and validated.
-    // console.log(values.username[0])
-    // const response = await axios.put(sasUrl, file, {
-    //   headers: {
-    //     'x-ms-blob-type': 'BlockBlob', // Required for Azure Blob uploads
-    //     'Content-Type': file.type // Set the MIME type of the file
-    //   },
-    //   onUploadProgress: (progressEvent) => {
-    //     const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-    //     console.log(`Upload Progress: ${percentCompleted}%`);
-    //   }
-    // });
+    const { data: sasSignature } = await visitAudioFileGetSignedUrl()
+    invariant(sasSignature, "sasSignature should always exist")
 
-    const baseUrl = "https://telehealthcosmaneura.blob.core.windows.net/"
-    const sasToken =
-      "sp=acw&st=2024-12-16T21:52:58Z&se=2024-12-17T05:52:58Z&spr=https&sv=2022-11-02&sr=c&sig=y%2F5KT9nilq3vfU9Pk0v%2Bl8UobFRVtm7sP0nVOHjrVso%3D"
-    const uploadTarget =
-      baseUrl + "telehealth-recording/" + "david.txt?" + sasToken
+    const unixTimestamp = Date.now()
+    const userClient = await getClient()
+    invariant(userClient && userClient.user, "userClient should always exist")
 
-    const _response = await fetch(uploadTarget, {
+    const stampedFileName =
+      userClient.user.id + "_" + unixTimestamp + "_" + file.name
+
+    const url = new URL(sasSignature)
+    url.pathname = `${url.pathname}/${stampedFileName}`
+    const finalUrl = url.toString()
+
+    const _response = await fetch(finalUrl, {
       method: "PUT",
       headers: {
         "x-ms-blob-type": "BlockBlob",
@@ -99,20 +93,9 @@ function TestFileForm() {
       },
       body: file,
     })
-
-    //     const client2 = new BlobServiceClient(
-    // "BlobEndpoint=https://telehealthcosmaneura.blob.core.windows.net/;QueueEndpoint=https://telehealthcosmaneura.queue.core.windows.net/;FileEndpoint=https://telehealthcosmaneura.file.core.windows.net/;TableEndpoint=https://telehealthcosmaneura.table.core.windows.net/;SharedAccessSignature=sv=2022-11-02&ss=bfqt&srt=o&sp=rwdlacupiytfx&se=2024-12-17T04:16:27Z&st=2024-12-16T20:16:27Z&spr=https&sig=G8Z9UNeK7cprlyoIh6L59%2B5Pw3%2B7Fp5jeTqoRVzY2TE%3D",
-    //     )
-    // const client = new BlockBlobClient(
-    //   "BlobEndpoint=https://telehealthcosmaneura.blob.core.windows.net/;QueueEndpoint=https://telehealthcosmaneura.queue.core.windows.net/;FileEndpoint=https://telehealthcosmaneura.file.core.windows.net/;TableEndpoint=https://telehealthcosmaneura.table.core.windows.net/;SharedAccessSignature=sv=2022-11-02&ss=bfqt&srt=o&sp=rwdlacupiytfx&se=2024-12-17T04:16:27Z&st=2024-12-16T20:16:27Z&spr=https&sig=G8Z9UNeK7cprlyoIh6L59%2B5Pw3%2B7Fp5jeTqoRVzY2TE%3D",
-    //   "telehealth-recording",
-    //   "hello3.txt"
-    // )
-
-    console.log(file)
   }
 
-  const [file, setFile] = useState(null)
+  const [file, setFile] = useState<File | null>(null)
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0]

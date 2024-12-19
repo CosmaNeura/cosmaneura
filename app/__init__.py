@@ -6,6 +6,7 @@ from pathlib import Path
 
 import structlog
 
+from .configuration.azure import configure_azure
 from .configuration.database import configure_database
 from .configuration.debugging import configure_debugging
 from .configuration.emailer import configure_mailer
@@ -38,6 +39,7 @@ def setup():
     configure_sentry()
     configure_debugging()
     configure_mailer()
+    configure_azure()
     check_service_versions()
 
     log.info("application setup", environment=python_environment())
