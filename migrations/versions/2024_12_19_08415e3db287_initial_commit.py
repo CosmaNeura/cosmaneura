@@ -1,8 +1,8 @@
 """initial_commit
 
-Revision ID: bd58ec37d4a5
+Revision ID: 08415e3db287
 Revises: 
-Create Date: 2024-12-19 10:28:14.607796
+Create Date: 2024-12-19 12:55:25.362936
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'bd58ec37d4a5'
+revision: str = '08415e3db287'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -38,8 +38,7 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.PrimaryKeyConstraint('id'),
-    comment='Represents a patient'
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_table('user',
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='usr'), nullable=False),
@@ -57,8 +56,7 @@ def upgrade() -> None:
     sa.Column('patient_id', sa.Uuid(), nullable=False),
     sa.Column('location', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.ForeignKeyConstraint(['patient_id'], ['patient.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    comment='Represents an appointment with a patient from accuity'
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_table('visit_audio_file',
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='visit_audio_file'), nullable=False),
@@ -67,8 +65,7 @@ def upgrade() -> None:
     sa.Column('user_id', activemodel.types.typeid.TypeIDType(prefix='usr'), nullable=False),
     sa.Column('azure_file_name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    comment='Link to the blob for a specific visit audio file\n\n1. User drops file into upload area\n2. User hits upload which hits the backend API which generates a signed upload URL\n3. User uploads file to signed upload URL, does not hit the backend API for upload'
+    sa.PrimaryKeyConstraint('id')
     )
     op.create_table('ai_visit_note',
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -81,8 +78,7 @@ def upgrade() -> None:
     sa.Column('note', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
-    sa.PrimaryKeyConstraint('id'),
-    comment='Contents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted.'
+    sa.PrimaryKeyConstraint('id')
     )
     # ### end Alembic commands ###
 
