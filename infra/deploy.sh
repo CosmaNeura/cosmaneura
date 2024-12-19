@@ -77,12 +77,15 @@ check_deployment() {
 	while [[ $attempts -lt $max_attempts ]]; do
 		# Check provisioning state
 		provisioning_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.provisioningState" -o tsv)
-		current_image=$(az containerapp revision list -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.template.containers[0].image" -o tsv)
+		current_image=$(az containerapp revision list -n "$container_name" -g "$RESOURCE_GROUP" --query "[0].properties.template.containers[0].image" -o tsv)
 		running_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.runningStatus" -o tsv)
 
 		# should never be empty, error if so
-		if [[ -z "$provisioning_state" ]] || [[ -z "$current_image" ]] || [[ -z "$health_state" ]]; then
+		if [[ -z "$provisioning_state" ]] || [[ -z "$current_image" ]] || [[ -z "$running_state" ]]; then
 			echo "Error: Failed to get complete status information for $container_name"
+			echo "Provisioning state: $provisioning_state"
+			echo "Current image: $current_image"
+			echo "Running state: $running_state"
 			return 1
 		fi
 
