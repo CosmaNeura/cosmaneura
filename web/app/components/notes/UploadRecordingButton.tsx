@@ -31,7 +31,10 @@ import {
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
 import { getClient } from "~/configuration/clerk"
-import { visitAudioFileGetSignedUrl } from "~/configuration/client"
+import {
+  generateSignedUploadUrl,
+  uploadVisitAudioFile,
+} from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
 
 import { invariant } from "@epic-web/invariant"
@@ -59,7 +62,7 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
 
   // function onSubmit(values: z.infer<typeof formSchema>) {
   async function onSubmit(_values: z.infer<typeof formSchema>) {
-    const { data: sasSignature } = await visitAudioFileGetSignedUrl()
+    const { data: sasSignature } = await generateSignedUploadUrl()
     invariant(sasSignature, "sasSignature should always exist")
 
     const unixTimestamp = Date.now()
@@ -73,13 +76,19 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
     url.pathname = `${url.pathname}/${stampedFileName}`
     const finalUrl = url.toString()
 
-    const _response = await fetch(finalUrl, {
+    const _azureUploadResponse = await fetch(finalUrl, {
       method: "PUT",
       headers: {
         "x-ms-blob-type": "BlockBlob",
         "Content-Type": file.type,
       },
       body: file,
+    })
+
+    const _internalResponse = await uploadVisitAudioFile({
+      query: {
+        file_name: stampedFileName,
+      },
     })
 
     toast({
