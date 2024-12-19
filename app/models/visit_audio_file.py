@@ -3,7 +3,7 @@ import uuid
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types.typeid import TypeIDType
-from sqlmodel import Field, Relationship
+from sqlmodel import Field
 
 
 class VisitAudioFile(

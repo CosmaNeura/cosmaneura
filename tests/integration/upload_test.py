@@ -1,13 +1,12 @@
-import re
-import time
-
 from playwright.sync_api import Page, expect
+
+from app import root
 
 from app.models.user import User
 from app.models.visit_audio_file import VisitAudioFile
 
 from tests.integration.clerk import setup_clerk_testing_token
-from tests.integration.server import home_url, wait_for_loading
+from tests.integration.server import home_url
 from tests.utils import get_clerk_dev_user
 
 
@@ -42,5 +41,5 @@ def test_audio_file_upload(server, page: Page) -> None:
     audio_file = list(VisitAudioFile.all())[0]
 
     assert audio_file.azure_file_name.endswith("recording.wav")
-    assert audio_file.user_id not None
-    assert audio_file.id not None
+    assert audio_file.user_id is not None
+    assert audio_file.id is not None
