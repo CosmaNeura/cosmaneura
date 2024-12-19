@@ -46,7 +46,7 @@ def visit_audio_file_get_signed_url():
 
 
 @internal_api_app.post("/visit-audio-file/upload-complete")
-def visit_audio_file_upload(blob_name: str) -> None:
+def upload_visit_audio_file(blob_name: str) -> None:
     return None
 
 

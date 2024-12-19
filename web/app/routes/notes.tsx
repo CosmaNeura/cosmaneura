@@ -1,8 +1,6 @@
 import { useState } from "react"
-import { useForm } from "react-hook-form"
 import { useNavigation } from "react-router"
 import { useOutletContext } from "react-router"
-import { z } from "zod"
 
 import type { Route } from "./+types.notes"
 
@@ -12,7 +10,6 @@ import { PageTransition } from "@/components/page-transition"
 import { MessageContent } from "@/components/shared/MessageContent"
 import { SkeletonMessage } from "@/components/skeleton-message"
 import { SkeletonMessageList } from "@/components/skeleton-message-list"
-import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
@@ -20,18 +17,8 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 import { mockData } from "@/data/mock"
-import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "~/components/ui/form"
-import { Input } from "~/components/ui/input"
 import { getClient } from "~/configuration/clerk"
-import { noteData, visitAudioFileGetSignedUrl } from "~/configuration/client"
+import { noteData } from "~/configuration/client"
 
 import { invariant } from "@epic-web/invariant"
 
@@ -50,81 +37,6 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   }
 
   return mockData
-}
-
-function TestFileForm() {
-  // const formSchema = z.object({
-  //   image: z
-  //     //Rest of validations done via react dropzone
-  //     .instanceof(File)
-  //     // .refine((file) => file.size !== 0, "Please upload an image"),
-  // });
-
-  // const form = useForm<z.infer<typeof formSchema>>({
-  const form = useForm({
-    // resolver: zodResolver(formSchema),
-    // mode: "onBlur",
-    // defaultValues: {
-    // image: new File([""], "filename"),
-    // },
-  })
-
-  // function onSubmit(values: z.infer<typeof formSchema>) {
-  async function onSubmit(_values: z.infer<typeof formSchema>) {
-    const { data: sasSignature } = await visitAudioFileGetSignedUrl()
-    invariant(sasSignature, "sasSignature should always exist")
-
-    const unixTimestamp = Date.now()
-    const userClient = await getClient()
-    invariant(userClient && userClient.user, "userClient should always exist")
-
-    const stampedFileName =
-      userClient.user.id + "_" + unixTimestamp + "_" + file.name
-
-    const url = new URL(sasSignature)
-    url.pathname = `${url.pathname}/${stampedFileName}`
-    const finalUrl = url.toString()
-
-    const _response = await fetch(finalUrl, {
-      method: "PUT",
-      headers: {
-        "x-ms-blob-type": "BlockBlob",
-        "Content-Type": file.type,
-      },
-      body: file,
-    })
-  }
-
-  const [file, setFile] = useState<File | null>(null)
-
-  const handleFileChange = (e) => {
-    const selectedFile = e.target.files[0]
-    setFile(selectedFile)
-  }
-
-  return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-        <FormField
-          control={form.control}
-          name="image"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Username</FormLabel>
-              <FormControl>
-                <Input type="file" {...field} onChange={handleFileChange} />
-              </FormControl>
-              <FormDescription>
-                This is your public display name.
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <Button type="submit">Submit</Button>
-      </form>
-    </Form>
-  )
 }
 
 export default function NotePage({ loaderData }: Route.ComponentProps) {
@@ -195,7 +107,6 @@ export default function NotePage({ loaderData }: Route.ComponentProps) {
                   <p className="text-sm">
                     Choose a patient from the list to view their details
                   </p>
-                  <TestFileForm />
                 </div>
               </div>
             )}

@@ -3,6 +3,7 @@ import type { LinksFunction } from "react-router"
 
 import { withProviders } from "~/configuration"
 
+import { Toaster } from "@/components/ui/toaster"
 import "~/app.css"
 
 export const links: LinksFunction = () => [
@@ -30,6 +31,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <body>
         {children}
         <ScrollRestoration />
+        <Toaster />
         <Scripts />
       </body>
     </html>
