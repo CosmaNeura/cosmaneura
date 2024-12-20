@@ -3,7 +3,9 @@ import uuid
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types.typeid import TypeIDType
-from sqlmodel import Field
+from app.models.appointment import Appointment
+from app.models.user import User
+from sqlmodel import Field, Relationship
 
 
 class VisitAudioFile(
@@ -22,4 +24,11 @@ class VisitAudioFile(
         foreign_key="user.id",
         nullable=False,
     )
+
+    patient_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    patient: User = Relationship()
+
+    appointment_id: uuid.UUID = Field(foreign_key="appointment.id", nullable=False)
+    appointment: Appointment = Relationship()
+
     azure_file_name: str
