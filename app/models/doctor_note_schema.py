@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
-from .user import Doctor
+from .doctor import Doctor
 
 if t.TYPE_CHECKING:
     from .doctor_note_example import DoctorNoteExample

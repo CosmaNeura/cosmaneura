@@ -3,7 +3,7 @@ from datetime import datetime
 
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
-from app.models.user import Doctor
+from app.models.doctor import Doctor
 from sqlmodel import Field, Relationship
 
 from .patient import Patient

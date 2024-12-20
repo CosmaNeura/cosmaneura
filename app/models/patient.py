@@ -5,7 +5,7 @@ from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from sqlmodel import Field, Relationship
 
-from .user import Doctor
+from .doctor import Doctor
 
 
 class Patient(BaseModel, TimestampsMixin, TypeIDMixin("patient"), table=True):

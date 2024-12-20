@@ -7,7 +7,7 @@ from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
 from .patient import Patient
-from .user import Doctor
+from .doctor import Doctor
 
 
 class VisitAudioFile(

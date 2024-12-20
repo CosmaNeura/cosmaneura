@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
-from .user import Doctor
+from .doctor import Doctor
 
 
 class TranscriptEntry(PydanticBaseModel):
