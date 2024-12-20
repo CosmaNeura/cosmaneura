@@ -1,8 +1,8 @@
 """initial_commit
 
-Revision ID: 08415e3db287
+Revision ID: c6636ea5cf19
 Revises: 
-Create Date: 2024-12-19 12:55:25.362936
+Create Date: 2024-12-20 11:05:58.635418
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '08415e3db287'
+revision: str = 'c6636ea5cf19'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -33,13 +33,6 @@ def upgrade() -> None:
     sa.Column('prompt_hash', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_table('patient',
-    sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='patient'), nullable=False),
-    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
-    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
-    sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
-    sa.PrimaryKeyConstraint('id')
-    )
     op.create_table('user',
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='usr'), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -49,13 +42,60 @@ def upgrade() -> None:
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_table('doctor_note_example',
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='doctor_note_example'), nullable=False),
+    sa.Column('user_id', sa.Uuid(), nullable=False),
+    sa.Column('doctor_note_schema_id', sa.Uuid(), nullable=False),
+    sa.Column('field_examples', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.ForeignKeyConstraint(['doctor_note_schema_id'], ['user.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('doctor_note_schema',
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='doctor_note_schema'), nullable=False),
+    sa.Column('user_id', sa.Uuid(), nullable=False),
+    sa.Column('note_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('fields', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('patient',
+    sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='patient'), nullable=False),
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('user_id', sa.Uuid(), nullable=False),
+    sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('date_of_birth', sa.DateTime(), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
     op.create_table('appointment',
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='appointment'), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('patient_id', sa.Uuid(), nullable=False),
-    sa.Column('location', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('appointment_date', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['patient_id'], ['patient.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_table('ai_visit_transcript',
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='ai_visit_transcript'), nullable=False),
+    sa.Column('user_id', sa.Uuid(), nullable=False),
+    sa.Column('appointment_id', sa.Uuid(), nullable=False),
+    sa.Column('patient_id', sa.Uuid(), nullable=False),
+    sa.Column('duration', sa.Integer(), nullable=True),
+    sa.Column('transcript_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], ),
+    sa.ForeignKeyConstraint(['patient_id'], ['patient.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('visit_audio_file',
@@ -63,7 +103,11 @@ def upgrade() -> None:
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('user_id', activemodel.types.typeid.TypeIDType(prefix='usr'), nullable=False),
+    sa.Column('patient_id', sa.Uuid(), nullable=False),
+    sa.Column('appointment_id', sa.Uuid(), nullable=False),
     sa.Column('azure_file_name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], ),
+    sa.ForeignKeyConstraint(['patient_id'], ['user.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -74,8 +118,9 @@ def upgrade() -> None:
     sa.Column('user_id', sa.Uuid(), nullable=False),
     sa.Column('appointment_id', sa.Uuid(), nullable=False),
     sa.Column('ai_transcript_id', sa.Uuid(), nullable=False),
-    sa.Column('note_schema_id', sa.Uuid(), nullable=False),
+    sa.Column('doctor_note_schema_id', sa.Uuid(), nullable=False),
     sa.Column('note', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+    sa.ForeignKeyConstraint(['ai_transcript_id'], ['ai_visit_transcript.id'], ),
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
     sa.PrimaryKeyConstraint('id')
@@ -87,8 +132,11 @@ def downgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.drop_table('ai_visit_note')
     op.drop_table('visit_audio_file')
+    op.drop_table('ai_visit_transcript')
     op.drop_table('appointment')
-    op.drop_table('user')
     op.drop_table('patient')
+    op.drop_table('doctor_note_schema')
+    op.drop_table('doctor_note_example')
+    op.drop_table('user')
     op.drop_table('llm_response')
     # ### end Alembic commands ###

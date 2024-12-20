@@ -34,7 +34,7 @@ class AIVisitNote(
     appointment: Appointment = Relationship()
 
     ai_transcript_id: uuid.UUID = Field(
-        foreign_key="ai_transcript_id.id", nullable=False
+        foreign_key="ai_visit_transcript.id", nullable=False
     )
     ai_transcript: AIVisitTranscript = Relationship()
 
