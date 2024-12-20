@@ -57,7 +57,7 @@ lint: js_lint py_lint db_lint
 # start all of the services you need for development in a single terminal
 [macos]
 [script]
-dev: local-alias setup
+dev: local-alias
 	# create a tmp Procfile with all of the dev services we need running
 	cat << 'EOF' > tmp/Procfile.dev
 	py_dev: just py_dev
@@ -466,6 +466,8 @@ py_test: py_js-build
 # open playwright trace viewer on last trace zip. --remote to download last failed remote trace
 [macos]
 py_playwright_trace remote="":
+		mkdir -p ${PLAYWRIGHT_RESULT_DIRECTORY}
+
 		# helpful to download to unique folder for two reasons: (a) easier to match up to web GHA view and (b) eliminates risk of gh-cli erroring out bc the directory already exists
 		if [ "{{remote}}" = "--remote" ]; then \
 				failed_run_id=$(just _gha_last_failed_run_id) && \
@@ -480,7 +482,7 @@ py_playwright_trace remote="":
 # record playwright interactions for integration tests and dump them to a file
 [macos]
 [script]
-py_playwright:
+py_playwright-record:
 	mkdir -p tmp/playwright
 	recorded_interaction=tmp/playwright/$(date +%m-%d-%s).py
 
@@ -554,6 +556,8 @@ down: db_down
 db_up:
 	docker compose up -d --wait postgres
 
+# TODO may need to run `docker rm $(docker ps -aq)` as well
+# TODO docker down does not exit 1 if it partially failed
 # turn off the database *and* completely remove the data
 db_down:
 	docker compose down --volumes postgres
@@ -595,6 +599,9 @@ db_play:
 
 # migrations on dev and test
 db_migrate:
+	# if this folder is wiped, you'll get a strange error from alembic
+	mkdir -p migrations/versions
+
 	# dev database is created automatically, but test database is not. We need to fail gracefully when the database already exists.
 	psql $DATABASE_URL -c "CREATE DATABASE ${TEST_DATABASE_NAME};" || true
 
