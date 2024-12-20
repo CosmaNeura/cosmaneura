@@ -7,7 +7,7 @@ from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
 from .patient import Patient
-from .user import User
+from .user import Doctor
 
 
 class VisitAudioFile(
@@ -21,7 +21,7 @@ class VisitAudioFile(
     3. User uploads file to signed upload URL, does not hit the backend API for upload
     """
 
-    user_id: uuid.UUID = User.foreign_key()
+    doctor_id: uuid.UUID = Doctor.foreign_key()
 
     patient_id: uuid.UUID = Patient.foreign_key()
     patient: Patient = Relationship()

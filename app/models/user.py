@@ -16,8 +16,8 @@ CLERK_OBJECT_PREFIX = "user_"
 
 
 # usr vs user is intentionally used to differentiate from the clerk model, which also uses a prefix ID
-class User(
-    BaseModel, TimestampsMixin, SoftDeletionMixin, TypeIDMixin("usr"), table=True
+class Doctor(
+    BaseModel, TimestampsMixin, SoftDeletionMixin, TypeIDMixin("doctor"), table=True
 ):
     clerk_id: str
 

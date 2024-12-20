@@ -5,7 +5,7 @@ from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from sqlmodel import Field, Relationship
 
-from .user import User
+from .user import Doctor
 
 
 class Patient(BaseModel, TimestampsMixin, TypeIDMixin("patient"), table=True):
@@ -20,8 +20,8 @@ class Patient(BaseModel, TimestampsMixin, TypeIDMixin("patient"), table=True):
     Fixing this is left as an exercise to the reader.
     """
 
-    user_id: uuid.UUID = User.foreign_key()
-    user: User = Relationship()
+    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor: Doctor = Relationship()
 
     name: str
     date_of_birth: datetime

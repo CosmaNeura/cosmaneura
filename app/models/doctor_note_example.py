@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
-from .user import User
+from .user import Doctor
 
 
 class DoctorNoteExample(
@@ -24,8 +24,8 @@ class DoctorNoteExample(
     which is why it's not included here.
     """
 
-    user_id: uuid.UUID = User.foreign_key()
-    user: User = Relationship(back_populates="examples")
+    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor: Doctor = Relationship(back_populates="examples")
 
     doctor_note_schema_id: uuid.UUID = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()

@@ -8,7 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
-from .user import User
+from .user import Doctor
 
 if t.TYPE_CHECKING:
     from .doctor_note_example import DoctorNoteExample
@@ -24,8 +24,8 @@ class DoctorNoteSchema(
     A description of the fields required for a specific note type and instructions on what information goes in each field
     """
 
-    user_id: uuid.UUID = User.foreign_key()
-    user: User = Relationship()
+    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor: Doctor = Relationship()
 
     note_type: str
     "user generated name of the note type"
