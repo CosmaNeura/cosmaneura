@@ -14,10 +14,10 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     Represents an appointment with a patient from accuity
     """
 
-    user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    user_id: uuid.UUID = User.foreign_key()
     user: User = Relationship()
 
-    patient_id: uuid.UUID = Field(foreign_key="patient.id", nullable=False)
+    patient_id: uuid.UUID = Patient.foreign_key()
     patient: Patient = Relationship()
 
     appointment_date: datetime

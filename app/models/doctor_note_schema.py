@@ -1,3 +1,4 @@
+import typing as t
 import uuid
 
 from activemodel import BaseModel
@@ -8,6 +9,9 @@ from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
 from .user import User
+
+if t.TYPE_CHECKING:
+    from .doctor_note_example import DoctorNoteExample
 
 
 class DoctorNoteSchema(
@@ -20,13 +24,13 @@ class DoctorNoteSchema(
     A description of the fields required for a specific note type and instructions on what information goes in each field
     """
 
-    user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    user_id: uuid.UUID = User.foreign_key()
     user: User = Relationship()
 
     note_type: str
     "user generated name of the note type"
 
-    fields: dict[str, str]  = Field(sa_type=JSONB())  # type: ignore
+    fields: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
     "key is field name, value is instruction"
 
-    # examples: DoctorNoteExample
+    examples: list["DoctorNoteExample"] = Relationship(back_populates="")

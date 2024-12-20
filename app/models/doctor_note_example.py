@@ -24,14 +24,13 @@ class DoctorNoteExample(
     which is why it's not included here.
     """
 
-    user_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
-    user: User = Relationship()
+    user_id: uuid.UUID = User.foreign_key()
+    user: User = Relationship(back_populates="examples")
 
-    doctor_note_schema_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
+    doctor_note_schema_id: uuid.UUID = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()
 
     field_examples: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
     "key is field name, value is example content for a specific field"
 
     # TODO the field examples need to be deidentified with surrogates
-

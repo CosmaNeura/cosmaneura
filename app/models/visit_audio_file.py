@@ -3,9 +3,11 @@ import uuid
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types.typeid import TypeIDType
-from app.models.appointment import Appointment
-from app.models.user import User
 from sqlmodel import Field, Relationship
+
+from .appointment import Appointment
+from .patient import Patient
+from .user import User
 
 
 class VisitAudioFile(
@@ -19,16 +21,13 @@ class VisitAudioFile(
     3. User uploads file to signed upload URL, does not hit the backend API for upload
     """
 
-    user_id: uuid.UUID = Field(
-        sa_type=TypeIDType("usr"),  # type: ignore
-        foreign_key="user.id",
-        nullable=False,
-    )
+    user_id: uuid.UUID = User.foreign_key()
 
-    patient_id: uuid.UUID = Field(foreign_key="user.id", nullable=False)
-    patient: User = Relationship()
+    patient_id: uuid.UUID = Patient.foreign_key()
+    patient: Patient = Relationship()
 
-    appointment_id: uuid.UUID = Field(foreign_key="appointment.id", nullable=False)
+    appointment_id: uuid.UUID = Appointment.foreign_key()
     appointment: Appointment = Relationship()
 
     azure_file_name: str
+    "file name of the blob in azure"
