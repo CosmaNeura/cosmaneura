@@ -2,7 +2,7 @@ import time
 
 from playwright.sync_api import Page, expect
 
-from app.models.user import User
+from app.models.doctor import Doctor
 
 from tests.integration.clerk import setup_clerk_testing_token
 from tests.integration.server import home_url, wait_for_loading
@@ -13,7 +13,7 @@ def test_signin(server, page: Page, assert_snapshot) -> None:
     username, password, user = get_clerk_dev_user()
 
     # paranoid testing to ensure database cleaning is working
-    assert User.count() == 0
+    assert Doctor.count() == 0
 
     setup_clerk_testing_token(page)
 
@@ -31,12 +31,12 @@ def test_signin(server, page: Page, assert_snapshot) -> None:
 
     # assert_snapshot(page)
 
-    assert User.count() == 1
+    assert Doctor.count() == 1
 
 
 def test_signup(server, page: Page, assert_snapshot) -> None:
     # paranoid testing to ensure database cleaning is working
-    assert User.count() == 0
+    assert Doctor.count() == 0
 
     setup_clerk_testing_token(page)
 
@@ -86,7 +86,7 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
     # assert_snapshot(page)
 
     # user should be created at this point!
-    assert User.count() == 1
+    assert Doctor.count() == 1
 
     # logout
     page.locator(".flex > div:nth-child(3)").first.click()

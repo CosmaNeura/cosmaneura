@@ -2,7 +2,7 @@ from playwright.sync_api import Page, expect
 
 from app import root
 
-from app.models.user import User
+from app.models.doctor import Doctor
 from app.models.visit_audio_file import VisitAudioFile
 
 from tests.integration.clerk import setup_clerk_testing_token
@@ -14,7 +14,7 @@ def test_audio_file_upload(server, page: Page) -> None:
     username, password, user = get_clerk_dev_user()
 
     # paranoid testing to ensure database cleaning is working
-    assert User.count() == 0
+    assert Doctor.count() == 0
 
     setup_clerk_testing_token(page)
 
@@ -41,5 +41,5 @@ def test_audio_file_upload(server, page: Page) -> None:
     audio_file = list(VisitAudioFile.all())[0]
 
     assert audio_file.azure_file_name.endswith("recording.wav")
-    assert audio_file.user_id is not None
+    assert audio_file.doctor_id is not None
     assert audio_file.id is not None

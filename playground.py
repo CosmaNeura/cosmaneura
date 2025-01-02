@@ -13,7 +13,7 @@ from app.models import *
 from activemodel.session_manager import get_session
 from app.models import llm_response
 from app.models.llm_response import LLMResponse
-from app.models.user import User
+from app.models.doctor import Doctor
 from activemodel.session_manager import get_engine
 
 def inspect_environment():
@@ -171,7 +171,7 @@ def get_redis_version(redis_url: str):
 	return redis_version
 
 # with Session(get_engine()) as session:
-# 	user = User(clerk_id="hi")
+# 	user = Doctor(clerk_id="hi")
 # 	llm_response = LLMResponse(
 # 		model="gpt-3.5-turbo",
 # 		category="test",
