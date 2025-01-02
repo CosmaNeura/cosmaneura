@@ -25,7 +25,7 @@ class DoctorNoteExample(
     """
 
     doctor_id: uuid.UUID = Doctor.foreign_key()
-    doctor: Doctor = Relationship(back_populates="examples")
+    doctor: Doctor = Relationship()
 
     doctor_note_schema_id: uuid.UUID = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()

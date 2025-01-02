@@ -33,4 +33,5 @@ class DoctorNoteSchema(
     fields: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
     "key is field name, value is instruction"
 
-    examples: list["DoctorNoteExample"] = Relationship(back_populates="")
+    # TODO Mike will handle back_populates
+    # examples: list["DoctorNoteExample"] = Relationship(back_populates="")
