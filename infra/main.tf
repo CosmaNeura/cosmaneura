@@ -192,7 +192,7 @@ resource "onepassword_item" "upload_blob_storage" {
     }
 
     field {
-      label = "container-name"
+      label = "uploads-container-name"
       value = azurerm_storage_container.uploads.name
     }
 
