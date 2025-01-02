@@ -2,6 +2,8 @@ import json
 import os
 import time
 import wave
+import uuid
+from typing import List
 from textwrap import dedent
 
 import assemblyai as assembly
@@ -9,15 +11,17 @@ from decouple import config
 from openai import OpenAI
 from pydub import AudioSegment
 
+from app.models.visit_audio_file import VisitAudioFile
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+
+from app.configuration.azure import (
+    AZURE_UPLOADS_ACCOUNT_KEY,
+    AZURE_UPLOADS_ACCOUNT_NAME,
+    AZURE_UPLOADS_ACCOUNT_URL,
+    AZURE_UPLOADS_CONTAINER_NAME,
+)
+
 from app import log
-
-log.info("hello, david", structure="me")
-
-deepgram_key = config("DEEPGRAM_API_KEY", cast=str)
-if not deepgram_key:
-    raise ValueError(
-        "API key not found. Please set DEEPGRAM_API_KEY in your .env file."
-    )
 
 assembly_key = config("ASSEMBLY_API_KEY", cast=str)
 if not assembly_key:
@@ -31,152 +35,134 @@ if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
 
-# current process:
-# - job 1
-#   - extract fields from example PDF note
-#   - produce field descriptions
-#   - create clinical note XML with descriptions
-#   - extract example note from PDF
-# - job 2
-#   - generate transcript from audio file
-#   - identify speakers as patient or doctor
-#   - replace speaker designations with "Patient" and "Doctor"
-# - job 3
-#   - prompt 4o with transcript, example, and clinical note XML
+from azure.storage.blob import BlobServiceClient
 
+def transcribe(visit_audio_file_id: uuid.UUID):
+    visit_audio_file = VisitAudioFile.get(visit_audio_file_id)
+    if not visit_audio_file:
+        raise ValueError(f"Visit audio file not found with id: {visit_audio_file_id}")
 
-def convert_to_wav(input_file, output_file="converted.wav"):
-    audio = AudioSegment.from_file(input_file)
-    audio.export(output_file, format="wav")
-    return output_file
+    result = transcribe_audio(visit_audio_file)
+
+    AIVisitTranscript.find_or_create_by(
+        doctor_id=visit_audio_file.doctor_id,
+        appointment_id=visit_audio_file.appointment_id,
+        patient_id=visit_audio_file.patient_id,
+        duration=result.duration,
+        transcript_data=result.transcript,
+    )
+
+def extract_audio_to_temp(visit: VisitAudioFile) -> str:
+    filename = visit.azure_file_name
+
+    temp_download_path = f"/tmp/{uuid.uuid4()}-{filename}"
+    basename_no_ext = os.path.splitext(filename)[0]
+    temp_audio_path = f"/tmp/{uuid.uuid4()}-{basename_no_ext}.wav"
+
+    service_client = BlobServiceClient(
+        AZURE_UPLOADS_ACCOUNT_URL,
+        credential=AZURE_UPLOADS_ACCOUNT_KEY,
+    )
+    blob_client = service_client.get_blob_client(
+        container=AZURE_UPLOADS_CONTAINER_NAME,
+        blob=filename,
+    )
+
+    try:
+        with open(temp_download_path, "wb") as file:
+            file.write(blob_client.download_blob().readall())
+
+        extract_audio_from_mp4(temp_download_path, output_audio_path=temp_audio_path)
+
+        return temp_audio_path
+
+    finally:
+        if os.path.exists(temp_download_path):
+            os.remove(temp_download_path)
 
 
 def extract_audio_from_mp4(mp4_path, output_audio_path="extracted_audio.wav"):
     audio = AudioSegment.from_file(mp4_path, format="mp4")
     audio.export(output_audio_path, format="wav")
-    return output_audio_path
 
-
-# Split into 2 MB chunks.
-def split_audio(file_path, chunk_duration=10 * 1024 * 1024):
-    with wave.open(file_path, "rb") as audio:
-        params = audio.getparams()
-        framerate = params.framerate
-        n_channels = params.nchannels
-        sampwidth = params.sampwidth
-        chunk_frames = int(chunk_duration / (n_channels * sampwidth))
-        chunks = []
-        basename = os.path.splitext(file_path)[0]
-        frame_num = 1
-        while True:
-            frames = audio.readframes(chunk_frames)
-            if not frames:
-                break
-            chunk_filename = f"temp_chunk_{basename}_{frame_num}.wav"
-            with wave.open(chunk_filename, "wb") as chunk:
-                print(f"Writing temp file {chunk_filename}...")
-                chunk.setnchannels(n_channels)
-                chunk.setsampwidth(sampwidth)
-                chunk.setframerate(framerate)
-                chunk.writeframes(frames)
-            chunks.append(chunk_filename)
-            frame_num += 1
-        return chunks
-
+class TranscriptionResult:
+    def __init__(self, transcript: List[TranscriptEntry], duration: int):
+        self.transcript = transcript
+        self.duration = duration
 
 # Function to transcribe and concatenate results
-def transcribe_audio(file_path):
-    # ----------------------------------------------------------
-    # ASSEMBLY AI Implementation
-    # ----------------------------------------------------------
-    transcriber = assembly.Transcriber()
-    config = assembly.TranscriptionConfig(speaker_labels=True, speakers_expected=2)
+def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
+    if visit_audio_file.azure_file_name.lower().endswith(".mp4"):
+        audio_file = extract_audio_to_temp(visit_audio_file)
+    # elif visit_audio_file.azure_file_name.lower().endswith(".wav"):
+    #     download the audio file from blob to temp storage
+    else:
+        ext = os.path.splitext(visit_audio_file.azure_file_name)[1]
+        raise ValueError("Unsupported file format: .{ext}. Please provide a .mp4 or .wav file.")
 
-    print("Transcribing audio...")
-    transcript = transcriber.transcribe(file_path, config)
-    print(transcript)
+    try:
+        transcriber = assembly.Transcriber()
+        config = assembly.TranscriptionConfig(speaker_labels=True, speakers_expected=2)
 
-    if (
-        transcript.status == assembly.TranscriptStatus.error
-        or transcript.utterances is None
-    ):
-        print(f"Transcription failed: {transcript.error}")
-        exit(1)
+        log.info("transcribing audio", audio_file=audio_file)
+        transcript = transcriber.transcribe(audio_file, config)
+    except Exception as e:
+        log.error("transcription failed", audio_file=audio_file, error=e)
+        raise ValueError(f"Transcription failed: {e}")
+    else:
+        if (
+            transcript.status == assembly.TranscriptStatus.error
+            or transcript.utterances is None
+        ):
+            log.error(
+                "transcription failed",
+                audio_file=audio_file,
+                error=transcript.error
+            )
+            raise ValueError(f"Transcription failed: {transcript.error}")
+    finally:
+        if os.path.exists(audio_file):
+            os.remove(audio_file):
 
-    # Identify speakers as doctor or patient.
-    print("Identifying speakers...")
+    log.info("identifying speakers", audio_file=audio_file)
     sample = "\n".join([f"{u.speaker}: {u.text}" for u in transcript.utterances[:10]])
     classification = identify_doctor_from_transcript(sample)
     doctor_label = extract_doctor_classification(classification)
+    if doctor_label is None:
+        log.error(
+            "speaker identifiation failed",
+            audio_file=audio_file,
+            classification=classification
+        )
+        raise ValueError("Could not extract doctor classification from reasoning.")
 
-    full_transcription = []
+    structured_transcript = []
+
+    # Utterance(
+    #   text='Okay, Go now.',
+    #   start=1360,
+    #   end=2792,
+    #   confidence=0.98156,
+    #   speaker='A',
+    #   channel=None,
+    #   words=[
+    #     UtteranceWord(text='Okay,', start=1360, end=1840, confidence=0.94812, speaker='A', channel=None),
+    #     UtteranceWord(text='Go', start=1880, end=2120, confidence=0.99861, speaker='A', channel=None),
     for utterance in transcript.utterances:
         label = utterance.speaker
-        if doctor_label is not None:
-            label = "Doctor" if doctor_label == utterance.speaker else "Patient"
-        full_transcription.append(f"{label}: {utterance.text}")
-    return "\n".join(full_transcription)
-    # ----------------------------------------------------------
+        label = "Doctor" if doctor_label == utterance.speaker else "Patient"
+        entry = TranscriptEntry(
+            speaker=label,
+            content=utterance.text,
+            startTime=utterance.start,
+            endTime=utterance.end,
+        )
+        structured_transcript.append(entry)
 
-    # ----------------------------------------------------------
-    # DEEPGRAM Implementation
-    # ----------------------------------------------------------
-    # try:
-    #   # STEP 1 Create a Deepgram client using the API key
-    #   deepgram = DeepgramClient(deepgram_key)
-    #
-    #   with open(file_path, "rb") as file:
-    #       buffer_data = file.read()
-    #
-    #   payload: FileSource = {
-    #       "buffer": buffer_data,
-    #   }
-    #
-    #   options = PrerecordedOptions(
-    #       model="nova-2",
-    #       smart_format=True,
-    #       paragraphs=True,
-    #       punctuate=True,
-    #       diarize=True, # identify speakers
-    #       filler_words=False, # remove ums and ahs
-    #   )
-    #
-    #   print(f"Transcribing audio...")
-    #   response = deepgram.listen.rest.v("1").transcribe_file(payload, options)
-    #
-    #   # return response.to_json(indent=4)
-    #   return response.results.channels[0].alternatives[0].paragraphs.transcript
-    #
-    # except Exception as e:
-    #     print(f"Exception: {e}")
-
-    # WHISPER implementation
-    # -------------------------------------------------------
-    # if not file_path.lower().endswith(".wav"):
-    #     print("Converting audio file to WAV format...")
-    #     file_path = convert_to_wav(file_path)
-    #
-    # chunks = split_audio(file_path)
-    # full_transcription = []
-    # try:
-    #     for index, chunk in enumerate(chunks):
-    #         print(f"Transcribing audio chunk #{index + 1}: {chunk}...")
-    #         with open(chunk, "rb") as audio_file:
-    #             response = client.audio.transcriptions.create(
-    #                 model="whisper-1",
-    #                 prompt="This is a recording of a doctor-patient interraction. There are only two speakers. MAKE SURE TO USE PUNCTUATION.",
-    #                 temperature=0.8, # more deterministic
-    #                 file=audio_file
-    #             )
-    #             full_transcription.append(response.text or "")
-    #             full_transcription.append("\n")
-    #         os.remove(chunk)
-    # except Exception as e:
-    #     print(f"Error processing chunk: {e}")
-    #     os.remove(chunk)
-    # return " ".join(full_transcription)
-    # ----------------------------------------------------------
-
+    return TranscriptionResult(
+        transcript=structured_transcript,
+        duration=transcript.audio_duration or 0,
+    )
 
 def identify_doctor_from_transcript(transcript: str) -> str | None:
     prompt = dedent(f"""
@@ -243,51 +229,3 @@ def extract_doctor_classification(reasoning: str | None) -> str | None:
     if response_content is None:
         return None
     return json.loads(response_content)["doctor"]
-
-
-def save_transcription(transcript, output_path):
-    try:
-        with open(output_path, "wb") as file:
-            file.write(transcript)
-        print(f"Transcription saved to {output_path}")
-    except Exception as e:
-        print(f"Error saving transcription: {e}")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    # Command-line argument parsing
-    parser = argparse.ArgumentParser(
-        description="Transcribe audio using OpenAI's Whisper API."
-    )
-    parser.add_argument(
-        "audio_file", type=str, help="Path to the audio file to transcribe."
-    )
-    args = parser.parse_args()
-    audio_file = args.audio_file
-
-    file_basename = os.path.basename(audio_file)
-    basename_no_ext = os.path.splitext(file_basename)[0]
-
-    # Handle MP4 input
-    if audio_file.lower().endswith(".mp4"):
-        print("Extracting audio from MP4...")
-        audio_file = extract_audio_from_mp4(
-            audio_file, output_audio_path=f"temp_audio_{basename_no_ext}"
-        )
-
-    transcript = transcribe_audio(audio_file)
-    if transcript:
-        # Create the transcripts directory if it doesn't exist
-        output_dir = "./transcripts"
-        os.makedirs(output_dir, exist_ok=True)
-
-        timestamp = int(time.time())
-        output_filename = f"{basename_no_ext}_assembly_{timestamp}_transcript.txt"
-        output_path = os.path.join(output_dir, output_filename)
-
-        # Save transcription to file
-        save_transcription(transcript, output_path)
-    else:
-        print("No transcription available.")

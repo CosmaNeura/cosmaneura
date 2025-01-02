@@ -15,7 +15,8 @@ from .doctor import Doctor
 class TranscriptEntry(PydanticBaseModel):
     speaker: str
     content: str
-    timestamp: str | None
+    startTime: int # in milliseconds
+    endTime: int # in milliseconds
 
 
 # TODO move to AIVisitNote
