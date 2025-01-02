@@ -5,6 +5,10 @@ This is the primary repo for cosmaneura.com.
 
 [Generated from python-starter-template.](http://github.com/iloveitaly/python-starter-template)
 
+# Suggested Script
+
+> I’m using a new tool to take better notes during our appointment so I can focus fully on you. It requires recording our conversation, but this is entirely optional. The recording is securely stored, follows strict HIPAA guidelines, and is deleted within a few hours after use. Are you okay with me recording?
+
 # PHI Management
 
 Here are the rules we use to manage PHI. You must follow these rules:

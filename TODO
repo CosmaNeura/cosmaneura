@@ -2,32 +2,32 @@
 
 ## davidlaprade
 
-- [ ] sharepoint for each doctor for manually run via computer
-- [ ] doctor names audio file with name, name of patient, and event type
-  - [ ] "08/20 - John Doe"
 - [ ] log everything required for HIPPA
 - [ ] data model for the note
 - [ ] push locally run scripts to production database
 - [ ] job to hit the deidentification service
+- [ ] add date + name of patient to audio upload
 
 ## mbianco
 
-- [ ] azure terraform
+- [ ] swap user to provider name
+- [x] azure terraform
 - [ ] staging environment
 - [x] merge in project template
-- [ ] merge in ui work
-- [ ] prod deployment on azure
+- [x] merge in ui work
+- [x] prod deployment on azure
 - [ ] wire up the note taking ui to a data model
+- [x] add upload with azure
 
 # v1: automatic upload
 
-- [ ] confirm baa on azure + openai, make sure we are all set
-- [ ] file upload for recordings
-  - [ ] need FE friendly azure creds
-  - [ ] backend model for audio uploads
-  - [ ] upload via FE and post resulting token to backend API which kicks off transcription job
-    - [ ] I think FE upload is The Way? https://stackoverflow.com/questions/67986754/upload-a-file-in-azure-blob-storage-using-react
-  - [ ] need sweep job to clear out (a) files after they are processed / expired (b) unattached files
+- [x] confirm baa on azure + openai, make sure we are all set
+- [x] file upload for recordings
+  - [x] need FE friendly azure creds
+  - [x] backend model for audio uploads
+  - [x] upload via FE and post resulting token to backend API which kicks off transcription job
+    - [x] I think FE upload is The Way? https://stackoverflow.com/questions/67986754/upload-a-file-in-azure-blob-storage-using-react
+  - [x] need sweep job to clear out (a) files after they are processed / expired (b) unattached files
 - [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
 - [ ] transcribe
   - [ ] job can just be a py module/class/function whatever that accepts a file model ID
@@ -62,3 +62,12 @@
 
 - [ ] ui + jobs for uploading example notes
 - [ ] cost tracing for AI stuff?
+
+## recording
+
+- https://collab-project.github.io/videojs-record/#/usage, mostly dead but not completely https://ossinsight.io/analyze/collab-project/videojs-record#commits. Started 2016
+- https://howlerjs.com just for playing audio
+- https://github.com/muaz-khan/RecordRTC no updates in 3yrs, lots of commits, but recent commits
+- https://github.com/maklov/react-mic completely dead
+- https://github.com/vocaroo/simple-audio-recorder?tab=readme-ov-file recently created, but looks mostly dead
+- https://github.com/YZarytskyi/react-voice-visualizer/issues/30 is the best one I could find

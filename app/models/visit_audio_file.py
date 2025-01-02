@@ -6,8 +6,8 @@ from activemodel.types.typeid import TypeIDType
 from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
-from .patient import Patient
 from .doctor import Doctor
+from .patient import Patient
 
 
 class VisitAudioFile(
@@ -22,6 +22,7 @@ class VisitAudioFile(
     """
 
     doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor: Doctor = Relationship()
 
     patient_id: uuid.UUID = Patient.foreign_key()
     patient: Patient = Relationship()
