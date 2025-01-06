@@ -8,17 +8,69 @@ import base64
 import io
 import json
 import os
+import uuid
 from textwrap import dedent
+from typeid import TypeID
 
 import PIL.Image
 from decouple import config
 from openai import OpenAI
 from pdf2image import convert_from_path
 
+from azure.storage.blob import BlobServiceClient
+
+from app.models.doctor_note_file import DoctorNoteFile
+from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.doctor_note_example import DoctorNoteExample
+
+from app.configuration.azure import (
+    AZURE_UPLOADS_ACCOUNT_KEY,
+    AZURE_UPLOADS_ACCOUNT_NAME,
+    AZURE_UPLOADS_ACCOUNT_URL,
+    AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
+)
+
 api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
+
+# TODO add logging
+
+def extract(note_id: str):
+    prefix = DoctorNoteFile.__table__.c.id.type.prefix
+    note_id = TypeID.from_uuid(uuid.UUID(note_id), prefix=prefix)
+    note = DoctorNoteFile.get(id=note_id)
+
+    note_pages = download_note(note)
+
+    note_fields = extract_note_fields(note_pages)
+    assert note_fields
+    instructions = explain_note_fields(note_fields)
+
+    schema = DoctorNoteSchema.find_or_create_by(
+        doctor_id=note.doctor_id,
+        note_type=note.note_type,
+        fields=instructions,
+    )
+
+    # TODO remove
+    print("schema ID:", schema.id)
+    print(note_fields)
+    print(json.dumps(instructions, indent=2))
+
+    content = extract_note_content(note_pages, note_fields)
+    assert content
+
+    example = DoctorNoteExample.find_or_create_by(
+        doctor_id=note.doctor_id,
+        doctor_note_schema_id=schema.id,
+        field_examples=content,
+    )
+
+    # TODO remove
+    print("doctor example ID:", example.id)
+    print(json.dumps(content, indent=2))
 
 
 # Convert images to base64 in a data URI format so they can be sent via API.
@@ -29,14 +81,39 @@ def get_img_uri(img: PIL.Image.Image) -> str:
     base64_png = base64.b64encode(png_buffer.read()).decode("utf-8")
     return f"data:image/png;base64,{base64_png}"
 
+def download_note(note: DoctorNoteFile) -> list[str]:
+    filename = note.azure_file_name
+
+    temp_download_path = f"./tmp/example-note-{uuid.uuid4()}-{filename}"
+    basename_no_ext = os.path.splitext(filename)[0]
+
+    service_client = BlobServiceClient(
+        AZURE_UPLOADS_ACCOUNT_URL,
+        credential=AZURE_UPLOADS_ACCOUNT_KEY,
+    )
+    blob_client = service_client.get_blob_client(
+        container=AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
+        blob=filename,
+    )
+
+    try:
+        with open(temp_download_path, "wb") as file:
+            file.write(blob_client.download_blob().readall())
+
+        # https://cookbook.openai.com/examples/parse_pdf_docs_for_rag
+        # Split the PDF into pages, then convert each page to an image.
+        pdf_pages = convert_from_path(temp_download_path, 500)
+        return [get_img_uri(page) for page in pdf_pages]
+
+    finally:
+        # Images are stored in memory at this point so we can delete the PDF
+        # from disk.
+        if os.path.exists(temp_download_path):
+            os.remove(temp_download_path)
+
 
 # Extract the fields from an example clinical note.
-def extract_note_fields(example_note: str) -> list[str] | None:
-    # https://cookbook.openai.com/examples/parse_pdf_docs_for_rag
-    # Split the PDF into pages, then convert each page to an image.
-    pdf_pages = convert_from_path(example_note, 500)
-    pdf_page_uris = [get_img_uri(page) for page in pdf_pages]
-
+def extract_note_fields(note_pages: list[str]) -> list[str]:
     system_prompt = dedent("""
         You will be provided with a series of images of the pages of a PDF.
         The PDF is a clinical note created by a doctor from a patient encounter.
@@ -62,7 +139,7 @@ def extract_note_fields(example_note: str) -> list[str] | None:
                 "role": "user",
                 "content": [
                     {"type": "image_url", "image_url": {"url": f"{data_uri}"}}
-                    for data_uri in pdf_page_uris
+                    for data_uri in note_pages
                 ],
             },
         ],
@@ -73,12 +150,11 @@ def extract_note_fields(example_note: str) -> list[str] | None:
     )
 
     fields = response.choices[0].message.content
-    if fields is None:
-        return None
+    assert fields
     return json.loads(fields)["fields"]
 
 
-def explain_note_fields(fields: list[str]) -> dict[str, str] | None:
+def explain_note_fields(fields: list[str]) -> dict[str, str]:
     prompt = dedent(f"""
         I have extracted the following fields from a clinical note:
 
@@ -110,18 +186,15 @@ def explain_note_fields(fields: list[str]) -> dict[str, str] | None:
         top_p=0.1,
     )
 
+    # TODO We need to ensure that the model sends back all of the fields and
+    # doesn't hallucinate any new ones.
+
     instructions = response.choices[0].message.content
-    if instructions is None:
-        return None
+    assert instructions
     return json.loads(instructions)
 
 
-def extract_note_content(example_note: str, fields: list[str]) -> dict[str, str] | None:
-    # https://cookbook.openai.com/examples/parse_pdf_docs_for_rag
-    # Split the PDF into pages, then convert each page to an image.
-    pdf_pages = convert_from_path(example_note, 500)
-    pdf_page_uris = [get_img_uri(page) for page in pdf_pages]
-
+def extract_note_content(note_pages: list[str], fields: list[str]) -> dict[str, str]:
     system_prompt = dedent("""
         You will be provided with a series of images of the pages of a PDF.
         The PDF is a clinical note created by a doctor from a patient encounter.
@@ -152,7 +225,7 @@ def extract_note_content(example_note: str, fields: list[str]) -> dict[str, str]
                 "role": "user",
                 "content": [
                     {"type": "image_url", "image_url": {"url": f"{data_uri}"}}
-                    for data_uri in pdf_page_uris
+                    for data_uri in note_pages
                 ],
             },
         ],
@@ -163,43 +236,11 @@ def extract_note_content(example_note: str, fields: list[str]) -> dict[str, str]
     )
 
     content = response.choices[0].message.content
-    if content is None:
-        return None
+    assert content
+
+    # TODO the field examples need to be deidentified with surrogates
+
+    # TODO We need to ensure that the model sends back all of the fields and
+    # doesn't hallucinate any new ones.
+
     return json.loads(content)
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Extract the schema and content from an example clinical note."
-    )
-    parser.add_argument(
-        "example_note", type=str, help="Path to the example note pdf file"
-    )
-    args = parser.parse_args()
-
-    fields = extract_note_fields(args.example_note)
-    print(fields)
-
-    assert fields
-
-    instructions = explain_note_fields(fields)
-    print(json.dumps(instructions, indent=2))
-
-    example_basename = os.path.basename(args.example_note)
-    example_filename_no_ext = os.path.splitext(example_basename)[0]
-
-    output_dir = "./schemas"
-    os.makedirs(output_dir, exist_ok=True)
-
-    with open(f"{output_dir}/{example_filename_no_ext}.json", "w") as file:
-        json.dump(instructions, file, indent=2)
-
-    content = extract_note_content(args.example_note, fields)
-    print(json.dumps(content, indent=2))
-
-    output_dir = "./examples"
-    os.makedirs(output_dir, exist_ok=True)
-    with open(f"{output_dir}/{example_filename_no_ext}.json", "w") as file:
-        json.dump(content, file, indent=2)
