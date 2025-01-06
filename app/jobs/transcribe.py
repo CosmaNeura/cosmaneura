@@ -42,12 +42,8 @@ if not api_key:
 openai = OpenAI(api_key=api_key)
 
 def transcribe(visit_audio_file_id: str):
-    prefix = VisitAudioFile.__table__.c.id.type.prefix
-    audio_id = TypeID.from_uuid(uuid.UUID(visit_audio_file_id), prefix=prefix)
-    visit_audio_file = VisitAudioFile.get(id=audio_id)
-
-    if not visit_audio_file:
-        raise ValueError(f"Visit audio file not found with id: {visit_audio_file_id}")
+    visit_audio_file = VisitAudioFile.get(id=visit_audio_file_id)
+    assert visit_audio_file
 
     result = transcribe_audio(visit_audio_file)
 

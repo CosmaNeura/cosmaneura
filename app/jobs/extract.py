@@ -38,10 +38,7 @@ openai = OpenAI(api_key=api_key)
 # TODO add logging
 
 def extract(note_id: str):
-    prefix = DoctorNoteFile.__table__.c.id.type.prefix
-    note_id = TypeID.from_uuid(uuid.UUID(note_id), prefix=prefix)
     note = DoctorNoteFile.get(id=note_id)
-
     note_pages = download_note(note)
 
     note_fields = extract_note_fields(note_pages)
