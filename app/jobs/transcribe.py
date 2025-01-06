@@ -3,7 +3,6 @@ import os
 import time
 import wave
 import uuid
-from typing import List
 from textwrap import dedent
 from typeid import TypeID
 
@@ -11,6 +10,7 @@ import assemblyai as assembly
 from decouple import config
 from openai import OpenAI
 from pydub import AudioSegment
+from azure.storage.blob import BlobServiceClient
 
 from app.models.visit_audio_file import VisitAudioFile
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -25,7 +25,7 @@ from app.configuration.azure import (
 from app import log
 
 class TranscriptionResult:
-    def __init__(self, transcript: List[TranscriptEntry], duration: int):
+    def __init__(self, transcript: list[TranscriptEntry], duration: int):
         self.transcript = transcript
         self.duration = duration
 
@@ -41,10 +41,7 @@ if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
 
-from azure.storage.blob import BlobServiceClient
-
 def transcribe(visit_audio_file_id: str):
-    parsed_uuid = uuid.UUID(visit_audio_file_id)
     prefix = VisitAudioFile.__table__.c.id.type.prefix
     audio_id = TypeID.from_uuid(uuid.UUID(visit_audio_file_id), prefix=prefix)
     visit_audio_file = VisitAudioFile.get(id=audio_id)
@@ -65,7 +62,7 @@ def transcribe(visit_audio_file_id: str):
 def extract_audio_to_temp(visit: VisitAudioFile) -> str:
     filename = visit.azure_file_name
 
-    temp_download_path = f"./tmp/{uuid.uuid4()}-{filename}"
+    temp_download_path = f"./tmp/visit-audio-{uuid.uuid4()}-{filename}"
     basename_no_ext = os.path.splitext(filename)[0]
     temp_audio_path = f"/tmp/{uuid.uuid4()}-{basename_no_ext}.wav"
 
