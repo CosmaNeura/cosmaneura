@@ -32,8 +32,10 @@ VisitAudioFile.find_or_create_by(
 DoctorNoteFile.find_or_create_by(
     doctor_id=doctor.id,
     azure_file_name="teresa-jensen-mock-appointment-note-11-15-2024.pdf",
+    note_type="Telehealth H&P Note",
 )
 DoctorNoteFile.find_or_create_by(
     doctor_id=doctor.id,
     azure_file_name="teresa-jensen-mock-appointment-note-11-22-2024.pdf",
+    note_type="Telehealth SOAP Note",
 )

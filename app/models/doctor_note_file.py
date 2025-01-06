@@ -19,5 +19,8 @@ class DoctorNoteFile(
     doctor_id: uuid.UUID = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
+    note_type: str
+    "user generated name of the note type"
+
     azure_file_name: str
     "file name of the PDF in azure"
