@@ -5,6 +5,7 @@ import wave
 import uuid
 from typing import List
 from textwrap import dedent
+from typeid import TypeID
 
 import assemblyai as assembly
 from decouple import config
@@ -23,6 +24,11 @@ from app.configuration.azure import (
 
 from app import log
 
+class TranscriptionResult:
+    def __init__(self, transcript: List[TranscriptEntry], duration: int):
+        self.transcript = transcript
+        self.duration = duration
+
 assembly_key = config("ASSEMBLY_API_KEY", cast=str)
 if not assembly_key:
     raise ValueError(
@@ -37,8 +43,12 @@ openai = OpenAI(api_key=api_key)
 
 from azure.storage.blob import BlobServiceClient
 
-def transcribe(visit_audio_file_id: uuid.UUID):
-    visit_audio_file = VisitAudioFile.get(visit_audio_file_id)
+def transcribe(visit_audio_file_id: str):
+    parsed_uuid = uuid.UUID(visit_audio_file_id)
+    prefix = VisitAudioFile.__table__.c.id.type.prefix
+    audio_id = TypeID.from_uuid(uuid.UUID(visit_audio_file_id), prefix=prefix)
+    visit_audio_file = VisitAudioFile.get(id=audio_id)
+
     if not visit_audio_file:
         raise ValueError(f"Visit audio file not found with id: {visit_audio_file_id}")
 
@@ -49,13 +59,13 @@ def transcribe(visit_audio_file_id: uuid.UUID):
         appointment_id=visit_audio_file.appointment_id,
         patient_id=visit_audio_file.patient_id,
         duration=result.duration,
-        transcript_data=result.transcript,
+        transcript_data=[item.model_dump() for item in result.transcript],
     )
 
 def extract_audio_to_temp(visit: VisitAudioFile) -> str:
     filename = visit.azure_file_name
 
-    temp_download_path = f"/tmp/{uuid.uuid4()}-{filename}"
+    temp_download_path = f"./tmp/{uuid.uuid4()}-{filename}"
     basename_no_ext = os.path.splitext(filename)[0]
     temp_audio_path = f"/tmp/{uuid.uuid4()}-{basename_no_ext}.wav"
 
@@ -84,11 +94,6 @@ def extract_audio_to_temp(visit: VisitAudioFile) -> str:
 def extract_audio_from_mp4(mp4_path, output_audio_path="extracted_audio.wav"):
     audio = AudioSegment.from_file(mp4_path, format="mp4")
     audio.export(output_audio_path, format="wav")
-
-class TranscriptionResult:
-    def __init__(self, transcript: List[TranscriptEntry], duration: int):
-        self.transcript = transcript
-        self.duration = duration
 
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
@@ -122,7 +127,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
             raise ValueError(f"Transcription failed: {transcript.error}")
     finally:
         if os.path.exists(audio_file):
-            os.remove(audio_file):
+            os.remove(audio_file)
 
     log.info("identifying speakers", audio_file=audio_file)
     sample = "\n".join([f"{u.speaker}: {u.text}" for u in transcript.utterances[:10]])
