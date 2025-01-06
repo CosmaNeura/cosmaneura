@@ -1,0 +1,23 @@
+import uuid
+
+from activemodel import BaseModel
+from activemodel.mixins import TimestampsMixin, TypeIDMixin
+from sqlmodel import Relationship
+
+from .doctor import Doctor
+
+class DoctorNoteFile(
+    BaseModel,
+    TypeIDMixin("doctor_note_file"),
+    TimestampsMixin,
+    table=True,
+):
+    """
+    When onboarding, doctors will upload PDFs of their best notes.
+    This model stores references to the uploaded PDFs in Azure.
+    """
+    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor: Doctor = Relationship()
+
+    azure_file_name: str
+    "file name of the PDF in azure"
