@@ -1,94 +1,50 @@
-import * as React from "react";
-import { Mail } from '@/data/mock';
-import { MessageHeader } from '@/components/message/MessageHeader';
-import { MessageTemplates } from '@/components/message/MessageTemplates';
-import { MessageIntake } from '@/components/message/MessageIntake';
-import { PatientDataSections } from '@/components/patient/PatientDataSections';
-import { FeedbackWidget } from './FeedbackWidget';
+import * as React from "react"
+
+import { MessageHeader } from "@/components/message/MessageHeader"
+import { MessageIntake } from "@/components/message/MessageIntake"
+import { MessageTemplates } from "@/components/message/MessageTemplates"
+import { PatientDataSections } from "@/components/patient/PatientDataSections"
+import { Mail } from "@/data/mock"
+
+import AIVisitNote from "../AIVisitNote"
+import { FeedbackWidget } from "./FeedbackWidget"
 
 type MessageContentProps = {
-  mail: Mail;
-  isSOAPOpen?: boolean;
-  setIsSOAPOpen?: (open: boolean) => void;
-  isNewPatientOpen?: boolean;
-  setIsNewPatientOpen?: (open: boolean) => void;
-  isTelehealthSOAPOpen?: boolean;
-  setIsTelehealthSOAPOpen?: (open: boolean) => void;
-  isTelehealthHPOpen?: boolean;
-  setIsTelehealthHPOpen?: (open: boolean) => void;
-  isTranscriptOpen?: boolean;
-  setIsTranscriptOpen?: (open: boolean) => void;
-  isAccuityIntakeOpen?: boolean;
-  setIsAccuityIntakeOpen?: (open: boolean) => void;
-  isIntakeTranscriptOpen?: boolean;
-  setIsIntakeTranscriptOpen?: (open: boolean) => void;
-  showTemplates?: boolean;
-  showStatus?: boolean;
-};
+  mail: Mail
+  notes: []
+  transcript: {}
+}
+
+function VisitTranscript() {
+  return <></>
+}
 
 export function MessageContent({
   mail,
-  isSOAPOpen,
-  setIsSOAPOpen,
-  isNewPatientOpen,
-  setIsNewPatientOpen,
-  isTelehealthSOAPOpen,
-  setIsTelehealthSOAPOpen,
-  isTelehealthHPOpen,
-  setIsTelehealthHPOpen,
-  isTranscriptOpen,
-  setIsTranscriptOpen,
-  isAccuityIntakeOpen,
-  setIsAccuityIntakeOpen,
-  isIntakeTranscriptOpen,
-  setIsIntakeTranscriptOpen,
-  showTemplates = true,
-  showStatus = false,
+  notes,
+  transcript,
+  // showTemplates = true,
+  // showStatus = false,
 }: MessageContentProps) {
-  const [isVisible, setIsVisible] = React.useState(true);
-  const [currentMail, setCurrentMail] = React.useState(mail);
-
-  React.useEffect(() => {
-    if (mail.email !== currentMail.email) {
-      setIsVisible(false);
-      const timer = setTimeout(() => {
-        setCurrentMail(mail);
-        setIsVisible(true);
-      }, 150);
-      return () => clearTimeout(timer);
-    }
-  }, [mail, currentMail]);
-
   return (
     <div className="space-y-6">
-      <div className={`transition-all duration-150 ease-in-out transform ${
-        isVisible ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'
-      }`}>
+      <div className={"transform transition-all duration-150 ease-in-out"}>
         <div className="rounded-lg border bg-card p-6 shadow-sm">
-          <MessageHeader 
-            mail={currentMail}
-            showStatus={showStatus}
+          <MessageHeader
+            mail={mail}
+            // showStatus={showStatus}
           />
 
-          <PatientDataSections className="mb-6" mail={currentMail} />
+          {notes &&
+            notes.map((note) => {
+              return <AIVisitNote note={note} />
+            })}
 
-          {showTemplates && (
-            <MessageTemplates
-              mail={currentMail}
-              isSOAPOpen={isSOAPOpen}
-              setIsSOAPOpen={setIsSOAPOpen}
-              isNewPatientOpen={isNewPatientOpen}
-              setIsNewPatientOpen={setIsNewPatientOpen}
-              isTelehealthSOAPOpen={isTelehealthSOAPOpen}
-              setIsTelehealthSOAPOpen={setIsTelehealthSOAPOpen}
-              isTelehealthHPOpen={isTelehealthHPOpen}
-              setIsTelehealthHPOpen={setIsTelehealthHPOpen}
-              isTranscriptOpen={isTranscriptOpen}
-              setIsTranscriptOpen={setIsTranscriptOpen}
-            />
-          )}
+          <VisitTranscript />
 
-          {!showTemplates && (
+          {/* <PatientDataSections className="mb-6" mail={currentMail} /> */}
+
+          {/* {!showTemplates && (
             <MessageIntake
               mail={currentMail}
               isAccuityIntakeOpen={isAccuityIntakeOpen}
@@ -96,13 +52,13 @@ export function MessageContent({
               isIntakeTranscriptOpen={isIntakeTranscriptOpen}
               setIsIntakeTranscriptOpen={setIsIntakeTranscriptOpen}
             />
-          )}
+          )} */}
         </div>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row">
         <FeedbackWidget />
       </div>
     </div>
-  );
+  )
 }

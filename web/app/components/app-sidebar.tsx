@@ -21,15 +21,26 @@ import { cn } from "@/lib/utils"
 import { StatusBadge } from "./status-badge"
 import { UserButton } from "@clerk/clerk-react"
 
+interface Mail {
+  email: string
+  name: string
+  date: string
+  location: string
+  status?: string
+  subject: string
+  teaser: string
+}
+
 interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
-  onMailSelect?: (mail: any) => void
-  selectedMail?: any
+  onMailSelect?: (mail: Mail) => void
+  selectedMail?: Mail
   onNavigate?: (page: string) => void
   currentPage?: string
   isLoading?: boolean
   loadingContent?: React.ReactNode
 }
 
+// TODO change application name
 const IconSidebarHeader = () => (
   <SidebarHeader>
     <SidebarMenu>
@@ -50,7 +61,15 @@ const IconSidebarHeader = () => (
   </SidebarHeader>
 )
 
-const NavigationMenu = ({ currentPage, onNavigate, setOpen }) => {
+const NavigationMenu = ({
+  currentPage,
+  onNavigate,
+  setOpen
+}: {
+  currentPage: string,
+  onNavigate?: (page: string) => void,
+  setOpen: (open: boolean) => void
+}) => {
   const location = useLocation()
   const getIcon = (iconName: string) => {
     switch (iconName) {
@@ -93,7 +112,21 @@ const NavigationMenu = ({ currentPage, onNavigate, setOpen }) => {
   )
 }
 
-const MailList = ({ isLoading, loadingContent, mails, onMailSelect, selectedMail, currentPage }) => (
+const MailList = ({
+  isLoading,
+  loadingContent,
+  mails,
+  onMailSelect,
+  selectedMail,
+  currentPage
+}: {
+  isLoading: boolean,
+  loadingContent: React.ReactNode,
+  mails: Mail[],
+  onMailSelect?: (mail: Mail) => void,
+  selectedMail?: Mail,
+  currentPage: string
+}) => (
   <SidebarGroupContent>
     {isLoading
       ? loadingContent
@@ -126,7 +159,21 @@ const MailList = ({ isLoading, loadingContent, mails, onMailSelect, selectedMail
   </SidebarGroupContent>
 )
 
-const SecondSidebar = ({ currentPage, isLoading, loadingContent, mails, onMailSelect, selectedMail }) => (
+const SecondSidebar = ({
+  currentPage,
+  isLoading,
+  loadingContent,
+  mails,
+  onMailSelect,
+  selectedMail
+}: {
+  currentPage: string,
+  isLoading: boolean,
+  loadingContent: React.ReactNode,
+  mails: Mail[],
+  onMailSelect?: (mail: Mail) => void,
+  selectedMail?: Mail
+}) => (
   currentPage !== "settings" && (
     <Sidebar collapsible="none" className="hidden flex-1 md:flex">
       <SidebarHeader className="gap-3.5 border-b p-4">
@@ -167,7 +214,7 @@ export function AppSidebar({
   ...props
 }: AppSidebarProps) {
   const { setOpen } = useSidebar()
-  const [mails, setMails] = React.useState(mockData.mails)
+  const [mails, setMails] = React.useState<Mail[]>(mockData.mails)
 
   return (
     <Sidebar
