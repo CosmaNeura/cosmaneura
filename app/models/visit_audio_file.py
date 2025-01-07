@@ -2,8 +2,7 @@ import uuid
 
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
-from activemodel.types.typeid import TypeIDType
-from sqlmodel import Field, Relationship
+from sqlmodel import Relationship
 
 from .appointment import Appointment
 from .doctor import Doctor

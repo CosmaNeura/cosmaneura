@@ -6,6 +6,7 @@ from sqlmodel import Relationship
 
 from .doctor import Doctor
 
+
 class DoctorNoteFile(
     BaseModel,
     TypeIDMixin("doctor_note_file"),
@@ -16,6 +17,7 @@ class DoctorNoteFile(
     When onboarding, doctors will upload PDFs of their best notes.
     This model stores references to the uploaded PDFs in Azure.
     """
+
     doctor_id: uuid.UUID = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 

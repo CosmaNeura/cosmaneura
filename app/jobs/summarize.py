@@ -1,16 +1,14 @@
 import json
-import os
-import time
 import math
 from textwrap import dedent
 
 from decouple import config
 from openai import OpenAI
 
+from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.ai_visit_note import AIVisitNote
 
 api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
@@ -18,6 +16,7 @@ if not api_key:
 openai = OpenAI(api_key=api_key)
 
 # TODO add logging
+
 
 def summarize(transcript_id: str, example_note_id: str):
     transcript = AIVisitTranscript.get(id=transcript_id)
@@ -44,6 +43,7 @@ def summarize(transcript_id: str, example_note_id: str):
         doctor_note_schema_id=schema.id,
         note=note,
     )
+
 
 # Build a structured prompt for creating a clinical note based on a transcript.
 # This is structured in the sense that it expects a JSON response with specific
@@ -126,7 +126,10 @@ def generate_clinical_note(
 
     return json.loads(content)
 
-def augment_clinical_note(original: dict[str, str], transcript: AIVisitTranscript) -> dict[str, str]:
+
+def augment_clinical_note(
+    original: dict[str, str], transcript: AIVisitTranscript
+) -> dict[str, str]:
     # Find key that contains the plan
     plan_key = None
     for key in original:

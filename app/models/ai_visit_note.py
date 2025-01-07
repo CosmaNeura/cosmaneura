@@ -1,7 +1,7 @@
 import uuid
 
 from activemodel import BaseModel
-from activemodel.mixins import SoftDeletionMixin, TimestampsMixin, TypeIDMixin
+from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_schema import DoctorNoteSchema
 from sqlalchemy.dialects.postgresql import JSONB

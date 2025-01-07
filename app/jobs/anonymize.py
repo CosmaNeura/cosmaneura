@@ -1,20 +1,17 @@
-import os
-import time
-from azure.identity import ClientSecretCredential
 from azure.health.deidentification import DeidentificationClient
 from azure.health.deidentification.models import (
-        DeidentificationResult,
-        DeidentificationContent,
-        OperationType,
-        DocumentDataType,
-        )
+    DeidentificationContent,
+    DeidentificationResult,
+)
+from azure.identity import ClientSecretCredential
 
 from app.configuration.azure import (
-    AZURE_DEID_TENANT_ID,
     AZURE_DEID_CLIENT_ID,
     AZURE_DEID_CLIENT_SECRET,
     AZURE_DEID_ENDPOINT,
+    AZURE_DEID_TENANT_ID,
 )
+
 
 # https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/healthdataaiservices/azure-health-deidentification/samples/sample_realtime_deidentification.py
 def deidentify(phi_text: str) -> str:
@@ -32,10 +29,7 @@ def deidentify(phi_text: str) -> str:
     # "2024-09-20, but the SDK throws an error if you specify it.
     # client = DeidentificationClient(endpoint, credential, api_version="2024-09-20")
     client = DeidentificationClient(AZURE_DEID_ENDPOINT, credential)
-    body = DeidentificationContent(
-        input_text=phi_text,
-        operation="Surrogate"
-    )
+    body = DeidentificationContent(input_text=phi_text, operation="Surrogate")
 
     result: DeidentificationResult = client.deidentify(body)
     assert result.output_text

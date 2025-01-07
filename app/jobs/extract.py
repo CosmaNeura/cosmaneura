@@ -10,25 +10,22 @@ import json
 import os
 import uuid
 from textwrap import dedent
-from typeid import TypeID
 
 import PIL.Image
+from azure.storage.blob import BlobServiceClient
 from decouple import config
 from openai import OpenAI
 from pdf2image import convert_from_path
 
-from azure.storage.blob import BlobServiceClient
-
-from app.models.doctor_note_file import DoctorNoteFile
-from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.doctor_note_example import DoctorNoteExample
-
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
-    AZURE_UPLOADS_ACCOUNT_NAME,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
+
+from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_file import DoctorNoteFile
+from app.models.doctor_note_schema import DoctorNoteSchema
 
 api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
@@ -36,6 +33,7 @@ if not api_key:
 openai = OpenAI(api_key=api_key)
 
 # TODO add logging
+
 
 def extract(note_id: str):
     note = DoctorNoteFile.get(id=note_id)
@@ -78,11 +76,12 @@ def get_img_uri(img: PIL.Image.Image) -> str:
     base64_png = base64.b64encode(png_buffer.read()).decode("utf-8")
     return f"data:image/png;base64,{base64_png}"
 
+
 def download_note(note: DoctorNoteFile) -> list[str]:
     filename = note.azure_file_name
 
     temp_download_path = f"./tmp/example-note-{uuid.uuid4()}-{filename}"
-    basename_no_ext = os.path.splitext(filename)[0]
+    _basename_no_ext = os.path.splitext(filename)[0]
 
     service_client = BlobServiceClient(
         AZURE_UPLOADS_ACCOUNT_URL,

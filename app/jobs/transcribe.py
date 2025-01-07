@@ -1,33 +1,30 @@
 import json
 import os
-import time
-import wave
 import uuid
 from textwrap import dedent
-from typeid import TypeID
 
 import assemblyai as assembly
+from azure.storage.blob import BlobServiceClient
 from decouple import config
 from openai import OpenAI
 from pydub import AudioSegment
-from azure.storage.blob import BlobServiceClient
 
-from app.models.visit_audio_file import VisitAudioFile
-from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
-
+from app import log
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
-    AZURE_UPLOADS_ACCOUNT_NAME,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_CONTAINER_NAME,
 )
 
-from app import log
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+from app.models.visit_audio_file import VisitAudioFile
+
 
 class TranscriptionResult:
     def __init__(self, transcript: list[TranscriptEntry], duration: int):
         self.transcript = transcript
         self.duration = duration
+
 
 assembly_key = config("ASSEMBLY_API_KEY", cast=str)
 if not assembly_key:
@@ -40,6 +37,7 @@ api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
+
 
 def transcribe(visit_audio_file_id: str):
     visit_audio_file = VisitAudioFile.get(id=visit_audio_file_id)
@@ -54,6 +52,7 @@ def transcribe(visit_audio_file_id: str):
         duration=result.duration,
         transcript_data=[item.model_dump() for item in result.transcript],
     )
+
 
 def extract_audio_to_temp(visit: VisitAudioFile) -> str:
     filename = visit.azure_file_name
@@ -88,6 +87,7 @@ def extract_audio_from_mp4(mp4_path, output_audio_path="extracted_audio.wav"):
     audio = AudioSegment.from_file(mp4_path, format="mp4")
     audio.export(output_audio_path, format="wav")
 
+
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
     if visit_audio_file.azure_file_name.lower().endswith(".mp4"):
@@ -96,7 +96,9 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
     #     download the audio file from blob to temp storage
     else:
         ext = os.path.splitext(visit_audio_file.azure_file_name)[1]
-        raise ValueError("Unsupported file format: .{ext}. Please provide a .mp4 or .wav file.")
+        raise ValueError(
+            f"Unsupported file format: .{ext}. Please provide a .mp4 or .wav file."
+        )
 
     try:
         transcriber = assembly.Transcriber()
@@ -113,9 +115,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
             or transcript.utterances is None
         ):
             log.error(
-                "transcription failed",
-                audio_file=audio_file,
-                error=transcript.error
+                "transcription failed", audio_file=audio_file, error=transcript.error
             )
             raise ValueError(f"Transcription failed: {transcript.error}")
     finally:
@@ -130,7 +130,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
         log.error(
             "speaker identifiation failed",
             audio_file=audio_file,
-            classification=classification
+            classification=classification,
         )
         raise ValueError("Could not extract doctor classification from reasoning.")
 
@@ -161,6 +161,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
         transcript=structured_transcript,
         duration=transcript.audio_duration or 0,
     )
+
 
 def identify_doctor_from_transcript(transcript: str) -> str | None:
     prompt = dedent(f"""

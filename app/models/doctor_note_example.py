@@ -3,11 +3,9 @@ import uuid
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.patient import Patient
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
-from .appointment import Appointment
 from .doctor import Doctor
 
 

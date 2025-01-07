@@ -4,7 +4,7 @@ from datetime import datetime
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from app.models.doctor import Doctor
-from sqlmodel import Field, Relationship
+from sqlmodel import Relationship
 
 from .patient import Patient
 

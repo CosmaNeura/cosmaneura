@@ -5,11 +5,8 @@ Mirrors this model: https://clerk.com/docs/reference/backend-api/tag/Users#opera
 # TODO should we create an organization?
 # https://clerk.com/docs/reference/backend-api/tag/Organizations#operation/GetOrganization
 
-from datetime import datetime
-
 from activemodel import BaseModel
 from activemodel.mixins import SoftDeletionMixin, TimestampsMixin, TypeIDMixin
-from sqlmodel import DateTime, Field
 
 # NOTE we use usr_ for our prefix to avoid confusion
 CLERK_OBJECT_PREFIX = "user_"
