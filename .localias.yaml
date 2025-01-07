@@ -3,8 +3,8 @@
 # random ports are chosen so it doesn't conflict with other projects that are running
 
 # dev server
-api.localhost: 8200
+cosma-api.localhost: 8200
 # test server
-api-test.localhost: 8201
+cosma-api-test.localhost: 8201
 # javascript server, for development only (not testing)
-web.localhost: 8202
+cosma.localhost: 8202
