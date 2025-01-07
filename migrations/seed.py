@@ -2,11 +2,11 @@
 
 from datetime import datetime
 
-from app.models.patient import Patient
-from app.models.doctor import Doctor
 from app.models.appointment import Appointment
-from app.models.visit_audio_file import VisitAudioFile
+from app.models.doctor import Doctor
 from app.models.doctor_note_file import DoctorNoteFile
+from app.models.patient import Patient
+from app.models.visit_audio_file import VisitAudioFile
 
 doctor = Doctor.find_or_create_by(clerk_id="user_2pB8MHVdVjSxOye98WwpMHalwlT")
 
@@ -26,7 +26,7 @@ VisitAudioFile.find_or_create_by(
     doctor_id=doctor.id,
     patient_id=patient.id,
     appointment_id=appointment.id,
-    azure_file_name="teresa-jensen-mock-appointment.mp4"
+    azure_file_name="teresa-jensen-mock-appointment.mp4",
 )
 
 DoctorNoteFile.find_or_create_by(
