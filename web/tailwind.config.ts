@@ -54,6 +54,18 @@ export default {
           DEFAULT: "hsl(var(--destructive))",
           foreground: "hsl(var(--destructive-foreground))",
         },
+        success: {
+          DEFAULT: 'hsl(142.1 76.2% 36.3%)',
+          foreground: 'hsl(355.7 100% 97.3%)',
+        },
+        warning: {
+          DEFAULT: 'hsl(47.9 95.8% 53.1%)',
+          foreground: 'hsl(26 83.3% 14.1%)',
+        },
+        error: {
+          DEFAULT: 'hsl(0 84.2% 60.2%)',
+          foreground: 'hsl(0 0% 98%)',
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
