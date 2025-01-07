@@ -49,6 +49,21 @@ def get_valid_token():
     return token_id
 
 
+def test_unauthorized_no_credentials(client: TestClient):
+    response = client.get(api_app.url_path_for("application_data"))
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_authorized_bad_credentials(client: TestClient):
+    response = client.get(
+        api_app.url_path_for("application_data"),
+        headers={"Authorization": "Bearer BAD_CREDS"},
+    )
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
 def test_authorized_good_credentials(client: TestClient):
     token_id = get_valid_token()
 

@@ -1,0 +1,75 @@
+// adapted from: https://github.com/mdn/learning-area/blob/af5a4cf5428ac1a8b5cfdb6a8d211e3571b9c518/.vscode/cspell.json
+{
+  "$schema": "https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json",
+  "version": "0.2",
+  "language": "en-us",
+  "languageId": "*",
+  // https://github.com/streetsidesoftware/cspell-dicts/tree/main
+  "dictionaries": [
+    "bash",
+    "css",
+    "cpp",
+    "django",
+    "filetypes",
+    "fonts",
+    "fullstack",
+    "html",
+    "latex",
+    "lorem-ipsum",
+    "markdown",
+    "node",
+    "npm",
+    "python",
+    "softwareTerms",
+    "svelte",
+    "typescript",
+    // custom
+    "project-words",
+    "missing-words"
+  ],
+  "ignorePaths": [
+    ".vscode/cspell.json",
+    ".vscode/extensions.json",
+    "**/*.ogg",
+    "**/*.mp3",
+    "**/*.mp4",
+    "pypi/"
+  ],
+  "ignoreRegExpList": [
+    // "#[\\w-]*",
+    "aria-activedescendant=\"(?:[^\\\"]+|\\.)*\"",
+    "aria-controls=\"(?:[^\\\"]+|\\.)*\"",
+    "aria-describedby=\"(?:[^\\\"]+|\\.)*\"",
+    "aria-details=\"(?:[^\\\"]+|\\.)*\"",
+    "aria-errormessage=\"(?:[^\\\"]+|\\.)*\"",
+    "aria-flowto=\"(?:[^\\\"]+|\\.)*\"",
+    "aria-labelledby=\"(?:[^\\\"]+|\\.)*\"",
+    "aria-owns=\"(?:[^\\\"]+|\\.)*\"",
+    "Base64",
+    // "class=\"(?:[^\\\"]+|\\.)*\"",
+    "data-test-id=\"(?:[^\\\"]+|\\.)*\"",
+    "EscapeCharacters",
+    "for=\"(?:[^\\\"]+|\\.)*\"",
+    "HexValues",
+    "href=\"(?:[^\\\"]+|\\.)*\"",
+    "id=\"(?:[^\\\"]+|\\.)*\"",
+    "lang=\".*\">.*</",
+    "src=\"(?:[^\\\"]+|\\.)*\"",
+    "url\\(\"data\\:image/svg\\+xml.*\"\\)[,;]",
+    "Urls"
+  ],
+  "allowCompoundWords": true,
+  "enabledFileTypes": { "jinja-html": true },
+  "dictionaryDefinitions": [
+    {
+      "name": "project-words",
+      "path": "./project-words.txt",
+      "addWords": true
+    },
+    {
+      "name": "missing-words",
+      "path": "./missing-words.txt",
+      "addWords": true
+    }
+  ]
+}
