@@ -1,4 +1,4 @@
-import { intakeData } from "client"
+import { intakeList } from "client"
 import { useState } from "react"
 import { MetaFunction, useNavigation } from "react-router"
 import { useOutletContext } from "react-router"
@@ -35,7 +35,7 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   invariant(clerkClient, "clerk client should always exist or redirect")
 
   // this route is authenticated
-  const { data } = await intakeData()
+  const { data } = await intakeList()
 
   // TODO need idiomatic error handling here
   if (data === undefined) {
@@ -85,12 +85,7 @@ function ResendIntakeButton() {
   )
 }
 
-const Header = ({
-  selectedMail,
-}: {
-  selectedMail: Route.Mail | null
-  resendIntake: () => void
-}) => (
+const Header = ({ selectedMail }: { selectedMail: Route.Mail | null }) => (
   <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
     <SidebarTrigger className="-ml-1" />
     <Separator orientation="vertical" className="mr-2 h-4" />

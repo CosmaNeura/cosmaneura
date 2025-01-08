@@ -21,6 +21,7 @@ export async function getClient() {
     return
   }
 
+  // IMPORTANT: this sets the bearer token for all requests to the internal backend API
   await setToken(clerk)
 
   return clerk

@@ -1,6 +1,8 @@
 import * as React from "react"
 import { useLocation } from "react-router"
+
 import { Command, File, Inbox, Settings } from "lucide-react"
+
 import { Label } from "@/components/ui/label"
 import {
   Sidebar,
@@ -16,8 +18,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
-import { mockData } from "@/data/mock"
 import { cn } from "@/lib/utils"
+
 import { StatusBadge } from "./status-badge"
 import { UserButton } from "@clerk/clerk-react"
 
@@ -31,16 +33,6 @@ interface Mail {
   teaser: string
 }
 
-interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
-  onMailSelect?: (mail: Mail) => void
-  selectedMail?: Mail
-  onNavigate?: (page: string) => void
-  currentPage?: string
-  isLoading?: boolean
-  loadingContent?: React.ReactNode
-}
-
-// TODO change application name
 const IconSidebarHeader = () => (
   <SidebarHeader>
     <SidebarMenu>
@@ -61,28 +53,53 @@ const IconSidebarHeader = () => (
   </SidebarHeader>
 )
 
+const NAVIGATION_ITEMS = [
+  {
+    title: "Intake",
+    url: "#",
+    icon: "Inbox",
+    page: "intake",
+  },
+  {
+    title: "Notetaking",
+    url: "#",
+    icon: "File",
+    page: "notetaking",
+  },
+  {
+    title: "Settings",
+    url: "#",
+    icon: "Settings",
+    page: "settings",
+  },
+]
+
 const NavigationMenu = ({
   currentPage,
   onNavigate,
-  setOpen
+  setOpen,
 }: {
-  currentPage: string,
-  onNavigate?: (page: string) => void,
+  currentPage: string
+  onNavigate?: (page: string) => void
   setOpen: (open: boolean) => void
 }) => {
   const location = useLocation()
   const getIcon = (iconName: string) => {
     switch (iconName) {
-      case "Inbox": return Inbox
-      case "File": return File
-      case "Settings": return Settings
-      default: return File
+      case "Inbox":
+        return Inbox
+      case "File":
+        return File
+      case "Settings":
+        return Settings
+      default:
+        return File
     }
   }
 
   return (
     <SidebarMenu>
-      {mockData.navMain.map((item) => {
+      {NAVIGATION_ITEMS.map((item) => {
         const Icon = getIcon(item.icon)
         return (
           <SidebarMenuItem key={item.title}>
@@ -112,19 +129,20 @@ const NavigationMenu = ({
   )
 }
 
-const MailList = ({
+// TODO add empty state
+const SelectionList = ({
   isLoading,
   loadingContent,
   mails,
   onMailSelect,
   selectedMail,
-  currentPage
+  currentPage,
 }: {
-  isLoading: boolean,
-  loadingContent: React.ReactNode,
-  mails: Mail[],
-  onMailSelect?: (mail: Mail) => void,
-  selectedMail?: Mail,
+  isLoading: boolean
+  loadingContent: React.ReactNode
+  mails: Mail[]
+  onMailSelect?: (mail: Mail) => void
+  selectedMail?: Mail
   currentPage: string
 }) => (
   <SidebarGroupContent>
@@ -159,21 +177,21 @@ const MailList = ({
   </SidebarGroupContent>
 )
 
-const SecondSidebar = ({
+const SelectionSidebar = ({
   currentPage,
   isLoading,
   loadingContent,
   mails,
   onMailSelect,
-  selectedMail
+  selectedMail,
 }: {
-  currentPage: string,
-  isLoading: boolean,
-  loadingContent: React.ReactNode,
-  mails: Mail[],
-  onMailSelect?: (mail: Mail) => void,
+  currentPage: string
+  isLoading: boolean
+  loadingContent: React.ReactNode
+  mails: Mail[]
+  onMailSelect?: (mail: Mail) => void
   selectedMail?: Mail
-}) => (
+}) =>
   currentPage !== "settings" && (
     <Sidebar collapsible="none" className="hidden flex-1 md:flex">
       <SidebarHeader className="gap-3.5 border-b p-4">
@@ -190,7 +208,7 @@ const SecondSidebar = ({
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup className="px-0">
-          <MailList
+          <SelectionList
             isLoading={isLoading}
             loadingContent={loadingContent}
             mails={mails}
@@ -202,7 +220,39 @@ const SecondSidebar = ({
       </SidebarContent>
     </Sidebar>
   )
-)
+
+export function IconNavigation({
+  currentPage,
+  onNavigate,
+  setOpen,
+}: {
+  currentPage: string
+  onNavigate?: (page: string) => void
+  setOpen: (open: boolean) => void
+}) {
+  return (
+    <Sidebar
+      collapsible="none"
+      className="!w-[calc(var(--sidebar-width-icon)_+_1px)] border-r"
+    >
+      <IconSidebarHeader />
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupContent className="px-1.5 md:px-0">
+            <NavigationMenu
+              currentPage={currentPage}
+              onNavigate={onNavigate}
+              setOpen={setOpen}
+            />
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter>
+        <UserButton />
+      </SidebarFooter>
+    </Sidebar>
+  )
+}
 
 export function AppSidebar({
   onMailSelect,
@@ -211,10 +261,18 @@ export function AppSidebar({
   currentPage = "intake",
   isLoading,
   loadingContent,
+  mails,
   ...props
-}: AppSidebarProps) {
+}: {
+  onMailSelect?: (mail: Mail) => void
+  selectedMail?: Mail
+  onNavigate?: (page: string) => void
+  currentPage?: string
+  isLoading?: boolean
+  loadingContent?: React.ReactNode
+  mails: Mail[]
+}) {
   const { setOpen } = useSidebar()
-  const [mails, setMails] = React.useState<Mail[]>(mockData.mails)
 
   return (
     <Sidebar
@@ -222,28 +280,14 @@ export function AppSidebar({
       className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row"
       {...props}
     >
-      <Sidebar
-        collapsible="none"
-        className="!w-[calc(var(--sidebar-width-icon)_+_1px)] border-r"
-      >
-        <IconSidebarHeader />
-        <SidebarContent>
-          <SidebarGroup>
-            <SidebarGroupContent className="px-1.5 md:px-0">
-              <NavigationMenu
-                currentPage={currentPage}
-                onNavigate={onNavigate}
-                setOpen={setOpen}
-              />
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
-        <SidebarFooter>
-          <UserButton />
-        </SidebarFooter>
-      </Sidebar>
+      <IconNavigation
+        currentPage={currentPage}
+        onNavigate={onNavigate}
+        setOpen={setOpen}
+      />
 
-      <SecondSidebar
+      {/* appointment / data sidebar */}
+      <SelectionSidebar
         currentPage={currentPage}
         isLoading={isLoading}
         loadingContent={loadingContent}

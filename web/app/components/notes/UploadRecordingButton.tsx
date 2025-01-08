@@ -44,6 +44,8 @@ type ContextType = { onNavigate: (page: string) => void; currentPage: string }
 function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
   const { toast } = useToast()
 
+  // TODO look up audio file types here": https://www.assemblyai.com/docs/getting-started/transcribe-an-audio-file
+
   // const formSchema = z.object({
   //   image: z
   //     //Rest of validations done via react dropzone
