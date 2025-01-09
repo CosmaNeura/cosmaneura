@@ -23,6 +23,7 @@ from structlog import get_logger
 import app.models  # noqa: F401
 
 from tests.utils import delete_all_users
+from tests.seeds import seed_test_data
 
 # this file is uploaded as an artifact
 TEST_RESULTS_DIRECTORY = Path(decouple_config("TEST_RESULTS_DIRECTORY", cast=str))
@@ -70,7 +71,7 @@ def pytest_configure(config: Config):
 def pytest_sessionstart(session):
     delete_all_users()
     database_reset_truncate()
-
+    seed_test_data()
 
 def base_server_url(protocol: t.Literal["http", "https"] = "http"):
     """

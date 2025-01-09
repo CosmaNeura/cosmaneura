@@ -1,4 +1,4 @@
-# seed fresh development and test databases with data
+# seed fresh development databases with data
 
 from datetime import datetime
 
