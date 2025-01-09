@@ -1,6 +1,6 @@
 # Extract the schema and content from an example clinical note.
 
-# Unfortunately this script requires poppler to be installed on your system.
+# This script requires poppler to be installed on your system.
 #   `brew install poppler` on MacOS
 #   `apt-get install poppler-utils` on Ubuntu
 
