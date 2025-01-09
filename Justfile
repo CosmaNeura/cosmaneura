@@ -651,7 +651,6 @@ db_migrate:
 # add seed data to dev and test
 db_seed: db_migrate
 	uv run python migrations/seed.py
-	[ -n "${CI:-}" ] || {{EXECUTE_IN_TEST}} uv run python migrations/seed.py
 
 # generate migration based on the current state of the database
 [script]
