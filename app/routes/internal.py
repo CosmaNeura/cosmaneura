@@ -4,7 +4,7 @@ from pydantic import BaseModel
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 
-from app.models.ai_visit_note import AIVisitNote
+from app.models.appointment import Appointment
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .dependencies.clerk import AuthenticateRequest
@@ -22,12 +22,12 @@ internal_api_app = APIRouter(
 )
 
 
-class IntakeData(BaseModel, extra="forbid"):
-    appointments: list[dict]
+class IntakeList(BaseModel, extra="forbid"):
+    appointments: list[Appointment]
 
 
 class NotetakingData(BaseModel, extra="forbid"):
-    notes: list[dict]
+    appointments: list[Appointment]
 
 
 class SettingsData(BaseModel, extra="forbid"):
@@ -35,13 +35,23 @@ class SettingsData(BaseModel, extra="forbid"):
 
 
 @internal_api_app.get("/intake")
-def intake_data() -> IntakeData:
-    return IntakeData(appointments=[])
+def intake_list() -> IntakeList:
+    # TODO filter appointment data
+    return IntakeList(appointments=list(Appointment.all()))
 
 
 @internal_api_app.get("/notes")
-def note_data() -> NotetakingData:
-    return NotetakingData(notes=[])
+# def note_list(request: Request) -> NotetakingData:
+def note_list(request: Request) -> NotetakingData:
+    """
+    A separate endpoint is used to pull data for an individual note, so we just need the appointment ID
+    at this point.
+    """
+
+    # visit_notes = AIVisitNote.select(AIVisitNote.doctor_id == request.state.doctor.id)
+    # visit_notes = AIVisitNote.all()
+
+    return NotetakingData(appointments=list(Appointment.all()))
 
 
 @internal_api_app.post("/visit-audio-file/get-signed-url", response_model=str)
@@ -52,7 +62,7 @@ def generate_signed_upload_url():
 @internal_api_app.post("/visit-audio-file/upload-complete")
 def upload_visit_audio_file(request: Request, file_name: str) -> None:
     return app.commands.uploads.upload_visit_audio_file.perform(
-        request.state.user, file_name
+        user=request.state.user, blob_name=file_name
     )
 
 
