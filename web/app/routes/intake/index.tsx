@@ -5,7 +5,7 @@ import { useOutletContext } from "react-router"
 
 import { Send } from "lucide-react"
 
-import type { Route } from "./+types/intake"
+import type { Route } from "../+types/intake"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { PageTransition } from "@/components/page-transition"

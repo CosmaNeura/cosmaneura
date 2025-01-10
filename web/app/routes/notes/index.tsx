@@ -2,7 +2,7 @@ import { useState } from "react"
 import { MetaFunction, useNavigation } from "react-router"
 import { useOutletContext } from "react-router"
 
-import type { Route } from "./+types/notes"
+import type { Route } from "../+types/notes"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
@@ -20,7 +20,7 @@ import { getClient } from "~/configuration/clerk"
 import { noteList } from "~/configuration/client"
 
 import { invariant } from "@epic-web/invariant"
-import type { Route } from "./+types/intake"
+import type { Route } from "../+types/intake"
 
 type ContextType = { onNavigate: (page: string) => void; currentPage: string }
 
