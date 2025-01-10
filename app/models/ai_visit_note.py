@@ -1,3 +1,4 @@
+from activemodel.types import TypeIDType
 import uuid
 
 from activemodel import BaseModel
@@ -21,16 +22,16 @@ class AIVisitNote(BaseModel, TypeIDMixin("visit_note"), TimestampsMixin, table=T
     We use soft deletion so we have a clear idea of when the note was deleted.
     """
 
-    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
-    appointment_id: uuid.UUID = Appointment.foreign_key()
+    appointment_id: TypeIDType = Appointment.foreign_key()
     appointment: Appointment = Relationship()
 
-    ai_transcript_id: uuid.UUID = AIVisitTranscript.foreign_key()
+    ai_transcript_id: TypeIDType = AIVisitTranscript.foreign_key()
     ai_transcript: AIVisitTranscript = Relationship()
 
-    doctor_note_schema_id: uuid.UUID = DoctorNoteSchema.foreign_key()
+    doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()
 
     @property

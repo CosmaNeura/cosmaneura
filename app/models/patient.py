@@ -1,3 +1,4 @@
+from activemodel.types import TypeIDType
 import uuid
 from datetime import datetime
 
@@ -20,7 +21,7 @@ class Patient(BaseModel, TimestampsMixin, TypeIDMixin("patient"), table=True):
     Fixing this is left as an exercise to the reader.
     """
 
-    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
     name: str

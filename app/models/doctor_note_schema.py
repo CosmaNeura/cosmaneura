@@ -1,3 +1,4 @@
+from activemodel.types import TypeIDType
 import typing as t
 import uuid
 
@@ -24,7 +25,7 @@ class DoctorNoteSchema(
     A description of the fields required for a specific note type and instructions on what information goes in each field
     """
 
-    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
     note_type: str

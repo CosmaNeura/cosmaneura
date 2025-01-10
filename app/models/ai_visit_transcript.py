@@ -1,3 +1,4 @@
+from activemodel.types import TypeIDType
 import uuid
 
 from pydantic import BaseModel as PydanticBaseModel
@@ -33,13 +34,13 @@ class AIVisitTranscript(
     We use soft deletion so we have a clear idea of when the note was deleted.
     """
 
-    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
-    appointment_id: uuid.UUID = Appointment.foreign_key()
+    appointment_id: TypeIDType = Appointment.foreign_key()
     appointment: Appointment = Relationship()
 
-    patient_id: uuid.UUID = Patient.foreign_key()
+    patient_id: TypeIDType = Patient.foreign_key()
     patient: Patient = Relationship()
 
     duration: int | None

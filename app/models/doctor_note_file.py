@@ -1,3 +1,4 @@
+from activemodel.types import TypeIDType
 import uuid
 
 from activemodel import BaseModel
@@ -18,7 +19,7 @@ class DoctorNoteFile(
     This model stores references to the uploaded PDFs in Azure.
     """
 
-    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
     note_type: str

@@ -1,3 +1,4 @@
+from activemodel.types import TypeIDType
 import uuid
 from datetime import datetime
 
@@ -14,10 +15,10 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     Represents an appointment with a patient from accuity
     """
 
-    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
-    patient_id: uuid.UUID = Patient.foreign_key()
+    patient_id: TypeIDType = Patient.foreign_key()
     patient: Patient = Relationship()
 
     appointment_date: datetime

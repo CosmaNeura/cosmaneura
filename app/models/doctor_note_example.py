@@ -1,3 +1,4 @@
+from activemodel.types import TypeIDType
 import uuid
 
 from activemodel import BaseModel
@@ -22,10 +23,10 @@ class DoctorNoteExample(
     which is why it's not included here.
     """
 
-    doctor_id: uuid.UUID = Doctor.foreign_key()
+    doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
-    doctor_note_schema_id: uuid.UUID = DoctorNoteSchema.foreign_key()
+    doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()
 
     field_examples: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
