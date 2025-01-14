@@ -1,5 +1,5 @@
-import multiprocessing
 import os
+import sys
 
 # when running locally, switching to the full-blown CI environment is a pain
 # to make it quick & easy to run tests, we force the environment to test
@@ -7,6 +7,11 @@ import os
 if os.environ["PYTHON_ENV"] != "test":
     print("\033[91mPYTHON_ENV is not set to test, forcing\033[0m")
     os.environ["PYTHON_ENV"] = "test"
+
+    assert 'app' not in sys.modules, "app modules should not be imported before environment is set"
+
+from tests.routes.utils import MockAuthenticateRequest
+import multiprocessing
 
 from pathlib import Path
 import typing as t
@@ -22,7 +27,7 @@ from structlog import get_logger
 # important to ensure model metadata is added to the application
 import app.models  # noqa: F401
 
-from tests.utils import delete_all_users
+from tests.utils import delete_all_clerk_users
 from tests.seeds import seed_test_data
 
 # this file is uploaded as an artifact
@@ -69,8 +74,11 @@ def pytest_configure(config: Config):
 
 # NOTE only executes if a test is run
 def pytest_sessionstart(session):
-    delete_all_users()
+    # without this, the clerk dev instance will get cluttered and throw errors
+    delete_all_clerk_users()
+    # clear out any previous cruft in this DB, which is why...
     database_reset_truncate()
+    # we reseed the database with a base set of records
     seed_test_data()
 
 def base_server_url(protocol: t.Literal["http", "https"] = "http"):
@@ -98,6 +106,17 @@ def client():
 
     return TestClient(api_app, base_url=base_server_url())
 
+@pytest.fixture
+def authenticated_client():
+    from app.server import api_app
+    from app.routes.internal import authenticate_clerk_request_middleware
+
+    api_app.dependency_overrides[authenticate_clerk_request_middleware] = MockAuthenticateRequest()
+
+    yield TestClient(api_app, base_url=base_server_url())
+
+    api_app.dependency_overrides = {}
+
 
 @pytest.fixture
 async def aclient() -> t.AsyncGenerator[AsyncClient, None]:
@@ -110,6 +129,6 @@ async def aclient() -> t.AsyncGenerator[AsyncClient, None]:
         yield client
 
 
-database_reset_transaction = pytest.fixture(scope="function", autouse=True)(
-    database_reset_transaction
-)
+@pytest.fixture(scope="function", autouse=True)
+def datatabase_reset_transaction_for_standard_tests(request):
+    yield from database_reset_transaction()

@@ -67,6 +67,8 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
     page.wait_for_timeout(100)
     page.get_by_label("Digit 6").fill("2")
 
+    # TODO assert that `Fill in missing fields` is not displayed
+
     wait_for_loading(page)
 
     # page.unroute("https://resolved-emu-53.clerk.accounts.dev/v1/**")
