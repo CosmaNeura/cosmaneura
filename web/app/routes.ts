@@ -5,7 +5,7 @@ import { index, layout, prefix, route } from "@react-router/dev/routes"
 // this is meant to be a simple way to define routes configuration at a high level
 
 export default [
-  index("routes/login.tsx"),
+  index("routes/index.tsx"),
   layout("layouts/authenticated.tsx", [
     ...prefix("intake", [
       layout("layouts/intake.tsx", [
@@ -16,7 +16,7 @@ export default [
     ...prefix("notes", [
       layout("layouts/notes.tsx", [
         index("routes/notes/index.tsx"),
-        route("/:id", "routes/notes/detail.tsx"),
+        route(":id", "routes/notes/detail.tsx"),
       ]),
     ]),
     route("/settings", "routes/settings.tsx"),

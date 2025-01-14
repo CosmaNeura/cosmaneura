@@ -1,46 +1,48 @@
-import * as React from "react"
+import VisitNoteViewer from "~/components/VisitNoteViewer"
+import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
+import type { AIVisitNote, AIVisitTranscript } from "~/configuration/client"
 
-import { MessageHeader } from "@/components/message/MessageHeader"
-import { MessageIntake } from "@/components/message/MessageIntake"
-import { MessageTemplates } from "@/components/message/MessageTemplates"
-import { PatientDataSections } from "@/components/patient/PatientDataSections"
-import { Mail } from "@/data/mock"
-
-import AIVisitNote from "../AIVisitNote"
 import { FeedbackWidget } from "./FeedbackWidget"
 
-type MessageContentProps = {
-  mail: Mail
-  notes: []
-  transcript: {}
-}
-
-function VisitTranscript() {
-  return <></>
+export function EmptyNotes() {
+  return (
+    <div className="mb-4">
+      <div className="mb-2 text-xl font-semibold">Notes</div>
+      <div className="text-sm italic text-muted-foreground">
+        No Notes Available. Upload some!
+      </div>
+    </div>
+  )
 }
 
 export function MessageContent({
-  mail,
   notes,
   transcript,
   // showTemplates = true,
   // showStatus = false,
-}: MessageContentProps) {
+}: {
+  notes: AIVisitNote[]
+  transcript: AIVisitTranscript
+}) {
   return (
     <div className="space-y-6">
+      {/* TODO pretty sure I should remove all of this transition stuff... */}
       <div className={"transform transition-all duration-150 ease-in-out"}>
         <div className="rounded-lg border bg-card p-6 shadow-sm">
-          <MessageHeader
+          {/* <MessageHeader
             mail={mail}
             // showStatus={showStatus}
-          />
+          /> */}
 
-          {notes &&
-            notes.map((note) => {
-              return <AIVisitNote note={note} />
-            })}
+          {notes.length ? (
+            notes.map((note, index) => (
+              <VisitNoteViewer note={note} defaultOpen={index === 0} />
+            ))
+          ) : (
+            <EmptyNotes />
+          )}
 
-          <VisitTranscript />
+          <VisitTranscriptViewer transcript={transcript} />
 
           {/* <PatientDataSections className="mb-6" mail={currentMail} /> */}
 

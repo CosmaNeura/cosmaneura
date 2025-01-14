@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useLocation } from "react-router"
+import { useLocation, useNavigate } from "react-router"
 
 import { Command, File, Inbox, Settings } from "lucide-react"
 
@@ -19,20 +19,14 @@ import {
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { Status } from "~/components/status-badge"
+import { Appointment } from "~/configuration/client"
 
+import { SkeletonMessageList } from "./skeleton-message-list"
 import { StatusBadge } from "./status-badge"
 import { UserButton } from "@clerk/clerk-react"
 
-interface Mail {
-  email: string
-  name: string
-  date: string
-  location: string
-  status?: string
-  subject: string
-  teaser: string
-}
-
+// logo icon at the top
 const IconSidebarHeader = () => (
   <SidebarHeader>
     <SidebarMenu>
@@ -53,54 +47,33 @@ const IconSidebarHeader = () => (
   </SidebarHeader>
 )
 
+// TODO should use typed routes here
 const NAVIGATION_ITEMS = [
   {
     title: "Intake",
-    url: "#",
-    icon: "Inbox",
-    page: "intake",
+    icon: Inbox,
+    url: "/intake",
   },
   {
     title: "Notetaking",
-    url: "#",
-    icon: "File",
-    page: "notetaking",
+    icon: File,
+    url: "/notes",
   },
   {
     title: "Settings",
-    url: "#",
-    icon: "Settings",
-    page: "settings",
+    icon: Settings,
+    url: "/settings",
   },
 ]
 
-const NavigationMenu = ({
-  currentPage,
-  onNavigate,
-  setOpen,
-}: {
-  currentPage: string
-  onNavigate?: (page: string) => void
-  setOpen: (open: boolean) => void
-}) => {
+const NavigationMenu = () => {
   const location = useLocation()
-  const getIcon = (iconName: string) => {
-    switch (iconName) {
-      case "Inbox":
-        return Inbox
-      case "File":
-        return File
-      case "Settings":
-        return Settings
-      default:
-        return File
-    }
-  }
+  const currentUrl = location.pathname
+  const navigate = useNavigate()
 
   return (
     <SidebarMenu>
       {NAVIGATION_ITEMS.map((item) => {
-        const Icon = getIcon(item.icon)
         return (
           <SidebarMenuItem key={item.title}>
             <SidebarMenuButton
@@ -108,18 +81,12 @@ const NavigationMenu = ({
                 children: item.title,
                 hidden: false,
               }}
-              onClick={() => {
-                if (onNavigate) {
-                  onNavigate(item.page)
-                }
-                if (location.pathname !== "/settings") {
-                  setOpen(true)
-                }
-              }}
-              isActive={currentPage === item.page}
+              onClick={() => navigate(item.url)}
+              // TODO this is a bit dangerous: there's got to be a better way to decide what section we are on
+              isActive={currentUrl.startsWith(item.url)}
               className="px-2.5 md:px-2"
             >
-              <Icon />
+              <item.icon />
               <span>{item.title}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -128,108 +95,97 @@ const NavigationMenu = ({
     </SidebarMenu>
   )
 }
+export interface SidebarEntry {
+  // for react keys
+  id: string
+  url: string
+  title: string
+  location: string
+  subTitle?: string
+  date: string
+  status: Status | "none"
+  preview: string
+}
 
 // TODO add empty state
-const SelectionList = ({
+function SelectionList({
   isLoading,
-  loadingContent,
-  mails,
-  onMailSelect,
-  selectedMail,
-  currentPage,
+  entries,
 }: {
   isLoading: boolean
-  loadingContent: React.ReactNode
-  mails: Mail[]
-  onMailSelect?: (mail: Mail) => void
-  selectedMail?: Mail
-  currentPage: string
-}) => (
-  <SidebarGroupContent>
-    {isLoading
-      ? loadingContent
-      : mails.map((mail) => (
+  entries: SidebarEntry[]
+}) {
+  const navigate = useNavigate()
+
+  const location = useLocation()
+  const currentUrl = location.pathname
+
+  return (
+    <SidebarGroupContent>
+      {isLoading ? (
+        <SkeletonMessageList />
+      ) : (
+        entries.map((entry) => (
           <button
-            key={mail.email}
-            onClick={() => onMailSelect?.(mail)}
+            key={entry.id}
+            onClick={() => navigate(entry.url)}
             className={cn(
               "w-full flex flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-              selectedMail?.email === mail.email &&
+              currentUrl === entry.url &&
+                true &&
                 "bg-sidebar-accent text-sidebar-accent-foreground",
             )}
           >
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="font-medium">{mail.name}</span>
-              <span className="text-xs text-slate-500">{mail.date}</span>
+              <span className="font-medium">{entry.title}</span>
+              <span className="text-xs text-slate-500">{entry.date}</span>
             </div>
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-xs text-slate-500">{mail.location}</span>
-              {currentPage === "intake" && (
-                <StatusBadge status={mail.status || "not-started"} />
-              )}
+              <span className="text-xs text-slate-500">{entry.location}</span>
+              {entry.status !== "none" && <StatusBadge status={entry.status} />}
             </div>
-            <span className="font-medium">{mail.subject}</span>
+            <span className="font-medium">{entry.subTitle}</span>
             <span className="line-clamp-2 w-[260px] whitespace-break-spaces text-left text-xs text-slate-500">
-              {mail.teaser}
+              {entry.preview}
             </span>
           </button>
-        ))}
-  </SidebarGroupContent>
-)
+        ))
+      )}
+    </SidebarGroupContent>
+  )
+}
 
-const SelectionSidebar = ({
-  currentPage,
+function SelectionSidebar({
+  header,
   isLoading,
-  loadingContent,
-  mails,
-  onMailSelect,
-  selectedMail,
+  entries,
 }: {
-  currentPage: string
+  header: string
   isLoading: boolean
-  loadingContent: React.ReactNode
-  mails: Mail[]
-  onMailSelect?: (mail: Mail) => void
-  selectedMail?: Mail
-}) =>
-  currentPage !== "settings" && (
+  entries: SidebarEntry[]
+}) {
+  return (
     <Sidebar collapsible="none" className="hidden flex-1 md:flex">
+      {/* title with filters */}
       <SidebarHeader className="gap-3.5 border-b p-4">
         <div className="flex w-full items-center justify-between">
-          <div className="text-base font-medium text-foreground">
-            {currentPage === "intake" ? "Intake" : "Notes"}
-          </div>
-          <Label className="flex items-center gap-2 text-sm">
+          <div className="text-base font-medium text-foreground">{header}</div>
+          {/* <Label className="flex items-center gap-2 text-sm">
             <span>Today</span>
             <Switch className="shadow-none" />
-          </Label>
+          </Label> */}
         </div>
         <SidebarInput placeholder="Type to search..." />
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup className="px-0">
-          <SelectionList
-            isLoading={isLoading}
-            loadingContent={loadingContent}
-            mails={mails}
-            onMailSelect={onMailSelect}
-            selectedMail={selectedMail}
-            currentPage={currentPage}
-          />
+          <SelectionList isLoading={isLoading} entries={entries} />
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
   )
-
-export function IconNavigation({
-  currentPage,
-  onNavigate,
-  setOpen,
-}: {
-  currentPage: string
-  onNavigate?: (page: string) => void
-  setOpen: (open: boolean) => void
-}) {
+}
+export function IconNavigation() {
   return (
     <Sidebar
       collapsible="none"
@@ -239,11 +195,7 @@ export function IconNavigation({
       <SidebarContent>
         <SidebarGroup>
           <SidebarGroupContent className="px-1.5 md:px-0">
-            <NavigationMenu
-              currentPage={currentPage}
-              onNavigate={onNavigate}
-              setOpen={setOpen}
-            />
+            <NavigationMenu />
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
@@ -255,22 +207,14 @@ export function IconNavigation({
 }
 
 export function AppSidebar({
-  onMailSelect,
-  selectedMail,
-  onNavigate,
-  currentPage = "intake",
   isLoading,
-  loadingContent,
-  mails,
+  entries,
+  header,
   ...props
 }: {
-  onMailSelect?: (mail: Mail) => void
-  selectedMail?: Mail
-  onNavigate?: (page: string) => void
-  currentPage?: string
-  isLoading?: boolean
-  loadingContent?: React.ReactNode
-  mails: Mail[]
+  isLoading: boolean
+  entries: SidebarEntry[]
+  header: string
 }) {
   const { setOpen } = useSidebar()
 
@@ -280,20 +224,14 @@ export function AppSidebar({
       className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row"
       {...props}
     >
-      <IconNavigation
-        currentPage={currentPage}
-        onNavigate={onNavigate}
-        setOpen={setOpen}
-      />
+      {/* the main navigation icon sidebar */}
+      <IconNavigation />
 
-      {/* appointment / data sidebar */}
+      {/* appointment list sidebar */}
       <SelectionSidebar
-        currentPage={currentPage}
+        header={header}
         isLoading={isLoading}
-        loadingContent={loadingContent}
-        mails={mails}
-        onMailSelect={onMailSelect}
-        selectedMail={selectedMail}
+        entries={entries}
       />
     </Sidebar>
   )

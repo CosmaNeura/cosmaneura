@@ -53,6 +53,11 @@ function App() {
   return <Outlet />
 }
 
+export function HydrateFallback() {
+  // TODO add a real skeleton
+  return <div>Loading...</div>
+}
+
 export default withProviders(App)
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

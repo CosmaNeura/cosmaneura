@@ -1,6 +1,6 @@
 import { intakeList } from "client"
 import { useState } from "react"
-import { MetaFunction, useNavigation } from "react-router"
+import type { MetaFunction } from "react-router"
 import { useOutletContext } from "react-router"
 
 import { Send } from "lucide-react"
@@ -31,18 +31,18 @@ import { getClient } from "~/configuration/clerk"
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  const clerkClient = await getClient()
-  invariant(clerkClient, "clerk client should always exist or redirect")
+  // const clerkClient = await getClient()
+  // invariant(clerkClient, "clerk client should always exist or redirect")
 
-  // this route is authenticated
-  const { data } = await intakeList()
+  // // this route is authenticated
+  // const { data } = await intakeList()
 
-  // TODO need idiomatic error handling here
-  if (data === undefined) {
-    throw new Error("Failed to load data")
-  }
+  // // TODO need idiomatic error handling here
+  // if (data === undefined) {
+  //   throw new Error("Failed to load data")
+  // }
 
-  return data
+  return {}
 }
 
 export const meta: MetaFunction = () => {
@@ -153,7 +153,7 @@ const Content = ({
   </div>
 )
 
-export default function IntakePage({ loaderData }: Route.ComponentProps) {
+export default function IntakeIndex({ loaderData }: Route.ComponentProps) {
   const { onNavigate, currentPage } = useOutletContext<ContextType>()
   const [selectedMail, setSelectedMail] = useState<Route.Mail | null>(null)
   const [isAccuityIntakeOpen, setIsAccuityIntakeOpen] = useState(false)
@@ -161,37 +161,19 @@ export default function IntakePage({ loaderData }: Route.ComponentProps) {
 
   const navigation = useNavigation()
   const isLoading = navigation.state === "loading"
+  return <>hi</>
 
   return (
-    <PageTransition>
-      <SidebarProvider
-        style={
-          {
-            "--sidebar-width": "350px",
-          } as React.CSSProperties
-        }
-      >
-        <AppSidebar
-          onMailSelect={setSelectedMail}
-          selectedMail={selectedMail}
-          onNavigate={onNavigate}
-          currentPage={currentPage}
-          isLoading={isLoading}
-          loadingContent={<SkeletonMessageList />}
-          mails={loaderData && loaderData.appointments}
-        />
-        <SidebarInset>
-          <Header selectedMail={selectedMail} />
-          <Content
-            isLoading={isLoading}
-            selectedMail={selectedMail}
-            isAccuityIntakeOpen={isAccuityIntakeOpen}
-            setIsAccuityIntakeOpen={setIsAccuityIntakeOpen}
-            isIntakeTranscriptOpen={isIntakeTranscriptOpen}
-            setIsIntakeTranscriptOpen={setIsIntakeTranscriptOpen}
-          />
-        </SidebarInset>
-      </SidebarProvider>
-    </PageTransition>
+    <SidebarInset>
+      <Header selectedMail={selectedMail} />
+      <Content
+        isLoading={isLoading}
+        selectedMail={selectedMail}
+        isAccuityIntakeOpen={isAccuityIntakeOpen}
+        setIsAccuityIntakeOpen={setIsAccuityIntakeOpen}
+        isIntakeTranscriptOpen={isIntakeTranscriptOpen}
+        setIsIntakeTranscriptOpen={setIsIntakeTranscriptOpen}
+      />
+    </SidebarInset>
   )
 }
