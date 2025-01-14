@@ -27,13 +27,14 @@ from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 
+from .anonymize import deidentify
+
 api_key = config("OPENAI_API_KEY", cast=str)
 if not api_key:
     raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
 openai = OpenAI(api_key=api_key)
 
 # TODO add logging
-
 
 def extract(note_id: str):
     note = DoctorNoteFile.get(id=note_id)
@@ -234,9 +235,13 @@ def extract_note_content(note_pages: list[str], fields: list[str]) -> dict[str, 
     content = response.choices[0].message.content
     assert content
 
-    # TODO the field examples need to be deidentified with surrogates
+    note = json.loads(content)
 
-    # TODO We need to ensure that the model sends back all of the fields and
+    # TODO We need to validate that the model sends back all of the fields and
     # doesn't hallucinate any new ones.
 
-    return json.loads(content)
+    # The field examples need to be deidentified with surrogates.
+    for field in note.keys():
+        note[field] = deidentify(note[field])
+
+    return note
