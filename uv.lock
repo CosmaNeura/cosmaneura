@@ -8,12 +8,30 @@ resolution-markers = [
 [[package]]
 name = "activemodel"
 version = "0.5.0"
-source = { git = "https://github.com/iloveitaly/activemodel.git#3ba47b6c150d80e24691c8eba195b800cc3ba61c" }
+source = { editable = "../../python/activemodel" }
 dependencies = [
     { name = "pydash" },
     { name = "python-decouple-typed" },
     { name = "sqlmodel" },
     { name = "typeid-python" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydash", specifier = ">=8.0.4" },
+    { name = "python-decouple-typed", specifier = ">=3.11.0" },
+    { name = "sqlmodel", specifier = ">=0.0.22" },
+    { name = "typeid-python", specifier = ">=0.3.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.115.6" },
+    { name = "ipdb", specifier = ">=0.13.13" },
+    { name = "pdbr", specifier = ">=0.8.9" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.3" },
+    { name = "pydantic", specifier = ">=2.10.0" },
+    { name = "pytest", specifier = ">=8.3.3" },
 ]
 
 [[package]]
@@ -606,7 +624,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "activemodel", git = "https://github.com/iloveitaly/activemodel.git" },
+    { name = "activemodel", editable = "../../python/activemodel" },
     { name = "aiosmtplib", specifier = ">=3.0.2" },
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "assemblyai", specifier = ">=0.35.1" },
@@ -801,7 +819,7 @@ wheels = [
 
 [[package]]
 name = "datamodel-code-generator"
-version = "0.26.4"
+version = "0.26.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "argcomplete" },
@@ -814,9 +832,9 @@ dependencies = [
     { name = "pydantic", extra = ["email"], marker = "python_full_version < '4.0'" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0e/d3/4989ef484c41c35f45a16b54ffc25ffb4972d2fefde576a604f1c8c0675d/datamodel_code_generator-0.26.4.tar.gz", hash = "sha256:9881124fec15655a3a635808ea5ded63afb0540c0c402998070ccf60a9dab225", size = 92241 }
+sdist = { url = "https://files.pythonhosted.org/packages/63/e4/53153452235a387112df40f67aaf24072d4b5e33aa7bb385004f4c4baf38/datamodel_code_generator-0.26.5.tar.gz", hash = "sha256:c4a94a7dbf7972129882732d9bcee44c9ae090f57c82edd58d237b9d48c40dd0", size = 92586 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6a/e7/66a7c16bfbf5596e9e556fa9841d3cb3fb61ff79026b084328a9c7e04a00/datamodel_code_generator-0.26.4-py3-none-any.whl", hash = "sha256:95bdaa91fe87a8c369b1c9147bb2ef2eead918964270451e6223235131974098", size = 114595 },
+    { url = "https://files.pythonhosted.org/packages/5a/d8/ead3e857d4048947fe92a731d6b1f257dcb267cc8b8918d3b72598c9b728/datamodel_code_generator-0.26.5-py3-none-any.whl", hash = "sha256:e32f986b9914a2b45093947043aa0192d704650be93151f78acf5c95676601ce", size = 114982 },
 ]
 
 [[package]]
@@ -1789,7 +1807,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "3.7.5"
+version = "3.8.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
@@ -1798,9 +1816,9 @@ dependencies = [
     { name = "requests" },
     { name = "six" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/58/e9/1cd7492bb58dd255129467e1221e2d6f51aa0c6f3c781ac9ac29cc8a2859/posthog-3.7.5.tar.gz", hash = "sha256:8ba40ab623da35db72715fc87fe7dccb7fc272ced92581fe31db2d4dbe7ad761", size = 50269 }
+sdist = { url = "https://files.pythonhosted.org/packages/51/5a/057ebd6b279940e2cf2cbe8b10a4b34bc832f6f82b10649dcd12210219e9/posthog-3.8.3.tar.gz", hash = "sha256:263df03ea312d4b47a3d5ea393fdb22ff2ed78140d5ce9af9dd0618ae245a44b", size = 56864 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/76/bd/2d550ac79443cdbb6a5a4193c37820f04df0499e1ecbe8e41c5462cf0c2d/posthog-3.7.5-py2.py3-none-any.whl", hash = "sha256:022132c17069dde03c5c5904e2ae1b9bd68d5059cbc5a8dffc5c1537a1b71cb5", size = 54882 },
+    { url = "https://files.pythonhosted.org/packages/83/3a/ff36f067367de4477d114ab04f42d5830849bad1b0949eb70c9858cdb7e2/posthog-3.8.3-py2.py3-none-any.whl", hash = "sha256:7215c4d7649b0c87905b42f460403311564996d776ab48d39852f46539a50f22", size = 64665 },
 ]
 
 [[package]]
@@ -2386,16 +2404,16 @@ wheels = [
 
 [[package]]
 name = "rich-toolkit"
-version = "0.12.0"
+version = "0.13.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/88/58c193e2e353b0ef8b4b9a91031bbcf8a9a3b431f5ebb4f55c3f3b1992e8/rich_toolkit-0.12.0.tar.gz", hash = "sha256:facb0b40418010309f77abd44e2583b4936656f6ee5c8625da807564806a6c40", size = 71673 }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/8a/71cfbf6bf6257ea785d1f030c22468f763eea1b3e5417620f2ba9abd6dca/rich_toolkit-0.13.2.tar.gz", hash = "sha256:fea92557530de7c28f121cbed572ad93d9e0ddc60c3ca643f1b831f2f56b95d3", size = 72288 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ac/3c/3b66696fc8a6c980674851108d7d57fbcbfedbefb3d8b61a64166dc9b18e/rich_toolkit-0.12.0-py3-none-any.whl", hash = "sha256:a2da4416384410ae871e890db7edf8623e1f5e983341dbbc8cc03603ce24f0ab", size = 13012 },
+    { url = "https://files.pythonhosted.org/packages/7e/1b/1c2f43af46456050b27810a7a013af8a7e12bc545a0cdc00eb0df55eb769/rich_toolkit-0.13.2-py3-none-any.whl", hash = "sha256:f3f6c583e5283298a2f7dbd3c65aca18b7f818ad96174113ab5bec0b0e35ed61", size = 13566 },
 ]
 
 [[package]]
@@ -2425,15 +2443,15 @@ wheels = [
 
 [[package]]
 name = "sentry-sdk"
-version = "2.19.2"
+version = "2.20.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/4a/eccdcb8c2649d53440ae1902447b86e2e2ad1bc84207c80af9696fa07614/sentry_sdk-2.19.2.tar.gz", hash = "sha256:467df6e126ba242d39952375dd816fbee0f217d119bf454a8ce74cf1e7909e8d", size = 299047 }
+sdist = { url = "https://files.pythonhosted.org/packages/68/e8/6a366c0cd5e129dda6ecb20ff097f70b18182c248d4c27e813c21f98992a/sentry_sdk-2.20.0.tar.gz", hash = "sha256:afa82713a92facf847df3c6f63cec71eb488d826a50965def3d7722aa6f0fdab", size = 300125 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/4d/74597bb6bcc23abc774b8901277652c61331a9d4d0a8d1bdb20679b9bbcb/sentry_sdk-2.19.2-py2.py3-none-any.whl", hash = "sha256:ebdc08228b4d131128e568d696c210d846e5b9d70aa0327dec6b1272d9d40b84", size = 322942 },
+    { url = "https://files.pythonhosted.org/packages/e6/0f/6f7e6cd0f4a141752caef3f79300148422fdf2b8b68b531f30b2b0c0cbda/sentry_sdk-2.20.0-py2.py3-none-any.whl", hash = "sha256:c359a1edf950eb5e80cffd7d9111f3dbeef57994cb4415df37d39fda2cf22364", size = 322576 },
 ]
 
 [package.optional-dependencies]
