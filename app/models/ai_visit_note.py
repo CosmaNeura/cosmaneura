@@ -1,8 +1,10 @@
-from activemodel.types import TypeIDType
 import uuid
 
+from pydantic import computed_field
+
 from activemodel import BaseModel
-from activemodel.mixins import TimestampsMixin, TypeIDMixin
+from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
+from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_schema import DoctorNoteSchema
 from sqlalchemy.dialects.postgresql import JSONB
@@ -12,7 +14,9 @@ from .appointment import Appointment
 from .doctor import Doctor
 
 
-class AIVisitNote(BaseModel, TypeIDMixin("visit_note"), TimestampsMixin, table=True):
+class AIVisitNote(
+    BaseModel, TypeIDMixin("visit_note"), PydanticJSONMixin, TimestampsMixin, table=True
+):
     """
     This represents the note summary for a single specific note schema. A given appointment will have multiple
     AI visit notes.
@@ -34,9 +38,10 @@ class AIVisitNote(BaseModel, TypeIDMixin("visit_note"), TimestampsMixin, table=T
     doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()
 
-    @property
-    def note_type(self) -> str:
-        return self.doctor_note_schema.note_type
+    # @computed_field
+    # @property
+    # def note_type(self) -> str:
+    #     return self.doctor_note_schema.note_type
 
     note: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
     "key is name of section, value is markdown content"

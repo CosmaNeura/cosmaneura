@@ -1,8 +1,8 @@
-from activemodel.types import TypeIDType
 import uuid
 
 from activemodel import BaseModel
-from activemodel.mixins import TimestampsMixin, TypeIDMixin
+from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
+from activemodel.types import TypeIDType
 from app.models.doctor_note_schema import DoctorNoteSchema
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
@@ -12,6 +12,7 @@ from .doctor import Doctor
 
 class DoctorNoteExample(
     BaseModel,
+    PydanticJSONMixin,
     TypeIDMixin("doctor_note_example"),
     TimestampsMixin,
     table=True,

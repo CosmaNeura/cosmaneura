@@ -1,10 +1,9 @@
-from activemodel.types import TypeIDType
 import typing as t
 import uuid
 
 from activemodel import BaseModel
-from activemodel.mixins import TimestampsMixin, TypeIDMixin
-from app.models.patient import Patient
+from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
+from activemodel.types import TypeIDType
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
@@ -17,6 +16,7 @@ if t.TYPE_CHECKING:
 
 class DoctorNoteSchema(
     BaseModel,
+    PydanticJSONMixin,
     TypeIDMixin("doctor_note_schema"),
     TimestampsMixin,
     table=True,

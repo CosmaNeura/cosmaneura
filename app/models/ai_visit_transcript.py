@@ -1,10 +1,13 @@
-from activemodel.types import TypeIDType
-import uuid
-
 from pydantic import BaseModel as PydanticBaseModel
 
 from activemodel import BaseModel
-from activemodel.mixins import SoftDeletionMixin, TimestampsMixin, TypeIDMixin
+from activemodel.mixins import (
+    PydanticJSONMixin,
+    SoftDeletionMixin,
+    TimestampsMixin,
+    TypeIDMixin,
+)
+from activemodel.types import TypeIDType
 from app.models.patient import Patient
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
@@ -20,10 +23,10 @@ class TranscriptEntry(PydanticBaseModel):
     endTime: int  # in milliseconds
 
 
-# TODO move to AIVisitNote
 class AIVisitTranscript(
     BaseModel,
     TypeIDMixin("ai_visit_transcript"),
+    PydanticJSONMixin,
     TimestampsMixin,
     SoftDeletionMixin,
     table=True,
@@ -44,6 +47,6 @@ class AIVisitTranscript(
     patient: Patient = Relationship()
 
     duration: int | None
-    "total length of the transcript in seconds"
+    "total length of the transcript, in seconds"
 
     transcript_data: list[TranscriptEntry] = Field(sa_type=JSONB())  # type: ignore
