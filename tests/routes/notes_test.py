@@ -11,7 +11,7 @@ def test_notes_list(authenticated_client: TestClient):
 
     assert response.status_code == status.HTTP_200_OK
 
-    result = response.json
+    _result = response.json
 
 
 def test_note_detail(authenticated_client: TestClient):
@@ -26,4 +26,4 @@ def test_note_detail(authenticated_client: TestClient):
 
     assert response.status_code == status.HTTP_200_OK
 
-    result = response.json()
+    _result = response.json()

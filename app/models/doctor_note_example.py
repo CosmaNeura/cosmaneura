@@ -1,5 +1,3 @@
-import uuid
-
 from activemodel import BaseModel
 from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType

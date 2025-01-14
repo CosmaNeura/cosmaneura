@@ -1,9 +1,8 @@
-from activemodel.types import TypeIDType
-import uuid
 from datetime import datetime
 
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
+from activemodel.types import TypeIDType
 from sqlmodel import Relationship
 
 from .doctor import Doctor
