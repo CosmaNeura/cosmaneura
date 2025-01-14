@@ -33,6 +33,15 @@ def write_versions():
 
 
 @app.command()
+def dump_openapi():
+    import json
+
+    from app.server import api_app
+
+    typer.echo(json.dumps(api_app.openapi()))
+
+
+@app.command()
 def hello():
     typer.echo("Hello, World!")
 

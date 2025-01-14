@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@clerk/clerk-js':
-        specifier: ^5.43.7
-        version: 5.43.7(@types/react@19.0.4)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+        specifier: ^5.44.0
+        version: 5.44.0(@types/react@19.0.4)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
       '@clerk/clerk-react':
         specifier: ^5.21.2
         version: 5.21.2(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
@@ -375,8 +375,8 @@ packages:
       react: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
       react-dom: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
 
-  '@clerk/clerk-js@5.43.7':
-    resolution: {integrity: sha512-Verd3dEC+hCsgPUFirsv+ofthkoF7qYKKmLr1PZmKN1onFgUpdQtDZJKhScQ/dpvA10KYRUdfZbeExci+aKb9w==}
+  '@clerk/clerk-js@5.44.0':
+    resolution: {integrity: sha512-pmjx/7iWM3QYGHHj4hIkVhvmI5QiDsxXPsoXChHeJYDX6HYZNw5BoJw2rh3I8aGEWlm1C7yta32BDETzGi0Kuw==}
     engines: {node: '>=18.17.0'}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0 || ^19.0.0-0
@@ -5453,7 +5453,7 @@ snapshots:
       react-lifecycles-compat: 3.0.4
       warning: 3.0.0
 
-  '@clerk/clerk-js@5.43.7(@types/react@19.0.4)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)':
+  '@clerk/clerk-js@5.44.0(@types/react@19.0.4)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)':
     dependencies:
       '@clerk/localizations': 3.9.7
       '@clerk/shared': 2.20.6(react-dom@19.0.0(react@19.0.0))(react@19.0.0)

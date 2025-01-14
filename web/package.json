@@ -12,7 +12,7 @@
     "typegen:watch": "react-router typegen --watch"
   },
   "dependencies": {
-    "@clerk/clerk-js": "^5.43.7",
+    "@clerk/clerk-js": "^5.44.0",
     "@clerk/clerk-react": "^5.21.2",
     "@epic-web/invariant": "^1.0.0",
     "@hey-api/client-fetch": "^0.6.0",
@@ -79,7 +79,7 @@
     "vitest": "^2.1.8"
   },
   "engines": {
-    "node": "^22.10.0",
+    "node": "^22.11.0",
     "pnpm": "^9.15.3"
   },
   "prettier": {
