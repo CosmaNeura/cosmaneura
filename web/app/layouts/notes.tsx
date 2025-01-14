@@ -1,6 +1,5 @@
 import * as React from "react"
 import { Outlet, useOutletContext } from "react-router"
-import type { ShouldRevalidateFunctionArgs } from "react-router"
 
 import { Route } from "./+types/notes"
 
@@ -12,8 +11,6 @@ import { getClient } from "~/configuration/clerk"
 import { Appointment, noteList } from "~/configuration/client"
 
 import { invariant } from "@epic-web/invariant"
-
-type ContextType = { onNavigate: (page: string) => void; currentPage: string }
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   const clerkClient = await getClient()
@@ -29,6 +26,7 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   return data
 }
 
+// import type { ShouldRevalidateFunctionArgs } from "react-router"
 // TODO not operational! https://github.com/remix-run/react-router/issues/12740
 // https://discord.com/channels/770287896669978684/770287896669978687/1328764904894758954
 // export function shouldRevalidate(_arg: ShouldRevalidateFunctionArgs) {
@@ -36,8 +34,6 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
 // }
 
 export default function NotesLayout({ loaderData }: Route.ComponentProps) {
-  const outletContext = useOutletContext<ContextType>()
-  const { onNavigate, currentPage } = outletContext
   const { appointments } = loaderData
 
   function appointmentToSidebarEntry(appointment: Appointment): SidebarEntry {
@@ -71,7 +67,7 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
           header={"Notes"}
           entries={appointments.map(appointmentToSidebarEntry)}
         />
-        <Outlet context={outletContext} />
+        <Outlet />
       </SidebarProvider>
     </PageTransition>
   )
