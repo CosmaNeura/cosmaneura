@@ -22,7 +22,14 @@ patient = Patient.find_or_create_by(
 appointment = Appointment.find_or_create_by(
     doctor_id=doctor.id,
     patient_id=patient.id,
-    appointment_date=datetime.now(),
+    appointment_date=datetime.strptime("2025-10-31", "%Y-%m-%d"),
+)
+
+# to test multiple items in the ui and an empty note state
+appointment_2 = Appointment.find_or_create_by(
+    doctor_id=doctor.id,
+    patient_id=patient.id,
+    appointment_date=datetime.strptime("2025-12-31", "%Y-%m-%d"),
 )
 
 VisitAudioFile.find_or_create_by(
