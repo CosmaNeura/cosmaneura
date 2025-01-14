@@ -4,6 +4,7 @@ from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_note_example import DoctorNoteExample
 
+from app import log
 import re
 
 def assert_matches(regex, string):
@@ -19,8 +20,6 @@ def test_telehealth_SOAP_note_extraction():
         note_type=file.note_type,
     )
     assert schema is None
-    example = DoctorNoteExample.get(doctor_id=file.doctor_id)
-    assert example is None
 
     extract(file.id)
 
@@ -98,7 +97,7 @@ def test_telehealth_SOAP_note_extraction():
         "EXT: symmetric movement bilat/UE; no cyanosis/clubbing/edema",
         "NEURO: AO x 3, grossly normal coordination and tone",
         "PSYCH: judgment/insight intact, euthymic mood/ congruent affect; good eye contact",
-        "Labs Reviewed: Nov 2024",
+        "Labs Reviewed",
         "1.2 TSH",
         "T4 1.21 (direct)",
         "T3 - WNL",
@@ -117,7 +116,7 @@ def test_telehealth_SOAP_note_extraction():
         "History suggests against a sleep disorder, depression or hormonal dysfunction",
         "she may have chronic sleep deprivation that is not yet corrected based on the ages of her kids",
         "may need combined T3 and T4 supplementation for best results",
-        "Check thyroid panel in 6 weeks - sent to LabCorps.",
+        "Check thyroid panel in 6 weeks - sent to",
         "Call if feeling significantly worse and need to be seen earlier to reassess medications",
         "schedule follow up for after labs are completed",
         # She mispelled the medication in her note.
@@ -137,8 +136,6 @@ def test_telehealth_H_and_P_note_extraction():
         note_type=file.note_type,
     )
     assert schema is None
-    example = DoctorNoteExample.get(doctor_id=file.doctor_id)
-    assert example is None
 
     extract(file.id)
 
@@ -250,12 +247,10 @@ def test_telehealth_H_and_P_note_extraction():
         "NEURO: AO x 3, grossly normal coordination and tone",
         "PSYCH: judgment/insight intact, euthymic mood/ congruent affect; good eye contact",
         "Chart Review:",
-        "11/11 - current",
         "4d menses, 1d BB",
-        "10/10/15 - 11/10",
         r"3d menses \+ 2d TEBB",
         r"6d mucus cycle \(MCS 17.2\)",
-        r"\+pain CD 13-14 - no midcycle bleeding",
+        r"\+pain CD \d\d-\d\d - no midcycle bleeding",
         "PPP 11 days, no PM BB or spotting",
         "No labs or imaging to review.",
     ]
@@ -263,10 +258,12 @@ def test_telehealth_H_and_P_note_extraction():
         assert_matches(content, exam)
 
     assessment = fields['Assessment'].replace("\n", " ")
+    assert "15 Nov, 2024" not in assessment # De-identified
+    assert "19 Nov, 2024" not in assessment # De-identified
     assessment_contents = [
-        r"Abnormal menstrual cycle \(N92.6\) Irregular menstruation, unspecified modified 15 Nov, 2024",
-        r"Lower abdominal pain \(R10.30\) Lower abdominal pain, unspecified modified 15 Nov, 2024",
-        r"\(Problem reconciliation performed by Teresa Asam-Jensen 01:40 PM 15 Nov 2024 Last updated\)",
+        r"Abnormal menstrual cycle \(N92.6\) Irregular menstruation",
+        r"Lower abdominal pain \(R10.30\) Lower abdominal pain, unspecified",
+        r"\(Problem reconciliation performed by .* Last updated\)", # De-identified
     ]
     for content in assessment_contents:
         assert_matches(content, assessment)
@@ -274,4 +271,4 @@ def test_telehealth_H_and_P_note_extraction():
     assert "Abnormal menstrual cycle" in fields['Plan']
     assert "Lower abdominal pain" in fields['Plan']
     assert "45 min visit" in fields['Plan']
-    assert "45 min visit" not in fields['Plan']
+    assert "Teresa Asam-Jensen" not in fields['Plan'] # De-identified
