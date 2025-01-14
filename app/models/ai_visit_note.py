@@ -1,5 +1,3 @@
-import uuid
-
 from pydantic import computed_field
 
 from activemodel import BaseModel
@@ -38,10 +36,10 @@ class AIVisitNote(
     doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()
 
-    # @computed_field
-    # @property
-    # def note_type(self) -> str:
-    #     return self.doctor_note_schema.note_type
+    @computed_field
+    @property
+    def note_type(self) -> str:
+        return self.doctor_note_schema.note_type
 
     note: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
     "key is name of section, value is markdown content"
