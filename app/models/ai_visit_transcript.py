@@ -44,6 +44,6 @@ class AIVisitTranscript(
     patient: Patient = Relationship()
 
     duration: int | None
-    "total length of the transcript"
+    "total length of the transcript in seconds"
 
     transcript_data: list[TranscriptEntry] = Field(sa_type=JSONB())  # type: ignore
