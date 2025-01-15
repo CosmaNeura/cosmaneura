@@ -5,6 +5,7 @@ from textwrap import dedent
 from decouple import config
 from openai import OpenAI
 
+from app.models.appointment import Appointment
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_example import DoctorNoteExample
@@ -35,6 +36,12 @@ def summarize(transcript_id: str, example_note_id: str):
     )
 
     note = augment_clinical_note(original=note, transcript=transcript)
+
+    appointment = Appointment.get(id=transcript.appointment_id)
+    assert appointment
+    fallback_name = f"{appointment.appointment_date} Appointment"
+    appointment.appointment_name = note.get("CC", fallback_name)
+    appointment.save()
 
     AIVisitNote.find_or_create_by(
         doctor_id=transcript.doctor_id,
