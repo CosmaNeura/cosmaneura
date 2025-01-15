@@ -6,7 +6,7 @@ from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from app.models.doctor import Doctor
-from sqlmodel import Relationship
+from sqlmodel import Field, Relationship
 
 from .patient import Patient
 
@@ -24,8 +24,8 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
 
     appointment_date: datetime
 
-    appointment_name: str
-    appointment_notes_preview: str
+    appointment_name: str | None = Field(nullable=True)
+    appointment_notes_preview: str | None = Field(nullable=True)
 
     @computed_field
     @property
