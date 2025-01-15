@@ -36,6 +36,7 @@ openai = OpenAI(api_key=api_key)
 
 # TODO add logging
 
+
 def extract(note_id: str):
     note = DoctorNoteFile.get(id=note_id)
     note_pages = download_note(note)

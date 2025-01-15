@@ -5,9 +5,9 @@ from textwrap import dedent
 from decouple import config
 from openai import OpenAI
 
-from app.models.appointment import Appointment
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.appointment import Appointment
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
 
