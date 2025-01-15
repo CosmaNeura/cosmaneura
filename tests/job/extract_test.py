@@ -1,18 +1,20 @@
-from app.jobs.extract import extract
-
-from app.models.doctor_note_file import DoctorNoteFile
-from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.doctor_note_example import DoctorNoteExample
+import re
 
 from app import log
-import re
+from app.jobs.extract import extract
+
+from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_file import DoctorNoteFile
+from app.models.doctor_note_schema import DoctorNoteSchema
+
 
 def assert_matches(regex, string):
     if not re.search(regex, string):
         raise AssertionError(f"Regex '{regex}' does not match the string '{string}'")
 
+
 def test_telehealth_SOAP_note_extraction():
-    file = DoctorNoteFile.get(note_type="Telehealth SOAP Note") # Seeded data.
+    file = DoctorNoteFile.get(note_type="Telehealth SOAP Note")  # Seeded data.
     assert file is not None
 
     schema = DoctorNoteSchema.get(
@@ -31,16 +33,16 @@ def test_telehealth_SOAP_note_extraction():
 
     field_keys = list(schema.fields.keys())
     expected_keys = [
-        'CC',
-        'Subjective',
-        'ROS',
-        'Medications',
-        'Allergies',
-        'Mental/Functional',
-        'Vitals',
-        'Objective',
-        'Assessment',
-        'Plan'
+        "CC",
+        "Subjective",
+        "ROS",
+        "Medications",
+        "Allergies",
+        "Mental/Functional",
+        "Vitals",
+        "Objective",
+        "Assessment",
+        "Plan",
     ]
     assert len(field_keys) == len(expected_keys)
     for key in expected_keys:
@@ -58,10 +60,10 @@ def test_telehealth_SOAP_note_extraction():
         assert key in list(example.field_examples.keys())
 
     fields = example.field_examples
-    assert "Thyroid" == fields['CC']
-    assert "No known allergies" == fields['Allergies']
-    assert "Mood is good: denies depression, anxiety" == fields['Mental/Functional']
-    assert "Hashimoto thyroiditis" in fields['Assessment']
+    assert "Thyroid" == fields["CC"]
+    assert "No known allergies" == fields["Allergies"]
+    assert "Mood is good: denies depression, anxiety" == fields["Mental/Functional"]
+    assert "Hashimoto thyroiditis" in fields["Assessment"]
 
     subjective_contents = [
         "history of thyroid disorder (Hashimoto)",
@@ -78,7 +80,7 @@ def test_telehealth_SOAP_note_extraction():
         "Sleep: no snoring",
     ]
     for content in subjective_contents:
-        assert content in fields['Subjective'].replace("\n", " ")
+        assert content in fields["Subjective"].replace("\n", " ")
 
     ros_contents = [
         "12 pt ROS performed",
@@ -86,7 +88,7 @@ def test_telehealth_SOAP_note_extraction():
         "nothing additional to HPI",
     ]
     for content in ros_contents:
-        assert content in fields['ROS'].replace("\n", " ")
+        assert content in fields["ROS"].replace("\n", " ")
 
     objective_contents = [
         "GEN: NAD, sitting comfortably facing screen, engaged easily in conversation",
@@ -106,7 +108,7 @@ def test_telehealth_SOAP_note_extraction():
         "Cycle review: none",
     ]
     for content in objective_contents:
-        assert content in fields['Objective'].replace("\n", " ")
+        assert content in fields["Objective"].replace("\n", " ")
 
     plan_contents = [
         "Hashimoto thyroiditis",
@@ -125,10 +127,11 @@ def test_telehealth_SOAP_note_extraction():
         r"Discussed other ways to optimize immune regulation through diet or other medications .naltrexone. - resources sent",
     ]
     for content in plan_contents:
-        assert_matches(content, fields['Plan'].replace("\n", " "))
+        assert_matches(content, fields["Plan"].replace("\n", " "))
+
 
 def test_telehealth_H_and_P_note_extraction():
-    file = DoctorNoteFile.get(note_type="Telehealth H&P Note") # Seeded data.
+    file = DoctorNoteFile.get(note_type="Telehealth H&P Note")  # Seeded data.
     assert file is not None
 
     schema = DoctorNoteSchema.get(
@@ -181,21 +184,23 @@ def test_telehealth_H_and_P_note_extraction():
         assert key in list(example.field_examples.keys())
 
     fields = example.field_examples
-    assert fields['CC'] == "Est care: evaluate mid-cycle pain"
-    assert fields['PMHx'] == "no dx pmh"
-    assert fields['PSHx'] == "Wisdom teeth removed no"
-    assert fields['FHx'] == "mother - alive, has Gestational DM"
-    assert fields['Soc Hx'] == "married"
-    assert fields['Ob Preg Hx'] == "Pregnancy History - G6, T0, P0, A0, L6"
+    assert fields["CC"] == "Est care: evaluate mid-cycle pain"
+    assert fields["PMHx"] == "no dx pmh"
+    assert fields["PSHx"] == "Wisdom teeth removed no"
+    assert fields["FHx"] == "mother - alive, has Gestational DM"
+    assert fields["Soc Hx"] == "married"
+    assert fields["Ob Preg Hx"] == "Pregnancy History - G6, T0, P0, A0, L6"
     ros = "12 pt ROS performed including Gen, HEENT, Resp, CV, GI, Skin - nothing additional to HPI"
-    assert fields['ROS'].replace("\n", " ") == ros
-    assert fields['Medications'] == "No known medications"
-    assert fields['Allergies'] == "No known allergies"
-    assert fields['Mental/Functional'] == "Normal mood; no c/o significant PMS mood shifts"
-    assert fields['Goals'] == "Dx and treat midcycle pain"
-    assert fields['Health Concerns'] == "None"
+    assert fields["ROS"].replace("\n", " ") == ros
+    assert fields["Medications"] == "No known medications"
+    assert fields["Allergies"] == "No known allergies"
+    assert (
+        fields["Mental/Functional"] == "Normal mood; no c/o significant PMS mood shifts"
+    )
+    assert fields["Goals"] == "Dx and treat midcycle pain"
+    assert fields["Health Concerns"] == "None"
 
-    hpi = fields['HPI'].replace("\n", " ")
+    hpi = fields["HPI"].replace("\n", " ")
     hpi_contents = [
         r"DL is a pleasant 37 yo G6P6 woman seen in IL via telemedicine with synchronous video for mid-cyc?lc?e pain.",
         "Reports regular cycles, 25-26 days long, tracking for about 12 years.",
@@ -234,9 +239,9 @@ def test_telehealth_H_and_P_note_extraction():
         "SpO2",
     ]
     for content in vitals_contents:
-        assert content in fields['Vitals']
+        assert content in fields["Vitals"]
 
-    exam = fields['EXAM'].replace("\n", " ")
+    exam = fields["EXAM"].replace("\n", " ")
     exam_contents = [
         "GEN: NAD, sitting comfortably facing screen, engaged easily in conversation. Appears well.",
         "HEENT: N/C. AT. MMM to observation. Symmetric facies without edema.",
@@ -257,18 +262,18 @@ def test_telehealth_H_and_P_note_extraction():
     for content in exam_contents:
         assert_matches(content, exam)
 
-    assessment = fields['Assessment'].replace("\n", " ")
-    assert "15 Nov, 2024" not in assessment # De-identified
-    assert "19 Nov, 2024" not in assessment # De-identified
+    assessment = fields["Assessment"].replace("\n", " ")
+    assert "15 Nov, 2024" not in assessment  # De-identified
+    assert "19 Nov, 2024" not in assessment  # De-identified
     assessment_contents = [
         r"Abnormal menstrual cycle \(N92.6\) Irregular menstruation",
         r"Lower abdominal pain \(R10.30\) Lower abdominal pain, unspecified",
-        r"\(Problem reconciliation performed by .* Last updated\)", # De-identified
+        r"\(Problem reconciliation performed by .* Last updated\)",  # De-identified
     ]
     for content in assessment_contents:
         assert_matches(content, assessment)
 
-    assert "Abnormal menstrual cycle" in fields['Plan']
-    assert "Lower abdominal pain" in fields['Plan']
-    assert "45 min visit" in fields['Plan']
-    assert "Teresa Asam-Jensen" not in fields['Plan'] # De-identified
+    assert "Abnormal menstrual cycle" in fields["Plan"]
+    assert "Lower abdominal pain" in fields["Plan"]
+    assert "45 min visit" in fields["Plan"]
+    assert "Teresa Asam-Jensen" not in fields["Plan"]  # De-identified
