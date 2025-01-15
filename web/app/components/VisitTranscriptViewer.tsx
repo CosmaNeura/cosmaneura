@@ -10,6 +10,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+// TODO https://github.com/hey-api/openapi-ts/issues/1571
 import type { AIVisitTranscript } from "~/configuration/client"
 import { secondsToMinutes } from "~/lib/date"
 

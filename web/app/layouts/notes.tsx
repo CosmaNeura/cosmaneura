@@ -10,6 +10,8 @@ import { SidebarProvider } from "@/components/ui/sidebar"
 import { getClient } from "~/configuration/clerk"
 import { Appointment, noteList } from "~/configuration/client"
 
+// import type { ShouldRevalidateFunctionArgs } from "react-router"
+import { standardDateTimeFormat } from "../lib/date"
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
@@ -26,7 +28,6 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   return data
 }
 
-// import type { ShouldRevalidateFunctionArgs } from "react-router"
 // TODO not operational! https://github.com/remix-run/react-router/issues/12740
 // https://discord.com/channels/770287896669978684/770287896669978687/1328764904894758954
 // export function shouldRevalidate(_arg: ShouldRevalidateFunctionArgs) {
@@ -41,15 +42,14 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
       id: appointment.id,
       url: `/notes/${appointment.id}`,
       // title: appointment.patient.name,
-      title: "patient name",
+      title: appointment.patient_name,
       // location: appointment.location,
-      location: "Denver, CO",
-      subTitle: "type of appointment",
-      date: appointment.appointment_date,
+      // subTitle: "type of appointment",
+      date: standardDateTimeFormat(appointment.appointment_date),
       // status: appointment.status,
       status: "none",
       // preview: appointment,
-      preview: "something",
+      // preview: "something",
     }
   }
 

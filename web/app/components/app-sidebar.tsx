@@ -128,7 +128,7 @@ function SelectionList({
         entries.map((entry) => (
           <button
             key={entry.id}
-            onClick={() => navigate(entry.url)}
+            onClick={() => currentUrl !== entry.url && navigate(entry.url)}
             className={cn(
               "w-full flex flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
               currentUrl === entry.url &&
@@ -164,22 +164,60 @@ function SelectionSidebar({
   isLoading: boolean
   entries: SidebarEntry[]
 }) {
+  const [searchTerm, setSearchTerm] = React.useState("")
+  const [showThisWeek, setShowThisWeek] = React.useState(false)
+
+  const filteredEntries = entries.filter((entry) => {
+    const matchesSearch = entry.title
+      .toLowerCase()
+      .includes(searchTerm.toLowerCase())
+
+    if (showThisWeek) {
+      const entryDate = new Date(entry.date)
+      const today = new Date()
+      const startOfWeek = new Date(today)
+      startOfWeek.setDate(today.getDate() - today.getDay())
+      const endOfWeek = new Date(today)
+      endOfWeek.setDate(today.getDate() + (6 - today.getDay()))
+
+      const isThisWeek = entryDate >= startOfWeek && entryDate <= endOfWeek
+      return matchesSearch && isThisWeek
+    }
+
+    return matchesSearch
+  })
+
   return (
     <Sidebar collapsible="none" className="hidden flex-1 md:flex">
       {/* title with filters */}
       <SidebarHeader className="gap-3.5 border-b p-4">
         <div className="flex w-full items-center justify-between">
           <div className="text-base font-medium text-foreground">{header}</div>
-          {/* <Label className="flex items-center gap-2 text-sm">
-            <span>Today</span>
-            <Switch className="shadow-none" />
-          </Label> */}
+          <Label className="flex items-center gap-2 text-sm">
+            <span>This Week</span>
+            <Switch
+              className="shadow-none"
+              checked={showThisWeek}
+              onCheckedChange={setShowThisWeek}
+            />
+          </Label>
         </div>
-        <SidebarInput placeholder="Type to search..." />
+        <SidebarInput
+          placeholder="Type to search..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+        />
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup className="px-0">
-          <SelectionList isLoading={isLoading} entries={entries} />
+          {filteredEntries.length === 0 ? (
+            <div className="p-4 text-center text-sm text-slate-500">
+              <p>No results found.</p>
+              <p className="mt-2">Try adjusting your filters.</p>
+            </div>
+          ) : (
+            <SelectionList isLoading={isLoading} entries={filteredEntries} />
+          )}
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
