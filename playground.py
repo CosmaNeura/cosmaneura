@@ -2,27 +2,31 @@
 
 # isort: off
 
-from pydantic import BaseModel, field_validator, model_validator
-import sqlmodel as sm
 import sqlalchemy as sa
 
-from sqlmodel import SQLModel, Session, select
+from sqlmodel import SQLModel
 from app.configuration.clerk import clerk
 from app.configuration.database import database_url
-from app.models import *
-from activemodel.session_manager import get_session
-from app.models import llm_response
-from app.models.llm_response import LLMResponse
-from app.models.doctor import Doctor
-from activemodel.session_manager import get_engine
+import app.models
+
+import inspect
+from typing import get_type_hints
+from rich.console import Console
+from rich.text import Text
+from pathlib import Path
+import inspect
+from sqlmodel import SQLModel
+import logging
+from playwright.async_api import async_playwright
+import funcy_pipe as fp
+from sqlmodel import create_engine
+from redis import Redis
+import pkgutil
+import importlib
+
 
 def inspect_environment():
     """Display relevant custom functions and variables with minimal formatting"""
-    import inspect
-    from typing import get_type_hints
-    from rich.console import Console
-    from rich.text import Text
-    from pathlib import Path
 
     console = Console()
     width = console.width
@@ -104,6 +108,36 @@ def inspect_environment():
             console.print(text)
 
 
+def import_all_models(module):
+    """Import all model classes from module and submodules into current namespace."""
+
+    log = logging.getLogger(__name__)
+    log.debug(f"Starting model import from module: {module.__name__}")
+    model_classes = {}
+
+    # Walk through all submodules
+    for loader, module_name, is_pkg in pkgutil.walk_packages(module.__path__):
+        full_name = f"{module.__name__}.{module_name}"
+        log.debug(f"Importing submodule: {full_name}")
+        submodule = importlib.import_module(full_name)
+
+        # Get all classes from module
+        for name, obj in inspect.getmembers(submodule):
+            if (inspect.isclass(obj) and
+                issubclass(obj, SQLModel) and
+                obj != SQLModel):
+                log.debug(f"Found model class: {name}")
+                model_classes[name] = obj
+
+                # Export to current namespace
+                globals()[name] = obj
+                log.debug(f"Exported {name} to global namespace")
+
+    log.debug(f"Completed model import. Found {len(model_classes)} models")
+    return model_classes
+
+import_all_models(app.models)
+
 # TODO not sure if this works
 def patch_reload():
 	# Store the original reload function
@@ -132,7 +166,6 @@ async def playwright_page():
 	>>> response.status
 	"""
 
-	from playwright.async_api import async_playwright
 
 	playwright = await async_playwright().start()
 	browser = await playwright.chromium.launch(headless = True)
@@ -142,18 +175,14 @@ async def playwright_page():
 def create_user():
 	clerk.users.create({"email_address": "test@test.com"})
 
-import funcy_pipe as fp
 
 def delete_all_users():
 	clerk.users.list() | fp.filter(lambda user: user.email_addresses[0].email_address != "mike+clerk_test@example.com") | fp.pluck_attr("id") | fp.lmap(lambda uid: clerk.users.delete(user_id=uid))
 
 
-from sqlmodel import create_engine
-import os
 
 engine = create_engine(database_url(), echo=True)
 
-from redis import Redis
 
 def get_db_version() -> tuple[str, str]:
 	with engine.connect() as conn:
