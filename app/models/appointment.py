@@ -24,6 +24,9 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
 
     appointment_date: datetime
 
+    appointment_name: str
+    appointment_notes_preview: str
+
     @computed_field
     @property
     def patient_name(self) -> str:
