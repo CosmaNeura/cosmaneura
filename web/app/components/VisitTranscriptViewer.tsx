@@ -1,3 +1,4 @@
+import { formatDuration, intervalToDuration } from "date-fns"
 import { useState } from "react"
 import Markdown from "react-markdown"
 
@@ -9,7 +10,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import { AIVisitTranscript } from "~/configuration/client"
+import type { AIVisitTranscript } from "~/configuration/client"
+import { secondsToMinutes } from "~/lib/date"
 
 export default function VisitTranscriptViewer({
   transcript,
@@ -27,23 +29,27 @@ export default function VisitTranscriptViewer({
     )
   }
 
+  // hook required for chevron state
   const [isOpen, setOpen] = useState(false)
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setOpen}>
+    <Collapsible defaultOpen open={isOpen} onOpenChange={setOpen}>
       <div className="flex items-start">
         <CollapsibleTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-auto p-0">
+          <Button variant="ghost" size="sm" className="h-auto p-2">
             <ChevronDown
               className={`h-4 w-4 transition-transform ${
                 isOpen ? "transform rotate-180" : ""
               }`}
             />
-            <span className="ml-2 text-xl font-semibold">Visit Transcript</span>
+            <span className="text-xl font-semibold">Visit Transcript</span>
           </Button>
         </CollapsibleTrigger>
       </div>
       <CollapsibleContent className="mt-3">
+        <div className="mb-2 text-sm italic text-muted-foreground">
+          Duration: {secondsToMinutes(transcript.duration)}
+        </div>
         {transcript.transcript_data.map((transcriptEntry) => {
           return (
             <div className="mb-2">
