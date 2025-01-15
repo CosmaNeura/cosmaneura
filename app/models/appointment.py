@@ -1,5 +1,7 @@
 from datetime import datetime
 
+from pydantic import computed_field
+
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
@@ -21,3 +23,8 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     patient: Patient = Relationship()
 
     appointment_date: datetime
+
+    @computed_field
+    @property
+    def patient_name(self) -> str:
+        return self.patient.name
