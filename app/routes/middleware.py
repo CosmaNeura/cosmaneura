@@ -8,17 +8,6 @@ from app.routes.dependencies.timing import add_timing_middleware
 from activemodel.session_manager import SessionManager
 
 
-def add_database_session_middleware(app: FastAPI):
-    """
-    Add a middleware that creates a database session for each request.
-    """
-
-    @app.middleware("http")
-    async def db_session_middleware(request: Request, call_next):
-        with SessionManager.get_instance().global_session():
-            return await call_next(request)
-
-
 def add_middleware(app: FastAPI):
     """
     Entrypoint to add all middleware for the root router:
@@ -34,13 +23,14 @@ def add_middleware(app: FastAPI):
         allow_headers=["*"],
     )
 
-    # add_database_session_middleware(app)
     add_timing_middleware(app)
 
     if is_development() and config("FASTAPI_DEBUG", cast=bool, default=False):
         from app.utils.debug import PdbMiddleware
 
+        # TODO should conditionally include this dependending on set_trace, and fix the stdin/stdout
         # app.add_middleware(PdbrMiddleware, debug=True)
+
         app.add_middleware(PdbMiddleware, debug=True)
 
     return app

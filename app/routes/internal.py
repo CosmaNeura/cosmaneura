@@ -6,11 +6,12 @@ from pydantic import BaseModel, computed_field
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 
-from activemodel.session_manager import global_session, global_session_2
+from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
+from app.models.doctor import Doctor
 from app.models.patient import Patient
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
@@ -26,9 +27,11 @@ internal_api_app = APIRouter(
     tags=["private"],
     # think of dependencies as middleware
     dependencies=[
-        # Depends(global_session),
-        Depends(global_session_2),
+        # NOTE this line could not be more important, look at the underlying implementation!
+        Depends(aglobal_session),
+        # make sure the user is auth'd via clerk to this endpoint
         Depends(authenticate_clerk_request_middleware),
+        # inject a doctor record into the request state
         Depends(inject_doctor_record),
     ],
 )
@@ -38,18 +41,19 @@ class IntakeList(BaseModel, extra="forbid"):
     appointments: list[Appointment]
 
 
+@internal_api_app.get("/intake")
+def intake_list(request: Request) -> IntakeList:
+    doctor: Doctor = request.state.doctor
+
+    return IntakeList(
+        appointments=list(
+            Appointment.select().where(Appointment.doctor_id == doctor.id).all()
+        )
+    )
+
+
 class NotetakingData(BaseModel, extra="forbid"):
     appointments: list[Appointment]
-
-
-class SettingsData(BaseModel, extra="forbid"):
-    settings: dict
-
-
-@internal_api_app.get("/intake")
-def intake_list() -> IntakeList:
-    # TODO filter appointment data
-    return IntakeList(appointments=list(Appointment.all()))
 
 
 @internal_api_app.get("/notes")
@@ -59,32 +63,12 @@ def note_list(request: Request) -> NotetakingData:
     at this point.
     """
 
-    # visit_notes = AIVisitNote.select(AIVisitNote.doctor_id == request.state.doctor.id)
-    # visit_notes = AIVisitNote.all()
+    doctor: Doctor = request.state.doctor
+    appointment_list = (
+        Appointment.select().where(Appointment.doctor_id == doctor.id).all()
+    )
 
-    return NotetakingData(appointments=list(Appointment.all()))
-
-
-from functools import wraps
-
-from activemodel.session_manager import get_session
-from sqlalchemy.orm.exc import DetachedInstanceError
-
-
-def safe_computed_field(func):
-    @computed_field
-    @property
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        try:
-            return func(self, *args, **kwargs)
-        except DetachedInstanceError:
-            breakpoint()
-            with get_session() as session:
-                merged_instance = session.merge(self)
-                return func(merged_instance, *args, **kwargs)
-
-    return wrapper
+    return NotetakingData(appointments=list(appointment_list))
 
 
 class NoteDetail(BaseModel, extra="forbid"):
@@ -94,7 +78,6 @@ class NoteDetail(BaseModel, extra="forbid"):
 
     @computed_field
     @property
-    # @safe_computed_field
     def patient(self) -> Patient:
         return self.appointment.patient
 
@@ -105,18 +88,27 @@ def note_detail(
     appointment_id: Annotated[TypeIDType, Path()],
 ) -> NoteDetail:
     # TODO error handling for bad IDs
-    note_detail = NoteDetail(
-        appointment=Appointment.get(id=appointment_id),
-        transcript=AIVisitTranscript.get(appointment_id=appointment_id),
-        # TODO should be able to handle a generator, right?
-        notes=list(
-            AIVisitNote.select()
-            .where(AIVisitNote.appointment_id == appointment_id)
-            .all()
-        ),
+    doctor: Doctor = request.state.doctor
+    appointment = (
+        Appointment.select()
+        .where(Appointment.doctor_id == doctor.id, Appointment.id == appointment_id)
+        .one()
     )
 
-    note_detail.patient
+    visit_notes = (
+        AIVisitNote.select()
+        .where(
+            AIVisitNote.appointment_id == appointment_id,
+        )
+        .all()
+    )
+
+    note_detail = NoteDetail(
+        appointment=appointment,
+        transcript=AIVisitTranscript.get(appointment_id=appointment_id),
+        # TODO should be able to handle a generator, right?
+        notes=list(visit_notes),
+    )
 
     return note_detail
 
@@ -131,6 +123,10 @@ def upload_visit_audio_file(request: Request, file_name: str) -> None:
     return app.commands.uploads.upload_visit_audio_file.perform(
         user=request.state.user, blob_name=file_name
     )
+
+
+class SettingsData(BaseModel, extra="forbid"):
+    settings: dict
 
 
 @internal_api_app.get("/settings")
