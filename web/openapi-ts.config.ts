@@ -27,5 +27,12 @@ export default defineConfig({
   },
   client: "@hey-api/client-fetch",
   experimentalParser: true,
-  plugins: [...defaultPlugins],
+  plugins: [
+    ...defaultPlugins,
+    // https://github.com/hey-api/openapi-ts/issues/1571
+    {
+      identifierCase: "preserve",
+      name: "@hey-api/typescript",
+    },
+  ],
 })
