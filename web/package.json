@@ -7,7 +7,7 @@
     "build": "pnpm run openapi && react-router typegen && react-router build",
     "test": "pnpm run openapi && vitest run",
     "start": "react-router-serve ./build/server/index.js",
-    "openapi": "pnpm dlx @hey-api/openapi-ts -i $OPENAPI_JSON_PATH -c @hey-api/client-fetch -o client -l $TEST_RESULTS_DIRECTORY",
+    "openapi": "pnpm dlx @hey-api/openapi-ts",
     "typecheck": "react-router typegen && tsc",
     "typegen:watch": "react-router typegen --watch"
   },
@@ -53,6 +53,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.18.0",
+    "@hey-api/openapi-ts": "^0.62.0",
     "@react-router/dev": "7.1.1",
     "@sentry/vite-plugin": "^3.0.0",
     "@testing-library/jest-dom": "^6.6.3",
