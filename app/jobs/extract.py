@@ -14,14 +14,16 @@ from textwrap import dedent
 import PIL.Image
 from azure.storage.blob import BlobServiceClient
 from decouple import config
-from openai import OpenAI
 from pdf2image import convert_from_path
+from typeid import TypeID
 
+from app import log
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
+from app.configuration.openai import openai
 
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
@@ -29,16 +31,15 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 
 from .anonymize import deidentify
 
-api_key = config("OPENAI_API_KEY", cast=str)
-if not api_key:
-    raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
-openai = OpenAI(api_key=api_key)
 
-# TODO add logging
+def perform(note_id: str | TypeID):
+    """
+    Extract a schema and content from an example clinical note.
+    """
 
-
-def extract(note_id: str):
     note = DoctorNoteFile.get(id=note_id)
+    assert note
+
     note_pages = download_note(note)
 
     note_fields = extract_note_fields(note_pages)
@@ -51,10 +52,12 @@ def extract(note_id: str):
         fields=instructions,
     )
 
-    # TODO remove
-    print("schema ID:", schema.id)
-    print(note_fields)
-    print(json.dumps(instructions, indent=2))
+    log.debug(
+        "extracting note content",
+        schema_id=schema.id,
+        note_fields=note_fields,
+        instructions=instructions,
+    )
 
     content = extract_note_content(note_pages, note_fields)
     assert content
@@ -65,9 +68,7 @@ def extract(note_id: str):
         field_examples=content,
     )
 
-    # TODO remove
-    print("doctor example ID:", example.id)
-    print(json.dumps(content, indent=2))
+    log.debug("extracted note content", note_example_id=example.id, content=content)
 
 
 # Convert images to base64 in a data URI format so they can be sent via API.
@@ -82,8 +83,8 @@ def get_img_uri(img: PIL.Image.Image) -> str:
 def download_note(note: DoctorNoteFile) -> list[str]:
     filename = note.azure_file_name
 
+    # TODO may cause issues in prod
     temp_download_path = f"./tmp/example-note-{uuid.uuid4()}-{filename}"
-    _basename_no_ext = os.path.splitext(filename)[0]
 
     service_client = BlobServiceClient(
         AZURE_UPLOADS_ACCOUNT_URL,

@@ -5,8 +5,6 @@ from textwrap import dedent
 
 import assemblyai as assembly
 from azure.storage.blob import BlobServiceClient
-from decouple import config
-from openai import OpenAI
 from pydub import AudioSegment
 
 from app import log
@@ -15,9 +13,14 @@ from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_CONTAINER_NAME,
 )
+from app.configuration.openai import openai
+from app.rq import q
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.visit_audio_file import VisitAudioFile
+
+OPENAI_MODEL = "gpt-4o-2024-08-06"
 
 
 class TranscriptionResult:
@@ -26,20 +29,15 @@ class TranscriptionResult:
         self.duration = duration
 
 
-assembly_key = config("ASSEMBLY_API_KEY", cast=str)
-if not assembly_key:
-    raise ValueError(
-        "API key not found. Please set ASSEMBLY_API_KEY in your .env file."
-    )
-assembly.settings.api_key = assembly_key
-
-api_key = config("OPENAI_API_KEY", cast=str)
-if not api_key:
-    raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
-openai = OpenAI(api_key=api_key)
+def queue(*args, **kwargs):
+    q.enqueue(perform, *args, **kwargs)
 
 
-def transcribe(visit_audio_file_id: str):
+def perform(visit_audio_file_id: str):
+    """
+    Perform transcription of visit audio file.
+    """
+
     visit_audio_file = VisitAudioFile.get(id=visit_audio_file_id)
     assert visit_audio_file
 
@@ -50,13 +48,18 @@ def transcribe(visit_audio_file_id: str):
         appointment_id=visit_audio_file.appointment_id,
         patient_id=visit_audio_file.patient_id,
         duration=result.duration,
+        # TODO I *think* this was fixed in a recent AM update, should check later
         transcript_data=[item.model_dump() for item in result.transcript],
     )
+
+    # now that the transcript exists, let's summarize it for each note type the doctor has
+    notes_for_doctor = DoctorNoteSchema()
 
 
 def extract_audio_to_temp(visit: VisitAudioFile) -> str:
     filename = visit.azure_file_name
 
+    # TODO I feel like this is going to break in prod
     temp_download_path = f"./tmp/visit-audio-{uuid.uuid4()}-{filename}"
     basename_no_ext = os.path.splitext(filename)[0]
     temp_audio_path = f"/tmp/{uuid.uuid4()}-{basename_no_ext}.wav"
@@ -97,7 +100,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
     else:
         ext = os.path.splitext(visit_audio_file.azure_file_name)[1]
         raise ValueError(
-            f"Unsupported file format: .{ext}. Please provide a .mp4 or .wav file."
+            f"Unsupported file format: .{ext}. Please ¡ovide a .mp4 or .wav file."
         )
 
     try:
@@ -180,7 +183,7 @@ def identify_doctor_from_transcript(transcript: str) -> str | None:
     """)
 
     response = openai.chat.completions.create(
-        model="gpt-4o-2024-08-06",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": "You are an assistant."},
             {"role": "user", "content": prompt},
@@ -216,7 +219,7 @@ def extract_doctor_classification(reasoning: str | None) -> str | None:
     """)
 
     response = openai.chat.completions.create(
-        model="gpt-4o-2024-08-06",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": "You are an assistant."},
             {"role": "user", "content": prompt},

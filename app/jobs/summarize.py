@@ -2,8 +2,9 @@ import json
 import math
 from textwrap import dedent
 
-from decouple import config
-from openai import OpenAI
+from app import log
+from app.configuration.openai import openai
+from app.rq import q
 
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
@@ -11,19 +12,24 @@ from app.models.appointment import Appointment
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
 
-api_key = config("OPENAI_API_KEY", cast=str)
-if not api_key:
-    raise ValueError("API key not found. Please set OPENAI_API_KEY in your .env file.")
-openai = OpenAI(api_key=api_key)
-
-# TODO add logging
+OPENAI_MODEL = "gpt-4o"
 
 
-def summarize(transcript_id: str, example_note_id: str):
+def queue(*args, **kwargs):
+    q.enqueue(perform, *args, **kwargs)
+
+
+def perform(transcript_id: str, example_note_id: str):
+    """
+    Summarize a visit transcript into a clinical note.
+    """
+
     transcript = AIVisitTranscript.get(id=transcript_id)
     assert transcript
+
     example = DoctorNoteExample.get(id=example_note_id)
     assert example
+
     schema = DoctorNoteSchema.get(id=example.doctor_note_schema_id)
     assert schema
 
@@ -39,8 +45,11 @@ def summarize(transcript_id: str, example_note_id: str):
 
     appointment = Appointment.get(id=transcript.appointment_id)
     assert appointment
-    fallback_name = f"{appointment.appointment_date} Appointment"
+
+    fallback_name = "General Appointment"
+    # primary compliant / condition
     appointment.appointment_name = note.get("CC", fallback_name)
+    # TODO can we add an appointment summary here? Maybe a separate openai call?
     appointment.save()
 
     AIVisitNote.find_or_create_by(
@@ -108,15 +117,16 @@ def generate_clinical_note(
     note_schema: DoctorNoteSchema,
 ) -> dict[str, str]:
     prompt = build_structured_prompt(transcript, example_note, note_schema)
-    print("Prompting 4o with:")
-    print(prompt)
+
+    log.debug("prompting 4o with", prompt=prompt)
+
     # Note: we can't currently use structured-outputs with the chat endpoint
     # because our schema is determined at runtime. Doctors all seem to have a
     # unique note structure that they like. Tebra gives them pretty broad
     # abilities to add fields and sections to their notes and they do.
     # https://platform.openai.com/docs/guides/structured-outputs
     response = openai.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[{"role": "system", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0,
@@ -128,8 +138,7 @@ def generate_clinical_note(
 
     # TODO if content schema doesn't match note_schema, we need to retry.
 
-    print("Response:")
-    print(content)
+    log.debug("response", content=content)
 
     return json.loads(content)
 
