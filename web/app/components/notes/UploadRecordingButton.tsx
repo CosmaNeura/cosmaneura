@@ -2,9 +2,10 @@ import { ChangeEventHandler, useState } from "react"
 import { useForm } from "react-hook-form"
 import { z } from "zod"
 
-import { Upload } from "lucide-react"
+import { CalendarIcon, CheckIcon, Upload } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
 import {
   Dialog,
   DialogContent,
@@ -13,6 +14,11 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   Tooltip,
   TooltipContent,
@@ -30,16 +36,76 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
+import {
+  ComboBox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+} from "~/components/vendor/Combobox"
 import { getClient } from "~/configuration/clerk"
 import {
   generateSignedUploadUrl,
   uploadVisitAudioFile,
 } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
+import { cn } from "~/lib/utils"
 
 import { invariant } from "@epic-web/invariant"
 
-type ContextType = { onNavigate: (page: string) => void; currentPage: string }
+function PatientComboboxSearch() {
+  const PATIENTS = [
+    { id: "patient_123", name: "John Doe", dob: "01/01/1990" },
+    { id: "patient_456", name: "Jane Smith", dob: "02/02/1995" },
+  ]
+
+  const [value, setValue] = useState<string | null>(null)
+  // const bookByValue = useMemo(
+  //   () => (value && BOOKS.find((book) => book.id === value)) || null,
+  //   [value],
+  // )
+
+  return (
+    <>
+      <ComboBox
+        value={value}
+        onValueChange={setValue}
+        filterItems={(inputValue, items) =>
+          items.filter(({ value }) => {
+            const book = PATIENTS.find((book) => book.id === value)
+            return (
+              !inputValue ||
+              (book &&
+                book.name.toLowerCase().includes(inputValue.toLowerCase()))
+            )
+          })
+        }
+      >
+        <ComboboxInput placeholder="Pick a book..." />
+        <ComboboxContent>
+          {PATIENTS.map(({ id, name, dob }) => (
+            <ComboboxItem
+              key={id}
+              value={id}
+              label={name}
+              disabled={id === "book-5"}
+              className="ps-8"
+            >
+              <span className="text-sm text-foreground">{name}</span>
+              <span className="text-xs text-muted-foreground">{dob}</span>
+              {value === id && (
+                <span className="absolute start-2 top-0 flex h-full items-center justify-center">
+                  <CheckIcon className="size-4" />
+                </span>
+              )}
+            </ComboboxItem>
+          ))}
+          <ComboboxEmpty>No results.</ComboboxEmpty>
+        </ComboboxContent>
+      </ComboBox>
+    </>
+  )
+}
 
 function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
   const { toast } = useToast()
@@ -116,15 +182,91 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
           control={form.control}
           name="file_upload"
           render={({ field }) => (
-            <FormItem>
-              <FormDescription>
-                Upload an audio recording from a patient visit.
-              </FormDescription>
-              <FormControl>
-                <Input type="file" {...field} onChange={handleFileChange} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
+            <>
+              <FormItem>
+                <FormLabel>Appointment Date</FormLabel>
+                <FormControl>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "w-full justify-start text-left font-normal",
+                          !field.value && "text-muted-foreground",
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {field.value
+                          ? format(field.value, "PPP")
+                          : "Pick a date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={field.value}
+                        onSelect={field.onChange}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+
+              <FormItem>
+                <FormLabel>Patient Name</FormLabel>
+                <FormControl>
+                  <PatientComboboxSearch />
+                  {/* <Input
+                    placeholder="Enter patient name"
+                    {...form.register("patientName")}
+                  /> */}
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+
+              <FormItem>
+                <FormLabel>Date of Birth</FormLabel>
+                <FormControl>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "w-full justify-start text-left font-normal",
+                          !field.value && "text-muted-foreground",
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {field.value
+                          ? format(field.value, "PPP")
+                          : "Pick a date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={field.value}
+                        onSelect={field.onChange}
+                        initialFocus
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+
+              <FormItem>
+                <FormDescription>
+                  Upload an audio recording from a patient visit.
+                </FormDescription>
+                <FormControl>
+                  <Input type="file" {...field} onChange={handleFileChange} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            </>
           )}
         />
         <Button type="submit" disabled={form.formState.isSubmitting || !file}>
