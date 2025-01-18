@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dropzone"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
+import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
   FormControl,
@@ -300,6 +301,14 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
     })
   }
 
+  function noteSchemasToComboBoxItems(noteSchemas: NoteSchema[]) {
+    return noteSchemas.map((schema) => ({
+      // value: schema.note_type,
+      value: schema.id,
+      label: schema.note_type,
+    }))
+  }
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="flex gap-8">
@@ -351,7 +360,11 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
               <FormItem>
                 <FormLabel>Note Type</FormLabel>
                 <FormControl>
-                  <Input placeholder="Enter note type" {...field} />
+                  <SimpleComboBox
+                    items={noteSchemasToComboBoxItems(noteSchemas)}
+                    {...field}
+                  />
+                  {/* <Input placeholder="Enter note type" {...field} /> */}
                 </FormControl>
                 <FormDescription>
                   Enter the type of note you want to upload. For example, "SOAP

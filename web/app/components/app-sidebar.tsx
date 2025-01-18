@@ -25,6 +25,7 @@ import { Appointment } from "~/configuration/client"
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { StatusBadge } from "./status-badge"
 import { UserButton } from "@clerk/clerk-react"
+import { invariant } from "@epic-web/invariant"
 
 // logo icon at the top
 const IconSidebarHeader = () => (
@@ -251,10 +252,16 @@ export function AppSidebar({
   ...props
 }: {
   isLoading: boolean
-  entries: SidebarEntry[]
-  header: string
+  entries: SidebarEntry[] | false
+  header?: string
 }) {
-  const { setOpen } = useSidebar()
+  const showSidebar = entries !== false
+
+  // not the best page transition...
+  if (!showSidebar) {
+    const { setOpen } = useSidebar()
+    setOpen(false)
+  }
 
   return (
     <Sidebar
@@ -266,11 +273,13 @@ export function AppSidebar({
       <IconNavigation />
 
       {/* appointment list sidebar */}
-      <SelectionSidebar
-        header={header}
-        isLoading={isLoading}
-        entries={entries}
-      />
+      {showSidebar && (
+        <SelectionSidebar
+          header={header}
+          isLoading={isLoading}
+          entries={entries}
+        />
+      )}
     </Sidebar>
   )
 }
