@@ -1,5 +1,5 @@
 import { ChangeEventHandler, useState } from "react"
-import { useForm } from "react-hook-form"
+import { ControllerRenderProps, FieldValues, useForm } from "react-hook-form"
 import { z } from "zod"
 
 import { CalendarIcon, CheckIcon, Upload } from "lucide-react"
@@ -43,17 +43,24 @@ import {
   ComboboxInput,
   ComboboxItem,
 } from "~/components/vendor/Combobox"
-import { getClient } from "~/configuration/clerk"
+import { getClient, getUserId } from "~/configuration/clerk"
 import {
-  generateSignedUploadUrl,
+  generateSignedVisitRecordingUploadUrl,
   uploadVisitAudioFile,
 } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
+import { standardDateFormat } from "~/lib/date"
 import { cn } from "~/lib/utils"
 
 import { invariant } from "@epic-web/invariant"
 
-function PatientComboboxSearch() {
+function PatientComboboxSearch({
+  onSelectedItemChange,
+}: {
+  onSelectedItemChange: React.ComponentProps<
+    typeof ComboBox
+  >["onSelectedItemChange"]
+}) {
   const PATIENTS = [
     { id: "patient_123", name: "John Doe", dob: "01/01/1990" },
     { id: "patient_456", name: "Jane Smith", dob: "02/02/1995" },
@@ -66,44 +73,41 @@ function PatientComboboxSearch() {
   // )
 
   return (
-    <>
-      <ComboBox
-        value={value}
-        onValueChange={setValue}
-        filterItems={(inputValue, items) =>
-          items.filter(({ value }) => {
-            const book = PATIENTS.find((book) => book.id === value)
-            return (
-              !inputValue ||
-              (book &&
-                book.name.toLowerCase().includes(inputValue.toLowerCase()))
-            )
-          })
-        }
-      >
-        <ComboboxInput placeholder="Pick a book..." />
-        <ComboboxContent>
-          {PATIENTS.map(({ id, name, dob }) => (
-            <ComboboxItem
-              key={id}
-              value={id}
-              label={name}
-              disabled={id === "book-5"}
-              className="ps-8"
-            >
-              <span className="text-sm text-foreground">{name}</span>
-              <span className="text-xs text-muted-foreground">{dob}</span>
-              {value === id && (
-                <span className="absolute start-2 top-0 flex h-full items-center justify-center">
-                  <CheckIcon className="size-4" />
-                </span>
-              )}
-            </ComboboxItem>
-          ))}
-          <ComboboxEmpty>No results.</ComboboxEmpty>
-        </ComboboxContent>
-      </ComboBox>
-    </>
+    <ComboBox
+      // TODO should figure out how to extract the default value from the field
+      onSelectedItemChange={onSelectedItemChange}
+      filterItems={(inputValue, items) =>
+        items.filter(({ value }) => {
+          const book = PATIENTS.find((book) => book.id === value)
+          return (
+            !inputValue ||
+            (book && book.name.toLowerCase().includes(inputValue.toLowerCase()))
+          )
+        })
+      }
+    >
+      <ComboboxInput placeholder="Pick a book..." />
+      <ComboboxContent>
+        {PATIENTS.map(({ id, name, dob }) => (
+          <ComboboxItem
+            key={id}
+            value={id}
+            label={name}
+            disabled={id === "book-5"}
+            className="ps-8"
+          >
+            <span className="text-sm text-foreground">{name}</span>
+            <span className="text-xs text-muted-foreground">{dob}</span>
+            {value === id && (
+              <span className="absolute start-2 top-0 flex h-full items-center justify-center">
+                <CheckIcon className="size-4" />
+              </span>
+            )}
+          </ComboboxItem>
+        ))}
+        <ComboboxEmpty>No results.</ComboboxEmpty>
+      </ComboboxContent>
+    </ComboBox>
   )
 }
 
@@ -129,17 +133,19 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
   })
 
   // function onSubmit(values: z.infer<typeof formSchema>) {
+
+  // this took an embarrasing amount of time to figure out
   async function onSubmit(_values: z.infer<typeof formSchema>) {
-    const { data: sasSignature } = await generateSignedUploadUrl()
+    console.log(_values)
+    return
+    const { data: sasSignature } = await generateSignedVisitRecordingUploadUrl()
     invariant(sasSignature, "sasSignature should always exist")
 
+    invariant(file, "file should be set at this stage ")
+
     const unixTimestamp = Date.now()
-    const userClient = await getClient()
-    invariant(userClient && userClient.user, "userClient should always exist")
-
-    const stampedFileName =
-      userClient.user.id + "_" + unixTimestamp + "_" + file.name
-
+    const userId = await getUserId()
+    const stampedFileName = [userId, unixTimestamp, file.name].join("_")
     const url = new URL(sasSignature)
     url.pathname = `${url.pathname}/${stampedFileName}`
     const finalUrl = url.toString()
@@ -180,93 +186,116 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
         <FormField
           control={form.control}
-          name="file_upload"
+          name="appointment_date"
+          defaultValue={new Date()}
           render={({ field }) => (
-            <>
-              <FormItem>
-                <FormLabel>Appointment Date</FormLabel>
-                <FormControl>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className={cn(
-                          "w-full justify-start text-left font-normal",
-                          !field.value && "text-muted-foreground",
-                        )}
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {field.value
-                          ? format(field.value, "PPP")
-                          : "Pick a date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={field.value}
-                        onSelect={field.onChange}
-                        initialFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
-                </FormControl>
-                <FormMessage />
-              </FormItem>
+            <FormItem>
+              <FormLabel>Appointment Date</FormLabel>
+              <FormControl>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "w-full justify-start text-left font-normal",
+                        !field.value && "text-muted-foreground",
+                      )}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {field.value
+                        ? standardDateFormat(field.value)
+                        : "Pick a date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={field.value}
+                      onSelect={field.onChange}
+                      defaultMonth={new Date()}
+                      disabled={(date) =>
+                        // two months ago, this is an arbitrary date
+                        date <
+                          new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) ||
+                        date > new Date()
+                      }
+                    />
+                  </PopoverContent>
+                </Popover>
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="patient_name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Patient Name</FormLabel>
+              <FormControl>
+                <PatientComboboxSearch
+                  onSelectedItemChange={(selectedItem) => {
+                    console.log(selectedItem)
+                    field.onChange(selectedItem.name)
+                    form.setValue("date_of_birth", selectedItem.dob)
+                  }}
+                />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
-              <FormItem>
-                <FormLabel>Patient Name</FormLabel>
-                <FormControl>
-                  <PatientComboboxSearch />
-                  {/* <Input
-                    placeholder="Enter patient name"
-                    {...form.register("patientName")}
-                  /> */}
-                </FormControl>
-                <FormMessage />
-              </FormItem>
+        <FormField
+          control={form.control}
+          name="date_of_birth"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Date of Birth</FormLabel>
+              <FormControl>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "w-full justify-start text-left font-normal",
+                        !field.value && "text-muted-foreground",
+                      )}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      {field.value
+                        ? standardDateFormat(field.value)
+                        : "Pick a date"}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={field.value}
+                      onSelect={field.onChange}
+                    />
+                  </PopoverContent>
+                </Popover>
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
 
-              <FormItem>
-                <FormLabel>Date of Birth</FormLabel>
-                <FormControl>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        className={cn(
-                          "w-full justify-start text-left font-normal",
-                          !field.value && "text-muted-foreground",
-                        )}
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
-                        {field.value
-                          ? format(field.value, "PPP")
-                          : "Pick a date"}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
-                        mode="single"
-                        selected={field.value}
-                        onSelect={field.onChange}
-                        initialFocus
-                      />
-                    </PopoverContent>
-                  </Popover>
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-
-              <FormItem>
-                <FormDescription>
-                  Upload an audio recording from a patient visit.
-                </FormDescription>
-                <FormControl>
-                  <Input type="file" {...field} onChange={handleFileChange} />
-                </FormControl>
-                <FormMessage />
-              </FormItem>
-            </>
+        <FormField
+          control={form.control}
+          name="audio_file"
+          render={({ field }) => (
+            <FormItem>
+              <FormDescription>
+                Upload an audio recording from a patient visit.
+              </FormDescription>
+              <FormControl>
+                <Input type="file" {...field} onChange={handleFileChange} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
           )}
         />
         <Button type="submit" disabled={form.formState.isSubmitting || !file}>
