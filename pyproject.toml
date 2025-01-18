@@ -164,6 +164,7 @@ asyncio_default_fixture_loop_scope = "session"
 
 [tool.uv.sources]
 j2lint = { git = "https://github.com/aristanetworks/j2lint.git" }
+rq = { git = "https://github.com/rq/rq", rev = "spawn-worker" }
 
 [tool.uv.sources.activemodel]
 path = "/Users/mike/Projects/python/activemodel"
