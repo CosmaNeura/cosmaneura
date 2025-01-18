@@ -1,13 +1,14 @@
 import typing as t
-import uuid
+
+from pydantic import computed_field
 
 from activemodel import BaseModel
 from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import joinedload
 from sqlmodel import Field, Relationship
 
-from .appointment import Appointment
 from .doctor import Doctor
 
 if t.TYPE_CHECKING:
@@ -34,5 +35,13 @@ class DoctorNoteSchema(
     fields: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
     "key is field name, value is instruction"
 
-    # TODO Mike will handle back_populates
-    # examples: list["DoctorNoteExample"] = Relationship(back_populates="")
+    examples: list["DoctorNoteExample"] = Relationship(
+        back_populates="doctor_note_schema"
+    )
+
+    @computed_field
+    @property
+    def example_count(self) -> int:
+        # TODO joinedload is probably not the right approach here
+        # TODO(mbianco) this took a long time to understand, document this upstream
+        return self.select().options(joinedload(self.__class__.examples)).count()

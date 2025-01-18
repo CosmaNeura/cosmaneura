@@ -23,9 +23,13 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     patient: Patient = Relationship()
 
     appointment_date: datetime
+    "date of the appointment"
 
     appointment_name: str | None = Field(nullable=True)
+    "a couple words about the appointment"
+
     appointment_notes_preview: str | None = Field(nullable=True)
+    "longer summary about the appointment"
 
     @computed_field
     @property
