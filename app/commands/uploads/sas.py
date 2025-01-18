@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from enum import Enum
 
 from azure.storage.blob import (
     AccountSasPermissions,
@@ -12,10 +13,17 @@ from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_NAME,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_CONTAINER_NAME,
+    AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
 
 
-def perform() -> str:
+class UploadType(Enum):
+    VISIT = AZURE_UPLOADS_CONTAINER_NAME
+    EXAMPLE_NOTE = AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
+    EXAMPLE_INTAKE = "to_implement"
+
+
+def perform(upload_type: UploadType) -> str:
     """
     Generate a SAS token for uploading files, like audio, to a azure storage blob.
 
@@ -28,11 +36,12 @@ def perform() -> str:
         account_key=AZURE_UPLOADS_ACCOUNT_KEY,
         resource_types=ResourceTypes(object=True),
         permission=AccountSasPermissions(write=True),
-        expiry=datetime.utcnow() + timedelta(hours=1),
+        # 1hr is arbitrary
+        expiry=datetime.now(timezone.utc) + timedelta(hours=1),
     )
 
     container_client = ContainerClient(
-        container_name=AZURE_UPLOADS_CONTAINER_NAME,
+        container_name=upload_type.value,
         account_url=AZURE_UPLOADS_ACCOUNT_URL,
         credential=sas_token,
     )

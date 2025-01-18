@@ -12,8 +12,6 @@ import {
 import { CopyButton } from "~/components/shared/CopyButton"
 import { AIVisitNote } from "~/configuration/client"
 
-import ReactDOMServer from "react-dom/server"
-
 export default function VisitNoteViewer({
   note,
   defaultOpen = false,

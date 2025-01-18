@@ -1,10 +1,13 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request
+from openai.types import Upload
 from pydantic import BaseModel, computed_field
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
+import app.jobs.extract
+from app.commands.uploads.sas import UploadType
 
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
@@ -12,6 +15,8 @@ from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
+from app.models.doctor_note_file import DoctorNoteFile
+from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
@@ -113,22 +118,66 @@ def note_detail(
     return note_detail
 
 
+# unique endpoints are used to generate the signed URLs, this is mostly an arbitrary choice. It probably adds an extra
+# added level of security and ability to evolve the upload flow in the future without modifying the frontend.
 @internal_api_app.post("/visit-audio-file/get-signed-url", response_model=str)
-def generate_signed_upload_url():
-    return app.commands.uploads.sas.perform()
+def generate_signed_visit_recording_upload_url():
+    return app.commands.uploads.sas.perform(UploadType.VISIT)
 
 
 @internal_api_app.post("/visit-audio-file/upload-complete")
 def upload_visit_audio_file(request: Request, file_name: str) -> None:
+    doctor: Doctor = request.state.doctor
+
     return app.commands.uploads.upload_visit_audio_file.perform(
-        user=request.state.user, blob_name=file_name
+        doctor=doctor,
+        blob_name=file_name,
+        # TODO add to upload process
+        patient_name="hi",
+        appointment_date="01-01-20101",
+        date_of_birth="01-01-20101",
     )
 
 
+@internal_api_app.post("/notes/get-signed-url", response_model=str)
+def generate_signed_example_note_upload_url():
+    return app.commands.uploads.sas.perform(UploadType.EXAMPLE_NOTE)
+
+
+@internal_api_app.post("/notes/upload-example")
+def upload_example_note(request: Request, file_name: str, note_type: str) -> None:
+    # TODO maybe accept ID as well?
+    doctor: Doctor = request.state.doctor
+
+    doctor_note_file = DoctorNoteFile(
+        doctor_id=doctor.id, azure_file_name=file_name, note_type=note_type
+    ).save()
+
+    app.jobs.extract.queue(doctor_note_file.id)
+
+
+@internal_api_app.post("/intake/get-signed-url", response_model=str)
+def generate_signed_example_intake_upload_url():
+    return app.commands.uploads.sas.perform(UploadType.EXAMPLE_INTAKE)
+
+
+@internal_api_app.post("/intake/upload-example")
+def upload_example_intake(request: Request, file_name: str) -> None:
+    doctor: Doctor = request.state.doctor
+    raise NotImplementedError()
+
+
 class SettingsData(BaseModel, extra="forbid"):
-    settings: dict
+    notes_schema: list[DoctorNoteSchema]
+    # TODO add intake schema
 
 
 @internal_api_app.get("/settings")
-def settings_data() -> SettingsData:
-    return SettingsData(settings={})
+def settings_data(request: Request) -> SettingsData:
+    doctor: Doctor = request.state.doctor
+
+    notes_schema = (
+        DoctorNoteSchema.select().where(DoctorNoteSchema.doctor_id == doctor.id).all()
+    )
+
+    return SettingsData(notes_schema=list(notes_schema))
