@@ -1,3 +1,7 @@
+/**
+ * A wrapper around the vendored Combobox component to make it *really* simple to use
+ * in common use cases.
+ */
 import { ReactNode } from "react"
 
 import { CheckIcon } from "lucide-react"
@@ -9,7 +13,6 @@ import {
   ComboboxInput,
   ComboboxItem,
   ComboboxItemBase,
-  useComboboxContext,
 } from "~/components/vendor/Combobox"
 
 // combobos is designed to take an array of ComboBox items, if a wrapper element
@@ -23,26 +26,31 @@ function generateComboboxItems({
   renderItem?: (item: ComboboxItemBase) => ReactNode
   selectionValue: string | null
 }) {
-  // this is within the context provider
-  const { selectedItem } = useComboboxContext()
-  console.log("inputValue", selectedItem)
+  // this is within the context provider, so we can use combobox context if we want
+  // I struggled to understand how `inputValue` was set, so we are using our own hook instead
 
-  return items.map(({ value, label }) => (
-    <ComboboxItem
-      key={label ?? value}
-      value={label ?? value}
-      label={label}
-      // disabled={id === "book-5"}
-      className="ps-8"
-    >
-      <span className="text-sm text-foreground">{label ?? value}</span>
-      {(label ?? value) === selectionValue && (
-        <span className="absolute start-2 top-0 flex h-full items-center justify-center">
-          <CheckIcon className="size-4" />
-        </span>
-      )}
-    </ComboboxItem>
-  ))
+  return items.map(({ value, label }) => {
+    const elementValue = label ?? value
+    const isSelected = elementValue === selectionValue
+
+    return (
+      <ComboboxItem
+        key={elementValue}
+        value={elementValue}
+        label={label}
+        // disabled={id === "book-5"}
+        className={isSelected ? "ps-8" : ""}
+      >
+        {/* TODO(mbianco) implement custom renderItem */}
+        <span className="text-sm text-foreground">{elementValue}</span>
+        {isSelected && (
+          <span className="absolute start-2 top-0 flex h-full items-center justify-center">
+            <CheckIcon className="size-4" />
+          </span>
+        )}
+      </ComboboxItem>
+    )
+  })
 }
 
 export function SimpleComboBox({
@@ -69,7 +77,8 @@ export function SimpleComboBox({
     <ComboBox
       // TODO should figure out how to set a default value on the field
       onValueChange={onChange}
-      // filterItems={filterItems}
+      // there's a default filter applied if none is passed
+      filterItems={filterItems}
     >
       <ComboboxInput {...props} />
       <ComboboxContent>
