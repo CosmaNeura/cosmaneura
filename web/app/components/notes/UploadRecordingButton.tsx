@@ -1,3 +1,4 @@
+import { props } from "ramda"
 import { ChangeEventHandler, useState } from "react"
 import { ControllerRenderProps, FieldValues, useForm } from "react-hook-form"
 import { z } from "zod"
@@ -45,6 +46,8 @@ import {
 } from "~/components/vendor/Combobox"
 import { getClient, getUserId } from "~/configuration/clerk"
 import {
+  Patient,
+  client,
   generateSignedVisitRecordingUploadUrl,
   uploadVisitAudioFile,
 } from "~/configuration/client"
@@ -52,63 +55,111 @@ import { useToast } from "~/hooks/use-toast"
 import { standardDateFormat } from "~/lib/date"
 import { cn } from "~/lib/utils"
 
+import { SimpleComboBox } from "../shared/SimpleComboBox"
 import { invariant } from "@epic-web/invariant"
+import { QueryClientProvider, useQuery } from "@tanstack/react-query"
+import { patientListOptions } from "client/@tanstack/react-query.gen"
 
 function PatientComboboxSearch({
-  onSelectedItemChange,
+  // onSelectedItemChange,
+  form,
+  onChange,
+  value,
+  ...props
 }: {
-  onSelectedItemChange: React.ComponentProps<
-    typeof ComboBox
-  >["onSelectedItemChange"]
+  form: ReturnType<typeof useForm>
+  // onSelectedItemChange: React.ComponentProps<
+  //   typeof ComboBox
+  // >["onSelectedItemChange"]
+  onChange: ControllerRenderProps<FieldValues, string>["onChange"]
+  value: ControllerRenderProps<FieldValues, string>["value"]
 }) {
-  const PATIENTS = [
-    { id: "patient_123", name: "John Doe", dob: "01/01/1990" },
-    { id: "patient_456", name: "Jane Smith", dob: "02/02/1995" },
-  ]
+  const { data, error } = useQuery({ ...patientListOptions({ client }) })
 
-  const [value, setValue] = useState<string | null>(null)
-  // const bookByValue = useMemo(
-  //   () => (value && BOOKS.find((book) => book.id === value)) || null,
-  //   [value],
-  // )
+  if (!data) {
+    return <div>Loading...</div>
+  }
+
+  function transformPatientForComboBox(patient: Patient): {
+    value: string
+    label: string
+  } {
+    return {
+      value: patient.id,
+      label: patient.name,
+    }
+  }
+
+  function handleChange(value: string) {
+    const patient = data.find((patient) => patient.id === value)
+
+    onChange(patient.name)
+    form.setValue("date_of_birth", patient.date_of_birth)
+  }
 
   return (
-    <ComboBox
-      // TODO should figure out how to extract the default value from the field
-      onSelectedItemChange={onSelectedItemChange}
-      filterItems={(inputValue, items) =>
-        items.filter(({ value }) => {
-          const book = PATIENTS.find((book) => book.id === value)
-          return (
-            !inputValue ||
-            (book && book.name.toLowerCase().includes(inputValue.toLowerCase()))
-          )
-        })
-      }
-    >
-      <ComboboxInput placeholder="Pick a book..." />
-      <ComboboxContent>
-        {PATIENTS.map(({ id, name, dob }) => (
-          <ComboboxItem
-            key={id}
-            value={id}
-            label={name}
-            disabled={id === "book-5"}
-            className="ps-8"
-          >
-            <span className="text-sm text-foreground">{name}</span>
-            <span className="text-xs text-muted-foreground">{dob}</span>
-            {value === id && (
-              <span className="absolute start-2 top-0 flex h-full items-center justify-center">
-                <CheckIcon className="size-4" />
-              </span>
-            )}
-          </ComboboxItem>
-        ))}
-        <ComboboxEmpty>No results.</ComboboxEmpty>
-      </ComboboxContent>
-    </ComboBox>
+    <SimpleComboBox
+      onChange={handleChange}
+      value={value}
+      items={data.map(transformPatientForComboBox)}
+      // onSelectedItemChange={onSelectedItemChange}
+      // renderItem={(item) => (
+      //   <>
+      //     <span className="text-sm text-foreground">{name}</span>
+      //     <span className="text-xs text-muted-foreground">{item.dob}</span>
+      //     {value === id && (
+      //       <span className="absolute start-2 top-0 flex h-full items-center justify-center">
+      //         <CheckIcon className="size-4" />
+      //       </span>
+      //     )}
+      //   </>
+      // )}
+      {...props}
+    />
   )
+
+  // const PATIENTS = [
+  //   { id: "patient_123", name: "John Doe", dob: "01/01/1990" },
+  //   { id: "patient_456", name: "Jane Smith", dob: "02/02/1995" },
+  // ]
+
+  // const [value, setValue] = useState<string | null>(null)
+  // // const bookByValue = useMemo(
+  // //   () => (value && BOOKS.find((book) => book.id === value)) || null,
+  // //   [value],
+  // // )
+
+  // return (
+  //   <ComboBox
+  //     // TODO should figure out how to extract the default value from the field
+  //     onSelectedItemChange={onSelectedItemChange}
+  //     filterItems={(inputValue, items) =>
+  //       items.filter(({ value }) => {
+  //         const book = PATIENTS.find((book) => book.id === value)
+  //         return (
+  //           !inputValue ||
+  //           (book && book.name.toLowerCase().includes(inputValue.toLowerCase()))
+  //         )
+  //       })
+  //     }
+  //   >
+  //     <ComboboxInput placeholder="Pick a book..." />
+  //     <ComboboxContent>
+  //       {PATIENTS.map(({ id, name, dob }) => (
+  //         <ComboboxItem
+  //           key={id}
+  //           value={id}
+  //           label={name}
+  //           disabled={id === "book-5"}
+  //           className="ps-8"
+  //         >
+
+  //         </ComboboxItem>
+  //       ))}
+  //       <ComboboxEmpty>No results.</ComboboxEmpty>
+  //     </ComboboxContent>
+  //   </ComboBox>
+  // )
 }
 
 function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
@@ -234,14 +285,12 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
             <FormItem>
               <FormLabel>Patient Name</FormLabel>
               <FormControl>
-                <PatientComboboxSearch
-                  onSelectedItemChange={(selectedItem) => {
-                    console.log(selectedItem)
-                    field.onChange(selectedItem.name)
-                    form.setValue("date_of_birth", selectedItem.dob)
-                  }}
-                />
+                <PatientComboboxSearch {...field} form={form} />
               </FormControl>
+              <FormDescription>
+                Search for an existing patient, or just type in a new patients
+                name to create a new patient.
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
@@ -278,6 +327,9 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
                   </PopoverContent>
                 </Popover>
               </FormControl>
+              <FormDescription>
+                Required to identify the patient in the future
+              </FormDescription>
               <FormMessage />
             </FormItem>
           )}
