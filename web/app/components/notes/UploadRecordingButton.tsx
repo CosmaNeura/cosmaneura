@@ -43,6 +43,7 @@ import {
   ComboboxEmpty,
   ComboboxInput,
   ComboboxItem,
+  ComboboxItemBase,
 } from "~/components/vendor/Combobox"
 import { getClient, getUserId } from "~/configuration/clerk"
 import {
@@ -57,6 +58,7 @@ import { cn } from "~/lib/utils"
 
 import { SimpleComboBox } from "../shared/SimpleComboBox"
 import { invariant } from "@epic-web/invariant"
+import { zodResolver } from "@hookform/resolvers/zod"
 import { QueryClientProvider, useQuery } from "@tanstack/react-query"
 import { patientListOptions } from "client/@tanstack/react-query.gen"
 
@@ -80,21 +82,20 @@ function PatientComboboxSearch({
     return <div>Loading...</div>
   }
 
-  function transformPatientForComboBox(patient: Patient): {
-    value: string
-    label: string
-  } {
+  function transformPatientForComboBox(patient: Patient): ComboboxItemBase {
     return {
       value: patient.id,
       label: patient.name,
     }
   }
 
-  function handleChange(value: string) {
-    const patient = data.find((patient) => patient.id === value)
+  function handleChange(selected_patient_id: string) {
+    const patient = data.find((patient) => patient.id === selected_patient_id)
 
+    // update the patient name field with the name of the patient, not the ID
     onChange(patient.name)
-    form.setValue("date_of_birth", patient.date_of_birth)
+
+    form.setValue("date_of_birth", new Date(patient.date_of_birth))
   }
 
   return (
@@ -102,7 +103,8 @@ function PatientComboboxSearch({
       onChange={handleChange}
       value={value}
       items={data.map(transformPatientForComboBox)}
-      // onSelectedItemChange={onSelectedItemChange}
+      // TODO(mbianco) renderItem only gets the value + label of the field, we should really pass
+      //               a full object so we can do more advanced rendering...
       // renderItem={(item) => (
       //   <>
       //     <span className="text-sm text-foreground">{name}</span>
@@ -117,78 +119,31 @@ function PatientComboboxSearch({
       {...props}
     />
   )
-
-  // const PATIENTS = [
-  //   { id: "patient_123", name: "John Doe", dob: "01/01/1990" },
-  //   { id: "patient_456", name: "Jane Smith", dob: "02/02/1995" },
-  // ]
-
-  // const [value, setValue] = useState<string | null>(null)
-  // // const bookByValue = useMemo(
-  // //   () => (value && BOOKS.find((book) => book.id === value)) || null,
-  // //   [value],
-  // // )
-
-  // return (
-  //   <ComboBox
-  //     // TODO should figure out how to extract the default value from the field
-  //     onSelectedItemChange={onSelectedItemChange}
-  //     filterItems={(inputValue, items) =>
-  //       items.filter(({ value }) => {
-  //         const book = PATIENTS.find((book) => book.id === value)
-  //         return (
-  //           !inputValue ||
-  //           (book && book.name.toLowerCase().includes(inputValue.toLowerCase()))
-  //         )
-  //       })
-  //     }
-  //   >
-  //     <ComboboxInput placeholder="Pick a book..." />
-  //     <ComboboxContent>
-  //       {PATIENTS.map(({ id, name, dob }) => (
-  //         <ComboboxItem
-  //           key={id}
-  //           value={id}
-  //           label={name}
-  //           disabled={id === "book-5"}
-  //           className="ps-8"
-  //         >
-
-  //         </ComboboxItem>
-  //       ))}
-  //       <ComboboxEmpty>No results.</ComboboxEmpty>
-  //     </ComboboxContent>
-  //   </ComboBox>
-  // )
 }
 
 function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
   const { toast } = useToast()
 
-  // TODO look up audio file types here": https://www.assemblyai.com/docs/getting-started/transcribe-an-audio-file
+  const formSchema = z.object({
+    appointment_date: z.date(),
+    patient_name: z.string(),
+    date_of_birth: z.date(),
+    // TODO look up audio file types here": https://www.assemblyai.com/docs/getting-started/transcribe-an-audio-file
+    // TODO There's some sort of fancy file validation stuff we can do here.
+    //   image: z
+    //     //Rest of validations done via react dropzone
+    //     .instanceof(File)
+    //     // .refine((file) => file.size !== 0, "Please upload an image"),
+  })
 
-  // const formSchema = z.object({
-  //   image: z
-  //     //Rest of validations done via react dropzone
-  //     .instanceof(File)
-  //     // .refine((file) => file.size !== 0, "Please upload an image"),
-  // });
-
-  // const form = useForm<z.infer<typeof formSchema>>({
-  const form = useForm({
-    // resolver: zodResolver(formSchema),
-    // mode: "onBlur",
-    // defaultValues: {
-    // image: new File([""], "filename"),
-    // },
+  const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
   })
 
   // function onSubmit(values: z.infer<typeof formSchema>) {
 
   // this took an embarrasing amount of time to figure out
-  async function onSubmit(_values: z.infer<typeof formSchema>) {
-    console.log(_values)
-    return
+  async function onSubmit(values: z.infer<typeof formSchema>) {
     const { data: sasSignature } = await generateSignedVisitRecordingUploadUrl()
     invariant(sasSignature, "sasSignature should always exist")
 
@@ -211,7 +166,9 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
     })
 
     const _internalResponse = await uploadVisitAudioFile({
-      query: {
+      // TODO what is the best pattern for passing dates over the wire?
+      body: {
+        ...values,
         file_name: stampedFileName,
       },
     })
@@ -278,6 +235,7 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
             </FormItem>
           )}
         />
+
         <FormField
           control={form.control}
           name="patient_name"
@@ -367,10 +325,6 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
 export function UploadRecordingButton() {
   const [open, setOpen] = useState(false)
 
-  const closeDialogBox = () => {
-    setOpen(false)
-  }
-
   return (
     <TooltipProvider>
       <Tooltip>
@@ -387,7 +341,7 @@ export function UploadRecordingButton() {
             <DialogHeader>
               <DialogTitle>Upload Recording</DialogTitle>
             </DialogHeader>
-            <TestFileForm closeDialogBox={closeDialogBox} />
+            <TestFileForm closeDialogBox={() => setOpen(false)} />
           </DialogContent>
         </Dialog>
         <TooltipContent>
