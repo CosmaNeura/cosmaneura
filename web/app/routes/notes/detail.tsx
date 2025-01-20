@@ -149,7 +149,11 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
 
         {hasNotes ? (
           notes.map((note, index) => (
-            <VisitNoteViewer note={note} defaultOpen={index === 0} />
+            <VisitNoteViewer
+              key={note.id}
+              note={note}
+              defaultOpen={index === 0}
+            />
           ))
         ) : (
           <EmptyNotes />
