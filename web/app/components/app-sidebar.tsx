@@ -34,7 +34,7 @@ const IconSidebarHeader = () => (
       <SidebarMenuItem>
         <SidebarMenuButton size="lg" asChild className="md:h-8 md:p-0">
           <a href="#">
-            <div className="size-8 flex aspect-square items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
               <Command className="size-4" />
             </div>
             <div className="grid flex-1 text-left text-sm leading-tight">
@@ -131,7 +131,7 @@ function SelectionList({
             key={entry.id}
             onClick={() => currentUrl !== entry.url && navigate(entry.url)}
             className={cn(
-              "w-full flex flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+              "flex w-full flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
               currentUrl === entry.url &&
                 true &&
                 "bg-sidebar-accent text-sidebar-accent-foreground",
@@ -211,7 +211,13 @@ function SelectionSidebar({
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup className="px-0">
-          {filteredEntries.length === 0 ? (
+          {entries.length === 0 && (
+            <div className="p-4 text-center text-sm text-slate-500">
+              <p>No Appointments</p>
+              <p className="mt-2">Upload a visit recording to get started.</p>
+            </div>
+          )}
+          {entries.length > 0 && filteredEntries.length === 0 ? (
             <div className="p-4 text-center text-sm text-slate-500">
               <p>No results found.</p>
               <p className="mt-2">Try adjusting your filters.</p>
