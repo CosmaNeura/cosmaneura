@@ -5,6 +5,7 @@ from azure.health.deidentification.models import (
 )
 from azure.identity import ClientSecretCredential
 
+from app import log
 from app.configuration.azure import (
     AZURE_DEID_CLIENT_ID,
     AZURE_DEID_CLIENT_SECRET,
@@ -25,6 +26,8 @@ def deidentify(phi_text: str) -> str:
         client_secret=AZURE_DEID_CLIENT_SECRET,
     )
 
+    log.info("running deid request")
+
     # The deid service configuration JSON says that it uses API version
     # "2024-09-20, but the SDK throws an error if you specify it.
     # client = DeidentificationClient(endpoint, credential, api_version="2024-09-20")
@@ -33,6 +36,7 @@ def deidentify(phi_text: str) -> str:
 
     result: DeidentificationResult = client.deidentify(body)
     assert result.output_text
-    print(f'Deidentified Text: "{result.output_text}"')
+
+    log.debug("deid Text", output=result.output_text)
 
     return result.output_text

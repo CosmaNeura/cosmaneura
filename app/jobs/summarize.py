@@ -4,8 +4,9 @@ from textwrap import dedent
 
 from app import log
 from app.configuration.openai import openai
-from app.rq import q
+from app.rq import RQ_RETRY, q
 
+import sqlmodel as sm
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
@@ -16,31 +17,42 @@ OPENAI_MODEL = "gpt-4o"
 
 
 def queue(*args, **kwargs):
-    q.enqueue(perform, *args, **kwargs)
+    log.info("queuing summarization job")
+    q.enqueue(perform, *args, **kwargs | {"retry": RQ_RETRY})
 
 
-def perform(transcript_id: str, example_note_id: str):
+def perform(transcript_id: str, schema_id: str):
     """
     Summarize a visit transcript into a clinical note.
     """
+    log.info("starting summarization", transcript_id=transcript_id, schema_id=schema_id)
 
     transcript = AIVisitTranscript.get(id=transcript_id)
     assert transcript
 
-    example = DoctorNoteExample.get(id=example_note_id)
-    assert example
-
-    schema = DoctorNoteSchema.get(id=example.doctor_note_schema_id)
+    schema = DoctorNoteSchema.get(id=schema_id)
     assert schema
+
+    # Get most recently updated example note for this schema
+    example = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema_id)
+        # TODO is there a way to actually fix this type? Feels like a limitation on sqlmodel
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
 
     # TODO Validate the example note matches the schema.
 
+    log.info("generating clinical note")
     note = generate_clinical_note(
         transcript=transcript,
         example_note=example,
         note_schema=schema,
     )
 
+    log.info("augmenting clinical note")
     note = augment_clinical_note(original=note, transcript=transcript)
 
     appointment = Appointment.get(id=transcript.appointment_id)
@@ -52,6 +64,7 @@ def perform(transcript_id: str, example_note_id: str):
     # TODO can we add an appointment summary here? Maybe a separate openai call?
     appointment.save()
 
+    log.info("saving visit note")
     AIVisitNote.find_or_create_by(
         doctor_id=transcript.doctor_id,
         appointment_id=transcript.appointment_id,
@@ -71,7 +84,7 @@ def build_structured_prompt(
     note_schema: DoctorNoteSchema,
 ) -> str:
     transcript_text = "\n".join(
-        [f"{u['speaker']}: {u['content']}" for u in transcript.transcript_data]
+        [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
     )
 
     return dedent(f"""

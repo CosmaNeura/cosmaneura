@@ -7,6 +7,7 @@ import assemblyai as assembly
 from azure.storage.blob import BlobServiceClient
 from pydub import AudioSegment
 
+import app.jobs.summarize
 from app import log
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
@@ -14,7 +15,7 @@ from app.configuration.azure import (
     AZURE_UPLOADS_CONTAINER_NAME,
 )
 from app.configuration.openai import openai
-from app.rq import q
+from app.rq import RQ_RETRY, q
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -29,21 +30,25 @@ class TranscriptionResult:
         self.duration = duration
 
 
+# TODO we lose the typing with this approach... is there a better way?
 def queue(*args, **kwargs):
-    q.enqueue(perform, *args, **kwargs)
+    log.info("queuing transcription", args=args, kwargs=kwargs)
+    q.enqueue(perform, *args, **kwargs | {"retry": RQ_RETRY})
 
 
 def perform(visit_audio_file_id: str):
     """
-    Perform transcription of visit audio file.
+    Perform transcription via assembly of visit audio or video file.
     """
 
+    log.info("starting transcription job", visit_audio_file_id=visit_audio_file_id)
     visit_audio_file = VisitAudioFile.get(id=visit_audio_file_id)
     assert visit_audio_file
 
     result = transcribe_audio(visit_audio_file)
 
-    AIVisitTranscript.find_or_create_by(
+    log.info("creating transcript record", duration=result.duration)
+    transcript = AIVisitTranscript.find_or_create_by(
         doctor_id=visit_audio_file.doctor_id,
         appointment_id=visit_audio_file.appointment_id,
         patient_id=visit_audio_file.patient_id,
@@ -52,12 +57,26 @@ def perform(visit_audio_file_id: str):
         transcript_data=[item.model_dump() for item in result.transcript],
     )
 
+    queue_schema_transcription(transcript)
+
+
+def queue_schema_transcription(transcript: AIVisitTranscript):
     # now that the transcript exists, let's summarize it for each note type the doctor has
-    notes_for_doctor = DoctorNoteSchema()
+    # Get all note schemas for the doctor and issue summary jobs
+    note_schemas = (
+        DoctorNoteSchema.select()
+        .where(DoctorNoteSchema.doctor_id == transcript.doctor_id)
+        .all()
+    )
+
+    for schema in note_schemas:
+        app.jobs.summarize.queue(transcript_id=transcript.id, schema_id=schema.id)
 
 
 def extract_audio_to_temp(visit: VisitAudioFile) -> str:
     filename = visit.azure_file_name
+
+    log.info("extracting audio to temp file", filename=filename)
 
     # TODO I feel like this is going to break in prod
     temp_download_path = f"./tmp/visit-audio-{uuid.uuid4()}-{filename}"
@@ -74,15 +93,18 @@ def extract_audio_to_temp(visit: VisitAudioFile) -> str:
     )
 
     try:
+        log.info("downloading blob", temp_path=temp_download_path)
         with open(temp_download_path, "wb") as file:
             file.write(blob_client.download_blob().readall())
 
+        log.info("extracting audio from mp4", output_path=temp_audio_path)
         extract_audio_from_mp4(temp_download_path, output_audio_path=temp_audio_path)
 
         return temp_audio_path
 
     finally:
         if os.path.exists(temp_download_path):
+            log.info("cleaning up temp download file", path=temp_download_path)
             os.remove(temp_download_path)
 
 
@@ -93,14 +115,16 @@ def extract_audio_from_mp4(mp4_path, output_audio_path="extracted_audio.wav"):
 
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
+    log.info("starting audio transcription", file_name=visit_audio_file.azure_file_name)
     if visit_audio_file.azure_file_name.lower().endswith(".mp4"):
         audio_file = extract_audio_to_temp(visit_audio_file)
     # elif visit_audio_file.azure_file_name.lower().endswith(".wav"):
     #     download the audio file from blob to temp storage
     else:
         ext = os.path.splitext(visit_audio_file.azure_file_name)[1]
+        log.error("unsupported file format", extension=ext)
         raise ValueError(
-            f"Unsupported file format: .{ext}. Please ¡ovide a .mp4 or .wav file."
+            f"Unsupported file format: .{ext}. Please provide a .mp4 or .wav file."
         )
 
     try:
@@ -123,6 +147,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
             raise ValueError(f"Transcription failed: {transcript.error}")
     finally:
         if os.path.exists(audio_file):
+            log.info("cleaning up audio file", path=audio_file)
             os.remove(audio_file)
 
     log.info("identifying speakers", audio_file=audio_file)
@@ -137,6 +162,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
         )
         raise ValueError("Could not extract doctor classification from reasoning.")
 
+    log.info("structuring transcript data")
     structured_transcript = []
 
     # Utterance(
@@ -160,6 +186,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
         )
         structured_transcript.append(entry)
 
+    log.info("transcription complete", duration=transcript.audio_duration)
     return TranscriptionResult(
         transcript=structured_transcript,
         duration=transcript.audio_duration or 0,
@@ -196,7 +223,9 @@ def identify_doctor_from_transcript(transcript: str) -> str | None:
 
 def extract_doctor_classification(reasoning: str | None) -> str | None:
     if reasoning is None:
+        log.error("no reasoning provided for doctor classification")
         return None
+
     # TODO Use structured outputs instead of json mode. This allows for definition of
     # response schema with pydantic and better refusal handling.
     # https://platform.openai.com/docs/guides/structured-outputs
@@ -229,5 +258,7 @@ def extract_doctor_classification(reasoning: str | None) -> str | None:
     # Parse and return the value of "doctor"
     response_content = response.choices[0].message.content
     if response_content is None:
+        log.error("no response content from OpenAI")
         return None
+
     return json.loads(response_content)["doctor"]

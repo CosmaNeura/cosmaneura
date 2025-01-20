@@ -1,4 +1,6 @@
-# Extract the schema and content from an example clinical note.
+"""
+Extract the schema and content from an example clinical note.
+"""
 
 # This script requires poppler to be installed on your system.
 #   `brew install poppler` on MacOS
@@ -24,6 +26,7 @@ from app.configuration.azure import (
     AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
 from app.configuration.openai import openai
+from app.rq import RQ_RETRY, q
 
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
@@ -31,21 +34,34 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 
 from .anonymize import deidentify
 
+OPENAI_MODEL = "gpt-4o"
 
-def perform(note_id: str | TypeID):
+
+# TODO there may be some fancy arg parsing we can do here? https://stackoverflow.com/questions/73856901/how-can-i-use-paramspec-with-method-decorators
+def queue(*args, **kwargs):
+    "always use this method to queue jobs so it's easy to swap out the job system"
+    q.enqueue(perform, *args, **kwargs | {"retry": RQ_RETRY})
+
+
+def perform(doctor_note_file_id: str | TypeID):
     """
     Extract a schema and content from an example clinical note.
     """
 
-    note = DoctorNoteFile.get(id=note_id)
+    log.info("extracting note", note_id=doctor_note_file_id)
+
+    note = DoctorNoteFile.get(id=doctor_note_file_id)
     assert note
 
     note_pages = download_note(note)
 
     note_fields = extract_note_fields(note_pages)
     assert note_fields
+
     instructions = explain_note_fields(note_fields)
 
+    # there can (and should!) be multiple examples per schema, so find a schema by the type
+    # TODO given that we are searching by fields, this will definitely cause a conflict, need to think this through
     schema = DoctorNoteSchema.find_or_create_by(
         doctor_id=note.doctor_id,
         note_type=note.note_type,
@@ -81,7 +97,10 @@ def get_img_uri(img: PIL.Image.Image) -> str:
 
 
 def download_note(note: DoctorNoteFile) -> list[str]:
-    filename = note.azure_file_name
+    full_upload_url = note.azure_file_name
+
+    # full upload url from azure is stored in the DB, we need to extract just the last path component
+    filename = os.path.basename(full_upload_url)
 
     # TODO may cause issues in prod
     temp_download_path = f"./tmp/example-note-{uuid.uuid4()}-{filename}"
@@ -131,7 +150,7 @@ def extract_note_fields(note_pages: list[str]) -> list[str]:
     """)
 
     response = openai.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {
@@ -175,7 +194,7 @@ def explain_note_fields(fields: list[str]) -> dict[str, str]:
     """)
 
     response = openai.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": prompt},
         ],
@@ -217,7 +236,7 @@ def extract_note_content(note_pages: list[str], fields: list[str]) -> dict[str, 
     """)
 
     response = openai.chat.completions.create(
-        model="gpt-4o",
+        model=OPENAI_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {
