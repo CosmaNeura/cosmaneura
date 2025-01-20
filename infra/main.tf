@@ -144,14 +144,16 @@ resource "azurerm_storage_management_policy" "delete_uploads" {
       blob_types = ["blockBlob"]
     }
 
+    # TODO change this back to 10d
+
     # IMPORTANT: this ensures files are wiped automatically after uploaded
     actions {
       base_blob {
-        delete_after_days_since_creation_greater_than = 10
+        delete_after_days_since_creation_greater_than = 60
       }
 
       snapshot {
-        delete_after_days_since_creation_greater_than = 10
+        delete_after_days_since_creation_greater_than = 60
       }
     }
   }
