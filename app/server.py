@@ -6,16 +6,13 @@ JavaScript client which will use these methods.
 """
 
 from fastapi import FastAPI, dependencies
-from rq_dashboard_fast import RedisQueueDashboard
 
-from app.configuration.redis import redis_url
 from app.routes.utils.openapi import simplify_operation_ids
 
 from .environments import is_production
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.static import mount_public_directory
-from .templates import render_template
 
 fast_api_args = {}
 
@@ -37,14 +34,6 @@ api_app.include_router(internal_api_app)
 add_middleware(api_app)
 
 # TODO maybe treat sqlalchemy.exc.NoResultFound as 404?
-
-# TODO(mbianco) unsure of why the path needs to be specified here?
-# TODO(mbianco) is there a way to protect this via a superuser clerk? https://discord.com/channels/856971667393609759/1330543476433227877
-# TODO(mbianco) this package includes pandas, really? https://github.com/Hannes221/rq-dashboard-fast/issues/100
-dashboard = RedisQueueDashboard(redis_url(), "/job-monitor")
-
-# add rq monitoring dashboard
-api_app.mount("/job-monitor", dashboard)
 
 
 @api_app.get("/healthcheck")
