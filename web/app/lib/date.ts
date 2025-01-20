@@ -15,3 +15,9 @@ export function standardDateTimeFormat(date: string) {
     timeStyle: "short",
   })
 }
+
+export function standardDateFormat(date: string) {
+  return new Date(date).toLocaleString("en-US", {
+    dateStyle: "short",
+  })
+}
