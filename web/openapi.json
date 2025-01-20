@@ -58,6 +58,37 @@
         ]
       }
     },
+    "/internal/v1/patients": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Patient List",
+        "description": "allows users to select an existing patient name and DOB when uploading a note",
+        "operationId": "patient_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Patient"
+                  },
+                  "type": "array",
+                  "title": "Response Patient List Internal V1 Patients Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/notes/{appointment_id}": {
       "get": {
         "tags": [
@@ -110,8 +141,8 @@
         "tags": [
           "private"
         ],
-        "summary": "Generate Signed Upload Url",
-        "operationId": "generate_signed_upload_url",
+        "summary": "Generate Signed Visit Recording Upload Url",
+        "operationId": "generate_signed_visit_recording_upload_url",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -119,7 +150,7 @@
               "application/json": {
                 "schema": {
                   "type": "string",
-                  "title": "Response Generate Signed Upload Url Internal V1 Visit Audio File Get Signed Url Post"
+                  "title": "Response Generate Signed Visit Recording Upload Url Internal V1 Visit Audio File Get Signed Url Post"
                 }
               }
             }
@@ -139,6 +170,158 @@
         ],
         "summary": "Upload Visit Audio File",
         "operationId": "upload_visit_audio_file",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitAudioUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes/get-signed-url": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Signed Example Note Upload Url",
+        "operationId": "generate_signed_example_note_upload_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "title": "Response Generate Signed Example Note Upload Url Internal V1 Notes Get Signed Url Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes/upload-example": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Upload Example Note",
+        "operationId": "upload_example_note",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Name"
+            }
+          },
+          {
+            "name": "note_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/intake/get-signed-url": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Signed Example Intake Upload Url",
+        "operationId": "generate_signed_example_intake_upload_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "title": "Response Generate Signed Example Intake Upload Url Internal V1 Intake Get Signed Url Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/intake/upload-example": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Upload Example Intake",
+        "operationId": "upload_example_intake",
         "security": [
           {
             "HTTPBearer": []
@@ -203,10 +386,10 @@
         ]
       }
     },
-    "/hello": {
+    "/healthcheck": {
       "get": {
-        "summary": "Index",
-        "operationId": "index",
+        "summary": "Healthcheck",
+        "operationId": "healthcheck",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -219,16 +402,38 @@
         }
       }
     },
-    "/healthcheck": {
+    "/{path}": {
       "get": {
-        "summary": "Healthcheck",
-        "operationId": "healthcheck",
+        "summary": "Frontend Handler",
+        "description": "This is a very dangerous piece of code: if this is not last it will override other routes in the application\n\nWithout this, non-index RR routes will not work.\n\nhttps://gist.github.com/ultrafunkamsterdam/b1655b3f04893447c3802453e05ecb5e",
+        "operationId": "frontend_handler__path__get",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Path"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -429,7 +634,32 @@
           "appointment_date": {
             "type": "string",
             "format": "date-time",
-            "title": "Appointment Date"
+            "title": "Appointment Date",
+            "description": "date of the appointment"
+          },
+          "appointment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Name",
+            "description": "a couple words about the appointment"
+          },
+          "appointment_notes_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Notes Preview",
+            "description": "longer summary about the appointment"
           },
           "patient_name": {
             "type": "string",
@@ -442,10 +672,80 @@
           "doctor_id",
           "patient_id",
           "appointment_date",
+          "appointment_name",
+          "appointment_notes_preview",
           "patient_name"
         ],
         "title": "Appointment",
         "description": "Represents an appointment with a patient from accuity"
+      },
+      "DoctorNoteSchema": {
+        "properties": {
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deleted At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type",
+            "description": "user generated name of the note type"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fields",
+            "description": "key is field name, value is instruction"
+          },
+          "example_count": {
+            "type": "integer",
+            "title": "Example Count",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "doctor_id",
+          "note_type",
+          "fields",
+          "example_count"
+        ],
+        "title": "DoctorNoteSchema",
+        "description": "A description of the fields required for a specific note type and instructions on what information goes in each field"
       },
       "HTTPValidationError": {
         "properties": {
@@ -593,15 +893,18 @@
       },
       "SettingsData": {
         "properties": {
-          "settings": {
-            "type": "object",
-            "title": "Settings"
+          "notes_schema": {
+            "items": {
+              "$ref": "#/components/schemas/DoctorNoteSchema"
+            },
+            "type": "array",
+            "title": "Notes Schema"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "settings"
+          "notes_schema"
         ],
         "title": "SettingsData"
       },
@@ -665,6 +968,36 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VisitAudioUploadRequest": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "appointment_date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Appointment Date"
+          },
+          "patient_name": {
+            "type": "string",
+            "title": "Patient Name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Date Of Birth"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_name",
+          "appointment_date",
+          "patient_name",
+          "date_of_birth"
+        ],
+        "title": "VisitAudioUploadRequest"
       }
     },
     "securitySchemes": {
