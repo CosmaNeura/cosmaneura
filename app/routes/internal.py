@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Body, Depends, Path, Request
 from openai.types import Upload
 from pydantic import BaseModel, computed_field
 
@@ -76,6 +77,18 @@ def note_list(request: Request) -> NotetakingData:
     return NotetakingData(appointments=list(appointment_list))
 
 
+@internal_api_app.get("/patients")
+def patient_list(request: Request) -> list[Patient]:
+    "allows users to select an existing patient name and DOB when uploading a note"
+
+    doctor: Doctor = request.state.doctor
+
+    # TODO(mbianco) AM types should be fixed and the types should now display properly here...
+    patient_list = Patient.select().where(Patient.doctor_id == doctor.id).all()
+
+    return list(patient_list)
+
+
 class NoteDetail(BaseModel, extra="forbid"):
     appointment: Appointment
     transcript: AIVisitTranscript | None
@@ -125,20 +138,26 @@ def generate_signed_visit_recording_upload_url():
     return app.commands.uploads.sas.perform(UploadType.VISIT)
 
 
+# using a pydantic class for input data validation automatically converts input string json to dates
+class VisitAudioUploadRequest(BaseModel):
+    file_name: str
+    appointment_date: datetime
+    patient_name: str
+    date_of_birth: datetime
+
+
 @internal_api_app.post("/visit-audio-file/upload-complete")
-def upload_visit_audio_file(request: Request, file_name: str) -> None:
+def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> None:
     doctor: Doctor = request.state.doctor
 
     return app.commands.uploads.upload_visit_audio_file.perform(
         doctor=doctor,
-        blob_name=file_name,
-        # TODO add to upload process
-        patient_name="hi",
-        appointment_date="01-01-20101",
-        date_of_birth="01-01-20101",
+        # TODO(mbianco) model_dump does not retain the types, so we lose type checking on `perform`
+        **data.model_dump(),
     )
 
 
+# for "raw" types like str, we need to explicitly specify the response_model
 @internal_api_app.post("/notes/get-signed-url", response_model=str)
 def generate_signed_example_note_upload_url():
     return app.commands.uploads.sas.perform(UploadType.EXAMPLE_NOTE)
@@ -146,7 +165,6 @@ def generate_signed_example_note_upload_url():
 
 @internal_api_app.post("/notes/upload-example")
 def upload_example_note(request: Request, file_name: str, note_type: str) -> None:
-    # TODO maybe accept ID as well?
     doctor: Doctor = request.state.doctor
 
     doctor_note_file = DoctorNoteFile(
