@@ -90,6 +90,9 @@ function PatientComboboxSearch({
   }
 
   function handleChange(selected_patient_id: string) {
+    if (selected_patient_id === "new_item") {
+      onChange(patient.name)
+    }
     const patient = data.find((patient) => patient.id === selected_patient_id)
 
     // update the patient name field with the name of the patient, not the ID
@@ -98,9 +101,23 @@ function PatientComboboxSearch({
     form.setValue("date_of_birth", new Date(patient.date_of_birth))
   }
 
+  function onSelectedItemChange(item: ComboboxItemBase | null) {
+    if (item.value == "new_item") {
+      onChange(item.label)
+    } else {
+      const patient = data.find((patient) => patient.id === selected_patient_id)
+
+      // update the patient name field with the name of the patient, not the ID
+      onChange(patient.name)
+
+      form.setValue("date_of_birth", new Date(patient.date_of_birth))
+    }
+  }
+
   return (
     <SimpleComboBox
-      onChange={handleChange}
+      // onChange={handleChange}
+      onSelectedItemChange={onSelectedItemChange}
       value={value}
       items={data.map(transformPatientForComboBox)}
       // TODO(mbianco) renderItem only gets the value + label of the field, we should really pass
