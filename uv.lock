@@ -374,16 +374,6 @@ wheels = [
 ]
 
 [[package]]
-name = "celery-once"
-version = "3.0.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "celery" },
-    { name = "redis" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/07/ff/af718344bfa9e0e25fb6855095a928ac6525f23b14a3998dd99699dfdee0/celery_once-3.0.1.tar.gz", hash = "sha256:9098730d6a84a91ccd84868c4730a81487fd0ffb7220cb1836d2b928542159d0", size = 12692 }
-
-[[package]]
 name = "certifi"
 version = "2024.12.14"
 source = { registry = "https://pypi.org/simple" }
@@ -529,7 +519,6 @@ dependencies = [
     { name = "backoff" },
     { name = "beautifulsoup4" },
     { name = "celery" },
-    { name = "celery-once" },
     { name = "clerk-backend-api" },
     { name = "css-inline" },
     { name = "deepgram-sdk" },
@@ -548,8 +537,6 @@ dependencies = [
     { name = "pydub" },
     { name = "python-decouple-typed" },
     { name = "redis" },
-    { name = "rq" },
-    { name = "rq-dashboard-fast" },
     { name = "sentry-sdk", extra = ["fastapi"] },
     { name = "sqlalchemy" },
     { name = "sqlmodel" },
@@ -613,7 +600,6 @@ requires-dist = [
     { name = "backoff", specifier = ">=2.2.1" },
     { name = "beautifulsoup4", specifier = ">=4.12.3" },
     { name = "celery", specifier = ">=5.4.0" },
-    { name = "celery-once", specifier = ">=3.0.1" },
     { name = "clerk-backend-api", specifier = ">=1.3.1" },
     { name = "css-inline", specifier = ">=0.14.3" },
     { name = "deepgram-sdk", specifier = ">=3.7.7" },
@@ -632,8 +618,6 @@ requires-dist = [
     { name = "pydub", specifier = ">=0.25.1" },
     { name = "python-decouple-typed", specifier = ">=3.11.0" },
     { name = "redis", specifier = ">=5.2.0" },
-    { name = "rq", git = "https://github.com/rq/rq?rev=spawn-worker" },
-    { name = "rq-dashboard-fast", specifier = ">=0.5.11" },
     { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.17.0" },
     { name = "sqlalchemy", specifier = ">=2.0.36" },
     { name = "sqlmodel", specifier = ">=0.0.22" },
@@ -723,12 +707,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/3c/6e/fe899fb937657db6df31cc3e61c6968cb56d36d7326361847440a430152e/coverage-7.6.10-cp313-cp313t-win32.whl", hash = "sha256:89d76815a26197c858f53c7f6a656686ec392b25991f9e409bcef020cd532312", size = 211611 },
     { url = "https://files.pythonhosted.org/packages/1c/55/52f5e66142a9d7bc93a15192eba7a78513d2abf6b3558d77b4ca32f5f424/coverage-7.6.10-cp313-cp313t-win_amd64.whl", hash = "sha256:54a5f0f43950a36312155dae55c505a76cd7f2b12d26abeebbe7a0b36dbc868d", size = 212781 },
 ]
-
-[[package]]
-name = "crontab"
-version = "1.0.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ae/13/696cac391e97fa47ec7323936838a540a610894a1d516a6b0cefbb1e495b/crontab-1.0.1.tar.gz", hash = "sha256:89477e3f93c81365e738d5ee2659509e6373bb2846de13922663e79aa74c6b91", size = 19616 }
 
 [[package]]
 name = "cryptography"
@@ -1035,18 +1013,6 @@ wheels = [
 [package.optional-dependencies]
 standard = [
     { name = "uvicorn", extra = ["standard"] },
-]
-
-[[package]]
-name = "freezegun"
-version = "1.5.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "python-dateutil" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/ef/722b8d71ddf4d48f25f6d78aa2533d505bf3eec000a7cacb8ccc8de61f2f/freezegun-1.5.1.tar.gz", hash = "sha256:b29dedfcda6d5e8e083ce71b2b542753ad48cfec44037b3fc79702e2980a89e9", size = 33697 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/0b/0d7fee5919bccc1fdc1c2a7528b98f65c6f69b223a3fd8f809918c142c36/freezegun-1.5.1-py3-none-any.whl", hash = "sha256:bf111d7138a8abe55ab48a71755673dbaa4ab87f4cff5634a4442dfec34c15f1", size = 17569 },
 ]
 
 [[package]]
@@ -2370,48 +2336,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5b/8a/71cfbf6bf6257ea785d1f030c22468f763eea1b3e5417620f2ba9abd6dca/rich_toolkit-0.13.2.tar.gz", hash = "sha256:fea92557530de7c28f121cbed572ad93d9e0ddc60c3ca643f1b831f2f56b95d3", size = 72288 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7e/1b/1c2f43af46456050b27810a7a013af8a7e12bc545a0cdc00eb0df55eb769/rich_toolkit-0.13.2-py3-none-any.whl", hash = "sha256:f3f6c583e5283298a2f7dbd3c65aca18b7f818ad96174113ab5bec0b0e35ed61", size = 13566 },
-]
-
-[[package]]
-name = "rq"
-version = "2.1.0"
-source = { git = "https://github.com/rq/rq?rev=spawn-worker#a2a5ab8c9f4f96725e354e3da8b84310033d6649" }
-dependencies = [
-    { name = "click" },
-    { name = "redis" },
-]
-
-[[package]]
-name = "rq-dashboard-fast"
-version = "0.5.12"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "jinja2" },
-    { name = "pygments" },
-    { name = "redis" },
-    { name = "rq" },
-    { name = "rq-scheduler" },
-    { name = "uvicorn" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/b0/9d/589a296974173c039f1d20e6159059f7cb33897b524abd065df567f18a24/rq_dashboard_fast-0.5.12.tar.gz", hash = "sha256:051456474e4df5e081a6a85ba5ce300f252564adb560ab005b3490698b6b8cc6", size = 15534 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0a/88/a2759d9d8199cf3f5a2fb503f745fd90d10876243541359e4ed37846d845/rq_dashboard_fast-0.5.12-py3-none-any.whl", hash = "sha256:c49b7c0c65beb78fa8f33fac6962c02116c7b2255e1b69fd7411d3f9cf3b1e64", size = 21587 },
-]
-
-[[package]]
-name = "rq-scheduler"
-version = "0.14.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "crontab" },
-    { name = "freezegun" },
-    { name = "python-dateutil" },
-    { name = "rq" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a0/4e/977bbcc1f3b25ed9ea60ec968b13f7147661defe5b2f9272b44fdb1c5549/rq-scheduler-0.14.0.tar.gz", hash = "sha256:2d5a14a1ab217f8693184ebaa1fe03838edcbc70b4f76572721c0b33058cd023", size = 16582 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/bb/d0/28cedca9f3b321f30e69d644c2dcd7097ec21570ec9606fde56750621300/rq_scheduler-0.14.0-py2.py3-none-any.whl", hash = "sha256:d4ec221a3d8c11b3ff55e041f09d9af1e17f3253db737b6b97e86ab20fc3dc0d", size = 13874 },
 ]
 
 [[package]]
