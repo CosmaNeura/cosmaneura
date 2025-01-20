@@ -6,6 +6,7 @@ from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
+from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
@@ -86,6 +87,19 @@ doctor_note_schema = DoctorNoteSchema.find_or_create_by(
         "History of Present Illness": "Describe the chronological history of the current medical problem",
         "Assessment": "List the diagnoses and clinical impressions",
         "Plan": "Detail the treatment plan and next steps",
+    },
+)
+
+# TODO this is AI generated, we should improve seed data here
+# each schema must have at least a single example
+doctor_note_example = DoctorNoteExample.find_or_create_by(
+    doctor_id=doctor.id,
+    doctor_note_schema_id=doctor_note_schema.id,
+    field_examples={
+        "Chief Complaint": "Patient reports recurring headaches",
+        "History of Present Illness": "Patient has been experiencing headaches recently. Frequency and duration to be determined.",
+        "Assessment": "Recurring headaches of unknown etiology",
+        "Plan": "Further evaluation needed to determine cause and appropriate treatment plan",
     },
 )
 
