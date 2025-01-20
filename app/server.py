@@ -5,8 +5,10 @@ Route method names are important as they will be used for the openapi spec which
 JavaScript client which will use these methods.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, dependencies
+from rq_dashboard_fast import RedisQueueDashboard
 
+from app.configuration.redis import redis_url
 from app.routes.utils.openapi import simplify_operation_ids
 
 from .environments import is_production
@@ -34,12 +36,15 @@ api_app = FastAPI(**fast_api_args)  # type: ignore
 api_app.include_router(internal_api_app)
 add_middleware(api_app)
 
+# TODO maybe treat sqlalchemy.exc.NoResultFound as 404?
 
-@api_app.get("/hello")
-async def index():
-    from datetime import datetime
+# TODO(mbianco) unsure of why the path needs to be specified here?
+# TODO(mbianco) is there a way to protect this via a superuser clerk? https://discord.com/channels/856971667393609759/1330543476433227877
+# TODO(mbianco) this package includes pandas, really? https://github.com/Hannes221/rq-dashboard-fast/issues/100
+dashboard = RedisQueueDashboard(redis_url(), "/job-monitor")
 
-    return render_template("routes/index.html", {"date": datetime.now()})
+# add rq monitoring dashboard
+api_app.mount("/job-monitor", dashboard)
 
 
 @api_app.get("/healthcheck")
