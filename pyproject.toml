@@ -168,8 +168,7 @@ j2lint = { git = "https://github.com/aristanetworks/j2lint.git" }
 rq = { git = "https://github.com/rq/rq", rev = "spawn-worker" }
 
 [tool.uv.sources.activemodel]
-path = "/Users/mike/Projects/python/activemodel"
-editable = true
+git = "https://github.com/iloveitaly/activemodel.git"
 
 [tool.uv.sources.ipython-autoimport]
 git = "https://github.com/anntzer/ipython-autoimport.git"

@@ -8,30 +8,12 @@ resolution-markers = [
 [[package]]
 name = "activemodel"
 version = "0.5.0"
-source = { editable = "../../python/activemodel" }
+source = { git = "https://github.com/iloveitaly/activemodel.git#be98abb1bb5abe34cf42ebba7b63b89a942e487e" }
 dependencies = [
     { name = "pydash" },
     { name = "python-decouple-typed" },
     { name = "sqlmodel" },
     { name = "typeid-python" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pydash", specifier = ">=8.0.4" },
-    { name = "python-decouple-typed", specifier = ">=3.11.0" },
-    { name = "sqlmodel", specifier = ">=0.0.22" },
-    { name = "typeid-python", specifier = ">=0.3.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.115.6" },
-    { name = "ipdb", specifier = ">=0.13.13" },
-    { name = "pdbr", specifier = ">=0.8.9" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.3" },
-    { name = "pydantic", specifier = ">=2.10.0" },
-    { name = "pytest", specifier = ">=8.3.3" },
 ]
 
 [[package]]
@@ -530,7 +512,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "activemodel", editable = "../../python/activemodel" },
+    { name = "activemodel", git = "https://github.com/iloveitaly/activemodel.git" },
     { name = "aiosmtplib", specifier = ">=3.0.2" },
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "assemblyai", specifier = ">=0.35.1" },
@@ -1513,7 +1495,7 @@ wheels = [
 
 [[package]]
 name = "openai"
-version = "1.59.8"
+version = "1.59.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -1525,9 +1507,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e0/c4/b4482784de63c7158f6c0afcb07fd66450ea6c912d6bddf9d7599f2eda25/openai-1.59.8.tar.gz", hash = "sha256:ac4bda5fa9819fdc6127e8ea8a63501f425c587244bc653c7c11a8ad84f953e1", size = 346775 }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/2d/04faa92bac0341649223398503db4415d2f658a757d9d32bb68f3378ddd0/openai-1.59.9.tar.gz", hash = "sha256:ec1a20b0351b4c3e65c6292db71d8233515437c6065efd4fd50edeb55df5f5d2", size = 347134 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/cf/5b235e12ead3cd2098f9792776c966994c1bc558cba5799e12f3045227df/openai-1.59.8-py3-none-any.whl", hash = "sha256:a8b8ee35c4083b88e6da45406d883cf6bd91a98ab7dd79178b8bc24c8bfb09d9", size = 455567 },
+    { url = "https://files.pythonhosted.org/packages/07/b4/57f1954a4560092ad8c45f07ad183eab9c8e093e0a1db829f9b506b2d5d1/openai-1.59.9-py3-none-any.whl", hash = "sha256:61a0608a1313c08ddf92fe793b6dbd1630675a1fe3866b2f96447ce30050c448", size = 455527 },
 ]
 
 [[package]]
@@ -1734,14 +1716,14 @@ wheels = [
 
 [[package]]
 name = "prompt-toolkit"
-version = "3.0.49"
+version = "3.0.50"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "wcwidth" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6a/86/7e1c8597700717511f7745075c4ed9b56186148785b79597793d967dbde4/prompt_toolkit-3.0.49.tar.gz", hash = "sha256:372cfcbff483cd5fac6f7870d21face30f1e2f217c6906721616fb1be778774d", size = 428816 }
+sdist = { url = "https://files.pythonhosted.org/packages/a1/e1/bd15cb8ffdcfeeb2bdc215de3c3cffca11408d829e4b8416dcfe71ba8854/prompt_toolkit-3.0.50.tar.gz", hash = "sha256:544748f3860a2623ca5cd6d2795e7a14f3d0e1c3c9728359013f79877fc89bab", size = 429087 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/b8/1a4af9d2acb88180916c7505d3c148a5e22380b230e4d48112faf35fbaea/prompt_toolkit-3.0.49-py3-none-any.whl", hash = "sha256:03b25a442496d1aeabcb4b8b8e94563ac6a8eff56467837367206a733c61c2de", size = 387606 },
+    { url = "https://files.pythonhosted.org/packages/e4/ea/d836f008d33151c7a1f62caf3d8dd782e4d15f6a43897f64480c2b8de2ad/prompt_toolkit-3.0.50-py3-none-any.whl", hash = "sha256:9b6427eb19e479d98acff65196a307c555eb567989e6d88ebbb1b509d9779198", size = 387816 },
 ]
 
 [[package]]
