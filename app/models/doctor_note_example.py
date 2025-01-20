@@ -1,5 +1,10 @@
 from activemodel import BaseModel
-from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
+from activemodel.mixins import (
+    PydanticJSONMixin,
+    SoftDeletionMixin,
+    TimestampsMixin,
+    TypeIDMixin,
+)
 from activemodel.types import TypeIDType
 from app.models.doctor_note_schema import DoctorNoteSchema
 from sqlalchemy.dialects.postgresql import JSONB
@@ -13,6 +18,7 @@ class DoctorNoteExample(
     PydanticJSONMixin,
     TypeIDMixin("doctor_note_example"),
     TimestampsMixin,
+    SoftDeletionMixin,
     table=True,
 ):
     """

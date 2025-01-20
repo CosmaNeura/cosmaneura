@@ -3,7 +3,12 @@ import typing as t
 from pydantic import computed_field
 
 from activemodel import BaseModel
-from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
+from activemodel.mixins import (
+    PydanticJSONMixin,
+    SoftDeletionMixin,
+    TimestampsMixin,
+    TypeIDMixin,
+)
 from activemodel.types import TypeIDType
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import joinedload
@@ -20,6 +25,7 @@ class DoctorNoteSchema(
     PydanticJSONMixin,
     TypeIDMixin("doctor_note_schema"),
     TimestampsMixin,
+    SoftDeletionMixin,
     table=True,
 ):
     """
