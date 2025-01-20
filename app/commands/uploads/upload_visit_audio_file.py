@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import app.jobs.transcribe
 from app import log
 
 from app.models.appointment import Appointment
@@ -11,7 +12,7 @@ from app.models.visit_audio_file import VisitAudioFile
 def perform(
     *,
     doctor: Doctor,
-    blob_name: str,
+    file_name: str,
     patient_name: str,
     appointment_date: datetime,
     date_of_birth: datetime,
@@ -22,13 +23,14 @@ def perform(
 
     # TODO wrap in transaction, needs to be addd to activemodel
 
-    # TODO DOB + user_id filtering
-    # Patient.select().where(Patient.name == patient_name).first()
-    # TODO create patient if not exists
+    # only care about the date, we want to optimize for matching
+    normalized_date_of_birth = date_of_birth.replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
 
-    patient = Patient(
-        doctor_id=doctor.id, name=patient_name, date_of_birth=date_of_birth
-    ).save()
+    patient = Patient.find_or_create_by(
+        doctor_id=doctor.id, name=patient_name, date_of_birth=normalized_date_of_birth
+    )
 
     appointment = Appointment(
         doctor_id=doctor.id,
@@ -40,8 +42,8 @@ def perform(
         doctor_id=doctor.id,
         patient_id=patient.id,
         appointment_id=appointment.id,
-        azure_file_name=blob_name,
+        azure_file_name=file_name,
     ).save()
 
-    # TODO kick off job with the file.id
     log.info("processing audio file", id=file.id)
+    app.jobs.transcribe.queue(file.id)
