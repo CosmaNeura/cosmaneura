@@ -2,11 +2,12 @@
 
 # isort: off
 
+from activemodel import SessionManager
 import sqlalchemy as sa
 
 from sqlmodel import SQLModel
 from app.configuration.clerk import clerk
-from app.configuration.database import database_url
+from app.configuration.database import configure_database, database_url
 import app.models
 
 import inspect
@@ -159,6 +160,55 @@ def patch_reload():
 
 patch_reload()
 
+# TODO this is so bad and dangerous
+def iterate_on_model(model: SQLModel):
+    from app.configuration.database import get_engine
+
+    SQLModel.metadata.drop_all(
+        tables=[SQLModel.metadata.tables[model.__tablename__]], bind=get_engine()
+    )
+
+    SQLModel.metadata.create_all(get_engine())
+
+from activemodel.session_manager import global_session, aglobal_session
+
+def global_playground_session():
+    session_context = global_session()
+    session_context.__enter__()
+
+    return session_context
+
+def global_playground_session_2():
+    "setup a global session to lazy field don't fail on us"
+    from contextlib import nullcontext
+    return nullcontext(global_session())
+
+async def aglobal_playground_session():
+    """Setup a global async session that persists for interactive development"""
+    from contextlib import nullcontext
+    session_context = aglobal_session()
+    # Get the first yield value from the async generator
+    context = await anext(session_context.__aiter__())
+    return nullcontext(context)
+
+# aglobal_playground_session()
+ctx = global_playground_session()
+
+def global_session_connection():
+    """Setup a global connection with transaction control for interactive development"""
+    engine = SessionManager.get_instance().get_engine()
+
+    ctx_connection = engine.begin()
+
+    # looks like if this is garbage collected, it will close the connection
+    connection = ctx_connection.__enter__()
+
+    # Store connection in session manager
+    SessionManager.get_instance().session_connection = connection
+    return ctx_connection
+
+# ctx = global_session_connection()
+
 async def playwright_page():
 	"""
 	>>> page = await playwright_page()
@@ -180,9 +230,9 @@ def delete_all_users():
 	clerk.users.list() | fp.filter(lambda user: user.email_addresses[0].email_address != "mike+clerk_test@example.com") | fp.pluck_attr("id") | fp.lmap(lambda uid: clerk.users.delete(user_id=uid))
 
 
-
+configure_database()
 engine = create_engine(database_url(), echo=True)
-
+session = SessionManager.get_instance().get_session().__enter__()
 
 def get_db_version() -> tuple[str, str]:
 	with engine.connect() as conn:
