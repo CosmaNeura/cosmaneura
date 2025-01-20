@@ -3,5 +3,5 @@
 # scattering and duplicating process definitions throughout your codebase.
 
 api: fastapi run --port ${PORT}
-worker: rq worker --with-scheduler
+worker: rq worker --with-scheduler -w rq.worker.SpawnWorker
 console: bash -l
