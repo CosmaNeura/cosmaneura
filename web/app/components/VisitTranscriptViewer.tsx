@@ -40,7 +40,7 @@ export default function VisitTranscriptViewer({
           <Button variant="ghost" size="sm" className="h-auto p-2">
             <ChevronDown
               className={`h-4 w-4 transition-transform ${
-                isOpen ? "transform rotate-180" : ""
+                isOpen ? "rotate-180 transform" : ""
               }`}
             />
             <span className="text-xl font-semibold">Visit Transcript</span>
@@ -53,7 +53,7 @@ export default function VisitTranscriptViewer({
         </div>
         {transcript.transcript_data.map((transcriptEntry) => {
           return (
-            <div className="mb-2">
+            <div className="mb-2" key={transcriptEntry.startTime}>
               <span className="font-bold">{transcriptEntry.speaker}: </span>
               {transcriptEntry.content}
             </div>

@@ -29,7 +29,7 @@ export default function VisitNoteViewer({
           <Button variant="ghost" size="sm" className="h-auto p-2">
             <ChevronDown
               className={`h-4 w-4 transition-transform ${
-                isOpen ? "transform rotate-180" : ""
+                isOpen ? "rotate-180 transform" : ""
               }`}
             />
             <span className="text-xl font-semibold">{note.note_type}</span>
@@ -47,7 +47,7 @@ export default function VisitNoteViewer({
       <CollapsibleContent className="mt-3">
         <div ref={contentRef}>
           {Object.entries(note.note).map(([sectionTitle, noteContent]) => (
-            <div className="mb-2">
+            <div className="mb-2" key={sectionTitle}>
               <h3 className="text-md font-semibold">{sectionTitle}</h3>
               <Markdown>{noteContent as string}</Markdown>
             </div>
