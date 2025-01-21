@@ -1,10 +1,8 @@
 """
 Extract the schema and content from an example clinical note.
-"""
 
-# This script requires poppler to be installed on your system.
-#   `brew install poppler` on MacOS
-#   `apt-get install poppler-utils` on Ubuntu
+Requires poppler to be installed on your system.
+"""
 
 import base64
 import io
@@ -15,7 +13,6 @@ from textwrap import dedent
 
 import PIL.Image
 from azure.storage.blob import BlobServiceClient
-from decouple import config
 from pdf2image import convert_from_path
 from typeid import TypeID
 

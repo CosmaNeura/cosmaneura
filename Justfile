@@ -88,7 +88,7 @@ dev: local-alias
 #######################
 
 # NOTE nixpacks is installed during the deployment step and not as a development prerequisite
-BREW_PACKAGES := "fd entr 1password-cli yq jq"
+BREW_PACKAGES := "fd entr 1password-cli yq jq poppler ffmpeg"
 EXTRA_BREW_PACKAGES := "lefthook peterldowns/tap/localias foreman"
 
 [macos]
