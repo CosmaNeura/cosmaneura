@@ -5,5 +5,5 @@
 api: python main.py
 worker: celery -A app.celery worker
 scheduler: celery -A app.celery beat
-job_monitor: celery -A app.celery flower --basic-auth=:$FLOWER_PASSWORD --port $FLOWER_PORT
+job_monitor: celery -A app.celery flower --basic-auth=:$FLOWER_PASSWORD --port=$FLOWER_PORT
 console: bash -l
