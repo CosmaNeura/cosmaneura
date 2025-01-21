@@ -21,14 +21,14 @@ variable "onepassword_tags" {
 variable "python_secret_vars" {
   description = "ENV vars which need to remain secret"
   type        = set(string)
-  default     = ["DATABASE_URL", "REDIS_URL", "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL", "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL", "AZURE_UPLOADS_CONTAINER_NAME"]
+  default     = ["DATABASE_URL", "REDIS_URL", "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL", "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL"]
 }
 
 # container configuration which does not need to be secret
 variable "python_public_vars" {
   description = "ENV vars which can be public"
   type        = set(string)
-  default     = ["LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT"]
+  default     = ["LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT", "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_INTAKE_CONTAINER_NAME"]
 }
 
 # start commands for the container types
