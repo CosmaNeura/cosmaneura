@@ -4,7 +4,7 @@ GIT_SHA="$1"
 
 # Define variables
 RESOURCE_GROUP="cosmaneura-prod"
-CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker"
+CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-job-monitor"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
@@ -40,7 +40,9 @@ gen_string_for_sha() {
 }
 
 # Generate the revision string
-REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
+# Note that if you attempt to deploy the same image twice, the revision string will be the same
+# and probably cause deployment errors, so you'll need to manually adjust this.
+REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")-2
 
 echo "Revision string: $REVISION_STRING"
 
