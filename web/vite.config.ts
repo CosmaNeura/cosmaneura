@@ -1,8 +1,11 @@
-import { defineConfig } from "vite"
+import { reactRouterDevTools } from "react-router-devtools"
+import { Connect, PluginOption, defineConfig } from "vite"
 import { loadEnv } from "vite"
+import Inspect from "vite-plugin-inspect"
 import Terminal from "vite-plugin-terminal"
 import tsconfigPaths from "vite-tsconfig-paths"
 
+import { viteRuntimeErrorOverlayPlugin } from "./vite-plugins/error"
 import { reactRouter } from "@react-router/dev/vite"
 import { sentryVitePlugin } from "@sentry/vite-plugin"
 
@@ -38,6 +41,75 @@ function requireEnvCheckerPlugin(mode: string) {
       }
     },
   }
+}
+
+const HTML_PLUGIN_TEST = {
+  name: "html-plugin-test",
+
+  transformIndexHtml(html) {
+    return {
+      tag: "script",
+      children: "alert('hello world')",
+    }
+  },
+}
+
+const htmlTransformPlugin: PluginOption = {
+  name: "vite-html-transform-test",
+  enforce: "post",
+
+  generateBundle(options, bundle) {
+    console.log("bundle", bundle)
+    console.log("options", options)
+  },
+
+  buildEnd() {
+    console.log("build end")
+  },
+
+  configureServer(server) {
+    server.middlewares.use(
+      (
+        req: Connect.IncomingMessage,
+        res: Connect.ServerResponse,
+        next: Connect.NextFunction,
+      ) => {
+        // Only process HTML requests
+        // const isIndexHtmlRequest = req.url === ""
+        // console.log("isHtmlRequest", req.url)
+
+        // if (!isIndexHtmlRequest) {
+        //   return next()
+        // }
+
+        // Check content type on response
+        const originalWrite = res.write
+        const originalEnd = res.end
+
+        res.end = function (chunk: any) {
+          const contentType = res.getHeader("content-type")
+
+          if (!contentType?.toString().includes("html")) {
+            return originalEnd.call(res, chunk)
+          }
+
+          // Transform HTML content
+          const html = chunk?.toString() || ""
+          console.log("html", html)
+          const transformedHtml = html.replace(
+            "</head>",
+            `<meta name="transformed" content="true"></head>`,
+          )
+
+          console.log("transformedHtml", transformedHtml)
+
+          return originalEnd.call(res, transformedHtml)
+        }
+
+        next()
+      },
+    )
+  },
 }
 
 function getModePlugins(mode: string) {
@@ -94,9 +166,10 @@ function getModePlugins(mode: string) {
   }
 
   return [
-    Terminal(),
-    // TODO this is still tool beta for rr7, need to wait for a more stable release
-    // reactRouterDevTools()
+    Inspect(),
+    Terminal({ console: "terminal" }),
+    // reactRouterDevTools(),
+    // viteRuntimeErrorOverlayPlugin(),
   ]
 }
 
@@ -123,5 +196,11 @@ export default defineConfig(({ mode }) => ({
     // random ports to avoid conflict with other projects
     port: parseInt(process.env.JAVASCRIPT_SERVER_PORT),
   },
+  // clearScreen: false,
   plugins: [reactRouter(), tsconfigPaths(), ...getModePlugins(mode)],
+  ssr: {
+    // now, we are in SPA (ssr: false) mode, so i have zero idea why this works
+    // https://github.com/react-dropzone/react-dropzone/issues/1259
+    noExternal: ["react-dropzone"],
+  },
 }))
