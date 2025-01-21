@@ -30,9 +30,7 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
-import { Input } from "~/components/ui/input"
 import { Separator } from "~/components/ui/separator"
-import { getUserId } from "~/configuration/clerk"
 import {
   generateSignedExampleIntakeUploadUrl,
   generateSignedExampleNoteUploadUrl,

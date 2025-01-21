@@ -6,7 +6,6 @@ import { Command, File, Inbox, Settings } from "lucide-react"
 import { Label } from "@/components/ui/label"
 import {
   Sidebar,
-  SIDEBAR_WIDTH_MOBILE,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
@@ -26,7 +25,6 @@ import { SkeletonMessageList } from "./skeleton-message-list"
 import { StatusBadge } from "./status-badge"
 import { UserButton } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
-import * as React from "react"
 
 // logo icon at the top
 const IconSidebarHeader = () => (
@@ -116,7 +114,7 @@ function SelectionList({
 }: {
   isLoading: boolean
   entries: SidebarEntry[]
-  }) {
+}) {
   // TODO loading state is not used here, consider
   const navigate = useNavigate()
 

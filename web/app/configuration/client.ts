@@ -2,7 +2,6 @@
 import { requireEnv } from "~/utils/environment"
 
 import { getClient } from "./clerk"
-import type { Clerk } from "@clerk/clerk-js"
 import { invariant } from "@epic-web/invariant"
 import { client } from "client/sdk.gen"
 

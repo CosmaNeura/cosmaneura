@@ -11,7 +11,6 @@ import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
 import { FeedbackWidget } from "~/components/shared/FeedbackWidget"
 import { StatusBadge } from "~/components/shared/StatusBadge"
-import { getClient } from "~/configuration/clerk"
 import { noteDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
 
@@ -39,11 +38,6 @@ export const meta: MetaFunction = () => {
       content: "Your patient meeting notes",
     },
   ]
-}
-
-interface Mail {
-  name: string
-  // Add other mail properties as needed
 }
 
 function Header({ title }: { title?: string }) {

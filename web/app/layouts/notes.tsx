@@ -4,9 +4,7 @@ import { Route } from "./+types/notes"
 
 import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
 import { PageTransition } from "@/components/page-transition"
-import { SkeletonMessageList } from "@/components/skeleton-message-list"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { getClient } from "~/configuration/clerk"
 import { Appointment, noteList } from "~/configuration/client"
 
 import { standardDateTimeFormat } from "../lib/date"
