@@ -684,17 +684,12 @@ resource "azurerm_container_app" "worker" {
   # required for blue/green deployments
   revision_mode = "Single"
 
-
   template {
     # without this, if the container fails, it will not be restarted even if tf config is updated
     min_replicas = 1
 
     container {
       name = "${local.base_name}-app-worker"
-
-      # great starter image to just get something running
-      # https://github.com/crccheck/docker-hello-world/blob/master/Dockerfile
-      # image = "crccheck/hello-world:latest"
 
       # the amount of time I wasted realizing that private images must be fully qualified, but public images do not need to be is embarrassing
       # https://github.com/hashicorp/terraform-provider-azurerm/issues/22459
@@ -703,6 +698,83 @@ resource "azurerm_container_app" "worker" {
       # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
 
       args = [data.external.procfile.result["worker"]]
+
+      dynamic "env" {
+        for_each = var.python_public_vars
+
+        content {
+          name  = env.key
+          value = data.external.secrets.result[env.key]
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.python_secret_vars
+
+        content {
+          name        = env.key
+          secret_name = replace(lower(env.key), "_", "-")
+        }
+      }
+
+      # yes, memory is defined as a string and CPU is defined as a float
+      cpu    = 0.5
+      memory = "1Gi"
+    }
+  }
+
+  dynamic "secret" {
+    for_each = var.python_secret_vars
+
+    content {
+      name  = replace(lower(secret.key), "_", "-")
+      value = data.external.secrets.result[secret.key]
+    }
+  }
+
+  # TODO could use identity based login in the future, but the Basic tier of acr doesn't support this
+  # https://github.com/microsoft/NubesGen/blob/0d5d4896f5f2c93d1baca01807527bee56ff49b8/terraform/modules/container-apps/main.tf#L91
+  registry {
+    # unlike other registry configs, this does NOT contain a protocol
+    server   = azurerm_container_registry.main.login_server
+    username = azurerm_container_registry.main.admin_username
+
+    # why is the password stored in a separate secret block? No idea. But, This is The Way.
+    password_secret_name = "registry-secret"
+  }
+
+  secret {
+    name  = "registry-secret"
+    value = azurerm_container_registry.main.admin_password
+  }
+
+  tags = var.tags
+}
+
+resource "azurerm_container_app" "job_monitor" {
+  resource_group_name = azurerm_resource_group.main.name
+  # NOTE location is determined automatically by the resource group
+
+  name                         = "${azurerm_resource_group.main.name}-job-monitor"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+
+  # required for blue/green deployments
+  revision_mode = "Single"
+
+  template {
+    # without this, if the container fails, it will not be restarted even if tf config is updated
+    min_replicas = 1
+
+    container {
+      name = "${local.base_name}-app-job-monitor"
+
+      # the amount of time I wasted realizing that private images must be fully qualified, but public images do not need to be is embarrassing
+      # https://github.com/hashicorp/terraform-provider-azurerm/issues/22459
+      image = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
+
+      # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
+
+      args = [data.external.procfile.result["job_monitor"]]
 
       dynamic "env" {
         for_each = var.python_public_vars

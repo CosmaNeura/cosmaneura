@@ -21,14 +21,22 @@ variable "onepassword_tags" {
 variable "python_secret_vars" {
   description = "ENV vars which need to remain secret"
   type        = set(string)
-  default     = ["DATABASE_URL", "REDIS_URL", "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL", "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL"]
+  default = ["DATABASE_URL", "REDIS_URL", "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL",
+    "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL",
+    # De-identification secrets
+    "AZURE_DEID_TENANT_ID", "AZURE_DEID_CLIENT_ID", "AZURE_DEID_CLIENT_SECRET", "AZURE_DEID_ENDPOINT"
+  ]
 }
+
 
 # container configuration which does not need to be secret
 variable "python_public_vars" {
   description = "ENV vars which can be public"
   type        = set(string)
-  default     = ["LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT", "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_INTAKE_CONTAINER_NAME"]
+  default = ["LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT",
+    # upload container names
+    "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_INTAKE_CONTAINER_NAME"
+  ]
 }
 
 # start commands for the container types
