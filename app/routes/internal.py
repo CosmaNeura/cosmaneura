@@ -16,6 +16,7 @@ from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
+from app.models.doctor_intake_file import DoctorIntakeFile
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
@@ -188,7 +189,12 @@ def generate_signed_example_intake_upload_url():
 @internal_api_app.post("/intake/upload-example")
 def upload_example_intake(request: Request, file_name: str) -> None:
     doctor: Doctor = request.state.doctor
-    raise NotImplementedError()
+
+    doctor_note_file = DoctorIntakeFile(
+        doctor_id=doctor.id, azure_file_name=file_name
+    ).save()
+
+    # TODO kick off job
 
 
 class SettingsData(BaseModel, extra="forbid"):
