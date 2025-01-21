@@ -41,33 +41,10 @@ import {
   uploadExampleNote,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+import { uploadFileToAzure } from "~/lib/azure-upload"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
-
-// generic upload function to be used by an onSubmit handler
-// TODO should handle errors better...
-async function uploadFileToAzure(file: File, sasSignature: string) {
-  invariant(sasSignature, "sasSignature should always exist")
-
-  const unixTimestamp = Date.now()
-  const userId = await getUserId()
-  const stampedFileName = [userId, unixTimestamp, file.name].join("_")
-  const url = new URL(sasSignature)
-  url.pathname = `${url.pathname}/${stampedFileName}`
-  const finalUrl = url.toString()
-
-  const azureUploadResponse = await fetch(finalUrl, {
-    method: "PUT",
-    headers: {
-      "x-ms-blob-type": "BlockBlob",
-      "Content-Type": file.type,
-    },
-    body: file,
-  })
-
-  return { stampedFileName, azureUploadResponse }
-}
 
 function ImageDropzone({
   children,
@@ -365,7 +342,6 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                     items={noteSchemasToComboBoxItems(noteSchemas)}
                     {...field}
                   />
-                  {/* <Input placeholder="Enter note type" {...field} /> */}
                 </FormControl>
                 <FormDescription>
                   Enter the type of note you want to upload. For example, "SOAP
@@ -415,6 +391,7 @@ export const meta: MetaFunction = () => {
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   return (
     <SidebarProvider
+      // eliminate the message sidebar
       style={{ "--sidebar-width": "3em" } as React.CSSProperties}
     >
       <AppSidebar isLoading={false} entries={false} />
