@@ -3,11 +3,7 @@
 - Spawn is not natively supported and fork has been depreciated https://github.com/celery/celery/issues/6036#issuecomment-1151224775
 """
 
-import logging
-from datetime import timedelta
-
 from celery import Celery
-from celery.schedules import crontab
 from celery.signals import (
     setup_logging,
     task_postrun,

@@ -3,20 +3,20 @@
 ## davidlaprade
 
 - [ ] log everything required for HIPPA
-- [ ] data model for the note
-- [ ] push locally run scripts to production database
+- [x] data model for the note
+- [x] push locally run scripts to production database
 - [ ] job to hit the deidentification service
-- [ ] add date + name of patient to audio upload
+- [x] add date + name of patient to audio upload
 
 ## mbianco
 
-- [ ] swap user to provider name
+- [x] swap user to provider name
 - [x] azure terraform
 - [ ] staging environment
 - [x] merge in project template
 - [x] merge in ui work
 - [x] prod deployment on azure
-- [ ] wire up the note taking ui to a data model
+- [x] wire up the note taking ui to a data model
 - [x] add upload with azure
 
 # v1: automatic upload
@@ -29,16 +29,21 @@
     - [x] I think FE upload is The Way? https://stackoverflow.com/questions/67986754/upload-a-file-in-azure-blob-storage-using-react
   - [x] need sweep job to clear out (a) files after they are processed / expired (b) unattached files
 - [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
-- [ ] transcribe
-  - [ ] job can just be a py module/class/function whatever that accepts a file model ID
-    - [ ] i.e. don't worry about celery details, for the initial write
-  - [ ] backend models for transcription data, etc
-  - [ ] job to delete / soft delete transcriptions
-- [ ] summarization
-  - [ ] models
-- [ ] tie into celery, make sure to handle openai (And Assembly/Deepgram outages) outages
+- [x] transcribe
+  - [x] job can just be a py module/class/function whatever that accepts a file model ID
+    - [x] i.e. don't worry about celery details, for the initial write
+  - [x] backend models for transcription data, etc
+  - [x] job to delete / soft delete transcriptions
+    - [x] ended up using azure for this
+- [x] summarization
+  - [x] models
+- [x] tie into celery, make sure to handle openai (And Assembly/Deepgram outages) outages
 - [ ] eval tooling, would be great to have this too
 - [ ] job monitoring (flower)
+
+## User Steps
+
+- [ ] ask them to upload additional example notes to the portal
 
 ## User Workflow
 
@@ -71,3 +76,7 @@
 - https://github.com/maklov/react-mic completely dead
 - https://github.com/vocaroo/simple-audio-recorder?tab=readme-ov-file recently created, but looks mostly dead
 - https://github.com/YZarytskyi/react-voice-visualizer/issues/30 is the best one I could find
+
+---
+
+https://github.com/shadcn-ui/ui/issues/5669 - can't use `    "verbatimModuleSyntax": true,`
