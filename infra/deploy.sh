@@ -4,7 +4,7 @@ GIT_SHA="$1"
 
 # Define variables
 RESOURCE_GROUP="cosmaneura-prod"
-CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-job-monitor"
+CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-app-job-monitor"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
@@ -42,7 +42,10 @@ gen_string_for_sha() {
 # Generate the revision string
 # Note that if you attempt to deploy the same image twice, the revision string will be the same
 # and probably cause deployment errors, so you'll need to manually adjust this.
-REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")-2
+#
+# Also, long application names can limit your revision string:
+# 'A revision name must consist of lower case alphanumeric characters or '-', start with an alphabetic character, and end with an alphanumeric character. The length of the revision name must not be more than a combined 54 characters with the container app name.'
+REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 

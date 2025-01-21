@@ -759,8 +759,9 @@ resource "onepassword_item" "job_monitor_login" {
   title    = "${local.environment} Job Monitor Flower Login"
   category = "login"
 
+  # TODO can't do this because of a circular dependency
   # url = azurerm_container_app.job-monitor.ingress[0].fqdn
-  url = "cosmaneura-prod-app-job-monitor.lemonsmoke-1009414c.northcentralus.azurecontainerapps.io"
+  url = "cosmaneura-prod-app-jmon.lemonsmoke-1009414c.northcentralus.azurecontainerapps.io"
 
   password_recipe {
     length  = 30
@@ -774,7 +775,8 @@ resource "azurerm_container_app" "job-monitor" {
   resource_group_name = azurerm_resource_group.main.name
   # NOTE location is determined automatically by the resource group
 
-  name                         = "${azurerm_resource_group.main.name}-app-job-monitor"
+  # jmon = job monitor to avoid revision name limits in azure
+  name                         = "${azurerm_resource_group.main.name}-app-jmon"
   container_app_environment_id = azurerm_container_app_environment.main.id
 
   # https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management
@@ -797,7 +799,7 @@ resource "azurerm_container_app" "job-monitor" {
     min_replicas = 1
 
     container {
-      name = "${local.base_name}-app-job-monitor"
+      name = "${local.base_name}-app-jmon"
 
       # great starter image to just get something running
       # https://github.com/crccheck/docker-hello-world/blob/master/Dockerfile
