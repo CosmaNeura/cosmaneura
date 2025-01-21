@@ -44,6 +44,7 @@ else:
 # def production_traceback_processor(logger, log_method, event_dict):
 
 PROCESSORS = [
+    structlog.stdlib.add_logger_name,
     structlog.contextvars.merge_contextvars,
     structlog.processors.add_log_level,
     EXC_PROCESSOR,
@@ -94,10 +95,11 @@ def redirect_stdlib_loggers():
 
     # Use ProcessorFormatter to format log records using structlog processors
     formatter = ProcessorFormatter(
-        processor=RENDERER,
+        processors=[RENDERER],
         foreign_pre_chain=[
-            structlog.stdlib.add_logger_name,
-            *PROCESSORS[:-1],  # Exclude the renderer from the pre-chain
+            # Exclude the renderer, the last element, from the pre-chain
+            # TODO(mbianco) unsure if this is actually required
+            *PROCESSORS[:-1],
         ],
     )
     handler.setFormatter(formatter)
