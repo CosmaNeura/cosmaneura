@@ -249,6 +249,13 @@ def get_redis_version(redis_url: str):
 
 	return redis_version
 
+# https://github.com/mher/flower/issues/1348
+def retry_task(task_id):
+    from app.celery import celery
+    meta = celery.backend.get_task_meta(task_id)
+    task = celery.tasks[meta['name']]
+    task.apply_async(args=meta['args'], kwargs=meta['kwargs'])
+
 # with Session(get_engine()) as session:
 # 	user = Doctor(clerk_id="hi")
 # 	llm_response = LLMResponse(

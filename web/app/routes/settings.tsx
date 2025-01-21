@@ -3,8 +3,7 @@ import { useForm } from "react-hook-form"
 import { MetaFunction } from "react-router"
 import { z } from "zod"
 
-import { Upload } from "lucide-react"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, Upload } from "lucide-react"
 import pluralize from "pluralize"
 
 import type { Route } from "./+types/settings"
@@ -191,7 +190,11 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
       <h3>Note Types</h3>
-      <p>Below are the notes you've uploaded.</p>
+      {noteSchemas.length > 1 ? (
+        <p>Below are the notes you've uploaded.</p>
+      ) : (
+        <p>Once you upload note types, they'll appear here.</p>
+      )}
       {noteSchemas.map((schema) => (
         <div key={schema.id} className="flex flex-col rounded-lg border p-4">
           <div
