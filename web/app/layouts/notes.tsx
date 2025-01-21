@@ -1,5 +1,4 @@
-import * as React from "react"
-import { Outlet, useOutletContext } from "react-router"
+import { Outlet } from "react-router"
 
 import { Route } from "./+types/notes"
 
@@ -10,24 +9,18 @@ import { SidebarProvider } from "@/components/ui/sidebar"
 import { getClient } from "~/configuration/clerk"
 import { Appointment, noteList } from "~/configuration/client"
 
-// import type { ShouldRevalidateFunctionArgs } from "react-router"
 import { standardDateTimeFormat } from "../lib/date"
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  const clerkClient = await getClient()
-  invariant(clerkClient, "clerk client should always exist or redirect")
-
-  const { data } = await noteList()
-
   // TODO need idiomatic error handling here
-  if (data === undefined) {
-    throw new Error("Failed to load data")
-  }
+  const { data } = await noteList()
+  invariant(data, "data failed to load")
 
   return data
 }
 
+// import type { ShouldRevalidateFunctionArgs } from "react-router"
 // TODO not operational! https://github.com/remix-run/react-router/issues/12740
 // https://discord.com/channels/770287896669978684/770287896669978687/1328764904894758954
 // export function shouldRevalidate(_arg: ShouldRevalidateFunctionArgs) {
@@ -44,12 +37,12 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
       // title: appointment.patient.name,
       title: appointment.patient_name,
       // location: appointment.location,
-      // subTitle: "type of appointment",
+      // TODO wire up type of appointment
+      // subTitle: appointment.appointment_name,
       date: standardDateTimeFormat(appointment.appointment_date),
       // status: appointment.status,
-      status: "none",
-      // preview: appointment,
-      // preview: "something",
+      status: appointment.appointment_name ? "completed" : "in-progress",
+      preview: appointment.appointment_name,
     }
   }
 
