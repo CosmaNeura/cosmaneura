@@ -14,22 +14,39 @@ import orjson
 import structlog
 import structlog.dev
 from decouple import config
+from structlog.processors import ExceptionRenderer
+from structlog.tracebacks import ExceptionDictTransformer
 
 from ..environments import is_production
 
 if is_production():
     RENDERER = structlog.processors.JSONRenderer(serializer=orjson.dumps)
+    # https://www.structlog.org/en/stable/exceptions.html
+    # customized version of dict_tracebacks, sentry will capture all of the details and we want to keep the logs simple
+    # references:
+    #   - https://github.com/apache/airflow/blob/4280b83977cd5a53c2b24143f3c9a6a63e298acc/task_sdk/src/airflow/sdk/log.py#L187
+    EXC_PROCESSOR = ExceptionRenderer(
+        ExceptionDictTransformer(
+            show_locals=False,
+            use_rich=False,
+            # number of frames is completely arbitrary
+            max_frames=5,
+            # TODO `suppress`
+        )
+    )
 else:
     RENDERER = structlog.dev.ConsoleRenderer(
         # supports NO_COLOR standard: https://no-color.org/
         colors=not config("NO_COLOR", cast=bool, default=False)
     )
+    EXC_PROCESSOR = structlog.processors.format_exc_info
 
+# def production_traceback_processor(logger, log_method, event_dict):
 
 PROCESSORS = [
     structlog.contextvars.merge_contextvars,
     structlog.processors.add_log_level,
-    structlog.processors.format_exc_info,
+    EXC_PROCESSOR,
     structlog.processors.TimeStamper(fmt="iso", utc=True),
     RENDERER,
 ]
