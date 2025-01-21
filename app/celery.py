@@ -3,24 +3,19 @@
 - Spawn is not natively supported and fork has been depreciated https://github.com/celery/celery/issues/6036#issuecomment-1151224775
 """
 
-from celery import Celery
-from celery.signals import (
-    setup_logging,
-    task_postrun,
-    task_prerun,
-    worker_init,
-    worker_process_init,
-    worker_process_shutdown,
-    worker_shutdown,
-)
+from celery import Celery, signals
 from kombu.utils.json import register_type
 from typeid import TypeID
 
 from app import log
 from app.configuration.redis import redis_url
+from app.configuration.sentry import configure_sentry
 
 
+# TODO extact to activemodel
 def register_typeid_encoder():
+    "this ensures TypeID objects passed as arguments to a delayed function are properly serialized"
+
     def class_full_name(clz) -> str:
         return ".".join([clz.__module__, clz.__qualname__])
 
@@ -48,7 +43,14 @@ celery = Celery(
 )
 
 
-@setup_logging.connect
+@signals.celeryd_init.connect
+def init_sentry(**_kwargs):
+    # according to sentry documentation, this must be done
+    # https://docs.sentry.io/platforms/python/integrations/celery/
+    configure_sentry()
+
+
+@signals.setup_logging.connect
 def receiver_setup_logging(
     loglevel, logfile, format, colorize, **kwargs
 ):  # pragma: no cover
@@ -56,14 +58,14 @@ def receiver_setup_logging(
     pass
 
 
-@worker_init.connect
+@signals.worker_init.connect
 def worker_init_import_jobs(sender, **kwargs):
     import app.jobs  # noqa: F401
     # ensures all job classes are available to celery and avoids circular imports
     # that would be caused by adding them as a top-level import
 
 
-@worker_process_init.connect
+@signals.worker_process_init.connect
 def worker_process_init_setup_logging(**kwargs):
     # TODO should add PID and worker ID to the log content, we want the `WARNING/ForkPoolWorker-8` ID in the logs
     # might need to grab this from? https://pypi.org/project/setproctitle/#history
@@ -71,19 +73,23 @@ def worker_process_init_setup_logging(**kwargs):
     pass
 
 
-@task_prerun.connect
+# tag all jobs with the job name (module path) and uuid for the task
+@signals.task_prerun.connect
 def on_task_prerun(sender, task_id, task, args, kwargs, **_kwargs):
     "https://github.com/hynek/structlog/issues/287#issuecomment-991182054"
     log.clear()
     log.local(task_id=task_id, task_name=task.name)
 
 
-@task_postrun.connect
+# TODO below should be cleaned up and is probably overkill
+
+
+@signals.task_postrun.connect
 def on_task_postrun(sender, task_id, task, args, kwargs, retval, state, **_kwargs):
     log.clear()
 
 
-@worker_shutdown.connect
+@signals.worker_shutdown.connect
 def capture_worker_stop(sender, **kwargs):
     log.clear()
 

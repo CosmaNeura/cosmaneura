@@ -27,9 +27,7 @@ def configure_sentry():
         environment=python_environment(),
         enable_tracing=True,
         traces_sample_rate=0.1,
-        integrations=[
-            # FlaskIntegration(),
-        ],
+        # integrations=[FlaskIntegration(),],
         before_send_transaction=filter_transactions,
         _experiments={
             # Set continuous_profiling_auto_start to True
