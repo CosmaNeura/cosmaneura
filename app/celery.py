@@ -75,6 +75,7 @@ def worker_init_import_jobs(sender, **kwargs):
 @signals.worker_process_init.connect
 def worker_process_init_setup_logging(**kwargs):
     # TODO should add PID and worker ID to the log content, we want the `WARNING/ForkPoolWorker-8` ID in the logs
+    #      https://github.com/celery/celery/discussions/9378
     # might need to grab this from? https://pypi.org/project/setproctitle/#history
     # log.local(celery_pid=sender.pid)
     pass
@@ -109,6 +110,10 @@ celery.conf.ONCE = {
     "backend": "celery_once.backends.Redis",
     "settings": {"url": redis_url(), "default_timeout": 60 * 60},
 }
+
+# TODO pulled from flower example, should we do this?
+# app.conf.accept_content = ["pickle", "json", "msgpack", "yaml"]
+# app.conf.worker_send_task_events = True
 
 # celery.conf.beat_schedule = {
 #     "example_normal": {
