@@ -7,6 +7,9 @@ AZURE_UPLOADS_CONTAINER_NAME = config("AZURE_UPLOADS_CONTAINER_NAME", cast=str)
 AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME = config(
     "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME", cast=str
 )
+AZURE_UPLOADS_EXAMPLE_INTAKE_CONTAINER_NAME = config(
+    "AZURE_UPLOADS_EXAMPLE_INTAKE_CONTAINER_NAME", cast=str
+)
 
 AZURE_DEID_TENANT_ID = config("AZURE_DEID_TENANT_ID", cast=str)
 AZURE_DEID_CLIENT_ID = config("AZURE_DEID_CLIENT_ID", cast=str)
@@ -15,4 +18,5 @@ AZURE_DEID_ENDPOINT = config("AZURE_DEID_ENDPOINT", cast=str)
 
 
 def configure_azure():
+    # TODO we should configure the logging, it's pretty noisy
     pass
