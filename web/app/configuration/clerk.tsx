@@ -1,5 +1,3 @@
-import { setToken } from "~/configuration/client"
-
 import { ClerkProvider } from "@clerk/clerk-react"
 import { loadClerkJsScript } from "@clerk/shared/loadClerkJsScript"
 import { invariant } from "@epic-web/invariant"
@@ -25,6 +23,7 @@ This whole situation isn't great. Here's what is happening:
 - This method is assumed to be called in a clientLoader.
 */
 
+// this will check to make sure the user is logged in and redirect them if they are not
 export async function getClient() {
   if (!window.Clerk) {
     // recommended officially here:
@@ -48,10 +47,13 @@ export async function getClient() {
     return
   }
 
-  // IMPORTANT: this sets the bearer token for all requests to the internal backend API
-  await setToken(clerk)
-
   return clerk
+}
+
+export async function getUserId() {
+  const client = await getClient()
+  invariant(client && client.user, "client should exist")
+  return client.user.id
 }
 
 export default function withClerkProvider(Component: React.ComponentType) {
