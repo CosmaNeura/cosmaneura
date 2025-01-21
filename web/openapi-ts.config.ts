@@ -34,5 +34,6 @@ export default defineConfig({
       identifierCase: "preserve",
       name: "@hey-api/typescript",
     },
+    "@tanstack/react-query",
   ],
 })
