@@ -751,15 +751,46 @@ resource "azurerm_container_app" "worker" {
   tags = var.tags
 }
 
-resource "azurerm_container_app" "job_monitor" {
+# create a new password and sync it to 1p for the job monitoring dashboard
+
+resource "onepassword_item" "job_monitor_login" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title    = "${local.environment} Job Monitor Flower Login"
+  category = "login"
+
+  # url = azurerm_container_app.job-monitor.ingress[0].fqdn
+  url = "cosmaneura-prod-app-job-monitor.lemonsmoke-1009414c.northcentralus.azurecontainerapps.io"
+
+  password_recipe {
+    length  = 30
+    symbols = false
+  }
+
+  tags = var.onepassword_tags
+}
+
+resource "azurerm_container_app" "job-monitor" {
   resource_group_name = azurerm_resource_group.main.name
   # NOTE location is determined automatically by the resource group
 
-  name                         = "${azurerm_resource_group.main.name}-job-monitor"
+  name                         = "${azurerm_resource_group.main.name}-app-job-monitor"
   container_app_environment_id = azurerm_container_app_environment.main.id
 
-  # required for blue/green deployments
+  # https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management
+  # > When in single revision mode, Container Apps handles the automatic switch between revisions to support zero downtime deployment.
   revision_mode = "Single"
+
+  ingress {
+    external_enabled = true
+    target_port      = 80
+
+    traffic_weight {
+      percentage = 100
+      # "If a traffic splitting rule is configured with latestRevision set to true, traffic doesn't switch to the latest revision until it's ready"
+      latest_revision = true
+    }
+  }
 
   template {
     # without this, if the container fails, it will not be restarted even if tf config is updated
@@ -768,13 +799,45 @@ resource "azurerm_container_app" "job_monitor" {
     container {
       name = "${local.base_name}-app-job-monitor"
 
+      # great starter image to just get something running
+      # https://github.com/crccheck/docker-hello-world/blob/master/Dockerfile
+      # image = "crccheck/hello-world:latest"
+
       # the amount of time I wasted realizing that private images must be fully qualified, but public images do not need to be is embarrassing
       # https://github.com/hashicorp/terraform-provider-azurerm/issues/22459
       image = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
 
+      # the docs state that these probes are automatically setup with the ingress port, so it's unclear why they need
+      # to be defined here. Additionally, the defaults used by terraform for these probes are not the same as the azure
+      # documentation.args =
+      readiness_probe {
+        port      = 80
+        transport = "TCP"
+      }
+
+      startup_probe {
+        port      = 80
+        transport = "TCP"
+      }
+
+      liveness_probe {
+        port      = 80
+        transport = "TCP"
+      }
+
       # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
 
       args = [data.external.procfile.result["job_monitor"]]
+
+      env {
+        name  = "FLOWER_PORT"
+        value = "80"
+      }
+
+      env {
+        name  = "FLOWER_PASSWORD"
+        value = onepassword_item.job_monitor_login.password
+      }
 
       dynamic "env" {
         for_each = var.python_public_vars
@@ -795,8 +858,8 @@ resource "azurerm_container_app" "job_monitor" {
       }
 
       # yes, memory is defined as a string and CPU is defined as a float
-      cpu    = 0.5
-      memory = "1Gi"
+      cpu    = 0.25
+      memory = "0.5Gi"
     }
   }
 
