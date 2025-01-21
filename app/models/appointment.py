@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import computed_field
 
-from activemodel import BaseModel
+from activemodel import BaseModel, SessionManager
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from app.models.doctor import Doctor
@@ -35,3 +35,18 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     @property
     def patient_name(self) -> str:
         return self.patient.name
+
+    # TODO not absolutely required right now since ALL appointments have audio files, until we integrate with accuity
+    # @computed_field
+    # @property
+    # def has_audio_upload(self) -> bool:
+    #     import sqlmodel as sm
+    #     from app.models.visit_audio_file import VisitAudioFile
+
+    #     with SessionManager.get_instance().get_session() as session:
+    #         # TODO this method is deprecated, but it wasn't clear what the replacement was?
+    #         return session.query(
+    #             sm.select(VisitAudioFile)
+    #             .where(VisitAudioFile.appointment_id == self.id)
+    #             .exists()
+    #         ).scalar()

@@ -77,6 +77,7 @@ def note_list(request: Request) -> NotetakingData:
     return NotetakingData(appointments=list(appointment_list))
 
 
+# TODO what about doctors who have an insane patient list?
 @internal_api_app.get("/patients")
 def patient_list(request: Request) -> list[Patient]:
     "allows users to select an existing patient name and DOB when uploading a note"
@@ -84,7 +85,12 @@ def patient_list(request: Request) -> list[Patient]:
     doctor: Doctor = request.state.doctor
 
     # TODO(mbianco) AM types should be fixed and the types should now display properly here...
-    patient_list = Patient.select().where(Patient.doctor_id == doctor.id).all()
+    patient_list = (
+        Patient.select()
+        .where(Patient.doctor_id == doctor.id)
+        .order_by(Patient.name.asc())
+        .all()
+    )
 
     return list(patient_list)
 
