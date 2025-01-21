@@ -49,7 +49,9 @@ export default function VisitNoteViewer({
           {Object.entries(note.note).map(([sectionTitle, noteContent]) => (
             <div className="mb-2" key={sectionTitle}>
               <h3 className="text-md font-semibold">{sectionTitle}</h3>
-              <Markdown>{noteContent as string}</Markdown>
+              <Markdown className="prose-headings prose max-w-full">
+                {noteContent as string}
+              </Markdown>
             </div>
           ))}
         </div>

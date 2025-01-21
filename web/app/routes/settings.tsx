@@ -31,6 +31,7 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
+import { Separator } from "~/components/ui/separator"
 import { getUserId } from "~/configuration/clerk"
 import {
   generateSignedExampleIntakeUploadUrl,
@@ -213,7 +214,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   }
 
   return (
-    <section className="prose prose-headings w-1/2 space-y-4">
+    <section className="prose-headings prose w-1/2 space-y-4">
       <h3>Note Types</h3>
       <p>Below are the notes you've uploaded.</p>
       {noteSchemas.map((schema) => (
@@ -393,10 +394,9 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
     </Form>
   )
 }
-export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
-  const { data } = await settingsData()
-
+export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
   // TODO need idiomatic error handling here
+  const { data } = await settingsData()
   invariant(data, "data should exist")
 
   return data
@@ -414,20 +414,21 @@ export const meta: MetaFunction = () => {
 
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   return (
-    <>
-      <SidebarProvider>
-        <AppSidebar isLoading={false} entries={false} />
+    <SidebarProvider
+      style={{ "--sidebar-width": "3em" } as React.CSSProperties}
+    >
+      <AppSidebar isLoading={false} entries={false} />
 
-        <SidebarInset>
-          <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
-            <h1 className="text-lg font-semibold">Settings</h1>
-          </header>
-          <div className="flex flex-col gap-8 p-6">
-            {/* <IntakeUpload /> */}
-            <NoteUpload noteSchemas={loaderData.notes_schema} />
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
-    </>
+      <SidebarInset>
+        <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
+          <h1 className="text-lg font-semibold">Settings</h1>
+        </header>
+        <div className="flex flex-col gap-8 p-6">
+          <NoteUpload noteSchemas={loaderData.notes_schema} />
+          <Separator />
+          <IntakeUpload />
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }

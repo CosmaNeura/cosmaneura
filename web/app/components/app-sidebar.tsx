@@ -6,6 +6,7 @@ import { Command, File, Inbox, Settings } from "lucide-react"
 import { Label } from "@/components/ui/label"
 import {
   Sidebar,
+  SIDEBAR_WIDTH_MOBILE,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
@@ -20,12 +21,12 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { Status } from "~/components/status-badge"
-import { Appointment } from "~/configuration/client"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { StatusBadge } from "./status-badge"
 import { UserButton } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
+import * as React from "react"
 
 // logo icon at the top
 const IconSidebarHeader = () => (
@@ -50,11 +51,11 @@ const IconSidebarHeader = () => (
 
 // TODO should use typed routes here
 const NAVIGATION_ITEMS = [
-  {
-    title: "Intake",
-    icon: Inbox,
-    url: "/intake",
-  },
+  // {
+  //   title: "Intake",
+  //   icon: Inbox,
+  //   url: "/intake",
+  // },
   {
     title: "Notetaking",
     icon: File,
@@ -108,14 +109,15 @@ export interface SidebarEntry {
   preview: string
 }
 
-// TODO add empty state
+// not rendered unless entries has contents
 function SelectionList({
   isLoading,
   entries,
 }: {
   isLoading: boolean
   entries: SidebarEntry[]
-}) {
+  }) {
+  // TODO loading state is not used here, consider
   const navigate = useNavigate()
 
   const location = useLocation()
@@ -142,13 +144,13 @@ function SelectionList({
               <span className="text-xs text-slate-500">{entry.date}</span>
             </div>
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-xs text-slate-500">{entry.location}</span>
+              <span className="text-xs text-slate-500">{entry.preview}</span>
               {entry.status !== "none" && <StatusBadge status={entry.status} />}
             </div>
-            <span className="font-medium">{entry.subTitle}</span>
+            {/* <span className="font-medium">{entry.subTitle}</span>
             <span className="line-clamp-2 w-[260px] whitespace-break-spaces text-left text-xs text-slate-500">
               {entry.preview}
-            </span>
+            </span> */}
           </button>
         ))
       )}
@@ -262,12 +264,6 @@ export function AppSidebar({
   header?: string
 }) {
   const showSidebar = entries !== false
-
-  // not the best page transition...
-  if (!showSidebar) {
-    const { setOpen } = useSidebar()
-    setOpen(false)
-  }
 
   return (
     <Sidebar

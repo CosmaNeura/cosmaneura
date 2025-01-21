@@ -18,9 +18,6 @@ import { standardDateTimeFormat } from "~/lib/date"
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
-  const clerkClient = await getClient()
-  invariant(clerkClient, "clerk client should always exist or redirect")
-
   const { data } = await noteDetail({
     path: {
       appointment_id: loaderArgs.params.id,
