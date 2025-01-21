@@ -1,4 +1,3 @@
-import { props } from "ramda"
 import { ChangeEventHandler, useState } from "react"
 import { ControllerRenderProps, FieldValues, useForm } from "react-hook-form"
 import { z } from "zod"
@@ -10,7 +9,6 @@ import { Calendar } from "@/components/ui/calendar"
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -37,15 +35,7 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
-import {
-  ComboBox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxItemBase,
-} from "~/components/vendor/Combobox"
-import { getClient, getUserId } from "~/configuration/clerk"
+import { ComboboxItemBase } from "~/components/vendor/Combobox"
 import {
   Patient,
   client,
@@ -53,26 +43,24 @@ import {
   uploadVisitAudioFile,
 } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
-import { standardDateFormat, standardDateFormat } from "~/lib/date"
+import { uploadFileToAzure } from "~/lib/azure-upload"
+import { standardDateFormat } from "~/lib/date"
 import { cn } from "~/lib/utils"
 
 import { SimpleComboBox } from "../shared/SimpleComboBox"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
-import { QueryClientProvider, useQuery } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { patientListOptions } from "client/@tanstack/react-query.gen"
 
 function PatientComboboxSearch({
-  // onSelectedItemChange,
+  // required for updating the DOB when a patient item is selected
   form,
   onChange,
   value,
   ...props
 }: {
   form: ReturnType<typeof useForm>
-  // onSelectedItemChange: React.ComponentProps<
-  //   typeof ComboBox
-  // >["onSelectedItemChange"]
   onChange: ControllerRenderProps<FieldValues, string>["onChange"]
   value: ControllerRenderProps<FieldValues, string>["value"]
 }) {
@@ -84,7 +72,9 @@ function PatientComboboxSearch({
 
   // TODO I need to better document this entire mess and upstream some of the combobox improvements
 
-  function transformPatientForComboBox(patient: Patient): ComboboxItemBase {
+  function transformPatientForComboBox(
+    patient: Patient,
+  ): ComboboxItemBase & Patient {
     return {
       ...patient,
       value: patient.id,
@@ -92,19 +82,10 @@ function PatientComboboxSearch({
     }
   }
 
-  // function handleChange(selected_patient_id: string) {
-  //   if (selected_patient_id === "new_item") {
-  //     onChange(patient.name)
-  //   }
-  //   const patient = data.find((patient) => patient.id === selected_patient_id)
-
-  //   // update the patient name field with the name of the patient, not the ID
-  //   onChange(patient.name)
-
-  //   form.setValue("date_of_birth", new Date(patient.date_of_birth))
-  // }
-
+  // TODO need to fix the typing in the underlying simple combox wrapper
   function onSelectedItemChange(item: ComboboxItemBase | null) {
+    // `new_item` is a special key to used to indicate that a value was typed in, and it wasn't selected from the list
+    // when this occurs, we want to set the field value to the inputted text (label)
     if (item.value == "new_item") {
       onChange(item.label)
     } else {
@@ -145,7 +126,11 @@ function PatientComboboxSearch({
   )
 }
 
-function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
+function VisitAudioUploadForm({
+  closeDialogBox,
+}: {
+  closeDialogBox: () => void
+}) {
   const { toast } = useToast()
 
   const formSchema = z.object({
@@ -164,30 +149,17 @@ function TestFileForm({ closeDialogBox }: { closeDialogBox: () => void }) {
     resolver: zodResolver(formSchema),
   })
 
-  // function onSubmit(values: z.infer<typeof formSchema>) {
-
-  // this took an embarrasing amount of time to figure out
+  // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
     const { data: sasSignature } = await generateSignedVisitRecordingUploadUrl()
     invariant(sasSignature, "sasSignature should always exist")
 
     invariant(file, "file should be set at this stage ")
 
-    const unixTimestamp = Date.now()
-    const userId = await getUserId()
-    const stampedFileName = [userId, unixTimestamp, file.name].join("_")
-    const url = new URL(sasSignature)
-    url.pathname = `${url.pathname}/${stampedFileName}`
-    const finalUrl = url.toString()
-
-    const _azureUploadResponse = await fetch(finalUrl, {
-      method: "PUT",
-      headers: {
-        "x-ms-blob-type": "BlockBlob",
-        "Content-Type": file.type,
-      },
-      body: file,
-    })
+    const { error, stampedFileName } = await uploadFileToAzure(
+      file,
+      sasSignature,
+    )
 
     const _internalResponse = await uploadVisitAudioFile({
       // TODO what is the best pattern for passing dates over the wire?
@@ -365,11 +337,11 @@ export function UploadRecordingButton() {
             <DialogHeader>
               <DialogTitle>Upload Recording</DialogTitle>
             </DialogHeader>
-            <TestFileForm closeDialogBox={() => setOpen(false)} />
+            <VisitAudioUploadForm closeDialogBox={() => setOpen(false)} />
           </DialogContent>
         </Dialog>
         <TooltipContent>
-          Upload an audio recording of the patient visit
+          Upload an audio recording of a patient visit
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

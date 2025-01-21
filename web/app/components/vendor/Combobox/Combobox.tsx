@@ -18,6 +18,7 @@ const defaultFilter = (inputValue: string, items: ComboboxItemBase[]) =>
 export type ComboboxProps = PropsWithChildren<{
   value?: string | null
   onValueChange?: (value: string | null) => void
+  onSelectedItemChange?: (item: ComboboxItemBase | null) => void
   filterItems?: (
     inputValue: string,
     items: ComboboxItemBase[],
@@ -27,6 +28,7 @@ export type ComboboxProps = PropsWithChildren<{
 export const ComboBox = ({
   value,
   onValueChange,
+  onSelectedItemChange,
   filterItems = defaultFilter,
   children,
 }: ComboboxProps) => {
@@ -64,14 +66,33 @@ export const ComboBox = ({
         case stateChangeTypes.InputClick:
         case stateChangeTypes.InputKeyDownEnter:
         case stateChangeTypes.InputKeyDownEscape: {
-          if (changes.isOpen || !prev.isOpen)
+          // occurs when a item is selected
+          if (changes.isOpen || !prev.isOpen) {
             return {
               ...changes,
               inputValue: prev.inputValue,
               selectedItem: prev.selectedItem,
             }
-          if (!prev.inputValue && prev.highlightedIndex < 0)
+          }
+
+          // occurs if nothing is selected and no input exists
+          if (!prev.inputValue && prev.highlightedIndex < 0) {
             return { ...changes, inputValue: "", selectedItem: null }
+          }
+
+          // no item is selected, but there is an input value, let's assume a new item
+          if (prev.inputValue) {
+            return {
+              ...changes,
+              inputValue: prev.inputValue,
+              selectedItem: {
+                label: prev.inputValue,
+                // this new_item value is arbitrary and must be properly handled
+                // by the user's `onSelectedItemChange` handler, otherwise new_item will be the value set in the form element
+                value: "new_item",
+              },
+            }
+          }
 
           const inputValue =
             changes.selectedItem?.label || prev.selectedItem?.label || ""
@@ -104,8 +125,10 @@ export const ComboBox = ({
       typeof value !== "undefined"
         ? items.find((item) => item.value === value) || null
         : undefined,
-    onSelectedItemChange: ({ selectedItem }) =>
-      onValueChange?.(selectedItem?.value || null),
+    onSelectedItemChange: ({ selectedItem }) => {
+      onSelectedItemChange?.(selectedItem)
+      return onValueChange?.(selectedItem?.value || null)
+    },
 
     stateReducer,
   })
