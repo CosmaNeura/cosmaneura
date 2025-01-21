@@ -1,5 +1,3 @@
-import { Component } from "react"
-
 import { isDevelopment } from "~/utils/environment"
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
@@ -13,7 +11,12 @@ export default function withTanstackQueryProvider(
   return (props: React.ComponentProps<typeof Component>) => (
     <QueryClientProvider client={queryClient}>
       <Component {...props} />
-      {isDevelopment() && <ReactQueryDevtools initialIsOpen={false} />}
+      {isDevelopment() && (
+        <ReactQueryDevtools
+          buttonPosition={"top-right"}
+          initialIsOpen={false}
+        />
+      )}
     </QueryClientProvider>
   )
 }

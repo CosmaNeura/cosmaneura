@@ -1,11 +1,10 @@
 import { reactRouterDevTools } from "react-router-devtools"
-import { Connect, PluginOption, defineConfig } from "vite"
+import { defineConfig } from "vite"
 import { loadEnv } from "vite"
 import Inspect from "vite-plugin-inspect"
 import Terminal from "vite-plugin-terminal"
 import tsconfigPaths from "vite-tsconfig-paths"
 
-import { viteRuntimeErrorOverlayPlugin } from "./vite-plugins/error"
 import { reactRouter } from "@react-router/dev/vite"
 import { sentryVitePlugin } from "@sentry/vite-plugin"
 
@@ -41,75 +40,6 @@ function requireEnvCheckerPlugin(mode: string) {
       }
     },
   }
-}
-
-const HTML_PLUGIN_TEST = {
-  name: "html-plugin-test",
-
-  transformIndexHtml(html) {
-    return {
-      tag: "script",
-      children: "alert('hello world')",
-    }
-  },
-}
-
-const htmlTransformPlugin: PluginOption = {
-  name: "vite-html-transform-test",
-  enforce: "post",
-
-  generateBundle(options, bundle) {
-    console.log("bundle", bundle)
-    console.log("options", options)
-  },
-
-  buildEnd() {
-    console.log("build end")
-  },
-
-  configureServer(server) {
-    server.middlewares.use(
-      (
-        req: Connect.IncomingMessage,
-        res: Connect.ServerResponse,
-        next: Connect.NextFunction,
-      ) => {
-        // Only process HTML requests
-        // const isIndexHtmlRequest = req.url === ""
-        // console.log("isHtmlRequest", req.url)
-
-        // if (!isIndexHtmlRequest) {
-        //   return next()
-        // }
-
-        // Check content type on response
-        const originalWrite = res.write
-        const originalEnd = res.end
-
-        res.end = function (chunk: any) {
-          const contentType = res.getHeader("content-type")
-
-          if (!contentType?.toString().includes("html")) {
-            return originalEnd.call(res, chunk)
-          }
-
-          // Transform HTML content
-          const html = chunk?.toString() || ""
-          console.log("html", html)
-          const transformedHtml = html.replace(
-            "</head>",
-            `<meta name="transformed" content="true"></head>`,
-          )
-
-          console.log("transformedHtml", transformedHtml)
-
-          return originalEnd.call(res, transformedHtml)
-        }
-
-        next()
-      },
-    )
-  },
 }
 
 function getModePlugins(mode: string) {
@@ -165,26 +95,13 @@ function getModePlugins(mode: string) {
     ]
   }
 
-  return [
-    Inspect(),
-    Terminal({ console: "terminal" }),
-    // reactRouterDevTools(),
-    // viteRuntimeErrorOverlayPlugin(),
-  ]
-}
-
-function getBuildConfig(_mode: string) {
-  return {
-    // TODO maybe use envDir to point to a fake directory
-    // base url where JS assets are served out of
-    // base: mode === "development" ? "/" : "/assets/",
-  }
+  // TODO most of these plugins do not work properly! https://github.com/remix-run/react-router/issues/12736#event-15990602218
+  return [Inspect(), Terminal({ console: "terminal" }), reactRouterDevTools()]
 }
 
 // test configuration is done via vitest.config.ts, this is only for the build system
 export default defineConfig(({ mode }) => ({
   // TODO need to disable .env file loading https://discord.com/channels/804011606160703521/1307442221288656906
-  ...getBuildConfig(mode),
   // build.outDir is ignored and buildDirectory in react-router.config.ts is used instead
   server: {
     // by default, vite will only listen on ipv6 loopback!
