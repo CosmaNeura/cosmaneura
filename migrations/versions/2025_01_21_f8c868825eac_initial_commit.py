@@ -1,8 +1,8 @@
 """initial_commit
 
-Revision ID: 10c65915c2e8
+Revision ID: f8c868825eac
 Revises: 
-Create Date: 2024-12-20 12:21:49.881683
+Create Date: 2025-01-21 11:09:12.796174
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '10c65915c2e8'
+revision: str = 'f8c868825eac'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -41,7 +41,29 @@ def upgrade() -> None:
     sa.Column('prompt_hash', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
+    op.create_table('doctor_intake_file',
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='doctor_intake_file'), nullable=False),
+    sa.Column('doctor_id', activemodel.types.typeid.TypeIDType(prefix='doctor'), nullable=False),
+    sa.Column('azure_file_name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    comment='When onboarding, doctors will upload PDFs of their intakes.\n\nThis model stores references to the uploaded PDFs in Azure.'
+    )
+    op.create_table('doctor_note_file',
+    sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
+    sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='doctor_note_file'), nullable=False),
+    sa.Column('doctor_id', activemodel.types.typeid.TypeIDType(prefix='doctor'), nullable=False),
+    sa.Column('note_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.Column('azure_file_name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
+    sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    comment='When onboarding, doctors will upload PDFs of their best notes.\nThis model stores references to the uploaded PDFs in Azure.'
+    )
     op.create_table('doctor_note_schema',
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='doctor_note_schema'), nullable=False),
@@ -49,7 +71,8 @@ def upgrade() -> None:
     sa.Column('note_type', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('fields', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    comment='A description of the fields required for a specific note type and instructions on what information goes in each field'
     )
     op.create_table('patient',
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='patient'), nullable=False),
@@ -59,7 +82,8 @@ def upgrade() -> None:
     sa.Column('name', sqlmodel.sql.sqltypes.AutoString(), nullable=False),
     sa.Column('date_of_birth', sa.DateTime(), nullable=False),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    comment='Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader.'
     )
     op.create_table('appointment',
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='appointment'), nullable=False),
@@ -68,11 +92,15 @@ def upgrade() -> None:
     sa.Column('doctor_id', activemodel.types.typeid.TypeIDType(prefix='doctor'), nullable=False),
     sa.Column('patient_id', activemodel.types.typeid.TypeIDType(prefix='patient'), nullable=False),
     sa.Column('appointment_date', sa.DateTime(), nullable=False),
+    sa.Column('appointment_name', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    sa.Column('appointment_notes_preview', sqlmodel.sql.sqltypes.AutoString(), nullable=True),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
     sa.ForeignKeyConstraint(['patient_id'], ['patient.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    comment='Represents an appointment with a patient from accuity'
     )
     op.create_table('doctor_note_example',
+    sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='doctor_note_example'), nullable=False),
@@ -81,7 +109,8 @@ def upgrade() -> None:
     sa.Column('field_examples', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
     sa.ForeignKeyConstraint(['doctor_note_schema_id'], ['doctor_note_schema.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    comment="When onboarding, doctors will upload PDFs of their best notes. The fields in this model will be extracted from the PDF.\n\nOpenAI is used to extract text content from uploaded PDFs, therefore we don't have the raw text content from the PDF\nwhich is why it's not included here."
     )
     op.create_table('ai_visit_transcript',
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
@@ -96,7 +125,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], ),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
     sa.ForeignKeyConstraint(['patient_id'], ['patient.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    comment='Contents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted.'
     )
     op.create_table('visit_audio_file',
     sa.Column('id', activemodel.types.typeid.TypeIDType(prefix='visit_audio_file'), nullable=False),
@@ -109,7 +139,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], ),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
     sa.ForeignKeyConstraint(['patient_id'], ['patient.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    comment='Link to the blob for a specific visit audio file\n\n1. User drops file into upload area\n2. User hits upload which hits the backend API which generates a signed upload URL\n3. User uploads file to signed upload URL, does not hit the backend API for upload'
     )
     op.create_table('ai_visit_note',
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
@@ -124,7 +155,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], ),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], ),
     sa.ForeignKeyConstraint(['doctor_note_schema_id'], ['doctor_note_schema.id'], ),
-    sa.PrimaryKeyConstraint('id')
+    sa.PrimaryKeyConstraint('id'),
+    comment='This represents the note summary for a single specific note schema. A given appointment will have multiple\nAI visit notes.\n\nContents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted.'
     )
     # ### end Alembic commands ###
 
@@ -138,6 +170,8 @@ def downgrade() -> None:
     op.drop_table('appointment')
     op.drop_table('patient')
     op.drop_table('doctor_note_schema')
+    op.drop_table('doctor_note_file')
+    op.drop_table('doctor_intake_file')
     op.drop_table('llm_response')
     op.drop_table('doctor')
     # ### end Alembic commands ###
