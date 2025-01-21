@@ -7,8 +7,7 @@ from pathlib import Path
 
 import structlog
 
-from app.configuration.assemblyai import configure_assemblyai
-
+from .configuration.assemblyai import configure_assemblyai
 from .configuration.azure import configure_azure
 from .configuration.database import configure_database
 from .configuration.debugging import configure_debugging

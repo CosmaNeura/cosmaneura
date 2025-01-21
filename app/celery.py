@@ -1,0 +1,137 @@
+"""
+
+- Spawn is not natively supported and fork has been depreciated https://github.com/celery/celery/issues/6036#issuecomment-1151224775
+"""
+
+import logging
+from datetime import timedelta
+
+from celery import Celery
+from celery.schedules import crontab
+from celery.signals import (
+    setup_logging,
+    task_postrun,
+    task_prerun,
+    worker_init,
+    worker_process_init,
+    worker_process_shutdown,
+    worker_shutdown,
+)
+from kombu.utils.json import register_type
+from typeid import TypeID
+
+from app import log
+from app.configuration.redis import redis_url
+
+
+def register_typeid_encoder():
+    def class_full_name(clz) -> str:
+        return ".".join([clz.__module__, clz.__qualname__])
+
+    def _encoder(obj: TypeID) -> str:
+        return str(obj)
+
+    def _decoder(data: str) -> TypeID:
+        return TypeID.from_string(data)
+
+    register_type(
+        TypeID,
+        class_full_name(TypeID),
+        encoder=_encoder,
+        decoder=_decoder,
+    )
+
+
+register_typeid_encoder()
+
+
+celery = Celery(
+    "tasks",
+    broker=redis_url(),
+    result_backend=redis_url(),
+)
+
+
+@setup_logging.connect
+def receiver_setup_logging(
+    loglevel, logfile, format, colorize, **kwargs
+):  # pragma: no cover
+    # this ensures celery does not override our application's logging configuration
+    pass
+
+
+@worker_init.connect
+def worker_init_import_jobs(sender, **kwargs):
+    import app.jobs  # noqa: F401
+    # ensures all job classes are available to celery and avoids circular imports
+    # that would be caused by adding them as a top-level import
+
+
+@worker_process_init.connect
+def worker_process_init_setup_logging(**kwargs):
+    # TODO should add PID and worker ID to the log content, we want the `WARNING/ForkPoolWorker-8` ID in the logs
+    # might need to grab this from? https://pypi.org/project/setproctitle/#history
+    # log.local(celery_pid=sender.pid)
+    pass
+
+
+@task_prerun.connect
+def on_task_prerun(sender, task_id, task, args, kwargs, **_kwargs):
+    "https://github.com/hynek/structlog/issues/287#issuecomment-991182054"
+    log.clear()
+    log.local(task_id=task_id, task_name=task.name)
+
+
+@task_postrun.connect
+def on_task_postrun(sender, task_id, task, args, kwargs, retval, state, **_kwargs):
+    log.clear()
+
+
+@worker_shutdown.connect
+def capture_worker_stop(sender, **kwargs):
+    log.clear()
+
+
+# celery.conf.app_name = "tasks"
+# celery.conf.log_level = "INFO"
+
+# https://stackoverflow.com/questions/26831103/avoiding-duplicate-tasks-in-celery-broker
+celery.conf.ONCE = {
+    "backend": "celery_once.backends.Redis",
+    "settings": {"url": redis_url(), "default_timeout": 60 * 60},
+}
+
+# celery.conf.beat_schedule = {
+#     "example_normal": {
+#         "task": "app.jobs.example_normal",
+#         # can run sub-minute schedules
+#         "schedule": timedelta(seconds=2),
+#     },
+#     "example_exactly_once": {
+#         "task": "app.jobs.example_exactly_once",
+#         "schedule": crontab(minute="*/60"),
+#     },
+#     "example_async": {
+#         "task": "app.jobs.example_async",
+#         "schedule": crontab(minute="*/5"),
+#     },
+# }
+
+# define a hard timeout to limit infinitely running processes
+celery.conf.task_time_limit = 60 * 35
+
+
+# from app.configuration.database import clear_engine
+# @task_prerun.connect
+# def on_task_init(*args, **kwargs):
+#     """
+#     Without this, the database connection becomes corrupted and causes SSL-related failures:
+
+#     https://github.com/celery/celery/issues/1564
+#     https://github.com/celery/celery/issues/3238
+#     https://stackoverflow.com/questions/45215596/flask-and-celery-on-heroku-sqlalchemy-exc-databaseerror-psycopg2-databaseerro
+#     """
+
+#     log.info("task init, clearing database engine")
+
+#     clear_engine()
