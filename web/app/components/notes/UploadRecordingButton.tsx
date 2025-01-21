@@ -53,7 +53,7 @@ import {
   uploadVisitAudioFile,
 } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
-import { standardDateFormat } from "~/lib/date"
+import { standardDateFormat, standardDateFormat } from "~/lib/date"
 import { cn } from "~/lib/utils"
 
 import { SimpleComboBox } from "../shared/SimpleComboBox"
@@ -82,29 +82,33 @@ function PatientComboboxSearch({
     return <div>Loading...</div>
   }
 
+  // TODO I need to better document this entire mess and upstream some of the combobox improvements
+
   function transformPatientForComboBox(patient: Patient): ComboboxItemBase {
     return {
+      ...patient,
       value: patient.id,
       label: patient.name,
     }
   }
 
-  function handleChange(selected_patient_id: string) {
-    if (selected_patient_id === "new_item") {
-      onChange(patient.name)
-    }
-    const patient = data.find((patient) => patient.id === selected_patient_id)
+  // function handleChange(selected_patient_id: string) {
+  //   if (selected_patient_id === "new_item") {
+  //     onChange(patient.name)
+  //   }
+  //   const patient = data.find((patient) => patient.id === selected_patient_id)
 
-    // update the patient name field with the name of the patient, not the ID
-    onChange(patient.name)
+  //   // update the patient name field with the name of the patient, not the ID
+  //   onChange(patient.name)
 
-    form.setValue("date_of_birth", new Date(patient.date_of_birth))
-  }
+  //   form.setValue("date_of_birth", new Date(patient.date_of_birth))
+  // }
 
   function onSelectedItemChange(item: ComboboxItemBase | null) {
     if (item.value == "new_item") {
       onChange(item.label)
     } else {
+      const selected_patient_id = item.value
       const patient = data.find((patient) => patient.id === selected_patient_id)
 
       // update the patient name field with the name of the patient, not the ID
@@ -120,19 +124,22 @@ function PatientComboboxSearch({
       onSelectedItemChange={onSelectedItemChange}
       value={value}
       items={data.map(transformPatientForComboBox)}
+      // TODO get DOB added to the item rendering
       // TODO(mbianco) renderItem only gets the value + label of the field, we should really pass
       //               a full object so we can do more advanced rendering...
-      // renderItem={(item) => (
-      //   <>
-      //     <span className="text-sm text-foreground">{name}</span>
-      //     <span className="text-xs text-muted-foreground">{item.dob}</span>
-      //     {value === id && (
-      //       <span className="absolute start-2 top-0 flex h-full items-center justify-center">
-      //         <CheckIcon className="size-4" />
-      //       </span>
-      //     )}
-      //   </>
-      // )}
+      renderItem={(item) => (
+        <>
+          <span className="text-sm text-foreground">{item.label}</span>
+          <span className="text-xs text-muted-foreground">
+            {standardDateFormat(item.date_of_birth)}
+          </span>
+          {item.isSelected && (
+            <span className="absolute start-2 top-0 flex h-full items-center justify-center">
+              <CheckIcon className="size-4" />
+            </span>
+          )}
+        </>
+      )}
       {...props}
     />
   )
