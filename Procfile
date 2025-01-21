@@ -3,5 +3,6 @@
 # scattering and duplicating process definitions throughout your codebase.
 
 api: fastapi run --port ${PORT}
-worker: rq worker --with-scheduler -w rq.worker.SpawnWorker
+worker: celery -A app.celery worker
+scheduler: celery -A app.celery beat
 console: bash -l

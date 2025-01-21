@@ -20,13 +20,13 @@ from pdf2image import convert_from_path
 from typeid import TypeID
 
 from app import log
+from app.celery import celery
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
 from app.configuration.openai import openai
-from app.rq import RQ_RETRY, q
 
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
@@ -35,12 +35,6 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from .anonymize import deidentify
 
 OPENAI_MODEL = "gpt-4o"
-
-
-# TODO there may be some fancy arg parsing we can do here? https://stackoverflow.com/questions/73856901/how-can-i-use-paramspec-with-method-decorators
-def queue(*args, **kwargs):
-    "always use this method to queue jobs so it's easy to swap out the job system"
-    q.enqueue(perform, *args, **kwargs | {"retry": RQ_RETRY})
 
 
 def perform(doctor_note_file_id: str | TypeID):
@@ -85,6 +79,15 @@ def perform(doctor_note_file_id: str | TypeID):
     )
 
     log.debug("extracted note content", note_example_id=example.id, content=content)
+
+
+perform_celery = celery.task(perform)
+
+
+# TODO there may be some fancy arg parsing we can do here? https://stackoverflow.com/questions/73856901/how-can-i-use-paramspec-with-method-decorators
+def queue(*args, **kwargs):
+    "always use this method to queue jobs so it's easy to swap out the job system"
+    perform_celery.delay(*args, **kwargs)
 
 
 # Convert images to base64 in a data URI format so they can be sent via API.

@@ -9,13 +9,13 @@ from pydub import AudioSegment
 
 import app.jobs.summarize
 from app import log
+from app.celery import celery
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_CONTAINER_NAME,
 )
 from app.configuration.openai import openai
-from app.rq import RQ_RETRY, q
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -28,12 +28,6 @@ class TranscriptionResult:
     def __init__(self, transcript: list[TranscriptEntry], duration: int):
         self.transcript = transcript
         self.duration = duration
-
-
-# TODO we lose the typing with this approach... is there a better way?
-def queue(*args, **kwargs):
-    log.info("queuing transcription", args=args, kwargs=kwargs)
-    q.enqueue(perform, *args, **kwargs | {"retry": RQ_RETRY})
 
 
 def perform(visit_audio_file_id: str):
@@ -58,6 +52,15 @@ def perform(visit_audio_file_id: str):
     )
 
     queue_schema_transcription(transcript)
+
+
+perform_celery = celery.task(perform)
+
+
+# TODO we lose the typing with this approach... is there a better way?
+def queue(*args, **kwargs):
+    log.info("queuing transcription", args=args, kwargs=kwargs)
+    perform_celery.delay(*args, **kwargs)
 
 
 def queue_schema_transcription(transcript: AIVisitTranscript):

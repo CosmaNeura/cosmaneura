@@ -3,8 +3,8 @@ import math
 from textwrap import dedent
 
 from app import log
+from app.celery import celery
 from app.configuration.openai import openai
-from app.rq import RQ_RETRY, q
 
 import sqlmodel as sm
 from app.models.ai_visit_note import AIVisitNote
@@ -14,11 +14,6 @@ from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
 
 OPENAI_MODEL = "gpt-4o"
-
-
-def queue(*args, **kwargs):
-    log.info("queuing summarization job")
-    q.enqueue(perform, *args, **kwargs | {"retry": RQ_RETRY})
 
 
 def perform(transcript_id: str, schema_id: str):
@@ -72,6 +67,14 @@ def perform(transcript_id: str, schema_id: str):
         doctor_note_schema_id=schema.id,
         note=note,
     )
+
+
+perform_celery = celery.task(perform)
+
+
+def queue(*args, **kwargs):
+    log.info("queuing summarization job", args=args, kwargs=kwargs)
+    perform_celery.delay(*args, **kwargs)
 
 
 # Build a structured prompt for creating a clinical note based on a transcript.

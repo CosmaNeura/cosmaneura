@@ -1,3 +1,10 @@
+"""
+RQ isn't working for us:
+https://github.com/rq/rq/issues/2058
+
+Also, the fastapi dashboard is pretty crappy, so we are going to try celery.
+"""
+
 from rq import Queue, Retry, Worker
 
 from app.configuration.redis import get_redis
