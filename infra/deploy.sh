@@ -4,7 +4,7 @@ GIT_SHA="$1"
 
 # Define variables
 RESOURCE_GROUP="cosmaneura-prod"
-CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-app-job-monitor"
+CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-app-jmon"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo

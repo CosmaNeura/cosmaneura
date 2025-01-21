@@ -4,6 +4,7 @@
 """
 
 from celery import Celery, signals
+from celery.app.task import Task
 from kombu.utils.json import register_type
 from typeid import TypeID
 
@@ -36,10 +37,16 @@ def register_typeid_encoder():
 register_typeid_encoder()
 
 
+class BaseTaskWithRetry(Task):
+    autoretry_for = (Exception,)
+    max_retries = 10
+    retry_backoff = True
+    retry_backoff_max = 700
+    retry_jitter = True
+
+
 celery = Celery(
-    "tasks",
-    broker=redis_url(),
-    result_backend=redis_url(),
+    "tasks", broker=redis_url(), result_backend=redis_url(), task_cls=BaseTaskWithRetry
 )
 
 
