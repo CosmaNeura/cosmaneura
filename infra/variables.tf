@@ -21,9 +21,12 @@ variable "onepassword_tags" {
 variable "python_secret_vars" {
   description = "ENV vars which need to remain secret"
   type        = set(string)
-  default = ["DATABASE_URL", "REDIS_URL", "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "SMTP_URL",
+  default = [
+    "DATABASE_URL", "REDIS_URL",
+    "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
+    # azure upload
     "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL",
-    # De-identification secrets
+    # azure de-identification secrets
     "AZURE_DEID_TENANT_ID", "AZURE_DEID_CLIENT_ID", "AZURE_DEID_CLIENT_SECRET", "AZURE_DEID_ENDPOINT"
   ]
 }
