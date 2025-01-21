@@ -8,15 +8,21 @@ def configure_sentry():
     if not is_production():
         return
 
-    # TODO does this still need happen?
-    # TODO https://github.com/getsentry/sentry-docs/pull/6364/files
     def filter_transactions(event, _hint):
-        from urllib.parse import urlparse  # pylint: disable=import-outside-toplevel
+        """
+        Filter out noisy urls that don't add any value to profiling
+
+        - https://docs.sentry.io/platforms/python/configuration/filtering/
+        - https://github.com/getsentry/sentry-docs/pull/6364/files
+        """
+        from urllib.parse import urlparse
+
+        IGNORED_PATHS = ["/healthcheck", "/", "{path:path}"]
 
         url_string = event["request"]["url"]
         parsed_url = urlparse(url_string)
 
-        if parsed_url.path == "/healthcheck":
+        if parsed_url.path in IGNORED_PATHS or parsed_url.path.startswith("/assets/"):
             return None
 
         return event
