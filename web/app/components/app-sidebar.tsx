@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useLocation, useNavigate } from "react-router"
+import { $path } from "safe-routes"
 
 import { Command, File, Inbox, Settings } from "lucide-react"
 
@@ -47,7 +48,6 @@ const IconSidebarHeader = () => (
   </SidebarHeader>
 )
 
-// TODO should use typed routes here
 const NAVIGATION_ITEMS = [
   // {
   //   title: "Intake",
@@ -57,12 +57,12 @@ const NAVIGATION_ITEMS = [
   {
     title: "Notetaking",
     icon: File,
-    url: "/notes",
+    url: $path("/notes"),
   },
   {
     title: "Settings",
     icon: Settings,
-    url: "/settings",
+    url: $path("/settings"),
   },
 ]
 

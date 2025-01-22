@@ -7,6 +7,7 @@ import tsconfigPaths from "vite-tsconfig-paths"
 
 import { reactRouter } from "@react-router/dev/vite"
 import { sentryVitePlugin } from "@sentry/vite-plugin"
+import { safeRoutes } from "safe-routes/vite"
 
 // TODO extract out to another file
 // ensure that the env variables are loaded if they are used!
@@ -114,7 +115,12 @@ export default defineConfig(({ mode }) => ({
     port: parseInt(process.env.JAVASCRIPT_SERVER_PORT),
   },
   // clearScreen: false,
-  plugins: [reactRouter(), tsconfigPaths(), ...getModePlugins(mode)],
+  plugins: [
+    reactRouter(),
+    tsconfigPaths(),
+    safeRoutes(),
+    ...getModePlugins(mode),
+  ],
   ssr: {
     // now, we are in SPA (ssr: false) mode, so i have zero idea why this works
     // https://github.com/react-dropzone/react-dropzone/issues/1259
