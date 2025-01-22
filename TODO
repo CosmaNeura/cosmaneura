@@ -43,13 +43,48 @@
 ## v2: intake
 
 - [ ] extract intake schema from uploaded examples
-- [ ] chat ui beta / review for john + co
 - [ ] accuity integration
   - [ ] ingest webhooks to keep schedule up to date
   - [ ] assoicate schedule items with drs, can hopefully just use email
+- [ ] email/sms to send the user a text
+- [ ] summarization job for the accuity data
 - [ ] unique link gen for each patient, automatically expiring links
-- [ ] model for transcript data store
+- [ ] chat experience
+  - [ ] Enter in their DOB to access the page
+  - [ ] frontend hits /questions API to get a dict of questions to ask {id: "question", question: "long question"}
+  - [ ] ui chatbot goes back and forth with a user to ask questions and persist to the DB
+  - [ ] /followup is hit to generate a set of follow-up questions via a model
+  - [ ] go through follow-up questions in the ui
 - [ ] summarization job after the intake is complete
+- [ ] present accuity & chat summarization in the ui
+
+ai issues to consider
+
+- [ ] how to keep it on the rails? Easy to pull these bots off-script.
+- [ ] how do you stop asking questions? How do you know when you are done?
+- [ ] How to assess quality of the answers?
+
+user flow
+
+1. doctor uploads example intake
+2. extract intake schema & answers
+3. patient visits intake page
+4. patient is given a chat-like experience to collect answers for the intake questions
+5. next, we feed the answers into the model and get a list of follow-up questions from the model to ask
+6. we run through the follow-up questions the model has chosen and close the session
+
+## v3: cleanup
+
+- [ ] cron job to delete transcripts from the database
+  - [ ] soft delete, actually remove the transcripts
+- [ ] alerting
+  - [ ] create two public endpoints on our web site, e.g. /status and /healthcheck
+  - [ ] for /status: run a Clerk query to find the last login time, if it’s within the last day, return 200
+  - [ ] for /healthcheck: return a 200
+  - [ ] have Sentry assess both pages for uptime
+  - [ ] run a celery job every X minutes and hit sentry, alert if it's not hit
+- [ ] job signals / events to monitor what is being processed
+  - [ ] hook into celery, alert on job name and other metadata when complete & started
 
 ## vFuture
 
