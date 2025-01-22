@@ -497,6 +497,7 @@ dev = [
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-celery" },
     { name = "pytest-cov" },
     { name = "pytest-github-actions-annotate-failures" },
     { name = "pytest-playwright" },
@@ -578,6 +579,7 @@ dev = [
     { name = "pyright", specifier = ">=1.1.386" },
     { name = "pytest", specifier = ">=8.3.3" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-celery", specifier = ">=1.1.3" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
     { name = "pytest-github-actions-annotate-failures", specifier = ">=0.2.0" },
     { name = "pytest-playwright", specifier = ">=0.6.2" },
@@ -783,6 +785,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b5/4a/263763cb2ba3816dd94b08ad3a33d5fdae34ecb856678773cc40a3605829/dnspython-2.7.0.tar.gz", hash = "sha256:ce9c432eda0dc91cf618a5cedf1a4e142651196bbcd2c80e89ed5a907e5cfaf1", size = 345197 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/68/1b/e0a87d256e40e8c888847551b20a017a6b98139178505dc7ffb96f04e954/dnspython-2.7.0-py3-none-any.whl", hash = "sha256:b4c34b7d10b51bcc3a5071e7b8dee77939f1e878477eeecc965e9835f63c6c86", size = 313632 },
+]
+
+[[package]]
+name = "docker"
+version = "7.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/91/9b/4a2ea29aeba62471211598dac5d96825bb49348fa07e906ea930394a83ce/docker-7.1.0.tar.gz", hash = "sha256:ad8c70e6e3f8926cb8a92619b832b4ea5299e2831c14284663184e200546fa6c", size = 117834 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/26/57c6fb270950d476074c087527a558ccb6f4436657314bfb6cdf484114c4/docker-7.1.0-py3-none-any.whl", hash = "sha256:c96b93b7f0a746f9e77d325bcfb87422a3d8bd4f03136ae8a85b37f1898d5fc0", size = 147774 },
 ]
 
 [[package]]
@@ -1601,7 +1617,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "3.8.4"
+version = "3.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "backoff" },
@@ -1610,9 +1626,9 @@ dependencies = [
     { name = "requests" },
     { name = "six" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/da/c7/ccbac277802d0fa25d265bd51d89dd1dafd55c7c3bc3445c5ddb27c996ae/posthog-3.8.4.tar.gz", hash = "sha256:ba8cd14bca58686a199b1ba5655d3bad67c09a3a381062347eb30908282df1da", size = 58969 }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/89/887872aeac5ae4a405819920c29d2126447d5fd0d00479a77e1f542a7fc9/posthog-3.9.0.tar.gz", hash = "sha256:0a40f4508ac7147aceee4b64628fedffc44038711537947fd8e003fbeb5718d5", size = 60084 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4d/e4/adc54b3a984c06ed86075ea64da5985cb9ba82b735df15c8334e85219e59/posthog-3.8.4-py2.py3-none-any.whl", hash = "sha256:a6f781310fda9c18a36e697400b7f8be8bd46e998f152560273e62b88d1c9f73", size = 69793 },
+    { url = "https://files.pythonhosted.org/packages/25/56/8d1c9983ef439b1a20b78b223deb2e9336a87b26ec16b9ad95e71c7ac8bb/posthog-3.9.0-py2.py3-none-any.whl", hash = "sha256:36bdfbb1fd2a890fb191555616e7cafdf128f78afa7834fba9f43815fe796e3e", size = 70781 },
 ]
 
 [[package]]
@@ -1919,6 +1935,24 @@ wheels = [
 ]
 
 [[package]]
+name = "pytest-celery"
+version = "1.1.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "celery" },
+    { name = "debugpy" },
+    { name = "docker" },
+    { name = "psutil" },
+    { name = "pytest-docker-tools" },
+    { name = "setuptools" },
+    { name = "tenacity" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a3/ed/cf73ad1119f2c9cc009d10a806d21aa165361e4bd04076c76e4f75d51789/pytest_celery-1.1.3.tar.gz", hash = "sha256:ac7eee546b4d9fb5c742eaaece98187f1f5e5f5622fbaa8e7729bb46923c54fc", size = 29770 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9c/a8/13f300c73143caaf22806953ba0e18b1aef1425357a9070cc2de99101b7c/pytest_celery-1.1.3-py3-none-any.whl", hash = "sha256:4cdb5f658dc472509e8be71f745d26bcb8246397661534f5709d2a55edc43286", size = 49032 },
+]
+
+[[package]]
 name = "pytest-cov"
 version = "6.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1929,6 +1963,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/be/45/9b538de8cef30e17c7b45ef42f538a94889ed6a16f2387a6c89e73220651/pytest-cov-6.0.0.tar.gz", hash = "sha256:fde0b595ca248bb8e2d76f020b465f3b107c9632e6a1d1705f17834c89dcadc0", size = 66945 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/36/3b/48e79f2cd6a61dbbd4807b4ed46cb564b4fd50a76166b1c4ea5c1d9e2371/pytest_cov-6.0.0-py3-none-any.whl", hash = "sha256:eee6f1b9e61008bd34975a4d5bab25801eb31898b032dd55addc93e96fcaaa35", size = 22949 },
+]
+
+[[package]]
+name = "pytest-docker-tools"
+version = "3.1.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "docker" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4f/a2/620ff42d20a2c2b107805a12633a2cb9eb01db3a4eb371a6bc1f71728217/pytest_docker_tools-3.1.3.tar.gz", hash = "sha256:c7e28841839d67b3ac80ad7b345b953701d5ae61ffda97586114244292aeacc0", size = 37136 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/90/f6/961e9b5c6a3006be78d2725713e0d6b2811dc20ae78b2b21b575185b448d/pytest_docker_tools-3.1.3-py3-none-any.whl", hash = "sha256:63e659043160f41d89f94ea42616102594bcc85682aac394fcbc14f14cd1b189", size = 24807 },
 ]
 
 [[package]]
@@ -2219,6 +2266,15 @@ fastapi = [
 ]
 
 [[package]]
+name = "setuptools"
+version = "75.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/92/ec/089608b791d210aec4e7f97488e67ab0d33add3efccb83a056cbafe3a2a6/setuptools-75.8.0.tar.gz", hash = "sha256:c5afc8f407c626b8313a86e10311dd3f661c6cd9c09d4bf8c15c0e11f9f2b0e6", size = 1343222 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/69/8a/b9dc7678803429e4a3bc9ba462fa3dd9066824d3c607490235c6a796be5a/setuptools-75.8.0-py3-none-any.whl", hash = "sha256:e3982f444617239225d675215d51f6ba05f845d4eec313da4418fdbb56fb27e3", size = 1228782 },
+]
+
+[[package]]
 name = "shellingham"
 version = "1.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -2437,6 +2493,15 @@ wheels = [
 ]
 
 [[package]]
+name = "tenacity"
+version = "9.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/94/91fccdb4b8110642462e653d5dcb27e7b674742ad68efd146367da7bdb10/tenacity-9.0.0.tar.gz", hash = "sha256:807f37ca97d62aa361264d497b0e31e92b8027044942bfa756160d908320d73b", size = 47421 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/cb/b86984bed139586d01532a587464b5805f12e397594f19f931c4c2fbfa61/tenacity-9.0.0-py3-none-any.whl", hash = "sha256:93de0c98785b27fcf659856aa9f54bfbd399e29969b0621bc7f762bd441b4539", size = 28169 },
+]
+
+[[package]]
 name = "termcolor"
 version = "2.5.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2553,11 +2618,11 @@ wheels = [
 
 [[package]]
 name = "tzdata"
-version = "2024.2"
+version = "2025.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e1/34/943888654477a574a86a98e9896bae89c7aa15078ec29f490fef2f1e5384/tzdata-2024.2.tar.gz", hash = "sha256:7d85cc416e9382e69095b7bdf4afd9e3880418a2413feec7069d533d6b4e31cc", size = 193282 }
+sdist = { url = "https://files.pythonhosted.org/packages/43/0f/fa4723f22942480be4ca9527bbde8d43f6c3f2fe8412f00e7f5f6746bc8b/tzdata-2025.1.tar.gz", hash = "sha256:24894909e88cdb28bd1636c6887801df64cb485bd593f2fd83ef29075a81d694", size = 194950 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a6/ab/7e5f53c3b9d14972843a647d8d7a853969a58aecc7559cb3267302c94774/tzdata-2024.2-py2.py3-none-any.whl", hash = "sha256:a48093786cdcde33cad18c2555e8532f34422074448fbc874186f0abd79565cd", size = 346586 },
+    { url = "https://files.pythonhosted.org/packages/0f/dd/84f10e23edd882c6f968c21c2434fe67bd4a528967067515feca9e611e5e/tzdata-2025.1-py2.py3-none-any.whl", hash = "sha256:7e127113816800496f027041c570f50bcd464a020098a3b6b199517772303639", size = 346762 },
 ]
 
 [[package]]
