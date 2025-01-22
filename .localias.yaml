@@ -9,4 +9,4 @@ cosma-api-test.localhost: 8206
 # javascript server, for development only (not testing)
 cosma.localhost: 8207
 # job monitoring
-cosma-flower.localhost: 5555
+cosma-flower.localhost: 8208
