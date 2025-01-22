@@ -912,23 +912,30 @@ resource "onepassword_item" "squarespace_domain" {
     ## DNS Settings
 
     You must login to SquareSpace and ensure the domain values included here are properly set
+
+    ### Clerk
+    - Add CNAME for `clerk.cosmaneura.com` -> `frontend-api.clerk.services`
+    - Add CNAME for `accounts.cosmaneura.com` -> `accounts.clerk.services`
+    - Add CNAME for `clk._domainkey.cosmaneura.com` -> `dkim1.au47c8ot0r4y.clerk.services`
+    - Add CNAME for `clk2._domainkey.cosmaneura.com` -> `dkim2.au47c8ot0r4y.clerk.services`
+    - Add CNAME for `clkmail.cosmaneura.com` -> `mail.au47c8ot0r4y.clerk.services`
   EOT
 
   section {
     label = "DNS"
 
     field {
-      label = "Validation Domain"
+      label = "App Validation Domain"
       value = "asuid.${azurerm_container_app_custom_domain.main.name}"
     }
 
     field {
-      label = "Validation Key"
+      label = "App Validation Key"
       value = azurerm_container_app.app.custom_domain_verification_id
     }
 
     field {
-      label = "Domain CNAME"
+      label = "App Domain CNAME"
       value = azurerm_container_app.app.ingress[0].fqdn
     }
   }
