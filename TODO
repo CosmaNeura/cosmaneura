@@ -2,24 +2,21 @@
 
 ## davidlaprade
 
-- [ ] log everything required for HIPPA
 - [x] data model for the note
 - [x] push locally run scripts to production database
-- [ ] job to hit the deidentification service
 - [x] add date + name of patient to audio upload
 
 ## mbianco
 
 - [x] swap user to provider name
 - [x] azure terraform
-- [ ] staging environment
 - [x] merge in project template
 - [x] merge in ui work
 - [x] prod deployment on azure
 - [x] wire up the note taking ui to a data model
 - [x] add upload with azure
 
-# v1: automatic upload
+## v1: automatic upload
 
 - [x] confirm baa on azure + openai, make sure we are all set
 - [x] file upload for recordings
@@ -28,7 +25,6 @@
   - [x] upload via FE and post resulting token to backend API which kicks off transcription job
     - [x] I think FE upload is The Way? https://stackoverflow.com/questions/67986754/upload-a-file-in-azure-blob-storage-using-react
   - [x] need sweep job to clear out (a) files after they are processed / expired (b) unattached files
-- [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
 - [x] transcribe
   - [x] job can just be a py module/class/function whatever that accepts a file model ID
     - [x] i.e. don't worry about celery details, for the initial write
@@ -38,45 +34,45 @@
 - [x] summarization
   - [x] models
 - [x] tie into celery, make sure to handle openai (And Assembly/Deepgram outages) outages
+- [x] job monitoring (flower)
+- [x] make sure retries on jobs are setup properly
+- [x] sentry tie into celery
+- [x] celery types (not worth it)
+- [x] ui + jobs for uploading example notes
+
+## v2: intake
+
+- [ ] extract intake schema from uploaded examples
+- [ ] chat ui beta / review for john + co
+- [ ] accuity integration
+  - [ ] ingest webhooks to keep schedule up to date
+  - [ ] assoicate schedule items with drs, can hopefully just use email
+- [ ] unique link gen for each patient, automatically expiring links
+- [ ] model for transcript data store
+- [ ] summarization job after the intake is complete
+
+## vFuture
+
+- [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
+  - [ ] is this partially done? What else needs to be done?
 - [ ] eval tooling, would be great to have this too
-- [ ] job monitoring (flower)
+- [ ] staging environment
+- [ ] log everything required for HIPPA
+- [ ] LLM response logging?
+- [ ] cost tracing for AI stuff?
 
 ## User Steps
 
 - [ ] ask them to upload additional example notes to the portal
 
-## User Workflow
+## Browser Audio Recording Notes
 
-1. User uploads audio in note taking inbox
-2. Upload goes to azure blob
-3. FE hits py API with blob ID
-4. py API kicks off transcription job
-5. job generates model which appears in the UI
+I got excited about this and took some notes about our options here:
 
-# v2: intake
-
-- [ ] accuity integration
-  - [ ] ingest webhooks to keep schedule up to date
-  - [ ] assoicate schedule items with drs, can hopefully just use email
-- [ ] chat ui beta / review for john + co
-- [ ] unique link gen for each patient, automatically expiring links
-- [ ] model for transcript data store
-- [ ] summarization job
-
-# v3: example notes / settings
-
-- [ ] ui + jobs for uploading example notes
-- [ ] cost tracing for AI stuff?
-
-## recording
-
+- https://stackblitz.com/edit/react-voice-visualizer?file=README.md
 - https://collab-project.github.io/videojs-record/#/usage, mostly dead but not completely https://ossinsight.io/analyze/collab-project/videojs-record#commits. Started 2016
 - https://howlerjs.com just for playing audio
 - https://github.com/muaz-khan/RecordRTC no updates in 3yrs, lots of commits, but recent commits
 - https://github.com/maklov/react-mic completely dead
 - https://github.com/vocaroo/simple-audio-recorder?tab=readme-ov-file recently created, but looks mostly dead
 - https://github.com/YZarytskyi/react-voice-visualizer/issues/30 is the best one I could find
-
----
-
-https://github.com/shadcn-ui/ui/issues/5669 - can't use `    "verbatimModuleSyntax": true,`
