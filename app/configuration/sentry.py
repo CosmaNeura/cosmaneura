@@ -1,11 +1,15 @@
 import sentry_sdk
 from decouple import config
 
-from ..environments import is_production, python_environment
+from ..environments import is_job_monitor, is_production, python_environment
 
 
 def configure_sentry():
     if not is_production():
+        return
+
+    if is_job_monitor():
+        # we don't care about monitoring the job monitoring frontend
         return
 
     def filter_transactions(event, _hint):
