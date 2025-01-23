@@ -180,6 +180,13 @@ resource "azurerm_storage_container" "example_intake" {
   container_access_type = "private"
 }
 
+# like a bucket or folder within the storage account
+resource "azurerm_storage_container" "test_uploads" {
+  name                  = "test-uploads"
+  storage_account_id    = azurerm_storage_account.uploads.id
+  container_access_type = "private"
+}
+
 # https://github.com/1Password/terraform-provider-onepassword/issues/17
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
 resource "onepassword_item" "upload_blob_storage" {
