@@ -1,7 +1,12 @@
 # https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.App/containerApps/cosmaneura-prod-app-web/ingress
-# requires yq
 
 install:
+	# yq is required for procfile parsing
+	@if ! brew list | grep -q yq; then \
+		echo "Installing yq..."; \
+		brew install yq; \
+	fi
+
 	# opentofu
 	@if ! brew list | grep -q opentofu; then \
 		echo "Installing opentofu"; \
@@ -13,8 +18,6 @@ install:
 		echo "Installing azure-cli"; \
 		brew install azure-cli; \
 	fi
-
-	brew install hashicorp/tap/terraform
 
 upgrade:
 	az upgrade --yes
@@ -29,7 +32,7 @@ upgrade:
 TOFU_GLOBAL_OPTIONS := ""
 
 # TODO we may be able to get rid of this with the federated creds
-# set the container registry password in GHA
+# set the container registry password in GHA which enables builds to be pushed to the registry
 azure_gh-secrets:
 	registry_password=$(just azure_output | jq -r '.acr_admin_password.value') && \
 		gh secret set CONTAINER_REGISTRY_PASSWORD --app actions --body "$registry_password"
@@ -42,34 +45,33 @@ azure_init:
 
 # init each run to make sure latest package versions are pulled
 azure_apply:
-	tofu {{TOFU_GLOBAL_OPTIONS}} apply -auto-approve
+	tofu {{TOFU_GLOBAL_OPTIONS}} apply
 
 azure_output:
 	tofu {{TOFU_GLOBAL_OPTIONS}} output -json
 
+# open a interactive terminal on a production container
 azure_shell:
-	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command zsh
+	@echo "Run 'alembic upgrade head' once the console is online to migrate the database"
+	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command zsh -l
 
+# TODO this string is copy/pasted in a couple of locations, should DRY up
 AZURE_RESOURCE_GROUP := "cosmaneura-prod"
+# TODO there are multiple containers in this app, need to document further
 AZURE_CONTAINER := "cosmaneura-prod-app"
 
 # instead of `heroku logs` we have this insane command we have to remember
 azure_logs:
 	az containerapp logs show --follow -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}}
 
-azure_exec:
-	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command "sh -l"
-
-azure_db-migrate:
-	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command "bash -c 'alembic upgrade head'"
-
+# TODO should be renamed
+# opentofu repl
 azure_play:
   tofu {{TOFU_GLOBAL_OPTIONS}} console
 
 azure_tags:
 	az acr repository show-tags --name cosmaneuraprodregistry.azurecr.io --repository 'cosmaneura/cosmaneura' --orderby time_desc
 
-
-
+# TODO should implement
 # clean:
 
