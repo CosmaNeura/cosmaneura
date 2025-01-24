@@ -4,11 +4,14 @@
 #   - https://github.com/hashicorp/terraform-provider-azurerm/blob/main/CHANGELOG.md
 
 locals {
+  # configuration to store tf state for ability for multiple devs to deploy
   tfstate = {
+    # this must be globally unique across all azure accounts. letters only!
     storage_account = "cosmaneuratfstate"
-    resource_group  = "tfstate-ResourceGroup"
-    container       = "tfstate"
-    key             = "prod.terraform.tfstate"
+    # resource group should be distinct from the resource group of the deployment
+    resource_group = "cosmaneura-tfstate"
+    container      = "cosmaneura-tfstate"
+    key            = "${local.environment}.tfstate"
   }
 
   azure_subscription_id = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
@@ -50,13 +53,13 @@ terraform {
   }
 
   # NOTE this must be hidden initially to bootstrap the account!
-  # backend "azurerm" {
-  #   resource_group_name = "tfstate-ResourceGroup"
-  #   # this must be globally unique across all azure accounts. letters only!
-  #   storage_account_name = local.tfstate.storage_account
-  #   container_name       = "tfstate"
-  #   key                  = "prod.terraform.tfstate"
-  # }
+  backend "azurerm" {
+    resource_group_name = local.tfstate.resource_group
+    # this must be globally unique across all azure accounts. letters only!
+    storage_account_name = local.tfstate.storage_account
+    container_name       = local.tfstate.container
+    key                  = local.tfstate.key
+  }
 }
 
 provider "onepassword" {
@@ -73,7 +76,10 @@ provider "azurerm" {
   }
 }
 
+
+# resource group where all service-related resources are stored
 resource "azurerm_resource_group" "main" {
+  # TOOD should the name contain the environment definition?
   name = "cosmaneura-prod"
   # this seemed to be the cheapest: https://cloudprice.net/regions
   # my analysis or understanding of pricing is limited, so this may be incorrect
@@ -81,30 +87,63 @@ resource "azurerm_resource_group" "main" {
   tags     = var.tags
 }
 
+# TODO this could have been fixed in a recent version of the azure provider, consider removing.
 # this should be done automatically when `skip_provider_registration = true`, which is the default, is set
 # however, for some reason this just does not work! We have to register this automatically
 # resource "azurerm_resource_provider_registration" "containerAppRegistration" {
 #   name = "Microsoft.App"
 # }
 
+########################################
+# Deployment Resource State
+########################################
+
+# resource group to hold common terraform state for deployment
+# IMPORTANT: (1) when bootstrapping a new azure account, this must be done first!
+resource "azurerm_resource_group" "tfstate" {
+  name     = local.tfstate.resource_group
+  location = "northcentralus"
+
+  # TODO customize tags since this is distinct from the deployment resource group
+  tags = var.tags
+}
+
+# IMPORTANT: (2) when bootstrapping a new azure account, this must be done second!
+resource "azurerm_storage_account" "tfstate" {
+  name                = local.tfstate.storage_account
+  resource_group_name = azurerm_resource_group.tfstate.name
+  location            = azurerm_resource_group.tfstate.location
+
+  account_tier = "Standard"
+  # locally redundant storage is the cheapest
+  account_replication_type = "LRS"
+  tags                     = var.tags
+}
+
+resource "azurerm_storage_container" "tfstate" {
+  name                  = local.tfstate.container
+  storage_account_id    = azurerm_storage_account.tfstate.id
+  container_access_type = "private"
+}
+
 # deployment locking is handled by storing the state of the deployment in a bucket
-# IMPORTANT: when bootstrapping a new azure account you must remove the backend block, apply this, then add the backend block again
-# data "terraform_remote_state" "tfstate" {
-# backend = "azurerm"
+# IMPORTANT: now, with a resource group and storage account in place
+data "terraform_remote_state" "tfstate" {
+  backend = "azurerm"
 
-# config = {
-#   # this is not in the docs, but is really important!
-#   # https://github.com/hashicorp/terraform/issues/23515
-#   resource_group_name  = local.tfstate.resource_group
-#   storage_account_name = local.tfstate.storage_account
-#   container_name       = local.tfstate.container
-#   key                  = local.tfstate.key
-# }
-# }
+  config = {
+    # this is not in the docs, but is really important!
+    # https://github.com/hashicorp/terraform/issues/23515
+    resource_group_name  = azurerm_resource_group.tfstate.name
+    storage_account_name = azurerm_storage_account.tfstate.name
+    container_name       = azurerm_storage_container.tfstate.name
+    key                  = local.tfstate.key
+  }
+}
 
-####################
+########################################
 # Upload Storage
-####################
+########################################
 
 # used for audio uploads
 # https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/storage_account#attributes-reference
@@ -166,26 +205,23 @@ resource "azurerm_storage_container" "uploads" {
   container_access_type = "private"
 }
 
-# like a bucket or folder within the storage account
 resource "azurerm_storage_container" "example_notes" {
   name                  = "example-notes"
   storage_account_id    = azurerm_storage_account.uploads.id
   container_access_type = "private"
 }
 
-# like a bucket or folder within the storage account
 resource "azurerm_storage_container" "example_intake" {
   name                  = "example-intake"
   storage_account_id    = azurerm_storage_account.uploads.id
   container_access_type = "private"
 }
 
-# like a bucket or folder within the storage account
-resource "azurerm_storage_container" "test_uploads" {
-  name                  = "test-uploads"
-  storage_account_id    = azurerm_storage_account.uploads.id
-  container_access_type = "private"
-}
+# resource "azurerm_storage_container" "test_uploads" {
+#   name                  = "test-uploads"
+#   storage_account_id    = azurerm_storage_account.uploads.id
+#   container_access_type = "private"
+# }
 
 # https://github.com/1Password/terraform-provider-onepassword/issues/17
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
