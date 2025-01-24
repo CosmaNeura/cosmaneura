@@ -1,3 +1,16 @@
+#######################
+# Deployment Scripts
+#
+# - Deploying a new image sets the image reference of the container app to the latest image SHA, but our terraform config
+#   uses `latest`. Each time you `tofu apply` you'll see this diff and that's completely ok since the latest container SHA
+#   is also `latest`.
+#
+# - The only environment variable that is important for these operations is your OP_SERVICE_ACCOUNT_TOKEN and AZURE_SUBSCRIPTION_ID.
+#   OP is required for pulling production secrets from `.env.backend.production` and AZURE_SUBSCRIPTION_ID is only required
+#   if you have multiple azure subscriptions.
+#
+#######################
+
 # https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.App/containerApps/cosmaneura-prod-app-web/ingress
 
 install:
@@ -21,7 +34,7 @@ install:
 
 upgrade:
 	az upgrade --yes
-	brew upgrade opentofu
+	HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade opentofu
 	tofu init -upgrade
 
 #######################
@@ -30,6 +43,15 @@ upgrade:
 
 # TOFU_GLOBAL_OPTIONS := "-chdir=infra"
 TOFU_GLOBAL_OPTIONS := ""
+
+# TODO run some scripts to setup remote GH repo state for security, this is still WIP
+# https://github.com/cli/cli/issues/8363
+
+gh_config_output:
+  gh api repos/$(gh repo view --json nameWithOwner -q '.nameWithOwner')/branches/master/protection/rules
+
+gh_config_apply:
+	gh api "repos/$(gh repo view --json nameWithOwner -q '.nameWithOwner')/branches/master/protection" --method PUT -f required_status_checks=null -f enforce_admins=true -f required_pull_request_reviews=null -f restrictions=null
 
 # TODO we may be able to get rid of this with the federated creds
 # set the container registry password in GHA which enables builds to be pushed to the registry

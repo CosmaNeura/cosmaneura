@@ -2,8 +2,13 @@
 
 This is the primary repo for cosmaneura.com.
 
-
 [Generated from python-starter-template.](http://github.com/iloveitaly/python-starter-template)
+
+## Deployment
+
+* The top-level [Justfile](./Justfile) contains all of build scripts (`just build` will do it all for you)
+* `infra/` contains all terraform logic. `cd infra && just install && just azure_apply` will setup infrastructure.
+---
 
 ## Suggested Consent Script
 

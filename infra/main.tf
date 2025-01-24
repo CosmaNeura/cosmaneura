@@ -54,6 +54,7 @@ terraform {
 
   # NOTE this must be hidden initially to bootstrap the account!
   backend "azurerm" {
+    # Variables here cannot reference created resources and must only reference local variables.
     resource_group_name = local.tfstate.resource_group
     # this must be globally unique across all azure accounts. letters only!
     storage_account_name = local.tfstate.storage_account
