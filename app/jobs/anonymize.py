@@ -16,6 +16,10 @@ from app.configuration.azure import (
 
 # https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/healthdataaiservices/azure-health-deidentification/samples/sample_realtime_deidentification.py
 def deidentify(phi_text: str) -> str:
+    text = phi_text.strip()
+    if not text:
+        return text
+
     # The Deidentification Service requires a service principal to authenticate.
     # Create one through the Entra portal.
     #   https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal
@@ -32,10 +36,16 @@ def deidentify(phi_text: str) -> str:
     # "2024-09-20, but the SDK throws an error if you specify it.
     # client = DeidentificationClient(endpoint, credential, api_version="2024-09-20")
     client = DeidentificationClient(AZURE_DEID_ENDPOINT, credential)
-    body = DeidentificationContent(input_text=phi_text, operation="Surrogate")
+    body = DeidentificationContent(input_text=text, operation="Surrogate")
 
-    result: DeidentificationResult = client.deidentify(body)
-    assert result.output_text
+    result: DeidentificationResult
+    try:
+        result = client.deidentify(body)
+        assert result.output_text
+    except (Exception) as e:
+        # Note that we're deliberately not logging the text here, as it is PHI.
+        log.error("error deidentifying text", error=str(e))
+        raise
 
     log.debug("deid Text", output=result.output_text)
 
