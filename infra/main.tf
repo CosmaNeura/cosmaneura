@@ -77,7 +77,6 @@ provider "azurerm" {
   }
 }
 
-
 # resource group where all service-related resources are stored
 resource "azurerm_resource_group" "main" {
   # TOOD should the name contain the environment definition?
@@ -762,8 +761,8 @@ resource "azurerm_container_app" "worker" {
       }
 
       # yes, memory is defined as a string and CPU is defined as a float
-      cpu    = 0.5
-      memory = "1Gi"
+      cpu    = 1
+      memory = "2Gi"
     }
   }
 
