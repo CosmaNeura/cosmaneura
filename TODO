@@ -75,6 +75,14 @@ user flow
 
 ## v3: cleanup
 
+- [ ] admin login_as to clerk hack workout
+- [ ] added to our list to let them know in the upload that there are no schemas/notes uploaded
+- [ ] add email to user record so we can tell who is who
+- [x] add console script to import all models and all jobs
+- [ ] add contraint to prevent duplicate schemas of the same type
+  - [ ] I think there was something about fks not being properly named...
+- [ ] multiple schemas seem to be created for the same input note. Should try to make these idempotent.
+- [ ] azure deid logs are super verbose
 - [ ] cron job to delete transcripts from the database
   - [ ] soft delete, actually remove the transcripts
 - [ ] alerting
@@ -91,7 +99,7 @@ user flow
 - [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
   - [ ] is this partially done? What else needs to be done?
 - [ ] eval tooling, would be great to have this too
-- [ ] staging environment
+- [ ] staging enviroeadnment
 - [ ] log everything required for HIPPA
 - [ ] LLM response logging?
 - [ ] cost tracing for AI stuff?
@@ -111,3 +119,23 @@ I got excited about this and took some notes about our options here:
 - https://github.com/maklov/react-mic completely dead
 - https://github.com/vocaroo/simple-audio-recorder?tab=readme-ov-file recently created, but looks mostly dead
 - https://github.com/YZarytskyi/react-voice-visualizer/issues/30 is the best one I could find
+
+# Developer Notes: Audio-only Recording System
+
+## Overview
+**Platform:** Addpipe
+**Purpose:** Enable in-app audio recording with incremental capture and automatic storage.
+
+## Key Features
+- **Audio-only Mode:** Available on desktop and mobile.
+- **React Integration:** Use @addpipe/react-pipe-media-recorder from npm.
+- **Incremental Saving:** Streams recordings to servers in real-time; recovers recordings if connection fails.
+
+## Pricing
+- **Audio-only:** $0.01/min
+- **Standard Plan:** $50/month for 5000 minutes
+- **PRO Plan:** $250/month
+
+## Additional Notes
+- Forwarded to John Clemente and David Laprade for future development considerations.
+- Screenshot of pricing details attached.
