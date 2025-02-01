@@ -5,7 +5,7 @@ import { useOutletContext } from "react-router"
 
 import { Send } from "lucide-react"
 
-import type { Route } from "../+types/intake"
+import type { Route } from "./+types/index"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { PageTransition } from "@/components/page-transition"
@@ -31,18 +31,11 @@ import { getClient } from "~/configuration/clerk"
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  // const clerkClient = await getClient()
-  // invariant(clerkClient, "clerk client should always exist or redirect")
+  // TODO need idiomatic error handling here
+  const { data } = await intakeList()
+  invariant(data, "data failed to load")
 
-  // // this route is authenticated
-  // const { data } = await intakeList()
-
-  // // TODO need idiomatic error handling here
-  // if (data === undefined) {
-  //   throw new Error("Failed to load data")
-  // }
-
-  return {}
+  return data
 }
 
 export const meta: MetaFunction = () => {
@@ -159,7 +152,6 @@ export default function IntakeIndex({ loaderData }: Route.ComponentProps) {
   const [isAccuityIntakeOpen, setIsAccuityIntakeOpen] = useState(false)
   const [isIntakeTranscriptOpen, setIsIntakeTranscriptOpen] = useState(false)
 
-  const navigation = useNavigation()
   const isLoading = navigation.state === "loading"
   return <>hi</>
 
