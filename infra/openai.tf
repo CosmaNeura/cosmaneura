@@ -10,7 +10,8 @@ resource "azurerm_ai_services" "openai_service" {
 }
 
 resource "azurerm_cognitive_deployment" "openai_deployment" {
-  name                 = "${azurerm_ai_services.openai_service.name}-gpt-4o"
+  # must match the model name you specify in the OpenAI API call
+  name                 = "gpt-4o"
   cognitive_account_id = azurerm_ai_services.openai_service.id
 
   # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#o1-and-o1-mini-models
@@ -42,3 +43,16 @@ resource "azurerm_cognitive_deployment" "openai_deployment" {
 #     # capacity = 5
 #   }
 # }
+
+# https://registry.terraform.io/providers/1Password/onepassword/latest/docs
+resource "onepassword_item" "azure_openai_service" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title    = "Azure ${local.environment} Open AI Service"
+  category = "login"
+
+  url      = azurerm_ai_services.openai_service.endpoint
+  password = azurerm_ai_services.openai_service.primary_access_key
+
+  tags = var.onepassword_tags
+}
