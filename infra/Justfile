@@ -73,18 +73,28 @@ azure_output:
 	tofu {{TOFU_GLOBAL_OPTIONS}} output -json
 
 # open a interactive terminal on a production container
-azure_shell:
+azure_shell container=AZURE_CONTAINER:
 	@echo "Run 'alembic upgrade head' once the console is online to migrate the database"
-	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command zsh -l
+	az containerapp exec -n {{container}} -g {{AZURE_RESOURCE_GROUP}} --command 'sh -l'
 
 # TODO this string is copy/pasted in a couple of locations, should DRY up
 AZURE_RESOURCE_GROUP := "cosmaneura-prod"
 # TODO there are multiple containers in this app, need to document further
 AZURE_CONTAINER := "cosmaneura-prod-app"
 
+azure_containers:
+	az containerapp list -g {{AZURE_RESOURCE_GROUP}} --query "[].name" -o tsv | fzf \
+		--height=40% \
+		--layout=reverse \
+		--no-preview \
+		--header="alt-l: logs | ctrl-e: shell" \
+		--prompt="Select Azure Container: " \
+		--bind="alt-l:abort+execute(just azure_logs {})" \
+		--bind="ctrl-e:execute(just azure_shell {})"
+
 # instead of `heroku logs` we have this insane command we have to remember
-azure_logs:
-	az containerapp logs show --follow -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}}
+azure_logs container=AZURE_CONTAINER:
+	az containerapp logs show --follow -n {{container}} -g {{AZURE_RESOURCE_GROUP}}
 
 # TODO should be renamed
 # opentofu repl
