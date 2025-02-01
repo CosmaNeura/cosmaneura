@@ -24,7 +24,7 @@ from sqlmodel import create_engine
 from redis import Redis
 import pkgutil
 import importlib
-
+from activemodel.utils import find_all_sqlmodels
 
 def inspect_environment():
     """Display relevant custom functions and variables with minimal formatting"""
@@ -109,35 +109,9 @@ def inspect_environment():
             console.print(text)
 
 
-def import_all_models(module):
-    """Import all model classes from module and submodules into current namespace."""
+# make all sqlmodels available in the repl
+globals().update(find_all_sqlmodels(app.models))
 
-    log = logging.getLogger(__name__)
-    log.debug(f"Starting model import from module: {module.__name__}")
-    model_classes = {}
-
-    # Walk through all submodules
-    for loader, module_name, is_pkg in pkgutil.walk_packages(module.__path__):
-        full_name = f"{module.__name__}.{module_name}"
-        log.debug(f"Importing submodule: {full_name}")
-        submodule = importlib.import_module(full_name)
-
-        # Get all classes from module
-        for name, obj in inspect.getmembers(submodule):
-            if (inspect.isclass(obj) and
-                issubclass(obj, SQLModel) and
-                obj != SQLModel):
-                log.debug(f"Found model class: {name}")
-                model_classes[name] = obj
-
-                # Export to current namespace
-                globals()[name] = obj
-                log.debug(f"Exported {name} to global namespace")
-
-    log.debug(f"Completed model import. Found {len(model_classes)} models")
-    return model_classes
-
-import_all_models(app.models)
 
 # TODO not sure if this works
 def patch_reload():
