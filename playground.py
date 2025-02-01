@@ -73,6 +73,22 @@ def inspect_environment():
             text.append(truncate_text(sig, width-30), style="green")
             console.print(text)
 
+    # Classes Section
+    console.print("\n[bold blue]Classes[/bold blue]")
+    console.print("─" * width)
+
+    for name, obj in current_module.items():
+        if (inspect.isclass(obj) and
+            not name.startswith('_')):
+            try:
+                sig = str(inspect.signature(obj.__init__))
+            except (TypeError, ValueError):
+                sig = "()"
+            text = Text()
+            text.append(f"{name:<30}", style="cyan bold")
+            text.append(truncate_text(sig, width-30), style="green")
+            console.print(text)
+
     # Modules Section
     console.print("\n[bold blue]Imported Modules[/bold blue]")
     console.print("─" * width)
@@ -108,10 +124,8 @@ def inspect_environment():
             text.append(truncate_text(type_info, width-30), style="green")
             console.print(text)
 
-
 # make all sqlmodels available in the repl
 globals().update(find_all_sqlmodels(app.models))
-
 
 # TODO not sure if this works
 def patch_reload():
