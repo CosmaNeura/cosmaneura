@@ -4,6 +4,8 @@ This is the primary repo for cosmaneura.com.
 
 [Generated from python-starter-template.](http://github.com/iloveitaly/python-starter-template)
 
+[Architecture is detailed out here.](https://docs.google.com/document/d/1bns3FMWLCi5pjl6jDLrHJ4HgR0SN89VsijqnDYtxMY4/edit?userstoinvite=shawn.coe@me.com&sharingaction=manageaccess&role=writer&tab=t.0#heading=h.qo9mfb5vnadm)
+
 ## Deployment
 
 * The top-level [Justfile](./Justfile) contains all of build scripts (`just build` will do it all for you)
