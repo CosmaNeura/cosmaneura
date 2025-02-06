@@ -23,12 +23,12 @@ from app.models.visit_audio_file import VisitAudioFile
 
 OPENAI_MODEL = "gpt-4o-2024-08-06"
 
+SUPPORTED_VIDEO_FILE_TYPES = ["mp4", "m4a", "mov", "avi"]
 
 class TranscriptionResult:
     def __init__(self, transcript: list[TranscriptEntry], duration: int):
         self.transcript = transcript
         self.duration = duration
-
 
 def perform(visit_audio_file_id: str):
     """
@@ -76,7 +76,7 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
         app.jobs.summarize.queue(transcript_id=transcript.id, schema_id=schema.id)
 
 
-def extract_audio_to_temp(visit: VisitAudioFile) -> str:
+def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
     filename = visit.azure_file_name
 
     log.info("extracting audio to temp file", filename=filename)
@@ -100,8 +100,11 @@ def extract_audio_to_temp(visit: VisitAudioFile) -> str:
         with open(temp_download_path, "wb") as file:
             file.write(blob_client.download_blob().readall())
 
-        log.info("extracting audio from mp4", output_path=temp_audio_path)
-        extract_audio_from_mp4(temp_download_path, output_audio_path=temp_audio_path)
+        log.info("extracting audio from video", output_path=temp_audio_path)
+        extract_audio_from_video(
+                video_path=temp_download_path,
+                format=format,
+                output_audio_path=temp_audio_path)
 
         return temp_audio_path
 
@@ -111,24 +114,21 @@ def extract_audio_to_temp(visit: VisitAudioFile) -> str:
             os.remove(temp_download_path)
 
 
-def extract_audio_from_mp4(mp4_path, output_audio_path="extracted_audio.wav"):
-    audio = AudioSegment.from_file(mp4_path, format="mp4")
+def extract_audio_from_video(video_path, format, output_audio_path="extracted_audio.wav"):
+    audio = AudioSegment.from_file(video_path, format=format)
     audio.export(output_audio_path, format="wav")
 
 
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
     log.info("starting audio transcription", file_name=visit_audio_file.azure_file_name)
-    if visit_audio_file.azure_file_name.lower().endswith(".mp4"):
-        audio_file = extract_audio_to_temp(visit_audio_file)
-    # elif visit_audio_file.azure_file_name.lower().endswith(".wav"):
-    #     download the audio file from blob to temp storage
+
+    ext = os.path.splitext(visit_audio_file.azure_file_name.lower())[1][1:]
+    if ext in SUPPORTED_VIDEO_FILE_TYPES:
+        audio_file = extract_audio_to_temp(visit_audio_file, format=ext)
     else:
-        ext = os.path.splitext(visit_audio_file.azure_file_name)[1]
-        log.error("unsupported file format", extension=ext)
-        raise ValueError(
-            f"Unsupported file format: .{ext}. Please provide a .mp4 or .wav file."
-        )
+        log.error("unsupported video format", extension=ext)
+        raise ValueError(f"Unsupported video format: .{ext}")
 
     try:
         transcriber = assembly.Transcriber()
