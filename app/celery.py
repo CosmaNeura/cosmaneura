@@ -106,10 +106,10 @@ def capture_worker_stop(sender, **kwargs):
 # celery.conf.log_level = "INFO"
 
 # https://stackoverflow.com/questions/26831103/avoiding-duplicate-tasks-in-celery-broker
-celery.conf.ONCE = {
-    "backend": "celery_once.backends.Redis",
-    "settings": {"url": redis_url(), "default_timeout": 60 * 60},
-}
+# celery.conf.ONCE = {
+#     "backend": "celery_once.backends.Redis",
+#     "settings": {"url": redis_url(), "default_timeout": 60 * 60},
+# }
 
 # TODO pulled from flower example, should we do this?
 # app.conf.accept_content = ["pickle", "json", "msgpack", "yaml"]
