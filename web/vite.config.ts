@@ -7,6 +7,7 @@ import tsconfigPaths from "vite-tsconfig-paths"
 
 import { reactRouter } from "@react-router/dev/vite"
 import { sentryVitePlugin } from "@sentry/vite-plugin"
+import tailwindcss from "@tailwindcss/vite"
 import { safeRoutes } from "safe-routes/vite"
 
 // TODO extract out to another file
@@ -97,7 +98,11 @@ function getModePlugins(mode: string) {
   }
 
   // TODO most of these plugins do not work properly! https://github.com/remix-run/react-router/issues/12736#event-15990602218
-  return [Inspect(), Terminal({ console: "terminal" }), reactRouterDevTools()]
+  return [
+    Inspect(),
+    Terminal({ console: "terminal" }),
+    // reactRouterDevTools()
+  ]
 }
 
 // test configuration is done via vitest.config.ts, this is only for the build system
@@ -116,6 +121,7 @@ export default defineConfig(({ mode }) => ({
   },
   // clearScreen: false,
   plugins: [
+    tailwindcss(),
     reactRouter(),
     tsconfigPaths(),
     safeRoutes(),

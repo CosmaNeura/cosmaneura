@@ -22,9 +22,9 @@ export default defineConfig({
     // converts all openapi snake case attributes to camelCase, but does not translate the api request
     // case: "camelCase",
   },
-  client: "@hey-api/client-fetch",
   experimentalParser: true,
   plugins: [
+    "@hey-api/client-fetch",
     ...defaultPlugins,
     // https://github.com/hey-api/openapi-ts/issues/1571
     {
