@@ -1,6 +1,7 @@
 # seed fresh test databases with data
 
 from datetime import datetime
+import pytz
 
 from app import log
 
@@ -17,8 +18,8 @@ from app.models.visit_audio_file import VisitAudioFile
 from tests.utils import get_clerk_dev_user
 
 
-def seed_test_data():
-    log.info("seeding data")
+def create_fixture_data():
+    log.info("creating test fixture data")
 
     username, password, user = get_clerk_dev_user()
     doctor = Doctor.find_or_create_by(clerk_id=user.id)
@@ -41,6 +42,26 @@ def seed_test_data():
         appointment_id=appointment.id,
         azure_file_name="fiat-health-mock-patient-appointment-12-17-2024.m4a",
     )
+
+    # For testing different video filetypes.
+    eastern_tz = pytz.timezone("America/New_York")
+    hour = 13
+    for file_type in ["mp4", "m4a", "mov", "avi"]:
+        date_no_zone = datetime(2024, 11, 15, hour, 0, 0)
+        date_et = eastern_tz.localize(date_no_zone)
+        hour += 1
+        appt = Appointment.find_or_create_by(
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            appointment_date=date_et
+        )
+        print(f"seeding teresa-jensen-mock-appointment-11-15-2024.{file_type}")
+        VisitAudioFile.find_or_create_by(
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            appointment_id=appt.id,
+            azure_file_name=f"teresa-jensen-mock-appointment-11-15-2024.{file_type}",
+        )
 
     DoctorNoteFile.find_or_create_by(
         doctor_id=doctor.id,

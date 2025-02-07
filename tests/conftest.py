@@ -28,7 +28,7 @@ from structlog import get_logger
 import app.models  # noqa: F401
 
 from tests.utils import delete_all_clerk_users
-from tests.seeds import seed_test_data
+from tests.fixtures import create_fixture_data
 
 # this file is uploaded as an artifact
 TEST_RESULTS_DIRECTORY = Path(decouple_config("TEST_RESULTS_DIRECTORY", cast=str))
@@ -78,8 +78,8 @@ def pytest_sessionstart(session):
     delete_all_clerk_users()
     # clear out any previous cruft in this DB, which is why...
     database_reset_truncate()
-    # we reseed the database with a base set of records
-    seed_test_data()
+    # we refresh fixtures on each test run
+    create_fixture_data()
 
 def base_server_url(protocol: t.Literal["http", "https"] = "http"):
     """
