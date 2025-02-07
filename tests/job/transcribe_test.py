@@ -1,5 +1,6 @@
 from app.jobs.transcribe import transcribe_audio, perform
 from app.models.visit_audio_file import VisitAudioFile
+from app.models.ai_visit_transcript import AIVisitTranscript
 
 def count_transcripts_for_audio_file(audio_file: VisitAudioFile) -> int:
     return AIVisitTranscript.select().where(
