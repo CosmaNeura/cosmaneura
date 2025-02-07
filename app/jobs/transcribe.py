@@ -39,6 +39,15 @@ def perform(visit_audio_file_id: str):
     visit_audio_file = VisitAudioFile.get(id=visit_audio_file_id)
     assert visit_audio_file
 
+    existing_transcript = AIVisitTranscript.get(
+        doctor_id=visit_audio_file.doctor_id,
+        appointment_id=visit_audio_file.appointment_id,
+        patient_id=visit_audio_file.patient_id
+    )
+    if existing_transcript is not None:
+        log.info("transcript already exists, skipping job")
+        return
+
     result = transcribe_audio(visit_audio_file)
 
     log.info("creating transcript record", duration=result.duration)
