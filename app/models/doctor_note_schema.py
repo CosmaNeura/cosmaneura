@@ -23,9 +23,9 @@ if t.TYPE_CHECKING:
 class DoctorNoteSchema(
     BaseModel,
     PydanticJSONMixin,
-    TypeIDMixin("doctor_note_schema"),
     TimestampsMixin,
     SoftDeletionMixin,
+    TypeIDMixin("doctor_note_schema"),
     table=True,
 ):
     """

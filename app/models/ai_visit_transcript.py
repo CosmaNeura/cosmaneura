@@ -25,10 +25,10 @@ class TranscriptEntry(PydanticBaseModel):
 
 class AIVisitTranscript(
     BaseModel,
-    TypeIDMixin("ai_visit_transcript"),
     PydanticJSONMixin,
     TimestampsMixin,
     SoftDeletionMixin,
+    TypeIDMixin("ai_visit_transcript"),
     table=True,
 ):
     """

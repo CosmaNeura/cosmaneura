@@ -8,8 +8,8 @@ from .doctor import Doctor
 
 class DoctorIntakeFile(
     BaseModel,
-    TypeIDMixin("doctor_intake_file"),
     TimestampsMixin,
+    TypeIDMixin("doctor_intake_file"),
     table=True,
 ):
     """

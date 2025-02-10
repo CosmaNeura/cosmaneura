@@ -16,9 +16,9 @@ from .doctor import Doctor
 class DoctorNoteExample(
     BaseModel,
     PydanticJSONMixin,
-    TypeIDMixin("doctor_note_example"),
     TimestampsMixin,
     SoftDeletionMixin,
+    TypeIDMixin("doctor_note_example"),
     table=True,
 ):
     """
