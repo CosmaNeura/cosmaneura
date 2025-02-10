@@ -9,6 +9,8 @@
 #   OP is required for pulling production secrets from `.env.backend.production` and AZURE_SUBSCRIPTION_ID is only required
 #   if you have multiple azure subscriptions.
 #
+# tofu_apply & azure_deploy are the two commands you'll want to understand.
+#
 #######################
 
 # https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.App/containerApps/cosmaneura-prod-app-web/ingress
@@ -62,14 +64,14 @@ azure_gh-secrets:
 azure_open:
 	open "https://portal.azure.com/$(az account show --query tenantId -o tsv)/"
 
-azure_init:
+tofu_init:
 	tofu init
 
 # init each run to make sure latest package versions are pulled
-azure_apply:
+tofu_apply:
 	tofu {{TOFU_GLOBAL_OPTIONS}} apply
 
-azure_output:
+tofu_output:
 	tofu {{TOFU_GLOBAL_OPTIONS}} output -json
 
 # open a interactive terminal on a production container
@@ -82,6 +84,7 @@ AZURE_RESOURCE_GROUP := "cosmaneura-prod"
 # TODO there are multiple containers in this app, need to document further
 AZURE_CONTAINER := "cosmaneura-prod-app"
 
+# view logs or open up a shell in a production container
 azure_containers:
 	az containerapp list -g {{AZURE_RESOURCE_GROUP}} --query "[].name" -o tsv | fzf \
 		--height=40% \
@@ -104,6 +107,28 @@ azure_play:
 azure_tags:
 	az acr repository show-tags --name cosmaneuraprodregistry.azurecr.io --repository 'cosmaneura/cosmaneura' --orderby time_desc
 
+azure_storage_browser:
+	# TODO is there a better way to create these shortcuts
+	open "https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.Storage/storageAccounts/cosmaneuraproduploads/storagebrowser"
+
 # TODO should implement
 # clean:
+
+# once an image is built and pushed to the registry, this deploys it across all containers
+azure_deploy:
+	./deploy.sh $(just _azure_last_image_id)
+
+@_azure_last_image_id:
+	# deprecated command, but seems to work a bit faster
+	# az acr repository show-manifests --name cosmaneuraprodregistry --repository cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]]"
+
+	# an alternative approach is to pull the image and inspect the digest
+	# however, this is slow and requires a full download of the image
+	# docker pull cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest
+	# docker image inspect cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest \
+	# 	--format='\{\{index .RepoDigests 0\}\}' \
+	# 	| cut -d '@' -f 2
+
+	# non-deprecated command, but is marked as preview (lol!)
+	az acr manifest list-metadata -r cosmaneuraprodregistry -n cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]].tags[0]" -o tsv 2>/dev/null
 

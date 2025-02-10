@@ -1,5 +1,16 @@
 #!/usr/bin/env zsh
 
+# Description: this insane mess deploys already-built containers to production
+#
+#   - By default, Azure container apps do NOT run their health checks and fail loudly. This is the main goal of this script.
+#     containers are deployed and then health checks for the containers are run.
+#
+#   - The version numbers that are auto-gen'd are just random hashes which makes it hard to determine if your container
+#     deployed properly. This is why we generate our own version numbers here.
+#
+#   - Containers are not rolled back if one of them fails. We assume that if one fails, they will all fail, which isn't a great
+#     assumption.
+
 GIT_SHA="$1"
 
 # Define variables
