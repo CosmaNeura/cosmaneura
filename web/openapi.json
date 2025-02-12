@@ -5,6 +5,77 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/internal/v1/admin/users": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "User List",
+        "operationId": "user_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/admin/login_as/{user_id}": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Login As User",
+        "operationId": "login_as_user",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
@@ -897,6 +968,58 @@
           "endTime"
         ],
         "title": "TranscriptEntry"
+      },
+      "UserListResponse": {
+        "properties": {
+          "current_user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserSwitchData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/UserSwitchData"
+            },
+            "type": "array",
+            "title": "Users"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_user",
+          "users"
+        ],
+        "title": "UserListResponse"
+      },
+      "UserSwitchData": {
+        "properties": {
+          "clerk_id": {
+            "type": "string",
+            "title": "Clerk Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clerk_id",
+          "email"
+        ],
+        "title": "UserSwitchData"
       },
       "ValidationError": {
         "properties": {
