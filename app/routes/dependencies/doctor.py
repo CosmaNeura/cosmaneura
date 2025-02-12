@@ -17,4 +17,4 @@ def inject_doctor_record(request: Request):
             status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
         )
 
-    request.state.doctor = doctor
+    request.state.doctor = request.state.user = doctor
