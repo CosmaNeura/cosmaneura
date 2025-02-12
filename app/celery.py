@@ -1,5 +1,10 @@
 """
+Configure job queue.
 
+Notes:
+
+- I tried RQ and ran into too many strange compatibility issues
+- celery-types is dead and seems to make the types *worse*
 - Spawn is not natively supported and fork has been depreciated https://github.com/celery/celery/issues/6036#issuecomment-1151224775
 """
 
@@ -12,34 +17,16 @@ from app import log
 from app.configuration.redis import redis_url
 from app.configuration.sentry import configure_sentry
 
+from activemodel.celery import register_celery_typeid_encoder
 
-# TODO extact to activemodel
-def register_typeid_encoder():
-    "this ensures TypeID objects passed as arguments to a delayed function are properly serialized"
-
-    def class_full_name(clz) -> str:
-        return ".".join([clz.__module__, clz.__qualname__])
-
-    def _encoder(obj: TypeID) -> str:
-        return str(obj)
-
-    def _decoder(data: str) -> TypeID:
-        return TypeID.from_string(data)
-
-    register_type(
-        TypeID,
-        class_full_name(TypeID),
-        encoder=_encoder,
-        decoder=_decoder,
-    )
-
-
-register_typeid_encoder()
+register_celery_typeid_encoder()
 
 
 class BaseTaskWithRetry(Task):
+    "the default retry sequence is very fast, we use a longer retry sequence in case an external system is down"
+
     autoretry_for = (Exception,)
-    max_retries = 10
+    max_retries = 20
     retry_backoff = True
     retry_backoff_max = 700
     retry_jitter = True
@@ -49,10 +36,31 @@ celery = Celery(
     "tasks", broker=redis_url(), result_backend=redis_url(), task_cls=BaseTaskWithRetry
 )
 
+# define a hard timeout to limit infinitely running processes
+# 35m is an arbitrary number, but should be long enough to handle most tasks
+celery.conf.task_time_limit = 60 * 35
+
+# keep results around for 30d, otherwise they are pulled from the flower UI and it's hard to see what happened
+celery.conf.result_expires = 60 * 60 * 24 * 30
+
+# By default, is a worker is killed without warning (OOM, etc) which can occur more easily in containerized environments
+# the job will get into a stale state where it looks like it is executing indefinitely and will never be retried.
+# in order to ensure that the job is retried if the process is killed abruptly, we need to enable two settings:
+#
+#   - acks_late: "The acks_late setting would be used when you need the task to be executed again if the worker (for some reason) crashes mid-execution"
+#   - task_reject_on_worker_lost: job is not retried if the worker is lost
+#
+# References:
+#
+#   - https://stackoverflow.com/questions/45045980/what-different-between-task-reject-on-worker-lost-and-task-acks-late-in-celery
+#   - https://stackoverflow.com/questions/69107860/celery-what-is-the-reason-to-have-acks-late-true-without-setting-task-reject-on
+celery.conf.task_reject_on_worker_lost = True
+celery.conf.task_acks_late = True
+
 
 @signals.celeryd_init.connect
 def init_sentry(**_kwargs):
-    # according to sentry documentation, this must be done
+    # according to sentry documentation, this must be done here, even if it's executed on application start
     # https://docs.sentry.io/platforms/python/integrations/celery/
     configure_sentry()
 
@@ -130,10 +138,6 @@ def capture_worker_stop(sender, **kwargs):
 #         "schedule": crontab(minute="*/5"),
 #     },
 # }
-
-# define a hard timeout to limit infinitely running processes
-celery.conf.task_time_limit = 60 * 35
-
 
 # from app.configuration.database import clear_engine
 # @task_prerun.connect
