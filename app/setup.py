@@ -4,6 +4,8 @@ Asking for trouble using a standard name like this :/
 
 from pathlib import Path
 
+from decouple import RepositoryEmpty
+
 from app.utils.patching import hash_function_code
 
 
@@ -18,7 +20,6 @@ def patch_decouple():
     """
 
     import decouple
-    from decouple import RepositoryEmpty
 
     assert (
         hash_function_code(decouple.config.__class__)

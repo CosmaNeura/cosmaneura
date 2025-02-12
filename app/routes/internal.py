@@ -22,8 +22,10 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
+from .admin import admin_api_app
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
+from .dependencies.login_as import login_as
 
 # extract into variable for test import to easily override dependencies
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
@@ -40,8 +42,12 @@ internal_api_app = APIRouter(
         Depends(authenticate_clerk_request_middleware),
         # inject a doctor record into the request state
         Depends(inject_doctor_record),
+        # allow admins to switch to another doctor
+        Depends(login_as),
     ],
 )
+
+internal_api_app.include_router(admin_api_app)
 
 
 class IntakeList(BaseModel, extra="forbid"):

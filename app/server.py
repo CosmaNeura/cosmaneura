@@ -5,7 +5,8 @@ Route method names are important as they will be used for the openapi spec which
 JavaScript client which will use these methods.
 """
 
-from fastapi import FastAPI, dependencies
+from fastapi import FastAPI
+from fastapi.responses import ORJSONResponse
 
 from app.routes.utils.openapi import simplify_operation_ids
 
@@ -28,12 +29,14 @@ if is_production():
 
 # TODO not possible to type this properly :/ https://github.com/python/typing/discussions/1501
 # NOTE `api_app` and not `app` is used intentionally here to make imports more specific
-api_app = FastAPI(**fast_api_args)  # type: ignore
+api_app = FastAPI(
+    **fast_api_args,  # type: ignore
+    # https://stackoverflow.com/questions/64408092/how-to-set-response-class-in-fastapi
+    default_response_class=ORJSONResponse,
+)
 
 api_app.include_router(internal_api_app)
 add_middleware(api_app)
-
-# TODO maybe treat sqlalchemy.exc.NoResultFound as 404?
 
 
 @api_app.get("/healthcheck")

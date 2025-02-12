@@ -2,6 +2,7 @@ import logging
 
 from openai import OpenAI
 
+from app.environments import is_development
 from app.setup import get_root_path
 
 # OPENAI_API_KEY is automatically sourced from the ENV
@@ -18,6 +19,10 @@ def openai_logging_setup():
 
     Related gist: https://gist.github.com/iloveitaly/aa616d08d582c20e717ecd047b1c8534
     """
+    if not is_development():
+        return
+
+    from app import log
 
     # TODO this doesn't seem right for prod
     openai_log_path = get_root_path() / "tmp/openai.log"
@@ -32,6 +37,13 @@ def openai_logging_setup():
     httpx_logger.propagate = False
     httpx_logger.handlers = []  # Remove all handlers
     httpx_logger.addHandler(openai_file_handler)
+
+    httpcore_logger = logging.getLogger("httpcore")
+    httpcore_logger.propagate = False
+    httpcore_logger.handlers = []
+    httpcore_logger.addHandler(openai_file_handler)
+
+    log.info("openai and http logging redirected", openai_log_path=openai_log_path)
 
 
 def configure_openai():
