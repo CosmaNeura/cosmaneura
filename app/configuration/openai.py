@@ -1,12 +1,8 @@
 import logging
-from pathlib import Path
 
-import openai
-from decouple import RepositoryEmpty, config
 from openai import OpenAI
 
 from app.setup import get_root_path
-from app.utils.patching import hash_function_code
 
 # OPENAI_API_KEY is automatically sourced from the ENV
 openai = OpenAI()
