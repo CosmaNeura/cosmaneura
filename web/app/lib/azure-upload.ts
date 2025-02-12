@@ -26,6 +26,7 @@ export async function uploadFileToAzure(file: File, sasSignature: string) {
   return {
     stampedFileName,
     azureUploadResponse,
+    // TODO add more extensive error information so we can capture it via sentry
     error: !azureUploadResponse.ok,
   }
 }
