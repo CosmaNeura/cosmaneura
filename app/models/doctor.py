@@ -5,11 +5,19 @@ Mirrors this model: https://clerk.com/docs/reference/backend-api/tag/Users#opera
 # TODO should we create an organization?
 # https://clerk.com/docs/reference/backend-api/tag/Organizations#operation/GetOrganization
 
+from enum import Enum
+
 from activemodel import BaseModel
 from activemodel.mixins import SoftDeletionMixin, TimestampsMixin, TypeIDMixin
+from sqlmodel import Field
 
 # NOTE we use usr_ for our prefix to avoid confusion
 CLERK_OBJECT_PREFIX = "user_"
+
+
+class DoctorRole(str, Enum):
+    normal = "normal"
+    admin = "admin"
 
 
 # usr vs user is intentionally used to differentiate from the clerk model, which also uses a prefix ID
@@ -17,6 +25,12 @@ class Doctor(
     BaseModel, TimestampsMixin, SoftDeletionMixin, TypeIDMixin("doctor"), table=True
 ):
     clerk_id: str
+    "external ID of the user in Clerk"
+
+    email: str = Field(nullable=True)
+    "email address of the user in Clerk, makes it easy to debug and find users, set async after the user is created"
+
+    role: DoctorRole = Field(default=DoctorRole.normal)
 
     # organization_id: str
 

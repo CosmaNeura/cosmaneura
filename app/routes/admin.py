@@ -13,7 +13,7 @@ from starlette import status
 
 from app import log
 
-from app.models.user import User, UserRole
+from app.models.doctor import Doctor, DoctorRole
 
 SESSION_KEY_LOGIN_AS_USER = "login_as_user"
 
@@ -21,7 +21,7 @@ SESSION_KEY_LOGIN_AS_USER = "login_as_user"
 def require_admin(request: Request):
     "Protect routes that require admin access"
 
-    if (admin_user := request.state.user) and admin_user.role != UserRole.admin:
+    if (admin_user := request.state.user) and admin_user.role != DoctorRole.admin:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 
@@ -47,13 +47,13 @@ def user_list(request: Request) -> UserListResponse:
 
     if SESSION_KEY_LOGIN_AS_USER in request.session:
         login_as_clerk_id = request.session[SESSION_KEY_LOGIN_AS_USER]
-        login_as_user = User.get(clerk_id=login_as_clerk_id)
+        login_as_user = Doctor.get(clerk_id=login_as_clerk_id)
 
     return UserListResponse(
         current_user=login_as_user,  # type: ignore
         users=list(
-            User.select(User.clerk_id, User.email)
-            .where(User.role != UserRole.admin)
+            Doctor.select(Doctor.clerk_id, Doctor.email)
+            .where(Doctor.role != DoctorRole.admin)
             .all()
         ),  # type: ignore
     )
@@ -66,8 +66,8 @@ def login_as_user(request: Request, user_id: Annotated[str, Path()]):
         request.session[SESSION_KEY_LOGIN_AS_USER] = None
         return
 
-    login_as_user = User.where(
-        User.role != UserRole.admin, User.clerk_id == user_id
+    login_as_user = Doctor.where(
+        Doctor.role != DoctorRole.admin, Doctor.clerk_id == user_id
     ).one()
 
     log.info("login_as_user", login_as_user=login_as_user)

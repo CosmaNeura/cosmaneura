@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from app.routes.admin import SESSION_KEY_LOGIN_AS_USER
 from app.server import api_app
 
-from app.models.user import User, UserRole
+from app.models.doctor import Doctor, DoctorRole
 
 from tests.routes.utils import (
     decode_cookie,
@@ -42,7 +42,7 @@ def test_user_list(client: TestClient):
 
     # create 3 users
     for i in range(users_to_create):
-        User(email=f"test{i}@example.com", clerk_id=f"user_{i}").save()
+        Doctor(email=f"test{i}@example.com", clerk_id=f"user_{i}").save()
 
     response = client.get(
         api_app.url_path_for("user_list"),
@@ -67,11 +67,11 @@ def test_login_as_authorized_good_credentials(client: TestClient):
     assert clerk_user
 
     # paranoid conditions to assert on the general test structure
-    local_admin = User.get(clerk_id=clerk_admin.id)
-    assert local_admin and local_admin.role == UserRole.admin
+    local_admin = Doctor.get(clerk_id=clerk_admin.id)
+    assert local_admin and local_admin.role == DoctorRole.admin
 
     # if the login_as user DNE it will throw an error
-    _user = User.find_or_create_by(clerk_id=clerk_user.id)
+    _user = Doctor.find_or_create_by(clerk_id=clerk_user.id)
 
     response = client.post(
         api_app.url_path_for("login_as_user", user_id=clerk_user.id),
@@ -101,7 +101,7 @@ def test_login_as_authorized_bad_credentials(client: TestClient):
     assert clerk_user
 
     # if the login_as user DNE it will throw an error
-    _user = User.find_or_create_by(clerk_id=clerk_user.id)
+    _user = Doctor.find_or_create_by(clerk_id=clerk_user.id)
 
     # attempt to login_as the non-admin user into the admin user
     response = client.post(
@@ -125,7 +125,7 @@ def test_login_as_reset_credentials(client: TestClient):
     assert clerk_user
 
     # if the login_as user DNE it will throw an error
-    _user = User.find_or_create_by(clerk_id=clerk_user.id)
+    _user = Doctor.find_or_create_by(clerk_id=clerk_user.id)
 
     response = client.post(
         api_app.url_path_for("login_as_user", user_id=clerk_user.id),
@@ -154,7 +154,7 @@ def test_login_as_user_route(client: TestClient):
     assert clerk_user
 
     # if the login_as user DNE it will throw an error
-    local_user = User.find_or_create_by(clerk_id=clerk_user.id)
+    local_user = Doctor.find_or_create_by(clerk_id=clerk_user.id)
 
     response = client.post(
         api_app.url_path_for("login_as_user", user_id=clerk_user.id),

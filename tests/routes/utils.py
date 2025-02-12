@@ -14,7 +14,7 @@ from httpx import Response
 
 from app.configuration.clerk import clerk
 
-from app.models.user import User, UserRole
+from app.models.doctor import Doctor, DoctorRole
 
 from tests.constants import (
     CLERK_DEV_ADMIN_EMAIL,
@@ -82,8 +82,8 @@ def get_clerk_admin_user():
     assert user
 
     # create the admin user locally
-    _admin = User.find_or_create_by(
-        clerk_id=user.id, email=CLERK_DEV_ADMIN_EMAIL, role=UserRole.admin
+    _admin = Doctor.find_or_create_by(
+        clerk_id=user.id, email=CLERK_DEV_ADMIN_EMAIL, role=DoctorRole.admin
     )
 
     return CLERK_DEV_ADMIN_EMAIL, CLERK_DEV_USER_PASSWORD, user
