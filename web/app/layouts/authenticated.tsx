@@ -1,5 +1,7 @@
 import { Outlet } from "react-router"
 
+import AdminBar from "~/components/AdminBar"
+
 // This layout assumes the user is authenticated. Any clientLoaders making authenticated
 // requests will run an additional check and redirect the user to the login page if it fails.
 // Additionally, all authenticated routes will 400 if not auth'd propely.
@@ -7,6 +9,7 @@ import { Outlet } from "react-router"
 export default function AuthenticatedLayout() {
   return (
     <>
+      <AdminBar />
       <Outlet />
     </>
   )
