@@ -8,6 +8,7 @@ dependencies = [
     "activemodel>=0.2.0",
     "aiosmtplib>=3.0.2",
     "alembic>=1.14.0",
+    "alembic-postgresql-enum>=1.6.1",
     "assemblyai>=0.35.1",
     "audioop-lts>=0.2.1",
     "azure-health-deidentification>=1.0.0b1",
