@@ -9,6 +9,7 @@ import { reactRouter } from "@react-router/dev/vite"
 import { sentryVitePlugin } from "@sentry/vite-plugin"
 import tailwindcss from "@tailwindcss/vite"
 import { safeRoutes } from "safe-routes/vite"
+import viteCompression from "vite-plugin-compression"                                                                                                                  │
 
 // TODO extract out to another file
 // ensure that the env variables are loaded if they are used!
@@ -94,6 +95,7 @@ function getModePlugins(mode: string) {
       // only check env vars when building for production
       // some ENV is only available in prod
       requireEnvCheckerPlugin(mode),
+      viteCompression()
     ]
   }
 
