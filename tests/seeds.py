@@ -1,6 +1,7 @@
 # seed fresh test databases with data
 
 from datetime import datetime
+
 import pytz
 
 from app import log
@@ -15,10 +16,10 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
-from tests.utils import get_clerk_dev_user
+from tests.routes.utils import get_clerk_dev_user
 
 
-def create_fixture_data():
+def seed_test_data():
     log.info("creating test fixture data")
 
     username, password, user = get_clerk_dev_user()
@@ -51,9 +52,7 @@ def create_fixture_data():
         date_et = eastern_tz.localize(date_no_zone)
         hour += 1
         appt = Appointment.find_or_create_by(
-            doctor_id=doctor.id,
-            patient_id=patient.id,
-            appointment_date=date_et
+            doctor_id=doctor.id, patient_id=patient.id, appointment_date=date_et
         )
         print(f"seeding teresa-jensen-mock-appointment-11-15-2024.{file_type}")
         VisitAudioFile.find_or_create_by(

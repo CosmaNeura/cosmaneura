@@ -1,46 +1,30 @@
+import funcy_pipe as fp
+
 from app import log
 from app.configuration.clerk import clerk
+from app.environments import is_testing
+
+from tests.constants import (
+    CLERK_DEV_ADMIN_EMAIL,
+    CLERK_DEV_USER_EMAIL,
+    CLERK_QA_USER_EMAIL,
+)
 
 
 def delete_all_clerk_users():
-    import funcy_pipe as fp
+    "clerk dev instances can hold a max of ~100 users, in order to avoid hitting that limit, we delete all users except for the dev users"
 
-    from app.configuration.clerk import clerk
+    log.info("deleting all dev clerk users")
 
-    log.info("deleting all clerk users")
+    if not is_testing():
+        raise RuntimeError("cannot delete dev users outside of testing")
 
     _deleted_users = (
         clerk.users.list()
         | fp.filter(
             lambda user: user.email_addresses[0].email_address
-            != "mike+clerk_test@example.com"
+            not in [CLERK_DEV_USER_EMAIL, CLERK_DEV_ADMIN_EMAIL, CLERK_QA_USER_EMAIL]
         )
         | fp.pluck_attr("id")
         | fp.lmap(lambda uid: clerk.users.delete(user_id=uid))
     )
-
-
-def get_clerk_dev_user():
-    """
-    Get or generate a common dev user to login via clerk
-    """
-
-    dev_user_email = "user+clerk_test@example.com"
-    password = "clerk-development-123"
-    user_list = clerk.users.list(email_address=[dev_user_email])
-
-    assert user_list is not None
-
-    if len(user_list) == 1:
-        user = user_list[0]
-    else:
-        user = clerk.users.create(
-            request={
-                "email_address": [dev_user_email],
-                "password": password,
-            }
-        )
-
-    assert user
-
-    return dev_user_email, password, user

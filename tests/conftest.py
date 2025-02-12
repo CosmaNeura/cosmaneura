@@ -10,25 +10,21 @@ if os.environ["PYTHON_ENV"] != "test":
 
     assert 'app' not in sys.modules, "app modules should not be imported before environment is set"
 
-from tests.routes.utils import MockAuthenticateRequest
 import multiprocessing
 
 from pathlib import Path
-import typing as t
 
 import pytest
 from pytest import Config
 from activemodel.pytest import database_reset_transaction, database_reset_truncate
 from decouple import config as decouple_config
-from fastapi.testclient import TestClient
-from httpx import ASGITransport, AsyncClient
 from structlog import get_logger
 
 # important to ensure model metadata is added to the application
 import app.models  # noqa: F401
 
 from tests.utils import delete_all_clerk_users
-from tests.fixtures import create_fixture_data
+from tests.seeds import seed_test_data
 
 # this file is uploaded as an artifact
 TEST_RESULTS_DIRECTORY = Path(decouple_config("TEST_RESULTS_DIRECTORY", cast=str))
@@ -65,68 +61,22 @@ def pytest_configure(config: Config):
     # without this, if the test succeeds, no output is provided
     # this is a good default, but makes it much harder to debug what is going on
     config.option.log_cli = True
-    config.option.log_cli_level = "INFO"
+    # config.option.log_cli_level = "INFO"
 
     # lower debug level for file debugging, so we can download this artifact and view detailed debugging
     config.option.log_file = str(TEST_RESULTS_DIRECTORY / "pytest.log")
-    config.option.log_file_level = "DEBUG"
+    # config.option.log_file_level = "DEBUG"
 
 
-# NOTE only executes if a test is run
 def pytest_sessionstart(session):
+    "only executes once if a test is run, at the beginning of the test suite execution"
+
     # without this, the clerk dev instance will get cluttered and throw errors
     delete_all_clerk_users()
     # clear out any previous cruft in this DB, which is why...
     database_reset_truncate()
-    # we refresh fixtures on each test run
-    create_fixture_data()
-
-def base_server_url(protocol: t.Literal["http", "https"] = "http"):
-    """
-    VITE_PYTHON_URL is defined as the protocol + host, but the user/dev shouldn't have to worry
-    about trailing slash, etc so we normalize it here.
-    """
-
-    url = decouple_config("VITE_PYTHON_URL", cast=str).strip()
-
-    # Remove any existing protocol
-    if url.startswith(("http://", "https://")):
-        url = url.split("://")[1]
-
-    # Remove any trailing slashes
-    url = url.rstrip("/")
-
-    # Add protocol and trailing slash
-    return f"{protocol}://{url}/"
-
-
-@pytest.fixture
-def client():
-    from app.server import api_app
-
-    return TestClient(api_app, base_url=base_server_url())
-
-@pytest.fixture
-def authenticated_client():
-    from app.server import api_app
-    from app.routes.internal import authenticate_clerk_request_middleware
-
-    api_app.dependency_overrides[authenticate_clerk_request_middleware] = MockAuthenticateRequest()
-
-    yield TestClient(api_app, base_url=base_server_url())
-
-    api_app.dependency_overrides = {}
-
-
-@pytest.fixture
-async def aclient() -> t.AsyncGenerator[AsyncClient, None]:
-    from app.server import api_app
-
-    async with AsyncClient(
-        transport=ASGITransport(app=api_app),
-        base_url=base_server_url(),
-    ) as client:
-        yield client
+    # we reseed the database with a base set of records
+    seed_test_data()
 
 
 @pytest.fixture(scope="function", autouse=True)
