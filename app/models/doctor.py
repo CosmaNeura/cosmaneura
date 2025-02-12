@@ -24,10 +24,10 @@ class DoctorRole(str, Enum):
 class Doctor(
     BaseModel, TimestampsMixin, SoftDeletionMixin, TypeIDMixin("doctor"), table=True
 ):
-    clerk_id: str
+    clerk_id: str = Field(unique=True, index=True)
     "external ID of the user in Clerk"
 
-    email: str = Field(nullable=True)
+    email: str = Field(nullable=True, default=None)
     "email address of the user in Clerk, makes it easy to debug and find users, set async after the user is created"
 
     role: DoctorRole = Field(default=DoctorRole.normal)
