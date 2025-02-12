@@ -1,4 +1,4 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 
 # Description: this insane mess deploys already-built containers to production
 #
@@ -13,6 +13,7 @@
 
 GIT_SHA="$1"
 
+# TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
 RESOURCE_GROUP="cosmaneura-prod"
 CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-app-jmon"
