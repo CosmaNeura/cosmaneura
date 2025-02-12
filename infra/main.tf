@@ -814,6 +814,20 @@ resource "onepassword_item" "job_monitor_login" {
   tags = var.onepassword_tags
 }
 
+resource "onepassword_item" "session_secret" {
+  vault = data.external.secrets.result["OP_VAULT_UID"]
+
+  title    = "${local.environment} Session Secret"
+  category = "password"
+
+  password_recipe {
+    length  = 30
+    symbols = false
+  }
+
+  tags = var.onepassword_tags
+}
+
 resource "azurerm_container_app" "job-monitor" {
   resource_group_name = azurerm_resource_group.main.name
   # NOTE location is determined automatically by the resource group

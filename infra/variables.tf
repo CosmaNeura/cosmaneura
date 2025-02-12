@@ -23,6 +23,7 @@ variable "python_secret_vars" {
   type        = set(string)
   default = [
     "DATABASE_URL", "REDIS_URL",
+    "SESSION_SECRET_KEY",
     "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
     # azure upload
     "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL",
@@ -36,7 +37,8 @@ variable "python_secret_vars" {
 variable "python_public_vars" {
   description = "ENV vars which can be public"
   type        = set(string)
-  default = ["LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT",
+  default = [
+    "LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT", "ALLOWED_HOST_LIST",
     # upload container names
     "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_INTAKE_CONTAINER_NAME"
   ]
