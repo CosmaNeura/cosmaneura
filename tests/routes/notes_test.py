@@ -15,10 +15,11 @@ def test_notes_list(authenticated_client: TestClient):
 
 
 def test_note_detail(authenticated_client: TestClient):
-    # TODO will break as the seed process becomes more complex
-    assert Appointment.count() == 1
+    # more than one, because of the db seed
+    assert Appointment.count() > 1
 
     appointment = Appointment.first()
+    assert appointment
 
     response = authenticated_client.get(
         api_app.url_path_for("note_detail", appointment_id=appointment.id)

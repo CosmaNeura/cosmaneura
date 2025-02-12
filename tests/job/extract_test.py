@@ -1,7 +1,6 @@
 import re
 
-from app import log
-from app.jobs.extract import extract
+from app.jobs.extract import perform
 
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
@@ -23,7 +22,7 @@ def test_telehealth_SOAP_note_extraction():
     )
     assert schema is None
 
-    extract(file.id)
+    perform(file.id)
 
     schema = DoctorNoteSchema.get(
         doctor_id=file.doctor_id,
@@ -140,7 +139,7 @@ def test_telehealth_H_and_P_note_extraction():
     )
     assert schema is None
 
-    extract(file.id)
+    perform(file.id)
 
     schema = DoctorNoteSchema.get(
         doctor_id=file.doctor_id,
