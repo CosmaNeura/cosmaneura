@@ -401,50 +401,16 @@
           }
         }
       }
-    },
-    "/{path}": {
-      "get": {
-        "summary": "Frontend Handler",
-        "description": "This is a very dangerous piece of code: if this is not last it will override other routes in the application\n\nWithout this, non-index RR routes will not work.\n\nhttps://gist.github.com/ultrafunkamsterdam/b1655b3f04893447c3802453e05ecb5e",
-        "operationId": "frontend_handler__path__get",
-        "parameters": [
-          {
-            "name": "path",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Path"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
     "schemas": {
       "AIVisitNote": {
         "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -468,10 +434,6 @@
               }
             ],
             "title": "Updated At"
-          },
-          "id": {
-            "type": "string",
-            "title": "Id"
           },
           "doctor_id": {
             "type": "string",
@@ -517,6 +479,10 @@
       },
       "AIVisitTranscript": {
         "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
           "deleted_at": {
             "type": "string",
             "format": "date-time",
@@ -545,10 +511,6 @@
               }
             ],
             "title": "Updated At"
-          },
-          "id": {
-            "type": "string",
-            "title": "Id"
           },
           "doctor_id": {
             "type": "string",
@@ -681,6 +643,10 @@
       },
       "DoctorNoteSchema": {
         "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
           "deleted_at": {
             "type": "string",
             "format": "date-time",
@@ -709,10 +675,6 @@
               }
             ],
             "title": "Updated At"
-          },
-          "id": {
-            "type": "string",
-            "title": "Id"
           },
           "doctor_id": {
             "type": "string",
