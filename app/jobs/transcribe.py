@@ -81,6 +81,10 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
         .all()
     )
 
+    if not note_schemas:
+        log.warning("no note schemas found for doctor", doctor_id=transcript.doctor_id)
+        return
+
     for schema in note_schemas:
         app.jobs.summarize.queue(transcript_id=transcript.id, schema_id=schema.id)
 

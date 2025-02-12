@@ -25,6 +25,7 @@ from app.configuration.azure import (
 )
 from app.configuration.openai import openai
 
+from activemodel.types import TypeIDType
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -34,7 +35,7 @@ from .anonymize import deidentify
 OPENAI_MODEL = "gpt-4o"
 
 
-def perform(doctor_note_file_id: str | TypeID):
+def perform(doctor_note_file_id: str | TypeID | TypeIDType):
     """
     Extract a schema and content from an example clinical note.
     """
