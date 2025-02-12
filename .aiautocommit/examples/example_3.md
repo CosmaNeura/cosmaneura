@@ -1,4 +1,4 @@
-# Example 3
+## Example 3
 
 ```
 diff --git a/app/routes/middleware/logging.py b/app/routes/middleware/logging.py

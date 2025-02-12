@@ -1,4 +1,4 @@
-# Example 4
+## Example 4
 
 ```
 diff --git a/pyproject.toml b/pyproject.toml

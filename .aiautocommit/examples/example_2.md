@@ -1,4 +1,4 @@
-# Example 2
+## Example 2
 
 ```
 diff --git a/.git-functions b/.git-functions
