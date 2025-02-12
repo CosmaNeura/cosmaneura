@@ -1,6 +1,3 @@
-# TODO need to understand the clerk data model
-
-
 class Organization(TimestampMixin):
     pass
 
@@ -28,10 +25,4 @@ class SchedulerEvent(TimestampMixin):
 class IntakeLink(TimestampMixin):
     """
     For each scheduled event, we will create a link to a unique intake chat.
-    """
-
-
-class IntakeTranscript(TimestampMixin):
-    """
-    When a patient submits an intake form, the raw data is stored here.
     """

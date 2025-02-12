@@ -302,6 +302,7 @@ def retry_task(task_id):
 
 # # TestValidationModel(prompt="foo", prompt_hash="bar")
 
+# https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/switching-endpoints
 def azure_openai_call():
      client = AzureOpenAI(api_key="key_from_1p", azure_endpoint="https://northcentralus.api.cognitive.microsoft.com/", api_version="2025-01-01-preview")
      client.chat.completions.create(model="gpt-4o", messages=[{"role":"system", "content":"tell me about yourself"}])
