@@ -8,9 +8,8 @@ import {
 
 import * as Sentry from "@sentry/react"
 
-// TODO fix up react router when rr7 is supported https://docs.sentry.io/platforms/javascript/guides/react/features/react-router/
-
 if (isProduction()) {
+  // TODO fix up react router when rr7 is supported https://docs.sentry.io/platforms/javascript/guides/react/features/react-router/
   Sentry.init({
     dsn: requireEnv("VITE_SENTRY_DSN"),
 
@@ -30,10 +29,10 @@ if (isProduction()) {
     // We recommend adjusting this value in production
     tracesSampleRate: 1.0,
 
-    // TODO(mbianco) pull domain from ENV
+    // TODO(mbianco) pull domain from ENV, maybe using a python CLI to inject the domain?
     // TODO(mbianco) should pull localias as well
     // Set `tracePropagationTargets` to control for which URLs distributed tracing should be enabled
-    tracePropagationTargets: ["localhost", /^https:\/\/yourserver\.io\/api/],
+    // tracePropagationTargets: ["localhost", /^https:\/\/yourserver\.io\/api/],
 
     // Capture Replay for 10% of all sessions,
     // plus for 100% of sessions with an error
@@ -50,8 +49,12 @@ export default function withSentryProvider(Component: React.ComponentType) {
     return Component
   }
 
+  // this seems to take precedence over the root.tsx ErrorBoundary
+  // TODO maybe set Sentry.setUser here?
+
   return Sentry.withErrorBoundary(Component, {
-    // TODO implement custom fallback for a nicer experience
     showDialog: true,
+    // TODO implement custom fallback for a nicer experience
+    fallback: <p>an error has occurred</p>,
   })
 }
