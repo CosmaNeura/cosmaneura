@@ -200,8 +200,10 @@ def redirect_stdlib_loggers():
         processors=[
             # required to strip extra keys that the structlog stdlib bindings add in
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            # don't use ORJSON here, as the stdlib formatter chain expects a str not a bytes
-            structlog.processors.JSONRenderer(sort_keys=True),
+            PROCESSORS[-1]
+            if not is_production() and not is_staging()
+            # don't use ORJSON in production environments, as the stdlib formatter chain expects a str not a bytes
+            else structlog.processors.JSONRenderer(sort_keys=True),
         ],
         # processors unique to stdlib logging
         foreign_pre_chain=[
