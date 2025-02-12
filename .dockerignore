@@ -33,6 +33,7 @@ node_modules
 Justfile*
 Procfile
 /TODO*
+/CHANGELOG.md
 /README.md
 /playground*
 /tests
@@ -48,5 +49,7 @@ lefthook.yml
 
 # web code is built and bundled into the image separately
 /web
+
+/.aiautocommit
 
 # NOTE .nixpacks must be added to the docker container! Do not ignore.
