@@ -4,31 +4,12 @@ requires-python = ">=3.13"
 [[package]]
 name = "activemodel"
 version = "0.7.0"
-source = { editable = "../../python/activemodel" }
+source = { git = "https://github.com/iloveitaly/activemodel.git#9fe4c5af619690ffb6344cf5c74a2d4b2b46ef02" }
 dependencies = [
     { name = "pydash" },
     { name = "python-decouple-typed" },
     { name = "sqlmodel" },
     { name = "typeid-python" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pydash", specifier = ">=8.0.4" },
-    { name = "python-decouple-typed", specifier = ">=3.11.0" },
-    { name = "sqlmodel", specifier = ">=0.0.22" },
-    { name = "typeid-python", specifier = ">=0.3.1" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "alembic", specifier = ">=1.14.1" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.115.6" },
-    { name = "ipdb", specifier = ">=0.13.13" },
-    { name = "pdbr", specifier = ">=0.8.9" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.3" },
-    { name = "pydantic", specifier = ">=2.10.0" },
-    { name = "pytest", specifier = ">=8.3.3" },
 ]
 
 [[package]]
@@ -553,7 +534,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "activemodel", editable = "../../python/activemodel" },
+    { name = "activemodel", git = "https://github.com/iloveitaly/activemodel.git" },
     { name = "aiosmtplib", specifier = ">=3.0.2" },
     { name = "alembic", specifier = ">=1.14.0" },
     { name = "alembic-postgresql-enum", specifier = ">=1.6.1" },
