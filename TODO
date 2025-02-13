@@ -75,25 +75,27 @@ user flow
 
 ## v3: cleanup
 
-- [ ] https://github.com/microsoft/azure-container-apps/issues/1307
+- [x] https://github.com/microsoft/azure-container-apps/issues/1307 - looks like a noop
+- [ ] logs are a weird nested JSON data structure coming from azure
 - [ ] use azure openai api instead of openai
-- [ ] admin login_as to clerk hack
-  - [ ] need role on user and way to switch session
-- [ ] added to our list to let them know in the upload that there are no schemas/notes uploaded
-- [ ] add email to user record so we can tell who is who
+- [x] admin login_as to clerk hack
+  - [x] need role on user and way to switch session
+- [ ] let users know in the upload that there are no schemas/notes uploaded
+- [x] add email to user record so we can tell who is who
+  - [x] add job to pull email from clerk
 - [x] add console script to import all models and all jobs
 - [ ] add contraint to prevent duplicate schemas of the same type https://github.com/fastapi/sqlmodel/issues/114
-  - [ ] I think there was something about fks not being properly named that we should fix as well
-- [ ] multiple schemas seem to be created for the same input note. Should try to make these idempotent.
+  - [x] I think there was something about fks not being properly named that we should fix as well
+  - [ ] multiple schemas seem to be created for the same input note. Should try to make these idempotent.
 - [ ] azure deid logs are super verbose, can we turn these down and decrease HTTP logging?
 - [ ] cron job to delete transcripts from the database
   - [ ] soft delete, actually remove the transcripts
   - [ ] need to implement this in activemodel
 - [ ] alerting
-  - [ ] create two public endpoints on our web site, e.g. /status and /healthcheck
-  - [ ] for /status: run a Clerk query to find the last login time, if it’s within the last day, return 200
-  - [ ] for /healthcheck: return a 200
-  - [ ] have Sentry assess both pages for uptime
+  - [x] create two public endpoints on our web site, e.g. /status and /healthcheck
+  - [x] for /status: run a Clerk query to find the last login time, if it’s within the last day, return 200
+  - [x] for /healthcheck: return a 200
+  - [x] have Sentry assess both pages for uptime
   - [ ] run a celery job every X minutes and hit sentry, alert if it's not hit
 - [ ] job signals / events to monitor what is being processed
   - [ ] hook into celery, alert on job name and other metadata when complete & started
