@@ -26,9 +26,12 @@ from decouple import config
 from starlette_context import context
 from structlog.processors import ExceptionRenderer
 from structlog.tracebacks import ExceptionDictTransformer
-from structlog.typing import ExcInfo
+from structlog.typing import EventDict, ExcInfo
+from typeid import TypeID
 
 from app.constants import NO_COLOR
+
+from activemodel import BaseModel
 
 from ..environments import is_production, is_staging
 
@@ -90,6 +93,21 @@ def pretty_traceback_exception_formatter(sio: TextIO, exc_info: ExcInfo) -> None
     sio.write("\n" + formatted_exception)
 
 
+def logger_name(logger: Any, method_name: Any, event_dict: EventDict) -> EventDict:
+    """
+    structlog does not have named loggers, so we roll our own
+
+    >>> structlog.get_logger(logger_name="my_logger_name")
+    """
+
+    if logger_name := event_dict.pop("logger_name", None):
+        # `logger` is a special key that structlog treats as the logger name
+        # look at `structlog.stdlib.add_logger_name` for more information
+        event_dict.setdefault("logger", logger_name)
+
+    return event_dict
+
+
 def log_processors_for_environment() -> list[structlog.types.Processor]:
     if is_production() or is_staging():
 
@@ -141,11 +159,36 @@ def add_fastapi_context(
     return event_dict
 
 
+def simplify_activemodel_objects(
+    logger: logging.Logger,
+    method_name: str,
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
+    """
+    Make the following transformations to the logs:
+
+    - Convert keys ('object') whose value inherit from activemodel's BaseModel to object_id=str(object.id)
+    - Convert TypeIDs to their string representation object=str(object)
+    """
+    for key, value in list(event_dict.items()):
+        if isinstance(value, BaseModel):
+            # TODO this will break as soon as a model doesn't have `id` as pk
+            event_dict[f"{key}_id"] = str(getattr(value, "id"))
+            del event_dict[key]
+        elif isinstance(value, TypeID):
+            event_dict[key] = str(value)
+
+    return event_dict
+
+
 # order here is not particularly informed
 PROCESSORS: list[structlog.types.Processor] = [
+    # although this is stdlib, it's needed, although I'm not sure entirely why
     structlog.stdlib.add_log_level,
     structlog.contextvars.merge_contextvars,
+    logger_name,
     add_fastapi_context,
+    simplify_activemodel_objects,
     structlog.processors.TimeStamper(fmt="iso", utc=True),
     # add `stack_info=True` to a log and get a `stack` attached to the log
     structlog.processors.StackInfoRenderer(),
