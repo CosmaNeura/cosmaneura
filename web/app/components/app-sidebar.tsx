@@ -20,10 +20,9 @@ import {
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
-import { Status } from "~/components/status-badge"
+import { StatusBadge } from "~/components/shared/StatusBadge"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
-import { StatusBadge } from "./status-badge"
 import { UserButton } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 
