@@ -24,4 +24,4 @@ def inject_doctor_record(request: Request):
     doctor.save()
 
     request.state.doctor = doctor
-    context["doctor"] = doctor
+    # context["doctor"] = doctor
