@@ -44,11 +44,15 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
     }
   }
 
+  function Bomb() {
+    throw new Error("Test error boundary")
+    return null
+  }
   return (
     <SidebarProvider
       style={
         {
-          "--sidebar-width": "350px",
+          "--sidebar-width": "300px",
         } as React.CSSProperties
       }
     >
@@ -57,6 +61,7 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
         header={"Notes"}
         entries={appointments.map(appointmentToSidebarEntry)}
       />
+      {/* <Bomb /> */}
       <Outlet />
     </SidebarProvider>
   )

@@ -37,7 +37,7 @@ function AdminBar() {
   }
 
   return (
-    <div className="fixed top-0 left-0 z-50 flex w-full items-center space-x-2 bg-white p-1 text-xs shadow">
+    <div className="z-50 flex w-full items-center space-x-2 bg-white p-2 text-xs shadow">
       {data.current_user && (
         <div className="whitespace-nowrap">
           {data.current_user.clerk_id} {data.current_user.email}

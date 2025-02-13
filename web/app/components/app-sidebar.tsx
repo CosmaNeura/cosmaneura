@@ -131,7 +131,7 @@ function SelectionList({
             key={entry.id}
             onClick={() => currentUrl !== entry.url && navigate(entry.url)}
             className={cn(
-              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex w-full flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0",
+              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b p-4 text-sm leading-tight",
               currentUrl === entry.url &&
                 true &&
                 "bg-sidebar-accent text-sidebar-accent-foreground",
@@ -142,7 +142,9 @@ function SelectionList({
               <span className="text-xs text-slate-500">{entry.date}</span>
             </div>
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-xs text-slate-500">{entry.preview}</span>
+              <span className="text-left text-xs text-slate-500">
+                {entry.preview}
+              </span>
               {entry.status !== "none" && <StatusBadge status={entry.status} />}
             </div>
             {/* <span className="font-medium">{entry.subTitle}</span>
@@ -264,11 +266,7 @@ export function AppSidebar({
   const showSidebar = entries !== false
 
   return (
-    <div
-      className="flex flex-row"
-      // className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row"
-      {...props}
-    >
+    <div className="flex overflow-hidden" {...props}>
       {/* the main navigation icon sidebar */}
       <IconNavigation />
 
