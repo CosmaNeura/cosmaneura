@@ -4,7 +4,6 @@ import { $path } from "safe-routes"
 import { Route } from "./+types/notes"
 
 import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
-import { PageTransition } from "@/components/page-transition"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { Appointment, noteList } from "~/configuration/client"
 
@@ -46,21 +45,19 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
   }
 
   return (
-    <PageTransition>
-      <SidebarProvider
-        style={
-          {
-            "--sidebar-width": "350px",
-          } as React.CSSProperties
-        }
-      >
-        <AppSidebar
-          isLoading={!appointments}
-          header={"Notes"}
-          entries={appointments.map(appointmentToSidebarEntry)}
-        />
-        <Outlet />
-      </SidebarProvider>
-    </PageTransition>
+    <SidebarProvider
+      style={
+        {
+          "--sidebar-width": "350px",
+        } as React.CSSProperties
+      }
+    >
+      <AppSidebar
+        isLoading={!appointments}
+        header={"Notes"}
+        entries={appointments.map(appointmentToSidebarEntry)}
+      />
+      <Outlet />
+    </SidebarProvider>
   )
 }

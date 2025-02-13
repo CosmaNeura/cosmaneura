@@ -34,7 +34,7 @@ const IconSidebarHeader = () => (
       <SidebarMenuItem>
         <SidebarMenuButton size="lg" asChild className="md:h-8 md:p-0">
           <a href="#">
-            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
+            <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
               <Command className="size-4" />
             </div>
             <div className="grid flex-1 text-left text-sm leading-tight">
@@ -131,7 +131,7 @@ function SelectionList({
             key={entry.id}
             onClick={() => currentUrl !== entry.url && navigate(entry.url)}
             className={cn(
-              "flex w-full flex-col items-start gap-2 whitespace-nowrap border-b p-4 text-sm leading-tight last:border-b-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex w-full flex-col items-start gap-2 border-b p-4 text-sm leading-tight whitespace-nowrap last:border-b-0",
               currentUrl === entry.url &&
                 true &&
                 "bg-sidebar-accent text-sidebar-accent-foreground",
@@ -189,11 +189,11 @@ function SelectionSidebar({
   })
 
   return (
-    <Sidebar collapsible="none" className="hidden flex-1 md:flex">
+    <Sidebar collapsible="none" className="hidden flex-1 border-r md:flex">
       {/* title with filters */}
       <SidebarHeader className="gap-3.5 border-b p-4">
         <div className="flex w-full items-center justify-between">
-          <div className="text-base font-medium text-foreground">{header}</div>
+          <div className="text-foreground text-base font-medium">{header}</div>
           <Label className="flex items-center gap-2 text-sm">
             <span>This Week</span>
             <Switch
@@ -264,9 +264,9 @@ export function AppSidebar({
   const showSidebar = entries !== false
 
   return (
-    <Sidebar
-      collapsible="icon"
-      className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row"
+    <div
+      className="flex flex-row"
+      // className="overflow-hidden [&>[data-sidebar=sidebar]]:flex-row"
       {...props}
     >
       {/* the main navigation icon sidebar */}
@@ -280,6 +280,6 @@ export function AppSidebar({
           entries={entries}
         />
       )}
-    </Sidebar>
+    </div>
   )
 }
