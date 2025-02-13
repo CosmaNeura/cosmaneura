@@ -4,8 +4,6 @@ from datetime import datetime
 
 import pytz
 
-from app import log
-
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
@@ -16,13 +14,14 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
-from tests.routes.utils import get_clerk_dev_user
+from tests.routes.utils import get_clerk_seed_user
+from tests.utils import log
 
 
 def seed_test_data():
     log.info("creating test fixture data")
 
-    username, password, user = get_clerk_dev_user()
+    username, password, user = get_clerk_seed_user()
     doctor = Doctor.find_or_create_by(clerk_id=user.id)
 
     patient = Patient.find_or_create_by(
@@ -54,7 +53,7 @@ def seed_test_data():
         appt = Appointment.find_or_create_by(
             doctor_id=doctor.id, patient_id=patient.id, appointment_date=date_et
         )
-        print(f"seeding teresa-jensen-mock-appointment-11-15-2024.{file_type}")
+        log.info(f"seeding teresa-jensen-mock-appointment-11-15-2024.{file_type}")
         VisitAudioFile.find_or_create_by(
             doctor_id=doctor.id,
             patient_id=patient.id,

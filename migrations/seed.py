@@ -12,7 +12,10 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
-doctor = Doctor.find_or_create_by(clerk_id="user_2pB8MHVdVjSxOye98WwpMHalwlT")
+from tests.seeds import get_clerk_seed_user
+
+_, _, clerk_user = get_clerk_seed_user()
+doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
 
 patient = Patient.find_or_create_by(
     doctor_id=doctor.id,
@@ -24,6 +27,8 @@ appointment = Appointment.find_or_create_by(
     doctor_id=doctor.id,
     patient_id=patient.id,
     appointment_date=datetime.strptime("2025-10-31", "%Y-%m-%d"),
+    appointment_name="Battle Wound",
+    appointment_notes_preview="Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength",
 )
 
 # to test multiple items in the ui and an empty note state
@@ -31,6 +36,7 @@ appointment_2 = Appointment.find_or_create_by(
     doctor_id=doctor.id,
     patient_id=patient.id,
     appointment_date=datetime.strptime("2025-12-31", "%Y-%m-%d"),
+    appointment_name="Wow AI really went crazy on this title, it's way too long. Will it ever end?",
 )
 
 VisitAudioFile.find_or_create_by(
