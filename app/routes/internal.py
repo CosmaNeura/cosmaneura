@@ -81,7 +81,10 @@ def note_list(request: Request) -> NotetakingData:
 
     doctor: Doctor = request.state.doctor
     appointment_list = (
-        Appointment.select().where(Appointment.doctor_id == doctor.id).all()
+        Appointment.select()
+        .where(Appointment.doctor_id == doctor.id)
+        .order_by(Appointment.appointment_date.desc())
+        .all()
     )
 
     return NotetakingData(appointments=list(appointment_list))
