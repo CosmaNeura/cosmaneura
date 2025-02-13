@@ -98,6 +98,18 @@ user flow
 - [ ] job signals / events to monitor what is being processed
   - [ ] hook into celery, alert on job name and other metadata when complete & started
 
+## Customer Feedback
+
+### Theresa
+
+- [ ] order of the elements in the notes is really important
+- [ ] numbered list would be better, looks like numbered list isn't working properly, but it should be formatted as markdown
+- [ ] make it so we can type in the DOB, right now this isn't possible
+- [ ] wants to be able select the note type from the upload area
+- [ ] remove markdown formatting from the copy content
+- [ ] add note feedback tool so they can submit feedback
+- [ ] she generates a patient instructions page,
+
 ## vFuture
 
 - [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
