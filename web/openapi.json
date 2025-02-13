@@ -926,6 +926,10 @@
       },
       "SettingsData": {
         "properties": {
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
           "notes_schema": {
             "items": {
               "$ref": "#/components/schemas/DoctorNoteSchema"
@@ -937,6 +941,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
+          "doctor_id",
           "notes_schema"
         ],
         "title": "SettingsData"
