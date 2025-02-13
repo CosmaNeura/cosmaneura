@@ -42,7 +42,7 @@ export const meta: MetaFunction = () => {
 
 function Header({ title }: { title?: string }) {
   return (
-    <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
+    <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-2 h-4" />
       <h1 className="text-lg font-semibold">
@@ -73,7 +73,7 @@ function Content({
             <div
               className={"transform transition-all duration-150 ease-in-out"}
             >
-              <div className="rounded-lg border bg-card p-6 shadow-sm">
+              <div className="bg-card rounded-lg border p-6 shadow-sm">
                 {children}
               </div>
             </div>
@@ -107,7 +107,7 @@ function NoteHeader({
         <div className="mt-1 space-y-1">
           {Object.entries(dataFields).map(([key, value]) => (
             <p className="text-sm" key={key}>
-              <span className="font-medium text-muted-foreground">{key}:</span>{" "}
+              <span className="text-muted-foreground font-medium">{key}:</span>{" "}
               <span>{value}</span>
             </p>
           ))}

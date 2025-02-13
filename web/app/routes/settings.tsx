@@ -130,7 +130,7 @@ function IntakeUpload() {
         <section className="w-1/2 space-y-4">
           <div className="space-y-2">
             <h2 className="text-left text-xl font-semibold">Intake</h2>
-            <p className="text-left text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-left text-sm">
               Upload the best intake notes that patients have provided you in
               the past. This will be used to create an intake process for each
               appointment type.
@@ -139,12 +139,12 @@ function IntakeUpload() {
           <ImageDropzone onDropFile={setFile}>
             {!file && (
               <div className="flex items-center gap-4 font-semibold">
-                <div className="rounded-full bg-muted p-3">
+                <div className="bg-muted rounded-full p-3">
                   <Upload className="h-4 w-4" />
                 </div>
                 <div className="flex flex-col gap-1">
                   <p>Upload Example Intake Note</p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-muted-foreground text-xs">
                     Click here or drag to select an image smaller than 10MB
                   </p>
                 </div>
@@ -153,7 +153,7 @@ function IntakeUpload() {
             {file && (
               <div className="flex flex-col gap-1 font-semibold">
                 <p>{file.name}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-muted-foreground text-xs">
                   Press the upload button below to add the note
                 </p>
               </div>
@@ -206,7 +206,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
               {schema.example_count}{" "}
               {pluralize("example", schema.example_count)}
             </div>
-            <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground">
+            <div className="text-muted-foreground ml-auto flex items-center gap-2 text-sm">
               <ChevronDown
                 className={`h-4 w-4 transform transition-transform ${
                   expandedIds.includes(schema.id) ? "rotate-180" : ""
@@ -220,7 +220,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 Here's the note structure we've extracted so far from your note:
               </p>
               <div className="mt-4 border-l-2 pl-4">
-                <p className="text-sm text-muted-foreground">
+                <p className="text-muted-foreground text-sm">
                   {Object.entries(schema.fields).map(([field, description]) => (
                     <div key={field} className="mb-2">
                       <span className="font-semibold">{field}:</span>{" "}
@@ -294,14 +294,14 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
         <section className="w-1/2 space-y-4">
           <div className="space-y-2">
             <h2 className="text-left text-xl font-semibold">Notetaking</h2>
-            <p className="text-left text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-left text-sm">
               Upload high quality examples of the different types of notes that
               you use. These examples will be used to generate future notes for
               your patients, so make sure they are a great representation of the
               structure and quality of note that you want to see from your
               personalized AI!
             </p>
-            <p className="text-left text-sm text-muted-foreground">
+            <p className="text-muted-foreground text-left text-sm">
               For example: if you use the telehealth SOAP note, pick a
               high-quality note for that note type and upload a PDF version of
               this note type.
@@ -311,12 +311,12 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
           <ImageDropzone onDropFile={setFile}>
             {!file && (
               <div className="flex items-center gap-4 font-semibold">
-                <div className="rounded-full bg-muted p-3">
+                <div className="bg-muted rounded-full p-3">
                   <Upload className="h-4 w-4" />
                 </div>
                 <div className="flex flex-col gap-1">
                   <p>Upload Example Visit Note</p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-muted-foreground text-xs">
                     Click here or drag to select an image smaller than 10MB
                   </p>
                 </div>
@@ -325,7 +325,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
             {file && (
               <div className="flex flex-col gap-1 font-semibold">
                 <p>{file.name}</p>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-muted-foreground text-xs">
                   Press the upload button below to add the example patient notes
                 </p>
               </div>
@@ -398,7 +398,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
       <AppSidebar isLoading={false} entries={false} />
 
       <SidebarInset>
-        <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
+        <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
           <h1 className="text-lg font-semibold">Settings</h1>
         </header>
         <div className="flex flex-col gap-8 p-6">

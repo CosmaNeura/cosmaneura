@@ -14,7 +14,7 @@ export const meta = () => {
 export function EmptySelectionState() {
   return (
     <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
-      <div className="text-center text-muted-foreground">
+      <div className="text-muted-foreground text-center">
         <h2 className="mb-2 text-xl font-semibold">Select a patient</h2>
         <p className="text-sm">
           Choose a patient from the list to view their details
