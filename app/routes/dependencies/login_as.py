@@ -16,7 +16,7 @@ def login_as(request: Request):
     if request.url.path.startswith("/internal/v1/admin"):
         return
 
-    if (admin_user := request.state.user) and admin_user.role == DoctorRole.admin:
+    if (admin_user := request.state.doctor) and admin_user.role == DoctorRole.admin:
         if SESSION_KEY_LOGIN_AS_USER not in request.session:
             return
 
@@ -34,9 +34,8 @@ def login_as(request: Request):
             admin_id=admin_user.id,
         )
 
-        # TODO should add admin ID for the user and update contextvars for logging
         request.state.admin_user = admin_user
-        request.state.user = login_as_user
+        request.state.doctor = login_as_user
 
-        context["user_id"] = str(login_as_user.id)
+        context["doctor_id"] = str(login_as_user.id)
         context["admin_user_id"] = str(admin_user.id)

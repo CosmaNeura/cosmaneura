@@ -1,4 +1,5 @@
 from fastapi import HTTPException, Request, status
+from starlette_context import context
 
 from app.models.doctor import Doctor
 
@@ -17,4 +18,5 @@ def inject_doctor_record(request: Request):
             status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
         )
 
-    request.state.doctor = request.state.user = doctor
+    request.state.doctor = doctor
+    context["doctor"] = doctor

@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Body, Depends, Path, Request
 from openai.types import Upload
 from pydantic import BaseModel, computed_field
+from typeid import TypeID
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -204,6 +205,7 @@ def upload_example_intake(request: Request, file_name: str) -> None:
 
 
 class SettingsData(BaseModel, extra="forbid"):
+    doctor_id: str
     notes_schema: list[DoctorNoteSchema]
     # TODO add intake schema
 
@@ -216,4 +218,4 @@ def settings_data(request: Request) -> SettingsData:
         DoctorNoteSchema.select().where(DoctorNoteSchema.doctor_id == doctor.id).all()
     )
 
-    return SettingsData(notes_schema=list(notes_schema))
+    return SettingsData(notes_schema=list(notes_schema), doctor_id=str(doctor.id))
