@@ -3,7 +3,6 @@ import { Outlet } from "react-router"
 import { Route } from "./+types/intake"
 
 import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
-import { PageTransition } from "@/components/page-transition"
 import { SkeletonMessageList } from "@/components/skeleton-message-list"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { getClient } from "~/configuration/clerk"
@@ -40,21 +39,19 @@ export default function Layout({ loaderData }: Route.ComponentProps) {
   }
 
   return (
-    <PageTransition>
-      <SidebarProvider
-        style={
-          {
-            "--sidebar-width": "350px",
-          } as React.CSSProperties
-        }
-      >
-        <AppSidebar
-          isLoading={!appointments}
-          header={"Notes"}
-          entries={appointments.map(appointmentToSidebarEntry)}
-        />
-        <Outlet />
-      </SidebarProvider>
-    </PageTransition>
+    <SidebarProvider
+      style={
+        {
+          "--sidebar-width": "350px",
+        } as React.CSSProperties
+      }
+    >
+      <AppSidebar
+        isLoading={!appointments}
+        header={"Notes"}
+        entries={appointments.map(appointmentToSidebarEntry)}
+      />
+      <Outlet />
+    </SidebarProvider>
   )
 }

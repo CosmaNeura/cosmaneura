@@ -8,7 +8,6 @@ import { Send } from "lucide-react"
 import type { Route } from "./+types/index"
 
 import { AppSidebar } from "@/components/app-sidebar"
-import { PageTransition } from "@/components/page-transition"
 import { MessageContent } from "@/components/shared/MessageContent"
 import { SkeletonMessage } from "@/components/skeleton-message"
 import { SkeletonMessageList } from "@/components/skeleton-message-list"
@@ -79,7 +78,7 @@ function ResendIntakeButton() {
 }
 
 const Header = ({ selectedMail }: { selectedMail: Route.Mail | null }) => (
-  <header className="sticky top-0 flex shrink-0 items-center gap-2 border-b bg-background p-4">
+  <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
     <SidebarTrigger className="-ml-1" />
     <Separator orientation="vertical" className="mr-2 h-4" />
     <Breadcrumb>
@@ -103,7 +102,7 @@ type ContentProps = {
 
 const BlankMessage = () => (
   <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
-    <div className="text-center text-muted-foreground">
+    <div className="text-muted-foreground text-center">
       <h2 className="mb-2 text-xl font-semibold">Select a patient</h2>
       <p className="text-sm">
         Choose a patient from the list to view their details
