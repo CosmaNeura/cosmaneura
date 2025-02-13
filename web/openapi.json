@@ -472,6 +472,23 @@
           }
         }
       }
+    },
+    "/status": {
+      "get": {
+        "summary": "Active User Status",
+        "description": "check if users have logged in within the last day",
+        "operationId": "active_user_status",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

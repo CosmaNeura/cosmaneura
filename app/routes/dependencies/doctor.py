@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import HTTPException, Request, status
 from starlette_context import context
 
@@ -17,6 +19,9 @@ def inject_doctor_record(request: Request):
         raise HTTPException(
             status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
         )
+
+    doctor.last_active_at = datetime.now()
+    doctor.save()
 
     request.state.doctor = doctor
     context["doctor"] = doctor
