@@ -2,13 +2,6 @@ import json
 
 import typer
 
-from app.configuration.versions import (
-    VERSIONS_FILE,
-    chrome_version,
-    postgres_version,
-    redis_version,
-)
-
 app = typer.Typer()
 
 
@@ -19,6 +12,13 @@ def write_versions():
 
     Helpful to automatically ensuring dev, test, and prod parity
     """
+
+    from app.configuration.versions import (
+        VERSIONS_FILE,
+        chrome_version,
+        postgres_version,
+        redis_version,
+    )
 
     VERSIONS_FILE.write_text(
         json.dumps(
@@ -42,8 +42,15 @@ def dump_openapi():
 
 
 @app.command()
-def hello():
-    typer.echo("Hello, World!")
+def routes():
+    "output list of routes available in the application"
+
+    from app.server import api_app
+
+    for route in api_app.routes:
+        methods = sorted(route.methods)
+        method = ", ".join(methods)
+        typer.echo(f"{method}   {route.path}    {route.name}")
 
 
 if __name__ == "__main__":
