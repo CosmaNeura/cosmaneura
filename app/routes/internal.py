@@ -61,7 +61,9 @@ def intake_list(request: Request) -> IntakeList:
 
     return IntakeList(
         appointments=list(
-            Appointment.select().where(Appointment.doctor_id == doctor.id).all()
+            Appointment.where(Appointment.doctor_id == doctor.id)
+            .order_by(Appointment.appointment_date.asc())
+            .all()
         )
     )
 
