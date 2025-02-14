@@ -54,9 +54,10 @@ def test_user_list(client: TestClient):
     user_state = response.json()
 
     assert "current_user" in user_state
-    assert len(user_state["users"]) == users_to_create
-    assert user_state["users"][0]["email"] == "test0@example.com"
-    assert user_state["users"][0]["clerk_id"] == "user_0"
+    # seed data creates more users
+    assert len(user_state["users"]) >= users_to_create
+    assert user_state["users"][-1]["email"] == "test2@example.com"
+    assert user_state["users"][-1]["clerk_id"] == "user_2"
 
 
 def test_login_as_authorized_good_credentials(client: TestClient):
@@ -151,25 +152,38 @@ def test_login_as_user_route(client: TestClient):
     assert clerk_admin
 
     _, _, clerk_user = get_clerk_dev_user()
-    assert clerk_user
+    assert clerk_user and clerk_user.id
+
+    local_admin = Doctor.get(clerk_id=clerk_admin.id)
 
     # if the login_as user DNE it will throw an error
-    local_user = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    local_user = Doctor(clerk_id=clerk_user.id).save()
 
+    settings_response = client.get(
+        api_app.url_path_for("settings_data"),
+        headers=clerk_authorization(clerk_admin),
+    )
+
+    assert settings_response.status_code == status.HTTP_200_OK
+    assert settings_response.json()["doctor_id"] == str(local_admin.id)
+
+    # switch to the user
     response = client.post(
         api_app.url_path_for("login_as_user", user_id=clerk_user.id),
         headers=clerk_authorization(clerk_admin),
     )
 
     assert response.status_code == status.HTTP_200_OK
+    cookie = decode_cookie(response)
+    assert cookie[SESSION_KEY_LOGIN_AS_USER] == clerk_user.id
 
-    user_response = client.get(
-        api_app.url_path_for("application_data"),
+    settings_response = client.get(
+        api_app.url_path_for("settings_data"),
         headers=clerk_authorization(clerk_admin),
     )
 
-    assert response.status_code == status.HTTP_200_OK
-    assert user_response.json()["user_id"] == str(local_user.id)
+    assert settings_response.status_code == status.HTTP_200_OK
+    assert settings_response.json()["doctor_id"] == str(local_user.id)
 
 
 def test_normal_route_as_admin(client: TestClient):
@@ -177,7 +191,7 @@ def test_normal_route_as_admin(client: TestClient):
     assert clerk_admin
 
     response = client.get(
-        api_app.url_path_for("application_data"),
+        api_app.url_path_for("settings_data"),
         headers=clerk_authorization(clerk_admin),
     )
 
