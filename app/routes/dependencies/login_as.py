@@ -32,6 +32,7 @@ def login_as(request: Request):
         log.info(
             "logging in as user",
             clerk_id=login_as_user.clerk_id,
+            doctor_id=login_as_user.id,
             admin_id=admin_user.id,
         )
 

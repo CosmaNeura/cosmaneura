@@ -7,14 +7,14 @@ from tests.routes.utils import get_valid_token
 
 
 def test_unauthorized_no_credentials(client: TestClient):
-    response = client.get(api_app.url_path_for("application_data"))
+    response = client.get(api_app.url_path_for("settings_data"))
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 def test_authorized_bad_credentials(client: TestClient):
     response = client.get(
-        api_app.url_path_for("application_data"),
+        api_app.url_path_for("settings_data"),
         headers={"Authorization": "Bearer BAD_CREDS"},
     )
 

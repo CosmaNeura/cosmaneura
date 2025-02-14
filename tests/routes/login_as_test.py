@@ -156,9 +156,13 @@ def test_login_as_user_route(client: TestClient):
 
     local_admin = Doctor.get(clerk_id=clerk_admin.id)
 
+    # paranoid: does this doctor already exist?
+    assert Doctor.get(clerk_id=clerk_user.id) is None
+
     # if the login_as user DNE it will throw an error
     local_user = Doctor(clerk_id=clerk_user.id).save()
 
+    # let's try a normal auth'd route
     settings_response = client.get(
         api_app.url_path_for("settings_data"),
         headers=clerk_authorization(clerk_admin),
@@ -167,7 +171,7 @@ def test_login_as_user_route(client: TestClient):
     assert settings_response.status_code == status.HTTP_200_OK
     assert settings_response.json()["doctor_id"] == str(local_admin.id)
 
-    # switch to the user
+    # switch to the non-admin user
     response = client.post(
         api_app.url_path_for("login_as_user", user_id=clerk_user.id),
         headers=clerk_authorization(clerk_admin),
@@ -177,6 +181,7 @@ def test_login_as_user_route(client: TestClient):
     cookie = decode_cookie(response)
     assert cookie[SESSION_KEY_LOGIN_AS_USER] == clerk_user.id
 
+    # now, with the cookie set, let's try the settings route
     settings_response = client.get(
         api_app.url_path_for("settings_data"),
         headers=clerk_authorization(clerk_admin),
