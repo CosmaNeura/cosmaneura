@@ -4,6 +4,7 @@ import uuid
 from textwrap import dedent
 
 import assemblyai as assembly
+import sentry_sdk
 from azure.storage.blob import BlobServiceClient
 from pydub import AudioSegment
 
@@ -25,10 +26,12 @@ OPENAI_MODEL = "gpt-4o-2024-08-06"
 
 SUPPORTED_VIDEO_FILE_TYPES = ["mp4", "m4a", "mov", "avi"]
 
+
 class TranscriptionResult:
     def __init__(self, transcript: list[TranscriptEntry], duration: int):
         self.transcript = transcript
         self.duration = duration
+
 
 def perform(visit_audio_file_id: str):
     """
@@ -39,11 +42,16 @@ def perform(visit_audio_file_id: str):
     visit_audio_file = VisitAudioFile.get(id=visit_audio_file_id)
     assert visit_audio_file
 
+    # TODO extract out to helper
+    sentry_sdk.set_user({"id": visit_audio_file.doctor_id})
+    log.local(doctor_id=visit_audio_file.doctor_id)
+
     existing_transcript = AIVisitTranscript.get(
         doctor_id=visit_audio_file.doctor_id,
         appointment_id=visit_audio_file.appointment_id,
-        patient_id=visit_audio_file.patient_id
+        patient_id=visit_audio_file.patient_id,
     )
+
     if existing_transcript is not None:
         log.info("transcript already exists, skipping job")
         return
@@ -115,9 +123,10 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
 
         log.info("extracting audio from video", output_path=temp_audio_path)
         extract_audio_from_video(
-                video_path=temp_download_path,
-                format=format,
-                output_audio_path=temp_audio_path)
+            video_path=temp_download_path,
+            format=format,
+            output_audio_path=temp_audio_path,
+        )
 
         return temp_audio_path
 
@@ -127,7 +136,9 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
             os.remove(temp_download_path)
 
 
-def extract_audio_from_video(video_path, format, output_audio_path="extracted_audio.wav"):
+def extract_audio_from_video(
+    video_path, format, output_audio_path="extracted_audio.wav"
+):
     audio = AudioSegment.from_file(video_path, format=format)
     audio.export(output_audio_path, format="wav")
 
