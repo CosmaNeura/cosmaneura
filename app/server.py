@@ -41,12 +41,7 @@ class ORJSONSortedResponse(JSONResponse):
     """
 
     def render(self, content: Any) -> bytes:
-        return orjson.dumps(
-            content,
-            option=orjson.OPT_NON_STR_KEYS
-            | orjson.OPT_SERIALIZE_NUMPY
-            | orjson.OPT_SORT_KEYS,
-        )
+        return orjson.dumps(content, option=orjson.OPT_NON_STR_KEYS)
 
 
 # TODO not possible to type this properly :/ https://github.com/python/typing/discussions/1501
