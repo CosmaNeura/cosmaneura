@@ -10,10 +10,8 @@ Notes:
 
 from celery import Celery, signals
 from celery.app.task import Task
-from kombu.utils.json import register_type
-from typeid import TypeID
 
-from app import log
+from app import log, root
 from app.configuration.redis import redis_url
 from app.configuration.sentry import configure_sentry
 
@@ -56,6 +54,8 @@ celery.conf.result_expires = 60 * 60 * 24 * 30
 #   - https://stackoverflow.com/questions/69107860/celery-what-is-the-reason-to-have-acks-late-true-without-setting-task-reject-on
 celery.conf.task_reject_on_worker_lost = True
 celery.conf.task_acks_late = True
+
+celery.conf.beat_schedule_filename = str(root / "tmp/celerybeat-schedule")
 
 
 @signals.celeryd_init.connect
