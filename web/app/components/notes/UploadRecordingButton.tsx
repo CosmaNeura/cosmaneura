@@ -110,8 +110,8 @@ function PatientComboboxSearch({
       //               a full object so we can do more advanced rendering...
       renderItem={(item) => (
         <>
-          <span className="text-sm text-foreground">{item.label}</span>
-          <span className="text-xs text-muted-foreground">
+          <span className="text-foreground text-sm">{item.label}</span>
+          <span className="text-muted-foreground text-xs">
             {standardDateFormat(item.date_of_birth)}
           </span>
           {item.isSelected && (
