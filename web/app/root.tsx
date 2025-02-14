@@ -10,6 +10,8 @@ import type { LinksFunction } from "react-router"
 
 import { withProviders } from "~/configuration"
 
+import { Loader2 } from "lucide-react"
+
 import type { Route } from "./+types/root"
 
 import { Toaster } from "@/components/ui/toaster"
@@ -53,8 +55,14 @@ function App() {
 }
 
 export function HydrateFallback() {
-  // TODO add a real skeleton
-  return <div>Loading...</div>
+  return (
+    <div className="flex h-screen w-screen items-center justify-center">
+      <div className="space-y-4 text-center">
+        <Loader2 className="text-primary mx-auto h-8 w-8 animate-spin" />
+        <p className="text-muted-foreground">Loading application...</p>
+      </div>
+    </div>
+  )
 }
 
 export default withProviders(App)
