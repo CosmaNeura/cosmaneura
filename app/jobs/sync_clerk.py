@@ -1,11 +1,10 @@
 """
-Job: sync_clerk.py
-
 Loop through all Doctors in our DB, retrieve the associated Clerk user,
 and update the Doctor record's email column from the Clerk data.
 """
 
 from app import log
+from app.celery import celery
 from app.configuration.clerk import clerk
 
 from app.models.doctor import Doctor
@@ -15,6 +14,8 @@ def perform() -> None:
     """
     Perform the syncing of Doctor email addresses with Clerk user data.
     """
+
+    # TODO support deleted flag in clerk
 
     for doctor in Doctor.all():
         try:
@@ -37,22 +38,12 @@ def perform() -> None:
         doctor.email = doctor_email
         doctor.save()
 
+    log.info("users synced with clerk", doctor=doctor)
 
-def queue() -> None:
-    """
-    Queue this job for background processing.
 
-    Patterned off the perform & queue methods from extract.py.
-    Replace the enqueue call with your project's job scheduler integration.
-    """
-    try:
-        from app.jobs.job_queue import (
-            enqueue_job,  # Adjust the import based on your project structure.
-        )
-    except ImportError:
-        log.error("Job scheduler module not found. Cannot queue job.")
-        return
+perform_celery = celery.task(perform)
 
-    # Enqueue the perform function as a background job.
-    enqueue_job(perform)
-    log.info("Queued sync_clerk job.")
+
+def queue():
+    "always use this method to queue jobs so it's easy to swap out the job system"
+    perform_celery.delay()

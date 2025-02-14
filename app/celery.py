@@ -10,6 +10,7 @@ Notes:
 
 from celery import Celery, signals
 from celery.app.task import Task
+from celery.schedules import crontab
 
 from app import log, root
 from app.configuration.redis import redis_url
@@ -123,21 +124,14 @@ def capture_worker_stop(sender, **kwargs):
 # app.conf.accept_content = ["pickle", "json", "msgpack", "yaml"]
 # app.conf.worker_send_task_events = True
 
-# celery.conf.beat_schedule = {
-#     "example_normal": {
-#         "task": "app.jobs.example_normal",
-#         # can run sub-minute schedules
-#         "schedule": timedelta(seconds=2),
-#     },
-#     "example_exactly_once": {
-#         "task": "app.jobs.example_exactly_once",
-#         "schedule": crontab(minute="*/60"),
-#     },
-#     "example_async": {
-#         "task": "app.jobs.example_async",
-#         "schedule": crontab(minute="*/5"),
-#     },
-# }
+celery.conf.beat_schedule = {
+    "sync_clerk": {
+        "task": "app.jobs.sync_clerk.perform",
+        "schedule": crontab(minute="0", hour="0"),
+    },
+}
+
+# Import crontab at the top of the file
 
 # from app.configuration.database import clear_engine
 # @task_prerun.connect
