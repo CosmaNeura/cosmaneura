@@ -1,3 +1,4 @@
+import sentry_sdk
 from fastapi import Request
 from starlette_context import context
 
@@ -37,5 +38,8 @@ def login_as(request: Request):
         request.state.admin_user = admin_user
         request.state.doctor = login_as_user
 
-        context["doctor_id"] = str(login_as_user.id)
-        context["admin_user_id"] = str(admin_user.id)
+        context["doctor"] = login_as_user.id
+        context["admin_user"] = admin_user.id
+
+        sentry_sdk.set_extra("admin_id", admin_user.id)
+        sentry_sdk.set_user({"id": login_as_user.id, "email": login_as_user.email})
