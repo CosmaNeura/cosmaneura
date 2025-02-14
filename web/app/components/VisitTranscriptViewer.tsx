@@ -23,7 +23,7 @@ export default function VisitTranscriptViewer({
     return (
       <>
         <div className="mb-2 text-xl font-semibold">Visit Transcript</div>
-        <div className="text-sm italic text-muted-foreground">
+        <div className="text-muted-foreground text-sm italic">
           No Transcript Available
         </div>
       </>
@@ -48,8 +48,11 @@ export default function VisitTranscriptViewer({
         </CollapsibleTrigger>
       </div>
       <CollapsibleContent className="mt-3">
-        <div className="mb-2 text-sm italic text-muted-foreground">
+        <div className="text-muted-foreground mb-2 text-sm italic">
           Duration: {secondsToMinutes(transcript.duration)}
+        </div>
+        <div className="text-muted-foreground mb-2 text-sm italic">
+          Transcripts are automatically deleted after a couple weeks.
         </div>
         {transcript.transcript_data.map((transcriptEntry) => {
           return (
