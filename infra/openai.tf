@@ -6,7 +6,7 @@ resource "azurerm_ai_services" "openai_service" {
   location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
 
-  sku_name = "S0"  # Example SKU, adjust based on actual requirements
+  sku_name = "S0" # Example SKU, adjust based on actual requirements
 }
 
 resource "azurerm_cognitive_deployment" "openai_deployment" {
@@ -22,7 +22,25 @@ resource "azurerm_cognitive_deployment" "openai_deployment" {
   }
 
   sku {
-    name     = "GlobalStandard"
+    name = "GlobalStandard"
+    # capacity = 5
+  }
+}
+
+resource "azurerm_cognitive_deployment" "openai_4o_mini" {
+  # must match the model name you specify in the OpenAI API call
+  name                 = "gpt-4o-mini"
+  cognitive_account_id = azurerm_ai_services.openai_service.id
+
+  # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#o1-and-o1-mini-models
+  model {
+    format = "OpenAI"
+    name   = "gpt-4o-mini"
+    # version = "2024-11-20"
+  }
+
+  sku {
+    name = "GlobalStandard"
     # capacity = 5
   }
 }
