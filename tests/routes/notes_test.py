@@ -57,9 +57,8 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["doctor_id"] == str(doctor.id)
 
 
-# TODO we should use a fixture system for these
-
-
+# TODO we need to move this to a factories.py and refactor the whole thing
+# TODO we should autogen all factories and then allow the user to extend them
 # https://github.com/fastapi/sqlmodel/discussions/615
 # https://factoryboy.readthedocs.io/en/stable/orms.html#managing-sessions
 
@@ -77,6 +76,7 @@ class DoctorNoteExampleFactory(SQLAlchemyModelFactory):
     class Meta:
         model = DoctorNoteExample
 
+    # TODO we should be able to inspect the types on the field
     field_examples = factory.Faker("pydict", allowed_types=(str,))
 
 
@@ -93,6 +93,7 @@ class DoctorNoteSchemaFactory(SQLAlchemyModelFactory):
         if not create:
             return
 
+        # one-to-many relationship could be generalized here
         DoctorNoteExampleFactory(
             doctor_note_schema_id=self.id, doctor_id=self.doctor_id
         ).save()

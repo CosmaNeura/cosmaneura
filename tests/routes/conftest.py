@@ -13,10 +13,15 @@ from tests.routes.utils import (
 # TODO should move to activemodel
 @pytest.fixture
 def global_session():
-    from activemodel.session_manager import (
-        SessionManager,
-        get_session,
-    )
+    """
+    By default, factories do not use the same session as the `save()` method.
+
+    This fixture ensures that a global factory is set and used for all factories *and* other ORM operations.
+    """
+
+    # TODO may be better to set some sort of session state on the ORM level so the factory boy session could be passed
+    # down. This doesn't seem like the best flow
+
     from activemodel.session_manager import (
         global_session as activemodel_global_session,
     )
