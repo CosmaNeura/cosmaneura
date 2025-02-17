@@ -22,6 +22,12 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     patient_id: TypeIDType = Patient.foreign_key()
     patient: Patient = Relationship()
 
+    external_id_type: str | None
+    "type of the system where the external ID came from"
+
+    external_id: str | None
+    "external ID of the appointment in acuity, or another external system"
+
     appointment_date: datetime
     "date of the appointment"
 
