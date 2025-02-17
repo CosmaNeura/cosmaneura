@@ -50,4 +50,9 @@ class DoctorNoteSchema(
     def example_count(self) -> int:
         # TODO joinedload is probably not the right approach here
         # TODO(mbianco) this took a long time to understand, document this upstream
-        return self.select().options(joinedload(self.__class__.examples)).count()
+        return (
+            self.where(DoctorNoteSchema.id == self.id, self.__class__.examples)
+            # generates a LEFT JOIN against examples table
+            # .options(joinedload(self.__class__.examples))
+            .count()
+        )
