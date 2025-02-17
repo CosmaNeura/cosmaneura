@@ -10,6 +10,29 @@ from tests.routes.utils import (
 )
 
 
+# TODO should move to activemodel
+@pytest.fixture
+def global_session():
+    from activemodel.session_manager import (
+        SessionManager,
+        get_session,
+    )
+    from activemodel.session_manager import (
+        global_session as activemodel_global_session,
+    )
+
+    with activemodel_global_session() as session:
+        assert session
+
+        from factory.alchemy import SQLAlchemyModelFactory
+
+        # Ensure that all factories use the same session
+        for factory in SQLAlchemyModelFactory.__subclasses__():
+            factory._meta.sqlalchemy_session = session
+
+        yield session
+
+
 @pytest.fixture
 def client():
     "client to connect to your fastapi routes"

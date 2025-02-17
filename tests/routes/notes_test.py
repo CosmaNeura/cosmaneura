@@ -1,12 +1,16 @@
 from datetime import datetime
 
+from factory.alchemy import SQLAlchemyModelFactory
 from fastapi import status
 from fastapi.testclient import TestClient
+from typeid import TypeID
 
 from app.server import api_app
 
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
+from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
 from tests.routes.utils import get_clerk_dev_user
@@ -51,3 +55,64 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["id"] == str(appointment.id)
     assert result["appointment"]["patient_id"] == str(patient.id)
     assert result["appointment"]["doctor_id"] == str(doctor.id)
+
+
+# TODO we should use a fixture system for these
+
+
+# https://github.com/fastapi/sqlmodel/discussions/615
+# https://factoryboy.readthedocs.io/en/stable/orms.html#managing-sessions
+
+import factory
+
+
+class DoctorFactory(SQLAlchemyModelFactory):
+    class Meta:
+        model = Doctor
+
+    clerk_id = str(TypeID("user"))
+
+
+class DoctorNoteExampleFactory(SQLAlchemyModelFactory):
+    class Meta:
+        model = DoctorNoteExample
+
+    field_examples = factory.Faker("pydict", allowed_types=(str,))
+
+
+class DoctorNoteSchemaFactory(SQLAlchemyModelFactory):
+    class Meta:
+        model = DoctorNoteSchema
+
+    doctor = factory.SubFactory(DoctorFactory)
+    note_type = factory.Faker("word")
+    fields = factory.Faker("pydict", allowed_types=(str,))
+
+    @factory.post_generation
+    def generate_examples(self, create, extracted, **kwargs):
+        if not create:
+            return
+
+        DoctorNoteExampleFactory(
+            doctor_note_schema_id=self.id, doctor_id=self.doctor_id
+        ).save()
+
+
+def test_note_count(global_session):
+    "this test shouldn't exist, but we are learning sqlalchemy + factory boy and are being a bit paranoid"
+
+    # paranoid check that the db is empty, we are still figuring out the right pattern for seeds, etc
+    assert DoctorNoteSchema.count() == 2
+
+    note_schema = DoctorNoteSchemaFactory().save()
+
+    note_schema2 = DoctorNoteSchemaFactory(doctor=note_schema.doctor).save()
+    DoctorNoteExampleFactory(
+        doctor_note_schema_id=note_schema2.id, doctor_id=note_schema2.doctor_id
+    ).save()
+
+    assert DoctorNoteSchema.count() == 4
+    assert note_schema.doctor_id == note_schema2.doctor_id
+
+    assert note_schema.example_count == 1
+    assert note_schema2.example_count == 2
