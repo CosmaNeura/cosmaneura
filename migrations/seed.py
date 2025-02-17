@@ -15,7 +15,11 @@ from app.models.visit_audio_file import VisitAudioFile
 from tests.seeds import get_clerk_seed_user
 
 _, _, clerk_user = get_clerk_seed_user()
+
 doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+
+# random uuid not tied to a valid clerk id
+doctor_2 = Doctor.find_or_create_by(clerk_id="user_01h45z113fexh8c1at7axm1r75")
 
 patient = Patient.find_or_create_by(
     doctor_id=doctor.id,
@@ -96,11 +100,34 @@ doctor_note_schema = DoctorNoteSchema.find_or_create_by(
     },
 )
 
+# same exact schema, different doctor, to better test the ui
+doctor2_note_schema = DoctorNoteSchema.find_or_create_by(
+    doctor_id=doctor.id,
+    note_type="Telehealth SOAP Note",
+    fields={
+        "Chief Complaint": "Document the patient's primary reason for visit",
+        "History of Present Illness": "Describe the chronological history of the current medical problem",
+        "Assessment": "List the diagnoses and clinical impressions",
+        "Plan": "Detail the treatment plan and next steps",
+    },
+)
+
 # TODO this is AI generated, we should improve seed data here
 # each schema must have at least a single example
 doctor_note_example = DoctorNoteExample.find_or_create_by(
     doctor_id=doctor.id,
     doctor_note_schema_id=doctor_note_schema.id,
+    field_examples={
+        "Chief Complaint": "Patient reports recurring headaches",
+        "History of Present Illness": "Patient has been experiencing headaches recently. Frequency and duration to be determined.",
+        "Assessment": "Recurring headaches of unknown etiology",
+        "Plan": "Further evaluation needed to determine cause and appropriate treatment plan",
+    },
+)
+
+doctor_note_example = DoctorNoteExample.find_or_create_by(
+    doctor_id=doctor_2.id,
+    doctor_note_schema_id=doctor2_note_schema.id,
     field_examples={
         "Chief Complaint": "Patient reports recurring headaches",
         "History of Present Illness": "Patient has been experiencing headaches recently. Frequency and duration to be determined.",
