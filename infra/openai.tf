@@ -23,10 +23,11 @@ resource "azurerm_cognitive_deployment" "openai_deployment" {
 
   sku {
     name = "GlobalStandard"
-    # capacity = 5
+    capacity = 50
   }
 }
 
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/cognitive_deployment#capacity-1
 resource "azurerm_cognitive_deployment" "openai_4o_mini" {
   # must match the model name you specify in the OpenAI API call
   name                 = "gpt-4o-mini"
@@ -40,8 +41,9 @@ resource "azurerm_cognitive_deployment" "openai_4o_mini" {
   }
 
   sku {
+    # standard is not valid
     name = "GlobalStandard"
-    # capacity = 5
+    capacity = 5
   }
 }
 
