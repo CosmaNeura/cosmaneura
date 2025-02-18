@@ -21,4 +21,7 @@ export default [
     ]),
     route("/settings", "routes/settings.tsx"),
   ]),
+
+  // public intake chat
+  route("chat", "routes/chat.tsx"),
 ] satisfies RouteConfig
