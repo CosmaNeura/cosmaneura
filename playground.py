@@ -25,6 +25,7 @@ from redis import Redis
 import pkgutil
 import importlib
 from activemodel.utils import find_all_sqlmodels
+from app.configuration.clerk import clerk
 
 def inspect_environment():
     """Display relevant custom functions and variables with minimal formatting"""
