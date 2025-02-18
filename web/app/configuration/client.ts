@@ -42,7 +42,12 @@ client.setConfig({
     // it would be challenging to inject `getClient` at just the right point, this is a natural place
     // to set the user context. However, this is not a perfect solution, as it uses the frontend user
     // authentication which can be different in the case of an admin who is logged in as a particular user.
-    Sentry.setUser({ id: client.user.id })
+    Sentry.setUser({
+      id: client.user.id,
+      // username + email are picked up by the feedback widget if we include thems
+      username: client.user.username,
+      email: client.user.primaryEmailAddress.emailAddress,
+    })
 
     return token
   },
