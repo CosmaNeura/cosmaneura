@@ -2,6 +2,10 @@
 
 from datetime import datetime
 
+import factory
+from factory.alchemy import SQLAlchemyModelFactory
+
+from activemodel import SessionManager
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
@@ -12,6 +16,7 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
+from tests.factories import AppointmentFactory
 from tests.seeds import get_clerk_seed_user
 
 _, _, clerk_user = get_clerk_seed_user()
@@ -35,13 +40,19 @@ appointment = Appointment.find_or_create_by(
     appointment_notes_preview="Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength",
 )
 
-# to test multiple items in the ui and an empty note state
-appointment_2 = Appointment.find_or_create_by(
-    doctor_id=doctor.id,
-    patient_id=patient.id,
-    appointment_date=datetime.strptime("2025-12-31", "%Y-%m-%d"),
-    appointment_name="Wow AI really went crazy on this title, it's way too long. Will it ever end?",
-)
+# Ensure that all factories use the same session
+for factory in SQLAlchemyModelFactory.__subclasses__():
+    factory._meta.sqlalchemy_session_factory = SessionManager.get_instance().get_session
+    factory._meta.sqlalchemy_session_persistence = "commit"
+
+# to test multiple items in the ui (past browser height) and an empty note state
+for i in range(20):
+    result = AppointmentFactory(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        # appointment_date=datetime.strptime("2025-12-31", "%Y-%m-%d"),
+        # appointment_name=f"Test Appointment {i + 1}: Wow AI really went crazy on this title, it's way too long. Will it ever end?",
+    )
 
 VisitAudioFile.find_or_create_by(
     doctor_id=doctor.id,
@@ -85,6 +96,12 @@ ai_visit_transcript = AIVisitTranscript.find_or_create_by(
             content="I see. How long have you been experiencing these headaches?",
             startTime=5500,
             endTime=8000,
+        ),
+        TranscriptEntry(
+            speaker="Doctor",
+            content="a" * 10000,  # generates a content string with 10k characters
+            startTime=0,
+            endTime=180000,
         ),
     ],
 )
