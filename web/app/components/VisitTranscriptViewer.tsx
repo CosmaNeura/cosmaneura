@@ -56,7 +56,7 @@ export default function VisitTranscriptViewer({
         </div>
         {transcript.transcript_data.map((transcriptEntry) => {
           return (
-            <div className="mb-2" key={transcriptEntry.startTime}>
+            <div className="mb-2 break-all" key={transcriptEntry.startTime}>
               <span className="font-bold">{transcriptEntry.speaker}: </span>
               {transcriptEntry.content}
             </div>
