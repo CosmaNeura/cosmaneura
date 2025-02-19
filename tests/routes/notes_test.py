@@ -13,6 +13,7 @@ from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
+from tests.factories import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
 from tests.routes.utils import get_clerk_dev_user
 
 
@@ -55,48 +56,6 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["id"] == str(appointment.id)
     assert result["appointment"]["patient_id"] == str(patient.id)
     assert result["appointment"]["doctor_id"] == str(doctor.id)
-
-
-# TODO we need to move this to a factories.py and refactor the whole thing
-# TODO we should autogen all factories and then allow the user to extend them
-# https://github.com/fastapi/sqlmodel/discussions/615
-# https://factoryboy.readthedocs.io/en/stable/orms.html#managing-sessions
-
-import factory
-
-
-class DoctorFactory(SQLAlchemyModelFactory):
-    class Meta:
-        model = Doctor
-
-    clerk_id = str(TypeID("user"))
-
-
-class DoctorNoteExampleFactory(SQLAlchemyModelFactory):
-    class Meta:
-        model = DoctorNoteExample
-
-    # TODO we should be able to inspect the types on the field
-    field_examples = factory.Faker("pydict", allowed_types=(str,))
-
-
-class DoctorNoteSchemaFactory(SQLAlchemyModelFactory):
-    class Meta:
-        model = DoctorNoteSchema
-
-    doctor = factory.SubFactory(DoctorFactory)
-    note_type = factory.Faker("word")
-    fields = factory.Faker("pydict", allowed_types=(str,))
-
-    @factory.post_generation
-    def generate_examples(self, create, extracted, **kwargs):
-        if not create:
-            return
-
-        # one-to-many relationship could be generalized here
-        DoctorNoteExampleFactory(
-            doctor_note_schema_id=self.id, doctor_id=self.doctor_id
-        ).save()
 
 
 def test_note_count(global_session):
