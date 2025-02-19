@@ -75,3 +75,33 @@ def test_summarize_includes_all_actionable_steps():
 
     assert_matches(r"request (records|labs)", plan)
     assert_matches(r"send a list of labs", plan)
+
+def test_summarize_is_idempotent():
+    transcript = AIVisitTranscript.sample()
+    assert transcript is not None
+
+    schema = DoctorNoteSchema.get(
+        DoctorNoteSchema.doctor_id == transcript.doctor_id and
+        DoctorNoteSchema.note_type == "Test SOAP Note"
+        )
+    assert schema is not None
+
+    init_note_count = count_visit_notes(transcript, schema)
+
+    perform(transcript.id, schema.id)
+
+    assert count_visit_notes(transcript, schema) == init_note_count + 1
+
+    note = AIVisitNote.get(
+        AIVisitNote.ai_transcript_id == transcript.id and
+        AIVisitNote.doctor_note_schema_id == schema.id
+    )
+
+    perform(transcript.id, schema.id)
+
+    assert count_visit_notes(transcript, schema) == init_note_count + 1
+
+    assert note.id == AIVisitNote.select().where(
+        AIVisitNote.ai_transcript_id == transcript.id and
+        AIVisitNote.doctor_note_schema_id == schema.id
+    ).order_by(AIVisitNote.updated_at.desc()).limit(1).one().id

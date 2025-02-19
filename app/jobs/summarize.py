@@ -28,6 +28,15 @@ def perform(transcript_id: str, schema_id: str):
     schema = DoctorNoteSchema.get(id=schema_id)
     assert schema
 
+    existing_note = AIVisitNote.get(
+        AIVisitNote.ai_transcript_id == transcript.id and
+        AIVisitNote.doctor_note_schema_id == schema.id
+    )
+    if existing_note:
+        log.info("note already exists, skipping summarization",
+                 transcript_id=transcript_id, schema_id=schema_id)
+        return
+
     # Get most recently updated example note for this schema
     example = (
         DoctorNoteExample.select()
