@@ -1,70 +1,27 @@
 # IMPORTANT: Your Instructions
 
-You are a expert senior software developer.
+Generate a commit message from the `git diff` output below using these rules:
 
-Generate a commit message from the `git diff` output below using the following rules:
+## 1. Subject Line
+- Use a conventional commit prefix:
+  - `feat`: New features (visible to users).
+  - `fix`: Bug fixes.
+  - `docs`: Changes only to documentation (e.g., `.md`, `.rst`) or code comments.
+  - `style`: Formatting, linting, or code style changes in code files.
+  - `refactor`: Code structure improvements (no behavior changes).
+  - `build`: Updates to build scripts or configs (e.g., `Makefile`, `Justfile`, `Dockerfile`, `package.json`).
+  - `deploy`: Deployment script updates.
+- Limit to **50 characters** after the prefix.
+- Use **imperative mood** (e.g., "Add feature").
+- Include specific details (e.g., "update dependencies" not "update files").
 
-1. **Subject Line**:
+## 2. Extended Commit Message
+- Add only for complex changes affecting functionality or build processes.
+- Use up to 3 markdown bullets focusing on **what** and **why** (not **how**).
+- Mention side effects or key considerations if relevant.
 
-   - Use a conventional commit prefix (e.g., `feat`, `fix`, `docs`, `style`, `refactor`, `build`, `deploy`).
-     - Use `docs` if **documentation files** (like `.md`, `.rst`, or documentation comments in code) are the **only files changed**, even if they include code examples.
-     - Use `docs` if **comments in code** are the **only changes made**.
-     - Use `style` for **formatting**, **code style**, **linting**, or related configuration changes within code files.
-     - Use `refactor` only for changes that do not alter behavior but improve the code structure.
-     - Use `build` when updating **build scripts**, **configuration files**, or **build system setup** (e.g., `Makefile`, `Justfile`, `package.json`).
-     - Use `deploy` when updating deployment scripts.
-     - Do not use `feat` for changes that users wouldn't notice.
-   - Limit the subject line to **50 characters** after the conventional commit prefix.
-   - Write the subject in the **imperative mood**, as if completing the sentence "If applied, this commit will...".
-   - Analyze **all changes**, including modifications in build scripts and configurations, when determining the commit message.
-
-2. **Extended Commit Message**:
-
-   - **Do not include an extended commit message** if the changes are **documentation-only**, involve **comment updates**, **simple formatting changes**, or are **not complex**.
-   - Include an extended commit message **only if the diff is complex and affects functionality or build processes**.
-   - Do not nest bullets
-   - **Do not** write more than three bullets, choose the most important couple changes to expand on
-   - In the extended message:
-     - Focus on **what** and **why**, not **how** (the code explains how).
-     - Use **markdown bullet points** to describe changes.
-     - Explain the **problem** the commit solves and the reasons for the change.
-     - Mention any **side effects** or important considerations.
-     - **Do not include descriptions of trivial formatting or comment changes** in the extended message.
-
-3. **General Guidelines**:
-
-   - Include specific details in the subject line for notable changes, such as version updates, feature additions, or configuration modifications.
-   - Do **not** wrap the output in a code block.
-   - Do **not** include obvious statements easily inferred from the diff.
-   - **Simplify** general statements. For example:
-     - Replace "update dependency versions in package.json and pnpm.lock" with "update dependencies".
-     - Replace "These changes resolve..." with "Resolved...".
-   - **Handling Formatting Changes**:
-     - If simple formatting updates (like changing quotes, code reformatting) are the **only changes** in code files, use the subject line "style: formatting update".
-     - **Do not** treat changes in build scripts or configurations that affect functionality as mere formatting changes. They should be described appropriately.
-   - Focus on code changes above comment or documentation updates
-
-4. **File Type Hints**:
-
-   - Recognize that a `Justfile` is like a `Makefile` and is part of the **build system**.
-   - Changes to the build system are significant and should be reflected in the commit message.
-   - Recognize other build-related files (e.g., `Dockerfile`, `package.json`, `webpack.config.js`) as part of the build or configuration.
-
-5. **Avoid Verbose Details**:
-
-   - Do not mention specific variables or excessive details.
-   - Keep the commit message concise and focused on the overall changes.
-
-6. **Focus on Functionality Over Documentation**:
-
-   - If both documentation and functionality are modified, **emphasize the functional changes**.
-
-7. **Insufficient Information**:
-
-   - If there isn't enough information to generate a summary, **return an empty string**.
-
-8. **Scopes**:
-
-   - A scope is not required. Do not include one unless you are confident about your choice.
-   - Scopes should formatted as `category(scope):` (e.g., `feat(api):`).
-   - Use `migrations` if the change involves database migrations.
+## 3. General Guidelines
+- Focus on functional changes over docs/comments.
+- Keep concise; avoid obvious or verbose details.
+- If insufficient info, return an empty string.
+- Optional scope (e.g., `feat(api):`); use `migrations` for database migrations.
