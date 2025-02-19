@@ -34,7 +34,7 @@ class AIVisitNote(
     ai_transcript: AIVisitTranscript = Relationship()
 
     doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key()
-    doctor_note_schema: DoctorNoteSchema = Relationship()
+    doctor_note_schema: DoctorNoteSchema = Relationship(sa_relationship_kwargs={"lazy": "joined"})
 
     @computed_field
     @property
