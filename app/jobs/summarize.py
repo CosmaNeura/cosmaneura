@@ -90,6 +90,12 @@ def build_structured_prompt(
         [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
     )
 
+    action_items = extract_action_items(transcript)
+
+    # TODO:
+    #  - give access to intake information
+    #  - instruct model that each field should be formatted as markdown
+
     return dedent(f"""
         You are a medical professional tasked with creating a clinical note based on a transcript from a medical encounter. Your goal is to accurately summarize the key information from the encounter in a structured, professional format.
 
@@ -112,6 +118,12 @@ def build_structured_prompt(
         {json.dumps(example_note.field_examples, indent=2)}
         </example_note>
 
+        Ensure that the clinical note you create includes the following action items:
+
+        <action_items>
+        {action_items}
+        </action_items>
+
         When creating the clinical note:
 
         1. Carefully review the transcript and extract all relevant medical information.
@@ -120,12 +132,51 @@ def build_structured_prompt(
         4. Avoid including any irrelevant personal details or small talk from the transcript.
         5. If certain information is not provided in the transcript, leave that section blank or write "Not mentioned in transcript" as appropriate. E.g. if the patient does not mention respiratory problems, do NOT assume that they do not have them.
         6. Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information.
-        7. Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient.
-        8. Take a deep breath and think step by step.
+        7. Ensure all action items are included in the relevant sections of the note.
+        8. Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient.
+        9. Take a deep breath and think step by step.
 
         Respond only in JSON format with the schema above.
     """)
 
+def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
+    transcript_text = "\n".join(
+        [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
+    )
+    return dedent(f"""
+    You are a doctor reviewing the transcript of a patient visit that you conducted.
+    You are looking for the actions you told the patient you would take as a result of this visit.
+
+    Actions might include (but not be limited to)::
+      - ordering labs
+      - prescribing medications
+      - scheduling follow-up appointments
+      - writing referrals
+      - consulting with other doctors
+      - calling the patient to discuss lab results
+      - requesting records from other providers
+      - sending educational information to the patient
+
+    Please extract all such action items from the transcript.
+
+    <transcript>
+    {transcript_text}
+    </transcript>
+
+    Your response should be structured as a markdown list.
+    """)
+
+def extract_action_items(transcript: AIVisitTranscript) -> str:
+    prompt = build_action_item_prompt(transcript)
+    response = openai.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "system", "content": prompt}],
+        temperature=0,
+        top_p=0.1,
+    )
+    content = response.choices[0].message.content
+    assert content
+    return content
 
 def generate_clinical_note(
     transcript: AIVisitTranscript,
