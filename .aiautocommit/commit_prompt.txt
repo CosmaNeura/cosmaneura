@@ -33,6 +33,7 @@ Generate a commit message from the `git diff` output below using the following r
 
 3. **General Guidelines**:
 
+   - Include specific details in the subject line for notable changes, such as version updates, feature additions, or configuration modifications.
    - Do **not** wrap the output in a code block.
    - Do **not** include obvious statements easily inferred from the diff.
    - **Simplify** general statements. For example:
