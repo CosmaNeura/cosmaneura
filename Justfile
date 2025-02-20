@@ -539,18 +539,23 @@ PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov 
 
 # run tests with the exact same environment that will be used on CI
 [script]
-py_test: py_js-build
+py_test:
 	# Define a more detailed colored PS4 without current directory so -x output is easier to read
 	setopt prompt_subst
 	export PS4='%F{green}+%f '
 	set -x
+
+	just _banner_echo "Building Javascript for Integration Tests"
+	just py_js-build
 
 	# TODO we don't need to see all of the details for this part of the build, since we are primarily testing javascript
 
 	# TODO I wonder if I could make EXECUTE_IN_TEST blank if in the test environment...
 	# NOTE unfortunately, because of the asyncio loop + playwright, we need to run the playwright integration tests separately
 	if [[ -n "${CI:-}" ]]; then
+	  just _banner_echo "Running Non-Integration Tests"
 		uv run pytest . --ignore tests/integration {{PYTEST_COV_PARAMS}}
+	  just _banner_echo "Running Integration"
 		uv run pytest tests/integration --cov-append {{PYTEST_COV_PARAMS}}
 	else
 		{{EXECUTE_IN_TEST}} uv run pytest . --ignore tests/integration {{PYTEST_COV_PARAMS}}
@@ -814,19 +819,39 @@ secrets_ci_manage:
 	open https://$OP_ACCOUNT/developer-tools/directory
 
 #######################
-# Deployment
+# GitHub
 #######################
 
-deploy:
-	if ! git remote | grep -q dokku; then \
-		git remote add dokku dokku@dokku.me:app; \
-	fi
+GITHUB_RULESET := """
+{
+	"name": "Protect master from force pushes",
+	"target": "branch",
+	"enforcement": "active",
+	"conditions": {
+		"ref_name": {
+			"include": ["refs/heads/master"],
+			"exclude": []
+		}
+	},
+	"rules": [
+		{
+			"type": "non_fast_forward"
+		}
+	]
+}
+"""
 
-	git push dokku main
+_github_repo:
+	gh repo view --json nameWithOwner -q .nameWithOwner
 
-	# TODO can we push from the registry image?
+github_ruleset_delete:
+	repo=$(just _github_repo) && \
+	  ruleset_name=$(echo '{{GITHUB_RULESET}}' | jq -r .name) && \
+		ruleset_id=$(gh api repos/$repo/rulesets --jq ".[] | select(.name == \"$ruleset_name\") | .id") && \
+		(([ -n "${ruleset_id}" ] || (echo "No ruleset found" && exit 0)) || gh api --method DELETE repos/$repo/rulesets/$ruleset_id)
 
-# TODO fly deployment and other options, this needs some work
+github_ruleset: github_ruleset_delete
+	gh api --method POST repos/$(just _github_repo)/rulesets --input - <<< '{{GITHUB_RULESET}}'
 
 #######################
 # Production Build
@@ -1120,3 +1145,6 @@ direnv_bash_export:
 	echo $'\n'
 	echo "File generated: $target_file"
 	echo "Source using 'source $target_file'"
+
+# TODO imported justfiles are not namespaced by default!
+# import? 'infra/Justfile'

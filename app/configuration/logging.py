@@ -11,6 +11,7 @@ References:
 - https://github.com/replicate/cog/blob/2e57549e18e044982bd100e286a1929f50880383/python/cog/logging.py#L20
 - https://github.com/apache/airflow/blob/4280b83977cd5a53c2b24143f3c9a6a63e298acc/task_sdk/src/airflow/sdk/log.py#L187
 - https://github.com/kiwicom/structlog-sentry
+- https://github.com/jeremyh/datacube-explorer/blob/b289b0cde0973a38a9d50233fe0fff00e8eb2c8e/cubedash/logs.py#L40C21-L40C42
 """
 
 import logging
@@ -115,7 +116,10 @@ def log_processors_for_environment() -> list[structlog.types.Processor]:
             "sort_keys=True is not supported, so we do it manually"
             # kwargs includes a default fallback json formatter
             return orjson.dumps(
-                value, option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS, **kwargs
+                # starlette-context includes non-string keys (enums)
+                value,
+                option=orjson.OPT_SORT_KEYS | orjson.OPT_NON_STR_KEYS,
+                **kwargs,
             )
 
         return [
@@ -256,7 +260,7 @@ def redirect_stdlib_loggers():
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             PROCESSORS[-1]
             if not is_production() and not is_staging()
-            # don't use ORJSON in production environments, as the stdlib formatter chain expects a str not a bytes
+            # don't use ORJSON here, as the stdlib formatter chain expects a str not a bytes
             else structlog.processors.JSONRenderer(sort_keys=True),
         ],
         # processors unique to stdlib logging

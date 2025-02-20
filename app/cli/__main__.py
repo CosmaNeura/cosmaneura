@@ -1,6 +1,7 @@
 import json
 
 import typer
+from fastapi.routing import APIRoute
 
 app = typer.Typer()
 
@@ -48,9 +49,12 @@ def routes():
     from app.server import api_app
 
     for route in api_app.routes:
-        methods = sorted(route.methods)
-        method = ", ".join(methods)
-        typer.echo(f"{method}   {route.path}    {route.name}")
+        if isinstance(route, APIRoute):
+            methods = sorted(route.methods)
+            method = ", ".join(methods)
+            typer.echo(f"{method}   {route.path}    {route.name}")
+        else:
+            typer.echo(f"unsupported route: {route}")
 
 
 if __name__ == "__main__":
