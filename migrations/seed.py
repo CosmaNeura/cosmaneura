@@ -37,10 +37,10 @@ appointment = Appointment.find_or_create_by(
     patient_id=patient.id,
     appointment_date=datetime.strptime("2025-10-31", "%Y-%m-%d"),
     appointment_name="Battle Wound",
-    appointment_notes_preview="Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength",
+    appointment_notes_preview="Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength.\nRecommend lots of wine, rest, and some light exercise.",
 )
 
-# Ensure that all factories use the same session
+# TODO should be moved to AM, still fiddling around with what the best pattern is here
 for factory in SQLAlchemyModelFactory.__subclasses__():
     factory._meta.sqlalchemy_session_factory = SessionManager.get_instance().get_session
     factory._meta.sqlalchemy_session_persistence = "commit"
@@ -162,6 +162,6 @@ AIVisitNote.find_or_create_by(
         "Chief Complaint": "Patient reports recurring headaches",
         "History of Present Illness": "Patient has been experiencing headaches recently. Frequency and duration to be determined.",
         "Assessment": "Recurring headaches of unknown etiology",
-        "Plan": "Further evaluation needed to determine cause and appropriate treatment plan",
+        "Plan": "Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength.\n\nRecommend lots of wine, rest, and some light exercise.",
     },
 )
