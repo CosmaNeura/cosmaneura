@@ -38,7 +38,7 @@ export default function VisitNoteViewer({
         {isOpen && (
           <CopyButton
             htmlRef={contentRef}
-            className="ml-5 mt-1"
+            className="mt-1 ml-5"
             text={note.note.content}
           />
         )}
@@ -49,9 +49,9 @@ export default function VisitNoteViewer({
           {Object.entries(note.note).map(([sectionTitle, noteContent]) => (
             <div className="mb-2" key={sectionTitle}>
               <h3 className="text-md font-semibold">{sectionTitle}</h3>
-              <Markdown className="prose-headings prose max-w-full">
-                {noteContent as string}
-              </Markdown>
+              <div className="prose-headings prose max-w-full">
+                <Markdown>{noteContent as string}</Markdown>
+              </div>
             </div>
           ))}
         </div>
