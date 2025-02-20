@@ -52,9 +52,6 @@ TOFU_GLOBAL_OPTIONS := ""
 gh_config_output:
   gh api repos/$(gh repo view --json nameWithOwner -q '.nameWithOwner')/branches/master/protection/rules
 
-gh_config_apply:
-	gh api "repos/$(gh repo view --json nameWithOwner -q '.nameWithOwner')/branches/master/protection" --method PUT -f required_status_checks=null -f enforce_admins=true -f required_pull_request_reviews=null -f restrictions=null
-
 # TODO we may be able to get rid of this with the federated creds
 # set the container registry password in GHA which enables builds to be pushed to the registry
 azure_gh-secrets:
@@ -71,6 +68,9 @@ tofu_init:
 tofu_apply:
 	tofu {{TOFU_GLOBAL_OPTIONS}} apply
 
+	az extension add --name containerapp --allow-preview
+	az containerapp env update --resource-group {{AZURE_RESOURCE_GROUP}} --name cosmaneura-prod-app-environment --logs-dynamic-json-columns true
+
 tofu_output:
 	tofu {{TOFU_GLOBAL_OPTIONS}} output -json
 
@@ -78,6 +78,11 @@ tofu_output:
 azure_shell container=AZURE_CONTAINER:
 	@echo "Run 'alembic upgrade head' once the console is online to migrate the database"
 	az containerapp exec -n {{container}} -g {{AZURE_RESOURCE_GROUP}} --command 'sh -l'
+
+# TODO azure doesn't like this :/
+# open an ipython console in a production container
+azure_ipy:
+	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command '/app/console.py'
 
 # TODO this string is copy/pasted in a couple of locations, should DRY up
 AZURE_RESOURCE_GROUP := "cosmaneura-prod"
@@ -131,4 +136,3 @@ azure_deploy:
 
 	# non-deprecated command, but is marked as preview (lol!)
 	az acr manifest list-metadata -r cosmaneuraprodregistry -n cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]].tags[0]" -o tsv 2>/dev/null
-

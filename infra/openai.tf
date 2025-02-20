@@ -49,7 +49,7 @@ resource "azurerm_cognitive_deployment" "openai_4o_mini" {
 
 # restricted based on this form: https://aka.ms/OAI/o1access
 # resource "azurerm_cognitive_deployment" "openai_o1" {
-#   name                 = "${azurerm_ai_services.openai_service.name}-gpt-o1"
+#   name                 = "o1"
 #   cognitive_account_id = azurerm_ai_services.openai_service.id
 
 #   model {

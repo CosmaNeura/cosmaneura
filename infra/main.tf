@@ -794,6 +794,10 @@ resource "azurerm_container_app" "worker" {
   tags = var.tags
 }
 
+# TODO need to configure DynamicJsonColumns, but it's not supported yet
+# https://github.com/microsoft/azure-container-apps/issues/938
+
+
 # create a new password and sync it to 1p for the job monitoring dashboard
 
 resource "onepassword_item" "job_monitor_login" {
