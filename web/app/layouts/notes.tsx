@@ -1,5 +1,4 @@
-import { Outlet } from "react-router"
-import { $path } from "safe-routes"
+import { Outlet, href } from "react-router"
 
 import { Route } from "./+types/notes"
 
@@ -31,7 +30,7 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
   function appointmentToSidebarEntry(appointment: Appointment): SidebarEntry {
     return {
       id: appointment.id,
-      url: $path("/notes/:id", { id: appointment.id }),
+      url: href("/notes/:id", { id: appointment.id }),
       // title: appointment.patient.name,
       title: appointment.patient_name,
       // location: appointment.location,

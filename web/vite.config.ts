@@ -9,7 +9,6 @@ import tsconfigPaths from "vite-tsconfig-paths"
 import { reactRouter } from "@react-router/dev/vite"
 import { sentryVitePlugin } from "@sentry/vite-plugin"
 import tailwindcss from "@tailwindcss/vite"
-import { safeRoutes } from "safe-routes/vite"
 
 // TODO extract out to another file
 // ensure that the env variables are loaded if they are used!
@@ -126,7 +125,6 @@ export default defineConfig(({ mode }) => ({
     tailwindcss(),
     reactRouter(),
     tsconfigPaths(),
-    safeRoutes(),
     ...getModePlugins(mode),
   ],
   ssr: {

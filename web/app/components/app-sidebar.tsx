@@ -1,6 +1,5 @@
 import * as React from "react"
-import { useLocation, useNavigate } from "react-router"
-import { $path } from "safe-routes"
+import { href, useLocation, useNavigate } from "react-router"
 
 import { Command, File, Inbox, Settings } from "lucide-react"
 
@@ -56,12 +55,12 @@ const NAVIGATION_ITEMS = [
   {
     title: "Notetaking",
     icon: File,
-    url: $path("/notes"),
+    url: href("/notess"),
   },
   {
     title: "Settings",
     icon: Settings,
-    url: $path("/settings"),
+    url: href("/settings"),
   },
 ]
 
