@@ -55,7 +55,7 @@ const NAVIGATION_ITEMS = [
   {
     title: "Notetaking",
     icon: File,
-    url: href("/notess"),
+    url: href("/notes"),
   },
   {
     title: "Settings",
