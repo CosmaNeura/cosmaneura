@@ -173,6 +173,8 @@ asyncio_default_fixture_loop_scope = "session"
 
 [tool.uv.sources]
 j2lint = { git = "https://github.com/aristanetworks/j2lint.git" }
+# for redis persistence and retries, waiting on two PRs here
+flower = { git = "https://github.com/iloveitaly/flower", rev = "custom" }
 
 [tool.uv.sources.activemodel]
 git = "https://github.com/iloveitaly/activemodel.git"
