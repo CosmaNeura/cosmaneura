@@ -23,24 +23,24 @@ def login_as(request: Request):
 
         # if we are an admin, let's check if we are logging in as another user
         login_as_clerk_id = request.session[SESSION_KEY_LOGIN_AS_USER]
-        login_as_user = Doctor.get(clerk_id=login_as_clerk_id)
+        login_as_doctor = Doctor.get(clerk_id=login_as_clerk_id)
 
-        if not login_as_user:
+        if not login_as_doctor:
             log.error("user not found", clerk_id=login_as_clerk_id)
             return
 
         log.info(
             "logging in as user",
-            clerk_id=login_as_user.clerk_id,
-            doctor_id=login_as_user.id,
+            clerk_id=login_as_doctor.clerk_id,
+            doctor_id=login_as_doctor.id,
             admin_id=admin_user.id,
         )
 
         request.state.admin_user = admin_user
-        request.state.doctor = login_as_user
+        request.state.doctor = login_as_doctor
 
-        context["doctor"] = login_as_user.id
-        context["admin_user"] = admin_user.id
+        context["doctor"] = login_as_doctor
+        context["admin_user"] = admin_user
 
         sentry_sdk.set_extra("admin_id", admin_user.id)
-        sentry_sdk.set_user({"id": login_as_user.id, "email": login_as_user.email})
+        sentry_sdk.set_user({"id": login_as_doctor.id, "email": login_as_doctor.email})
