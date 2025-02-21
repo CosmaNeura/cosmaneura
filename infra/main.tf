@@ -183,16 +183,14 @@ resource "azurerm_storage_management_policy" "delete_uploads" {
       blob_types = ["blockBlob"]
     }
 
-    # TODO change this back to 10d
-
     # IMPORTANT: this ensures files are wiped automatically after uploaded
     actions {
       base_blob {
-        delete_after_days_since_creation_greater_than = 60
+        delete_after_days_since_creation_greater_than = 10
       }
 
       snapshot {
-        delete_after_days_since_creation_greater_than = 60
+        delete_after_days_since_creation_greater_than = 10
       }
     }
   }
@@ -485,6 +483,8 @@ resource "azurerm_log_analytics_workspace" "main" {
   # I literally can't find a description for the SKU options anywhere
   # sku               = "PerGB2018"
   retention_in_days = 30
+
+  tags = var.tags
 }
 
 # https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/data-sources/container_app_environment
