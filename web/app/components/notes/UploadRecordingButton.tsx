@@ -47,6 +47,7 @@ import { uploadFileToAzure } from "~/lib/azure-upload"
 import { standardDateFormat } from "~/lib/date"
 import { cn } from "~/lib/utils"
 
+import * as Sentry from "@sentry/react"
 import { SimpleComboBox } from "../shared/SimpleComboBox"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -156,18 +157,24 @@ function VisitAudioUploadForm({
 
     invariant(file, "file should be set at this stage ")
 
-    const { error, stampedFileName } = await uploadFileToAzure(
+    const { error: uploadFileError, stampedFileName } = await uploadFileToAzure(
       file,
       sasSignature,
     )
 
-    const _internalResponse = await uploadVisitAudioFile({
+    const { error: uploadVisitError } = await uploadVisitAudioFile({
       // TODO what is the best pattern for passing dates over the wire?
       body: {
         ...values,
         file_name: stampedFileName,
       },
     })
+
+    if (uploadVisitError) {
+      const reportedEventId = Sentry.captureException(uploadVisitError)
+      Sentry.showReportDialog({ eventId: reportedEventId })
+      // TODO stop execution
+    }
 
     toast({
       title: "Upload complete",
