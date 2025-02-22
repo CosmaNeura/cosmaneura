@@ -16,7 +16,13 @@ import { userListOptions } from "client/@tanstack/react-query.gen"
 
 function AdminBar() {
   const [selectedUser, setSelectedUser] = useState("")
-  const { data, error } = useQuery({ ...userListOptions() })
+  const { data, error } = useQuery({
+    ...userListOptions(),
+    // we can't check the 401 code and only stop retries then
+    retry: false,
+    // TODO keep it fresh for 1d, although I don't think this does anything
+    staleTime: 24 * 60 * 60 * 1000,
+  })
 
   if (!data || error) {
     return
