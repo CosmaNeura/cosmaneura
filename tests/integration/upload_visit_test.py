@@ -26,7 +26,6 @@ def test_audio_file_upload(server, page: Page) -> None:
     page.get_by_test_id("date-of-birth-button").click()
 
     page.get_by_role("button", name="Upload").click()
-    page.get_by_role("status").click()
 
     expect(page.get_by_text("Notification Upload")).to_be_visible()
 
