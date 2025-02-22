@@ -5,23 +5,34 @@ Generate a commit message from the `git diff` output below using these rules:
 ## 1. Subject Line
 - Use a conventional commit prefix:
   - `feat`: New features (visible to users).
-  - `fix`: Bug fixes.
+  - `fix`: Bug fixes, including user-visible design or style fixes.
   - `docs`: Changes only to documentation (e.g., `.md`, `.rst`) or code comments.
-  - `style`: Formatting, linting, or code style changes in code files.
+  - `style`: Use only for code formatting changes that do not affect the UI. For UI styling changes that impact visual output, use fix (for corrections) or feat (for new features).
   - `refactor`: Code structure improvements (no behavior changes).
   - `build`: Updates to build scripts or configs (e.g., `Makefile`, `Justfile`, `Dockerfile`, `package.json`).
   - `deploy`: Deployment script updates.
+  - `test`: Changes to tests
 - Limit to **50 characters** after the prefix.
-- Use **imperative mood** (e.g., "Add feature").
-- Include specific details (e.g., "update dependencies" not "update files").
+- Use **imperative mood** (e.g., "Improve layout").
+- Describe the intent or outcome (e.g., "prevent text overflow" not "add break-all").
 
 ## 2. Extended Commit Message
 - Add only for complex changes affecting functionality or build processes.
-- Use up to 3 markdown bullets focusing on **what** and **why** (not **how**).
-- Mention side effects or key considerations if relevant.
+- Use up to 3 markdown bullets focusing on **what changed** and **why it matters**.
+- Mention side effects, user impact, or key considerations if relevant.
+- Do not add an extended message if the change can be fully described in the subject line. Only include it when additional context is necessary to understand the change or its implications.
 
 ## 3. General Guidelines
-- Focus on functional changes over docs/comments.
+- Prioritize the purpose of changes over listing tools or properties used.
 - Keep concise; avoid obvious or verbose details.
 - If insufficient info, return an empty string.
-- Optional scope (e.g., `feat(api):`); use `migrations` for database migrations.
+
+## 4. Scopes
+Optional scopes (e.g., `feat(api):`) to use:
+
+- `api`: API endpoints, controllers, and services.
+- `frontend`: React components, styles, and state management.
+- `migration`: Database schema changes.
+- `jobs``: Background jobs and scheduled tasks.
+- `infra`: Infrastructure, networking, and deployment.
+- `prompt`: Updates to LLM or AI prompts
