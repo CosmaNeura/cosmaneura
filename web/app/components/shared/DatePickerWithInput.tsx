@@ -13,7 +13,11 @@ import {
   FormMessage,
 } from "@/components/ui/form"
 import { Input } from "@/components/ui/input"
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { standardDateFormat } from "~/lib/date"
 
 export function DatePickerWithInput({
@@ -60,7 +64,7 @@ export function DatePickerWithInput({
       <FormLabel>{label}</FormLabel>
       <FormControl>
         <Popover open={isOpen} onOpenChange={setIsOpen}>
-          <PopoverAnchor asChild>
+          <PopoverTrigger asChild>
             <div className="relative">
               <Input
                 value={inputValue}
@@ -68,17 +72,15 @@ export function DatePickerWithInput({
                 onBlur={handleBlur}
                 placeholder="YYYY-MM-DD"
                 className="pr-10"
-                onClick={() => setIsOpen(true)}
               />
               <Button
                 variant="ghost"
                 className="absolute top-0 right-0 h-full px-3"
-                onClick={() => setIsOpen(true)}
               >
                 <CalendarIcon className="h-4 w-4" />
               </Button>
             </div>
-          </PopoverAnchor>
+          </PopoverTrigger>
           <PopoverContent className="w-auto p-0" align="start">
             <Calendar
               mode="single"
