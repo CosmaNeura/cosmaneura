@@ -9,6 +9,7 @@ import { z } from "zod"
 
 import { CalendarIcon, CheckIcon, Upload } from "lucide-react"
 
+import { DatePickerWithInput } from "@/components/shared/DatePickerWithInput"
 import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
 import {
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/dialog"
 import {
   Popover,
+  PopoverAnchor,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
@@ -58,81 +60,6 @@ import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery } from "@tanstack/react-query"
 import { patientListOptions } from "client/@tanstack/react-query.gen"
-
-function DatePickerWithInput({
-  field,
-  label,
-  description,
-  calendarProps = {},
-}: {
-  field: ControllerRenderProps<FieldValues, string>
-  label: string
-  description?: string
-  calendarProps?: Record<string, any>
-}) {
-  const form = useFormContext()
-  const [inputValue, setInputValue] = useState(
-    field.value ? standardDateFormat(field.value) : "",
-  )
-
-  // Sync input value with field value when it changes externally
-  useEffect(() => {
-    setInputValue(field.value ? standardDateFormat(field.value) : "")
-  }, [field.value])
-
-  // Parse date string to Date object
-  const parseDate = (str: string): Date | null => {
-    const date = new Date(str)
-    return isNaN(date.getTime()) ? null : date
-  }
-
-  // Handle input blur: parse date and update field or set error
-  const handleBlur = () => {
-    const parsedDate = parseDate(inputValue)
-    if (parsedDate) {
-      field.onChange(parsedDate)
-      form.clearErrors(field.name)
-    } else if (inputValue) {
-      form.setError(field.name, { type: "manual", message: "Invalid date" })
-    }
-  }
-
-  return (
-    <FormItem>
-      <FormLabel>{label}</FormLabel>
-      <FormControl>
-        <div className="flex items-center">
-          <Input
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onBlur={handleBlur}
-            placeholder="YYYY-MM-DD"
-          />
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="ml-2">
-                <CalendarIcon className="h-4 w-4" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={field.value}
-                onSelect={(date) => {
-                  field.onChange(date)
-                  setInputValue(date ? standardDateFormat(date) : "")
-                }}
-                {...calendarProps}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-      </FormControl>
-      {description && <FormDescription>{description}</FormDescription>}
-      <FormMessage />
-    </FormItem>
-  )
-}
 
 function PatientComboboxSearch({
   // required for updating the DOB when a patient item is selected
