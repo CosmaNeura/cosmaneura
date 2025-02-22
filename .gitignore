@@ -1,3 +1,5 @@
+# NOTE use the `web/` gitignore for web-specific ignores
+
 .ipython_history
 .DS_Store
 .venv
@@ -7,8 +9,6 @@ __pycache__
 .mypy_cache
 
 *.env.*local
-
-/celerybeat-schedule
 
 .nixpacks
 
