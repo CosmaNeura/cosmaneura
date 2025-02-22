@@ -39,6 +39,9 @@ def pytest_configure(config: Config):
     config.option.pdbcls = "pdbr:RichPdb"
     config.option.disable_warnings = True
 
+    # this forces pretty-traceback
+    config.option.tbstyle = "native"
+
     # playwright config
     config.option.screenshot = "only-on-failure"
     config.option.tracing = "retain-on-failure"
