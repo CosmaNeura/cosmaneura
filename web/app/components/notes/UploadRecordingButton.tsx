@@ -55,6 +55,7 @@ import { standardDateFormat } from "~/lib/date"
 import { cn } from "~/lib/utils"
 
 import * as Sentry from "@sentry/react"
+import { DateTimePicker } from "../lingua-time/datetime-picker"
 import { SimpleComboBox } from "../shared/SimpleComboBox"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -267,13 +268,32 @@ function VisitAudioUploadForm({
         <FormField
           control={form.control}
           name="date_of_birth"
-          render={({ field }) => (
-            <DatePickerWithInput
-              field={field}
-              label="Date of Birth"
-              description="Required to identify the patient in the future"
-            />
-          )}
+          render={({ field }) => {
+            function setDateOfBirth(date: Date) {
+              console.log("hi")
+              // field.onChange(date)
+              // debugger
+            }
+
+            return (
+              <DateTimePicker
+                {...field}
+                // these are all splatted from `field`
+                // name={name}
+                // onBlur={onBlur}
+                // disabled={disabled}
+
+                // setDateTime={setDateOfBirth}
+                // TODO we should rename these fields so we can just splat them from `field`
+                dateTime={field.value}
+                setDateTime={field.onChange}
+                // TODO can't we just pick better defaults here?
+                showTimePicker={false}
+                autoComplete="off"
+                aria-describedby={undefined}
+              />
+            )
+          }}
         />
 
         <FormField
