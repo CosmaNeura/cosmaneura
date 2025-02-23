@@ -1,8 +1,12 @@
 import * as chrono from "chrono-node"
 import { format } from "date-fns"
 
-export function generateDateString(date: Date) {
+export function generateDateTimeString(date: Date) {
   return format(date, "MMM do yyyy, hh:mm a")
+}
+
+export function generateDateString(date: Date) {
+  return format(date, "MMM do yyyy")
 }
 
 export function generateDate(date: string) {

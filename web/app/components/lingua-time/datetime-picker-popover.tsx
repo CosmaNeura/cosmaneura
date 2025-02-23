@@ -17,7 +17,7 @@ import {
 import { useMediaQuery } from "~/hooks/use-media-query"
 
 import { TimePicker } from "../time-picker/time-picker"
-import { generateDateString } from "./datetime-utils"
+import { generateDateTimeString } from "./datetime-utils"
 
 interface DateTimePickerPopoverProps {
   children: React.ReactNode
@@ -25,6 +25,8 @@ interface DateTimePickerPopoverProps {
   dateTime: Date | undefined
   setDateTime: React.Dispatch<React.SetStateAction<Date | undefined>>
   setInputValue: React.Dispatch<React.SetStateAction<string>>
+  showTimePicker: boolean
+  dateTimeFormatFunction: (date: Date) => string
 }
 
 export function DateTimePickerPopover({
@@ -33,6 +35,8 @@ export function DateTimePickerPopover({
   dateTime,
   setDateTime,
   setInputValue,
+  showTimePicker,
+  dateTimeFormatFunction,
 }: DateTimePickerPopoverProps) {
   const [isPopoverOpen, setIsPopoverOpen] = useState(false)
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
@@ -41,7 +45,7 @@ export function DateTimePickerPopover({
 
   useEffect(() => {
     if (dateTime) {
-      setInputValue(generateDateString(dateTime))
+      setInputValue(dateTimeFormatFunction(dateTime))
     }
   }, [dateTime, setInputValue])
 
@@ -69,9 +73,11 @@ export function DateTimePickerPopover({
               initialFocus
               className="self-center"
             />
-            <div className="border-border border-t p-3">
-              <TimePicker date={dateTime} setDate={setDateTime} />
-            </div>
+            {showTimePicker && (
+              <div className="border-border border-t p-3">
+                <TimePicker date={dateTime} setDate={setDateTime} />
+              </div>
+            )}
           </div>
         </DrawerContent>
       </Drawer>
@@ -94,9 +100,11 @@ export function DateTimePickerPopover({
           onSelect={setDateTime}
           initialFocus
         />
-        <div className="border-border border-t p-3">
-          <TimePicker date={dateTime} setDate={setDateTime} />
-        </div>
+        {showTimePicker && (
+          <div className="border-border border-t p-3">
+            <TimePicker date={dateTime} setDate={setDateTime} />
+          </div>
+        )}
       </PopoverContent>
     </Popover>
   )

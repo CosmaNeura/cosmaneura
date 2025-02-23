@@ -19,6 +19,7 @@ import { DateTimePickerPopover } from "./datetime-picker-popover"
 import {
   generateDate,
   generateDateString,
+  generateDateTimeString,
   isValidDateFormat,
 } from "./datetime-utils"
 
@@ -63,10 +64,11 @@ interface DateTimePickerProps
   extends React.InputHTMLAttributes<HTMLInputElement> {
   dateTime: Date | undefined
   setDateTime: React.Dispatch<React.SetStateAction<Date | undefined>>
+  showTimePicker?: boolean
 }
 
 export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
-  ({ dateTime, setDateTime, ...props }, ref) => {
+  ({ dateTime, setDateTime, showTimePicker = true, ...props }, ref) => {
     const [suggestion, setSuggestion] = useState<Suggestion | null>(null)
     const [inputValue, setInputValue] = useState("")
     const [isOpen, setIsOpen] = useState(false)
@@ -77,6 +79,10 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
     const dropdownRef = useRef<HTMLDivElement>(null)
 
     useImperativeHandle(ref, () => inputRef.current!)
+
+    const dateTimeFormatFunction = showTimePicker
+      ? generateDateTimeString
+      : generateDateString
 
     const suggestions = generateSuggestions(inputValue, suggestion)
 
@@ -103,7 +109,7 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
         setSelectedIndex((prevIndex) => (prevIndex > 0 ? prevIndex - 1 : 0))
       } else if (e.key === "Enter" && isOpen && suggestions.length > 0) {
         e.preventDefault()
-        const dateStr = generateDateString(suggestions[selectedIndex].date)
+        const dateStr = dateTimeFormatFunction(suggestions[selectedIndex].date)
         setInputValue(dateStr)
         setDateTime(suggestions[selectedIndex].date)
         closeDropdown()
@@ -151,6 +157,7 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
           <Input
             placeholder="Tomorrow morning"
             {...props}
+            // expose the <input> element as the ref
             ref={inputRef}
             type="text"
             value={inputValue}
@@ -164,6 +171,8 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
             dateTime={dateTime}
             setDateTime={setDateTime}
             setInputValue={setInputValue}
+            showTimePicker={showTimePicker}
+            dateTimeFormatFunction={dateTimeFormatFunction}
           >
             <Button
               size="icon"
@@ -203,7 +212,7 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
                       "bg-accent text-accent-foreground",
                   )}
                   onClick={() => {
-                    const dateStr = generateDateString(suggestion.date)
+                    const dateStr = dateTimeFormatFunction(suggestion.date)
                     setInputValue(dateStr)
                     setDateTime(suggestion.date)
                     closeDropdown()
@@ -215,7 +224,7 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
                     {suggestion.inputString}
                   </span>
                   <span className="text-muted-foreground shrink-0 text-xs">
-                    {generateDateString(suggestion.date)}
+                    {dateTimeFormatFunction(suggestion.date)}
                   </span>
                 </li>
               ))}
