@@ -23,37 +23,13 @@ import {
   isValidDateFormat,
 } from "./datetime-utils"
 
-const defaultSuggestions = [
+const DEFAULT_SUGGESTIONS = [
   "Tomorrow",
   "Tomorrow morning",
   "Tomorrow night",
   "Next Monday",
   "Next Sunday",
 ]
-
-function generateSuggestions(
-  inputValue: string,
-  suggestion: Suggestion | null,
-): Suggestion[] {
-  if (!inputValue.length) {
-    return defaultSuggestions.map((suggestion) => ({
-      date: generateDate(suggestion),
-      inputString: suggestion,
-    }))
-  }
-
-  const filteredDefaultSuggestions = defaultSuggestions.filter((suggestion) =>
-    suggestion.toLowerCase().includes(inputValue.toLowerCase()),
-  )
-  if (filteredDefaultSuggestions.length) {
-    return filteredDefaultSuggestions.map((suggestion) => ({
-      date: generateDate(suggestion),
-      inputString: suggestion,
-    }))
-  }
-
-  return [suggestion].filter((suggestion) => suggestion !== null)
-}
 
 interface Suggestion {
   date: Date
@@ -65,10 +41,47 @@ interface DateTimePickerProps
   dateTime: Date | undefined
   setDateTime: React.Dispatch<React.SetStateAction<Date | undefined>>
   showTimePicker?: boolean
+  suggestions?: string[]
+}
+
+function generateSuggestions(
+  // raw input from the input field
+  inputValue: string,
+  suggestion: Suggestion | null,
+  defaultSuggestions: string[],
+): Suggestion[] {
+  if (!inputValue.length) {
+    return defaultSuggestions.map((sugg) => ({
+      date: generateDate(sugg),
+      inputString: sugg,
+    }))
+  }
+
+  const filteredDefaultSuggestions = defaultSuggestions.filter((sugg) =>
+    sugg.toLowerCase().includes(inputValue.toLowerCase()),
+  )
+
+  if (filteredDefaultSuggestions.length) {
+    return filteredDefaultSuggestions.map((sugg) => ({
+      date: generateDate(sugg),
+      inputString: sugg,
+    }))
+  }
+
+  return [suggestion].filter((sugg): sugg is Suggestion => sugg !== null)
 }
 
 export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
-  ({ dateTime, setDateTime, showTimePicker = true, ...props }, ref) => {
+  (
+    {
+      dateTime,
+      setDateTime,
+      showTimePicker = true,
+      suggestions: suggestionsProp,
+      ...props
+    },
+    ref,
+  ) => {
     const [suggestion, setSuggestion] = useState<Suggestion | null>(null)
     const [inputValue, setInputValue] = useState("")
     const [isOpen, setIsOpen] = useState(false)
@@ -84,7 +97,13 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
       ? generateDateTimeString
       : generateDateString
 
-    const suggestions = generateSuggestions(inputValue, suggestion)
+    // Use passed suggestions if provided, otherwise fall back to DEFAULT_SUGGESTIONS
+    const defaultSuggestions = suggestionsProp ?? DEFAULT_SUGGESTIONS
+    const computedSuggestions = generateSuggestions(
+      inputValue,
+      suggestion,
+      defaultSuggestions,
+    )
 
     function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
       setInputValue(e.target.value)
@@ -102,16 +121,24 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
       if (e.key === "ArrowDown") {
         e.preventDefault()
         setSelectedIndex((prevIndex) =>
-          prevIndex < suggestions.length - 1 ? prevIndex + 1 : prevIndex,
+          prevIndex < computedSuggestions.length - 1
+            ? prevIndex + 1
+            : prevIndex,
         )
       } else if (e.key === "ArrowUp") {
         e.preventDefault()
         setSelectedIndex((prevIndex) => (prevIndex > 0 ? prevIndex - 1 : 0))
-      } else if (e.key === "Enter" && isOpen && suggestions.length > 0) {
+      } else if (
+        e.key === "Enter" &&
+        isOpen &&
+        computedSuggestions.length > 0
+      ) {
         e.preventDefault()
-        const dateStr = dateTimeFormatFunction(suggestions[selectedIndex].date)
+        const dateStr = dateTimeFormatFunction(
+          computedSuggestions[selectedIndex].date,
+        )
         setInputValue(dateStr)
-        setDateTime(suggestions[selectedIndex].date)
+        setDateTime(computedSuggestions[selectedIndex].date)
         closeDropdown()
       } else if (e.key === "Escape" || e.key === "Tab") {
         closeDropdown()
@@ -185,7 +212,7 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
           </DateTimePickerPopover>
         </div>
 
-        {isOpen && suggestions.length > 0 && (
+        {isOpen && computedSuggestions.length > 0 && (
           <div
             ref={dropdownRef}
             role="dialog"
@@ -201,9 +228,9 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
               aria-label="Suggestions"
               className="max-h-56 overflow-auto p-1"
             >
-              {suggestions.map((suggestion, index) => (
+              {computedSuggestions.map((sugg, index) => (
                 <li
-                  key={suggestion.inputString}
+                  key={sugg.inputString}
                   role="option"
                   aria-selected={selectedIndex === index}
                   className={cn(
@@ -212,19 +239,19 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
                       "bg-accent text-accent-foreground",
                   )}
                   onClick={() => {
-                    const dateStr = dateTimeFormatFunction(suggestion.date)
+                    const dateStr = dateTimeFormatFunction(sugg.date)
                     setInputValue(dateStr)
-                    setDateTime(suggestion.date)
+                    setDateTime(sugg.date)
                     closeDropdown()
                     inputRef.current?.focus()
                   }}
                   onMouseEnter={() => setSelectedIndex(index)}
                 >
                   <span className="xs:w-auto w-[110px] truncate">
-                    {suggestion.inputString}
+                    {sugg.inputString}
                   </span>
                   <span className="text-muted-foreground shrink-0 text-xs">
-                    {dateTimeFormatFunction(suggestion.date)}
+                    {dateTimeFormatFunction(sugg.date)}
                   </span>
                 </li>
               ))}
