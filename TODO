@@ -47,6 +47,7 @@
   - [ ] ingest webhooks to keep schedule up to date
   - [ ] assoicate schedule items with drs, can hopefully just use email
 - [ ] email/sms to send the user a text
+  - [ ] This may be done via Greg's accuity integration
 - [ ] summarization job for the accuity data
 - [ ] unique link gen for each patient, automatically expiring links
 - [ ] chat experience
@@ -81,13 +82,14 @@ user flow
 - [x] admin login_as to clerk hack
   - [x] need role on user and way to switch session
 - [ ] let users know in the upload that there are no schemas/notes uploaded
+  - [x] fix the example count in the UI
 - [x] add email to user record so we can tell who is who
   - [x] add job to pull email from clerk
 - [x] add console script to import all models and all jobs
 - [ ] add contraint to prevent duplicate schemas of the same type https://github.com/fastapi/sqlmodel/issues/114
   - [x] I think there was something about fks not being properly named that we should fix as well
   - [ ] multiple schemas seem to be created for the same input note. Should try to make these idempotent.
-- [ ] azure deid logs are super verbose, can we turn these down and decrease HTTP logging?
+- [x] azure deid logs are super verbose, can we turn these down and decrease HTTP logging?
 - [ ] cron job to delete transcripts from the database
   - [ ] soft delete, actually remove the transcripts
   - [ ] need to implement this in activemodel
@@ -104,13 +106,13 @@ user flow
 
 ### Theresa
 
-- [ ] order of the elements in the notes is really important
+- [x] block future DOB
+- [x] order of the elements in the notes is really important
 - [ ] numbered list would be better, looks like numbered list isn't working properly, but it should be formatted as markdown
-- [ ] make it so we can type in the DOB, right now this isn't possible
+- [x] make it so we can type in the DOB, right now this isn't possible [shawn]
 - [ ] wants to be able select the note type from the upload area
 - [ ] remove markdown formatting from the copy content
 - [ ] add note feedback tool so they can submit feedback
-- [ ] she generates a patient instructions page,
 
 ## vFuture
 
@@ -121,6 +123,9 @@ user flow
 - [ ] log everything required for HIPPA
 - [ ] LLM response logging?
 - [ ] cost tracing for AI stuff?
+  - [ ] this may be done via Sentry for us
+- [ ] upload types should be defined in the backend and sent to the frontend, right now they are hardcoded in each
+  - [ ] related, upload file type limits should be defined in the backend
 
 ## User Steps
 
