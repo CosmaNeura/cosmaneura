@@ -17,7 +17,6 @@ import {
 import { useMediaQuery } from "~/hooks/use-media-query"
 
 import { TimePicker } from "../time-picker/time-picker"
-import { generateDateTimeString } from "./datetime-utils"
 
 interface DateTimePickerPopoverProps {
   children: React.ReactNode
@@ -43,11 +42,14 @@ export function DateTimePickerPopover({
 
   const isDesktop = useMediaQuery("(min-width: 640px)")
 
-  useEffect(() => {
-    if (dateTime) {
-      setInputValue(dateTimeFormatFunction(dateTime))
+  // we wrap the setDateTime function in order to make sync the text date representation and date object are in sync
+  function handleDateTimeChange(date: Date | undefined) {
+    setDateTime(date)
+
+    if (date) {
+      setInputValue(dateTimeFormatFunction(date))
     }
-  }, [dateTime, setInputValue])
+  }
 
   if (!isDesktop) {
     return (
@@ -69,13 +71,13 @@ export function DateTimePickerPopover({
             <Calendar
               mode="single"
               selected={dateTime}
-              onSelect={setDateTime}
+              onSelect={handleDateTimeChange}
               initialFocus
               className="self-center"
             />
             {showTimePicker && (
               <div className="border-border border-t p-3">
-                <TimePicker date={dateTime} setDate={setDateTime} />
+                <TimePicker date={dateTime} setDate={handleDateTimeChange} />
               </div>
             )}
           </div>
@@ -97,12 +99,12 @@ export function DateTimePickerPopover({
         <Calendar
           mode="single"
           selected={dateTime}
-          onSelect={setDateTime}
+          onSelect={handleDateTimeChange}
           initialFocus
         />
         {showTimePicker && (
           <div className="border-border border-t p-3">
-            <TimePicker date={dateTime} setDate={setDateTime} />
+            <TimePicker date={dateTime} setDate={handleDateTimeChange} />
           </div>
         )}
       </PopoverContent>
