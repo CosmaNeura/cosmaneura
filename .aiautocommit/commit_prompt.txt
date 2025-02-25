@@ -1,38 +1,44 @@
 # IMPORTANT: Your Instructions
 
-Generate a commit message from the `git diff` output below using these rules:
+Generate a commit message from the `git diff` output using these rules:
 
-## 1. Subject Line
+#### 1. **Subject Line**
 - Use a conventional commit prefix:
   - `feat`: New features (visible to users).
-  - `fix`: Bug fixes, including user-visible design or style fixes.
-  - `docs`: Changes only to documentation (e.g., `.md`, `.rst`) or code comments.
-  - `style`: Use only for code formatting changes that do not affect the UI. For UI styling changes that impact visual output, use fix (for corrections) or feat (for new features).
-  - `refactor`: Code structure improvements (no behavior changes).
-  - `build`: Updates to build scripts or configs (e.g., `Makefile`, `Justfile`, `Dockerfile`, `package.json`).
+  - `fix`: Bug fixes, including corrections to internal behavior or error prevention.
+  - `docs`: Changes only to documentation or code comments.
+  - `style`: Code formatting changes (no behavior changes).
+  - `refactor`: Code structure improvements with **no behavior changes** (e.g., renaming variables, extracting functions, moving code to shared components).
+  - `build`: Updates to build scripts or configs.
   - `deploy`: Deployment script updates.
-  - `test`: Changes to tests
+  - `test`: Changes to tests.
 - Limit to **50 characters** after the prefix.
-- Use **imperative mood** (e.g., "Improve layout").
-- Describe the intent or outcome (e.g., "prevent text overflow" not "add break-all").
+- Use **imperative mood** (e.g., "Extract component").
+- Describe the intent or outcome succinctly.
 
-## 2. Extended Commit Message
-- Add only for complex changes affecting functionality or build processes.
-- Use up to 3 markdown bullets focusing on **what changed** and **why it matters**.
-- Mention side effects, user impact, or key considerations if relevant.
-- Do not add an extended message if the change can be fully described in the subject line. Only include it when additional context is necessary to understand the change or its implications.
+#### 2. **Extended Commit Message**
+- Include only for changes that:
+  - Affect functionality (e.g., new features, bug fixes).
+  - Modify build processes or deployment.
+  - Have side effects or require special considerations.
+- For simple refactors, style changes, or documentation updates, **do not** include an extended message.
+- When included, use up to 3 markdown bullets focusing on **what changed** and **why it matters**.
+- **Do not** include an extended message for:
+  - Refactors that only improve code structure without altering behavior (e.g., extracting functions, renaming variables, moving code to shared components).
+  - Style changes (e.g., formatting, linting).
+  - Documentation updates (e.g., comments, README changes).
 
-## 3. General Guidelines
-- Prioritize the purpose of changes over listing tools or properties used.
-- Keep concise; avoid obvious or verbose details.
-- If insufficient info, return an empty string.
+#### 3. **General Guidelines**
+- Prioritize the purpose over listing tools or properties.
+- Keep concise; avoid obvious details.
+- If the change is straightforward and doesn’t affect functionality, the subject line alone is sufficient.
+- Consider code comments or context only if they help determine the impact of the change.
 
-## 4. Scopes
-Optional scopes (e.g., `feat(api):`) to use:
-
-- `api`: API endpoints, controllers, and services.
-- `frontend`: React components, styles, and state management.
+#### 4. **Scopes**
+Optional scopes (e.g., `feat(api):`):
+- `api`: API endpoints, controllers, services.
+- `frontend`: React components, styles, state management.
 - `migration`: Database schema changes.
-- `jobs``: Background jobs and scheduled tasks.
-- `infra`: Infrastructure, networking, and deployment.
-- `prompt`: Updates to LLM or AI prompts
+- `jobs`: Background jobs, scheduled tasks.
+- `infra`: Infrastructure, networking, deployment, containerization.
+- `prompt`: Updates to LLM or AI prompts.
