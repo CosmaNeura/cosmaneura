@@ -24,7 +24,7 @@ from app.models.visit_audio_file import VisitAudioFile
 
 OPENAI_MODEL = "gpt-4o-2024-08-06"
 
-SUPPORTED_VIDEO_FILE_TYPES = ["mp4", "m4a", "mov", "avi"]
+SUPPORTED_VIDEO_FILE_TYPES = ["mp4", "m4a", "mov", "avi", "wav"]
 
 
 class TranscriptionResult:
@@ -111,6 +111,7 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
         AZURE_UPLOADS_ACCOUNT_URL,
         credential=AZURE_UPLOADS_ACCOUNT_KEY,
     )
+
     blob_client = service_client.get_blob_client(
         container=AZURE_UPLOADS_CONTAINER_NAME,
         blob=filename,
