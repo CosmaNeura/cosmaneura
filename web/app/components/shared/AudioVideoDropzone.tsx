@@ -35,7 +35,7 @@ export function AudioVideoDropzone({
     validation: {
       accept: {
         "audio/*": [".mp3", ".wav", ".m4a"],
-        "video/*": [".mp4"],
+        "video/*": [".mp4", "mov", "avi"],
       },
       // 300mb? this is arbitrary
       maxSize: 300 * 1024 * 1024,
