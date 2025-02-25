@@ -143,9 +143,17 @@ function VisitAudioUploadForm({
   const { toast } = useToast()
 
   const formSchema = z.object({
-    appointment_date: z.date(),
+    appointment_date: z
+      .date()
+      .max(new Date(), { message: "Appointment date cannot be in the future" })
+      .min(
+        new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+        "Appointment date cannot be more than 2 months in the past",
+      ),
     patient_name: z.string(),
-    date_of_birth: z.date(),
+    date_of_birth: z
+      .date()
+      .max(new Date(), { message: "Date of birth cannot be in the future" }),
     // TODO look up audio file types here": https://www.assemblyai.com/docs/getting-started/transcribe-an-audio-file
     // TODO There's some sort of fancy file validation stuff we can do here.
     //   image: z
@@ -193,12 +201,16 @@ function VisitAudioUploadForm({
     closeDialogBox()
   }
 
+  // TODO can we really not handle this within the zod side of things?
   const [file, setFile] = useState<File | null>(null)
 
   const handleFileChange = (e: ChangeEventHandler<HTMLInputElement>) => {
     const selectedFile = e.target.files[0]
     setFile(selectedFile)
   }
+
+  const DATE_PLACEHOLDER =
+    "Enter date (i.e. 'August 10, 2023') or pick from the calendar"
 
   return (
     <Form {...form}>
@@ -211,36 +223,17 @@ function VisitAudioUploadForm({
             <FormItem>
               <FormLabel>Appointment Date</FormLabel>
               <FormControl>
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className={cn(
-                        "w-full justify-start text-left font-normal",
-                        !field.value && "text-muted-foreground",
-                      )}
-                    >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      {field.value
-                        ? standardDateFormat(field.value)
-                        : "Pick a date"}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={field.value}
-                      onSelect={field.onChange}
-                      defaultMonth={new Date()}
-                      disabled={(date) =>
-                        // two months ago, this is an arbitrary date
-                        date <
-                          new Date(Date.now() - 60 * 24 * 60 * 60 * 1000) ||
-                        date > new Date()
-                      }
-                    />
-                  </PopoverContent>
-                </Popover>
+                <DateTimePicker
+                  {...field}
+                  showTimePicker={false}
+                  suggestions={[
+                    "Today",
+                    "Yesterday",
+                    "Last Friday",
+                    "Two weeks ago",
+                  ]}
+                  placeholder={DATE_PLACEHOLDER}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -268,32 +261,24 @@ function VisitAudioUploadForm({
         <FormField
           control={form.control}
           name="date_of_birth"
-          render={({ field }) => {
-            function setDateOfBirth(date: Date) {
-              console.log("hi")
-              // field.onChange(date)
-              // debugger
-            }
-
-            return (
-              <DateTimePicker
-                {...field}
-                // these are all splatted from `field`
-                // name={name}
-                // onBlur={onBlur}
-                // disabled={disabled}
-
-                // setDateTime={setDateOfBirth}
-                // TODO we should rename these fields so we can just splat them from `field`
-                dateTime={field.value}
-                setDateTime={field.onChange}
-                // TODO can't we just pick better defaults here?
-                showTimePicker={false}
-                autoComplete="off"
-                aria-describedby={undefined}
-              />
-            )
-          }}
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Date of Birth</FormLabel>
+              <FormControl>
+                <DateTimePicker
+                  {...field}
+                  showTimePicker={false}
+                  suggestions={[]}
+                  placeholder={DATE_PLACEHOLDER}
+                />
+              </FormControl>
+              <FormDescription>
+                Use an accurate DOB. This will be required to identify the
+                patient in the future.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
         />
 
         <FormField
