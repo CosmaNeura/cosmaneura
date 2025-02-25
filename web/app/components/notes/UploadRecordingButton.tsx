@@ -1,17 +1,11 @@
-import { ChangeEventHandler, useEffect, useState } from "react"
-import {
-  ControllerRenderProps,
-  FieldValues,
-  useForm,
-  useFormContext,
-} from "react-hook-form"
+import { addDays, subMonths } from "date-fns"
+import { ChangeEventHandler, useState } from "react"
+import { ControllerRenderProps, FieldValues, useForm } from "react-hook-form"
 import { z } from "zod"
 
-import { CalendarIcon, CheckIcon, Upload } from "lucide-react"
+import { CheckIcon, Upload } from "lucide-react"
 
-import { DatePickerWithInput } from "@/components/shared/DatePickerWithInput"
 import { Button } from "@/components/ui/button"
-import { Calendar } from "@/components/ui/calendar"
 import {
   Dialog,
   DialogContent,
@@ -20,18 +14,15 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import {
-  Popover,
-  PopoverAnchor,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover"
-import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Icons } from "~/components/icons"
+import { DateTimePicker } from "~/components/lingua-time/datetime-picker"
+import { AudioVideoDropzone } from "~/components/shared/AudioVideoDropzone"
+import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
   FormControl,
@@ -52,16 +43,14 @@ import {
 import { useToast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { standardDateFormat } from "~/lib/date"
-import { cn } from "~/lib/utils"
 
 import * as Sentry from "@sentry/react"
-import { DateTimePicker } from "../lingua-time/datetime-picker"
-import { SimpleComboBox } from "../shared/SimpleComboBox"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery } from "@tanstack/react-query"
 import { patientListOptions } from "client/@tanstack/react-query.gen"
 
+// TODO should really be extracted out to a shared component, but it's too married into this page at this point... :/
 function PatientComboboxSearch({
   // required for updating the DOB when a patient item is selected
   form,
@@ -141,25 +130,25 @@ function VisitAudioUploadForm({
   closeDialogBox: () => void
 }) {
   const { toast } = useToast()
+  const tomorrow = addDays(new Date(), 1)
 
   const formSchema = z.object({
     appointment_date: z
       .date()
-      .max(new Date(), { message: "Appointment date cannot be in the future" })
+      .max(tomorrow, { message: "Appointment date cannot be in the future" })
       .min(
-        new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+        // why two months? Can't imagine doctors are entering notes from two months ago
+        subMonths(new Date(), 2),
         "Appointment date cannot be more than 2 months in the past",
       ),
     patient_name: z.string(),
-    date_of_birth: z
-      .date()
-      .max(new Date(), { message: "Date of birth cannot be in the future" }),
-    // TODO look up audio file types here": https://www.assemblyai.com/docs/getting-started/transcribe-an-audio-file
-    // TODO There's some sort of fancy file validation stuff we can do here.
-    //   image: z
-    //     //Rest of validations done via react dropzone
-    //     .instanceof(File)
-    //     // .refine((file) => file.size !== 0, "Please upload an image"),
+    date_of_birth: z.date().max(tomorrow, {
+      message: "Date of birth cannot be in the future",
+    }),
+    // most of the file validation is done within the dropzone component
+    file: z.instanceof(File, {
+      message: "Please select a valid audio or video file",
+    }),
   })
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -171,10 +160,8 @@ function VisitAudioUploadForm({
     const { data: sasSignature } = await generateSignedVisitRecordingUploadUrl()
     invariant(sasSignature, "sasSignature should always exist")
 
-    invariant(file, "file should be set at this stage ")
-
     const { error: uploadFileError, stampedFileName } = await uploadFileToAzure(
-      file,
+      values.file,
       sasSignature,
     )
 
@@ -195,20 +182,13 @@ function VisitAudioUploadForm({
     toast({
       title: "Upload complete",
       description:
-        "Your audio recording has been uploaded successfully. Check back in a couple minutes.",
+        "Your recording has been uploaded successfully. Check back in a couple minutes.",
     })
 
     closeDialogBox()
   }
 
-  // TODO can we really not handle this within the zod side of things?
-  const [file, setFile] = useState<File | null>(null)
-
-  const handleFileChange = (e: ChangeEventHandler<HTMLInputElement>) => {
-    const selectedFile = e.target.files[0]
-    setFile(selectedFile)
-  }
-
+  // TODO should move a project constant
   const DATE_PLACEHOLDER =
     "Enter date (i.e. 'August 10, 2023') or pick from the calendar"
 
@@ -233,6 +213,7 @@ function VisitAudioUploadForm({
                     "Two weeks ago",
                   ]}
                   placeholder={DATE_PLACEHOLDER}
+                  autoFocus={false}
                 />
               </FormControl>
               <FormMessage />
@@ -268,8 +249,9 @@ function VisitAudioUploadForm({
                 <DateTimePicker
                   {...field}
                   showTimePicker={false}
-                  suggestions={[]}
                   placeholder={DATE_PLACEHOLDER}
+                  // no suggestions for DOB
+                  suggestions={[]}
                 />
               </FormControl>
               <FormDescription>
@@ -283,20 +265,23 @@ function VisitAudioUploadForm({
 
         <FormField
           control={form.control}
-          name="audio_file"
+          name="file"
           render={({ field }) => (
             <FormItem>
               <FormDescription>
                 Upload an audio recording from a patient visit.
               </FormDescription>
               <FormControl>
-                <Input type="file" {...field} onChange={handleFileChange} />
+                <AudioVideoDropzone
+                  onDropFile={(file: File) => form.setValue("file", file)}
+                  file={form.watch("file")}
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
           )}
         />
-        <Button type="submit" disabled={form.formState.isSubmitting || !file}>
+        <Button type="submit" disabled={form.formState.isSubmitting}>
           {form.formState.isSubmitting ? (
             <>
               <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -310,6 +295,8 @@ function VisitAudioUploadForm({
     </Form>
   )
 }
+
+// button which triggers the upload dialog to be opened
 export function UploadRecordingButton() {
   const [open, setOpen] = useState(false)
 
