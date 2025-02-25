@@ -3,7 +3,6 @@ from playwright.sync_api import Page, expect
 from app import root
 
 from app.models.doctor_note_file import DoctorNoteFile
-from app.models.visit_audio_file import VisitAudioFile
 
 from tests.integration.utils import login_as_dev_user
 

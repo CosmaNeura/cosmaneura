@@ -6,14 +6,10 @@ from app import root
 from app.configuration.azure import AZURE_UPLOADS_CONTAINER_NAME
 from app.utils.azure import download_blob
 
-from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
-from tests.integration.clerk import setup_clerk_testing_token
-from tests.integration.server import home_url
 from tests.integration.utils import login_as_dev_user
-from tests.routes.utils import get_clerk_dev_user
 
 
 def test_audio_file_upload(server, page: Page) -> None:

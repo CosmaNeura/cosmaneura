@@ -11,7 +11,6 @@ from activemodel.mixins import (
 )
 from activemodel.types import TypeIDType
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import joinedload
 from sqlmodel import Field, Relationship
 
 from .doctor import Doctor

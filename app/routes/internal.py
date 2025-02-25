@@ -1,10 +1,8 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Path, Request
-from openai.types import Upload
+from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel, computed_field
-from typeid import TypeID
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file

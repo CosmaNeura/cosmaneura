@@ -1,11 +1,13 @@
 import re
 
 from app.jobs.summarize import perform
+
+from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
-from app.models.patient import Patient
 from app.models.appointment import Appointment
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.ai_visit_note import AIVisitNote
+from app.models.patient import Patient
+
 
 def assert_matches(regex, string):
     if not re.search(regex, string, re.IGNORECASE):

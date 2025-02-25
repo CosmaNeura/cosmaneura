@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import computed_field
 
-from activemodel import BaseModel, SessionManager
+from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from app.models.doctor import Doctor

@@ -6,7 +6,6 @@ from app import log
 from app.celery import celery
 from app.configuration.openai import openai
 
-import sqlmodel as sm
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment

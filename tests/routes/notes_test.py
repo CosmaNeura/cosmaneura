@@ -1,15 +1,12 @@
 from datetime import datetime
 
-from factory.alchemy import SQLAlchemyModelFactory
 from fastapi import status
 from fastapi.testclient import TestClient
-from typeid import TypeID
 
 from app.server import api_app
 
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
-from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
