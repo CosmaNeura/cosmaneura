@@ -63,7 +63,9 @@ celery.conf.beat_schedule_filename = str(root / "tmp/celerybeat-schedule")
 def init_sentry(**_kwargs):
     # according to sentry documentation, this must be done here, even if it's executed on application start
     # https://docs.sentry.io/platforms/python/integrations/celery/
-    configure_sentry()
+    from sentry_sdk.integrations.celery import CeleryIntegration
+
+    configure_sentry(integrations=[CeleryIntegration(monitor_beat_tasks=True)])
 
 
 @signals.setup_logging.connect
