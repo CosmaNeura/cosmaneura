@@ -13,16 +13,19 @@ def assert_matches(regex, string):
     if not re.search(regex, string, re.IGNORECASE):
         raise AssertionError(f"Regex '{regex}' does not match the string '{string}'")
 
-def count_visit_notes(
-    transcript: AIVisitTranscript,
-    schema: DoctorNoteSchema
-) -> int:
-    return AIVisitNote.select().where(
-        AIVisitNote.doctor_id == transcript.doctor_id and
-        AIVisitNote.appointment_id == transcript.appointment_id and
-        AIVisitNote.ai_transcript_id == transcript.id and
-        AIVisitNote.doctor_note_schema_id == schema.id
-    ).count()
+
+def count_visit_notes(transcript: AIVisitTranscript, schema: DoctorNoteSchema) -> int:
+    return (
+        AIVisitNote.select()
+        .where(
+            AIVisitNote.doctor_id == transcript.doctor_id
+            and AIVisitNote.appointment_id == transcript.appointment_id
+            and AIVisitNote.ai_transcript_id == transcript.id
+            and AIVisitNote.doctor_note_schema_id == schema.id
+        )
+        .count()
+    )
+
 
 # Done at the request of Teresa Jensen.
 def test_summarize_includes_all_actionable_steps():
@@ -33,27 +36,29 @@ def test_summarize_includes_all_actionable_steps():
     assert appt is not None
 
     schema = DoctorNoteSchema.get(
-                DoctorNoteSchema.doctor_id == appt.doctor_id and
-                DoctorNoteSchema.note_type == "Test SOAP Note"
-              )
+        DoctorNoteSchema.doctor_id == appt.doctor_id
+        and DoctorNoteSchema.note_type == "Test SOAP Note"
+    )
     assert schema is not None
 
-    transcript = AIVisitTranscript.select().where(
-                   AIVisitTranscript.appointment_id == appt.id
-                 ).one()
+    transcript = (
+        AIVisitTranscript.select()
+        .where(AIVisitTranscript.appointment_id == appt.id)
+        .one()
+    )
     assert transcript is not None
 
     note = AIVisitNote.get(
-        AIVisitNote.ai_transcript_id == transcript.id and
-        AIVisitNote.doctor_note_schema_id == schema.id
+        AIVisitNote.ai_transcript_id == transcript.id
+        and AIVisitNote.doctor_note_schema_id == schema.id
     )
     assert note is None
 
     perform(transcript.id, schema.id)
 
     note = AIVisitNote.get(
-        AIVisitNote.ai_transcript_id == transcript.id and
-        AIVisitNote.doctor_note_schema_id == schema.id
+        AIVisitNote.ai_transcript_id == transcript.id
+        and AIVisitNote.doctor_note_schema_id == schema.id
     )
     assert note is not None
 
@@ -78,14 +83,15 @@ def test_summarize_includes_all_actionable_steps():
     assert_matches(r"request (records|labs)", plan)
     assert_matches(r"send a list of labs", plan)
 
+
 def test_summarize_is_idempotent():
     transcript = AIVisitTranscript.sample()
     assert transcript is not None
 
     schema = DoctorNoteSchema.get(
-        DoctorNoteSchema.doctor_id == transcript.doctor_id and
-        DoctorNoteSchema.note_type == "Test SOAP Note"
-        )
+        DoctorNoteSchema.doctor_id == transcript.doctor_id
+        and DoctorNoteSchema.note_type == "Test SOAP Note"
+    )
     assert schema is not None
 
     init_note_count = count_visit_notes(transcript, schema)
@@ -95,15 +101,23 @@ def test_summarize_is_idempotent():
     assert count_visit_notes(transcript, schema) == init_note_count + 1
 
     note = AIVisitNote.get(
-        AIVisitNote.ai_transcript_id == transcript.id and
-        AIVisitNote.doctor_note_schema_id == schema.id
+        AIVisitNote.ai_transcript_id == transcript.id
+        and AIVisitNote.doctor_note_schema_id == schema.id
     )
 
     perform(transcript.id, schema.id)
 
     assert count_visit_notes(transcript, schema) == init_note_count + 1
 
-    assert note.id == AIVisitNote.select().where(
-        AIVisitNote.ai_transcript_id == transcript.id and
-        AIVisitNote.doctor_note_schema_id == schema.id
-    ).order_by(AIVisitNote.updated_at.desc()).limit(1).one().id
+    assert (
+        note.id
+        == AIVisitNote.select()
+        .where(
+            AIVisitNote.ai_transcript_id == transcript.id
+            and AIVisitNote.doctor_note_schema_id == schema.id
+        )
+        .order_by(AIVisitNote.updated_at.desc())
+        .limit(1)
+        .one()
+        .id
+    )
