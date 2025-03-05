@@ -587,7 +587,7 @@ requires-dist = [
     { name = "sqlmodel", specifier = ">=0.0.22" },
     { name = "starlette-context", git = "https://github.com/tomwojcik/starlette-context.git" },
     { name = "structlog", specifier = ">=24.4.0" },
-    { name = "typeid-python", extras = ["cli"], specifier = ">=0.3.1" },
+    { name = "typeid-python", extras = ["cli"], git = "https://github.com/saltmade/typeid-python?rev=saltmade%2Fsubclass-error" },
     { name = "typer", specifier = ">=0.14.0" },
     { name = "uvicorn", specifier = ">=0.32.0" },
 ]
@@ -2694,13 +2694,9 @@ wheels = [
 [[package]]
 name = "typeid-python"
 version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/saltmade/typeid-python?rev=saltmade%2Fsubclass-error#7dd240f8002c69d88e6bc794223ce7aa900c2366" }
 dependencies = [
     { name = "uuid6" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/25/c3/4d4cfcdc4a568e50b0f4702fafac66e01934ded5efc4f822ed4d38d29780/typeid_python-0.3.1.tar.gz", hash = "sha256:f96a78c5dc6d8df1d058b72598bcc2c1c5bb8d8343f53f910e074dae01458417", size = 5861 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f4/a6/3929b4574b02541a07b3fd61f6d2757eb263dcf606ecfb71b63d504cfd08/typeid_python-0.3.1-py3-none-any.whl", hash = "sha256:62a6747933b3323d65f0bf91c8e8c7768b0292eaf9c176fb0c934ff3a61acce5", size = 7013 },
 ]
 
 [[package]]

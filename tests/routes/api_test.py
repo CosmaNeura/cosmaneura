@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
-from app.models.user import User
+from app.models.doctor import Doctor
 
 from tests.routes.utils import get_valid_token
 
@@ -36,7 +36,7 @@ def test_authorized_clerk_credentials(client: TestClient):
 
 def test_authorized_api_credentials(client: TestClient):
     # TODO should use a factory
-    user = User(clerk_id="user_123").save()
+    user = Doctor(clerk_id="user_123").save()
     user.generate_api_key()
 
     response = client.get(
