@@ -1,57 +1,67 @@
 """
+Logic for an API server. This is distinct from the "app" API server, which hosts static assets
+and is authenticated via a clerk token, and is meant to be consumed by an external user.
+
+
+It is locked to a specific
 TODO
 
 - [ ] organizations? what is the clerk data model?
 - [ ] use sk_ for API key prefix
 """
 
-from fastapi import APIRouter, Depends, Form, HTTPException, status
+import sentry_sdk
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from starlette.routing import Host
+from starlette_context import context
+from typeid import TypeID
+from typeid.errors import TypeIDException
 
-from sqlmodel import Field, SQLModel
+from app.models.user import API_KEY_PREFIX, User
 
-# Configuration
-ALLOWED_HOST = "api.example.com"  # Restrict to this host
-API_KEY = "0123456789abcdef0123456789abcdef01234567"  # Hardcoded API key (use securely in production)
-
-# Define the OAuth2 scheme for Bearer token authentication
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
+UNAUTHORIZED_EXCEPTION = HTTPException(
+    status_code=status.HTTP_401_UNAUTHORIZED,
+    detail="Invalid key",
+)
 
-# Dependency to validate the API key
-def validate_api_key(token: str = Depends(oauth2_scheme)):
-    if token != API_KEY:
+
+def authenticate_api_request_middleware(
+    request: Request, token: str = Depends(oauth2_scheme)
+):
+    try:
+        token_as_typeid = TypeID.from_string(token)
+    except TypeIDException:
+        raise UNAUTHORIZED_EXCEPTION
+
+    if token_as_typeid.prefix != API_KEY_PREFIX:
+        raise UNAUTHORIZED_EXCEPTION
+
+    api_user = User.get(api_key=token_as_typeid.uuid)
+
+    if not api_user:
+        raise UNAUTHORIZED_EXCEPTION
+
+    if api_user.deleted_at:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid API key",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
         )
 
+    request.state.api_user = api_user
 
-sync_router = APIRouter(prefix="/v1")
+    context["api_user"] = api_user
 
-
-# Define the Item model using SQLModel
-class Item(SQLModel):
-    id: int = Field(default=None, primary_key=True)
-    name: str
+    sentry_sdk.set_user({"id": api_user.id, "email": api_user.email})
+    sentry_sdk.set_extra("api_user", True)
 
 
-# Mock database (replace with a real database in production)
-items = {2995104339: Item(id=2995104339, name="Sample Item")}
+external_api_app = APIRouter(
+    prefix="/external/v1", dependencies=[Depends(authenticate_api_request_middleware)]
+)
 
 
-# Define the endpoint with API key validation
-@sync_router.post("/items/get")
-async def get_item(item_id: int = Form(...), _api: None = Depends(validate_api_key)):
-    item = items.get(item_id)
-    if item is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Item not found"
-        )
-    return item
-
-
-# Mount the router under the specific host
-sync_router = Host(ALLOWED_HOST, sync_router)
+@external_api_app.get("/ping")
+def external_api_ping():
+    "basic uptime + API authentication check"
+    return {"status": "ok"}

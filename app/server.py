@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from starlette import status
 
+from app.routes.api import external_api_app
 from app.routes.utils.openapi import simplify_operation_ids
 
 from app.models.doctor import Doctor
@@ -54,6 +55,8 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+api_app.include_router(external_api_app)
+
 add_middleware(api_app)
 
 
