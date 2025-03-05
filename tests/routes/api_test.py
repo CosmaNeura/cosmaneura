@@ -5,6 +5,7 @@ from app.server import api_app
 
 from app.models.doctor import Doctor
 
+from tests.factories import DoctorFactory
 from tests.routes.utils import get_valid_token
 
 
@@ -35,13 +36,12 @@ def test_authorized_clerk_credentials(client: TestClient):
 
 
 def test_authorized_api_credentials(client: TestClient):
-    # TODO should use a factory
-    user = Doctor(clerk_id="user_123").save()
+    user = DoctorFactory()
     user.generate_api_key()
 
     response = client.get(
         api_app.url_path_for("external_api_ping"),
-        headers={"Authorization": f"Bearer {user.api_key}"},  # noqa: S104
+        headers={"Authorization": f"Bearer {user.api_key}"},
     )
 
     assert response.status_code == status.HTTP_200_OK

@@ -1,13 +1,6 @@
 """
 Logic for an API server. This is distinct from the "app" API server, which hosts static assets
 and is authenticated via a clerk token, and is meant to be consumed by an external user.
-
-
-It is locked to a specific
-TODO
-
-- [ ] organizations? what is the clerk data model?
-- [ ] use sk_ for API key prefix
 """
 
 import sentry_sdk
@@ -16,6 +9,9 @@ from fastapi.security import OAuth2PasswordBearer
 from starlette_context import context
 from typeid import TypeID
 from typeid.errors import TypeIDException
+
+import app.commands.intake.create
+from app.commands.intake.create import AppointmentRequest, AppointmentResponse
 
 from app.models.doctor import API_KEY_PREFIX, Doctor
 
@@ -65,3 +61,8 @@ external_api_app = APIRouter(
 def external_api_ping():
     "basic uptime + API authentication check"
     return {"status": "ok"}
+
+
+@external_api_app.post("/intake")
+def create_intake(request: Request, data: AppointmentRequest) -> AppointmentResponse:
+    return app.commands.intake.create.perform(data, request.state.api_doctor)
