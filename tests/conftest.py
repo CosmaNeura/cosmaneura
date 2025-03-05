@@ -39,7 +39,7 @@ def pytest_configure(config: Config):
     config.option.pdbcls = "pdbr:RichPdb"
     config.option.disable_warnings = True
 
-    # this forces pretty-traceback
+    # this forces pretty-traceback to be used instead of the default pytest tb, which is absolutely terrible
     config.option.tbstyle = "native"
 
     # playwright config
