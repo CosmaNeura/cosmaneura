@@ -17,7 +17,7 @@ from starlette_context import context
 from typeid import TypeID
 from typeid.errors import TypeIDException
 
-from app.models.user import API_KEY_PREFIX, User
+from app.models.doctor import API_KEY_PREFIX, Doctor
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
@@ -38,22 +38,22 @@ def authenticate_api_request_middleware(
     if token_as_typeid.prefix != API_KEY_PREFIX:
         raise UNAUTHORIZED_EXCEPTION
 
-    api_user = User.get(api_key=token_as_typeid.uuid)
+    api_doctor = Doctor.get(api_key=token_as_typeid.uuid)
 
-    if not api_user:
+    if not api_doctor:
         raise UNAUTHORIZED_EXCEPTION
 
-    if api_user.deleted_at:
+    if api_doctor.deleted_at:
         raise HTTPException(
             status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
         )
 
-    request.state.api_user = api_user
+    request.state.api_doctor = api_doctor
 
-    context["api_user"] = api_user
+    context["api_doctor"] = api_doctor
 
-    sentry_sdk.set_user({"id": api_user.id, "email": api_user.email})
-    sentry_sdk.set_extra("api_user", True)
+    sentry_sdk.set_user({"id": api_doctor.id, "email": api_doctor.email})
+    sentry_sdk.set_extra("api_doctor", True)
 
 
 external_api_app = APIRouter(
