@@ -186,8 +186,8 @@ git = "https://github.com/iloveitaly/activemodel.git"
 git = "https://github.com/anntzer/ipython-autoimport.git"
 
 [tool.uv.sources.ipython-suggestions]
-path = "/Users/mike/Projects/python/ipython-suggestions"
-editable = true
+git = "https://github.com/iloveitaly/ipython-suggestions.git"
+rev = "ipython-9.x"
 
 [tool.uv.sources.djlint]
 git = "https://github.com/iloveitaly/djLint.git"
