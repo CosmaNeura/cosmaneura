@@ -12,9 +12,11 @@ from tests.factories import DoctorFactory
 
 
 class AppointmentRequestFactory(ModelFactory[AppointmentRequest]):
-    # optional by default, but make it required in the factory otherwise the randomness of doctor_{email,id} will cause us issues
-    # TODO https://github.com/litestar-org/polyfactory/issues/655
-    doctor_email: EmailStr
+    @classmethod
+    def doctor_email(cls) -> str:
+        # optional by default, but make it required in the factory otherwise the randomness of doctor_{email,id} will cause us issues
+        # TODO https://github.com/litestar-org/polyfactory/issues/655
+        return cls.__faker__.ascii_email()
 
 
 def assert_status(response, status_code: int = status.HTTP_200_OK):
