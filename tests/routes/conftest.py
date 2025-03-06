@@ -11,6 +11,7 @@ from tests.routes.utils import (
 
 
 # TODO should move to activemodel
+# TODO I wonder how the other factory library handles this?
 @pytest.fixture
 def global_session():
     """
@@ -59,7 +60,9 @@ def authenticated_client():
         MockAuthenticateRequest()
     )
 
-    yield TestClient(api_app, base_url=base_server_url())
+    with TestClient(api_app, base_url=base_server_url()) as client:
+        client.cookies.clear()
+        yield client
 
     api_app.dependency_overrides = {}
 
@@ -72,4 +75,5 @@ async def aclient() -> t.AsyncGenerator[AsyncClient, None]:
         transport=ASGITransport(app=api_app),
         base_url=base_server_url(),
     ) as client:
+        client.cookies.clear()
         yield client

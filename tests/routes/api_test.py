@@ -3,14 +3,21 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
-from app.models.doctor import Doctor
-
 from tests.factories import DoctorFactory
 from tests.routes.utils import get_valid_token
 
 
 def test_unauthorized_no_credentials(client: TestClient):
     response = client.get(api_app.url_path_for("external_api_ping"))
+
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+def test_authorized_no_bearer(client: TestClient):
+    response = client.get(
+        api_app.url_path_for("external_api_ping"),
+        headers={"Authorization": "BAD_CREDS"},
+    )
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
 
