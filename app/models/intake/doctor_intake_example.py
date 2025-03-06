@@ -6,13 +6,13 @@ from activemodel.mixins import (
     TypeIDMixin,
 )
 from activemodel.types import TypeIDType
-from app.models.doctor_intake_schema import DoctorIntakeSchema
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake import IntakeQuestion
+from app.models.intake.doctor_intake_schema import DoctorIntakeSchema
+from app.models.intake.intake import IntakeQuestion
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
-from .doctor import Doctor
+from ..doctor import Doctor
 
 
 class DoctorIntakeExample(
