@@ -1,4 +1,5 @@
 from pydantic import BaseModel as PydanticBaseModel
+from pydantic import HttpUrl
 
 from activemodel import BaseModel
 from activemodel.mixins import (
@@ -8,26 +9,13 @@ from activemodel.mixins import (
     TypeIDMixin,
 )
 from activemodel.types import TypeIDType
-from app.models.patient import Patient
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
-from .appointment import Appointment
-from .doctor import Doctor
-
-
-class IntakeQuestion(PydanticBaseModel):
-    key: str
-    "unique key for the question"
-
-    question: str
-    "question to ask the patient"
-
-    description: str
-    "description of the question"
-
-    order: int
-    "order that the question should be asked in"
+from ..appointment import Appointment
+from ..doctor import Doctor
+from ..patient import Patient
+from .doctor_intake_schema import DoctorIntakeSchema, IntakeQuestion
 
 
 class IntakeAnswer(PydanticBaseModel):
@@ -62,17 +50,25 @@ class Intake(
     patient_id: TypeIDType = Patient.foreign_key()
     patient: Patient = Relationship()
 
-    duration: int | None
+    doctor_intake_schema_id: TypeIDType = DoctorIntakeSchema.foreign_key()
+    doctor_intake_schema: DoctorIntakeSchema = Relationship()
+
+    duration: int | None = None
     "total length of the transcript, in seconds"
 
-    intake_questions: list[IntakeQuestion] = Field(sa_type=JSONB())  # type: ignore
+    intake_questions: list[IntakeQuestion] = Field(sa_type=JSONB)
     "list of questions extracted from the intake schema when this intake URL was generated"
 
-    intake_questions_answers: list[IntakeAnswer] = Field(sa_type=JSONB())  # type: ignore
+    intake_questions_answers: list[IntakeAnswer] = Field(sa_type=JSONB, default={})
     "list of answers to the intake questions"
 
-    intake_followup_questions: list[IntakeQuestion] = Field(sa_type=JSONB())  # type: ignore
+    intake_followup_questions: list[IntakeQuestion] = Field(sa_type=JSONB, default={})
     "after the initial intake questions are answered, the LLM is asked to generate followup questions, this is the structured response"
 
-    intake_followup_questions_answers: list[IntakeAnswer] = Field(sa_type=JSONB())  # type: ignore
+    intake_followup_questions_answers: list[IntakeAnswer] = Field(
+        sa_type=JSONB, default=[]
+    )
     "answers to the followup questions"
+
+    def public_url(self) -> HttpUrl:
+        return HttpUrl("https://intake.heydoctor.com/intake/" + str(self.id))
