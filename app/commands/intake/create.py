@@ -6,7 +6,10 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 
+from app.models.appointment import Appointment
 from app.models.doctor import Doctor
+from app.models.intake.intake import Intake
+from app.models.patient import Patient
 
 
 class PatientRequest(BaseModel):
@@ -63,6 +66,11 @@ class AppointmentRequest(BaseModel):
                 "Doctor not found by email, make sure they have signed in to Cosmaneura"
             )
 
+        # error out if the doctor doesn't have any intake form uploaded
+
+        # remove all time information from the date
+        # self.date = datetime(self.date.year, self.date.month, self.date.day, 0, 0, 0, 0)
+
         return self
 
     intake_json: dict | None
@@ -86,9 +94,50 @@ class AppointmentResponse(BaseModel):
     "URL of the intake form for this appointment"
 
 
+# TODO wrap the whole thing in a transaction
 def perform(
     appointment_request: AppointmentRequest, api_doctor: Doctor
 ) -> AppointmentResponse:
     # the "doctor" is this case is an API user, not an actual doctor
-    # this means we shouldn't necessarily associate the
-    return AppointmentResponse(url=HttpUrl("https://example.com"))
+    # this means we shouldn't associate the appointment with that doctor
+
+    assert appointment_request.doctor
+
+    # let's see if we can find the appointment by the external ID
+    if appointment_request.id and (
+        appointment := Appointment.get(external_id=appointment_request.id)
+    ):
+        # TODO update the appointment with the new data
+        return AppointmentResponse(url=HttpUrl("https://example.com"))
+
+    doctor_id = appointment_request.doctor.id
+
+    # TODO obviously, this will fail in many edge cases, but let's start simple
+    # Try to find existing patient by name and date of birth
+    patient = Patient.find_or_create_by(
+        name=appointment_request.patient.name,
+        date_of_birth=appointment_request.patient.dob,
+        doctor_id=doctor_id,
+    )
+
+    # now, let's find or create an appointment
+    appointment = Appointment(
+        doctor_id=doctor_id,
+        patient_id=patient.id,
+        appointment_date=appointment_request.date,
+        external_id=appointment_request.id,
+        created_by_system="api",
+    ).save()
+
+    # TODO determine which questions to ask based on the appointment type, probably hit an LLM here?
+
+    # we are finally ready to create an intake
+    intake = Intake(
+        doctor_id=doctor_id,
+        appointment_id=appointment.id,
+        patient_id=patient.id,
+        # TODO need to pick actual questions
+        intake_questions=[],
+    ).save()
+
+    return AppointmentResponse(url=intake.public_url())
