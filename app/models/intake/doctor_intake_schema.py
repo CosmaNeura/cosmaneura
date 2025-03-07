@@ -1,5 +1,6 @@
 import typing as t
 
+from pydantic import BaseModel as PydanticBaseModel
 from pydantic import computed_field
 
 from activemodel import BaseModel
@@ -10,15 +11,28 @@ from activemodel.mixins import (
     TypeIDMixin,
 )
 from activemodel.types import TypeIDType
-from app.models.intake import IntakeQuestion
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import joinedload
 from sqlmodel import Field, Relationship
 
-from .doctor import Doctor
+from ..doctor import Doctor
 
 if t.TYPE_CHECKING:
     from .doctor_intake_example import DoctorIntakeExample
+
+
+class IntakeQuestion(PydanticBaseModel):
+    key: str
+    "unique key for the question"
+
+    question: str
+    "question to ask the patient"
+
+    description: str
+    "description of the question"
+
+    order: int
+    "order that the question should be asked in"
 
 
 class DoctorIntakeSchema(
@@ -38,7 +52,7 @@ class DoctorIntakeSchema(
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
-    questions: list[IntakeQuestion] = Field(sa_type=JSONB())  # type: ignore
+    questions: list[IntakeQuestion] = Field(sa_type=JSONB)
     "list of questions imported from the intake examples"
 
     examples: list["DoctorIntakeExample"] = Relationship(

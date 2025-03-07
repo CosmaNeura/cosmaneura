@@ -8,13 +8,13 @@ from activemodel.mixins import (
     TypeIDMixin,
 )
 from activemodel.types import TypeIDType
-from app.models.intake import Intake
+from app.models.intake.intake import Intake
 from app.models.patient import Patient
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
-from .appointment import Appointment
-from .doctor import Doctor
+from ..appointment import Appointment
+from ..doctor import Doctor
 
 
 class IntakeSummary(
@@ -35,4 +35,5 @@ class IntakeSummary(
     intake_id: TypeIDType = Intake.foreign_key()
     intake: Intake = Relationship()
 
-    summary: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
+    summary: dict[str, str] = Field(sa_type=JSONB)
+    "key value dictionary of the AI summary"

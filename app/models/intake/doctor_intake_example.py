@@ -36,5 +36,5 @@ class DoctorIntakeExample(
     doctor_intake_schema_id: TypeIDType = DoctorIntakeSchema.foreign_key()
     doctor_intake_schema: DoctorIntakeSchema = Relationship()
 
-    questions: list[IntakeQuestion] = Field(sa_type=JSONB())  # type: ignore
+    questions: list[IntakeQuestion] = Field(sa_type=JSONB)
     "list of questions imported from the intake examples"
