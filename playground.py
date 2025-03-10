@@ -183,21 +183,6 @@ async def aglobal_playground_session():
 # aglobal_playground_session()
 ctx = global_playground_session()
 
-def global_session_connection():
-    """Setup a global connection with transaction control for interactive development"""
-    engine = SessionManager.get_instance().get_engine()
-
-    ctx_connection = engine.begin()
-
-    # looks like if this is garbage collected, it will close the connection
-    connection = ctx_connection.__enter__()
-
-    # Store connection in session manager
-    SessionManager.get_instance().session_connection = connection
-    return ctx_connection
-
-# ctx = global_session_connection()
-
 async def playwright_page():
 	"""
 	>>> page = await playwright_page()
@@ -222,21 +207,6 @@ def delete_all_users():
 configure_database()
 engine = create_engine(database_url(), echo=True)
 session = SessionManager.get_instance().get_session().__enter__()
-
-def get_db_version() -> tuple[str, str]:
-	with engine.connect() as conn:
-		pg_version = conn.execute(sa.text("SHOW server_version")).scalar()
-		# Extract major.minor version from full version string
-		pg_version = pg_version.split()[0]
-
-	return pg_version
-
-def get_redis_version(redis_url: str):
-	# Get Redis version
-	redis_client = Redis.from_url(redis_url)
-	redis_version = redis_client.info()['redis_version']
-
-	return redis_version
 
 # https://github.com/mher/flower/issues/1348
 def retry_task(task_id):
