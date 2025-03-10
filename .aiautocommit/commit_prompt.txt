@@ -37,6 +37,8 @@ Generate a commit message from the `git diff` output using these rules:
 #### 4. **Scopes**
 Optional scopes (e.g., `feat(api):`):
 - `api`: API endpoints, controllers, services.
+- `intake`: Functionality related to patient intake.
+- `notes`: Functionality related to doctor note summarization
 - `frontend`: React components, styles, state management.
 - `migration`: Database schema changes.
 - `jobs`: Background jobs, scheduled tasks.
