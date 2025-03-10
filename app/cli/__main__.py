@@ -34,16 +34,34 @@ def write_versions():
 
 
 @app.command()
-def dump_openapi():
+def dump_openapi(app_target: str = "api_app"):
+    """
+    Dump OpenAPI schema for the specified app target.
+    """
+    import importlib
     import json
 
-    from fastapi.openapi.utils import get_openapi
+    from app.utils.openapi import generate_openapi_schema
 
-    from app.server import api_app, internal_api_app
+    # Dynamically get the target app from app.server module
+    server_module = importlib.import_module("app.server")
+    available_apps = [
+        name
+        for name in dir(server_module)
+        # TODO is this a fastapi router? Probably a better way to do this?
+        if not name.startswith("_") and hasattr(getattr(server_module, name), "routes")
+    ]
 
-    openapi = get_openapi(
-        title="internal api", version=api_app.version, routes=internal_api_app.routes
-    )
+    if app_target not in available_apps:
+        typer.echo(
+            f"Error: '{app_target}' not found. Available targets: {', '.join(available_apps)}"
+        )
+        raise typer.Exit(1)
+
+    target_app = getattr(server_module, app_target)
+
+    # Use our utility function
+    openapi = generate_openapi_schema(target_app)
 
     typer.echo(json.dumps(openapi))
 
