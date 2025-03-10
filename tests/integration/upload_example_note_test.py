@@ -20,7 +20,7 @@ def test_example_note_upload(server, page: Page) -> None:
 
     page.locator('[id="downshift-\\:ra\\:-input"]').click()
     page.locator('[id="downshift-\\:ra\\:-input"]').fill("Example Note")
-    page.get_by_role("button", name="Upload Example Visit Notes").click()
+    page.get_by_role("button", name="Upload Example Visit Note").click()
 
     expect(page.get_by_text("Notification Upload")).to_be_visible()
 
