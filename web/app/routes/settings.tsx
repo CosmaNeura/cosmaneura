@@ -74,7 +74,7 @@ function IntakeUpload() {
     toast({
       title: "Upload Complete",
       description:
-        "Your intake notes have been uploaded successfully. They will be processed and displayed here in a couple minutes.",
+        "Your intake example have been uploaded successfully. They will be processed and displayed here in a couple minutes.",
     })
   }
 
@@ -280,7 +280,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
               <div className="flex flex-col gap-1 font-semibold">
                 <p>{file.name}</p>
                 <p className="text-muted-foreground text-xs">
-                  Press the upload button below to add the example patient notes
+                  Press the upload button below to add the example patient note
                 </p>
               </div>
             )}
@@ -301,7 +301,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 <FormDescription>
                   Enter the type of note you want to upload. For example, "SOAP
                   Note". If you've already uploaded a note for this note type,
-                  and want to add more examples to improve our systems
+                  and want to add more examples to improve our system's
                   performance, please select it from the list.
                 </FormDescription>
                 <FormMessage />
@@ -316,7 +316,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 Uploading...
               </>
             ) : (
-              "Upload Example Visit Notes"
+              "Upload Example Visit Note"
             )}
           </Button>
         </section>
