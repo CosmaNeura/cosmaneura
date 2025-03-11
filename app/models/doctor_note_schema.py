@@ -10,7 +10,7 @@ from activemodel.mixins import (
     TypeIDMixin,
 )
 from activemodel.types import TypeIDType
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSON
 from sqlmodel import Field, Relationship
 
 from .doctor import Doctor
@@ -37,7 +37,7 @@ class DoctorNoteSchema(
     note_type: str
     "user generated name of the note type"
 
-    fields: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
+    fields: dict[str, str] = Field(sa_type=JSON())  # type: ignore
     "key is field name, value is instruction"
 
     examples: list["DoctorNoteExample"] = Relationship(
