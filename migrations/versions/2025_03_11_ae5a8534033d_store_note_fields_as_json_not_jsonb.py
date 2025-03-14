@@ -20,9 +20,13 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
+    """
+    Alembic DID NOT generate the correct migration from JSONB => JSON, so this is hand-coded.
+    """
+
     op.add_column(
       'doctor_note_schema',
-      sa.Column('fields_json', type_=postgresql.JSON(astext_type=sa.Text()), nullable=True)
+      sa.Column('fields_json', type_=postgresql.JSON(astext_type=sa.Text()), nullable=True, comment='key is field name, value is instruction')
     )
     op.execute("UPDATE doctor_note_schema SET fields_json = fields::json")
     op.drop_column('doctor_note_schema', 'fields')
