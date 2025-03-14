@@ -33,7 +33,7 @@ def downgrade() -> None:
     # Reverse the migration (JSON back to JSONB)
     op.add_column(
       'doctor_note_schema',
-      sa.Column('fields', postgresql.JSONB(astext_type=sa.Text()), nullable=True)
+      sa.Column('fields_jsonb', postgresql.JSONB(astext_type=sa.Text()), nullable=True)
     )
     op.execute("UPDATE doctor_note_schema SET fields_jsonb = fields::jsonb")
     op.drop_column('doctor_note_schema', 'fields')
