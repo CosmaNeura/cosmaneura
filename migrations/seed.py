@@ -1,5 +1,6 @@
 # seed fresh development databases with data
 
+import json
 from datetime import datetime
 
 import factory
@@ -106,28 +107,46 @@ ai_visit_transcript = AIVisitTranscript.find_or_create_by(
     ],
 )
 
-doctor_note_schema = DoctorNoteSchema.find_or_create_by(
-    doctor_id=doctor.id,
-    note_type="Telehealth SOAP Note",
-    fields={
-        "Chief Complaint": "Document the patient's primary reason for visit",
-        "History of Present Illness": "Describe the chronological history of the current medical problem",
-        "Assessment": "List the diagnoses and clinical impressions",
-        "Plan": "Detail the treatment plan and next steps",
-    },
-)
+EXAMPLE_NOTE_SCHEMA_FIELDS = {
+    "Chief Complaint": "Document the patient's primary reason for visit",
+    "History of Present Illness": "Describe the chronological history of the current medical problem",
+    "Assessment": "List the diagnoses and clinical impressions",
+    "Plan": "Detail the treatment plan and next steps",
+}
+
+
+# This where condition below, instead of using find_or_initialized by, was a particularly hard won.
+# Unfortunately, SQLAlchemy does not properly cast the JSON field to text when doing a comparison with a dictionary or even a string.
+# So we need to manually force the comparison to an "as text" as you can see below.
+# https://grok.com/share/bGVnYWN5_ba442958-cc1c-4a68-915b-099eb0b5ce1e
+doctor_note_schema = DoctorNoteSchema.where(
+    DoctorNoteSchema.doctor_id == doctor.id,
+    DoctorNoteSchema.note_type == "Telehealth SOAP Note",
+    DoctorNoteSchema.fields["fields"].astext == json.dumps(EXAMPLE_NOTE_SCHEMA_FIELDS),
+).first()
+
+if not doctor_note_schema:
+    doctor_note_schema = DoctorNoteSchema(
+        doctor_id=doctor.id,
+        note_type="Telehealth SOAP Note",
+        fields=EXAMPLE_NOTE_SCHEMA_FIELDS,
+    ).save()
 
 # same exact schema, different doctor, to better test the ui
-doctor2_note_schema = DoctorNoteSchema.find_or_create_by(
-    doctor_id=doctor.id,
-    note_type="Telehealth SOAP Note",
-    fields={
-        "Chief Complaint": "Document the patient's primary reason for visit",
-        "History of Present Illness": "Describe the chronological history of the current medical problem",
-        "Assessment": "List the diagnoses and clinical impressions",
-        "Plan": "Detail the treatment plan and next steps",
-    },
-)
+doctor2_note_schema = DoctorNoteSchema.where(
+    DoctorNoteSchema.doctor_id == doctor_2.id,
+    DoctorNoteSchema.note_type == "In-person SOAP Note",
+    DoctorNoteSchema.fields["fields"].astext == json.dumps(EXAMPLE_NOTE_SCHEMA_FIELDS),
+).first()
+
+if not doctor2_note_schema:
+    doctor2_note_schema = DoctorNoteSchema(
+        doctor_id=doctor_2.id,
+        note_type="In-person SOAP Note",
+        fields=EXAMPLE_NOTE_SCHEMA_FIELDS,
+    ).save()
+
+assert isinstance(doctor_note_schema, DoctorNoteSchema)
 
 # TODO this is AI generated, we should improve seed data here
 # each schema must have at least a single example
