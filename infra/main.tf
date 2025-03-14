@@ -181,6 +181,13 @@ resource "azurerm_storage_management_policy" "delete_uploads" {
 
     filters {
       blob_types = ["blockBlob"]
+      # by default, all storage containers have the same rule applied, so we need to explicitly filter on storage container name
+      prefix_match = [
+        azurerm_storage_container.uploads.name,
+        azurerm_storage_container.example_notes.name,
+        azurerm_storage_container.example_intake.name,
+        # NOTE test_uploads is explicitly not deleted!
+      ]
     }
 
     # IMPORTANT: this ensures files are wiped automatically after uploaded
