@@ -37,7 +37,7 @@ class DoctorNoteSchema(
     note_type: str
     "user generated name of the note type"
 
-    fields: dict[str, str] = Field(sa_type=JSON())  # type: ignore
+    fields: dict[str, str] = Field(sa_type=JSON)
     "key is field name, value is instruction"
 
     examples: list["DoctorNoteExample"] = Relationship(
