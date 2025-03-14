@@ -54,11 +54,11 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
 
     # there can (and should!) be multiple examples per schema, so find a schema by the type
     # TODO given that we are searching by fields, this will definitely cause a conflict, need to think this through
-    schema = DoctorNoteSchema.find_or_create_by(
+    schema = DoctorNoteSchema(
         doctor_id=note.doctor_id,
         note_type=note.note_type,
         fields=instructions,
-    )
+    ).save()
 
     log.debug(
         "extracting note content",

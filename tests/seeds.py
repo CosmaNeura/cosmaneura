@@ -72,7 +72,7 @@ def seed_test_data():
         note_type="Telehealth SOAP Note",
     )
 
-    schema = DoctorNoteSchema.find_or_create_by(
+    schema = DoctorNoteSchema(
         doctor_id=doctor.id,
         note_type="Test SOAP Note",
         fields={
@@ -87,7 +87,7 @@ def seed_test_data():
             "Medications": "List all current medications the patient is taking, including dosages and frequency.",
             "Mental/Functional": "Assess the patient's mental status and functional abilities, noting any cognitive or psychological concerns.",
         },
-    )
+    ).save()
 
     DoctorNoteExample.find_or_create_by(
         doctor_id=doctor.id,
@@ -265,7 +265,7 @@ def seed_test_data():
         ],
     )
 
-    doctor_note_schema = DoctorNoteSchema.find_or_create_by(
+    doctor_note_schema = DoctorNoteSchema(
         doctor_id=doctor.id,
         note_type="Telehealth SOAP Note",
         fields={
@@ -274,7 +274,7 @@ def seed_test_data():
             "Assessment": "List the diagnoses and clinical impressions",
             "Plan": "Detail the treatment plan and next steps",
         },
-    )
+    ).save()
 
     AIVisitNote.find_or_create_by(
         doctor_id=doctor.id,
