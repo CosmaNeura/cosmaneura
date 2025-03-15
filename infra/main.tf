@@ -172,6 +172,7 @@ resource "azurerm_storage_account" "uploads" {
 }
 
 # automatically delete audio files after 10d
+# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/storage_management_policy
 resource "azurerm_storage_management_policy" "delete_uploads" {
   storage_account_id = azurerm_storage_account.uploads.id
 
