@@ -546,19 +546,19 @@ py_test:
 	export PS4='%F{green}+%f '
 	set -x
 
-	just _banner_echo "Building Javascript for Integration Tests"
-	just py_js-build
-
 	# TODO we don't need to see all of the details for this part of the build, since we are primarily testing javascript
 
 	# TODO I wonder if I could make EXECUTE_IN_TEST blank if in the test environment...
 	# NOTE unfortunately, because of the asyncio loop + playwright, we need to run the playwright integration tests separately
 	if [[ -n "${CI:-}" ]]; then
+		just _banner_echo "Building Javascript for Integration Tests"
+		just py_js-build
 	  just _banner_echo "Running Non-Integration Tests"
 		uv run pytest . --ignore tests/integration {{PYTEST_COV_PARAMS}}
 	  just _banner_echo "Running Integration"
 		uv run pytest tests/integration --cov-append {{PYTEST_COV_PARAMS}}
 	else
+		# when not running in CI, JS is built automatically
 		{{EXECUTE_IN_TEST}} uv run pytest . --ignore tests/integration {{PYTEST_COV_PARAMS}}
 		{{EXECUTE_IN_TEST}} uv run pytest tests/integration --cov-append {{PYTEST_COV_PARAMS}}
 	fi
@@ -782,7 +782,7 @@ db_debug_off:
 		psql -U $POSTGRES_USER -c "ALTER SYSTEM SET log_statement = 'none'; SELECT pg_reload_conf();"
 
 #######################
-# Secrets
+# Secrets (via 1Password)
 #######################
 
 _secrets_service-token CONTEXT WRITE_PERMISSION="false":
@@ -794,13 +794,12 @@ _secrets_service-token CONTEXT WRITE_PERMISSION="false":
 			--vault "${OP_VAULT_UID}:read_items${write_permission}" \
 			--raw
 
-
 # for terraform and other tools which can create entries
 [macos]
 secrets_write-service-token:
 	just _secrets_service-token write true | jq -r -R '@sh "export OP_SERVICE_ACCOUNT_TOKEN=\(.)"'
 
-# generate service account token to be used locally for a developer
+# generate service account token for local development
 [macos]
 secrets_local-service-token user=`whoami`:
 	just _secrets_service-token {{user}} | jq -r -R '@sh "export OP_SERVICE_ACCOUNT_TOKEN=\(.)"'
