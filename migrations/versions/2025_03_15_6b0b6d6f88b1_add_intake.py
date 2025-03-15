@@ -1,8 +1,8 @@
-"""add_intake_models
+"""add_intake
 
-Revision ID: 6ab5fb7366a9
-Revises: e5a43ea65095
-Create Date: 2025-03-06 20:21:02.022993
+Revision ID: 6b0b6d6f88b1
+Revises: ae5a8534033d
+Create Date: 2025-03-15 15:42:52.999937
 
 """
 from typing import Sequence, Union
@@ -14,8 +14,8 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '6ab5fb7366a9'
-down_revision: Union[str, None] = 'e5a43ea65095'
+revision: str = '6b0b6d6f88b1'
+down_revision: Union[str, None] = 'ae5a8534033d'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -53,7 +53,6 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('doctor_id', activemodel.types.typeid.TypeIDType(prefix='doctor'), nullable=False),
     sa.Column('appointment_id', activemodel.types.typeid.TypeIDType(prefix='appointment'), nullable=False),
-    sa.Column('patient_id', activemodel.types.typeid.TypeIDType(prefix='patient'), nullable=False),
     sa.Column('doctor_intake_schema_id', activemodel.types.typeid.TypeIDType(prefix='doctor_intake_schema'), nullable=False),
     sa.Column('duration', sa.Integer(), nullable=True, comment='total length of the transcript, in seconds'),
     sa.Column('intake_questions', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='list of questions extracted from the intake schema when this intake URL was generated'),
@@ -63,7 +62,6 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], name=op.f('intake_appointment_id_fkey')),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], name=op.f('intake_doctor_id_fkey')),
     sa.ForeignKeyConstraint(['doctor_intake_schema_id'], ['doctor_intake_schema.id'], name=op.f('intake_doctor_intake_schema_id_fkey')),
-    sa.ForeignKeyConstraint(['patient_id'], ['patient.id'], name=op.f('intake_patient_id_fkey')),
     sa.PrimaryKeyConstraint('id', name=op.f('intake_pkey')),
     comment='This represents a chat experience with a patient to gather information about them.'
     )
