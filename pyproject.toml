@@ -183,7 +183,6 @@ j2lint = { git = "https://github.com/aristanetworks/j2lint.git" }
 # for redis persistence and retries, waiting on two PRs here
 flower = { git = "https://github.com/iloveitaly/flower", rev = "custom" }
 ipdb = { git = "https://github.com/iloveitaly/ipdb", rev = "support-executables" }
-ipython-autoimport = { git = "https://github.com/iloveitaly/ipython-autoimport", rev = "ipython-9.x" }
 ipython-suggestions = { git = "https://github.com/iloveitaly/ipython-suggestions.git", rev = "ipython-9.x" }
 
 [tool.uv.sources.activemodel]
@@ -196,9 +195,6 @@ rev = "github-output"
 [tool.uv.sources.pytest-playwright-visual]
 git = "https://github.com/iloveitaly/pytest-playwright-visual.git"
 rev = "global-defaults"
-
-[tool.uv.sources.starlette_context]
-git = "https://github.com/tomwojcik/starlette-context.git"
 
 [tool.uv.sources.pdbr]
 git = "https://github.com/iloveitaly/pdbr.git"
