@@ -10,13 +10,6 @@ import type { Route } from "./+types/settings"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
-import {
-  DropZoneArea,
-  Dropzone,
-  DropzoneMessage,
-  DropzoneTrigger,
-  useDropzone,
-} from "@/components/ui/dropzone"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"

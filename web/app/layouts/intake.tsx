@@ -3,9 +3,7 @@ import { Outlet } from "react-router"
 import { Route } from "./+types/intake"
 
 import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
-import { SkeletonMessageList } from "@/components/skeleton-message-list"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { getClient } from "~/configuration/clerk"
 import { intakeList } from "~/configuration/client"
 
 import { standardDateTimeFormat } from "../lib/date"
