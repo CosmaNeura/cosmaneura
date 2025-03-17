@@ -4,7 +4,7 @@ Create a new intake form
 
 from datetime import date, datetime
 
-from pydantic import AnyHttpUrl, BaseModel, EmailStr, HttpUrl, model_validator
+from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 
 from app.models.doctor import Doctor
 

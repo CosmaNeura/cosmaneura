@@ -42,9 +42,11 @@ appointment = Appointment.find_or_create_by(
 )
 
 # TODO should be moved to AM, still fiddling around with what the best pattern is here
-for factory in SQLAlchemyModelFactory.__subclasses__():
-    factory._meta.sqlalchemy_session_factory = SessionManager.get_instance().get_session
-    factory._meta.sqlalchemy_session_persistence = "commit"
+for factory_subclass in SQLAlchemyModelFactory.__subclasses__():
+    factory_subclass._meta.sqlalchemy_session_factory = (
+        SessionManager.get_instance().get_session
+    )
+    factory_subclass._meta.sqlalchemy_session_persistence = "commit"
 
 # to test multiple items in the ui (past browser height) and an empty note state
 for i in range(20):
