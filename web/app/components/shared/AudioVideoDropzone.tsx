@@ -37,8 +37,8 @@ export function AudioVideoDropzone({
         "audio/*": [".mp3", ".wav", ".m4a"],
         "video/*": [".mp4", "mov", "avi"],
       },
-      // 300mb? this is arbitrary
-      maxSize: 300 * 1024 * 1024,
+      // 2gb this is arbitrary
+      maxSize: 2000 * 1024 * 1024,
       maxFiles: 1,
     },
     shiftOnMaxFiles: true,
@@ -61,7 +61,7 @@ export function AudioVideoDropzone({
                 <p>Upload Audio or Video</p>
                 <p className="text-muted-foreground text-xs">
                   Click here or drag to select an audio or video smaller than
-                  300MB
+                  2GB
                 </p>
               </div>
             </div>
