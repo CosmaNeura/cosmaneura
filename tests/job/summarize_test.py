@@ -81,6 +81,7 @@ def test_summarize_includes_all_actionable_steps():
 
 
 def test_summarize_is_idempotent():
+    # TODO causes flakey tests
     transcript = AIVisitTranscript.sample()
     assert transcript is not None
 
