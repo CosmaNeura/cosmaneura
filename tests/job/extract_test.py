@@ -168,8 +168,6 @@ def test_telehealth_SOAP_note_extraction():
 
 
 def test_telehealth_H_and_P_note_extraction():
-    pytest.skip("test is failing locally and on CI")
-
     file = DoctorNoteFile.get(note_type="Telehealth H&P Note")  # Seeded data.
     assert file is not None
 
