@@ -19,7 +19,7 @@ from pathlib import Path
 from pretty_traceback import formatting
 
 import pytest
-from pytest import Config
+from pytest import Config, FixtureRequest
 from activemodel.pytest import database_reset_transaction, database_reset_truncate
 from decouple import config as decouple_config
 
@@ -30,8 +30,6 @@ from tests.seeds import seed_test_data
 TEST_RESULTS_DIRECTORY = Path(decouple_config("TEST_RESULTS_DIRECTORY", cast=str))
 
 log.info("multiprocess start method", start_method=multiprocessing.get_start_method())
-
-
 
 # TODO can we move this into pretty_traceback?
 @pytest.hookimpl(hookwrapper=True)
@@ -107,7 +105,32 @@ def pytest_sessionstart(session):
     # we reseed the database with a base set of records
     seed_test_data()
 
+def is_integration_test(request: FixtureRequest):
+    integration_tests = Path(__file__).parent / "integration"
+
+    # should never occur!
+    if not integration_tests.exists():
+        raise FileNotFoundError(
+            f"Integration tests directory does not exist: {integration_tests}"
+        )
+
+    current_test_path = request.node.path
+
+    # is the current test within the integration tests directory?
+    if str(current_test_path).startswith(str(integration_tests)):
+        return True
+
+    return False
+
 
 @pytest.fixture(scope="function", autouse=True)
 def datatabase_reset_transaction_for_standard_tests(request):
+    if is_integration_test(request):
+        # transaction truncation cannot be used with integration tests since the forked server does not retain the same
+        # db connection in memory and therefore the transaction rollback does not work. To get around this, we truncate the
+        # database before running any tests, although this also has the side effect of destroying any test seed data.
+        database_reset_truncate()
+        yield
+        return
+
     yield from database_reset_transaction()
