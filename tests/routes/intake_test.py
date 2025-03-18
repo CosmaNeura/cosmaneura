@@ -305,14 +305,26 @@ def test_last_question(client: TestClient):
 
 
 def test_next_question():
-    """
-    In order to test this, we need an intake with a valid structure (questions, etc)
-    """
-
     intake = SimpleIncompleteIntakeFactory.build().save()
 
-    result = app.commands.intake.chat.perform(intake, BaseFactory.__faker__.sentence())
+    # should be empty to start
+    assert not intake.intake_questions_answers
+
+    # send in a fake response
+    fake_response = BaseFactory.__faker__.sentence()
+    result = app.commands.intake.chat.perform(intake, fake_response)
 
     assert result
+    # second q test
     assert result.question == EXAMPLE_INTAKE_QUESTIONS[1].question
     assert result.key == EXAMPLE_INTAKE_QUESTIONS[1].key
+
+    intake.refresh()
+
+    # now we should have an answer
+    assert len(intake.intake_questions_answers) == 1
+    assert (
+        intake.intake_questions_answers[0].question_key
+        == EXAMPLE_INTAKE_QUESTIONS[0].key
+    )
+    assert intake.intake_questions_answers[0].answer == fake_response
