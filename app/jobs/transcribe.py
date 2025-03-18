@@ -100,7 +100,6 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
 def download_blob(visit: VisitAudioFile) -> str:
     filename = visit.azure_file_name
 
-    log.info("downloading blob", filename=filename)
     temp_download_path = f"./tmp/visit-audio-{uuid.uuid4()}-{filename}"
 
     service_client = BlobServiceClient(
