@@ -47,8 +47,9 @@ class Intake(
     appointment_id: TypeIDType = Appointment.foreign_key()
     appointment: Appointment = Relationship()
 
-    patient_id: TypeIDType = Patient.foreign_key()
-    patient: Patient = Relationship()
+    # TODO patient is tied to appointment, so we probably don't need this
+    # patient_id: TypeIDType = Patient.foreign_key()
+    # patient: Patient = Relationship()
 
     doctor_intake_schema_id: TypeIDType = DoctorIntakeSchema.foreign_key()
     doctor_intake_schema: DoctorIntakeSchema = Relationship()
