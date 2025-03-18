@@ -15,7 +15,7 @@ from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
-from app.models.doctor_intake_file import DoctorIntakeFile
+from app.models.intake.doctor_intake_file import DoctorIntakeFile
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
