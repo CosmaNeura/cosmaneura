@@ -61,6 +61,14 @@ def seed_test_data():
             azure_file_name=f"teresa-jensen-mock-appointment-11-15-2024.{file_type}",
         )
 
+    # For audio-only files.
+    VisitAudioFile.find_or_create_by(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_id=appointment.id,
+        azure_file_name=f"teresa-jensen-mock-appointment-11-15-2024.wav",
+    )
+
     DoctorNoteFile.find_or_create_by(
         doctor_id=doctor.id,
         azure_file_name="teresa-jensen-mock-appointment-note-11-15-2024.pdf",

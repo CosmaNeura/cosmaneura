@@ -39,6 +39,21 @@ def test_perform_idempotency():
       patient_id=audio_file.patient_id
   ).id
 
+def test_wav_transcription():
+  # Created in test seeds.
+  audio_file = VisitAudioFile.get(
+     azure_file_name="teresa-jensen-mock-appointment-11-15-2024.wav"
+  )
+  assert audio_file is not None
+
+  result = transcribe_audio(audio_file)
+
+  assert result.duration > 2200
+  doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
+  assert len(doctor_entries) >= 65
+  patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
+  assert len(patient_entries) >= 65
+
 def test_m4a_transcription():
   # Created in test seeds.
   audio_file = VisitAudioFile.get(
