@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
+from app.models.intake.doctor_intake_schema import DoctorIntakeSchema
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
@@ -129,15 +130,24 @@ def perform(
         created_by_system="api",
     ).save()
 
+    # For now, just use the first available intake form
+    # In the future, this could be more sophisticated based on appointment_type
     # TODO determine which questions to ask based on the appointment type, probably hit an LLM here?
+    #      for now we are just going to pull the first intake question that is available
+    # Get available intake questions for the doctor
+    intake_schema = DoctorIntakeSchema.where(
+        DoctorIntakeSchema.doctor_id == doctor_id
+    ).first()
+
+    assert intake_schema, "Doctor does not have any intake forms"
 
     # we are finally ready to create an intake
     intake = Intake(
         doctor_id=doctor_id,
         appointment_id=appointment.id,
         patient_id=patient.id,
-        # TODO need to pick actual questions
-        intake_questions=[],
+        doctor_intake_schema_id=intake_schema.id,
+        intake_questions=intake_schema.questions,
     ).save()
 
     return AppointmentResponse(url=intake.public_url())

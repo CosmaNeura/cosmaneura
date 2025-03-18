@@ -10,6 +10,7 @@ from starlette_context import context
 from typeid import TypeID
 from typeid.errors import TypeIDException
 
+import app.commands.intake.chat
 import app.commands.intake.create
 from app.commands.intake.create import AppointmentRequest, AppointmentResponse
 
@@ -26,6 +27,8 @@ UNAUTHORIZED_EXCEPTION = HTTPException(
 def authenticate_api_request_middleware(
     request: Request, token: str = Depends(oauth2_scheme)
 ):
+    "parse bearer token, lookup associated user, and inject into request state"
+
     try:
         token_as_typeid = TypeID.from_string(token)
     except TypeIDException:
@@ -41,7 +44,7 @@ def authenticate_api_request_middleware(
 
     if api_doctor.deleted_at:
         raise HTTPException(
-            status_code=status.HTTP_410_GONE, detail="Your Account has Been Disabled"
+            status_code=status.HTTP_410_GONE, detail="Your API access has been disabled"
         )
 
     request.state.api_doctor = api_doctor
@@ -66,3 +69,18 @@ def external_api_ping():
 @external_api_app.post("/intake")
 def create_intake(request: Request, data: AppointmentRequest) -> AppointmentResponse:
     return app.commands.intake.create.perform(data, request.state.api_doctor)
+
+
+@external_api_app.get("/question")
+def get_last_question(
+    request: Request, data: AppointmentRequest
+) -> AppointmentResponse:
+    "when returning to the page, return the last question without accepting any user input"
+    return app.commands.intake.chat.perform(data, None)
+
+
+@external_api_app.post("/question")
+def get_next_question(
+    request: Request, data: AppointmentRequest
+) -> AppointmentResponse:
+    return app.commands.intake.chat.perform(data, None)
