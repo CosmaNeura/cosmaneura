@@ -11,6 +11,9 @@ from tests.integration.utils import login_as_dev_user
 
 
 def test_signin(server, page: Page, assert_snapshot) -> None:
+    # paranoid testing to ensure database cleaning is working
+    assert Doctor.count() == 0
+
     _user = login_as_dev_user(page)
 
     expect(page.locator("body")).to_contain_text("Select a patient")
