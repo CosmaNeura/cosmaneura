@@ -41,17 +41,31 @@ class SQLModelFactory[T](ModelFactory):
 
     @classmethod
     def should_set_field_value(cls, field_meta: FieldMeta, **kwargs: t.Any) -> bool:
+        has_object_override = hasattr(cls, field_meta.name)
+
         # TODO this should be more intelligent
-        if field_meta.name == "id" or field_meta.name.endswith("_id"):
+        if not has_object_override and (
+            field_meta.name == "id" or field_meta.name.endswith("_id")
+        ):
             return False
 
         return super().should_set_field_value(field_meta, **kwargs)
 
 
-# class DoctorFactory(SQLModelFactory[Doctor]):
-class DoctorFactory(ModelFactory[Doctor]):
-    id = Ignore()
+class ActiveModelFactory[T](SQLModelFactory):
+    __is_base_factory__ = True
 
+    @classmethod
+    def should_set_field_value(cls, field_meta: FieldMeta, **kwargs: t.Any) -> bool:
+        # deleted at mixin, should be smarter about this...
+        if field_meta.name == "deleted_at":
+            return False
+
+        return super().should_set_field_value(field_meta, **kwargs)
+
+
+class DoctorFactory(ActiveModelFactory[Doctor]):
+    # TODO cleanup these prefixes
     api_key = lambda: str(TypeID(API_KEY_PREFIX))
     clerk_id = lambda: str(TypeID(CLERK_OBJECT_PREFIX[0:-1]))
 
@@ -198,8 +212,7 @@ class SimpleIncompleteIntakeFactory(ModelFactory[Intake]):
         all tied to the same doctor
         """
 
-        doctor = DoctorFactory.build()
-        doctor.save()
+        doctor = DoctorFactory.build().save()
 
         intake_schema = DoctorIntakeSchemaFactory.build(doctor_id=doctor.id).save()
         appointment = AppointmentFactory.build(doctor_id=doctor.id).save()
@@ -230,8 +243,9 @@ def assert_status(response, status_code: int = status.HTTP_200_OK):
 def test_intake_creation(client: TestClient):
     request = AppointmentRequestFactory.build(factory_use_construct=True)
 
-    user = DoctorFactory(email=request.doctor_email)
+    user = DoctorFactory.build(email=request.doctor_email)
     user.generate_api_key()
+    user.save()
 
     response = client.post(
         api_app.url_path_for("create_intake"),
@@ -252,8 +266,9 @@ def test_intake_without_doctor_email(client: TestClient):
     request = AppointmentRequestFactory.build(factory_use_construct=True)
 
     # email on the above request will not exist
-    user = DoctorFactory()
+    user = DoctorFactory.build()
     user.generate_api_key()
+    user.save()
 
     response = client.post(
         api_app.url_path_for("create_intake"),
@@ -271,8 +286,11 @@ def test_intake_without_doctor_email(client: TestClient):
 def test_intake_without_doctor_id(client: TestClient):
     request = AppointmentRequestFactory.build(factory_use_construct=True)
 
-    user = DoctorFactory()
+    user = DoctorFactory.build()
     user.generate_api_key()
+    user.save()
+
+    assert not user.deleted_at
 
     response = client.post(
         api_app.url_path_for("create_intake"),
