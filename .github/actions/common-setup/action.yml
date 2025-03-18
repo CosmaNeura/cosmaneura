@@ -12,6 +12,7 @@ runs:
     # TODO document: https://github.com/actions/runner-images/issues/4849, https://github.com/actions/runner-images/issues/264
     - uses: tecolicom/actions-use-apt-tools@v1
       with:
+        method: timestamp
         tools: |
           zsh libnss3-tools \
           poppler-utils ffmpeg
