@@ -147,14 +147,8 @@ EXAMPLE_INTAKE_QUESTIONS = [
 ]
 
 
-class DoctorIntakeSchemaFactory(ModelFactory[DoctorIntakeSchema]):
+class DoctorIntakeSchemaFactory(ActiveModelFactory[DoctorIntakeSchema]):
     questions = EXAMPLE_INTAKE_QUESTIONS
-
-    # TODO handled by sqlmodel, should be ignored by default
-    id = Ignore()
-
-    # TODO relationships should be automatically ignored
-    doctor_id = Ignore()
 
     # doctor = Ignore()
     # @post_generated
@@ -241,11 +235,17 @@ def assert_status(response, status_code: int = status.HTTP_200_OK):
 
 
 def test_intake_creation(client: TestClient):
+    # paranoid
+    assert Intake.count() == 0
+
     request = AppointmentRequestFactory.build(factory_use_construct=True)
 
+    # use the same random email as the request
     user = DoctorFactory.build(email=request.doctor_email)
     user.generate_api_key()
     user.save()
+
+    DoctorIntakeSchemaFactory.build(doctor_id=user.id).save()
 
     response = client.post(
         api_app.url_path_for("create_intake"),
@@ -259,7 +259,31 @@ def test_intake_creation(client: TestClient):
     data = response.json()
     assert data["url"].startswith("https://")
 
-    # TODO should test against intake records
+    assert Intake.count() == 1
+    intake = Intake.last()
+
+    assert intake
+    assert intake.doctor_id == user.id
+    assert intake.appointment_id
+
+    # TODO we can't do this since the session is temporal, need to fix in activemodel
+    # appointment = intake.appointment
+
+    appointment = Appointment.get(intake.appointment_id)
+
+    assert appointment
+    assert appointment.created_by_system == "api"
+
+    # try posting again, and let's make sure nothing new is created
+    response = client.post(
+        api_app.url_path_for("create_intake"),
+        headers={"Authorization": f"Bearer {user.api_key}"},
+        json=request.model_dump(mode="json"),
+    )
+
+    assert_status(response)
+
+    assert Intake.count() == 1
 
 
 def test_intake_without_doctor_email(client: TestClient):
@@ -269,6 +293,8 @@ def test_intake_without_doctor_email(client: TestClient):
     user = DoctorFactory.build()
     user.generate_api_key()
     user.save()
+
+    # we are intentionally not creating an intake schema since we should fail before then
 
     response = client.post(
         api_app.url_path_for("create_intake"),
