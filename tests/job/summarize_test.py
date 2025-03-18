@@ -15,16 +15,12 @@ def assert_matches(regex, string):
 
 
 def count_visit_notes(transcript: AIVisitTranscript, schema: DoctorNoteSchema) -> int:
-    return (
-        AIVisitNote.select()
-        .where(
-            AIVisitNote.doctor_id == transcript.doctor_id
-            and AIVisitNote.appointment_id == transcript.appointment_id
-            and AIVisitNote.ai_transcript_id == transcript.id
-            and AIVisitNote.doctor_note_schema_id == schema.id
-        )
-        .count()
-    )
+    return AIVisitNote.where(
+        AIVisitNote.doctor_id == transcript.doctor_id
+        and AIVisitNote.appointment_id == transcript.appointment_id
+        and AIVisitNote.ai_transcript_id == transcript.id
+        and AIVisitNote.doctor_note_schema_id == schema.id
+    ).count()
 
 
 # Done at the request of Teresa Jensen.

@@ -6,6 +6,7 @@ from app import log
 from app.celery import celery
 from app.configuration.openai import openai
 
+from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
@@ -15,7 +16,7 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 OPENAI_MODEL = "gpt-4o"
 
 
-def perform(transcript_id: str, schema_id: str):
+def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     """
     Summarize a visit transcript into a clinical note.
     """
@@ -28,12 +29,16 @@ def perform(transcript_id: str, schema_id: str):
     assert schema
 
     existing_note = AIVisitNote.get(
-        AIVisitNote.ai_transcript_id == transcript.id and
-        AIVisitNote.doctor_note_schema_id == schema.id
+        AIVisitNote.ai_transcript_id == transcript.id
+        and AIVisitNote.doctor_note_schema_id == schema.id
     )
+
     if existing_note:
-        log.info("note already exists, skipping summarization",
-                 transcript_id=transcript_id, schema_id=schema_id)
+        log.info(
+            "note already exists, skipping summarization",
+            transcript_id=transcript_id,
+            schema_id=schema_id,
+        )
         return
 
     # Get most recently updated example note for this schema
@@ -147,6 +152,7 @@ def build_structured_prompt(
         Respond only in JSON format with the schema above.
     """)
 
+
 def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
     transcript_text = "\n".join(
         [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
@@ -174,6 +180,7 @@ def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
     Your response should be structured as a markdown list.
     """)
 
+
 def extract_action_items(transcript: AIVisitTranscript) -> str:
     prompt = build_action_item_prompt(transcript)
     response = openai.chat.completions.create(
@@ -185,6 +192,7 @@ def extract_action_items(transcript: AIVisitTranscript) -> str:
     content = response.choices[0].message.content
     assert content
     return content
+
 
 def generate_clinical_note(
     transcript: AIVisitTranscript,
