@@ -34,6 +34,11 @@
   --chart-5: hsl(27 87% 67%);
   --radius: 0.6rem;
 
+  --chat-user-bg: #344ffb;
+  --chat-user-fg: #ffffff;
+  --chat-assistant-fg: #202124;
+  --chat-assistant-bg: #ededed;
+
   --sidebar-background: hsl(0 0% 98%);
   --sidebar-foreground: hsl(240 5.3% 26.1%);
   --sidebar-primary: hsl(240 5.9% 10%);
@@ -125,6 +130,11 @@
   --color-sidebar: var(--sidebar-background);
   --animate-accordion-down: accordion-down 0.2s ease-out;
   --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  --color-chat-user: var(--chat-user-bg);
+  --color-chat-user-foreground: var(--chat-user-fg);
+  --color-chat-assistant: var(--chat-assistant-bg);
+  --color-chat-assistant-foreground: var(--chat-assistant-fg);
 
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
