@@ -9,6 +9,8 @@ from sqlmodel import SQLModel
 
 from app.configuration.clerk import clerk
 from app.configuration.database import configure_database, database_url
+
+# autoimport packages
 import app.models
 import app.commands
 

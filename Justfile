@@ -61,6 +61,7 @@ PYTHON_WATCHMEDO := "uv run --with watchdog watchmedo auto-restart --directory=.
 [macos]
 [script]
 dev: local-alias dev_kill
+	# TODO note that this does not work if direnv is not working
 	just _banner_echo "Starting dev services"
 
 	# TODO we should think about the worker command a bit more...should we use the same exact command? should we generate vs hardcode?
@@ -106,8 +107,8 @@ dev_kill:
 @_banner_echo BANNER:
 	# TODO use style tags from justfile
 	# TODO I wonder if sending an endgroup when one isn't started will cause issues.
-	[[ -n "${CI:-}" ]] && echo "::endgroup::"
-	[[ -n "${CI:-}" ]] && echo "::group::{{BANNER}}"
+	([[ -n "${CI:-}" ]] && echo "::endgroup::") || true
+	([[ -n "${CI:-}" ]] && echo "::group::{{BANNER}}") || true
 	# two spaces added because of the '# ' prefix on the banner message
 	banner_length=$(echo -n "{{BANNER}}  " | wc -c) && \
 	printf "\n\033[0;36m%${banner_length}s#\033[0m\n" | tr " " "#" && \
@@ -259,6 +260,7 @@ upgrade: tooling_upgrade js_upgrade py_upgrade
 [macos]
 [script]
 local-alias:
+	# TODO fail if localias is not installed
 	if [[ "$(localias status)" == "daemon running with pid "* ]]; then
 		just _banner_echo "Localias Daemon Already Running, Reloading"
 		localias reload
