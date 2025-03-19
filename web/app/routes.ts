@@ -21,4 +21,6 @@ export default [
     ]),
     route("/settings", "routes/settings.tsx"),
   ]),
+  // public, unauthenticated, intake chat
+  route("chat/intake/:id", "routes/chat/intake.tsx"),
 ] satisfies RouteConfig
