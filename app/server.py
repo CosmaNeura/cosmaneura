@@ -19,6 +19,7 @@ from app.routes.utils.openapi import simplify_operation_ids
 from app.models.doctor import Doctor
 
 from .environments import is_production
+from .routes.chat import chat_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.static import mount_public_directory
@@ -33,7 +34,8 @@ if is_production():
         "openapi_url": None,
     }
 
-# set `version:` as GIT sha? Set `title:`? https://github.com/fastapiutils/fastapi-utils/blob/e9e7e2c834d703503a3bf5d5605db6232dd853b9/fastapi_utils/api_settings.py#L43
+# TODO should we set a debug flag? https://fastapi.tiangolo.com/reference/fastapi/?h=debug#fastapi.FastAPI--example
+# TODO set `version:` as GIT sha? Set `title:`? https://github.com/fastapiutils/fastapi-utils/blob/e9e7e2c834d703503a3bf5d5605db6232dd853b9/fastapi_utils/api_settings.py#L43
 
 
 class ORJSONSortedResponse(JSONResponse):
@@ -56,6 +58,7 @@ api_app = FastAPI(
 
 api_app.include_router(internal_api_app)
 api_app.include_router(external_api_app)
+api_app.include_router(chat_api_app)
 
 add_middleware(api_app)
 
