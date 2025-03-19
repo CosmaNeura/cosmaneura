@@ -122,5 +122,5 @@ jobs:
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to Azure
-        run: |                  # Log in using the service principal
+        run: |
           cd infra && bash deploy.sh ${{ github.sha }}

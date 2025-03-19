@@ -33,6 +33,9 @@ fi
 echo "Azure Acccount Information:"
 az account show
 
+echo "All Available Containers:"
+az containerapp list --query "[].name"
+
 # Convert potential short SHA to full SHA
 GIT_SHA=$(git rev-parse "$GIT_SHA")
 PRODUCTION_TAG="$PRODUCTION_IMAGE:$GIT_SHA"

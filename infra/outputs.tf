@@ -1,7 +1,8 @@
 output "python_containers" {
   value = [
     azurerm_container_app.app.name,
-    azurerm_container_app.worker.name
+    azurerm_container_app.worker.name,
+    azurerm_container_app.job-monitor.name
   ]
 }
 
