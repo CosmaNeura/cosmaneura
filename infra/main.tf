@@ -1068,7 +1068,25 @@ resource "azurerm_role_assignment" "github_acr_push" {
 # az role definition list --name "Container Apps Operator" --output json
 resource "azurerm_role_assignment" "github_container_apps_operator" {
   scope                = azurerm_container_app_environment.main.id
-  role_definition_name = "Container Apps Contributor"
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
+}
+
+resource "azurerm_role_assignment" "github_container_app_1_operator" {
+  scope                = azurerm_container_app.app.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
+}
+
+resource "azurerm_role_assignment" "github_container_app_2_operator" {
+  scope                = azurerm_container_app.job-monitor.id
+  role_definition_name = "Contributor"
+  principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
+}
+
+resource "azurerm_role_assignment" "github_container_app_3_operator" {
+  scope                = azurerm_container_app.worker.id
+  role_definition_name = "Contributor"
   principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
 }
 

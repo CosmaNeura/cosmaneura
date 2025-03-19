@@ -68,6 +68,8 @@ tofu_init:
 tofu_apply:
 	tofu {{TOFU_GLOBAL_OPTIONS}} apply
 
+# additional azure configuration that cannot be done via tf
+azure_configure:
 	az extension add --name containerapp --allow-preview
 	az containerapp env update --resource-group {{AZURE_RESOURCE_GROUP}} --name cosmaneura-prod-app-environment --logs-dynamic-json-columns true
 
