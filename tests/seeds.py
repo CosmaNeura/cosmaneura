@@ -871,3 +871,571 @@ def seed_test_data():
             )
         ]
     )
+
+    patient3 = Patient.find_or_create_by(
+        doctor_id=doctor.id,
+        name="Samwise Gamgee",
+        date_of_birth=datetime.strptime("2019-12-25", "%Y-%m-%d"),
+    )
+
+    appointment3 = Appointment.find_or_create_by(
+        doctor_id=doctor.id,
+        patient_id=patient3.id,
+        appointment_date=datetime.now(),
+    )
+
+    # This is real patient data that has been de-identified using the Azure
+    # de-identification service.
+    AIVisitTranscript.find_or_create_by(
+        doctor_id=doctor.id,
+        patient_id=patient3.id,
+        appointment_id=appointment3.id,
+        duration=1256,
+        transcript_data=[
+            TranscriptEntry(
+                content="Rivera Street place. Because you're six. Yeah. Right? Yeah. You want to sit up here? Great. Ms's going to ask you some questions. Okay. All right. Okay. Well, how are you doing? What things do you have to play with? How do you go to school? Do you do school at home?",
+                endTime=15032,
+                speaker="Doctor",
+                startTime=80
+            ),
+            TranscriptEntry(
+                content="I did school at home and at school.",
+                endTime=19060,
+                speaker="Patient",
+                startTime=15216
+            ),
+            TranscriptEntry(
+                content="Cool. He does a hybrid. Yeah. That's awesome. Do you like, do you have friends at your school that you play with, that you go to? Yeah. That's pretty awesome. What do you like to do? You like to play any music or play any sports?",
+                endTime=35970,
+                speaker="Doctor",
+                startTime=19440
+            ),
+            TranscriptEntry(
+                content="We have like a little playground at our school. The back of it.",
+                endTime=44926,
+                speaker="Patient",
+                startTime=36310
+            ),
+            TranscriptEntry(
+                content="That's awesome. What's your favorite thing on the playground?",
+                endTime=48690,
+                speaker="Doctor",
+                startTime=45078
+            ),
+            TranscriptEntry(
+                content="I just say the goggle bar.",
+                endTime=53770,
+                speaker="Patient",
+                startTime=51430
+            ),
+            TranscriptEntry(
+                content="That's a good one. You had your appointment last week. So are you in first grade, is that right? What grade are you in?",
+                endTime=66640,
+                speaker="Doctor",
+                startTime=54700
+            ),
+            TranscriptEntry(
+                content="Kindergarten.",
+                endTime=68932,
+                speaker="Patient",
+                startTime=67900
+            ),
+            TranscriptEntry(
+                content="Kindergarten. Who's your teacher? Yeah.",
+                endTime=79508,
+                speaker="Doctor",
+                startTime=68996
+            ),
+            TranscriptEntry(
+                content="Ms. Palmatary and Mrs. Mumin Danielle.",
+                endTime=82100,
+                speaker="Patient",
+                startTime=79604
+            ),
+            TranscriptEntry(
+                content="Do you like your teachers?",
+                endTime=86096,
+                speaker="Doctor",
+                startTime=84680
+            ),
+            TranscriptEntry(
+                content="Yes.",
+                endTime=86816,
+                speaker="Patient",
+                startTime=86208
+            ),
+            TranscriptEntry(
+                content="Good. I'm so glad. Mom. Have any concerns? Oh, no, no. He's doing really well. Don't have any concerns. I know we're putting Jackie's going to speech. I mean I think his speech is good. I can tell he's got a little bit of like a tongue thrust. I don't know, I mean if we feel like it'll. His speech has improved greatly with that. Like sure. On its own. But I don't know, when you go to speech with him, you maybe just bring him and just be like you just. Yeah. Do you think any, you know, could you take a quick listen and if it's worth an eval, you know, let me know what you think. Okay. Or she may just even be able to give you like a couple tips. You can start at home for a little while. It is mild. It's mild. Yeah. And it's gotten much better. I love it. But yeah, I do notice. I mean he definitely has a little bit of a tongue thrust for sure. But I mean other than that he's doing really well in school. Real social. I love it. Yeah. My Osiris, our 8 year old, he was really mild speech at this age and I never did anything and I wish I had because he still has stuff now at 8 and now it's socially he's more aware. Okay. So I will say it's now I'm like, I've tried. I'm trying to put him as feed, you know, like good to know. Okay. I mean if we're going to take one. I know. Yeah, exactly. It's like well, if we're going or if we're going. Yeah. So we're. I'm happy to put the referral in our. If you want to first. Just, like, get there and get in and see what we like. Yeah, we have him scheduled for the 29th, so. Oh, good. That's great. Perfect.",
+                endTime=186678,
+                speaker="Doctor",
+                startTime=86928
+            ),
+            TranscriptEntry(
+                content="Get down.",
+                endTime=187578,
+                speaker="Patient",
+                startTime=186744
+            ),
+            TranscriptEntry(
+                content="Eating lots of. Yes. His fruit, vegetables diet is great. It's really picked up. He used to be picky, but I feel like we're finally starting to leave that phase behind. Hey, boys. Boys Drinking? Mostly water. Any juice? No, not really. I mean, occasionally, like, it's a treat, but not really. What about milk? He does, like, one glass with dinner, so maybe like. I mean, not even 8 ounce glass. Maybe like 6 or so. All right. And then one soft stool a day normally. Most days, yeah. He's either every day or every other day. Okay. And then go and potty. Go and pee. Normal. No concerns there. Okay. All right. And then sleep well. Good job. I love it. No concerns. You brush your teeth every day?",
+                endTime=250930,
+                speaker="Doctor",
+                startTime=187714
+            ),
+            TranscriptEntry(
+                content="Yeah.",
+                endTime=252170,
+                speaker="Patient",
+                startTime=251310
+            ),
+            TranscriptEntry(
+                content="Brushing once or twice or twice a day. Twice a day also.",
+                endTime=256290,
+                speaker="Doctor",
+                startTime=253070
+            ),
+            TranscriptEntry(
+                content="Yes.",
+                endTime=260250,
+                speaker="Patient",
+                startTime=259470
+            ),
+            TranscriptEntry(
+                content="Do you get any, like, a sticker or anything when you go to the dentist?",
+                endTime=265030,
+                speaker="Doctor",
+                startTime=261550
+            ),
+            TranscriptEntry(
+                content="I get a goodie bag.",
+                endTime=266614,
+                speaker="Patient",
+                startTime=265190
+            ),
+            TranscriptEntry(
+                content="A goodie bag. They have the best stuff.",
+                endTime=270862,
+                speaker="Doctor",
+                startTime=266662
+            ),
+            TranscriptEntry(
+                content="Brush and toothpaste and cloth and all that stuff.",
+                endTime=276530,
+                speaker="Patient",
+                startTime=271046
+            ),
+            TranscriptEntry(
+                content="Going twice a year to the dentist? Once. Yeah. Yep. Every six months. Yeah. And then are you active? Do you like playing outside? Yeah. Yeah. Nice.",
+                endTime=287870,
+                speaker="Doctor",
+                startTime=276870
+            ),
+            TranscriptEntry(
+                content="But not when it's raining, of course.",
+                endTime=290702,
+                speaker="Patient",
+                startTime=288030
+            ),
+            TranscriptEntry(
+                content="You get wet. Any behavior concerns? No, no. He does suck. Any screen tone? He does some. I'd say probably like an hour, maybe two hours, but, yes, he does. He loves the show. Loves the. Loves the iPad, but he doesn't do too much. Okay, great. What kind of games do y'all do on the iPad? He does. What do you like? Grandpa got him on Angry Birds. He likes. Grandpa got Austyn's on lots of things. And then we did that Creekside Grill or that Bamboo Books likes that. He likes Dr. Marlowe. I don't know if you know the Dr. Marlowe seepersaud. He likes those.",
+                endTime=338910,
+                speaker="Doctor",
+                startTime=290806
+            ),
+            TranscriptEntry(
+                content="I like Trouble.",
+                endTime=342498,
+                speaker="Patient",
+                startTime=341290
+            ),
+            TranscriptEntry(
+                content="You like Trouble? Trouble, yeah. You got trouble for your birthday. Oh, fun. All right, well, I think that's. That's mostly all I have, unless you. Yeah, no, he's. We don't have any concerns. He's been doing really well. Is he reading and. Yeah, he's. Yes. Yeah. Aren't you. You're reading. Oh, my goodness. He's really good at math. Oh, my God. He's like a little math guy.",
+                endTime=367600,
+                speaker="Doctor",
+                startTime=342594
+            ),
+            TranscriptEntry(
+                content="Four plus four is eight.",
+                endTime=371400,
+                speaker="Patient",
+                startTime=368580
+            ),
+            TranscriptEntry(
+                content="I don't know. He had a lot of, like, ear infection problems early on. We had two. Speech was a little right. And hearing was never a problem, but kind of had just like, a lot of some mouth breathing. We considered taking his adenoids out and decided against it. And, you know, we were gonna put in a second set of tubes and kind of just decided, let's try to just go with it. And he just got the moringoplasty. And so far he's been okay. But I mean, I have noticed. I mean, all my kids just have kind of, like, I don't know, mouthy stuff. Mouth. I don't know. I mean, he looks so wide. Yeah. I mean, very wide. His teeth, like, the more I've kind of dung down the. The rabbit hole. I mean, like, their pallets seem nice and wide. Their teeth are nice and spaced. Like, it doesn't seem like that He. I don't know if he has like, an untreated tongue tie or something that has, like, kind of contributed to some of his issues. But I mean, he. It doesn't cause any, like, problems in his, like, daily living other than a little bit of, like, the speech, which may. I mean, usually. But the mouth breathing has improved. Like, that's what we were considering, the adenoids. But I feel like it has improved. I'll still catch him every once in a while. Like, if I come in before he wakes up, notice that his mouth is open. But I mean, he's not like, snoring. Yeah. Like anything and all. No apnea or anything. Yeah. And like, I'll even tell him, like, close your mouth, try to breathe through your nose. And he. Pretty much. Some of it's just habitual with the language stuff. It's like I started saying with the or suh, you know, and I just created that pattern in my brain. I just gotta retrain it. Yeah. It could have nothing to do with being like, tethered. Yeah. Because usually that's more of a la la. Like I can't reach through my mouth. And not as this sound is completely different. It doesn't really need your tongue that much, you know, so it's probably just more that he stuck with a bad pattern. Yeah. So don't blame yourself. Like, helmets on bikes, scooters, sunscreen outside. And then, you know, safe water play safety around strangers. Great. All right. Awesome. Should we see how big you are, buddy? Look, you think you can step up on that scale? Yeah, we gotta wait till it says zero. Okay. You haven't lost any teeth yet, right? Just one oh, you have. And it's. The one that's coming in is huge. Really? Oh, man. Oh, we gotta take your shoes off. You want to take your shoes off, buddy? Oh, yeah, sorry. You can see how tall you are. And then get on there and stand up real straight.",
+                endTime=540550,
+                speaker="Doctor",
+                startTime=377060
+            ),
+            TranscriptEntry(
+                content="That's weird.",
+                endTime=541930,
+                speaker="Patient",
+                startTime=540710
+            ),
+            TranscriptEntry(
+                content="Dimitra, let's do everything. Hey, stand up real straight. Tag, get your head off of there. We can't lean on there yet. Okay, 46.8. Hey, Tag, step off and do it. Do it. We're. Stand up real tall. Okay, Don't. He's. He's been about 49. Okay. Oh, watch out, buddy. Okay, it's Tag'T's turn. Okay, now go. Just stand up real straight. Oh, well, I don't know. Okay. 46.8. Okay, we weigh him at home, but I mean, it's different still. 55th percentile, so. Yeah, nothing concerning long. And lean all the way back. Okay. And then head straight up. Okay, you're good. You can step out 47 and a little over. 47 and a half. Yeah. Good job. Whoa. You're 35.6. High five, man. Oh, yeah, that's good. 85th percentile for a second. Yeah. Yeah, sounds about right. Oh, my goodness. Naked feet. Do you think you can sit up here so we can listen to your heart?",
+                endTime=619980,
+                speaker="Doctor",
+                startTime=544110
+            ),
+            TranscriptEntry(
+                content="I just gotta get my shoes on.",
+                endTime=621728,
+                speaker="Patient",
+                startTime=620150
+            ),
+            TranscriptEntry(
+                content="No problem. He had it at his old pediatrician. I mean, they did like, you know, the checks every so often, but he's never been to, like, on your arm. Okay. Have you had this time before? Okay. Yeah, because he knows his letters. You had one time. Okay. Okay. So we're gonna roll your sleeve up.",
+                endTime=648840,
+                speaker="Doctor",
+                startTime=621784
+            ),
+            TranscriptEntry(
+                content="I know.",
+                endTime=650280,
+                speaker="Patient",
+                startTime=649300
+            ),
+            TranscriptEntry(
+                content="All right. I'll do anything. For spring break. We don't have plans. We. We might go to Massachusetts and visit some family and things shouldn't get such a long, long break, but no big plan. So. Okay, we turn it on. I don't. Okay. There you go. Hey, it's gonna get a little tight. Okay. Put her some shoes for a short bit. Can you remember some of your friends names from school?",
+                endTime=685008,
+                speaker="Doctor",
+                startTime=652660
+            ),
+            TranscriptEntry(
+                content="Yes.",
+                endTime=685680,
+                speaker="Patient",
+                startTime=685144
+            ),
+            TranscriptEntry(
+                content="Yeah. What are some of their names?",
+                endTime=687528,
+                speaker="Doctor",
+                startTime=685760
+            ),
+            TranscriptEntry(
+                content="Gooley, Bassam. Blane.",
+                endTime=692784,
+                speaker="Patient",
+                startTime=687728
+            ),
+            TranscriptEntry(
+                content="Tyshen. Yeah. So many boys. Yes, there are a lot of boys around us.",
+                endTime=698688,
+                speaker="Doctor",
+                startTime=692912
+            ),
+            TranscriptEntry(
+                content="Yes.",
+                endTime=699152,
+                speaker="Patient",
+                startTime=698744
+            ),
+            TranscriptEntry(
+                content="Yeah. For some of the girls. You remember any of the girls, Larkynn. Oh, yeah. Larkynn. Larkynn. All very musical names. Yes. And. Okay. Did you go to school yesterday? So long ago. Yeah. That's hard to remember. Did you do anything fun at school yesterday? Fun at. Hey, Jammie. Don't touch me. Let's try one more time. Okay. Sometimes if we we just relax like a statue. Did you go to the park yesterday at school? Did we play after school? And Le did too. That's so fun. That's amazing. Don't lean back anymore. I don't want you to fall off. Yeah, don't hit us. Just want wanted you to know so we don't fall off. That would be no good. What's your favorite show to watch?",
+                endTime=758010,
+                speaker="Doctor",
+                startTime=699216
+            ),
+            TranscriptEntry(
+                content="Like Mouse has a Cookie.",
+                endTime=761886,
+                speaker="Patient",
+                startTime=758950
+            ),
+            TranscriptEntry(
+                content="Mouse has a cookie. Did you give a mouse a cookie? That one. That's a good one. Do you ever watch, like, Little Bear? There we go.",
+                endTime=772030,
+                speaker="Doctor",
+                startTime=761998
+            ),
+            TranscriptEntry(
+                content="Yeah.",
+                endTime=772782,
+                speaker="Patient",
+                startTime=772150
+            ),
+            TranscriptEntry(
+                content="Yeah. What should we do? YouTube.",
+                endTime=779500,
+                speaker="Doctor",
+                startTime=772926
+            ),
+            TranscriptEntry(
+                content="I hope that doesn't really hurt you because I'm going to tie up.",
+                endTime=785080,
+                speaker="Patient",
+                startTime=780320
+            ),
+            TranscriptEntry(
+                content="He's so brave. You're brave, too. You did such a good job. All right, bud, you ready? It's going to squeeze. There it goes. 92 over 51. Okay, that's pretty tight. That's kind of funny, isn't it?",
+                endTime=805230,
+                speaker="Doctor",
+                startTime=785120
+            ),
+            TranscriptEntry(
+                content="I never heard that sound.",
+                endTime=808546,
+                speaker="Patient",
+                startTime=806010
+            ),
+            TranscriptEntry(
+                content="Yeah, that's silly. Well, Kimberlie listens to your heart. I'm gonna listen to your lungs. Back here. Two sides. Wow. Can you take a couple deep breaths? Here you go. Good. Good job. Deep breath. Yeah, I know. She letting me do that.",
+                endTime=828430,
+                speaker="Doctor",
+                startTime=808658
+            ),
+            TranscriptEntry(
+                content="Ew.",
+                endTime=832714,
+                speaker="Patient",
+                startTime=832050
+            ),
+            TranscriptEntry(
+                content="Ew. Looks so great. When's your birthday? You remember what month? Not December, but January. Okay. And not the first, but second, the second. Did you have a birthday like celebration?",
+                endTime=850590,
+                speaker="Doctor",
+                startTime=832842
+            ),
+            TranscriptEntry(
+                content="Did you have a birthday party at the oceanview high place?",
+                endTime=225490,
+                speaker="Patient",
+                startTime=851170
+            ),
+            TranscriptEntry(
+                content="That is so fun.",
+                endTime=739044,
+                speaker="Doctor",
+                startTime=854802
+            ),
+            TranscriptEntry(
+                content="Bowling alley.",
+                endTime=337804,
+                speaker="Patient",
+                startTime=856162
+            ),
+            TranscriptEntry(
+                content="Was it fun? Yes.",
+                endTime=859444,
+                speaker="Doctor",
+                startTime=858050
+            ),
+            TranscriptEntry(
+                content="I just got three stripes.",
+                endTime=861188,
+                speaker="Patient",
+                startTime=859492
+            ),
+            TranscriptEntry(
+                content="Three stripes? No way. It was our first time ever bowling to your heart. They loved was a lot of that. We invited some of his little classmates and stuff, and I think it was a lot of kids first time bowling. Did you use the little ramp that you rolled a ball down? Do you remember?",
+                endTime=879000,
+                speaker="Doctor",
+                startTime=861284
+            ),
+            TranscriptEntry(
+                content="Yes.",
+                endTime=880116,
+                speaker="Patient",
+                startTime=879500
+            ),
+            TranscriptEntry(
+                content="You did say some, some with, some without. Tried it both ways. So fun.",
+                endTime=885318,
+                speaker="Doctor",
+                startTime=880228
+            ),
+            TranscriptEntry(
+                content="There's a Will. Will.",
+                endTime=888050,
+                speaker="Patient",
+                startTime=885454
+            ),
+            TranscriptEntry(
+                content="Ta da. You did such a good job. All right, let me see your beautiful eyes. Can you look at my nose right here?",
+                endTime=642290,
+                speaker="Doctor",
+                startTime=891630
+            ),
+            TranscriptEntry(
+                content="Yes.",
+                endTime=831144,
+                speaker="Patient",
+                startTime=899134
+            ),
+            TranscriptEntry(
+                content="Don't let it run away. Good. That was bright, wasn't it? That was so bright. My Oops. I found. Okay, great job. That was so good. Right? We'll see his box now. All right, let's look in those ears. You think we're gonna find anything in there?",
+                endTime=920864,
+                speaker="Doctor",
+                startTime=900070
+            ),
+            TranscriptEntry(
+                content="No. Please watch it.",
+                endTime=923020,
+                speaker="Patient",
+                startTime=921032
+            ),
+            TranscriptEntry(
+                content="Jackie just doesn't want to be left out. I know. Let me see the other side. Good job. All right. Miss's gonna do the same. I'll start over here since you already got this. Nice Big ear canals. Makes it easy. Look good. I haven't looked in his ears in a really long time. Okay. Yeah, perfect. Looks great. All right, other side. You're such a good listener. Are you this good of a listener at home, too?",
+                endTime=947910,
+                speaker="Doctor",
+                startTime=923480
+            ),
+            TranscriptEntry(
+                content="Yeah, but I can do.",
+                endTime=950690,
+                speaker="Patient",
+                startTime=948030
+            ),
+            TranscriptEntry(
+                content="You look so good. You want to try it? You can use it. All right. I'm going to feel your neck with my cold hands, okay? I know. It's kind of tickly, isn't it? It's like a massage. Does your mommy ever give you a massage? Yes, she does. She's the best mom ever. Just relax, buddy. Good job. All right, Miss's gonna feel, too. Okay, really quick, okay? Take a deep breath. There you go. Good job. Okay, I'm finished. Are you a doctor? All right, can you say, there you go. Stick your tongue out for me. Oh, you already say ah. Ah. Kind of go like this. Very good. Got a little tonsils going in there. Good job. Yeah. Might come out eventually. And I'll just hang out for a minute. Okay, buddy? We're gonna lay back so we can see your belly. Good job. Yeah. Oh, wow. There you go. That looks cozy. Is that cozy?",
+                endTime=1013502,
+                speaker="Doctor",
+                startTime=951150
+            ),
+            TranscriptEntry(
+                content="Yeah, it's cozy.",
+                endTime=1015934,
+                speaker="Patient",
+                startTime=1013566
+            ),
+            TranscriptEntry(
+                content="It is cozy. This table's nice and soft. Sometimes, you know, I want to come in here and take a nap because it's such a soft table. All right, Miss's going to press on your belly. And then is it okay if we take a quick peek at privates to make sure everything looks normal and healthy? Is that okay with you? You can check with Mom. That's okay. It's okay. Yeah, I know. It's kind of silly, isn't it? Only because we're at the doctors and because Mommy's here. Right. Otherwise, that would be ridiculous, wouldn't it? Good job.",
+                endTime=1045620,
+                speaker="Doctor",
+                startTime=1015982
+            ),
+            TranscriptEntry(
+                content="Why is there a door on the ceiling?",
+                endTime=1049176,
+                speaker="Patient",
+                startTime=1046880
+            ),
+            TranscriptEntry(
+                content="That's a good question. I guess just to bring some natural light into the halls. All right, we're gonna check your back, my friend, and then your vision, and we'll be all done. Can you stand up nice and tall for me on the floor? Okay. Turn around and face mom if you want. Good job. Shoulders look nice and even. We're gonna go. Hang your arms down. Loosey goosey, like noodles. There you go. And then keep it nice and still. Perfect. Beautiful. All right. Do you know your letters? I heard you were reading. Yeah, a little bit. Okay, here's what we're gonna do. I want you to stand, turn around. You see my letters on the wall there? They're up here. You see Those letters. Can you read the line? Can you read this line with both your eyes? Tell me what letters you see here.",
+                endTime=1110250,
+                speaker="Doctor",
+                startTime=1049288
+            ),
+            TranscriptEntry(
+                content="D, F, C, D, L, T, T. Good job.",
+                endTime=1119588,
+                speaker="Patient",
+                startTime=1110370
+            ),
+            TranscriptEntry(
+                content="How about this line right here?",
+                endTime=1121120,
+                speaker="Doctor",
+                startTime=1119644
+            ),
+            TranscriptEntry(
+                content="E, T, O. Ok. Just a little. How's that?",
+                endTime=1127620,
+                speaker="Patient",
+                startTime=1121740
+            ),
+            TranscriptEntry(
+                content="Over. Okay, go ahead.",
+                endTime=1129252,
+                speaker="Doctor",
+                startTime=1127660
+            ),
+            TranscriptEntry(
+                content="T, O, D, C, F, O.",
+                endTime=1135060,
+                speaker="Patient",
+                startTime=1129356
+            ),
+            TranscriptEntry(
+                content="Very good. I want you to try this sign one more time.",
+                endTime=1137476,
+                speaker="Doctor",
+                startTime=1135180
+            ),
+            TranscriptEntry(
+                content="Try that one one more time. D, F, F, C, D, C, L.",
+                endTime=1146170,
+                speaker="Patient",
+                startTime=1137548
+            ),
+            TranscriptEntry(
+                content="T, T. Okay, can you cover one I for me? Good job. Can you read this line here?",
+                endTime=1153486,
+                speaker="Doctor",
+                startTime=1146630
+            ),
+            TranscriptEntry(
+                content="D, L, P, E, D, T, C.",
+                endTime=1162638,
+                speaker="Patient",
+                startTime=1153638
+            ),
+            TranscriptEntry(
+                content="How about this one?",
+                endTime=1163930,
+                speaker="Doctor",
+                startTime=1162774
+            ),
+            TranscriptEntry(
+                content="N, E.",
+                endTime=1167050,
+                speaker="Patient",
+                startTime=1165030
+            ),
+            TranscriptEntry(
+                content="Very good. Okay, let's try this line with that. I scoot back just a little bit there. Can you stand on the blue for me? Good job.",
+                endTime=1197840,
+                speaker="Doctor",
+                startTime=1180770
+            ),
+            TranscriptEntry(
+                content="I was just worried it was tape.",
+                endTime=1200176,
+                speaker="Patient",
+                startTime=1197880
+            ),
+            TranscriptEntry(
+                content="Yeah. No, no tape on the floor this time. Okay. So you cover the same eye. I think it was your other eye you were covering. It was that one. Okay, this one here.",
+                endTime=1210096,
+                speaker="Doctor",
+                startTime=1200368
+            ),
+            TranscriptEntry(
+                content="C, F, C, Z, L, T, T.",
+                endTime=1215440,
+                speaker="Patient",
+                startTime=1210168
+            ),
+            TranscriptEntry(
+                content="Can you try this line here?",
+                endTime=1217104,
+                speaker="Doctor",
+                startTime=1215560
+            ),
+            TranscriptEntry(
+                content="That's too small.",
+                endTime=1219100,
+                speaker="Patient",
+                startTime=1217272
+            ),
+            TranscriptEntry(
+                content="Can you switch eyes for me? Good job. How about. What's this letter?",
+                endTime=1225288,
+                speaker="Doctor",
+                startTime=1220440
+            ),
+            TranscriptEntry(
+                content="T, C, P, D, C, E, T, D, C, F, F, C, Z, L, T, T, D.",
+                endTime=1251120,
+                speaker="Patient",
+                startTime=1225464
+            ),
+            TranscriptEntry(
+                content="Can't see him. He's 20, 40. It's like right on the line. So 20, 30, you pass a driving test. Okay. And so that's like you don't have to worry about it. He's still on the younger side. Okay. You could go to an optometrist and they'll do a little machine somewhere accurate. They will do like a sit down and cut your eye test too. Yeah, but he's not compensating one eye over the other. They're both exactly the same. So that's good. Okay. It could just be that it needs a little bit more time. Okay. It's not enough unless he's complaining or you notice anything. I haven't, no. Okay. If you want. Okay. What age do they typically start calling an optometrist? Like for, like just. Unless they just. If they need to, like they screen into it. Okay. Yeah. I mean, any. You can. Yeah, of course. They'll absolutely take your money. Yeah, yeah, you can definitely do it. Or, you know, if it's on the line again next year, then I would go. Okay. Or obviously if he starts claiming you anything. Okay. He's just barely didn't pass like you got. If you missed two letters then in the line and he got all the letters but two, so. All right, guys, that's it. And no vaccines. No. Still not playing. I did kind of want to pick your brain about measles? What are you thinking? What am I thinking? It's a great question. I mean, I feel like I've been trying to follow the information coming out. I feel like the information coming out has been scant and hard to kind of decipher just because the details are so limited. Yeah. But yeah, I mean, I think that like, unfortunately, like kids die from different things all the time. Right. And so our perspective becomes really skewed when it's like there's been a death. Right. Like, you know, there's like 4,000 deaths a year from RSV. Right. And like, but we don't hear about it. So we're not like, oh my gosh, I'm freaked out. You know, and so it's not to say that like we're never ever going to get sick and it's going to be fine. Sure. But the risk is still relatively very, very, very low to catch it. And very, very, very low. And I mean, honestly, you know, you read the vaccine insert and it has all the same complications as getting these losses as like a possible side effect. So you're like, which of the two do I want to risk? Yeah. Yeah. And so I still personally would stand on the side of like, I personally would not get the mmr, but obviously that's what I've been reading so much too about like the vitamin A. Yeah. It seems like, I mean, not even that there's any in our area, but just like thinking ahead, like, you know. Yeah. The studies on that show like significant improvement in terms of mortality and pneumonia, which are like the. Too. Lots of things. Yeah. Like at 86%, you know, like this. Yeah. So it is definitely. Nothing's foolproof. Yeah. Certainly. Okay. To me, relatively when you look at everything, you know, four kids die from the flu every year. Yeah. And there's measles outbreaks every year. You can look up CDC website. Yeah. And so. Yeah, that's my bad. Okay. Okay. I just kind of was curious so just to hear your take. I mean, like I said, I've been trying to follow it, but I know they got their 12 months. He did not. He got one dose of MMR. He got everything until his four year old shots. Okay. We stopped. So he may even be immune. Yeah. Because he had the one dose. He had the one and like 80% of the population with only one dose. So he's not had. He had everything through nine months and then we did some 12 months, but we did not do that more. Yeah. Look at you greeting back to Miss Kimberlie, please. What a good reader. He has been doing really well. He has been doing so good. Thank you. I know. All right. Okay, guys, are you ready? See you later. Go enjoy the sunshine. Yeah. We're going to the zoo. Oh, my goodness. That's fun. Can you put it down, please? Okay. Thanks. I like her little outfit. That's. Oh, thanks. Where did you get it? Oh. Oh, gosh. Lavon's. Maybe. Yeah, I think it's Lavon's. Cute. Thank you. Look how strong is. Sorry. I'm not touching you. Thank you. Bye. Keep me posted on the next speech referral, people. I will. Yeah. Yeah, we're scheduled for the 29th. Great. Any feedback? No, I think you did great. Yeah. I think, obviously, you know, you get a rhythm eventually, as you do more, but it's. I mean, I think really. Well, you're great with patient rapport and being comfortable and building trust right out of the gate, which is awesome. Yeah. Comfortable with you. Yeah. So great.",
+                endTime=1590190,
+                speaker="Doctor",
+                startTime=1256620
+            )]
+        )

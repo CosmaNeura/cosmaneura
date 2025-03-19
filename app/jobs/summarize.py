@@ -160,8 +160,9 @@ def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
     return dedent(f"""
     You are a doctor reviewing the transcript of a patient visit that you conducted.
     You are looking for the actions you told the patient you would take as a result of this visit.
+    You are also looking for actions that you told the patient to take.
 
-    Actions might include (but not be limited to)::
+    Actions for you might include (but not be limited to):
       - ordering labs
       - prescribing medications
       - scheduling follow-up appointments
@@ -170,6 +171,14 @@ def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
       - calling the patient to discuss lab results
       - requesting records from other providers
       - sending educational information to the patient
+
+    Actions for the patient might include (but not be limited to):
+      - taking medications
+      - making lifestyle changes
+      - monitoring for specific symptoms
+      - looking out for changes in symptoms
+      - consulting with other doctors/specialists
+      - calling back with questions
 
     Please extract all such action items from the transcript.
 
