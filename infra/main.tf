@@ -1034,6 +1034,7 @@ resource "azurerm_role_assignment" "health_services_deid_access" {
 # GHA Access
 #
 # Adapted from: https://github.com/likvid-bank/likvid-cloudfoundation/blob/86930f7b9aa538f7f8cb64074f351dfec81a4c84/kit/azure/buildingblocks/starterkit-composition/github-actions-terraform-setup/resources.azure.cicd.tf
+# View all roles: az role definition list --output json --query '[].roleName' | fzf
 ####################
 
 resource "azurerm_user_assigned_identity" "ghactions" {
@@ -1063,9 +1064,11 @@ resource "azurerm_role_assignment" "github_acr_push" {
   principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
 }
 
+# deploy images to container apps
+# az role definition list --name "Container Apps Operator" --output json
 resource "azurerm_role_assignment" "github_container_apps_operator" {
   scope                = azurerm_container_app_environment.main.id
-  role_definition_name = "Container Apps Operator"
+  role_definition_name = "Container Apps Contributor"
   principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
 }
 

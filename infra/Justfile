@@ -84,6 +84,7 @@ azure_shell container=AZURE_CONTAINER:
 azure_ipy:
 	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command '/app/console.py'
 
+# TODO there are multiple resource groups
 # TODO this string is copy/pasted in a couple of locations, should DRY up
 AZURE_RESOURCE_GROUP := "cosmaneura-prod"
 # TODO there are multiple containers in this app, need to document further
