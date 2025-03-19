@@ -6,23 +6,16 @@ from activemodel import SessionManager
 import sqlalchemy as sa
 
 from sqlmodel import SQLModel
+
 from app.configuration.clerk import clerk
 from app.configuration.database import configure_database, database_url
 import app.models
+import app.commands
 
-import inspect
-from typing import get_type_hints
-from rich.console import Console
-from rich.text import Text
-from pathlib import Path
-import inspect
 from sqlmodel import SQLModel
-import logging
 from playwright.async_api import async_playwright
 import funcy_pipe as fp
 from sqlmodel import create_engine
-from redis import Redis
-import pkgutil
 import importlib
 from activemodel.utils import find_all_sqlmodels
 from app.configuration.clerk import clerk
