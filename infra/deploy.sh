@@ -30,6 +30,9 @@ if ! git rev-parse --quiet --verify "$GIT_SHA^{commit}" >/dev/null; then
 	exit 1
 fi
 
+echo "Azure Acccount Information:"
+az account show
+
 # Convert potential short SHA to full SHA
 GIT_SHA=$(git rev-parse "$GIT_SHA")
 PRODUCTION_TAG="$PRODUCTION_IMAGE:$GIT_SHA"

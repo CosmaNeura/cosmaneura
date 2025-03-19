@@ -98,11 +98,12 @@ jobs:
     if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
     permissions:
       contents: read
+      # TODO why exactly do we need id-token here?
       id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/common-setup
-        timeout-minutes: 1
+        timeout-minutes: 2
 
       # TODO I think we can use the magic azure credentials for this, need to swap out password with those credentials
       # login before building so previous build image can be pulled for nixpacks cache
@@ -120,4 +121,6 @@ jobs:
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
 
-      - run: cd infra && bash deploy.sh ${{ github.sha }}
+      - name: Deploy to Azure
+        run: |                  # Log in using the service principal
+          cd infra && bash deploy.sh ${{ github.sha }}
