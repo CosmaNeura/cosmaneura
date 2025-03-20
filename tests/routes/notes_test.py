@@ -10,7 +10,7 @@ from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
-from tests.factory_alt import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
+from tests.factories import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
 from tests.routes.utils import get_clerk_dev_user
 
 
