@@ -1,4 +1,3 @@
-import re
 import typing as t
 
 from fastapi import status
@@ -26,6 +25,7 @@ from app.models.patient import Patient
 Notes on polyfactory:
 
 1. is_supported_type validates that the class can be used to generate a factory
+https://github.com/litestar-org/polyfactory/issues/655#issuecomment-2727450854
 """
 
 
@@ -172,8 +172,6 @@ class SimpleIncompleteIntakeFactory(ModelFactory[Intake]):
 
     # TODO should we use ignore instead and just default to server defaults?
     intake_questions_answers = []
-    intake_followup_questions = []
-    intake_followup_questions_answers = []
 
     # TODO this is not the best way to do this, but we need a way to customize generation of relationships
     # TODO automatically ignoring all relationships on sqlmodel needs to be upstreamed
