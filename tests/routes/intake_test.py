@@ -21,7 +21,7 @@ from app.models.intake.doctor_intake_schema import DoctorIntakeSchema, IntakeQue
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
-from tests.factory_alt import (
+from tests.factories import (
     EXAMPLE_INTAKE_QUESTIONS,
     AppointmentRequestFactory,
     DoctorFactory,

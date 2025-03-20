@@ -1,61 +1,280 @@
 """
-NOTE pretty much moved over to polyfactory instead, but still need to refactor this
-
-TODO we should autogen all factories and then allow the user to extend them
-https://github.com/fastapi/sqlmodel/discussions/615
-https://factoryboy.readthedocs.io/en/stable/orms.html#managing-sessions
+Remove the alt once factoryboy is refactored out of the codebase
 """
 
-import factory
-from factory.alchemy import SQLAlchemyModelFactory
+import typing as t
+
+from fastapi import status
+from fastapi.testclient import TestClient
+from polyfactory import BaseFactory, Ignore, Require
+from polyfactory.decorators import post_generated
+from polyfactory.factories import DataclassFactory
+from polyfactory.factories.pydantic_factory import ModelFactory
+from polyfactory.field_meta import FieldMeta
+from pydantic import EmailStr
 from typeid import TypeID
 
+import app.commands.intake.chat
+from app.commands.intake.create import AppointmentRequest, AppointmentResponse
+from app.server import api_app
+
+from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
-from app.models.doctor import Doctor
+from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.intake.doctor_intake_schema import DoctorIntakeSchema, IntakeQuestion
+from app.models.intake.intake import Intake
+from app.models.patient import Patient
+
+"""
+Notes on polyfactory:
+
+1. is_supported_type validates that the class can be used to generate a factory
+https://github.com/litestar-org/polyfactory/issues/655#issuecomment-2727450854
+"""
 
 
-class DoctorFactory(SQLAlchemyModelFactory):
-    class Meta:
-        model = Doctor
+# TODO not currently used
+def type_id_provider(cls, field_meta):
+    # TODO this doesn't work well with __ args:
+    # https://github.com/litestar-org/polyfactory/pull/666/files
+    return str(TypeID("hi"))
 
-    clerk_id = str(TypeID("user"))
+
+BaseFactory.add_provider(TypeIDType, type_id_provider)
 
 
-class AppointmentFactory(SQLAlchemyModelFactory):
-    class Meta:
-        model = Appointment
+class SQLModelFactory[T](ModelFactory):
+    """
+    Base factory for SQLModel models:
 
-    appointment_date = factory.Faker(
-        "date_between", start_date="-90d", end_date="today"
+    1. Ability to ignore all relationship fks
+    2. Option to ignore all pks
+    """
+
+    __is_base_factory__ = True
+
+    @classmethod
+    def should_set_field_value(cls, field_meta: FieldMeta, **kwargs: t.Any) -> bool:
+        has_object_override = hasattr(cls, field_meta.name)
+
+        # TODO this should be more intelligent
+        if not has_object_override and (
+            field_meta.name == "id" or field_meta.name.endswith("_id")
+        ):
+            return False
+
+        return super().should_set_field_value(field_meta, **kwargs)
+
+
+class ActiveModelFactory[T](SQLModelFactory):
+    __is_base_factory__ = True
+
+    @classmethod
+    def should_set_field_value(cls, field_meta: FieldMeta, **kwargs: t.Any) -> bool:
+        # do not default deleted at mixin to deleted!
+        # TODO should be smarter about this...
+        if field_meta.name == "deleted_at":
+            return False
+
+        return super().should_set_field_value(field_meta, **kwargs)
+
+    # @classmethod
+    # def build(
+    #     cls,
+    #     factory_use_construct: bool | None = None,
+    #     sqlmodel_save: bool = False,
+    #     **kwargs: t.Any,
+    # ) -> T:
+    #     result = super().build(factory_use_construct=factory_use_construct, **kwargs)
+
+    #     # TODO allow magic dunder method here
+    #     if sqlmodel_save:
+    #         result.save()
+
+    #     return result
+
+
+class DoctorFactory(ActiveModelFactory[Doctor]):
+    # TODO cleanup these prefixes
+    # TODO can polyfactory handle this for us?
+    api_key = lambda: str(TypeID(API_KEY_PREFIX))
+    clerk_id = lambda: str(TypeID(CLERK_OBJECT_PREFIX[0:-1]))
+
+
+class PatientFactory(ActiveModelFactory[Patient]):
+    pass
+
+
+class AppointmentFactory(ActiveModelFactory[Appointment]):
+    # doctor_id is dependency-injected
+    @post_generated
+    @classmethod
+    def patient_id(cls, doctor_id: TypeIDType) -> TypeIDType:
+        assert doctor_id
+        patient = PatientFactory.build(doctor_id=doctor_id).save()
+        return patient.id
+
+    appointment_date = ModelFactory.__faker__.date_between(
+        start_date="-90d", end_date="today"
     )
-    appointment_name = factory.Faker("word")
-    appointment_notes_preview = factory.Faker("sentence")
+    appointment_name = ModelFactory.__faker__.catch_phrase()
 
 
-class DoctorNoteExampleFactory(SQLAlchemyModelFactory):
-    class Meta:
-        model = DoctorNoteExample
+# TODO move to factories file
+class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
+    # pick a random ID
+    id = BaseFactory.__faker__.uuid4()
 
-    # TODO we should be able to inspect the types on the field
-    field_examples = factory.Faker("pydict", allowed_types=(str,))
+    @classmethod
+    def doctor_email(cls) -> str:
+        # optional by default, but make it required in the factory otherwise the randomness of doctor_{email,id} will cause us issues
+        # TODO https://github.com/litestar-org/polyfactory/issues/655
+        return cls.__faker__.ascii_email()
 
 
-class DoctorNoteSchemaFactory(SQLAlchemyModelFactory):
-    class Meta:
-        model = DoctorNoteSchema
+# class TypeIDTypeFactory(BaseFactory[TypeIDType]):
+#     __set_as_default_factory_for_type__ = True
 
-    doctor = factory.SubFactory(DoctorFactory)
-    note_type = factory.Faker("word")
-    fields = factory.Faker("pydict", allowed_types=(str,))
+#     @classmethod
+#     def process_kwargs(cls, **kwargs: t.Any) -> dict[str, t.Any]:
+#         breakpoint()
 
-    @factory.post_generation
-    def generate_examples(self, create, extracted, **kwargs):
-        if not create:
-            return
+#     @classmethod
+#     def is_supported_type(cls, value: t.Any) -> t.TypeGuard[type[TypeIDType]]:
+#         """Determine whether the given value is supported by the factory.
 
-        # one-to-many relationship could be generalized here
-        DoctorNoteExampleFactory(
-            doctor_note_schema_id=self.id, doctor_id=self.doctor_id
+#         :param value: An arbitrary value.
+#         :returns: A typeguard
+#         """
+#         return isinstance(value, TypeIDType)
+
+
+EXAMPLE_INTAKE_QUESTIONS = [
+    IntakeQuestion(
+        key="medical_history",
+        question="Do you have any pre-existing medical conditions?",
+        description="Please list any diagnosed conditions or ongoing health issues",
+        order=1,
+    ),
+    IntakeQuestion(
+        key="current_medications",
+        question="What medications are you currently taking?",
+        description="Include prescription, over-the-counter medications and supplements",
+        order=2,
+    ),
+    IntakeQuestion(
+        key="allergies",
+        question="Do you have any known allergies?",
+        description="List any allergies to medications, foods, or environmental factors",
+        order=3,
+    ),
+]
+
+
+class DoctorIntakeSchemaFactory(ActiveModelFactory[DoctorIntakeSchema]):
+    questions = EXAMPLE_INTAKE_QUESTIONS
+
+    # doctor = Ignore()
+    # @post_generated
+    # @classmethod
+    # def doctor_id(cls):
+    #     breakpoint()
+
+    # @classmethod
+    # def post_generate(cls, result: dict[str, t.Any]) -> dict[str, t.Any]:
+    #     doctor = DoctorFactory.build()
+    #     doctor.save()
+
+    #     result["doctor_id"] = doctor.id
+
+    #     return result
+
+
+class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
+    # TODO no...
+    intake_questions = EXAMPLE_INTAKE_QUESTIONS
+
+    # TODO should we use ignore instead and just default to server defaults?
+    intake_questions_answers = []
+
+    # TODO this is not the best way to do this, but we need a way to customize generation of relationships
+    # TODO automatically ignoring all relationships on sqlmodel needs to be upstreamed
+    # https://discord.com/channels/919193495116337154/1349832200060665969
+
+    # doctor = Ignore()
+    # appointment = Ignore()
+    # patient = Ignore()
+    # doctor_intake_schema = Ignore()
+
+    # id = Ignore()
+    # doctor_id = Ignore()
+    # appointment_id = Ignore()
+    # patient_id = Ignore()
+    # doctor_intake_schema_id = Ignore()
+
+    # https://discord.com/channels/919193495116337154/1349843948809486398
+    @classmethod
+    def build(
+        cls,
+        factory_use_construct: bool | None = None,
+        **kwargs: t.Any,
+    ) -> Intake:
+        """
+        We need:
+
+        - intake schema
+        - appointment
+
+        all tied to the same doctor
+        """
+
+        doctor = DoctorFactory.build().save()
+
+        intake_schema = DoctorIntakeSchemaFactory.build(doctor_id=doctor.id).save()
+        appointment = AppointmentFactory.build(doctor_id=doctor.id).save()
+
+        intake_record = super().build(
+            factory_use_construct=factory_use_construct,
+            doctor_id=doctor.id,
+            appointment_id=appointment.id,
+            doctor_intake_schema_id=intake_schema.id,
+            **kwargs,
+        )
+
+        # intake_record.
+        return intake_record
+
+    # @post_generated
+    # @classmethod
+    # def doctor_id(cls):
+    #     breakpoint()
+    #     return None
+
+
+class DoctorNoteExampleFactory(ActiveModelFactory[DoctorNoteExample]):
+    # TODO we should be able to inspect the types on the field and generate the correct dict types
+    # field_examples = lambda: BaseFactory.__faker__.pydict(allowed_types=(str,))
+    pass
+
+
+class DoctorNoteSchemaFactory(ActiveModelFactory[DoctorNoteSchema]):
+    # doctor = DoctorFactory.build
+    note_type = BaseFactory.__faker__.word
+
+    # fields = factory.Faker("pydict", allowed_types=(str,))
+
+    @classmethod
+    def post_create(cls, model: DoctorNoteSchema):
+        # TODO why can't i do this on the header level?
+        if not model.doctor_id:
+            model.doctor = DoctorFactory.build().save()
+        # model.doctor_id = DoctorFactory.build().save().id
+
+        model.save()
+
+        # TODO one-to-many relationship could be generalized here
+        DoctorNoteExampleFactory.build(
+            doctor_note_schema_id=model.id, doctor_id=model.doctor_id
         ).save()

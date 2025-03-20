@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
-from tests.factory_alt import DoctorFactory
+from tests.factories import DoctorFactory
 from tests.routes.utils import get_valid_token
 
 
