@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
-from tests.factories import DoctorFactory
+from tests.factory_alt import DoctorFactory
 from tests.routes.utils import get_valid_token
 
 
@@ -43,8 +43,10 @@ def test_authorized_clerk_credentials(client: TestClient):
 
 
 def test_authorized_api_credentials(client: TestClient):
-    user = DoctorFactory()
+    # TODO should allow factories to automatically persist
+    user = DoctorFactory.build()
     user.generate_api_key()
+    user.save()
 
     response = client.get(
         api_app.url_path_for("external_api_ping"),
