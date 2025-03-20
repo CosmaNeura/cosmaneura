@@ -10,7 +10,7 @@ from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
-from tests.factories import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
+from tests.factory_alt import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
 from tests.routes.utils import get_clerk_dev_user
 
 
@@ -55,16 +55,16 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["doctor_id"] == str(doctor.id)
 
 
-def test_note_count(global_session):
+def test_note_count():
     "this test shouldn't exist, but we are learning sqlalchemy + factory boy and are being a bit paranoid"
 
     # paranoid check that the db is empty, we are still figuring out the right pattern for seeds, etc
     assert DoctorNoteSchema.count() == 2
 
-    note_schema = DoctorNoteSchemaFactory().save()
+    note_schema = DoctorNoteSchemaFactory.build().save()
 
-    note_schema2 = DoctorNoteSchemaFactory(doctor=note_schema.doctor).save()
-    DoctorNoteExampleFactory(
+    note_schema2 = DoctorNoteSchemaFactory.build(doctor_id=note_schema.doctor_id).save()
+    DoctorNoteExampleFactory.build(
         doctor_note_schema_id=note_schema2.id, doctor_id=note_schema2.doctor_id
     ).save()
 
