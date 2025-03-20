@@ -1,8 +1,8 @@
 """add_intake
 
-Revision ID: 6b0b6d6f88b1
+Revision ID: 5999559af240
 Revises: ae5a8534033d
-Create Date: 2025-03-15 15:42:52.999937
+Create Date: 2025-03-20 13:24:55.023010
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '6b0b6d6f88b1'
+revision: str = '5999559af240'
 down_revision: Union[str, None] = 'ae5a8534033d'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -57,8 +57,6 @@ def upgrade() -> None:
     sa.Column('duration', sa.Integer(), nullable=True, comment='total length of the transcript, in seconds'),
     sa.Column('intake_questions', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='list of questions extracted from the intake schema when this intake URL was generated'),
     sa.Column('intake_questions_answers', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='list of answers to the intake questions'),
-    sa.Column('intake_followup_questions', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='after the initial intake questions are answered, the LLM is asked to generate followup questions, this is the structured response'),
-    sa.Column('intake_followup_questions_answers', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='answers to the followup questions'),
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], name=op.f('intake_appointment_id_fkey')),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], name=op.f('intake_doctor_id_fkey')),
     sa.ForeignKeyConstraint(['doctor_intake_schema_id'], ['doctor_intake_schema.id'], name=op.f('intake_doctor_intake_schema_id_fkey')),
