@@ -38,7 +38,7 @@ def perform() -> None:
         doctor.email = doctor_email
         doctor.save()
 
-    log.info("users synced with clerk", doctor=doctor)
+    log.info("users synced with clerk")
 
 
 perform_celery = celery.task(perform)
