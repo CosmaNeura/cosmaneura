@@ -29,6 +29,16 @@ https://github.com/litestar-org/polyfactory/issues/655#issuecomment-2727450854
 """
 
 
+# TODO not currently used
+def type_id_provider(cls, field_meta):
+    # TODO this doesn't work well with __ args:
+    # https://github.com/litestar-org/polyfactory/pull/666/files
+    return str(TypeID("hi"))
+
+
+BaseFactory.add_provider(TypeIDType, type_id_provider)
+
+
 class SQLModelFactory[T](ModelFactory):
     """
     Base factory for SQLModel models:
@@ -57,7 +67,8 @@ class ActiveModelFactory[T](SQLModelFactory):
 
     @classmethod
     def should_set_field_value(cls, field_meta: FieldMeta, **kwargs: t.Any) -> bool:
-        # deleted at mixin, should be smarter about this...
+        # do not default deleted at mixin to deleted!
+        # TODO should be smarter about this...
         if field_meta.name == "deleted_at":
             return False
 
@@ -66,20 +77,17 @@ class ActiveModelFactory[T](SQLModelFactory):
 
 class DoctorFactory(ActiveModelFactory[Doctor]):
     # TODO cleanup these prefixes
+    # TODO can polyfactory handle this for us?
     api_key = lambda: str(TypeID(API_KEY_PREFIX))
     clerk_id = lambda: str(TypeID(CLERK_OBJECT_PREFIX[0:-1]))
 
 
-class PatientFactory(SQLModelFactory[Patient]):
+class PatientFactory(ActiveModelFactory[Patient]):
     pass
 
 
-class AppointmentFactory(ModelFactory[Appointment]):
-    # ignore relationships
-    id = Ignore()
-    doctor_id = Ignore()
-
-    # patient_id = Ignore()
+class AppointmentFactory(ActiveModelFactory[Appointment]):
+    # doctor_id is dependency-injected
     @post_generated
     @classmethod
     def patient_id(cls, doctor_id: TypeIDType) -> TypeIDType:
@@ -92,14 +100,11 @@ class AppointmentFactory(ModelFactory[Appointment]):
     )
     appointment_name = ModelFactory.__faker__.catch_phrase()
 
-    external_id = Ignore()
-
 
 # TODO move to factories file
-class AppointmentRequestFactory(ModelFactory[AppointmentRequest]):
-    # we want to test the validation logic in a deterministic way
-    doctor = None
-    doctor_id = None
+class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
+    # pick a random ID
+    id = BaseFactory.__faker__.uuid4()
 
     @classmethod
     def doctor_email(cls) -> str:
@@ -166,7 +171,7 @@ class DoctorIntakeSchemaFactory(ActiveModelFactory[DoctorIntakeSchema]):
     #     return result
 
 
-class SimpleIncompleteIntakeFactory(ModelFactory[Intake]):
+class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
     # TODO no...
     intake_questions = EXAMPLE_INTAKE_QUESTIONS
 
@@ -177,16 +182,16 @@ class SimpleIncompleteIntakeFactory(ModelFactory[Intake]):
     # TODO automatically ignoring all relationships on sqlmodel needs to be upstreamed
     # https://discord.com/channels/919193495116337154/1349832200060665969
 
-    doctor = Ignore()
-    appointment = Ignore()
-    patient = Ignore()
-    doctor_intake_schema = Ignore()
+    # doctor = Ignore()
+    # appointment = Ignore()
+    # patient = Ignore()
+    # doctor_intake_schema = Ignore()
 
-    id = Ignore()
-    doctor_id = Ignore()
-    appointment_id = Ignore()
-    patient_id = Ignore()
-    doctor_intake_schema_id = Ignore()
+    # id = Ignore()
+    # doctor_id = Ignore()
+    # appointment_id = Ignore()
+    # patient_id = Ignore()
+    # doctor_intake_schema_id = Ignore()
 
     # https://discord.com/channels/919193495116337154/1349843948809486398
     @classmethod
@@ -325,6 +330,7 @@ def test_intake_without_doctor_id(client: TestClient):
 
     assert_status(response, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
+    # the missing doctor ID should be specified in the error message
     data = response.json()
     assert "detail" in data
     assert "doctor_id" in data["detail"][0]["msg"]
