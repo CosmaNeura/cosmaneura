@@ -1,4 +1,6 @@
 """
+NOTE pretty much moved over to polyfactory instead, but still need to refactor this
+
 TODO we should autogen all factories and then allow the user to extend them
 https://github.com/fastapi/sqlmodel/discussions/615
 https://factoryboy.readthedocs.io/en/stable/orms.html#managing-sessions
