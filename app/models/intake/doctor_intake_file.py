@@ -21,6 +21,9 @@ class DoctorIntakeFile(
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
+    form_type: str
+    "user generated name of the form type"
+
     azure_file_name: str
     "file name of the PDF in azure"
 
