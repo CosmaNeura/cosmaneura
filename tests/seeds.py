@@ -66,7 +66,7 @@ def seed_test_data():
         doctor_id=doctor.id,
         patient_id=patient.id,
         appointment_id=appointment.id,
-        azure_file_name=f"teresa-jensen-mock-appointment-11-15-2024.wav",
+        azure_file_name="teresa-jensen-mock-appointment-11-15-2024.wav",
     )
 
     DoctorNoteFile.find_or_create_by(

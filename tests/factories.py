@@ -4,19 +4,13 @@ Remove the alt once factoryboy is refactored out of the codebase
 
 import typing as t
 
-from fastapi import status
-from fastapi.testclient import TestClient
-from polyfactory import BaseFactory, Ignore, Require
+from polyfactory import BaseFactory
 from polyfactory.decorators import post_generated
-from polyfactory.factories import DataclassFactory
 from polyfactory.factories.pydantic_factory import ModelFactory
 from polyfactory.field_meta import FieldMeta
-from pydantic import EmailStr
 from typeid import TypeID
 
-import app.commands.intake.chat
-from app.commands.intake.create import AppointmentRequest, AppointmentResponse
-from app.server import api_app
+from app.commands.intake.create import AppointmentRequest
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
