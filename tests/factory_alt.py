@@ -21,6 +21,8 @@ from app.server import api_app
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
+from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.intake.doctor_intake_schema import DoctorIntakeSchema, IntakeQuestion
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
@@ -77,6 +79,21 @@ class ActiveModelFactory[T](SQLModelFactory):
             return False
 
         return super().should_set_field_value(field_meta, **kwargs)
+
+    # @classmethod
+    # def build(
+    #     cls,
+    #     factory_use_construct: bool | None = None,
+    #     sqlmodel_save: bool = False,
+    #     **kwargs: t.Any,
+    # ) -> T:
+    #     result = super().build(factory_use_construct=factory_use_construct, **kwargs)
+
+    #     # TODO allow magic dunder method here
+    #     if sqlmodel_save:
+    #         result.save()
+
+    #     return result
 
 
 class DoctorFactory(ActiveModelFactory[Doctor]):
@@ -234,3 +251,30 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
     # def doctor_id(cls):
     #     breakpoint()
     #     return None
+
+
+class DoctorNoteExampleFactory(ActiveModelFactory[DoctorNoteExample]):
+    # TODO we should be able to inspect the types on the field and generate the correct dict types
+    # field_examples = lambda: BaseFactory.__faker__.pydict(allowed_types=(str,))
+    pass
+
+
+class DoctorNoteSchemaFactory(ActiveModelFactory[DoctorNoteSchema]):
+    # doctor = DoctorFactory.build
+    note_type = BaseFactory.__faker__.word
+
+    # fields = factory.Faker("pydict", allowed_types=(str,))
+
+    @classmethod
+    def post_create(cls, model: DoctorNoteSchema):
+        # TODO why can't i do this on the header level?
+        if not model.doctor_id:
+            model.doctor = DoctorFactory.build().save()
+        # model.doctor_id = DoctorFactory.build().save().id
+
+        model.save()
+
+        # TODO one-to-many relationship could be generalized here
+        DoctorNoteExampleFactory.build(
+            doctor_note_schema_id=model.id, doctor_id=model.doctor_id
+        ).save()
