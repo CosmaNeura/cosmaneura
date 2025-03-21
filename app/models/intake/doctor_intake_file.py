@@ -23,3 +23,6 @@ class DoctorIntakeFile(
 
     azure_file_name: str
     "file name of the PDF in azure"
+
+    form_name: str
+    "user generated name of the form type"
