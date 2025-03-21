@@ -16,7 +16,6 @@ from sqlmodel import Field, Relationship
 
 from ..appointment import Appointment
 from ..doctor import Doctor
-from .doctor_intake_schema import DoctorIntakeSchema
 
 
 class IntakeSchemaQuestion(PydanticBaseModel):
@@ -55,9 +54,6 @@ class Intake(
     # patient is tied to the appointment, so we don't have a patient_id on this model
     appointment_id: TypeIDType = Appointment.foreign_key()
     appointment: Appointment = Relationship()
-
-    doctor_intake_schema_id: TypeIDType = DoctorIntakeSchema.foreign_key()
-    doctor_intake_schema: DoctorIntakeSchema = Relationship()
 
     intake_questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
     "list of questions extracted from the intake schema when this intake URL was generated"

@@ -56,6 +56,9 @@ class Doctor(
         default=None,
     )
 
+    biography: str | None
+    "what type of doctor is this, what specialist, what they focus on, etc. Used for the intake process."
+
     def generate_api_key(self):
         api_key = TypeID(API_KEY_PREFIX)
 
