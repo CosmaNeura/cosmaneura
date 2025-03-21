@@ -8,7 +8,6 @@ from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
-from app.models.intake.doctor_intake_schema import DoctorIntakeSchema
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
 

@@ -17,11 +17,7 @@ from app.models.appointment import Appointment
 from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.doctor_intake_schema import (
-    DoctorIntakeSchema,
-    IntakeSchemaQuestion,
-)
-from app.models.intake.intake import Intake
+from app.models.intake.intake import Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
 
 """
@@ -150,43 +146,21 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
 
 EXAMPLE_INTAKE_QUESTIONS = [
     IntakeSchemaQuestion(
-        key="medical_history",
         question="Do you have any pre-existing medical conditions?",
-        description="Please list any diagnosed conditions or ongoing health issues",
+        required_details="Include important details",
         order=1,
     ),
     IntakeSchemaQuestion(
-        key="current_medications",
         question="What medications are you currently taking?",
-        description="Include prescription, over-the-counter medications and supplements",
+        required_details="Include important details",
         order=2,
     ),
     IntakeSchemaQuestion(
-        key="allergies",
         question="Do you have any known allergies?",
-        description="List any allergies to medications, foods, or environmental factors",
+        required_details="Include important details",
         order=3,
     ),
 ]
-
-
-class DoctorIntakeSchemaFactory(ActiveModelFactory[DoctorIntakeSchema]):
-    questions = EXAMPLE_INTAKE_QUESTIONS
-
-    # doctor = Ignore()
-    # @post_generated
-    # @classmethod
-    # def doctor_id(cls):
-    #     breakpoint()
-
-    # @classmethod
-    # def post_generate(cls, result: dict[str, t.Any]) -> dict[str, t.Any]:
-    #     doctor = DoctorFactory.build()
-    #     doctor.save()
-
-    #     result["doctor_id"] = doctor.id
-
-    #     return result
 
 
 class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
