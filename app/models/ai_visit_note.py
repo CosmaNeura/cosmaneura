@@ -34,12 +34,14 @@ class AIVisitNote(
     ai_transcript: AIVisitTranscript = Relationship()
 
     doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key()
-    doctor_note_schema: DoctorNoteSchema = Relationship(sa_relationship_kwargs={"lazy": "joined"})
+    doctor_note_schema: DoctorNoteSchema = Relationship(
+        sa_relationship_kwargs={"lazy": "joined"}
+    )
 
     @computed_field
     @property
     def note_type(self) -> str:
         return self.doctor_note_schema.note_type
 
-    note: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
+    note: dict[str, str] = Field(sa_type=JSONB)
     "key is name of section, value is markdown content"
