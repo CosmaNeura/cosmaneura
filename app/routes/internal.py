@@ -96,10 +96,7 @@ def patient_list(request: Request) -> list[Patient]:
 
     # TODO(mbianco) AM types should be fixed and the types should now display properly here...
     patient_list = (
-        Patient.select()
-        .where(Patient.doctor_id == doctor.id)
-        .order_by(Patient.name.asc())
-        .all()
+        Patient.where(Patient.doctor_id == doctor.id).order_by(Patient.name.asc()).all()
     )
 
     return list(patient_list)
@@ -123,19 +120,13 @@ def note_detail(
 ) -> NoteDetail:
     # TODO error handling for bad IDs
     doctor: Doctor = request.state.doctor
-    appointment = (
-        Appointment.select()
-        .where(Appointment.doctor_id == doctor.id, Appointment.id == appointment_id)
-        .one()
-    )
+    appointment = Appointment.where(
+        Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
+    ).one()
 
-    visit_notes = (
-        AIVisitNote.select()
-        .where(
-            AIVisitNote.appointment_id == appointment_id,
-        )
-        .all()
-    )
+    visit_notes = AIVisitNote.where(
+        AIVisitNote.appointment_id == appointment_id,
+    ).all()
 
     note_detail = NoteDetail(
         appointment=appointment,
