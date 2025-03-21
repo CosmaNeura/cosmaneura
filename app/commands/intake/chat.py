@@ -1,6 +1,5 @@
 import time
 
-from app.models.intake.doctor_intake_schema import IntakeSchemaQuestion
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
 
 
