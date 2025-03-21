@@ -23,6 +23,8 @@
   "typescript.experimental.expandableHover": true,
 
   "prettier.prettierPath": "web/node_modules/prettier",
+  "prettier.ignorePath": "web/.prettierignore",
+
   "[typescript][typescriptreact][javascript][javascriptreact]": {
     "editor.formatOnSave": true,
     "editor.defaultFormatter": "esbenp.prettier-vscode",
@@ -113,5 +115,8 @@
     "editor.trimAutoWhitespace": true,
     // "editor.defaultFormatter": "nefrob.vscode-just-syntax",
     "editor.formatOnSave": true
-  }
+  },
+
+  // tmp thing to make sure we are using copilot
+  "cody.suggestions.mode": "off"
 }
