@@ -1,22 +1,16 @@
 import type { FC } from "react"
 
+import { MarkdownText } from "~/components/assistant-ui/markdown-text"
 import {
-  AssistantActionBar,
-  AssistantMessage,
-  BranchPicker,
   Composer,
   EditComposer,
   ThreadScrollToBottom,
-  ThreadWelcome,
-  UserActionBar,
   UserMessage,
 } from "~/components/assistant-ui/thread"
 
 import { IntakeThreadWelcome } from "./IntakeThreadWelcome"
 import { ThreadPrimitive } from "@assistant-ui/react"
 import { MessagePrimitive } from "@assistant-ui/react"
-import { UserMessage } from '~/components/assistant-ui/thread';
-import { MarkdownText } from "~/components/assistant-ui/markdown-text"
 
 export const IntakeUserMessage: FC = () => {
   return (
@@ -24,8 +18,6 @@ export const IntakeUserMessage: FC = () => {
       <div className="bg-chat-user text-chat-user-foreground col-start-2 row-start-2 max-w-[calc(var(--thread-max-width)*0.8)] rounded-3xl px-5 py-2.5 break-words">
         <MessagePrimitive.Content />
       </div>
-
-      <BranchPicker className="col-span-full col-start-1 row-start-3 -mr-1 justify-end" />
     </MessagePrimitive.Root>
   )
 }
@@ -33,11 +25,9 @@ export const IntakeUserMessage: FC = () => {
 export const IntakeAssistantMessage: FC = () => {
   return (
     <MessagePrimitive.Root className="relative grid w-full max-w-[var(--thread-max-width)] grid-cols-[auto_auto_1fr] grid-rows-[auto_1fr] py-4">
-      <div className="bg-chat-assistant text-chat-assistant-foreground rounded-3xl px-5 py-2.5 col-span-2 col-start-2 row-start-1 my-1.5 max-w-[calc(var(--thread-max-width)*0.8)] leading-7 break-words">
+      <div className="bg-chat-assistant text-chat-assistant-foreground col-span-2 col-start-2 row-start-1 my-1.5 max-w-[calc(var(--thread-max-width)*0.8)] rounded-3xl px-5 py-2.5 leading-7 break-words">
         <MessagePrimitive.Content components={{ Text: MarkdownText }} />
       </div>
-
-      <BranchPicker className="col-start-2 row-start-2 mr-2 -ml-2" />
     </MessagePrimitive.Root>
   )
 }
