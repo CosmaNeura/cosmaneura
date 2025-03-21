@@ -1,10 +1,10 @@
 import time
 
-from app.models.intake.doctor_intake_schema import IntakeQuestion
-from app.models.intake.intake import Intake, IntakeAnswer
+from app.models.intake.doctor_intake_schema import IntakeSchemaQuestion
+from app.models.intake.intake import Intake, IntakeSchemaQuestion
 
 
-def perform(intake: Intake, user_chat_input: str | None) -> IntakeQuestion | None:
+def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion | None:
     """
     Handles processing a user chat input for an intake process and letting the user know what to answer next
 

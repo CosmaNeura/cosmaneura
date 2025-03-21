@@ -2,19 +2,15 @@
 Public, unauthenticated API endpoints for the chat interface.
 """
 
-from time import strftime
-from typing import Annotated
-
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from typeid import TypeID
-from typeid.errors import SuffixValidationException, TypeIDException
+from typeid.errors import TypeIDException
 
 import app.commands.intake.chat
 import app.commands.intake.create
 from app.commands.intake.create import AppointmentResponse
 
 from activemodel.session_manager import aglobal_session
-from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import PydanticBaseModel
 from app.models.intake.intake import Intake
 from sqlalchemy.exc import NoResultFound

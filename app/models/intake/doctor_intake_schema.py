@@ -21,10 +21,7 @@ if t.TYPE_CHECKING:
     from .doctor_intake_example import DoctorIntakeExample
 
 
-class IntakeQuestion(PydanticBaseModel):
-    key: str
-    "unique key for the question"
-
+class IntakeSchemaQuestion(PydanticBaseModel):
     answer_type: t.Literal["FREE_FORM", "MULTIPLE_CHOICE", "MULTIPLE_CHOICE_WITH_OTHER"]
     "type of answer extracted from the intake PDF"
 
@@ -34,11 +31,9 @@ class IntakeQuestion(PydanticBaseModel):
     question: str
     "question to ask the patient"
 
-    description: str
-    "description of the question"
-
-    order: int
-    "order that the question should be asked in"
+    # TODO not currently in use, but could be used in the future for follow-up questions
+    required_details: str
+    "information that we expect to be included as a full answer to the question, based on the uploaded PDF upload"
 
 
 class DoctorIntakeSchema(
@@ -58,7 +53,7 @@ class DoctorIntakeSchema(
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
-    questions: list[IntakeQuestion] = Field(sa_type=JSONB)
+    questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
     "list of questions imported from the intake examples"
 
     examples: list["DoctorIntakeExample"] = Relationship(
