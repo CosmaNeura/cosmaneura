@@ -187,7 +187,7 @@ resource "azurerm_storage_management_policy" "delete_uploads" {
         azurerm_storage_container.uploads.name,
         azurerm_storage_container.example_notes.name,
         azurerm_storage_container.example_intake.name,
-        # NOTE test_uploads is explicitly not deleted!
+        # NOTE test-* is explicitly not deleted!
       ]
     }
 
@@ -225,6 +225,12 @@ resource "azurerm_storage_container" "example_intake" {
 
 resource "azurerm_storage_container" "test_uploads" {
   name                  = "test-uploads"
+  storage_account_id    = azurerm_storage_account.uploads.id
+  container_access_type = "private"
+}
+
+resource "azurerm_storage_container" "test_example_intake" {
+  name                  = "test-example-intake"
   storage_account_id    = azurerm_storage_account.uploads.id
   container_access_type = "private"
 }
