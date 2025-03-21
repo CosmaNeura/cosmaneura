@@ -25,6 +25,12 @@ class IntakeQuestion(PydanticBaseModel):
     key: str
     "unique key for the question"
 
+    answer_type: t.Literal["FREE_FORM", "MULTIPLE_CHOICE", "MULTIPLE_CHOICE_WITH_OTHER"]
+    "type of answer extracted from the intake PDF"
+
+    answer_options: list[str] | None = None
+    "required only for multiple-choice types"
+
     question: str
     "question to ask the patient"
 
