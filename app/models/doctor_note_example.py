@@ -34,7 +34,7 @@ class DoctorNoteExample(
     doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key()
     doctor_note_schema: DoctorNoteSchema = Relationship()
 
-    field_examples: dict[str, str] = Field(sa_type=JSONB())  # type: ignore
+    field_examples: dict[str, str] = Field(sa_type=JSONB)
     "key is field name, value is example content for a specific field"
 
     # TODO the field examples need to be deidentified with surrogates

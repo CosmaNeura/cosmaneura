@@ -14,7 +14,6 @@ from sqlmodel import Field, Relationship
 
 from ..appointment import Appointment
 from ..doctor import Doctor
-from ..patient import Patient
 from .doctor_intake_schema import DoctorIntakeSchema, IntakeQuestion
 
 
@@ -62,14 +61,6 @@ class Intake(
 
     intake_questions_answers: list[IntakeAnswer] = Field(sa_type=JSONB, default={})
     "list of answers to the intake questions"
-
-    intake_followup_questions: list[IntakeQuestion] = Field(sa_type=JSONB, default={})
-    "after the initial intake questions are answered, the LLM is asked to generate followup questions, this is the structured response"
-
-    intake_followup_questions_answers: list[IntakeAnswer] = Field(
-        sa_type=JSONB, default=[]
-    )
-    "answers to the followup questions"
 
     def public_url(self) -> HttpUrl:
         return HttpUrl("https://intake.heydoctor.com/intake/" + str(self.id))
