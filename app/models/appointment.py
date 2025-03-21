@@ -22,6 +22,7 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     patient_id: TypeIDType = Patient.foreign_key()
     patient: Patient = Relationship()
 
+    # TODO should make this an enum
     created_by_system: str | None = Field(default="gui", nullable=True)
     "the system the appointment was created by. API, UI, etc"
 
@@ -30,6 +31,12 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
 
     appointment_date: datetime
     "date of the appointment"
+
+    def is_expired(self) -> bool:
+        """
+        Check if the appointment is expired. An appointment is considered expired if it is in the past.
+        """
+        return self.appointment_date < datetime.now()
 
     appointment_name: str | None = Field(nullable=True, default=None)
     "a couple words about the appointment"

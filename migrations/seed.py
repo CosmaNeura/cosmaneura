@@ -3,7 +3,6 @@
 import json
 from datetime import datetime
 
-import factory
 from factory.alchemy import SQLAlchemyModelFactory
 
 from activemodel import SessionManager
@@ -50,12 +49,12 @@ for factory_subclass in SQLAlchemyModelFactory.__subclasses__():
 
 # to test multiple items in the ui (past browser height) and an empty note state
 for i in range(20):
-    result = AppointmentFactory(
+    result = AppointmentFactory.build(
         doctor_id=doctor.id,
         patient_id=patient.id,
         # appointment_date=datetime.strptime("2025-12-31", "%Y-%m-%d"),
         # appointment_name=f"Test Appointment {i + 1}: Wow AI really went crazy on this title, it's way too long. Will it ever end?",
-    )
+    ).save()
 
 VisitAudioFile.find_or_create_by(
     doctor_id=doctor.id,

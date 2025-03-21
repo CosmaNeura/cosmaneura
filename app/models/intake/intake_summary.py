@@ -1,4 +1,3 @@
-from pydantic import BaseModel as PydanticBaseModel
 
 from activemodel import BaseModel
 from activemodel.mixins import (
@@ -9,11 +8,9 @@ from activemodel.mixins import (
 )
 from activemodel.types import TypeIDType
 from app.models.intake.intake import Intake
-from app.models.patient import Patient
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
-from ..appointment import Appointment
 from ..doctor import Doctor
 
 
