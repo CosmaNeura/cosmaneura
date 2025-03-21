@@ -73,7 +73,9 @@ def pytest_configure(config: Config):
     # config.option.log_file_level = "DEBUG"
 
     config.option.enable_pretty_traceback = True
-    config.option.enable_pretty_traceback_local_stack_only = False
+    config.option.enable_pretty_traceback_local_stack_only = decouple_config(
+        "PRETTY_TRACEBACK_LOCAL_ONLY", default=False, cast=bool
+    )
 
 
 def pytest_sessionstart(session):
