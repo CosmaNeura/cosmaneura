@@ -191,30 +191,15 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
     intake_questions = EXAMPLE_INTAKE_QUESTIONS
 
     # TODO should we use ignore instead and just default to server defaults?
-    intake_questions_answers = []
+    intake_questions_answers = list
 
-    # TODO this is not the best way to do this, but we need a way to customize generation of relationships
     # TODO automatically ignoring all relationships on sqlmodel needs to be upstreamed
     # https://discord.com/channels/919193495116337154/1349832200060665969
 
-    # doctor = Ignore()
-    # appointment = Ignore()
-    # patient = Ignore()
-    # doctor_intake_schema = Ignore()
-
-    # id = Ignore()
-    # doctor_id = Ignore()
-    # appointment_id = Ignore()
-    # patient_id = Ignore()
-    # doctor_intake_schema_id = Ignore()
-
+    # TODO this is not the best way to do this, but we need a way to customize generation of relationships
     # https://discord.com/channels/919193495116337154/1349843948809486398
     @classmethod
-    def build(
-        cls,
-        factory_use_construct: bool | None = None,
-        **kwargs: t.Any,
-    ) -> Intake:
+    def post_create(cls, model):
         """
         We need:
 
@@ -223,28 +208,20 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
 
         all tied to the same doctor
         """
+        doctor_id = model.doctor_id
 
-        doctor = DoctorFactory.build().save()
+        if not doctor_id:
+            doctor_id = DoctorFactory.build().save().id
+            model.doctor_id = doctor_id
 
-        intake_schema = DoctorIntakeSchemaFactory.build(doctor_id=doctor.id).save()
-        appointment = AppointmentFactory.build(doctor_id=doctor.id).save()
+        if not model.appointment_id:
+            appointment = AppointmentFactory.build(doctor_id=doctor_id).save()
+            model.appointment_id = appointment.id
 
-        intake_record = super().build(
-            factory_use_construct=factory_use_construct,
-            doctor_id=doctor.id,
-            appointment_id=appointment.id,
-            doctor_intake_schema_id=intake_schema.id,
-            **kwargs,
-        )
+        intake_schema = DoctorIntakeSchemaFactory.build(doctor_id=doctor_id).save()
+        model.doctor_intake_schema_id = intake_schema.id
 
-        # intake_record.
-        return intake_record
-
-    # @post_generated
-    # @classmethod
-    # def doctor_id(cls):
-    #     breakpoint()
-    #     return None
+        model.save()
 
 
 class DoctorNoteExampleFactory(ActiveModelFactory[DoctorNoteExample]):
