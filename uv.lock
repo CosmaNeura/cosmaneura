@@ -648,7 +648,7 @@ debugging-extras = [
     { name = "pdbr", extras = ["ipython"], git = "https://github.com/iloveitaly/pdbr.git?rev=ipython-9.x" },
     { name = "pipdeptree", specifier = ">=2.25.0" },
     { name = "pre-commit", specifier = ">=4.1.0" },
-    { name = "pretty-traceback", editable = "../../python/pretty-traceback" },
+    { name = "pretty-traceback", git = "https://github.com/iloveitaly/pretty-traceback.git?rev=custom" },
     { name = "pudb", specifier = ">=2024.1.3" },
     { name = "pyfzf", specifier = ">=0.3.1" },
     { name = "pytest-fzf", specifier = ">=0.1.2.post1" },
@@ -664,8 +664,8 @@ dev = [
     { name = "gitignore-parser", specifier = ">=0.1.11" },
     { name = "ipython", specifier = ">=8.28.0" },
     { name = "j2lint", git = "https://github.com/aristanetworks/j2lint.git" },
-    { name = "polyfactory", editable = "../../python/polyfactory" },
-    { name = "pretty-traceback", editable = "../../python/pretty-traceback" },
+    { name = "polyfactory", git = "https://github.com/iloveitaly/polyfactory.git?rev=custom" },
+    { name = "pretty-traceback", git = "https://github.com/iloveitaly/pretty-traceback.git?rev=custom" },
     { name = "pyright", specifier = ">=1.1.386" },
     { name = "pytest", specifier = ">=8.3.3" },
     { name = "pytest-asyncio", specifier = ">=0.24.0" },
@@ -1847,69 +1847,10 @@ wheels = [
 [[package]]
 name = "polyfactory"
 version = "2.19.0"
-source = { editable = "../../python/polyfactory" }
+source = { git = "https://github.com/iloveitaly/polyfactory.git?rev=custom#f6ebf650f94176d84283ac2d505fcf16856aaac6" }
 dependencies = [
     { name = "faker" },
     { name = "typing-extensions" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "attrs", marker = "extra == 'attrs'", specifier = ">=22.2.0" },
-    { name = "attrs", marker = "extra == 'full'" },
-    { name = "beanie", marker = "extra == 'beanie'" },
-    { name = "beanie", marker = "extra == 'full'" },
-    { name = "faker", specifier = ">=5.0.0" },
-    { name = "msgspec", marker = "extra == 'full'" },
-    { name = "msgspec", marker = "extra == 'msgspec'" },
-    { name = "odmantic", marker = "extra == 'full'" },
-    { name = "odmantic", marker = "extra == 'odmantic'", specifier = "<1.0.0" },
-    { name = "pydantic", marker = "extra == 'full'" },
-    { name = "pydantic", extras = ["email"], marker = "extra == 'beanie'" },
-    { name = "pydantic", extras = ["email"], marker = "extra == 'odmantic'" },
-    { name = "pydantic", extras = ["email"], marker = "extra == 'pydantic'", specifier = ">=1.10" },
-    { name = "pymongo", marker = "extra == 'beanie'", specifier = "<4.9" },
-    { name = "sqlalchemy", marker = "extra == 'full'" },
-    { name = "sqlalchemy", marker = "extra == 'sqlalchemy'", specifier = ">=1.4.29" },
-    { name = "typing-extensions", specifier = ">=4.6.0" },
-]
-provides-extras = ["sqlalchemy", "pydantic", "msgspec", "odmantic", "beanie", "attrs", "full"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "aiosqlite", specifier = ">=0.19.0" },
-    { name = "mongomock-motor", specifier = ">=0.0.21" },
-    { name = "polyfactory", extras = ["full"], editable = "../../python/polyfactory" },
-    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=1.4.29" },
-]
-docs = [
-    { name = "auto-pytabs", specifier = ">=0.4.0" },
-    { name = "git-cliff", specifier = ">=2.2.1" },
-    { name = "litestar-sphinx-theme", git = "https://github.com/litestar-org/litestar-sphinx-theme.git?rev=v3" },
-    { name = "sphinx", specifier = ">=7.1.2" },
-    { name = "sphinx-autobuild", specifier = ">=2021.3.14" },
-    { name = "sphinx-copybutton", specifier = ">=0.5.2" },
-    { name = "sphinx-design", specifier = ">=0.5.0" },
-    { name = "sphinx-paramlinks", specifier = ">=0.6.0" },
-    { name = "sphinx-togglebutton", specifier = ">=0.3.2" },
-    { name = "sphinx-toolbox", specifier = ">=3.5.0" },
-    { name = "sphinxcontrib-mermaid", specifier = ">=0.9.2" },
-]
-lint = [
-    { name = "codespell", specifier = ">=2.2.5" },
-    { name = "mypy", specifier = ">=1.5.1" },
-    { name = "pre-commit", specifier = ">=3.4.0" },
-    { name = "pyright", specifier = ">=1.1.327" },
-    { name = "ruff", specifier = ">=0.0.290" },
-    { name = "shellcheck-py", specifier = ">=0.9.0.5" },
-    { name = "sourcery", specifier = ">=1.9.0" },
-]
-test = [
-    { name = "annotated-types", specifier = ">=0.5.0" },
-    { name = "hypothesis", specifier = ">=6.86.2" },
-    { name = "pytest", specifier = ">=7.4.2" },
-    { name = "pytest-asyncio", specifier = ">=0.21.1" },
-    { name = "pytest-cov", specifier = ">=4.1.0" },
 ]
 
 [[package]]
@@ -1948,16 +1889,9 @@ wheels = [
 [[package]]
 name = "pretty-traceback"
 version = "2024.1021"
-source = { editable = "../../python/pretty-traceback" }
+source = { git = "https://github.com/iloveitaly/pretty-traceback.git?rev=custom#b60b2239e0d7d85a537f95be39a56141b71a81a2" }
 dependencies = [
     { name = "colorama" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "colorama", marker = "python_full_version < '3.6'", specifier = ">=0.3.9,<0.4" },
-    { name = "colorama", marker = "python_full_version >= '3.6'", specifier = ">=0.4" },
-    { name = "typing", marker = "python_full_version < '3.5'" },
 ]
 
 [[package]]
