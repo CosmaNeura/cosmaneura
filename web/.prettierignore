@@ -1,5 +1,5 @@
 pnpm-lock.yaml
 openapi.json
 .depcheckrc.yml
-web/app/components/ui
-web/app/components/assistant-ui
+app/components/ui
+app/components/assistant-ui
