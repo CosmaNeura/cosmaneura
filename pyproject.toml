@@ -203,9 +203,9 @@ git = "https://github.com/iloveitaly/pdbr.git"
 rev = "ipython-9.x"
 
 [tool.uv.sources.polyfactory]
-path = "/Users/mike/Projects/python/polyfactory"
-editable = true
+git = "https://github.com/iloveitaly/polyfactory.git"
+rev = "custom"
 
 [tool.uv.sources.pretty_traceback]
-path = "/Users/mike/Projects/python/pretty-traceback"
-editable = true
+git = "https://github.com/iloveitaly/pretty-traceback.git"
+rev = "custom"
