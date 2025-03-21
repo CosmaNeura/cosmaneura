@@ -1,10 +1,55 @@
-
+from fastapi import status
 from fastapi.testclient import TestClient
 from polyfactory import BaseFactory
 
 import app.commands.intake.chat
 
-from tests.factories import EXAMPLE_INTAKE_QUESTIONS, SimpleIncompleteIntakeFactory
+from app.models.intake.intake import Intake
+
+from tests.factories import (
+    EXAMPLE_INTAKE_QUESTIONS,
+    AppointmentFactory,
+    DoctorFactory,
+    SimpleIncompleteIntakeFactory,
+)
+from tests.integration.server import api_app
+from tests.routes.utils import assert_status
+
+
+def test_invalid_intake_uuid(client: TestClient):
+    response = client.get(api_app.url_path_for("get_last_question", intake_id="BAD_ID"))
+
+    assert_status(response, status.HTTP_404_NOT_FOUND)
+
+
+def test_uuid_cannot_be_found(client: TestClient):
+    # TODO so ugly, there has to be a better way...
+    # TypeID(Intake.model_fields["id"].sa_column.type.prefix)
+    fake_id = Intake.model_fields["id"].sa_column.type.generate()
+
+    response = client.get(api_app.url_path_for("get_last_question", intake_id=fake_id))
+    assert_status(response, status.HTTP_404_NOT_FOUND)
+
+
+def test_intake_expired(client: TestClient):
+    doctor = DoctorFactory.build().save()
+    appointment = AppointmentFactory.build(
+        doctor_id=doctor.id,
+        # create an appointment which already ended!
+        appointment_date=AppointmentFactory.__faker__.date_between(
+            start_date="-90d", end_date="today"
+        ),
+    ).save()
+
+    intake = SimpleIncompleteIntakeFactory.build(
+        appointment_id=appointment.id, doctor_id=doctor.id
+    ).save()
+
+    response = client.get(
+        api_app.url_path_for("get_last_question", intake_id=intake.id)
+    )
+
+    assert_status(response, status.HTTP_410_GONE)
 
 
 def test_last_question(client: TestClient):
