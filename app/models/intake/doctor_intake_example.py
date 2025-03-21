@@ -6,8 +6,10 @@ from activemodel.mixins import (
     TypeIDMixin,
 )
 from activemodel.types import TypeIDType
-from app.models.intake.doctor_intake_schema import DoctorIntakeSchema
-from app.models.intake.intake import IntakeQuestion
+from app.models.intake.doctor_intake_schema import (
+    DoctorIntakeSchema,
+    IntakeSchemaQuestion,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship
 
@@ -35,5 +37,5 @@ class DoctorIntakeExample(
     doctor_intake_schema_id: TypeIDType = DoctorIntakeSchema.foreign_key()
     doctor_intake_schema: DoctorIntakeSchema = Relationship()
 
-    questions: list[IntakeQuestion] = Field(sa_type=JSONB)
+    questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
     "list of questions imported from the intake examples"

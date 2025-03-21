@@ -130,6 +130,8 @@ def perform(
         created_by_system="api",
     ).save()
 
+    # app.schema_picker.queue(intake.id)
+
     # For now, just use the first available intake form
     # In the future, this could be more sophisticated based on appointment_type
     # TODO determine which questions to ask based on the appointment type, probably hit an LLM here?
@@ -147,6 +149,8 @@ def perform(
         appointment_id=appointment.id,
         patient_id=patient.id,
         doctor_intake_schema_id=intake_schema.id,
+        # copy intake schema questions into the intake object itself
+        # this is slightly paranoid/unnecessary
         intake_questions=intake_schema.questions,
     ).save()
 

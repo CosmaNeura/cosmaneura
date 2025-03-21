@@ -17,7 +17,10 @@ from app.models.appointment import Appointment
 from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.doctor_intake_schema import DoctorIntakeSchema, IntakeQuestion
+from app.models.intake.doctor_intake_schema import (
+    DoctorIntakeSchema,
+    IntakeSchemaQuestion,
+)
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
@@ -146,19 +149,19 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
 
 
 EXAMPLE_INTAKE_QUESTIONS = [
-    IntakeQuestion(
+    IntakeSchemaQuestion(
         key="medical_history",
         question="Do you have any pre-existing medical conditions?",
         description="Please list any diagnosed conditions or ongoing health issues",
         order=1,
     ),
-    IntakeQuestion(
+    IntakeSchemaQuestion(
         key="current_medications",
         question="What medications are you currently taking?",
         description="Include prescription, over-the-counter medications and supplements",
         order=2,
     ),
-    IntakeQuestion(
+    IntakeSchemaQuestion(
         key="allergies",
         question="Do you have any known allergies?",
         description="List any allergies to medications, foods, or environmental factors",
