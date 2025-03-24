@@ -55,6 +55,9 @@ class Intake(
     appointment_id: TypeIDType = Appointment.foreign_key()
     appointment: Appointment = Relationship()
 
+    external_intake_data: dict[str, str] = Field(sa_type=JSONB)
+    "arbitrary blob of data from an external system representing any other intake data that has been collected"
+
     intake_questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
     "list of questions extracted from the intake schema when this intake URL was generated"
 
