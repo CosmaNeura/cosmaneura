@@ -1,4 +1,3 @@
-
 from fastapi import status
 from fastapi.testclient import TestClient
 
@@ -10,27 +9,26 @@ from app.models.intake.intake import Intake
 from tests.factories import (
     AppointmentRequestFactory,
     DoctorFactory,
-    DoctorIntakeSchemaFactory,
 )
+from tests.routes.utils import assert_status
 
 
-# TODO move to general route assertions
-def assert_status(response, status_code: int = status.HTTP_200_OK):
-    assert response.status_code == status_code, response.json()
+def test_intake_creation(client: TestClient, sync_celery):
+    "test a successful intake creation"
 
-
-def test_intake_creation(client: TestClient):
     # paranoid
     assert Intake.count() == 0
 
+    # TODO should be a option on the factory itself!
     request = AppointmentRequestFactory.build(factory_use_construct=True)
+
+    # paranoid because we are adding this logic to polyfactory
+    assert request.intake_json
 
     # use the same random email as the request
     user = DoctorFactory.build(email=request.doctor_email)
     user.generate_api_key()
     user.save()
-
-    DoctorIntakeSchemaFactory.build(doctor_id=user.id).save()
 
     response = client.post(
         api_app.url_path_for("create_intake"),
@@ -40,6 +38,7 @@ def test_intake_creation(client: TestClient):
 
     assert_status(response)
 
+    # TODO assert more details on url once that is settled
     # successful response should include a url to redirect the user to
     data = response.json()
     assert data["url"].startswith("https://")
@@ -50,6 +49,8 @@ def test_intake_creation(client: TestClient):
     assert intake
     assert intake.doctor_id == user.id
     assert intake.appointment_id
+    assert len(intake.intake_questions) > 0
+    assert len(intake.external_intake_data.keys()) > 0
 
     # TODO we can't do this since the session is temporal, need to fix in activemodel
     # appointment = intake.appointment
@@ -68,6 +69,7 @@ def test_intake_creation(client: TestClient):
 
     assert_status(response)
 
+    # let's make sure new intakes weren't created
     assert Intake.count() == 1
 
 
