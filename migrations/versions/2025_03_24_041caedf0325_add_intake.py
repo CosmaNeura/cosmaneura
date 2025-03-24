@@ -1,8 +1,8 @@
 """add_intake
 
-Revision ID: 444a644e5197
+Revision ID: 041caedf0325
 Revises: ae5a8534033d
-Create Date: 2025-03-21 11:28:55.494394
+Create Date: 2025-03-24 14:33:47.243634
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '444a644e5197'
+revision: str = '041caedf0325'
 down_revision: Union[str, None] = 'ae5a8534033d'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -29,6 +29,7 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     sa.Column('doctor_id', activemodel.types.typeid.TypeIDType(prefix='doctor'), nullable=False),
     sa.Column('appointment_id', activemodel.types.typeid.TypeIDType(prefix='appointment'), nullable=False),
+    sa.Column('external_intake_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='arbitrary blob of data from an external system representing any other intake data that has been collected'),
     sa.Column('intake_questions', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='list of questions extracted from the intake schema when this intake URL was generated'),
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], name=op.f('intake_appointment_id_fkey')),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], name=op.f('intake_doctor_id_fkey')),
