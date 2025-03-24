@@ -1,6 +1,6 @@
 import typing as t
 
-from pydantic import BaseModel as PydanticBaseModel
+from pydantic import BaseModel as PydanticBaseModel, Field
 from pydantic import computed_field
 
 from activemodel import BaseModel
@@ -20,25 +20,22 @@ from ..doctor import Doctor
 if t.TYPE_CHECKING:
     from .doctor_intake_example import DoctorIntakeExample
 
+class IntakeQuestion(BaseModel):
+    key: str = Field(..., description="unique key for the question")
 
-class IntakeQuestion(PydanticBaseModel):
-    key: str
-    "unique key for the question"
+    answer_type: t.Literal["FREE_FORM", "MULTIPLE_CHOICE", "MULTIPLE_CHOICE_WITH_OTHER"] = Field(
+        ..., description="type of answer extracted from the intake PDF"
+    )
 
-    answer_type: t.Literal["FREE_FORM", "MULTIPLE_CHOICE", "MULTIPLE_CHOICE_WITH_OTHER"]
-    "type of answer extracted from the intake PDF"
+    answer_options: t.Optional[list[str]] = Field(
+        default=None, description="required only for multiple-choice types"
+    )
 
-    answer_options: list[str] | None = None
-    "required only for multiple-choice types"
+    question: str = Field(..., description="question to ask the patient")
 
-    question: str
-    "question to ask the patient"
+    description: str = Field(..., description="description of the question")
 
-    description: str
-    "description of the question"
-
-    order: int
-    "order that the question should be asked in"
+    order: int = Field(..., description="order that the question should be asked in")
 
 
 class DoctorIntakeSchema(

@@ -187,8 +187,9 @@ ipdb = { git = "https://github.com/iloveitaly/ipdb", rev = "support-executables"
 ipython-suggestions = { git = "https://github.com/iloveitaly/ipython-suggestions.git", rev = "ipython-9.x" }
 
 [tool.uv.sources.activemodel]
-path = "/Users/mike/Projects/python/activemodel"
-editable = true
+git = "https://github.com/iloveitaly/activemodel.git"
+# path = "/Users/mike/Projects/python/activemodel"
+# editable = true
 
 [tool.uv.sources.djlint]
 git = "https://github.com/iloveitaly/djLint.git"

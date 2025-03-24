@@ -27,8 +27,8 @@ from app.configuration.openai import openai
 
 from activemodel.types import TypeIDType
 from app.models.doctor_note_example import DoctorNoteExample
-from app.models.doctor_intake_file import DoctorIntakeFile
-from app.models.doctor_intake_schema import DoctorIntakeSchema
+from app.models.intake.doctor_intake_file import DoctorIntakeFile
+from app.models.intake.doctor_intake_schema import DoctorIntakeSchema, IntakeQuestion
 
 OPENAI_MODEL = "gpt-4o"
 
@@ -39,8 +39,7 @@ def perform(doctor_intake_file_id: str | TypeID | TypeIDType):
 
     log.info("extracting intake questions", intake_id=doctor_intake_file_id)
 
-    file = DoctorIntakeFile.get(id=doctor_intake_file_id)
-    assert file
+    file = DoctorIntakeFile.one(id=doctor_intake_file_id)
 
     intake_pages = download_intake_file(file)
 
@@ -113,6 +112,10 @@ def download_intake_file(file: DoctorIntakeFile) -> list[str]:
 # Extract the questions from a clinical intake form.
 # `intake_pages` is a list of base64-encoded images of the pages of the form PDF.
 def extract_intake_questions(intake_pages: list[str]) -> list[str]:
+    question_schema = IntakeQuestion.model_json_schema()["properties"]
+    question_schema.pop("key")
+    question_schema.pop("description")
+
     system_prompt = dedent("""
         You will be provided with a series of images of the pages of a PDF.
         The PDF is a clinical intake form created by a doctor.
@@ -139,12 +142,7 @@ def extract_intake_questions(intake_pages: list[str]) -> list[str]:
           - "What is today's date?"
         - Respond only in JSON format with the following SCHEMA:
 
-        interface Question {{
-          content: string;
-          answerType: 'FREE_FORM' | 'MULTIPLE_CHOICE' | 'MULTIPLE_CHOICE_WITH_OTHER';
-          // Only required if answerType is MULTIPLE_CHOICE or MULTIPLE_CHOICE_WITH_OTHER
-          answerOptions?: string[];
-        }}
+        interface Question {json.dumps(question_schema, indent=2)}
 
         <SCHEMA>
         {{
