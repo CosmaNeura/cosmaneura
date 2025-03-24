@@ -6,6 +6,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 
+import app.jobs.intake.schema_picker
+
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
@@ -76,8 +78,9 @@ class AppointmentRequest(BaseModel):
     intake_json: dict | None
     "if available, JSON that is the result of an intake form"
 
-    intake_text: str | None
-    "if JSON is not available, unstructured text that is the result of an intake form"
+    # TODO initial release only needs JSON, could easily support string input in the future
+    # intake_text: str | None
+    # "if JSON is not available, unstructured text that is the result of an intake form"
 
     patient: PatientRequest
     "DOB is required to reduce the risk of duplicates"
@@ -85,8 +88,9 @@ class AppointmentRequest(BaseModel):
     appointment_type: str
     "type of appointment, e.g. 'follow up', 'new patient', etc."
 
-    metadata: dict | None
-    "additional metadata about the appointment"
+    # TODO not required for the initial release, but probably something we should offer in the future
+    # metadata: dict | None
+    # "additional metadata about the appointment"
 
 
 class AppointmentResponse(BaseModel):
@@ -94,7 +98,7 @@ class AppointmentResponse(BaseModel):
     "URL of the intake form for this appointment"
 
 
-# TODO wrap the whole thing in a transaction
+# TODO wrap the whole thing in a DB transaction
 def perform(
     appointment_request: AppointmentRequest, api_doctor: Doctor
 ) -> AppointmentResponse:
@@ -129,28 +133,16 @@ def perform(
         created_by_system="api",
     ).save()
 
-    # app.schema_picker.queue(intake.id)
-
-    # For now, just use the first available intake form
-    # In the future, this could be more sophisticated based on appointment_type
-    # TODO determine which questions to ask based on the appointment type, probably hit an LLM here?
-    #      for now we are just going to pull the first intake question that is available
-    # Get available intake questions for the doctor
-    intake_schema = DoctorIntakeSchema.where(
-        DoctorIntakeSchema.doctor_id == doctor_id
-    ).first()
-
-    assert intake_schema, "Doctor does not have any intake forms"
-
     # we are finally ready to create an intake
     intake = Intake(
         doctor_id=doctor_id,
         appointment_id=appointment.id,
-        patient_id=patient.id,
-        doctor_intake_schema_id=intake_schema.id,
         # copy intake schema questions into the intake object itself
         # this is slightly paranoid/unnecessary
-        intake_questions=intake_schema.questions,
+        intake_questions=None,
+        external_intake_data=appointment_request.intake_json,
     ).save()
+
+    app.jobs.intake.schema_picker.perform.delay(intake.id)
 
     return AppointmentResponse(url=intake.public_url())

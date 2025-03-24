@@ -12,14 +12,7 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
 
     Remember, this is not an authenticated endpoint, so we cannot return any content with PII
     """
-    # Get questions from intake
-    all_questions = intake.intake_questions
-
-    # Find out which questions have been answered already
-    answered_keys = [answer.question_key for answer in intake.intake_questions_answers]
-
-    # Find unanswered questions
-    unanswered_questions = [q for q in all_questions if q.key not in answered_keys]
+    unanswered_questions = [q for q in intake.intake_questions if not q.answer]
 
     if not unanswered_questions:
         # All questions have been answered, we would handle follow-up questions here
@@ -34,21 +27,11 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
         current_question = unanswered_questions[0]
         assert current_question
 
-        # Store the answer
-        answer = IntakeAnswer(
-            question_key=current_question.key,
-            answer=user_chat_input,
-            timestamp=int(time.time()),
-        )
-
-        intake.intake_questions_answers.append(answer)
+        current_question.answer = user_chat_input
+        current_question.answer_timestamp = int(time.time())
         intake.save()
 
-        # Update the list of unanswered questions
-        answered_keys.append(current_question.key)
-        unanswered_questions = [
-            q for q in unanswered_questions if q.key != current_question.key
-        ]
+        unanswered_questions = [q for q in unanswered_questions if not q.answer]
 
     # Return the next question if there are any left
     if unanswered_questions:
