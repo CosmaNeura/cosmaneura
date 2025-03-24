@@ -4,7 +4,7 @@ Remove the alt once factoryboy is refactored out of the codebase
 
 import typing as t
 
-from polyfactory import BaseFactory
+from polyfactory import BaseFactory, NeverNone, Require
 from polyfactory.decorators import post_generated
 from polyfactory.factories.pydantic_factory import ModelFactory
 from polyfactory.field_meta import FieldMeta
@@ -115,10 +115,11 @@ class AppointmentFactory(ActiveModelFactory[Appointment]):
     appointment_name = ModelFactory.__faker__.catch_phrase()
 
 
-# TODO move to factories file
 class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
-    # pick a random ID
-    id = BaseFactory.__faker__.uuid4()
+    # pick a random ID, in any format
+    id = BaseFactory.__faker__.uuid4
+
+    intake_json = NeverNone()
 
     @classmethod
     def doctor_email(cls) -> str:
@@ -194,9 +195,6 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
         if not model.appointment_id:
             appointment = AppointmentFactory.build(doctor_id=doctor_id).save()
             model.appointment_id = appointment.id
-
-        intake_schema = DoctorIntakeSchemaFactory.build(doctor_id=doctor_id).save()
-        model.doctor_intake_schema_id = intake_schema.id
 
         model.save()
 
