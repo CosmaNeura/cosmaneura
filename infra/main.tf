@@ -217,20 +217,8 @@ resource "azurerm_storage_container" "example_notes" {
   container_access_type = "private"
 }
 
-resource "azurerm_storage_container" "example_intake" {
-  name                  = "example-intake"
-  storage_account_id    = azurerm_storage_account.uploads.id
-  container_access_type = "private"
-}
-
 resource "azurerm_storage_container" "test_uploads" {
   name                  = "test-uploads"
-  storage_account_id    = azurerm_storage_account.uploads.id
-  container_access_type = "private"
-}
-
-resource "azurerm_storage_container" "test_example_intake" {
-  name                  = "test-example-intake"
   storage_account_id    = azurerm_storage_account.uploads.id
   container_access_type = "private"
 }
