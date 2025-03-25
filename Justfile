@@ -735,7 +735,12 @@ db_migrate:
 # pick a migration to downgrade to
 [macos]
 db_downgrade:
-	uv run alembic downgrade $(uv run alembic history | fzf --delimiter '[->\s,]+' --bind 'enter:become(echo {2})')
+	alembic_target_id=$(uv run alembic history | fzf --delimiter '[->\s,]+' --bind 'enter:become(echo {2})') && \
+		just _banner_echo "Downgrading Dev Database..." && \
+		uv run alembic downgrade $alembic_target_id && \
+		just _banner_echo "Downgrading Test Database..." && \
+		{{EXECUTE_IN_TEST}} uv run alembic downgrade $alembic_target_id
+
 
 # add seed data to dev and test
 db_seed: db_migrate
