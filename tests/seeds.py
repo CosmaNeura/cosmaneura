@@ -1439,3 +1439,12 @@ def seed_test_data():
                 startTime=1256620
             )]
         )
+
+    Intake.find_or_create_by(
+        doctor_id=doctor.id,
+        appointment_id=appointment.id,
+        external_intake_data = {
+          # TODO get from Greg
+        },
+        intake_questions = [],
+    )
