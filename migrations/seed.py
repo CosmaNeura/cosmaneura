@@ -3,8 +3,6 @@
 import json
 from datetime import datetime
 
-from factory.alchemy import SQLAlchemyModelFactory
-
 from activemodel import SessionManager
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -16,7 +14,7 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
-from tests.factories import AppointmentFactory
+from tests.factories import AppointmentFactory, SimpleIncompleteIntakeFactory
 from tests.seeds import get_clerk_seed_user
 
 _, _, clerk_user = get_clerk_seed_user()
@@ -39,13 +37,6 @@ appointment = Appointment.find_or_create_by(
     appointment_name="Battle Wound",
     appointment_notes_preview="Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength.\nRecommend lots of wine, rest, and some light exercise.",
 )
-
-# TODO should be moved to AM, still fiddling around with what the best pattern is here
-for factory_subclass in SQLAlchemyModelFactory.__subclasses__():
-    factory_subclass._meta.sqlalchemy_session_factory = (
-        SessionManager.get_instance().get_session
-    )
-    factory_subclass._meta.sqlalchemy_session_persistence = "commit"
 
 # to test multiple items in the ui (past browser height) and an empty note state
 for i in range(20):
@@ -185,3 +176,5 @@ AIVisitNote.find_or_create_by(
         "Plan": "Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength.\n\nRecommend lots of wine, rest, and some light exercise.",
     },
 )
+
+SimpleIncompleteIntakeFactory.build(doctor_id=doctor.id).save()
