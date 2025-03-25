@@ -585,6 +585,15 @@ py_playwright_trace remote="":
 		# https://github.com/sharkdp/fd/issues/196
 		uv run playwright show-trace $(fd --no-ignore-vcs . ${PLAYWRIGHT_RESULT_DIRECTORY} -e zip -t f --exec-batch stat -f '%m %N' | sort -n | tail -1 | cut -f2- -d" ")
 
+# download the visual snapshots from the last failed playwright run, useful for updating non-macos screenshot versions
+[macos]
+py_playwright_visual-download:
+	failed_run_id=$(just _gha_last_failed_run_id) && \
+		rm -rf ${PLAYWRIGHT_RESULT_DIRECTORY}/${failed_run_id} && \
+		mkdir -p ${PLAYWRIGHT_RESULT_DIRECTORY}/${failed_run_id} && \
+		gh run --dir ${PLAYWRIGHT_RESULT_DIRECTORY}/${failed_run_id} download $failed_run_id && \
+		cp -R ${PLAYWRIGHT_RESULT_DIRECTORY}/${failed_run_id}/test-results/${PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY}/ ${PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY}/
+
 # record playwright interactions for integration tests and dump them to a file
 [macos]
 [script]
