@@ -77,7 +77,6 @@ def pytest_configure(config: Config):
         "PRETTY_TRACEBACK_LOCAL_ONLY", default=False, cast=bool
     )
 
-
 def pytest_sessionstart(session):
     "only executes once if a test is run, at the beginning of the test suite execution"
 
@@ -105,6 +104,30 @@ def is_integration_test(request: FixtureRequest):
 
     return False
 
+# TODO we should probably wipe the redis DB on start as well?
+@pytest.fixture(scope="function")
+def sync_celery():
+    "run celery tasks synchronously instead of in the background"
+
+    # TODO I have to change the name of celery app... :/
+    from app.celery import celery
+
+    # celery settings to mutate
+    settings = {
+        'task_always_eager': True,
+        'task_eager_propagates': True,
+    }
+
+    # Store original values
+    original_settings = {key: celery.conf.get(key) for key in settings}
+
+    # Set to sync mode
+    celery.conf.update(settings)
+
+    yield
+
+    # Restore original values
+    celery.conf.update(original_settings)
 
 @pytest.fixture(scope="function", autouse=True)
 def datatabase_reset_transaction_for_standard_tests(request):

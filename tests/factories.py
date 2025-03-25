@@ -115,6 +115,12 @@ class AppointmentFactory(ActiveModelFactory[Appointment]):
     appointment_name = ModelFactory.__faker__.catch_phrase()
 
 
+class FutureAppointmentFactory(AppointmentFactory):
+    appointment_date = ModelFactory.__faker__.date_between(
+        start_date="+1d", end_date="+90d"
+    )
+
+
 class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
     # pick a random ID, in any format
     id = BaseFactory.__faker__.uuid4
@@ -126,23 +132,6 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
         # optional by default, but make it required in the factory otherwise the randomness of doctor_{email,id} will cause us issues
         # TODO https://github.com/litestar-org/polyfactory/issues/655
         return cls.__faker__.ascii_email()
-
-
-# class TypeIDTypeFactory(BaseFactory[TypeIDType]):
-#     __set_as_default_factory_for_type__ = True
-
-#     @classmethod
-#     def process_kwargs(cls, **kwargs: t.Any) -> dict[str, t.Any]:
-#         breakpoint()
-
-#     @classmethod
-#     def is_supported_type(cls, value: t.Any) -> t.TypeGuard[type[TypeIDType]]:
-#         """Determine whether the given value is supported by the factory.
-
-#         :param value: An arbitrary value.
-#         :returns: A typeguard
-#         """
-#         return isinstance(value, TypeIDType)
 
 
 EXAMPLE_INTAKE_QUESTIONS = [
@@ -193,7 +182,7 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
             model.doctor_id = doctor_id
 
         if not model.appointment_id:
-            appointment = AppointmentFactory.build(doctor_id=doctor_id).save()
+            appointment = FutureAppointmentFactory.build(doctor_id=doctor_id).save()
             model.appointment_id = appointment.id
 
         model.save()
