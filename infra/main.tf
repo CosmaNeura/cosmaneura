@@ -251,11 +251,6 @@ resource "onepassword_item" "upload_blob_storage" {
       label = "example-notes-container-name"
       value = azurerm_storage_container.example_notes.name
     }
-
-    field {
-      label = "example-intake-container-name"
-      value = azurerm_storage_container.example_intake.name
-    }
   }
 
   tags = var.onepassword_tags
