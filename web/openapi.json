@@ -359,21 +359,20 @@
         }
       }
     },
-    "/internal/v1/intake/get-signed-url": {
-      "post": {
+    "/internal/v1/settings": {
+      "get": {
         "tags": [
           "private"
         ],
-        "summary": "Generate Signed Example Intake Upload Url",
-        "operationId": "generate_signed_example_intake_upload_url",
+        "summary": "Settings Data",
+        "operationId": "settings_data",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "string",
-                  "title": "Response Generate Signed Example Intake Upload Url Internal V1 Intake Get Signed Url Post"
+                  "$ref": "#/components/schemas/SettingsData"
                 }
               }
             }
@@ -384,31 +383,23 @@
             "HTTPBearer": []
           }
         ]
-      }
-    },
-    "/internal/v1/intake/upload-example": {
+      },
       "post": {
         "tags": [
           "private"
         ],
-        "summary": "Upload Example Intake",
-        "operationId": "upload_example_intake",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "file_name",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "File Name"
+        "summary": "Update Settings Data",
+        "operationId": "update_settings_data",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsData"
+              }
             }
-          }
-        ],
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -424,27 +415,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/internal/v1/settings": {
-      "get": {
-        "tags": [
-          "private"
-        ],
-        "summary": "Settings Data",
-        "operationId": "settings_data",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SettingsData"
                 }
               }
             }
@@ -648,6 +618,31 @@
             "type": "string",
             "title": "Patient Id"
           },
+          "created_by_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By System",
+            "description": "the system the appointment was created by. API, UI, etc",
+            "default": "gui"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id",
+            "description": "external ID of the appointment in acuity, or another external system"
+          },
           "appointment_date": {
             "type": "string",
             "format": "date-time",
@@ -688,9 +683,8 @@
         "required": [
           "doctor_id",
           "patient_id",
+          "external_id",
           "appointment_date",
-          "appointment_name",
-          "appointment_notes_preview",
           "patient_name"
         ],
         "title": "Appointment",
@@ -920,13 +914,25 @@
             },
             "type": "array",
             "title": "Notes Schema"
+          },
+          "biography": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Biography"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
           "doctor_id",
-          "notes_schema"
+          "notes_schema",
+          "biography"
         ],
         "title": "SettingsData"
       },
@@ -957,6 +963,27 @@
           "endTime"
         ],
         "title": "TranscriptEntry"
+      },
+      "UpdateSettingsData": {
+        "properties": {
+          "biography": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Biography"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "biography"
+        ],
+        "title": "UpdateSettingsData"
       },
       "UserListResponse": {
         "properties": {
