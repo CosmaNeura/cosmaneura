@@ -14,6 +14,10 @@ from app.configuration.azure import (
 )
 
 
+# TODO implement!
+def perform(): ...
+
+
 # https://github.com/Azure/azure-sdk-for-python/blob/main/sdk/healthdataaiservices/azure-health-deidentification/samples/sample_realtime_deidentification.py
 def deidentify(phi_text: str) -> str:
     text = phi_text.strip()
@@ -42,7 +46,7 @@ def deidentify(phi_text: str) -> str:
     try:
         result = client.deidentify(body)
         assert result.output_text
-    except (Exception) as e:
+    except Exception as e:
         # Note that we're deliberately not logging the text here, as it is PHI.
         log.error("error deidentifying text", error=str(e))
         raise
