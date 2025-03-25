@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import status
 from fastapi.testclient import TestClient
 from polyfactory import BaseFactory
@@ -49,7 +51,47 @@ def test_intake_expired(client: TestClient):
         api_app.url_path_for("get_last_question", intake_id=intake.id)
     )
 
-    assert_status(response, status.HTTP_410_GONE)
+    assert_status(response)
+
+    assert response.json()["status"] == "completed"
+
+
+def test_intake_completed(client: TestClient):
+    intake = SimpleIncompleteIntakeFactory.build().save()
+
+    # fill out all of the intake questions
+    for question in intake.intake_questions:
+        question.answer = BaseFactory.__faker__.sentence()
+        question.answer_timestamp = int(datetime.now().timestamp())
+
+    intake.save()
+
+    assert not intake.is_processing()
+    assert intake.is_complete()
+
+    response = client.get(
+        api_app.url_path_for("get_last_question", intake_id=intake.id)
+    )
+
+    assert_status(response)
+    assert response.json()["status"] == "completed"
+
+
+def test_intake_processing(client: TestClient):
+    intake = SimpleIncompleteIntakeFactory.build().save()
+
+    intake.intake_questions = []
+    intake.save()
+
+    assert intake.is_processing()
+    assert not intake.is_complete()
+
+    response = client.get(
+        api_app.url_path_for("get_last_question", intake_id=intake.id)
+    )
+
+    assert_status(response)
+    assert response.json()["status"] == "in_progress"
 
 
 def test_last_question(client: TestClient):
