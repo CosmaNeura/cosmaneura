@@ -38,7 +38,7 @@ def type_id_provider(cls, field_meta):
 BaseFactory.add_provider(TypeIDType, type_id_provider)
 
 
-class SQLModelFactory[T](ModelFactory):
+class SQLModelFactory[T](ModelFactory[T]):
     """
     Base factory for SQLModel models:
 
@@ -61,7 +61,7 @@ class SQLModelFactory[T](ModelFactory):
         return super().should_set_field_value(field_meta, **kwargs)
 
 
-class ActiveModelFactory[T](SQLModelFactory):
+class ActiveModelFactory[T](SQLModelFactory[T]):
     __is_base_factory__ = True
 
     @classmethod
