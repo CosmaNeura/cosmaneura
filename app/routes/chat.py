@@ -42,19 +42,29 @@ def process_intake(intake_id: str = Path(title="Intake ID")) -> Intake:
 
 
 class ChatResponse(PydanticBaseModel):
-    response: str
+    question: str | None
+    completed: bool
 
 
 @chat_api_app.get("/intake/{intake_id}/question")
 def get_last_question(
-    request: Request, intake_id: Intake = Depends(process_intake)
-) -> AppointmentResponse:
+    request: Request, intake: Intake = Depends(process_intake)
+) -> ChatResponse:
     "when returning to the page, return the last question without accepting any user input"
-    return app.commands.intake.chat.perform(data, None)
+    next_question = app.commands.intake.chat.perform(intake, None)
+
+    return ChatResponse(
+        question=next_question and next_question.question,
+        completed=not next_question,
+    )
 
 
 @chat_api_app.post("/intake/{intake_id}/question")
 def get_next_question(
     request: Request, data: ChatResponse, intake_id: Intake = Depends(process_intake)
-) -> AppointmentResponse:
-    return app.commands.intake.chat.perform(data, None)
+) -> ChatResponse:
+    next_question = app.commands.intake.chat.perform(data, None)
+
+    return ChatResponse(
+        question=next_question and next_question.question, completed=not next_question
+    )
