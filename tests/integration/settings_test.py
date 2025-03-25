@@ -31,3 +31,19 @@ def test_example_note_upload(server, page: Page) -> None:
     assert doctor_note
     assert doctor_note.note_type == "Example Note"
     assert doctor_note.doctor_id == doctor.id
+
+
+def test_biography_update(server, page: Page):
+    doctor = login_as_dev_user(page)
+
+    biography_text = "This is my biography"
+
+    page.get_by_role("button", name="Settings").click()
+    page.get_by_role("textbox", name="Biography").fill(biography_text)
+    page.get_by_role("button", name="Save").click()
+
+    expect(page.get_by_text("Notification Biography Updated")).to_be_visible()
+
+    doctor.refresh()
+
+    assert doctor.biography == biography_text
