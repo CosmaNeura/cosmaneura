@@ -25,10 +25,9 @@ import {
 } from "~/components/ui/form"
 import { Separator } from "~/components/ui/separator"
 import {
-  generateSignedExampleIntakeUploadUrl,
   generateSignedExampleNoteUploadUrl,
   settingsData,
-  uploadExampleIntake,
+  updateSettingsData,
   uploadExampleNote,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
@@ -37,89 +36,73 @@ import { uploadFileToAzure } from "~/lib/azure-upload"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 
-function IntakeUpload() {
-  const [file, setFile] = useState<File | null>(null)
-  const form = useForm({})
+function BiographyInput({ biography }: { biography: string }) {
+  const formSchema = z.object({
+    biography: z.string().min(1, "Biography is required"),
+  })
 
-  async function onSubmit(_values: z.infer<typeof formSchema>) {
-    invariant(
-      file,
-      "file should be required, submit should be impossible without a valid file",
-    )
+  const form = useForm({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      biography: biography || "",
+    },
+  })
 
-    const { data: sasSignature } = await generateSignedExampleIntakeUploadUrl()
-
-    invariant(
-      sasSignature,
-      "sasSignature should always exist unless the server fails",
-    )
-
-    const { stampedFileName } = await uploadFileToAzure(file, sasSignature)
-
-    const _internalResponse = await uploadExampleIntake({
-      query: {
-        file_name: stampedFileName,
-      },
+  async function onSubmit(values: z.infer<typeof formSchema>) {
+    await updateSettingsData({
+      body: values,
     })
 
-    setFile(null)
-
     toast({
-      title: "Upload Complete",
-      description:
-        "Your intake example have been uploaded successfully. They will be processed and displayed here in a couple minutes.",
+      title: "Biography Updated",
+      description: "Your biography has been updated successfully.",
     })
   }
 
   return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)}>
-        <section className="w-1/2 space-y-4">
-          <div className="space-y-2">
-            <h2 className="text-left text-xl font-semibold">Intake</h2>
-            <p className="text-muted-foreground text-left text-sm">
-              Upload the best intake notes that patients have provided you in
-              the past. This will be used to create an intake process for each
-              appointment type.
-            </p>
-          </div>
-          <ImageDropzone onDropFile={setFile}>
-            {!file && (
-              <div className="flex items-center gap-4 font-semibold">
-                <div className="bg-muted rounded-full p-3">
-                  <Upload className="h-4 w-4" />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <p>Upload Example Intake Note</p>
-                  <p className="text-muted-foreground text-xs">
-                    Click here or drag to select an image smaller than 10MB
-                  </p>
-                </div>
-              </div>
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>Biography</h3>
+      <p className="text-muted-foreground text-sm">
+        This is the information that will be used to personalize your
+        experience, including intake. You can change this at any time.
+      </p>
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <FormField
+            control={form.control}
+            name="biography"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Biography</FormLabel>
+                <FormControl>
+                  <textarea
+                    className="w-full rounded-md border p-2"
+                    rows={5}
+                    placeholder="Tell us about yourself..."
+                    {...field}
+                  />
+                </FormControl>
+                <FormDescription>
+                  Share information about your medical practice, expertise, and
+                  approach.
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
             )}
-            {file && (
-              <div className="flex flex-col gap-1 font-semibold">
-                <p>{file.name}</p>
-                <p className="text-muted-foreground text-xs">
-                  Press the upload button below to add the note
-                </p>
-              </div>
-            )}
-          </ImageDropzone>
-
-          <Button disabled={!file} type="submit">
+          />
+          <Button type="submit">
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                Uploading...
+                Saving...
               </>
             ) : (
-              "Upload Example Intake Form"
+              "Save Biography"
             )}
           </Button>
-        </section>
-      </form>
-    </Form>
+        </form>
+      </Form>
+    </section>
   )
 }
 
@@ -183,6 +166,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
     </section>
   )
 }
+
 function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   const formSchema = z.object({
     //   image: z
@@ -349,9 +333,9 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
           <h1 className="text-lg font-semibold">Settings</h1>
         </header>
         <div className="flex flex-col gap-8 p-6">
-          <NoteUpload noteSchemas={loaderData.notes_schema} />
+          <BiographyInput biography={loaderData.biography} />
           <Separator />
-          <IntakeUpload />
+          <NoteUpload noteSchemas={loaderData.notes_schema} />
         </div>
       </SidebarInset>
     </SidebarProvider>
