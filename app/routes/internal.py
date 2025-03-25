@@ -17,7 +17,6 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.doctor_intake_file import DoctorIntakeFile
 from app.models.patient import Patient
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
@@ -181,26 +180,10 @@ def upload_example_note(request: Request, file_name: str, note_type: str) -> Non
     app.jobs.extract.queue(doctor_note_file.id)
 
 
-@internal_api_app.post("/intake/get-signed-url", response_model=str)
-def generate_signed_example_intake_upload_url():
-    return app.commands.uploads.sas.perform(UploadType.EXAMPLE_INTAKE)
-
-
-@internal_api_app.post("/intake/upload-example")
-def upload_example_intake(request: Request, file_name: str) -> None:
-    doctor: Doctor = request.state.doctor
-
-    doctor_note_file = DoctorIntakeFile(
-        doctor_id=doctor.id, azure_file_name=file_name
-    ).save()
-
-    # TODO kick off job
-
-
 class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
-    # TODO add intake schema
+    biography: str | None
 
 
 @internal_api_app.get("/settings")
@@ -211,4 +194,19 @@ def settings_data(request: Request) -> SettingsData:
         DoctorNoteSchema.select().where(DoctorNoteSchema.doctor_id == doctor.id).all()
     )
 
-    return SettingsData(notes_schema=list(notes_schema), doctor_id=str(doctor.id))
+    return SettingsData(
+        notes_schema=list(notes_schema),
+        doctor_id=str(doctor.id),
+        biography=doctor.biography,
+    )
+
+
+class UpdateSettingsData(BaseModel, extra="forbid"):
+    biography: str | None
+
+
+@internal_api_app.post("/settings")
+def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
+    doctor: Doctor = request.state.doctor
+    doctor.biography = data.biography
+    doctor.save()
