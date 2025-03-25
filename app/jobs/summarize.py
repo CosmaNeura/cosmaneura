@@ -1,3 +1,7 @@
+"""
+Summarize a patient visit into a clinical note with the specified schema.
+"""
+
 import json
 import math
 from textwrap import dedent
@@ -106,6 +110,8 @@ def build_structured_prompt(
     action_items = extract_action_items(transcript)
 
     # TODO:
+    #  - add the doctor's bio to the prompt (includes specialties, types of
+    #    patients seen, appointment types, etc)
     #  - give access to intake information
     #  - instruct model that each field should be formatted as markdown
 
