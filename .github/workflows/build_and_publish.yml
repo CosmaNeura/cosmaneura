@@ -73,7 +73,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # playwright traces, screenshots, logs, etc
-          name: result-results
+          name: test-results
           # NOTE if direnv sourcing fails, this var will not be set and it will fail
           path: ${{ env.TEST_RESULTS_DIRECTORY }}
 
