@@ -61,5 +61,20 @@ class Intake(
     intake_questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
     "list of questions extracted from the intake schema when this intake URL was generated"
 
+    def unanswered_questions(self) -> list[IntakeSchemaQuestion]:
+        return [q for q in self.intake_questions if not q.answer]
+
+    def is_processing(self) -> bool:
+        """
+        Is AI still determining what questions to ask?
+        """
+        return len(self.intake_questions) == 0
+
+    def is_complete(self) -> bool:
+        """
+        Check if the intake process is complete. An intake is considered complete if all questions have been answered.
+        """
+        return not self.is_processing() and len(self.unanswered_questions()) == 0
+
     def public_url(self) -> HttpUrl:
         return HttpUrl("https://intake.heydoctor.com/intake/" + str(self.id))
