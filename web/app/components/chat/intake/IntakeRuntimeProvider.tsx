@@ -20,12 +20,16 @@ const convertMessage = (message: IntakeMessage): ThreadMessageLike => {
   }
 }
 
-const backendApi = async (
+// TODO need to manually sync with the backend, should really use a
+interface IntakeResponse {
+  question: string
+  status: string
+}
+
+const getNextQuestion = async (
   apiEndpoint: string,
   messageInput: string,
-): Promise<IntakeMessage> => {
-  return { role: "assistant", content: "Hello, world!" }
-
+): Promise<IntakeResponse> => {
   const response = await fetch(apiEndpoint, {
     method: "POST",
     headers: {
@@ -35,6 +39,13 @@ const backendApi = async (
       answer: messageInput,
     }),
   })
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch response from backend")
+  }
+
+  const intakeResponse = response.json()
+  return intakeResponse
 }
 
 export function IntakeRuntimeProvider({
@@ -66,7 +77,17 @@ export function IntakeRuntimeProvider({
     // waiting for backend response
     setIsRunning(true)
 
-    const assistantMessage = await backendApi(api, latestMessageInput)
+    const questionResponse = await getNextQuestion(api, latestMessageInput)
+
+    if (questionResponse.status === "completed") {
+      setIsFinished(true)
+      return
+    }
+
+    const assistantMessage: IntakeMessage = {
+      role: "assistant",
+      content: questionResponse.question,
+    }
 
     setMessages((currentConversation) => [
       ...currentConversation,

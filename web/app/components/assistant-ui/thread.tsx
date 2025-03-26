@@ -124,7 +124,7 @@ export const Composer: FC = () => {
   );
 };
 
-const ComposerAction: FC = () => {
+export const ComposerAction: FC = () => {
   return (
     <>
       <ThreadPrimitive.If running={false}>
