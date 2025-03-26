@@ -113,7 +113,6 @@ def build_structured_prompt(
     #  - add the doctor's bio to the prompt (includes specialties, types of
     #    patients seen, appointment types, etc)
     #  - give access to intake information
-    #  - instruct model that each field should be formatted as markdown
 
     return dedent(f"""
         You are a medical professional tasked with creating a clinical note based on a transcript from a medical encounter. Your goal is to accurately summarize the key information from the encounter in a structured, professional format.
@@ -153,9 +152,8 @@ def build_structured_prompt(
         6. Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information.
         7. Ensure all action items are included in the relevant sections of the note.
         8. Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient.
-        9. Take a deep breath and think step by step.
-
-        Respond only in JSON format with the schema above.
+        9. Respond only in JSON format with the schema above. JSON property values should be valid markdown.
+        10. Take a deep breath and think step by step.
     """)
 
 
