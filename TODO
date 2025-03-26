@@ -42,20 +42,23 @@
 
 ## v2: intake
 
-- [ ] extract intake schema from uploaded examples
-- [ ] accuity integration
-  - [ ] ingest webhooks to keep schedule up to date
-  - [ ] assoicate schedule items with drs, can hopefully just use email
-- [ ] email/sms to send the user a text
-  - [ ] This may be done via Greg's accuity integration
+- [ ] intake UI
+- [ ] bugs
+  - [ ] visual layout bug
+  - [ ] check field ordering and backfill ordering script
+  - [ ] avoid dup schema types, backfill merging duplicates
+- [ ] MCD hits our API to create an intake link
+  - [ ] use email to associate doctors with patients
+- [x] email/sms to send the user a text
+  - [x] This may be done via Greg's accuity integration
 - [ ] summarization job for the accuity data
-- [ ] unique link gen for each patient, automatically expiring links
+- [x] unique link gen for each patient
+  - [x] expire links automatically based on appointment date
 - [ ] chat experience
-  - [ ] Enter in their DOB to access the page
-  - [ ] frontend hits /questions API to get a dict of questions to ask {id: "question", question: "long question"}
-  - [ ] ui chatbot goes back and forth with a user to ask questions and persist to the DB
-  - [ ] /followup is hit to generate a set of follow-up questions via a model
-  - [ ] go through follow-up questions in the ui
+  - [x] Enter in their DOB to access the page
+    - [x] do we need this? Let's skip it for now.
+  - [x] frontend hits /questions API to get the next question to ask
+  - [x] API responds with a terminal state and the UI marks the intake as complete
 - [ ] summarization job after the intake is complete
 - [ ] present accuity & chat summarization in the ui
 
@@ -77,7 +80,8 @@ user flow
 ## v3: cleanup
 
 - [x] https://github.com/microsoft/azure-container-apps/issues/1307 - looks like a noop
-- [ ] logs are a weird nested JSON data structure coming from azure
+- [x] logs are a weird nested JSON data structure coming from azure
+  - [ ] we enabled json logging in prod, there's not much else that can be done here.
 - [ ] use azure openai api instead of openai
 - [x] admin login_as to clerk hack
   - [x] need role on user and way to switch session
@@ -93,16 +97,31 @@ user flow
 - [ ] cron job to delete transcripts from the database
   - [ ] soft delete, actually remove the transcripts
   - [ ] need to implement this in activemodel
+- [ ] improve celery persistence, use branch with redis storage
 - [ ] alerting
   - [x] create two public endpoints on our web site, e.g. /status and /healthcheck
   - [x] for /status: run a Clerk query to find the last login time, if it’s within the last day, return 200
   - [x] for /healthcheck: return a 200
   - [x] have Sentry assess both pages for uptime
-  - [ ] run a celery job every X minutes and hit sentry, alert if it's not hit
+  - [x] run a celery job every X minutes and hit sentry, alert if it's not hit
+    - [x] clerk sync job is running and tracked on production
 - [ ] job signals / events to monitor what is being processed
   - [ ] hook into celery, alert on job name and other metadata when complete & started
 
 ## Customer Feedback
+
+### Andrea
+
+- [ ] objective
+  - [ ] no patient comments in this section, should only be for the doctor
+- [ ] subjective
+  - [ ] this should be only the patient
+- [ ] assessment area
+  - [ ] she wants it really short, the uploaded note was a very short assessment. Not sure why the resulting note was much longer.
+- [ ] dialog box hidden on smaller screens
+- [ ] let them know that no note examples are uploaded
+- [ ] Placeholder on the note type upload
+- [ ] "No results" make this descriptive of what the user should do here
 
 ### Theresa
 
@@ -119,17 +138,13 @@ user flow
 - [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
   - [ ] is this partially done? What else needs to be done?
 - [ ] eval tooling, would be great to have this too
-- [ ] staging enviroeadnment
+- [ ] staging environment
 - [ ] log everything required for HIPPA
 - [ ] LLM response logging?
 - [ ] cost tracing for AI stuff?
   - [ ] this may be done via Sentry for us
 - [ ] upload types should be defined in the backend and sent to the frontend, right now they are hardcoded in each
   - [ ] related, upload file type limits should be defined in the backend
-
-## User Steps
-
-- [ ] ask them to upload additional example notes to the portal
 
 ## Browser Audio Recording Notes
 
