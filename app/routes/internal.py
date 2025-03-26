@@ -217,7 +217,10 @@ def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
 
     notes_schema = (
-        DoctorNoteSchema.select().where(DoctorNoteSchema.doctor_id == doctor.id).all()
+        DoctorNoteSchema.select().where(
+            (DoctorNoteSchema.doctor_id == doctor.id)
+            & DoctorNoteSchema.deleted_at.is_(None)
+        ).all()
     )
 
     return SettingsData(notes_schema=list(notes_schema), doctor_id=str(doctor.id))

@@ -86,8 +86,10 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
     # Get all note schemas for the doctor and issue summary jobs
     note_schemas = (
         DoctorNoteSchema.select()
-        .where(DoctorNoteSchema.doctor_id == transcript.doctor_id)
-        .all()
+        .where(
+            (DoctorNoteSchema.doctor_id == transcript.doctor_id)
+            & DoctorNoteSchema.deleted_at.is_(None)
+        ).all()
     )
 
     if not note_schemas:
