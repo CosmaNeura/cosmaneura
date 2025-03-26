@@ -37,6 +37,7 @@ class DoctorNoteSchema(
     note_type: str
     "user generated name of the note type"
 
+    # IMPORTANT JSON type is very intentional here, without this we lose ordering
     fields: dict[str, str] = Field(sa_type=JSON)
     "key is field name, value is instruction"
 
