@@ -65,6 +65,9 @@ class Intake(
     intake_questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
     "list of questions extracted from the intake schema when this intake URL was generated"
 
+    summary: str | None = Field(nullable=True, default=None)
+    "AI generated summary of all intake information"
+
     def unanswered_questions(self) -> list[IntakeSchemaQuestion]:
         return [q for q in self.intake_questions if not q.answer]
 
