@@ -5,11 +5,14 @@ import type { Route } from "./+types/intake"
 
 import { IntakeRuntimeProvider } from "~/components/chat/intake/IntakeRuntimeProvider"
 import { IntakeThread } from "~/components/chat/intake/IntakeThread"
+import { requireEnv } from "~/utils/environment"
 
 import { invariant } from "@epic-web/invariant"
 
+const VITE_PYTHON_URL = requireEnv("VITE_PYTHON_URL")
+
 function chatEndpoint(intakeId: string) {
-  return `https://api.cosma.localhost/external/chat/intake/${intakeId}/question`
+  return `${VITE_PYTHON_URL}/external/chat/intake/${intakeId}/question`
 }
 
 export const meta: MetaFunction = () => {
@@ -70,12 +73,12 @@ function IntakeComplete() {
 }
 
 function IntakeProcessing() {
+  // reload every 10s until we are ready
   useEffect(() => {
     const reloadTimer = setTimeout(() => {
       window.location.reload()
     }, 10000)
 
-    // Clean up timer on unmount
     return () => clearTimeout(reloadTimer)
   }, [])
 
@@ -96,7 +99,7 @@ export default function IntakeChat({ loaderData }: Route.ComponentProps) {
 
   invariant(intakeId, "Intake ID is required")
 
-  if (loaderData.status == "complete" || isFinished) {
+  if (loaderData.status == "completed" || isFinished) {
     return <IntakeComplete />
   }
 
