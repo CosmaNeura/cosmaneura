@@ -6,6 +6,8 @@
 
 # dev server
 api.cosma.localhost: 8205
+# separate chat domain, to mirror production
+chat.cosma.localhost: 8205
 # test server
 api-test.cosma.localhost: 8206
 # javascript server, for development only (not testing)
