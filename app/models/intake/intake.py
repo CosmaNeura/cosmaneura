@@ -1,7 +1,11 @@
 import typing as t
 
+from decouple import config
+from furl import furl
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import HttpUrl
+
+from app.constants import INTAKE_CHAT_DOMAIN
 
 from activemodel import BaseModel
 from activemodel.mixins import (
@@ -77,4 +81,12 @@ class Intake(
         return not self.is_processing() and len(self.unanswered_questions()) == 0
 
     def public_url(self) -> HttpUrl:
-        return HttpUrl("https://intake.heydoctor.com/intake/" + str(self.id))
+        chat_url = furl().set(
+            scheme="https",
+            host=INTAKE_CHAT_DOMAIN,
+            # TODO is there a way to auto-gen this in some way?
+            path="chat/intake/" + str(self.id),
+            # args={"some": "args"},
+            # fragment="great job",
+        )
+        return HttpUrl(str(chat_url))
