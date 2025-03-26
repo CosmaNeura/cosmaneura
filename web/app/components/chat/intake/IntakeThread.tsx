@@ -3,13 +3,13 @@ import type { FC } from "react"
 import { MarkdownText } from "~/components/assistant-ui/markdown-text"
 import {
   Composer,
+  ComposerAction,
   EditComposer,
   ThreadScrollToBottom,
-  UserMessage,
 } from "~/components/assistant-ui/thread"
 
 import { IntakeThreadWelcome } from "./IntakeThreadWelcome"
-import { ThreadPrimitive } from "@assistant-ui/react"
+import { ComposerPrimitive, ThreadPrimitive } from "@assistant-ui/react"
 import { MessagePrimitive } from "@assistant-ui/react"
 
 export const IntakeUserMessage: FC = () => {
@@ -29,6 +29,23 @@ export const IntakeAssistantMessage: FC = () => {
         <MessagePrimitive.Content components={{ Text: MarkdownText }} />
       </div>
     </MessagePrimitive.Root>
+  )
+}
+
+export const IntakeComposer: FC = () => {
+  return (
+    <ComposerPrimitive.Root className="focus-within:border-ring/20 flex w-full flex-wrap items-end rounded-lg border bg-inherit px-2.5 shadow-sm transition-colors ease-in">
+      <ComposerPrimitive.Input
+        rows={10}
+        autoFocus
+        placeholder="Include a long and detailed response to the above question.
+
+Use as many lines and add as many details as you'd like!"
+        submitOnEnter={false}
+        className="placeholder:text-muted-foreground max-h-200 flex-grow resize-none border-none bg-transparent px-2 py-4 text-sm outline-none focus:ring-0 disabled:cursor-not-allowed"
+      />
+      <ComposerAction />
+    </ComposerPrimitive.Root>
   )
 }
 
@@ -57,7 +74,7 @@ export const IntakeThread: FC = () => {
 
         <div className="sticky bottom-0 mt-3 flex w-full max-w-[var(--thread-max-width)] flex-col items-center justify-end rounded-t-lg bg-inherit pb-4">
           <ThreadScrollToBottom />
-          <Composer />
+          <IntakeComposer />
         </div>
       </ThreadPrimitive.Viewport>
     </ThreadPrimitive.Root>
