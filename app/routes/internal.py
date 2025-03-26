@@ -190,9 +190,11 @@ class SettingsData(BaseModel, extra="forbid"):
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
 
-    notes_schema = (
-        DoctorNoteSchema.select().where(DoctorNoteSchema.doctor_id == doctor.id).all()
-    )
+    notes_schema = DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor.id,
+        # TODO should move to activemodel filter
+        DoctorNoteSchema.deleted_at is None,
+    ).all()
 
     return SettingsData(
         notes_schema=list(notes_schema),
