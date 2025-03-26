@@ -1,4 +1,4 @@
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { MetaFunction, useParams } from "react-router"
 
 import type { Route } from "./+types/intake"
@@ -6,10 +6,11 @@ import type { Route } from "./+types/intake"
 import { IntakeRuntimeProvider } from "~/components/chat/intake/IntakeRuntimeProvider"
 import { IntakeThread } from "~/components/chat/intake/IntakeThread"
 
-import { AssistantRuntimeProvider, useEdgeRuntime } from "@assistant-ui/react"
+import { invariant } from "@epic-web/invariant"
 
-const API_BASE_URL = "https://api.cosma.localhost"
-const INTAKE_PATH = "/external/chat/intake"
+function chatEndpoint(intakeId: string) {
+  return `https://api.cosma.localhost/external/chat/intake/${intakeId}/question`
+}
 
 export const meta: MetaFunction = () => {
   return [
@@ -32,9 +33,7 @@ export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
     throw new Response("Intake ID is required", { status: 400 })
   }
 
-  const response = await fetch(
-    `${API_BASE_URL}${INTAKE_PATH}/${intakeId}/question`,
-  )
+  const response = await fetch(chatEndpoint(intakeId))
 
   if (!response.ok) {
     throw new Response(`Failed to load intake data: ${response.statusText}`, {
@@ -45,12 +44,28 @@ export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
   return await response.json()
 }
 
+function IntakeLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="h-full">
+      <div className="bg-background box-border flex h-full flex-col overflow-hidden">
+        <div className="flex h-full flex-col items-center overflow-y-scroll scroll-smooth bg-inherit px-4 pt-8">
+          <div className="flex w-full flex-grow flex-col">
+            <div className="flex w-full flex-grow flex-col items-center justify-center">
+              {children}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function IntakeComplete() {
   return (
-    <div className="flex h-full items-center justify-center">
-      <h1 className="text-2xl font-bold">Intake Complete</h1>
-      <p className="mt-4 text-lg">Thank you for your responses!</p>
-    </div>
+    <IntakeLayout>
+      <p className="mt-4 text-lg font-medium">Intake Complete</p>
+      <p className="mt-4">Thank you for your responses! </p>
+    </IntakeLayout>
   )
 }
 
@@ -65,35 +80,23 @@ function IntakeProcessing() {
   }, [])
 
   return (
-    <div className="flex h-full items-center justify-center">
+    <IntakeLayout>
       <h1 className="text-2xl font-bold">Loading...</h1>
       <p className="mt-4 text-lg">Please wait while we load your intake.</p>
-    </div>
+    </IntakeLayout>
   )
 }
 
 export default function IntakeChat({ loaderData }: Route.ComponentProps) {
+  // hook to disable the page once intake is finished
+  const [isFinished, setIsFinished] = useState(false)
+
   const params = useParams()
   const intakeId = params.id
 
-  const runtime = useEdgeRuntime({
-    api: `${API_BASE_URL}${INTAKE_PATH}/${intakeId}/question`,
-    initialMessages: [
-      {
-        role: "assistant",
-        content: loaderData.question,
-      },
-    ],
+  invariant(intakeId, "Intake ID is required")
 
-    onResponse(response) {
-      console.log("Response:", response)
-    },
-    onError: (error) => {
-      console.error("Error:", error)
-    },
-  })
-
-  if (loaderData.status == "complete") {
+  if (loaderData.status == "complete" || isFinished) {
     return <IntakeComplete />
   }
 
@@ -110,17 +113,18 @@ export default function IntakeChat({ loaderData }: Route.ComponentProps) {
 
   return (
     <div className="h-full">
-      <IntakeRuntimeProvider>
+      <IntakeRuntimeProvider
+        setIsFinished={setIsFinished}
+        api={chatEndpoint(intakeId)}
+        initialMessages={[
+          {
+            role: "assistant",
+            content: loaderData.question,
+          },
+        ]}
+      >
         <IntakeThread />
       </IntakeRuntimeProvider>
-    </div>
-  )
-
-  return (
-    <div className="h-full">
-      <AssistantRuntimeProvider runtime={runtime}>
-        <IntakeThread />
-      </AssistantRuntimeProvider>
     </div>
   )
 }

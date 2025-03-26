@@ -8,46 +8,72 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react"
 
-type MyMessage = {
+type IntakeMessage = {
   role: "user" | "assistant"
   content: string
 }
 
-const convertMessage = (message: MyMessage): ThreadMessageLike => {
+const convertMessage = (message: IntakeMessage): ThreadMessageLike => {
   return {
     role: message.role,
     content: [{ type: "text", text: message.content }],
   }
 }
 
-const backendApi = async (input: string): Promise<MyMessage> => {
+const backendApi = async (
+  apiEndpoint: string,
+  messageInput: string,
+): Promise<IntakeMessage> => {
   return { role: "assistant", content: "Hello, world!" }
+
+  const response = await fetch(apiEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      answer: messageInput,
+    }),
+  })
 }
 
 export function IntakeRuntimeProvider({
+  api,
+  initialMessages,
   children,
+  setIsFinished,
 }: Readonly<{
+  api: string
+  initialMessages: IntakeMessage[]
   children: ReactNode
+  setIsFinished: (isFinished: boolean) => void
 }>) {
   const [isRunning, setIsRunning] = useState(false)
-  const [messages, setMessages] = useState<MyMessage[]>([])
+  const [messages, setMessages] = useState<IntakeMessage[]>(initialMessages)
 
   const onNew = async (message: AppendMessage) => {
-    if (message.content[0]?.type !== "text")
+    if (message.content[0]?.type !== "text") {
       throw new Error("Only text messages are supported")
+    }
 
-    const input = message.content[0].text
+    const latestMessageInput = message.content[0].text
+
     setMessages((currentConversation) => [
       ...currentConversation,
-      { role: "user", content: input },
+      { role: "user", content: latestMessageInput },
     ])
 
+    // waiting for backend response
     setIsRunning(true)
-    const assistantMessage = await backendApi(input)
+
+    const assistantMessage = await backendApi(api, latestMessageInput)
+
     setMessages((currentConversation) => [
       ...currentConversation,
       assistantMessage,
     ])
+
+    // finished consuming backend response
     setIsRunning(false)
   }
 
