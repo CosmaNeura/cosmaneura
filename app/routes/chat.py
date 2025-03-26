@@ -55,6 +55,12 @@ def process_intake(intake_id: str = Path(title="Intake ID")) -> Intake | JSONRes
     return intake
 
 
+class ChatInput(PydanticBaseModel):
+    answer: str
+    # TODO do we need the question to be posted back? Would probably provide another layer of validation?
+    # question: str
+
+
 class ChatResponse(PydanticBaseModel):
     question: str | None
     status: Literal["processing", "completed", "in_progress"]
@@ -73,9 +79,9 @@ def get_last_question(
 
 @chat_api_app.post("/intake/{intake_id}/question")
 def get_next_question(
-    request: Request, data: ChatResponse, intake: Intake = Depends(process_intake)
+    request: Request, data: ChatInput, intake: Intake = Depends(process_intake)
 ) -> ChatResponse:
-    next_question = app.commands.intake.chat.perform(intake, None)
+    next_question = app.commands.intake.chat.perform(intake, data.answer)
 
     return ChatResponse(
         question=next_question and next_question.question,
