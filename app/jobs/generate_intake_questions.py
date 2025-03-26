@@ -62,8 +62,10 @@ def generate_prompt(intake: Intake) -> str:
         AIVisitNote.select()
         .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
         .join(Patient, Appointment.patient_id == Patient.id)
-        .where(AIVisitNote.doctor_id == doctor.id and Patient.id == patient.id)
-        .order_by(Appointment.updated_at.desc())
+        .where(
+            (AIVisitNote.doctor_id == doctor.id)
+            & (Patient.id == patient.id)
+        ).order_by(Appointment.updated_at.desc())
         .limit(1)
         .first()
     )
