@@ -217,7 +217,7 @@ def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
 
     notes_schema = (
-        DoctorNoteSchema.select().where(
+        DoctorNoteSchema.where(
             (DoctorNoteSchema.doctor_id == doctor.id)
             & DoctorNoteSchema.deleted_at.is_(None)
         ).all()
