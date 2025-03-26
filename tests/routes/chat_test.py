@@ -132,3 +132,43 @@ def test_next_question():
     assert len(answered_questions) == 1
     assert answered_questions[0].order == EXAMPLE_INTAKE_QUESTIONS[0].order
     assert answered_questions[0].answer == fake_response
+
+
+def test_terminal_question(client: TestClient):
+    "can we properly exhaust the questions?"
+
+    intake = SimpleIncompleteIntakeFactory.build().save()
+
+    count = 0
+    limit = len(intake.intake_questions)
+    last_unanswered_count = 0
+
+    while True:
+        assert count < limit
+
+        # hit the api with a new answer
+        response = client.post(
+            api_app.url_path_for("get_next_question", intake_id=intake.id),
+            json={"answer": BaseFactory.__faker__.sentence()},
+        )
+
+        assert_status(response)
+
+        intake.refresh()
+
+        assert last_unanswered_count != len(intake.unanswered_questions())
+
+        count += 1
+        last_unanswered_count = len(intake.unanswered_questions())
+
+        assert_status(response)
+        response = response.json()
+
+        if count != limit:
+            assert response["status"] == "processing"
+            assert response["question"]
+        else:
+            assert response["status"] == "completed"
+            assert not response["question"]
+            assert len(intake.unanswered_questions()) == 0
+            break
