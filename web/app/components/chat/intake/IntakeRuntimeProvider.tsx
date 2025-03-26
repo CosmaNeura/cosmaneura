@@ -8,6 +8,11 @@ import {
   useExternalStoreRuntime,
 } from "@assistant-ui/react"
 
+type MyMessage = {
+  role: "user" | "assistant"
+  content: string
+}
+
 const convertMessage = (message: MyMessage): ThreadMessageLike => {
   return {
     role: message.role,
@@ -15,7 +20,11 @@ const convertMessage = (message: MyMessage): ThreadMessageLike => {
   }
 }
 
-export function MyRuntimeProvider({
+const backendApi = async (input: string): Promise<MyMessage> => {
+  return { role: "assistant", content: "Hello, world!" }
+}
+
+export function IntakeRuntimeProvider({
   children,
 }: Readonly<{
   children: ReactNode

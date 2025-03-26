@@ -1,8 +1,9 @@
 import { useEffect } from "react"
-import { useParams } from "react-router"
+import { MetaFunction, useParams } from "react-router"
 
 import type { Route } from "./+types/intake"
 
+import { IntakeRuntimeProvider } from "~/components/chat/intake/IntakeRuntimeProvider"
 import { IntakeThread } from "~/components/chat/intake/IntakeThread"
 
 import { AssistantRuntimeProvider, useEdgeRuntime } from "@assistant-ui/react"
@@ -100,12 +101,20 @@ export default function IntakeChat({ loaderData }: Route.ComponentProps) {
     return <IntakeProcessing />
   }
 
-  // TODO transform API shape to what assistant-ui expects
+  // TODO transform API shape to what assistant-ui expects https://www.assistant-ui.com/docs/runtimes/custom/external-store and https://discord.com/channels/1251324227668283443/1251324228171726889/1354153714029563935
   // TODO mark as complete depending on the response
   // TODO handle errors from chat API
   // TODO make sure UI disables while loading
   // TODO test slow connection
   // TODO integration tests
+
+  return (
+    <div className="h-full">
+      <IntakeRuntimeProvider>
+        <IntakeThread />
+      </IntakeRuntimeProvider>
+    </div>
+  )
 
   return (
     <div className="h-full">
