@@ -1,3 +1,5 @@
+from decouple import config
+
 CLERK_DEV_USER_PASSWORD = "clerk-development-123"
 
 CLERK_QA_USER_EMAIL = "qa+clerk_test@example.com"
@@ -18,3 +20,5 @@ CLERK_ALL_USERS_TO_PRESERVE = [
     CLERK_QA_USER_EMAIL,
     CLERK_DEV_SEED_EMAIL,
 ]
+
+PYTHON_TEST_SERVER_HOST = config("PYTHON_TEST_SERVER_HOST", cast=str)
