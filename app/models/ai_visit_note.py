@@ -13,7 +13,12 @@ from .doctor import Doctor
 
 
 class AIVisitNote(
-    BaseModel, PydanticJSONMixin, TimestampsMixin, TypeIDMixin("visit_note"), table=True
+    BaseModel,
+    PydanticJSONMixin,
+    TimestampsMixin,
+    TypeIDMixin("visit_note"),
+    table=True,
+    # TODO add deleted add mixin
 ):
     """
     This represents the note summary for a single specific note schema. A given appointment will have multiple
