@@ -52,10 +52,67 @@ def days_since(past_dt: datetime) -> int:
     today = datetime.today().date()
     return (today - past_date).days
 
-def generate_prompt(intake: Intake) -> str:
+def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
+    return dedent("""
+        You are a doctor that is about to see a patient. Here is your bio:
+
+        <BIO>
+        {doctor.biography}
+        </BIO>
+
+        I'm going to give you the INTAKE information for the patient. It is structured as JSON.
+
+        <INTAKE>
+        {json.dumps(intake.external_intake_data, indent=2)}
+        </INTAKE>
+
+        # Here are your instructions
+
+        1. Extract the appointment type and (if available) its category from the INTAKE.
+
+        2. Extract the patient's main reason for the visit from the INTAKE.
+        - If not present, say "Not provided"
+
+        3. Extract any additional information from INTAKE that is relevant to your preparation for this appointment.
+        - Keep in mind the type of doctor you are (see your BIO), the appointment type, and the patient's main reason for the visit.
+        - Examples of relevant information include: patient vitals, measurements, past medical history, family history, etc.
+        - Do NOT extract administrative information like name, DOB, insurance, doctor name, appointment date, addresses, or payment info.
+        - Do NOT comment on information that is missing or not present, only on what information is there.
+
+        4. Respond only in JSON with the following SCHEMA.
+
+        <SCHEMA>
+        {{
+          appointment_type: string
+          appointment_category: string | null
+          reason: string // The patient's main reason for the visit
+          additional_info: string // Additional info relevant to the doctor's preparation
+        }}
+        </SCHEMA>
+    """)
+
+def extract_intake_data(intake: Intake, doctor: Doctor) -> dict[str, str]:
+    prompt = extraction_prompt(intake, doctor)
+    response = openai.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "system", "content": prompt}],
+        temperature=0,
+        top_p=0.1,
+    )
+    raw_intake_data = response.choices[0].message.content
+    assert raw_intake_data
+    intake_data = json.loads(raw_intake_data)
+
+    print(intake_data)
+
+    return intake_data
+
+def generate_questions_prompt(intake: Intake) -> str:
     doctor = Doctor.one(id=intake.doctor_id)
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
+
+   intake_data = extract_intake_data(intake, doctor)
 
     # TODO This should be time-limited, e.g. don't pull a note from 5 years ago.
     last_note = (
@@ -97,7 +154,7 @@ def generate_prompt(intake: Intake) -> str:
     The patient has filled out a preliminary intake form with the following information:
 
     <INTAKE>
-    {json.dumps(intake.external_intake_data, indent=2)}
+    {json.dumps(intake_data, indent=2)}
     </INTAKE>
 
     {last_visit_section}
@@ -151,7 +208,7 @@ def generate_prompt(intake: Intake) -> str:
     """)
 
 def generate_intake_questions(intake: Intake) -> list[IntakeSchemaQuestion]:
-    prompt = generate_prompt(intake)
+    prompt = generate_questions_prompt(intake)
     response = openai.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "system", "content": prompt}],
@@ -172,5 +229,7 @@ def generate_intake_questions(intake: Intake) -> list[IntakeSchemaQuestion]:
         )
         for q in parsed_questions["questions"]
     ]
+
+    print(intake_questions)
 
     return intake_questions
