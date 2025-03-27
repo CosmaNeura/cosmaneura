@@ -21,6 +21,19 @@ from sqlmodel import Field, Relationship
 from ..appointment import Appointment
 from ..doctor import Doctor
 
+class ExternalIntakeData(PydanticBaseModel):
+    reason: str
+    "The patient's main reason for the visit. AKA chief complaint."
+
+    appointment_type: str
+    "Type of appointment"
+
+    additional_info: str
+    "Additional info relevant to the doctor's preparation"
+
+    appointment_category: str | None = None
+    "Category of appointment, if available"
+
 
 class IntakeSchemaQuestion(PydanticBaseModel):
     order: int
@@ -61,6 +74,9 @@ class Intake(
 
     external_intake_data: dict[str, str] = Field(sa_type=JSONB)
     "arbitrary blob of data from an external system representing any other intake data that has been collected"
+
+    cleaned_external_intake_data: ExternalIntakeData | None = Field(nullable=True, default=None, sa_type=JSONB)
+    "data from an external intake system that has been cleaned and normalized"
 
     intake_questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
     "list of questions extracted from the intake schema when this intake URL was generated"
