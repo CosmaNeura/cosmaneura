@@ -1476,14 +1476,14 @@ def seed_test_data():
             "category": " Virtual Dermatology",
             "duration": "30",
             "calendar": "Arin Marzen, MD, FAAD",
-            "calendarID": 0449376,
+            "calendarID": 449376,
             "certificate": None,
-            "confirmationPage": "https//https:\\/rxz.gdkyxmmqcjnunnuz.jic\/ievfzmte.cke?owner=marveloustree95&action=appt&id%5B%5D=cngq6xz19k63j3q70p41450553vrk786",
-            "confirmationPagePaymentLink": "https//https:\/\let.wxvqthfieczczaud.com\/yixirnkh.cm?owner=21735274&action=appt&id%5B%5D=cngq6xz19k63j3q70p41450553vrk786&paymentLink=true#payment",
-            "location": "https//https:\/\/tyfysqbcnjpibivk.qqr\zoom\unngoe.php?m=66k54a74y3db25np8e7q66g94570m7fy",
+            "confirmationPage": 'https://rxz.gdkyxmmqcjnunnuz.jic/ievfzmte.cke?owner=marveloustree95&action=appt&id%5B%5D=cngq6xz19k63j3q70p41450553vrk786',
+            "confirmationPagePaymentLink": 'https://let.wxvqthfieczczaud.com/yixirnkh.cm?owner=21735274&action=appt&id%5B%5D=cngq6xz19k63j3q70p41450553vrk786&paymentLink=true#payment',
+            "location": 'https://tyfysqbcnjpibivk.zoom/ngoe.php?m=66k54a74y3db25np8e7q66g94570m7fy',
             "notes": "",
-            "timezone": "America\/Garfield_Virginia",
-            "calendarTimezone": "America\/New_Virginia",
+            "timezone": "America/Garfield_Virginia",
+            "calendarTimezone": "America/New_Virginia",
             "canceled": False,
             "canClientCancel": False,
             "canClientReschedule": False,
@@ -1496,7 +1496,7 @@ def seed_test_data():
             ],
             "forms": [
                 {
-                    "id": 0157311,
+                    "id": 157311,
                     "name": "Licensed States",
                     "values": [
                         {
@@ -1514,8 +1514,8 @@ def seed_test_data():
                         {
                             "id": 3690880209,
                             "fieldID": 3932905,
-                            "value": "5\/25\/2005",
-                            "name": "Patient Date of Birth (MM\/DD\/YYYY)"
+                            "value": "5/25/2005",
+                            "name": "Patient Date of Birth (MM/DD/YYYY)"
                         },
                         {
                             "id": 3299805239,
@@ -1542,7 +1542,7 @@ def seed_test_data():
                     "name": "Billing Address (Required)",
                     "values": [
                         {
-                            "id": 0782623445,
+                            "id": 782623445,
                             "fieldID": 7825230,
                             "value": "8316 Goettingen Dr",
                             "name": "Address"
@@ -1593,11 +1593,11 @@ def seed_test_data():
                             "id": 5620586674,
                             "fieldID": 57383411,
                             "value": "yes",
-                            "name": "I have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\xkieixkehpbveuap.com\/nnmccvy-payment\/"
+                            "name": "I have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\""
                         },
                         {
                                 "id": 8144580206,
-                                "fieldID": 00467178,
+                                "fieldID": 467178,
                                 "value": "\u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.",
                                 "name": "How do you wish to pay for your visit?"
                                 },
@@ -1615,7 +1615,7 @@ def seed_test_data():
                         "values": [
                             {
                                 "id": 5103380584,
-                                "fieldID": 07140935,
+                                "fieldID": 7140935,
                                 "value": "yes",
                                 "name": "I agree with these requirements, which apply if I pay with insurance."
                                 }
@@ -1646,7 +1646,7 @@ def seed_test_data():
                             {
                                 "id": 8233623623,
                                 "fieldID": 69079921,
-                                "value": "5\/25\/2005",
+                                "value": "5/25/2005",
                                 "name": "Policy Holder's Date of Birth (required)"
                                 }
                             ]
@@ -1675,7 +1675,7 @@ def seed_test_data():
                         "values": [
                             {
                                 "id": 4094861333,
-                                "fieldID": 02022880,
+                                "fieldID": 2022880,
                                 "value": "yes",
                                 "name": "I understand that I must enter a credit card on file in the intake forms which will be emailed to me. "
                                 }

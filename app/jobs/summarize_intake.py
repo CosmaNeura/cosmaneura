@@ -4,6 +4,7 @@ Summarize all the intake data for a given appointment.
 
 from typeid import TypeID
 from textwrap import dedent
+from datetime import datetime
 
 from app.celery import celery
 from app import log

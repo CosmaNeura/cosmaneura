@@ -53,7 +53,7 @@ def days_since(past_dt: datetime) -> int:
     return (today - past_date).days
 
 def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
-    return dedent("""
+    return dedent(f"""
         You are a doctor that is about to see a patient. Here is your bio:
 
         <BIO>
@@ -78,6 +78,7 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
         - Examples of relevant information include: patient vitals, measurements, past medical history, family history, etc.
         - Do NOT extract administrative information like name, DOB, insurance, doctor name, appointment date, addresses, or payment info.
         - Do NOT comment on information that is missing or not present, only on what information is there.
+        - Do NOT include any information already extracted in other steps.
 
         4. Respond only in JSON with the following SCHEMA.
 
@@ -96,6 +97,7 @@ def extract_intake_data(intake: Intake, doctor: Doctor) -> dict[str, str]:
     response = openai.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "system", "content": prompt}],
+        response_format={"type": "json_object"},
         temperature=0,
         top_p=0.1,
     )
@@ -107,12 +109,12 @@ def extract_intake_data(intake: Intake, doctor: Doctor) -> dict[str, str]:
 
     return intake_data
 
-def generate_questions_prompt(intake: Intake) -> str:
+def generate_questions_prompt(intake: Intake) -> str|None:
     doctor = Doctor.one(id=intake.doctor_id)
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
-   intake_data = extract_intake_data(intake, doctor)
+    intake_data = extract_intake_data(intake, doctor)
 
     # TODO This should be time-limited, e.g. don't pull a note from 5 years ago.
     last_note = (
@@ -143,7 +145,7 @@ def generate_questions_prompt(intake: Intake) -> str:
     # JSON mode limits a model's reasoning capabilities otherwise.
     # See https://arxiv.org/html/2408.02442v3.
 
-    return dedent("""
+    return dedent(f"""
     You are a doctor with the following bio:
 
     <BIO>
@@ -212,6 +214,7 @@ def generate_intake_questions(intake: Intake) -> list[IntakeSchemaQuestion]:
     response = openai.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "system", "content": prompt}],
+        response_format={"type": "json_object"},
         temperature=0,
         top_p=0.1,
     )
