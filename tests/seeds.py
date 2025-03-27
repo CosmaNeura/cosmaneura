@@ -1,6 +1,7 @@
 # seed fresh test databases with data
 
 from datetime import datetime
+from textwrap import dedent
 
 import pytz
 
@@ -24,6 +25,12 @@ def seed_test_data():
 
     username, password, user = get_clerk_seed_user()
     doctor = Doctor.find_or_create_by(clerk_id=user.id)
+
+    if not doctor.biography:
+        doctor.biography = dedent("""
+        Dr. Jensen sees patients of all ages for holistic primary care and convenient care. She has a special interest in the care of children and adults with developmental disabilities, and completing training as a Creighton FertilityCare Medical Consultant.
+        """)
+        doctor.save()
 
     patient = Patient.find_or_create_by(
         doctor_id=doctor.id,
@@ -1444,8 +1451,238 @@ def seed_test_data():
     Intake.find_or_create_by(
         doctor_id=doctor.id,
         appointment_id=appointment.id,
+        # This intake data was given to us by MyCatholicDoctor and then run
+        # through Azure's de-identification API.
         external_intake_data = {
-          # TODO get from Greg
+            "id": 9983118540,
+            "firstName": "Coulter",
+            "lastName": "Blair",
+            "phone": "2749792512",
+            "email": "[url]@pexjzuw.wxw",
+            "date": "December 17, 2024",
+            "time": "10:30am",
+            "endTime": "11:00am",
+            "dateCreated": "November 19, 2024",
+            "datetimeCreated": "2/17/2024:02:41-0600",
+            "datetime": "2/17/2024:30:00-0500",
+            "price": "0.00",
+            "priceSold": "0.00",
+            "paid": "no",
+            "amountPaid": "0.00",
+            "type": "Dermatology \u2502 Existing Patient",
+            "appointmentTypeID": 96546045,
+            "classID": None,
+            "addonIDs": [],
+            "category": " Virtual Dermatology",
+            "duration": "30",
+            "calendar": "Arin Marzen, MD, FAAD",
+            "calendarID": 0449376,
+            "certificate": None,
+            "confirmationPage": "https//https:\\/rxz.gdkyxmmqcjnunnuz.jic\/ievfzmte.cke?owner=marveloustree95&action=appt&id%5B%5D=cngq6xz19k63j3q70p41450553vrk786",
+            "confirmationPagePaymentLink": "https//https:\/\let.wxvqthfieczczaud.com\/yixirnkh.cm?owner=21735274&action=appt&id%5B%5D=cngq6xz19k63j3q70p41450553vrk786&paymentLink=true#payment",
+            "location": "https//https:\/\/tyfysqbcnjpibivk.qqr\zoom\unngoe.php?m=66k54a74y3db25np8e7q66g94570m7fy",
+            "notes": "",
+            "timezone": "America\/Garfield_Virginia",
+            "calendarTimezone": "America\/New_Virginia",
+            "canceled": False,
+            "canClientCancel": False,
+            "canClientReschedule": False,
+            "labels": [
+                {
+                    "id": 54105253,
+                    "name": "\u2713 \u2713",
+                    "color": "pink"
+                }
+            ],
+            "forms": [
+                {
+                    "id": 0157311,
+                    "name": "Licensed States",
+                    "values": [
+                        {
+                            "id": 2990355721,
+                            "fieldID": 66242589,
+                            "value": "Chester River Health System - CT",
+                            "name": "Please confirm the state you will be located in at the time of the appointment:"
+                        }
+                    ]
+                },
+                {
+                    "id": 8869662,
+                    "name": "Patient DOB, Gender, Height, & Weight",
+                    "values": [
+                        {
+                            "id": 3690880209,
+                            "fieldID": 3932905,
+                            "value": "5\/25\/2005",
+                            "name": "Patient Date of Birth (MM\/DD\/YYYY)"
+                        },
+                        {
+                            "id": 3299805239,
+                            "fieldID": 5764402,
+                            "value": "Male",
+                            "name": "Patient Sex"
+                        },
+                        {
+                            "id": 1154578305,
+                            "fieldID": 80728979,
+                            "value": "6\u20190\u201d",
+                            "name": "Patient Height"
+                        },
+                        {
+                            "id": 6692009275,
+                            "fieldID": 74650362,
+                            "value": "155",
+                            "name": "Patient Weight"
+                        }
+                    ]
+                },
+                {
+                    "id": 9552493,
+                    "name": "Billing Address (Required)",
+                    "values": [
+                        {
+                            "id": 0782623445,
+                            "fieldID": 7825230,
+                            "value": "8316 Goettingen Dr",
+                            "name": "Address"
+                        },
+                        {
+                            "id": 3251618631,
+                            "fieldID": 6487034,
+                            "value": "",
+                            "name": "Address 2"
+                        },
+                        {
+                            "id": 2133365354,
+                            "fieldID": 3914477,
+                            "value": "Vidrine",
+                            "name": "City"
+                        },
+                        {
+                            "id": 1057390470,
+                            "fieldID": 4596312,
+                            "value": "Mackenzie Hospital",
+                            "name": "State"
+                        },
+                        {
+                            "id": 9616298884,
+                            "fieldID": 7955096,
+                            "value": "25173",
+                            "name": "Zip"
+                        },
+                        {
+                            "id": 8372912642,
+                            "fieldID": 8372153,
+                            "value": "Follow up acne ",
+                            "name": "What is the primary reason for making this appointment?"
+                        },
+                        {
+                            "id": 1516697993,
+                            "fieldID": 5961108,
+                            "value": "Friend or family member",
+                            "name": "How did you hear about MyCatholicDoctor?"
+                        }
+                    ]
+                },
+                {
+                    "id": 5847026,
+                    "name": "Payment Information",
+                    "values": [
+                        {
+                            "id": 5620586674,
+                            "fieldID": 57383411,
+                            "value": "yes",
+                            "name": "I have reviewed MyCatholicDoctor's Billing Policy, which includes my provision to receive a Good Faith Estimate as required by the Federal \"No Surprises Act\" : https:\/\xkieixkehpbveuap.com\/nnmccvy-payment\/"
+                        },
+                        {
+                                "id": 8144580206,
+                                "fieldID": 00467178,
+                                "value": "\u2022 Bill my Insurance - I agree to provide pictures of the front and back of my card(s) below.",
+                                "name": "How do you wish to pay for your visit?"
+                                },
+                        {
+                                "id": 5428232054,
+                                "fieldID": 76155895,
+                                "value": "no",
+                                "name": "Do you have Asuris Northwest Health or Carefirst?"
+                                }
+                    ]
+                },
+                {
+                        "id": 8147467,
+                        "name": "Insurance Requirements",
+                        "values": [
+                            {
+                                "id": 5103380584,
+                                "fieldID": 07140935,
+                                "value": "yes",
+                                "name": "I agree with these requirements, which apply if I pay with insurance."
+                                }
+                            ]
+                        },
+                {
+                        "id": 2856091,
+                        "name": "Insurance Information",
+                        "values": [
+                            {
+                                "id": 9591015752,
+                                "fieldID": 3755640,
+                                "value": "",
+                                "name": "Insurance Card(s) - FRONT"
+                                },
+                            {
+                                "id": 5714467201,
+                                "fieldID": 8031523,
+                                "value": "",
+                                "name": "Insurance Card(s) - BACK"
+                                },
+                            {
+                                "id": 8468653705,
+                                "fieldID": 94026368,
+                                "value": "Sutton Baldowski",
+                                "name": "Policy Holder's Name (required)"
+                                },
+                            {
+                                "id": 8233623623,
+                                "fieldID": 69079921,
+                                "value": "5\/25\/2005",
+                                "name": "Policy Holder's Date of Birth (required)"
+                                }
+                            ]
+                        },
+                {
+                        "id": 6815013,
+                        "name": "Terms & Conditions (Required)",
+                        "values": [
+                            {
+                                "id": 6970746965,
+                                "fieldID": 64964657,
+                                "value": "Sharod Nisby",
+                                "name": "By typing my name below, I am electronically certifying that I read and agree to the above terms of use, privacy policy and consent to treatment"
+                                },
+                            {
+                                "id": 1872708311,
+                                "fieldID": 3276233,
+                                "value": "",
+                                "name": "Add me to your mailing list so I can stay updated with services, providers and MyCatholicDoctor Foundation fundraising. Unsubscribe any time."
+                                }
+                            ]
+                        },
+                {
+                        "id": 8391035,
+                        "name": "What Happens After Scheduling:",
+                        "values": [
+                            {
+                                "id": 4094861333,
+                                "fieldID": 02022880,
+                                "value": "yes",
+                                "name": "I understand that I must enter a credit card on file in the intake forms which will be emailed to me. "
+                                }
+                            ]
+                        }
+            ],
+            "formsText": ""
         },
         intake_questions = [],
     )
