@@ -14,7 +14,7 @@ from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
-from app.models.intake.intake import Intake
+from app.models.intake.intake import Intake, ExternalIntakeData
 
 from tests.routes.utils import get_clerk_seed_user
 from tests.utils import log
@@ -315,6 +315,18 @@ def seed_test_data():
         doctor_id=doctor.id,
         patient_id=patient2.id,
         appointment_date=datetime.now(),
+    )
+
+    Intake.find_or_create_by(
+        doctor_id=doctor.id,
+        appointment_id=appointment2.id,
+        external_intake_data = {},
+        cleaned_external_intake_data=ExternalIntakeData(
+            reason_for_visit="Diabetes management",
+            appointment_type="Follow-up",
+            additional_info="Patient has a history of diabetes and Lyme disease. Recently diagnosed with diabetic retinopathy. Currently on insulin therapy.",
+        ),
+        intake_questions = [],
     )
 
     # This is real patient data that has been de-identified using the Azure
