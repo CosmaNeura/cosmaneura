@@ -8,6 +8,12 @@ def test_should_generate_intake_summary():
     assert intake.cleaned_external_intake_data is None
     assert not intake.summary
 
+    # The job should not run on an intake without the proper info.
+    try:
+        perform(intake.id)
+    except ValueError as e:
+        assert str(e) == "intake data not prepared"
+
     # Add questions and cleaned intake data.
     # This simulates running the `generate_intake_questions` job and collecting
     # answers from the patient.
@@ -17,6 +23,13 @@ def test_should_generate_intake_summary():
         additional_info='Patient is a 19-year-old male with a height of 6\'0" and weight of 155 lbs.',
         appointment_category='Virtual Dermatology',
         )
+    intake.save()
+
+    # The job should not run on an intake without answered questions.
+    try:
+        perform(intake.id)
+    except ValueError as e:
+        assert str(e) == "intake questions not answered"
 
     intake.intake_questions = [
             IntakeSchemaQuestion(
@@ -74,7 +87,11 @@ def test_should_generate_intake_summary():
     perform(intake.id)
 
     intake = Intake.get(id=intake.id)
-    assert intake.summary
-    assert len(intake.summary.split()) <= 300
+    summary = intake.summary
+    assert summary
+    assert len(summary.split()) <= 300 # Roughly under 250 words.
 
-    print(intake.summary)
+    # The job should be idempotent.
+    perform(intake.id)
+    intake = Intake.get(id=intake.id)
+    assert summary == intake.summary
