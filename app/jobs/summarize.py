@@ -16,6 +16,7 @@ from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.intake.intake import Intake
 
 OPENAI_MODEL = "gpt-4o"
 
@@ -70,9 +71,15 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     appointment = Appointment.get(id=transcript.appointment_id)
     assert appointment
 
-    fallback_name = "General Appointment"
-    # primary compliant / condition
-    appointment.appointment_name = note.get("CC", fallback_name)
+    # CC == cheif complaint.
+    appointment_name = note.get("CC", "General Appointment")
+
+    intake = Intake.where(Intake.appointment_id == appointment.id).first()
+    if intake and intake.cleaned_external_intake_data:
+        data = intake.cleaned_external_intake_data
+        appointment_name = f"{data.appointment_type} -- {data.reason_for_visit}"
+
+    appointment.appointment_name = appointment_name
     # TODO can we add an appointment summary here? Maybe a separate openai call?
     appointment.save()
 
