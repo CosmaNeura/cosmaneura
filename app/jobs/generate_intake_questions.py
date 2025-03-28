@@ -24,7 +24,8 @@ def perform(intake_id: str | TypeID | TypeIDType):
     """
     Generate intake questions for a patient of a doctor.
     """
-    log.info("generating intake questions", intake_id=intake_id)
+    log.local(intake_id=intake_id)
+    log.info("generating intake questions")
 
     intake = Intake.one(id=intake_id)
     doctor = Doctor.one(id=intake.doctor_id)
@@ -33,7 +34,6 @@ def perform(intake_id: str | TypeID | TypeIDType):
     if intake_data is None:
         log.info("cleaning intake information", intake_id=intake_id)
         intake_data = extract_intake_data(intake, doctor)
-        print(intake_data)
         intake.cleaned_external_intake_data = intake_data
         intake.save()
 
