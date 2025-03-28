@@ -244,6 +244,4 @@ def generate_intake_questions(intake: Intake, doctor: Doctor) -> list[IntakeSche
         for q in parsed_questions["questions"]
     ]
 
-    print(intake_questions)
-
     return intake_questions

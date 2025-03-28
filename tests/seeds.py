@@ -1448,11 +1448,11 @@ def seed_test_data():
             )]
         )
 
+    # This intake data was given to us by MyCatholicDoctor and then run
+    # through Azure's de-identification API.
     Intake.find_or_create_by(
         doctor_id=doctor.id,
         appointment_id=appointment.id,
-        # This intake data was given to us by MyCatholicDoctor and then run
-        # through Azure's de-identification API.
         external_intake_data = {
             "id": 9983118540,
             "firstName": "Coulter",
@@ -1469,7 +1469,7 @@ def seed_test_data():
             "priceSold": "0.00",
             "paid": "no",
             "amountPaid": "0.00",
-            "type": "Dermatology \u2502 Existing Patient",
+            "type": "Dermatology | Existing Patient",
             "appointmentTypeID": 96546045,
             "classID": None,
             "addonIDs": [],
