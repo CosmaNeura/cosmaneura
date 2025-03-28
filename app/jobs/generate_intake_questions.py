@@ -12,7 +12,7 @@ from app.celery import celery
 from app.configuration.openai import openai
 
 from activemodel.types import TypeIDType
-from app.models.intake.intake import Intake, IntakeSchemaQuestion
+from app.models.intake.intake import Intake, IntakeSchemaQuestion, ExternalIntakeData
 from app.models.ai_visit_note import AIVisitNote
 from app.models.doctor import Doctor
 from app.models.patient import Patient
@@ -27,13 +27,22 @@ def perform(intake_id: str | TypeID | TypeIDType):
     log.info("generating intake questions", intake_id=intake_id)
 
     intake = Intake.one(id=intake_id)
+    doctor = Doctor.one(id=intake.doctor_id)
+
+    intake_data = intake.cleaned_external_intake_data
+    if intake_data is None:
+        log.info("cleaning intake information", intake_id=intake_id)
+        intake_data = extract_intake_data(intake, doctor)
+        print(intake_data)
+        intake.cleaned_external_intake_data = intake_data
+        intake.save()
 
     if len(intake.intake_questions) > 0:
         log.info("intake questions already exist, skipping generation",
                  intake_id=intake_id)
         return
 
-    questions = generate_intake_questions(intake)
+    questions = generate_intake_questions(intake, doctor)
     assert questions
 
     intake.intake_questions = questions
@@ -92,7 +101,7 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
         </SCHEMA>
     """)
 
-def extract_intake_data(intake: Intake, doctor: Doctor) -> dict[str, str]:
+def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
     prompt = extraction_prompt(intake, doctor)
     response = openai.chat.completions.create(
         model=OPENAI_MODEL,
@@ -105,16 +114,18 @@ def extract_intake_data(intake: Intake, doctor: Doctor) -> dict[str, str]:
     assert raw_intake_data
     intake_data = json.loads(raw_intake_data)
 
-    print(intake_data)
+    return ExternalIntakeData(
+        reason_for_visit=intake_data["reason"],
+        appointment_type=intake_data["appointment_type"],
+        additional_info=intake_data["additional_info"],
+        appointment_category=intake_data.get("appointment_category"),
+    )
 
-    return intake_data
-
-def generate_questions_prompt(intake: Intake) -> str|None:
-    doctor = Doctor.one(id=intake.doctor_id)
+def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str|None:
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
-    intake_data = extract_intake_data(intake, doctor)
+    intake_data = intake.cleaned_external_intake_data.dict() if intake.cleaned_external_intake_data else {}
 
     # TODO This should be time-limited, e.g. don't pull a note from 5 years ago.
     last_note = (
@@ -209,8 +220,8 @@ def generate_questions_prompt(intake: Intake) -> str|None:
     </SCHEMA>
     """)
 
-def generate_intake_questions(intake: Intake) -> list[IntakeSchemaQuestion]:
-    prompt = generate_questions_prompt(intake)
+def generate_intake_questions(intake: Intake, doctor: Doctor) -> list[IntakeSchemaQuestion]:
+    prompt = generate_questions_prompt(intake, doctor)
     response = openai.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "system", "content": prompt}],

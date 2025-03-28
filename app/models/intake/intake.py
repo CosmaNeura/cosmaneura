@@ -22,7 +22,7 @@ from ..appointment import Appointment
 from ..doctor import Doctor
 
 class ExternalIntakeData(PydanticBaseModel):
-    reason: str
+    reason_for_visit: str
     "The patient's main reason for the visit. AKA chief complaint."
 
     appointment_type: str
