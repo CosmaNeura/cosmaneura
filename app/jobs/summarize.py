@@ -74,7 +74,7 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     # CC == cheif complaint.
     appointment_name = note.get("CC", "General Appointment")
 
-    intake = Intake.where(Intake.appointment_id == appointment.id).first()
+    intake = Intake.one(appointment_id=appointment.id)
     if intake and intake.cleaned_external_intake_data:
         data = intake.cleaned_external_intake_data
         appointment_name = f"{data.appointment_type} -- {data.reason_for_visit}"
