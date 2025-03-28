@@ -2,6 +2,7 @@
 Summarize all the intake data for a given appointment.
 """
 
+import json
 from typeid import TypeID
 from textwrap import dedent
 from datetime import datetime
@@ -27,10 +28,23 @@ def perform(intake_id: str | TypeID | TypeIDType):
 
     intake = Intake.one(id=intake_id)
 
-    if intake.intake_summary:
+    if intake.summary:
         log.info("intake summary already exists, skipping generation",
                  intake_id=intake_id)
         return
+
+    if not intake.cleaned_external_intake_data:
+        log.error("summarize_intake: intake data not prepared",
+                  intake_id=intake_id)
+        raise ValueError("intake data not prepared")
+
+    missing_answers = all(
+        question.answer is None for question in intake.intake_questions
+    )
+
+    if missing_answers:
+        log.error("summarize_intake: intake questions not answered", intake_id=intake_id)
+        raise ValueError("intake questions not answered")
 
     summary = generate_intake_summary(intake)
     assert summary
@@ -78,7 +92,7 @@ def generate_prompt(intake: Intake) -> str:
     if last_note is not None:
         last_appt = Appointment.one(id=last_note.appointment_id)
         last_visit_section = dedent(f"""
-        The patient has seen you before. Here is the clinical note from their last visit, which was {days_since(last_appt.appointment_date)} days ago:
+        This particular patient has seen you before. Here is the clinical note from their last visit, which was {days_since(last_appt.appointment_date)} days ago:
 
         <CLINICAL_NOTE>
         {json.dumps(last_note.note, indent=2)}
@@ -89,7 +103,7 @@ def generate_prompt(intake: Intake) -> str:
     # doctor's time to read. An average reader reads about 4 words per second.
     max_words = 250
 
-    return dedent("""
+    return dedent(f"""
     You are a doctor with the following bio:
 
     <BIO>
@@ -97,13 +111,13 @@ def generate_prompt(intake: Intake) -> str:
     </BIO>
 
     A patient is coming in for an appointment with you.
-    The patient has filled out a preliminary intake form with the following information:
+    Your office has collected some information from the patient during intake to help you prepare.
 
     <INTAKE>
-    {json.dumps(intake.external_intake_data, indent=2)}
+    {json.dumps(intake.cleaned_external_intake_data.dict(), indent=2)}
     </INTAKE>
 
-    You asked the patient some follow up questions, here are their answers:
+    The patient was asked some follow up questions, here are the questions and answers:
 
     <FOLLOW_UP>
     {json.dumps(follow_up_questions, indent=2)}
@@ -115,7 +129,7 @@ def generate_prompt(intake: Intake) -> str:
 
     1. Summarize the INTAKE and FOLLOW_UP information.
       - Your goal is to produce a summary that will quickly prepare YOU for the patient's visit.
-      - You will be reading the summary in the minute before you begin the appointment.
+      - You will be reading the summary immediately before you begin the appointment.
 
     2. Keep in mind your BIO and the kind of visit that the patient is coming in for.
       - This will determine what information is most important to include in your summary.
