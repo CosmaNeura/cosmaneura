@@ -1,4 +1,20 @@
-import React from "react"
+function PageNotFoundIcon() {
+  return (
+    <svg
+      className="mx-auto h-16 w-16 text-blue-500"
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+      />
+    </svg>
+  )
+}
 
 export default function PageNotFound() {
   return (
@@ -6,19 +22,7 @@ export default function PageNotFound() {
       <div className="text-center">
         <h1 className="text-9xl font-bold text-blue-600">404</h1>
         <div className="mt-4 animate-bounce">
-          <svg
-            className="mx-auto h-16 w-16 text-blue-500"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-            />
-          </svg>
+          <PageNotFoundIcon />
         </div>
         <h2 className="mt-6 text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl">
           Page not found
