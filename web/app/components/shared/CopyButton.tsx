@@ -6,6 +6,8 @@ import { Copy } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 
+import { invariant } from "@epic-web/invariant"
+
 interface CopyButtonProps {
   text?: string
   html?: string
@@ -13,12 +15,7 @@ interface CopyButtonProps {
   className?: string
 }
 
-export function CopyButton({
-  text,
-  html,
-  htmlRef,
-  className,
-}: CopyButtonProps) {
+export function CopyButton({ text, html, htmlRef }: CopyButtonProps) {
   const [copied, setCopied] = useState(false)
 
   const copyToClipboard = async () => {
@@ -34,9 +31,12 @@ export function CopyButton({
       if (!textContent && htmlContent) {
         var turndownService = new TurndownService()
         textContent = turndownService.turndown(htmlContent)
-      } else {
-        textContent = ""
       }
+
+      invariant(
+        textContent,
+        "textContent should exist. If you are using htmlRef, make sure to pass a ref to the html element.",
+      )
 
       if (htmlContent) {
         const clipboardData = new ClipboardItem({
