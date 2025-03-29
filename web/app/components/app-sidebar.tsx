@@ -15,7 +15,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
@@ -23,7 +22,6 @@ import { StatusBadge } from "~/components/shared/StatusBadge"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { UserButton } from "@clerk/clerk-react"
-import { invariant } from "@epic-web/invariant"
 
 // logo icon at the top
 const IconSidebarHeader = () => (
@@ -47,11 +45,11 @@ const IconSidebarHeader = () => (
 )
 
 const NAVIGATION_ITEMS = [
-  // {
-  //   title: "Intake",
-  //   icon: Inbox,
-  //   url: "/intake",
-  // },
+  {
+    title: "Intake",
+    icon: Inbox,
+    url: href("/intake"),
+  },
   {
     title: "Notetaking",
     icon: File,
