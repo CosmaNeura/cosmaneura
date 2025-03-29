@@ -17,6 +17,7 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
@@ -56,13 +57,16 @@ class IntakeList(BaseModel, extra="forbid"):
 def intake_list(request: Request) -> IntakeList:
     doctor: Doctor = request.state.doctor
 
-    return IntakeList(
-        appointments=list(
-            Appointment.where(Appointment.doctor_id == doctor.id)
-            .order_by(Appointment.appointment_date.asc())
-            .all()
-        )
+    # get a list of appointments which have an intake object associated with them
+    appointment_list = (
+        Appointment.where(Appointment.doctor_id == doctor.id)
+        # outer join = left join, which will drop appointments without intake
+        .join(Intake)
+        .order_by(Appointment.appointment_date.asc())
+        .all()
     )
+
+    return IntakeList(appointments=list(appointment_list))
 
 
 class NotetakingData(BaseModel, extra="forbid"):
@@ -135,6 +139,37 @@ def note_detail(
     )
 
     return note_detail
+
+
+class IntakeDetail(BaseModel, extra="forbid"):
+    appointment: Appointment
+    intake: Intake
+    patient: Patient
+
+
+@internal_api_app.get("/intake/{appointment_id}")
+def intake_detail(
+    request: Request,
+    appointment_id: Annotated[TypeIDType, Path()],
+) -> IntakeDetail:
+    # TODO error handling for bad IDs
+    doctor: Doctor = request.state.doctor
+
+    appointment = Appointment.where(
+        Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
+    ).one()
+
+    assert appointment
+
+    intake = appointment.intake
+
+    intake_detail = IntakeDetail(
+        appointment=appointment,
+        intake=intake,
+        patient=appointment.patient,
+    )
+
+    return intake_detail
 
 
 # unique endpoints are used to generate the signed URLs, this is mostly an arbitrary choice. It probably adds an extra

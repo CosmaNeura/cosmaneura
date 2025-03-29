@@ -70,7 +70,7 @@ class Intake(
 
     # patient is tied to the appointment, so we don't have a patient_id on this model
     appointment_id: TypeIDType = Appointment.foreign_key()
-    appointment: Appointment = Relationship()
+    appointment: Appointment = Relationship(back_populates="intake")
 
     external_intake_data: dict[str, str] = Field(sa_type=JSONB)
     "arbitrary blob of data from an external system representing any other intake data that has been collected"

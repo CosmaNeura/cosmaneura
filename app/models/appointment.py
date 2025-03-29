@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from pydantic import computed_field
 
@@ -7,6 +8,9 @@ from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from app.models.doctor import Doctor
 from sqlmodel import Field, Relationship
+
+if TYPE_CHECKING:
+    from app.models.intake.intake import Intake
 
 from .patient import Patient
 
@@ -21,6 +25,8 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
 
     patient_id: TypeIDType = Patient.foreign_key()
     patient: Patient = Relationship()
+
+    intake: "Intake" = Relationship(back_populates="appointment")
 
     # TODO should make this an enum
     created_by_system: str | None = Field(default="gui", nullable=True)
