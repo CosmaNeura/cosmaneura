@@ -8,14 +8,19 @@ import { Button } from "@/components/ui/button"
 
 import { invariant } from "@epic-web/invariant"
 
-interface CopyButtonProps {
+interface CopyButtonProps extends React.ComponentProps<typeof Button> {
   text?: string
   html?: string
   htmlRef?: React.RefObject<HTMLElement | null>
-  className?: string
 }
 
-export function CopyButton({ text, html, htmlRef }: CopyButtonProps) {
+export function CopyButton({
+  text,
+  html,
+  htmlRef,
+  className,
+  ...props
+}: CopyButtonProps) {
   const [copied, setCopied] = useState(false)
 
   const copyToClipboard = async () => {
@@ -61,6 +66,7 @@ export function CopyButton({ text, html, htmlRef }: CopyButtonProps) {
       size="sm"
       className={className}
       onClick={copyToClipboard}
+      {...props}
     >
       <Copy className="mr-2 h-4 w-4" />
       {copied ? "Copied!" : "Copy to Clipboard"}
