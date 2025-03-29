@@ -207,6 +207,53 @@
         }
       }
     },
+    "/internal/v1/intake/{appointment_id}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Intake Detail",
+        "operationId": "intake_detail",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/visit-audio-file/get-signed-url": {
       "post": {
         "tags": [
@@ -677,6 +724,10 @@
             "type": "string",
             "title": "Patient Name",
             "readOnly": true
+          },
+          "intake_status": {
+            "$ref": "#/components/schemas/IntakeStatus",
+            "readOnly": true
           }
         },
         "type": "object",
@@ -685,7 +736,8 @@
           "patient_id",
           "external_id",
           "appointment_date",
-          "patient_name"
+          "patient_name",
+          "intake_status"
         ],
         "title": "Appointment",
         "description": "Represents an appointment with a patient from accuity"
@@ -758,6 +810,40 @@
         "title": "DoctorNoteSchema",
         "description": "A description of the fields required for a specific note type and instructions on what information goes in each field"
       },
+      "ExternalIntakeData": {
+        "properties": {
+          "reason_for_visit": {
+            "type": "string",
+            "title": "Reason For Visit"
+          },
+          "appointment_type": {
+            "type": "string",
+            "title": "Appointment Type"
+          },
+          "additional_info": {
+            "type": "string",
+            "title": "Additional Info"
+          },
+          "appointment_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Category"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason_for_visit",
+          "appointment_type",
+          "additional_info"
+        ],
+        "title": "ExternalIntakeData"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -770,6 +856,129 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "Intake": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deleted At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "external_intake_data": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "External Intake Data",
+            "description": "arbitrary blob of data from an external system representing any other intake data that has been collected"
+          },
+          "cleaned_external_intake_data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExternalIntakeData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "data from an external intake system that has been cleaned and normalized"
+          },
+          "intake_questions": {
+            "items": {
+              "$ref": "#/components/schemas/IntakeSchemaQuestion"
+            },
+            "type": "array",
+            "title": "Intake Questions",
+            "description": "list of questions extracted from the intake schema when this intake URL was generated"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary",
+            "description": "AI generated summary of all intake information"
+          },
+          "public_url": {
+            "type": "string",
+            "maxLength": 2083,
+            "minLength": 1,
+            "format": "uri",
+            "title": "Public Url",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "doctor_id",
+          "appointment_id",
+          "external_intake_data",
+          "intake_questions",
+          "public_url"
+        ],
+        "title": "Intake",
+        "description": "This represents a chat experience with a patient to gather information about them."
+      },
+      "IntakeDetail": {
+        "properties": {
+          "appointment": {
+            "$ref": "#/components/schemas/Appointment"
+          },
+          "intake": {
+            "$ref": "#/components/schemas/Intake"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/Patient"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment",
+          "intake",
+          "patient"
+        ],
+        "title": "IntakeDetail"
       },
       "IntakeList": {
         "properties": {
@@ -787,6 +996,61 @@
           "appointments"
         ],
         "title": "IntakeList"
+      },
+      "IntakeSchemaQuestion": {
+        "properties": {
+          "order": {
+            "type": "integer",
+            "title": "Order"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "required_details": {
+            "type": "string",
+            "title": "Required Details"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answer_timestamp": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order",
+          "question",
+          "required_details"
+        ],
+        "title": "IntakeSchemaQuestion"
+      },
+      "IntakeStatus": {
+        "type": "string",
+        "enum": [
+          "none",
+          "pending",
+          "processing",
+          "complete"
+        ],
+        "title": "IntakeStatus"
       },
       "NoteDetail": {
         "properties": {

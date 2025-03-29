@@ -12,7 +12,16 @@ from sqlmodel import Field, Relationship
 if TYPE_CHECKING:
     from app.models.intake.intake import Intake
 
+from enum import Enum
+
 from .patient import Patient
+
+
+class IntakeStatus(str, Enum):
+    none = "none"
+    pending = "pending"
+    processing = "processing"
+    complete = "complete"
 
 
 class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=True):
@@ -54,6 +63,20 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     @property
     def patient_name(self) -> str:
         return self.patient.name
+
+    @computed_field
+    @property
+    def intake_status(self) -> IntakeStatus:
+        if not self.intake:
+            return IntakeStatus.none
+
+        if self.intake.unanswered_questions():
+            return IntakeStatus.pending
+
+        if not self.intake.summary:
+            return IntakeStatus.processing
+
+        return IntakeStatus.complete
 
     # TODO not absolutely required right now since ALL appointments have audio files, until we integrate with accuity
     # @computed_field

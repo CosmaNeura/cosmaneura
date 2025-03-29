@@ -3,7 +3,7 @@ import typing as t
 from decouple import config
 from furl import furl
 from pydantic import BaseModel as PydanticBaseModel
-from pydantic import HttpUrl
+from pydantic import HttpUrl, computed_field
 
 from app.constants import INTAKE_CHAT_DOMAIN
 
@@ -20,6 +20,7 @@ from sqlmodel import Field, Relationship
 
 from ..appointment import Appointment
 from ..doctor import Doctor
+
 
 class ExternalIntakeData(PydanticBaseModel):
     reason_for_visit: str
@@ -75,7 +76,9 @@ class Intake(
     external_intake_data: dict[str, str] = Field(sa_type=JSONB)
     "arbitrary blob of data from an external system representing any other intake data that has been collected"
 
-    cleaned_external_intake_data: ExternalIntakeData | None = Field(nullable=True, default=None, sa_type=JSONB)
+    cleaned_external_intake_data: ExternalIntakeData | None = Field(
+        nullable=True, default=None, sa_type=JSONB
+    )
     "data from an external intake system that has been cleaned and normalized"
 
     intake_questions: list[IntakeSchemaQuestion] = Field(sa_type=JSONB)
@@ -99,6 +102,8 @@ class Intake(
         """
         return not self.is_processing() and len(self.unanswered_questions()) == 0
 
+    @computed_field
+    @property
     def public_url(self) -> HttpUrl:
         chat_url = furl().set(
             scheme="https",

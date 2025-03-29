@@ -14,7 +14,11 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
-from tests.factories import AppointmentFactory, SimpleIncompleteIntakeFactory
+from tests.factories import (
+    AppointmentFactory,
+    SimpleCompleteIntakeFactory,
+    SimpleIncompleteIntakeFactory,
+)
 from tests.seeds import get_clerk_seed_user
 
 _, _, clerk_user = get_clerk_seed_user()
@@ -177,4 +181,5 @@ AIVisitNote.find_or_create_by(
     },
 )
 
-SimpleIncompleteIntakeFactory.build(doctor_id=doctor.id).save()
+incomplete_intake = SimpleIncompleteIntakeFactory.build(doctor_id=doctor.id).save()
+complete_intake = SimpleCompleteIntakeFactory.build(doctor_id=doctor.id).save()

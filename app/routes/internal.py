@@ -9,6 +9,7 @@ import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
 from app.commands.uploads.sas import UploadType
 
+import sqlalchemy as sa
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -62,6 +63,8 @@ def intake_list(request: Request) -> IntakeList:
         Appointment.where(Appointment.doctor_id == doctor.id)
         # outer join = left join, which will drop appointments without intake
         .join(Intake)
+        # TODO preload the intake object to avoid N+1 queries
+        # .options(sa.joinedload(Appointment.intake))
         .order_by(Appointment.appointment_date.asc())
         .all()
     )

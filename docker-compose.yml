@@ -47,6 +47,7 @@ services:
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
 
+# volume names will be automatically prefixed with the project name
 volumes:
   mailpit_data:
   # NOTE redis data is not persisted, assumed to be ephemeral

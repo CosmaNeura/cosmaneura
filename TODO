@@ -42,31 +42,32 @@
 
 ## v2: intake
 
-- [ ] intake UI
+- [x] intake UI
+  - [x] completed on intake needs to change
 - [ ] bugs
-  - [ ] visual layout bug
+  - [x] visual layout bug
   - [ ] check field ordering and backfill ordering script
   - [ ] avoid dup schema types, backfill merging duplicates
+  - [x] popup on date window
 - [ ] MCD hits our API to create an intake link
   - [ ] use email to associate doctors with patients
 - [x] email/sms to send the user a text
   - [x] This may be done via Greg's accuity integration
-- [ ] summarization job for the accuity data
+- [x] summarization job for the accuity data
 - [x] unique link gen for each patient
   - [x] expire links automatically based on appointment date
-- [ ] chat experience
+- [x] chat experience
   - [x] Enter in their DOB to access the page
     - [x] do we need this? Let's skip it for now.
   - [x] frontend hits /questions API to get the next question to ask
   - [x] API responds with a terminal state and the UI marks the intake as complete
-- [ ] summarization job after the intake is complete
-- [ ] present accuity & chat summarization in the ui
+- [x] summarization job after the intake is complete
 
 ai issues to consider
 
-- [ ] how to keep it on the rails? Easy to pull these bots off-script.
-- [ ] how do you stop asking questions? How do you know when you are done?
-- [ ] How to assess quality of the answers?
+* how to keep it on the rails? Easy to pull these bots off-script.
+* how do you stop asking questions? How do you know when you are done?
+* How to assess quality of the answers?
 
 user flow
 
@@ -127,9 +128,9 @@ user flow
 
 - [x] block future DOB
 - [x] order of the elements in the notes is really important
-- [ ] numbered list would be better, looks like numbered list isn't working properly, but it should be formatted as markdown
+- [x] numbered list would be better, looks like numbered list isn't working properly, but it should be formatted as markdown
 - [x] make it so we can type in the DOB, right now this isn't possible [shawn]
-- [ ] wants to be able select the note type from the upload area
+- [ ] wants to be able select the note type from the upload area so notes of all types are not generated
 - [ ] remove markdown formatting from the copy content
 - [ ] add note feedback tool so they can submit feedback
 
