@@ -312,7 +312,8 @@ export function UploadRecordingButton() {
               </Button>
             </DialogTrigger>
           </TooltipTrigger>
-          <DialogContent>
+          {/* onOpenAutoFocus is a very important line! Prevents the automatic date popup */}
+          <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
             <DialogHeader>
               <DialogTitle>Upload Recording</DialogTitle>
             </DialogHeader>
