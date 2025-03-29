@@ -8,6 +8,7 @@ from app.models.appointment import Appointment
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
+
 def assert_matches(regex, string):
     if not re.search(regex, string, re.IGNORECASE):
         raise AssertionError(f"Regex '{regex}' does not match the string '{string}'")

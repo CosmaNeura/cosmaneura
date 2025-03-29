@@ -3,20 +3,21 @@ Summarize all the intake data for a given appointment.
 """
 
 import json
-from typeid import TypeID
-from textwrap import dedent
 from datetime import datetime
+from textwrap import dedent
 
-from app.celery import celery
+from typeid import TypeID
+
 from app import log
+from app.celery import celery
 from app.configuration.openai import openai
-from activemodel.types import TypeIDType
 
-from app.models.intake.intake import Intake
+from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
-from app.models.doctor import Doctor
-from app.models.patient import Patient
 from app.models.appointment import Appointment
+from app.models.doctor import Doctor
+from app.models.intake.intake import Intake
+from app.models.patient import Patient
 
 OPENAI_MODEL = "gpt-4o"
 

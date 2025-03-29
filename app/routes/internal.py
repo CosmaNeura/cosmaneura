@@ -9,7 +9,6 @@ import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
 from app.commands.uploads.sas import UploadType
 
-import sqlalchemy as sa
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote

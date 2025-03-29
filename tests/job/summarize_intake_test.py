@@ -1,6 +1,7 @@
 from app.jobs.summarize_intake import perform
 
-from app.models.intake.intake import Intake, ExternalIntakeData, IntakeSchemaQuestion
+from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
+
 
 def test_should_generate_intake_summary():
     intake = Intake.where(Intake.external_intake_data.contains({"firstName": "Coulter"})).one()

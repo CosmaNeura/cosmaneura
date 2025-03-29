@@ -2,6 +2,7 @@ from app.jobs.generate_intake_questions import perform
 
 from app.models.intake.intake import Intake
 
+
 # should be idempotent
 # should not include PII in questions (idk how to test this)
 # should save questions to the model

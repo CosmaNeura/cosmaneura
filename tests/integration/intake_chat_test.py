@@ -1,4 +1,3 @@
-import re
 
 from furl import furl
 from playwright.sync_api import Page, expect

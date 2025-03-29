@@ -4,7 +4,7 @@ Remove the alt once factoryboy is refactored out of the codebase
 
 import typing as t
 
-from polyfactory import BaseFactory, NeverNone, Require
+from polyfactory import BaseFactory, NeverNone
 from polyfactory.decorators import post_generated
 from polyfactory.factories.pydantic_factory import ModelFactory
 from polyfactory.field_meta import FieldMeta

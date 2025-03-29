@@ -3,7 +3,6 @@
 import json
 from datetime import datetime
 
-from activemodel import SessionManager
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
