@@ -5,9 +5,10 @@ import { Route } from "./+types/detail"
 
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { CopyButton } from "~/components/shared/CopyButton"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
-import { intakeDetail } from "~/configuration/client"
+import { Intake, intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
@@ -77,12 +78,20 @@ function IntakeHeader({
   )
 }
 
-function EmptyState(intake: Intake) {
+function EmptyState({ intake }: { intake: Intake }) {
   return (
     <div className="mb-4">
-      {/* <div className="mb-2 text-xl font-semibold">Notes</div> */}
-      <div className="text-muted-foreground text-sm italic">
-        Your patient has not yet completed their intake.
+      <div className="text-muted-foreground">
+        Your patient has not yet completed their intake they have been sent. If
+        you'd like to resend their intake URL, you can find it below.
+        <br />
+        <br />
+        <div className="flex items-center gap-2">
+          <a target="_blank" href={intake.public_url} className="text-blue-500">
+            {intake.public_url}
+          </a>
+          <CopyButton text={intake.public_url} />
+        </div>
       </div>
     </div>
   )
@@ -111,7 +120,7 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
           </div>
         )}
 
-        {!hasSummary && <EmptyState />}
+        {!hasSummary && <EmptyState intake={intake} />}
       </InnerScrollableContent>
     </SidebarInset>
   )

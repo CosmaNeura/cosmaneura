@@ -3,6 +3,7 @@ import { href, useLocation, useNavigate } from "react-router"
 
 import { Command, File, Inbox, Settings } from "lucide-react"
 
+import { Status } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
 import {
   Sidebar,

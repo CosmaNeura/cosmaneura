@@ -1,9 +1,9 @@
 import { cn } from "@/lib/utils"
 
-type Status = "completed" | "in-progress" | "not-started"
+export type StatusBadgeOptions = "completed" | "in-progress" | "not-started"
 
 interface StatusBadgeProps {
-  status: Status
+  status: StatusBadgeOptions
   className?: string
 }
 

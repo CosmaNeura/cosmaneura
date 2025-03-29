@@ -2,10 +2,11 @@ import { Outlet, href } from "react-router"
 
 import { Route } from "./+types/intake"
 
-import { AppSidebar } from "@/components/app-sidebar"
+import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
+import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { intakeList } from "~/configuration/client"
-import { appointmentsToSidebarEntries } from "~/lib/appointment"
+import { Appointment, IntakeStatus, intakeList } from "~/configuration/client"
+import { standardDateTimeFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
 
@@ -14,6 +15,34 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   invariant(data, "data failed to load")
 
   return data
+}
+
+export function appointmentsToSidebarEntries(
+  appointments: Appointment[],
+): SidebarEntry[] {
+  const STATUS_MAP: Record<IntakeStatus, StatusBadgeOptions> = {
+    pending: "not-started",
+    processing: "in-progress",
+    complete: "completed",
+    // this should never occur, but makes TS happy
+    none: "not-started",
+  }
+
+  return appointments.map((appointment) => {
+    invariant(appointment.id, "appointment.id is required")
+    return {
+      id: appointment.id,
+      url: href("/intake/:id", { id: appointment.id }),
+      title: appointment.patient_name,
+      // location: appointment.location,
+      // TODO wire up type of appointment
+      // subTitle: appointment.appointment_name,
+      date: standardDateTimeFormat(appointment.appointment_date),
+      // status: appointment.status,
+      status: STATUS_MAP[appointment.intake_status],
+      preview: appointment.appointment_name,
+    } as SidebarEntry
+  })
 }
 
 export default function Layout({ loaderData }: Route.ComponentProps) {
@@ -29,10 +58,8 @@ export default function Layout({ loaderData }: Route.ComponentProps) {
     >
       <AppSidebar
         isLoading={!appointments}
-        header={"Notes"}
-        entries={appointmentsToSidebarEntries(appointments, (id: string) =>
-          href("/intake/:id", { id }),
-        )}
+        header={"Patient Intake"}
+        entries={appointmentsToSidebarEntries(appointments)}
       />
       <Outlet />
     </SidebarProvider>

@@ -13,7 +13,6 @@ export function appointmentsToSidebarEntries(
     return {
       id: appointment.id,
       url: linkTarget(appointment.id),
-      // title: appointment.patient.name,
       title: appointment.patient_name,
       // location: appointment.location,
       // TODO wire up type of appointment
