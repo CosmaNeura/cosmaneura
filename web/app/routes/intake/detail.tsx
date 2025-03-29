@@ -3,14 +3,9 @@ import type { MetaFunction } from "react-router"
 
 import { Route } from "./+types/detail"
 
-import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
-import { EmptyNotes } from "@/components/shared/MessageContent"
-import { SkeletonMessage } from "@/components/skeleton-message"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
-import VisitNoteViewer from "~/components/VisitNoteViewer"
-import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
-import { FeedbackWidget } from "~/components/shared/FeedbackWidget"
+import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
@@ -53,39 +48,6 @@ function Header({ title }: { title?: string }) {
   )
 }
 
-function Content({
-  isLoading = false,
-  children,
-}: {
-  isLoading?: boolean
-  children: React.ReactNode
-}) {
-  return (
-    <div className="flex flex-col gap-4 p-4">
-      {isLoading ? (
-        <SkeletonMessage />
-      ) : (
-        <div className="translate-y-0 transform opacity-100 transition-all duration-300 ease-in-out">
-          <div className="space-y-6">
-            {/* TODO pretty sure I should remove all of this transition stuff... */}
-            <div
-              className={"transform transition-all duration-150 ease-in-out"}
-            >
-              <div className="bg-card rounded-lg border p-6 shadow-sm">
-                {children}
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-4 sm:flex-row">
-              <FeedbackWidget />
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function IntakeHeader({
   status,
   title,
@@ -115,6 +77,17 @@ function IntakeHeader({
   )
 }
 
+function EmptyState(intake: Intake) {
+  return (
+    <div className="mb-4">
+      {/* <div className="mb-2 text-xl font-semibold">Notes</div> */}
+      <div className="text-muted-foreground text-sm italic">
+        Your patient has not yet completed their intake.
+      </div>
+    </div>
+  )
+}
+
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
   const { appointment, intake, patient } = loaderData
   const hasSummary = !!intake.summary
@@ -122,7 +95,7 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
   return (
     <SidebarInset>
       <Header title={loaderData.patient.name} />
-      <Content>
+      <InnerScrollableContent>
         <IntakeHeader
           title={loaderData.patient.name}
           status={hasSummary ? "completed" : "not-started"}
@@ -130,15 +103,16 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
             "Appointment Date": standardDateTimeFormat(
               loaderData.appointment.appointment_date,
             ),
-            // "Notes Created At": "Completed at",
-            // TODO no location in data model 7yet
-            // Location: "Denver, CO",
           }}
         />
-        <div className="prose-headings prose max-w-full">
-          <Markdown>{intake.summary}</Markdown>
-        </div>
-      </Content>
+        {hasSummary && (
+          <div className="prose-headings prose max-w-full">
+            <Markdown>{intake.summary}</Markdown>
+          </div>
+        )}
+
+        {!hasSummary && <EmptyState />}
+      </InnerScrollableContent>
     </SidebarInset>
   )
 }

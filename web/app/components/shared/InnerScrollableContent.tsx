@@ -1,7 +1,6 @@
 import { SkeletonMessage } from "../skeleton-message"
-import { FeedbackWidget } from "./FeedbackWidget"
 
-function Content({
+export function InnerScrollableContent({
   isLoading = false,
   children,
 }: {
@@ -9,7 +8,7 @@ function Content({
   children: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-4 overflow-y-auto p-4">
       {isLoading ? (
         <SkeletonMessage />
       ) : (
@@ -22,10 +21,6 @@ function Content({
               <div className="bg-card rounded-lg border p-6 shadow-sm">
                 {children}
               </div>
-            </div>
-
-            <div className="flex flex-col gap-4 sm:flex-row">
-              <FeedbackWidget />
             </div>
           </div>
         </div>
