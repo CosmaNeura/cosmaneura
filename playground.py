@@ -1,17 +1,14 @@
 #!/usr/bin/env -S uv run ipython -i
-
 # isort: off
 
 from activemodel import SessionManager
 from activemodel.utils import compile_sql
 
-
-from sqlmodel import SQLModel, select
-
 from app.configuration.clerk import clerk
 from app.configuration.database import configure_database, database_url
 
 # aliases for query building
+from sqlmodel import SQLModel, select
 import sqlalchemy as sa
 import sqlmodel as sm
 
@@ -24,7 +21,6 @@ from sqlmodel import SQLModel
 from playwright.async_api import async_playwright
 import funcy_pipe as fp
 from sqlmodel import create_engine
-import importlib
 from activemodel.utils import find_all_sqlmodels
 from app.configuration.clerk import clerk
 import ipython_playground
@@ -34,7 +30,7 @@ globals().update(find_all_sqlmodels(app.models))
 
 doctor = Doctor.sample()
 
-from activemodel.session_manager import global_session, aglobal_session
+from activemodel.session_manager import _session_context, global_session, aglobal_session
 
 
 def create_user():
@@ -46,8 +42,11 @@ def delete_all_users():
 
 
 configure_database()
+
+# treat the entire ipython session as a with block :)
 engine = create_engine(database_url(), echo=True)
 session = SessionManager.get_instance().get_session().__enter__()
+_session_context.set(session)
 
 def sa_run(stmt):
       result = session.execute(stmt).all()
@@ -62,7 +61,6 @@ def retry_task(task_id):
     meta = celery.backend.get_task_meta(task_id)
     task = celery.tasks[meta['name']]
     task.apply_async(args=meta['args'], kwargs=meta['kwargs'])
-
 
 # https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/switching-endpoints
 def azure_openai_call():
