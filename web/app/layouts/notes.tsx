@@ -2,11 +2,14 @@ import { Outlet, href } from "react-router"
 
 import { Route } from "./+types/notes"
 
-import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
+import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { Appointment, noteList } from "~/configuration/client"
+import { noteList } from "~/configuration/client"
+import {
+  appointmentToSidebarEntry,
+  appointmentsToSidebarEntries,
+} from "~/lib/appointment"
 
-import { standardDateTimeFormat } from "../lib/date"
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
@@ -27,26 +30,6 @@ export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
 export default function NotesLayout({ loaderData }: Route.ComponentProps) {
   const { appointments } = loaderData
 
-  function appointmentToSidebarEntry(appointment: Appointment): SidebarEntry {
-    return {
-      id: appointment.id,
-      url: href("/notes/:id", { id: appointment.id }),
-      // title: appointment.patient.name,
-      title: appointment.patient_name,
-      // location: appointment.location,
-      // TODO wire up type of appointment
-      // subTitle: appointment.appointment_name,
-      date: standardDateTimeFormat(appointment.appointment_date),
-      // status: appointment.status,
-      status: appointment.appointment_name ? "completed" : "in-progress",
-      preview: appointment.appointment_name,
-    }
-  }
-
-  function Bomb() {
-    throw new Error("Test error boundary")
-    return null
-  }
   return (
     <SidebarProvider
       style={
@@ -58,9 +41,10 @@ export default function NotesLayout({ loaderData }: Route.ComponentProps) {
       <AppSidebar
         isLoading={!appointments}
         header={"Notes"}
-        entries={appointments.map(appointmentToSidebarEntry)}
+        entries={appointmentsToSidebarEntries(appointments, (id: string) =>
+          href("/notes/:id", { id }),
+        )}
       />
-      {/* <Bomb /> */}
       <Outlet />
     </SidebarProvider>
   )

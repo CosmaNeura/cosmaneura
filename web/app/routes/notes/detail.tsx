@@ -151,18 +151,6 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
         )}
 
         <VisitTranscriptViewer transcript={transcript} />
-
-        {/* <PatientDataSections className="mb-6" mail={currentMail} /> */}
-
-        {/* {!showTemplates && (
-            <MessageIntake
-              mail={currentMail}
-              isAccuityIntakeOpen={isAccuityIntakeOpen}
-              setIsAccuityIntakeOpen={setIsAccuityIntakeOpen}
-              isIntakeTranscriptOpen={isIntakeTranscriptOpen}
-              setIsIntakeTranscriptOpen={setIsIntakeTranscriptOpen}
-            />
-          )} */}
       </Content>
     </SidebarInset>
   )

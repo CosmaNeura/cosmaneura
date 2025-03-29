@@ -1,3 +1,4 @@
+import Markdown from "react-markdown"
 import type { MetaFunction } from "react-router"
 
 import { Route } from "./+types/detail"
@@ -11,13 +12,13 @@ import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
 import { FeedbackWidget } from "~/components/shared/FeedbackWidget"
 import { StatusBadge } from "~/components/shared/StatusBadge"
-import { noteDetail } from "~/configuration/client"
+import { intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
-  const { data } = await noteDetail({
+  const { data } = await intakeDetail({
     path: {
       appointment_id: loaderArgs.params.id,
     },
@@ -32,7 +33,7 @@ export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
 // TODO can we make this dynamic?
 export const meta: MetaFunction = () => {
   return [
-    { title: "Notetaking" },
+    { title: "Intake" },
     {
       name: "description",
       content: "Your patient meeting notes",
@@ -48,9 +49,6 @@ function Header({ title }: { title?: string }) {
       <h1 className="text-lg font-semibold">
         {title ? title : "Select a patient"}
       </h1>
-      <div className="ml-auto">
-        <UploadRecordingButton />
-      </div>
     </header>
   )
 }
@@ -88,7 +86,7 @@ function Content({
   )
 }
 
-function NoteHeader({
+function IntakeHeader({
   status,
   title,
   dataFields,
@@ -117,17 +115,17 @@ function NoteHeader({
   )
 }
 
-export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
-  const { transcript, notes } = loaderData
-  const hasNotes = notes && notes.length > 0
+export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
+  const { appointment, intake, patient } = loaderData
+  const hasSummary = !!intake.summary
 
   return (
     <SidebarInset>
       <Header title={loaderData.patient.name} />
       <Content>
-        <NoteHeader
+        <IntakeHeader
           title={loaderData.patient.name}
-          status={hasNotes ? "completed" : "not-started"}
+          status={hasSummary ? "completed" : "not-started"}
           dataFields={{
             "Appointment Date": standardDateTimeFormat(
               loaderData.appointment.appointment_date,
@@ -137,32 +135,9 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
             // Location: "Denver, CO",
           }}
         />
-
-        {hasNotes ? (
-          notes.map((note, index) => (
-            <VisitNoteViewer
-              key={note.id}
-              note={note}
-              defaultOpen={index === 0}
-            />
-          ))
-        ) : (
-          <EmptyNotes />
-        )}
-
-        <VisitTranscriptViewer transcript={transcript} />
-
-        {/* <PatientDataSections className="mb-6" mail={currentMail} /> */}
-
-        {/* {!showTemplates && (
-            <MessageIntake
-              mail={currentMail}
-              isAccuityIntakeOpen={isAccuityIntakeOpen}
-              setIsAccuityIntakeOpen={setIsAccuityIntakeOpen}
-              isIntakeTranscriptOpen={isIntakeTranscriptOpen}
-              setIsIntakeTranscriptOpen={setIsIntakeTranscriptOpen}
-            />
-          )} */}
+        <div className="prose-headings prose max-w-full">
+          <Markdown>{intake.summary}</Markdown>
+        </div>
       </Content>
     </SidebarInset>
   )

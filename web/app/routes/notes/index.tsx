@@ -25,6 +25,7 @@ export function EmptySelectionState() {
 }
 
 export default function NotePage() {
+  // the nested route will fill in the main content, so we can assume empty state here
   return (
     <SidebarInset>
       <Header />
