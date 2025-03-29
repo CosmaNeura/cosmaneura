@@ -157,6 +157,8 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
     # TODO no...
     intake_questions = EXAMPLE_INTAKE_QUESTIONS
 
+    summary = None
+
     # TODO should we use ignore instead and just default to server defaults?
     intake_questions_answers = list
 
@@ -185,6 +187,44 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
             appointment = FutureAppointmentFactory.build(doctor_id=doctor_id).save()
             model.appointment_id = appointment.id
 
+        model.save()
+
+
+class SimpleCompleteIntakeFactory(SimpleIncompleteIntakeFactory):
+    summary = """
+- **Reason for Visit**: Follow-up for acne.
+- **Appointment Type**: Dermatology │ Existing Patient.
+- **Appointment Category**: Virtual Dermatology.
+- **Patient Details**: 19-year-old male, 6'0", 155 lbs.
+
+- **Acne Changes**: Acne has worsened with more breakouts on cheeks and forehead, appearing more inflamed.
+- **Triggers**: Stress and increased consumption of dairy products seem to trigger breakouts.
+- **Current Treatments**:
+  - Topical retinoid cream (Tretinoin) used nightly.
+  - Over-the-counter benzoyl peroxide wash used in the morning.
+  - New moisturizer added to routine.
+- **Side Effects**: No side effects reported from current treatments.
+- **Other Skin Concerns**: Dryness and peeling around nose and mouth, likely due to retinoid cream.
+- **Diet/Lifestyle Changes**: Consumes one raw sardine each morning with sunrise.
+- **Other Medications/Supplements**: Taking "Molly."
+
+- **Previous Visit (0 days ago)**:
+  - **Chief Complaint**: Recurring headaches.
+  - **Assessment**: Recurring headaches of unknown etiology.
+  - **Plan**: Further evaluation needed to determine cause and appropriate treatment plan.
+"""
+
+    @classmethod
+    def post_create(cls, model):
+        super().post_create(model)
+
+        "answer all questions"
+        for question in model.intake_questions:
+            question.answer = cls.__faker__.sentence()
+            question.answer_timestamp = int(cls.__faker__.unix_time())
+
+        # IMPORTANT json objects are not automatically marked as dirty
+        model.flag_modified("intake_questions")
         model.save()
 
 
