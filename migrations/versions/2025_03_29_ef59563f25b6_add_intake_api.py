@@ -1,8 +1,8 @@
-"""add_intake
+"""add_intake_api
 
-Revision ID: 729942e5417d
-Revises: ae5a8534033d
-Create Date: 2025-03-25 07:33:36.992585
+Revision ID: ef59563f25b6
+Revises: 489aff797e2e
+Create Date: 2025-03-29 00:06:35.870168
 
 """
 from typing import Sequence, Union
@@ -14,8 +14,8 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = '729942e5417d'
-down_revision: Union[str, None] = 'ae5a8534033d'
+revision: str = 'ef59563f25b6'
+down_revision: Union[str, None] = '489aff797e2e'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -30,7 +30,9 @@ def upgrade() -> None:
     sa.Column('doctor_id', activemodel.types.typeid.TypeIDType(prefix='doctor'), nullable=False),
     sa.Column('appointment_id', activemodel.types.typeid.TypeIDType(prefix='appointment'), nullable=False),
     sa.Column('external_intake_data', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='arbitrary blob of data from an external system representing any other intake data that has been collected'),
+    sa.Column('cleaned_external_intake_data', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='data from an external intake system that has been cleaned and normalized'),
     sa.Column('intake_questions', postgresql.JSONB(astext_type=sa.Text()), nullable=False, comment='list of questions extracted from the intake schema when this intake URL was generated'),
+    sa.Column('summary', sqlmodel.sql.sqltypes.AutoString(), nullable=True, comment='AI generated summary of all intake information'),
     sa.ForeignKeyConstraint(['appointment_id'], ['appointment.id'], name=op.f('intake_appointment_id_fkey')),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], name=op.f('intake_doctor_id_fkey')),
     sa.PrimaryKeyConstraint('id', name=op.f('intake_pkey')),

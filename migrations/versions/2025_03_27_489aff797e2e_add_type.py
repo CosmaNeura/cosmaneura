@@ -1,7 +1,7 @@
 """empty message
 
 Revision ID: 489aff797e2e
-Revises: 729942e5417d
+Revises: ae5a8534033d
 Create Date: 2025-03-27 20:02:44.254927
 
 """
@@ -15,7 +15,7 @@ import activemodel
 
 # revision identifiers, used by Alembic.
 revision: str = '489aff797e2e'
-down_revision: Union[str, None] = '729942e5417d'
+down_revision: Union[str, None] = 'ae5a8534033d'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
