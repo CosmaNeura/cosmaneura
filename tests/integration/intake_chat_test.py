@@ -1,4 +1,3 @@
-
 from furl import furl
 from playwright.sync_api import Page, expect
 
@@ -9,7 +8,7 @@ from tests.factories import SimpleIncompleteIntakeFactory
 def test_intake_chat(server, page: Page) -> None:
     intake = SimpleIncompleteIntakeFactory.build().save()
 
-    intake_url = furl(str(intake.public_url()))
+    intake_url = furl(str(intake.public_url))
     intake_url.set(host=PYTHON_TEST_SERVER_HOST)
 
     # this tests mocks out 3, let's make sure that doesn't change
