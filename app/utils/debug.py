@@ -21,6 +21,14 @@ from starlette.middleware.errors import ServerErrorMiddleware
 from app import log
 
 
+def safe_print(*args, **kwargs):
+    """
+    Print to stderr by default to avoid interfering with stdout processing
+    """
+    kwargs.setdefault("file", sys.stderr)
+    print(*args, **kwargs)
+
+
 def install_traps():
     """
     Install all debugging traps:
@@ -51,12 +59,12 @@ def install_process_trap():
 
     def dump_process_tree(sig, frame):
         process_tree = build_process_tree()
-        print(f"Process tree for PID {os.getpid()}:", file=sys.stderr)
-        print(json.dumps(process_tree, indent=2), file=sys.stderr)
+        safe_print(f"Process tree for PID {os.getpid()}:")
+        safe_print(json.dumps(process_tree, indent=2))
 
     signal.signal(signal.SIGPROF, dump_process_tree)
 
-    print(f"installed SIGPROF signal handler on pid {os.getpid()}", file=sys.stderr)
+    safe_print(f"installed SIGPROF signal handler on pid {os.getpid()}")
 
 
 def install_coroutine_trap():
@@ -75,19 +83,19 @@ def install_coroutine_trap():
     def dump_all_tasks(sig, frame):
         all_tasks = asyncio.all_tasks()
 
-        print(f"dump all tasks ({len(all_tasks)}) stack trace", file=sys.stderr)
+        safe_print(f"dump all tasks ({len(all_tasks)}) stack trace")
 
         for task in all_tasks:
             try:
                 name = task.get_name()
-                print(f"task {name}:", file=sys.stderr)
+                safe_print(f"task {name}:")
                 asyncio.Task.print_stack(task, file=sys.stderr)
             except Exception as e:
-                print(f"error dumping task: {e}", file=sys.stderr)
+                safe_print(f"error dumping task: {e}")
 
     signal.signal(signal.SIGUSR1, dump_all_tasks)
 
-    print(f"installed USR1 signal handler on pid {os.getpid()}", file=sys.stderr)
+    safe_print(f"installed USR1 signal handler on pid {os.getpid()}")
 
 
 def install_thread_trap():
@@ -105,15 +113,15 @@ def install_thread_trap():
 
     def dump_all_threads(sig, frame):
         for thread_id, stack in sys._current_frames().items():
-            print(f"Thread {thread_id}:", file=sys.stderr)
+            safe_print(f"Thread {thread_id}:")
             for filename, lineno, name, line in traceback.extract_stack(stack):
-                print(f"  File: {filename}, line {lineno}, in {name}", file=sys.stderr)
+                safe_print(f"  File: {filename}, line {lineno}, in {name}")
                 if line:
-                    print(f"    {line.strip()}", file=sys.stderr)
+                    safe_print(f"    {line.strip()}")
 
     signal.signal(signal.SIGUSR2, dump_all_threads)
 
-    print(f"installed USR2 signal handler on pid {os.getpid()}", file=sys.stderr)
+    safe_print(f"installed USR2 signal handler on pid {os.getpid()}")
 
 
 @contextmanager
@@ -164,7 +172,7 @@ def memray_profile(log: Logger | None = None, live: bool = False):
         live_socket = memray.SocketDestination(12345, "0.0.0.0")
 
         # NOTE follow_fork does not seem to work with live
-        # > --follow-fork mode can only be used with an output file. It is incompatible with --live mode and --live-remote mode, since the TUI can’t be attached to multiple processes at once.
+        # > --follow-fork mode can only be used with an output file. It is incompatible with --live mode and --live-remote mode, since the TUI can't be attached to multiple processes at once.
 
         tracker_args = {
             "destination": live_socket,
@@ -184,7 +192,7 @@ def memray_profile(log: Logger | None = None, live: bool = False):
     if log:
         log.warn("starting memray tracker", tracker_args)
     else:
-        print("starting memray tracker", file=sys.stderr)
+        safe_print("starting memray tracker")
 
     with memray.Tracker(**tracker_args):
         yield
@@ -192,9 +200,9 @@ def memray_profile(log: Logger | None = None, live: bool = False):
     if log:
         log.warn("memory tracing complete")
     else:
-        print("memory tracing complete", file=sys.stderr)
-        print("memory tracing complete", file=sys.stderr)
-        print("memory tracing complete", file=sys.stderr)
+        safe_print("memory tracing complete")
+        safe_print("memory tracing complete")
+        safe_print("memory tracing complete")
 
 
 def log_system_options():
@@ -383,7 +391,7 @@ def build_process_tree(pid=None):
     try:
         root = psutil.Process(pid)
     except psutil.NoSuchProcess:
-        print(f"No process found with PID: {pid}")
+        safe_print(f"No process found with PID: {pid}")
         return {}
 
     def recurse(process):
