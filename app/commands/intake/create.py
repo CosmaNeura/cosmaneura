@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 
 import app.jobs.intake.schema_picker
 
+from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
@@ -94,6 +95,9 @@ class AppointmentRequest(BaseModel):
 
 
 class AppointmentResponse(BaseModel):
+    id: TypeIDType
+    "ID of the appointment in cosmaneura"
+
     url: HttpUrl
     "URL of the intake form for this appointment"
 
@@ -112,7 +116,9 @@ def perform(
         appointment := Appointment.get(external_id=appointment_request.id)
     ):
         # TODO update the appointment with the new data
-        return AppointmentResponse(url=HttpUrl("https://example.com"))
+        return AppointmentResponse(
+            url=HttpUrl("https://example.com"), id=str(appointment.id)
+        )
 
     doctor_id = appointment_request.doctor.id
 
@@ -145,4 +151,5 @@ def perform(
 
     app.jobs.intake.schema_picker.perform.delay(intake.id)
 
-    return AppointmentResponse(url=intake.public_url())
+    # TODO something in activemodel is broken, without casting to string this breaks...
+    return AppointmentResponse(url=intake.public_url, id=str(intake.id))

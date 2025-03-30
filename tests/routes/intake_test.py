@@ -16,8 +16,7 @@ from tests.routes.utils import assert_status
 def test_intake_creation(client: TestClient, sync_celery):
     "test a successful intake creation"
 
-    # paranoid
-    assert Intake.count() == 0
+    initial_intake_count = Intake.count()
 
     # TODO should be a option on the factory itself!
     request = AppointmentRequestFactory.build(factory_use_construct=True)
@@ -43,8 +42,8 @@ def test_intake_creation(client: TestClient, sync_celery):
     data = response.json()
     assert data["url"].startswith("https://")
 
-    assert Intake.count() == 1
-    intake = Intake.last()
+    assert Intake.count() == initial_intake_count + 1
+    intake = Intake.get(data["id"])
 
     assert intake
     assert intake.doctor_id == user.id
@@ -70,7 +69,7 @@ def test_intake_creation(client: TestClient, sync_celery):
     assert_status(response)
 
     # let's make sure new intakes weren't created
-    assert Intake.count() == 1
+    assert Intake.count() == initial_intake_count + 1
 
 
 def test_intake_without_doctor_email(client: TestClient):

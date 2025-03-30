@@ -3,6 +3,7 @@ from datetime import datetime
 from fastapi import status
 from fastapi.testclient import TestClient
 from polyfactory import BaseFactory
+from typeid import TypeID
 
 import app.commands.intake.chat
 
@@ -12,6 +13,7 @@ from tests.factories import (
     EXAMPLE_INTAKE_QUESTIONS,
     AppointmentFactory,
     DoctorFactory,
+    SimpleCompleteIntakeFactory,
     SimpleIncompleteIntakeFactory,
 )
 from tests.integration.server import api_app
@@ -27,7 +29,8 @@ def test_invalid_intake_uuid(client: TestClient):
 def test_uuid_cannot_be_found(client: TestClient):
     # TODO so ugly, there has to be a better way...
     # TypeID(Intake.model_fields["id"].sa_column.type.prefix)
-    fake_id = Intake.model_fields["id"].sa_column.type.generate()
+    # fake_id = Intake.model_fields["id"].sa_column.type.generate()
+    fake_id = TypeID(Intake.model_fields["id"].sa_column.type.prefix)
 
     response = client.get(api_app.url_path_for("get_last_question", intake_id=fake_id))
     assert_status(response, status.HTTP_404_NOT_FOUND)
@@ -57,14 +60,7 @@ def test_intake_expired(client: TestClient):
 
 
 def test_intake_completed(client: TestClient):
-    intake = SimpleIncompleteIntakeFactory.build().save()
-
-    # fill out all of the intake questions
-    for question in intake.intake_questions:
-        question.answer = BaseFactory.__faker__.sentence()
-        question.answer_timestamp = int(datetime.now().timestamp())
-
-    intake.save()
+    intake = SimpleCompleteIntakeFactory.build().save()
 
     assert not intake.is_processing()
     assert intake.is_complete()
