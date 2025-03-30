@@ -206,7 +206,8 @@ def memray_profile(log: Logger | None = None, live: bool = False):
 
 
 def log_system_options():
-    log.info("system options", **dump_system_options())
+    "unique method for this so it's easy to call when debugging"
+    log.debug("system options", **dump_system_options())
 
 
 def dump_system_options():
@@ -406,6 +407,52 @@ def build_process_tree(pid=None):
             return {"pid": process.pid, "name": process.name(), "children": []}
 
     return recurse(root)
+
+
+def python_children(pid=None) -> list[int]:
+    """
+    Returns a list of PIDs of Python subprocesses starting from the given PID.
+    If no PID is provided, uses the current process PID.
+
+    :param pid: Process ID of the root process. Defaults to current process PID.
+    :return: A list of PIDs of Python subprocesses.
+    """
+    import psutil
+
+    if pid is None:
+        pid = os.getpid()
+
+    try:
+        root = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        safe_print(f"No process found with PID: {pid}")
+        return []
+
+    python_pids = []
+
+    def collect_python_processes(process):
+        children = []
+        try:
+            children = process.children(recursive=False)
+        except psutil.NoSuchProcess:
+            return
+
+        for child in children:
+            try:
+                cmd = child.cmdline()
+                # Check if this is a Python process
+                if cmd and (
+                    "python" in cmd[0].lower()
+                    or cmd[0].endswith("python3")
+                    or cmd[0].endswith("python")
+                ):
+                    python_pids.append(child.pid)
+                collect_python_processes(child)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, IndexError):
+                continue
+
+    collect_python_processes(root)
+    return python_pids
 
 
 # TODO could be worth trying at some point
