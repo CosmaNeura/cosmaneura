@@ -547,6 +547,7 @@ debugging-extras = [
     { name = "pipdeptree" },
     { name = "pre-commit" },
     { name = "pretty-traceback" },
+    { name = "psutil" },
     { name = "pudb" },
     { name = "pyfzf" },
     { name = "pytest-fzf" },
@@ -647,6 +648,7 @@ debugging-extras = [
     { name = "pipdeptree", specifier = ">=2.25.0" },
     { name = "pre-commit", specifier = ">=4.1.0" },
     { name = "pretty-traceback", git = "https://github.com/iloveitaly/pretty-traceback.git?rev=local-traceback" },
+    { name = "psutil", specifier = ">=7.0.0" },
     { name = "pudb", specifier = ">=2024.1.3" },
     { name = "pyfzf", specifier = ">=0.3.1" },
     { name = "pytest-fzf", specifier = ">=0.1.2.post1" },
@@ -2471,16 +2473,16 @@ wheels = [
 
 [[package]]
 name = "rich-toolkit"
-version = "0.14.0"
+version = "0.14.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "rich" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bc/88/965bb2da72bc68cd3425e5be70b1cfb74c9c1cb93168317e07205c0d42c5/rich_toolkit-0.14.0.tar.gz", hash = "sha256:569c61522e0e24fc4e9a58191fd97b64aa4e1376856666bae6122a7362bbf32d", size = 104309 }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/ea/13945d58d556a28dfb0f774ad5c8af759527390e59505a40d164bf8ce1ce/rich_toolkit-0.14.1.tar.gz", hash = "sha256:9248e2d087bfc01f3e4c5c8987e05f7fa744d00dd22fa2be3aa6e50255790b3f", size = 104416 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/70/a2/dc0ae0b61d5fce9eec3763c98d5a471f7b07c891a2cbfb3fd6a0f632a9a1/rich_toolkit-0.14.0-py3-none-any.whl", hash = "sha256:75ff4b3e70e27e9cb145164bfe8d8e56758162fa3f87594067f4d85630b98bf9", size = 24062 },
+    { url = "https://files.pythonhosted.org/packages/66/e8/61c5b12d1567fdba41a6775db12a090d88b8305424ee7c47259c70d33cb4/rich_toolkit-0.14.1-py3-none-any.whl", hash = "sha256:dc92c0117d752446d04fdc828dbca5873bcded213a091a5d3742a2beec2e6559", size = 24177 },
 ]
 
 [[package]]
@@ -2925,14 +2927,14 @@ wheels = [
 
 [[package]]
 name = "types-setuptools"
-version = "77.0.2.20250328"
+version = "78.1.0.20250329"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "setuptools" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/60/54/5f3d3f07663f94f87506bece0ef166b8b89ad00fb951d6e4f00795c9be19/types_setuptools-77.0.2.20250328.tar.gz", hash = "sha256:0d4d03c89ef34a4a81e19ee797ed1ea4496ef787524e03b40dcf91ba0328e8f5", size = 43990 }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/6e/c54e6705e5fe67c3606e4c7c91123ecf10d7e1e6d7a9c11b52970cf2196c/types_setuptools-78.1.0.20250329.tar.gz", hash = "sha256:31e62950c38b8cc1c5114b077504e36426860a064287cac11b9666ab3a483234", size = 43942 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2c/8f/ef5a20fa17dcbf6bfe59199d2e4d020d95c3dcb6415506080bdc9f566dbd/types_setuptools-77.0.2.20250328-py3-none-any.whl", hash = "sha256:034fb89e346fc8b19be25b73c304b64bd8d7e6a4f7a20d21be38ee67f8ed081d", size = 66995 },
+    { url = "https://files.pythonhosted.org/packages/7d/31/85d0264705d8ef47680d28f4dc9bb1e27d8cace785fbe3f8d009fad6cb88/types_setuptools-78.1.0.20250329-py3-none-any.whl", hash = "sha256:ea47eab891afb506f470eee581dcde44d64dc99796665da794da6f83f50f6776", size = 66985 },
 ]
 
 [[package]]
