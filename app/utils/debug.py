@@ -6,7 +6,11 @@ Should not be used in production. Helpful debugging tools for async code and oth
 Types are ignored since not all of the packages are included as dependencies
 """
 
-import pdb
+import inspect
+import json
+import os
+import signal
+import sys
 import traceback
 from contextlib import ContextDecorator, contextmanager
 from functools import wraps
@@ -19,13 +23,40 @@ from app import log
 
 def install_traps():
     """
-    Install all debugging traps
+    Install all debugging traps:
+
+    - USR1: asyncio / coroutine debugging
+    - USR2: threading debugging
+    - SIGPROF: 27 process debugging
     """
 
     install_coroutine_trap()
     install_thread_trap()
+    install_process_trap()
 
-    log.info("installed debugging traps")
+    log.info("installed debugging traps", pid=os.getpid())
+
+    log_system_options()
+
+
+def install_process_trap():
+    """
+    Listen to SIGPROF signal to dump all process state to the console.
+
+    kill -SIGPROF <pid>
+
+    Dumps the process tree structure to help debug process hierarchies.
+    Uses build_process_tree() to generate the tree.
+    """
+
+    def dump_process_tree(sig, frame):
+        process_tree = build_process_tree()
+        print(f"Process tree for PID {os.getpid()}:", file=sys.stderr)
+        print(json.dumps(process_tree, indent=2), file=sys.stderr)
+
+    signal.signal(signal.SIGPROF, dump_process_tree)
+
+    print(f"installed SIGPROF signal handler on pid {os.getpid()}", file=sys.stderr)
 
 
 def install_coroutine_trap():
@@ -39,7 +70,6 @@ def install_coroutine_trap():
 
     import asyncio
     import os
-    import signal
     import sys
 
     def dump_all_tasks(sig, frame):
@@ -345,8 +375,6 @@ def build_process_tree(pid=None):
     :return: A dictionary representing the process tree.
     """
 
-    import os
-
     import psutil
 
     if pid is None:
@@ -370,6 +398,52 @@ def build_process_tree(pid=None):
             return {"pid": process.pid, "name": process.name(), "children": []}
 
     return recurse(root)
+
+
+# TODO could be worth trying at some point
+# # https://github.com/cansarigol/pdbr/blob/master/pdbr/utils.py#L123
+# def _rpdb_cls(return_instance=True):
+#     from pdbr.debugger import debugger_cls
+#     from rpdb import get_debugger_class
+
+#     try:
+#         from celery.contrib import rdb
+
+#         rdb.BANNER = """\
+# {self.ident}: Type `pdbr_telnet {self.host} {self.port}` to connect
+
+# {self.ident}: Waiting for client...
+# """
+#     except ModuleNotFoundError as error:
+#         raise type(error)("In order to install celery, use pdbr[celery]") from error
+
+#     klass = get_debugger_class()(klass=rdb.Rdb, is_celery=True, show_layouts=False)
+#     if return_instance:
+#         return klass()
+#     return klass
+
+# TODO this uvicorn stuff should probably sit somewhere else...
+
+
+def is_uvicorn_running():
+    """
+    When running the server within an integration test, it's helpful to know if we are in the uvicorn context or not.
+
+    If we are running in the uvicorin context, we'll want to set up a remote debugging session instead of attempting to communicate over stdout.
+
+    Do not use this in production.
+    """
+
+    # Check if 'uvicorn' is in the loaded modules
+    if "uvicorn" not in sys.modules:
+        return False
+
+    # Inspect the call stack for Uvicorn frames
+    for frame_info in inspect.stack():
+        if "uvicorn" in frame_info.filename.lower():
+            return True
+
+    return False
 
 
 class PdbMiddleware(ServerErrorMiddleware):
@@ -398,6 +472,9 @@ class apdb_context(AsyncContextDecorator):
 
     async def __aexit__(self, _, exc_value, exc_traceback):
         if exc_traceback and self.debug:
-            pdb.post_mortem(exc_traceback)
+            import rpdb
+
+            rpdb.post_mortem()
+            # pdb.post_mortem(exc_traceback)
             return self.suppress_exc
         return False
