@@ -11,7 +11,11 @@ def test_example_note_upload(server, page: Page) -> None:
     # paranoid as we build the ORM
     assert DoctorNoteFile.count() == 0
 
+    # page.set_default_timeout(120_000)
+    # page.set_default_navigation_timeout(120_000)
     doctor = login_as_dev_user(page)
+
+    # page.unroute("https://resolved-emu-53.clerk.accounts.dev/v1/**")
 
     page.get_by_role("button", name="Settings").click()
     page.get_by_role("textbox", name="Upload Example Visit Note").set_input_files(
@@ -19,8 +23,14 @@ def test_example_note_upload(server, page: Page) -> None:
     )
 
     # super brittle!
-    page.locator('[id="downshift-\\:rb\\:-input"]').click()
-    page.locator('[id="downshift-\\:rb\\:-input"]').fill("Example Note")
+    # page.pause()
+
+    # breakpoint()
+    # page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    # page.locator('[id="downshift-\\:rb\\:-input"]').click()
+    # page.locator('[id="downshift-\\:rb\\:-input"]').fill("Example Note")
+    page.locator('[name="note_type"]').click()
+    page.locator('[name="note_type"]').fill("Example Note")
     page.get_by_role("button", name="Upload Example Visit Note").click()
 
     expect(page.get_by_text("Notification Upload")).to_be_visible()
