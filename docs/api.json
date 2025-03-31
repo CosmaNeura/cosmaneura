@@ -1,0 +1,148 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "APIRouter API", "version": "0.1.0" },
+  "paths": {
+    "/external/v1/ping": {
+      "get": {
+        "summary": "External Api Ping",
+        "description": "basic uptime + API authentication check",
+        "operationId": "external_api_ping",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": { "application/json": { "schema": {} } }
+          }
+        },
+        "security": [{ "OAuth2PasswordBearer": [] }]
+      }
+    },
+    "/external/v1/intake": {
+      "post": {
+        "summary": "Create Intake",
+        "operationId": "create_intake",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AppointmentRequest" }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AppointmentResponse" }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        },
+        "security": [{ "OAuth2PasswordBearer": [] }]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AppointmentRequest": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "date": { "type": "string", "format": "date-time", "title": "Date" },
+          "doctor_email": {
+            "anyOf": [
+              { "type": "string", "format": "email" },
+              { "type": "null" }
+            ],
+            "title": "Doctor Email"
+          },
+          "doctor_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Doctor Id"
+          },
+          "intake_json": {
+            "anyOf": [
+              { "additionalProperties": true, "type": "object" },
+              { "type": "null" }
+            ],
+            "title": "Intake Json"
+          },
+          "patient": { "$ref": "#/components/schemas/PatientRequest" },
+          "appointment_type": { "type": "string", "title": "Appointment Type" }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "date",
+          "intake_json",
+          "patient",
+          "appointment_type"
+        ],
+        "title": "AppointmentRequest",
+        "description": "A valid doctor association must be provided or the API will return an error."
+      },
+      "AppointmentResponse": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "url": {
+            "type": "string",
+            "maxLength": 2083,
+            "minLength": 1,
+            "format": "uri",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": ["id", "url"],
+        "title": "AppointmentResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": { "$ref": "#/components/schemas/ValidationError" },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "PatientRequest": {
+        "properties": {
+          "name": { "type": "string", "title": "Name" },
+          "dob": { "type": "string", "format": "date", "title": "Dob" }
+        },
+        "type": "object",
+        "required": ["name", "dob"],
+        "title": "PatientRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": { "anyOf": [{ "type": "string" }, { "type": "integer" }] },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": { "type": "string", "title": "Message" },
+          "type": { "type": "string", "title": "Error Type" }
+        },
+        "type": "object",
+        "required": ["loc", "msg", "type"],
+        "title": "ValidationError"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2PasswordBearer": {
+        "type": "oauth2",
+        "flows": { "password": { "scopes": {}, "tokenUrl": "token" } }
+      }
+    }
+  }
+}
