@@ -186,7 +186,6 @@ resource "azurerm_storage_management_policy" "delete_uploads" {
       prefix_match = [
         azurerm_storage_container.uploads.name,
         azurerm_storage_container.example_notes.name,
-        azurerm_storage_container.example_intake.name,
         # NOTE test-* is explicitly not deleted!
       ]
     }
