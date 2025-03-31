@@ -13,6 +13,7 @@ from celery.app.task import Task
 from celery.schedules import crontab
 
 from app import log, root
+from app.celery_healthcheck import HealthCheckServer
 from app.configuration.redis import redis_url
 from app.configuration.sentry import configure_sentry
 
@@ -34,6 +35,8 @@ class BaseTaskWithRetry(Task):
 celery = Celery(
     "tasks", broker=redis_url(), result_backend=redis_url(), task_cls=BaseTaskWithRetry
 )
+
+celery.steps["worker"].add(HealthCheckServer)
 
 # define a hard timeout to limit infinitely running processes
 # 35m is an arbitrary number, but should be long enough to handle most tasks
