@@ -523,7 +523,7 @@ dependencies = [
     { name = "structlog" },
     { name = "typeid-python" },
     { name = "typer" },
-    { name = "uvicorn" },
+    { name = "uvicorn", extra = ["standard"] },
 ]
 
 [package.dev-dependencies]
@@ -549,6 +549,7 @@ debugging-extras = [
     { name = "pretty-traceback" },
     { name = "psutil" },
     { name = "pudb" },
+    { name = "py-spy" },
     { name = "pyfzf" },
     { name = "pytest-fzf" },
     { name = "rich" },
@@ -624,7 +625,7 @@ requires-dist = [
     { name = "structlog", specifier = ">=24.4.0" },
     { name = "typeid-python", extras = ["cli"], specifier = ">=0.3.2" },
     { name = "typer", specifier = ">=0.14.0" },
-    { name = "uvicorn", specifier = ">=0.32.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -650,12 +651,13 @@ debugging-extras = [
     { name = "pretty-traceback", git = "https://github.com/iloveitaly/pretty-traceback.git?rev=local-traceback" },
     { name = "psutil", specifier = ">=7.0.0" },
     { name = "pudb", specifier = ">=2024.1.3" },
+    { name = "py-spy", specifier = ">=0.4.0" },
     { name = "pyfzf", specifier = ">=0.3.1" },
     { name = "pytest-fzf", specifier = ">=0.1.2.post1" },
     { name = "rich", specifier = ">=13.9.4" },
-    { name = "rpdb", specifier = ">=0.2.0" },
+    { name = "rpdb", git = "https://github.com/iloveitaly/rpdb.git" },
     { name = "sqlparse", specifier = ">=0.5.3" },
-    { name = "uv-development-toggle", specifier = ">=0.2.1" },
+    { name = "uv-development-toggle", git = "https://github.com/iloveitaly/uv-development-toggle.git" },
 ]
 dev = [
     { name = "covdefaults", specifier = ">=2.3.0" },
@@ -1997,6 +1999,21 @@ wheels = [
 ]
 
 [[package]]
+name = "py-spy"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/7c/cd/9dacc04604dc4398ce5bed77ed59918ad0940f15165954d4aaa651cc640c/py_spy-0.4.0.tar.gz", hash = "sha256:806602ce7972782cc9c1e383f339bfc27bfb822d42485e6a3e0530ae5040e1f0", size = 253236 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/7e/02ca3ee68507db47afce769504060d71b4dc1455f0f9faa8d32fc7762221/py_spy-0.4.0-py2.py3-none-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:f2cf3f7130e7d780471faa5957441d3b4e0ec39a79b2c00f4c33d494f7728428", size = 3617847 },
+    { url = "https://files.pythonhosted.org/packages/65/7c/d9e26cc4c8e91f96a3a65de04d2e2e4131fbcaf6830d10917d4fab9d6788/py_spy-0.4.0-py2.py3-none-macosx_11_0_arm64.whl", hash = "sha256:47cdda4c34d9b6cb01f3aaeceb2e88faf57da880207fe72ff6ff97e9bb6cc8a9", size = 1761955 },
+    { url = "https://files.pythonhosted.org/packages/d2/e4/8fbfd219b7f282b80e6b2e74c9197850d2c51db8555705567bb65507b060/py_spy-0.4.0-py2.py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:eee3d0bde85ca5cf4f01f012d461180ca76c24835a96f7b5c4ded64eb6a008ab", size = 2059471 },
+    { url = "https://files.pythonhosted.org/packages/a7/1d/79a94a5ace810c13b730ce96765ca465c171b4952034f1be7402d8accbc1/py_spy-0.4.0-py2.py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:c5f06ffce4c9c98b7fc9f5e67e5e7db591173f1351837633f3f23d9378b1d18a", size = 2067486 },
+    { url = "https://files.pythonhosted.org/packages/6d/90/fbbb038f826a83ed15ebc4ae606815d6cad6c5c6399c86c7ab96f6c60817/py_spy-0.4.0-py2.py3-none-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:87573e64dbfdfc89ba2e0f5e2f525aa84e0299c7eb6454b47ea335fde583a7a0", size = 2141433 },
+    { url = "https://files.pythonhosted.org/packages/c9/c1/5e012669ebb687e546dc99fcfc4861ebfcf3a337b7a41af945df23140bb5/py_spy-0.4.0-py2.py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.whl", hash = "sha256:8bf2f3702cef367a489faa45177b41a6c31b2a3e5bd78c978d44e29340152f5a", size = 2732951 },
+    { url = "https://files.pythonhosted.org/packages/74/8b/dd8490660019a6b0be28d9ffd2bf1db967604b19f3f2719c0e283a16ac7f/py_spy-0.4.0-py2.py3-none-win_amd64.whl", hash = "sha256:77d8f637ade38367d944874776f45b703b7ac5938b1f7be8891f3a5876ddbb96", size = 1810770 },
+]
+
+[[package]]
 name = "pycparser"
 version = "2.22"
 source = { registry = "https://pypi.org/simple" }
@@ -2497,11 +2514,7 @@ wheels = [
 [[package]]
 name = "rpdb"
 version = "0.2.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/0f/87/2dc67e3d5a005173b2e4165bdfdeb302ef38393b16312afe70f7a252f3ae/rpdb-0.2.0.tar.gz", hash = "sha256:8346f0dd498a1c30768af3d3528cdfe8086d8c057c9fccb5430b5aec32ae16ab", size = 5560 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/56/dd/39ee98f8fc0163f4df6264525fff2b87eef4b3d1a48db5936261e029ba15/rpdb-0.2.0-py3-none-any.whl", hash = "sha256:20e59ed87bbc0ec6a89ea883d8620f26c6e0877b851a49e19c239ad2c6bd4f49", size = 5985 },
-]
+source = { git = "https://github.com/iloveitaly/rpdb.git#19b8cff709b04f8980004c2562d6c66b02646796" }
 
 [[package]]
 name = "ruff"
@@ -3023,14 +3036,10 @@ wheels = [
 [[package]]
 name = "uv-development-toggle"
 version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/iloveitaly/uv-development-toggle.git#7cb791b6f03186e2e10c07f40f0ef0cfa5770103" }
 dependencies = [
     { name = "rich" },
     { name = "tomlkit" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/79/95/ed820ff0fa04cc609cb1c914575b158208aeaed5b24102990bf3978efcd6/uv_development_toggle-0.3.0.tar.gz", hash = "sha256:d69689ffc0120625816f76cda53c634ad52df2f3cecd00d95dcc745caea6e547", size = 18188 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9a/74/c9be3a3dd632a1eb812cd8d3f2a4a52db96d6a0ae71eb88a3179e4f4cf6f/uv_development_toggle-0.3.0-py3-none-any.whl", hash = "sha256:664729b18f78b9c31bbf5bb00399976eba5e0e4b390f7345a88b304c42f0a588", size = 5301 },
 ]
 
 [[package]]
