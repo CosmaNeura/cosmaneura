@@ -94,7 +94,7 @@ jobs:
   deploy:
     name: 🚀 Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     needs: [web, app]
     if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
     permissions:
