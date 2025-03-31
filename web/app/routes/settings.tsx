@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
+import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
@@ -332,11 +333,11 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
           <h1 className="text-lg font-semibold">Settings</h1>
         </header>
-        <div className="flex flex-col gap-8 p-6">
+        <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
           <Separator />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
-        </div>
+        </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>
   )
