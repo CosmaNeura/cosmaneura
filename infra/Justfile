@@ -9,6 +9,8 @@
 #   OP is required for pulling production secrets from `.env.backend.production` and AZURE_SUBSCRIPTION_ID is only required
 #   if you have multiple azure subscriptions.
 #
+# - You'll want to set new environment variables here first, and then deploy. If you don't do this in the correct order, the deployment will fail.
+#
 # tofu_apply & azure_deploy are the two commands you'll want to understand.
 #
 #######################

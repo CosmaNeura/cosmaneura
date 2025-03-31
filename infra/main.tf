@@ -874,9 +874,17 @@ resource "onepassword_item" "squarespace_domain" {
   note_value = <<-EOT
     ## DNS Settings
 
-    You must login to SquareSpace and ensure the domain values included here are properly set
+    You must login to SquareSpace and ensure the domain values included here are properly set.
+
+    https://account.squarespace.com/domains/managed/cosmaneura.com/dns/dns-settings
+
+    ### app.cosmaneura.com & chat.cosmaneura.com
+
+    - CNAME. fqdn of the target container app.
+    - asuid.app. Hash based on TF output.
 
     ### Clerk
+
     - Add CNAME for `clerk.cosmaneura.com` -> `frontend-api.clerk.services`
     - Add CNAME for `accounts.cosmaneura.com` -> `accounts.clerk.services`
     - Add CNAME for `clk._domainkey.cosmaneura.com` -> `dkim1.au47c8ot0r4y.clerk.services`

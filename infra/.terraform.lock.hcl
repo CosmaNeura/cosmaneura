@@ -44,19 +44,19 @@ provider "registry.opentofu.org/azure/azapi" {
 }
 
 provider "registry.opentofu.org/hashicorp/azurerm" {
-  version     = "4.23.0"
+  version     = "4.25.0"
   constraints = ">= 4.14.0"
   hashes = [
-    "h1:g8LCC6sGzVbDqaYCKutgJjIFANagcrkf5BPnV33ilB8=",
-    "zh:3e3b220ffc6ec415532326bee7301044eb79817ea1cbd6a5de49410dde59cb22",
-    "zh:473343d0cd4b323a66efd085ad314d3847dbe543699f6893169aa2f5e7810fe4",
-    "zh:609723012184fad70fdbdcb13b9d0fb8a12b694397bca3ae3d35365d268c361d",
-    "zh:89cd9a121e281b78c50441bee8c491527df07d043e51e25682bdd8e36ca6d526",
-    "zh:ca15bab60e887eb0c2c64e3e6d3be7e5c5c86f8a8bece17a1f5fce08ca32e63c",
-    "zh:cbecdd2100b08ffdb791a98acbfcfaa9df926b5db847d1d403e08550c5e20cd9",
-    "zh:ce6e59bfdcd85e199434327c4b45da1e959a78b7bde61d70a7e68074f357eff2",
-    "zh:e13bb3bbeb8847972df43bb8bd5520508afe48118460d872213ae260116543ec",
-    "zh:e57c8da8a60e7887ca019f656cff8c1fff000c3ec4eb256a61ac3305ec5680ed",
+    "h1:YzEPmRU2SQYIGlUXiaEuJ9TU0pdxBTVqD5DDW4ilSCc=",
+    "zh:0873b75aa7b862f25e2554456ae4b9f90977814de8fd9bdd414aa1ccd9bcde3c",
+    "zh:1fe502957471e8ffddd4ce34182afce34dabc1a0e37ef4095e6b814af406d969",
+    "zh:2936fd3da3c519f40cd04cb284af853bc4f4351df8484fd4e00a2d7162495586",
+    "zh:78fd3991412e0372dde022abe44443bad5368c507e820bb46e0c85472ca98677",
+    "zh:8a0cb3d3b4b4fc8b41831b6926c379f9df99a7cceb0781f4099e94a92678766e",
+    "zh:a1eb601bab5875bdf396e62a961047a58083437270c43c30d66e519d3b6d92f6",
+    "zh:b4554316c6b347f0bcfc134200b164bab13571659013133347bdbab19bb7d7d6",
+    "zh:b5f58df2941363ac5db7216df7eb88239f973e7542eea0e31679dddb6406b00f",
+    "zh:db30b372560445882e83a7e098e689acf6142d4ffc1e036b03aa54a15aa6f3f4",
   ]
 }
 

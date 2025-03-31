@@ -22,7 +22,7 @@ resource "azurerm_cognitive_deployment" "openai_deployment" {
   }
 
   sku {
-    name = "GlobalStandard"
+    name     = "GlobalStandard"
     capacity = 50
   }
 }
@@ -35,14 +35,14 @@ resource "azurerm_cognitive_deployment" "openai_4o_mini" {
 
   # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#o1-and-o1-mini-models
   model {
-    format = "OpenAI"
-    name   = "gpt-4o-mini"
+    format  = "OpenAI"
+    name    = "gpt-4o-mini"
     version = "2024-07-18"
   }
 
   sku {
     # standard is not valid
-    name = "GlobalStandard"
+    name     = "GlobalStandard"
     capacity = 5
   }
 }
