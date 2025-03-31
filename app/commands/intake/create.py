@@ -5,6 +5,7 @@ Create a new intake form
 from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 import app.jobs.intake.schema_picker
 
@@ -34,8 +35,7 @@ class AppointmentRequest(BaseModel):
     date: datetime
     "date and time of the appointment"
 
-    # TODO can we hide this from the generated API?
-    doctor: Doctor | None
+    doctor: SkipJsonSchema[Doctor | None]
 
     doctor_email: EmailStr | None = None
     "email of the doctor who the appointment is scheduled with"
