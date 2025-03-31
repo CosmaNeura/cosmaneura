@@ -7,6 +7,7 @@ from pathlib import Path
 
 import structlog
 
+from . import constants  # noqa: F401, import all constants to trigger build failures
 from .configuration.assemblyai import configure_assemblyai
 from .configuration.azure import configure_azure
 from .configuration.database import configure_database
