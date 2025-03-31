@@ -636,6 +636,23 @@ resource "azurerm_container_app" "worker" {
     container {
       name = "${local.base_name}-app-worker"
 
+      # there's a custom http server that runs `/` as a healthcheck url and pings celery
+      readiness_probe {
+        port      = 9000
+        transport = "TCP"
+      }
+
+      startup_probe {
+        port      = 9000
+        transport = "TCP"
+      }
+
+      liveness_probe {
+        port      = 9000
+        transport = "TCP"
+      }
+
+
       # the amount of time I wasted realizing that private images must be fully qualified, but public images do not need to be is embarrassing
       # https://github.com/hashicorp/terraform-provider-azurerm/issues/22459
       image = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
