@@ -607,3 +607,24 @@ class apdb_context(AsyncContextDecorator):
             # pdb.post_mortem(exc_traceback)
             return self.suppress_exc
         return False
+
+
+def async_embed():
+    """
+    Start an interactive IPython shell in an asyncio context
+
+    TODO needs work, not working...
+    """
+    import inspect
+
+    import nest_asyncio
+    from IPython import embed
+
+    # TODO breaks celergy if you run at the top of the file
+    # nest_asyncio.apply()
+
+    caller_frame = inspect.currentframe().f_back
+    caller_locals = caller_frame.f_locals
+    caller_self = caller_locals.get("self", None)
+    embed(using="asyncio", user_ns=caller_locals)
+    del caller_frame
