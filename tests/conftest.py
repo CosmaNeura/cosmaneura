@@ -54,6 +54,8 @@ def pytest_configure(config: Config):
     # this forces pretty-traceback to be used instead of the default pytest tb, which is absolutely terrible
     config.option.tbstyle = "native"
 
+    config.option.verbose = True
+
     # must be session to align with playwright expectations
     config.option.asyncio_mode = "auto"
     # TODO right now this option can only be set on ini, which is strange
