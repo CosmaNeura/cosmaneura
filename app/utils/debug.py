@@ -29,6 +29,28 @@ def safe_print(*args, **kwargs):
     print(*args, **kwargs)
 
 
+def ascii_banner(message, width=40, char="#"):
+    """
+    Creates an ASCII banner with the given message.
+
+    :param message: Message to display in the banner
+    :param width: Width of the banner
+    :param char: Character to use for the banner border
+    :return: String containing the ASCII banner
+    """
+    border = char * width
+    padding = (width - len(message) - 2) // 2
+    left_padding = " " * padding
+    right_padding = " " * (width - len(message) - 2 - padding)
+
+    banner = f"""
+{border}
+{char} {left_padding}{message}{right_padding} {char}
+{border}
+"""
+    return banner
+
+
 def install_traps():
     """
     Install all debugging traps:
@@ -58,9 +80,17 @@ def install_process_trap():
     """
 
     def dump_process_tree(sig, frame):
+        signal_name = signal.Signals(sig).name
+        pid = os.getpid()
+        banner_msg = f"Signal {signal_name} received by PID {pid}"
+        safe_print(ascii_banner(banner_msg))
+
         process_tree = build_process_tree()
         safe_print(f"Process tree for PID {os.getpid()}:")
         safe_print(json.dumps(process_tree, indent=2))
+
+        # Propagate signal to Python children
+        propagate_signal_to_children(signal.SIGPROF)
 
     signal.signal(signal.SIGPROF, dump_process_tree)
 
@@ -81,6 +111,11 @@ def install_coroutine_trap():
     import sys
 
     def dump_all_tasks(sig, frame):
+        signal_name = signal.Signals(sig).name
+        pid = os.getpid()
+        banner_msg = f"Signal {signal_name} received by PID {pid}"
+        safe_print(ascii_banner(banner_msg))
+
         all_tasks = asyncio.all_tasks()
 
         safe_print(f"dump all tasks ({len(all_tasks)}) stack trace")
@@ -92,6 +127,9 @@ def install_coroutine_trap():
                 asyncio.Task.print_stack(task, file=sys.stderr)
             except Exception as e:
                 safe_print(f"error dumping task: {e}")
+
+        # Propagate signal to Python children
+        propagate_signal_to_children(signal.SIGUSR1)
 
     signal.signal(signal.SIGUSR1, dump_all_tasks)
 
@@ -112,6 +150,11 @@ def install_thread_trap():
     import sys
 
     def dump_all_threads(sig, frame):
+        signal_name = signal.Signals(sig).name
+        pid = os.getpid()
+        banner_msg = f"Signal {signal_name} received by PID {pid}"
+        safe_print(ascii_banner(banner_msg))
+
         for thread_id, stack in sys._current_frames().items():
             safe_print(f"Thread {thread_id}:")
             for filename, lineno, name, line in traceback.extract_stack(stack):
@@ -119,9 +162,40 @@ def install_thread_trap():
                 if line:
                     safe_print(f"    {line.strip()}")
 
+        # Propagate signal to Python children
+        propagate_signal_to_children(signal.SIGUSR2)
+
     signal.signal(signal.SIGUSR2, dump_all_threads)
 
     safe_print(f"installed USR2 signal handler on pid {os.getpid()}")
+
+
+def propagate_signal_to_children(sig):
+    """
+    Propagate the given signal to all Python child processes.
+
+    :param sig: Signal to propagate.
+    """
+    import os
+
+    children = python_children()
+    signal_name = signal.Signals(sig).name
+
+    if children:
+        safe_print(
+            f"Propagating {signal_name} to {len(children)} Python child processes: {children}"
+        )
+
+        for child_pid in children:
+            try:
+                os.kill(child_pid, sig)
+                safe_print(f"Sent {signal_name} to child process {child_pid}")
+            except OSError as e:
+                safe_print(
+                    f"Failed to send {signal_name} to child process {child_pid}: {e}"
+                )
+    else:
+        safe_print(f"No Python child processes found to propagate {signal_name}")
 
 
 @contextmanager
