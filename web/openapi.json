@@ -539,6 +539,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "doctor_id",
           "appointment_id",
           "ai_transcript_id",
@@ -618,6 +619,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "doctor_id",
           "appointment_id",
           "patient_id",
@@ -732,6 +734,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "doctor_id",
           "patient_id",
           "external_id",
@@ -802,6 +805,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "doctor_id",
           "note_type",
           "fields",
@@ -950,6 +954,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "doctor_id",
           "appointment_id",
           "external_intake_data",
@@ -1159,6 +1164,7 @@
         },
         "type": "object",
         "required": [
+          "id",
           "doctor_id",
           "name",
           "date_of_birth"
