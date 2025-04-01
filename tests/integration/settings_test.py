@@ -7,31 +7,24 @@ from app.models.doctor_note_file import DoctorNoteFile
 from tests.integration.utils import login_as_dev_user
 
 
-def test_example_note_upload(server, page: Page) -> None:
+def test_example_note_upload(server, page: Page, assert_snapshot) -> None:
     # paranoid as we build the ORM
     assert DoctorNoteFile.count() == 0
 
-    # page.set_default_timeout(120_000)
-    # page.set_default_navigation_timeout(120_000)
     doctor = login_as_dev_user(page)
 
-    # page.unroute("https://resolved-emu-53.clerk.accounts.dev/v1/**")
+    assert_snapshot(page)
 
     page.get_by_role("button", name="Settings").click()
     page.get_by_role("textbox", name="Upload Example Visit Note").set_input_files(
         root / "tests/data/example-note.pdf"
     )
 
-    # super brittle!
-    # page.pause()
-
-    # breakpoint()
-    # page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-    # page.locator('[id="downshift-\\:rb\\:-input"]').click()
-    # page.locator('[id="downshift-\\:rb\\:-input"]').fill("Example Note")
     page.locator('[name="note_type"]').click()
     page.locator('[name="note_type"]').fill("Example Note")
     page.get_by_role("button", name="Upload Example Visit Note").click()
+
+    assert_snapshot(page)
 
     expect(page.get_by_text("Notification Upload")).to_be_visible()
 

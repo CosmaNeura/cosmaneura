@@ -5,7 +5,7 @@ from tests.constants import PYTHON_TEST_SERVER_HOST
 from tests.factories import SimpleIncompleteIntakeFactory
 
 
-def test_intake_chat(server, page: Page) -> None:
+def test_intake_chat(server, page: Page, assert_snapshot) -> None:
     intake = SimpleIncompleteIntakeFactory.build().save()
 
     intake_url = furl(str(intake.public_url))
@@ -16,11 +16,16 @@ def test_intake_chat(server, page: Page) -> None:
 
     page.goto(intake_url.url)
 
+    assert_snapshot(page)
+
     page.get_by_role("textbox", name="Include a long and detailed").click()
     page.get_by_role("textbox", name="Include a long and detailed").fill(
         "so many\n\non multiple lines, too "
     )
     page.get_by_role("button", name="Send").click()
+
+    assert_snapshot(page)
+
     page.get_by_role("textbox", name="Include a long and detailed").click()
     page.get_by_role("textbox", name="Include a long and detailed").fill(
         "so many, hard to list"
