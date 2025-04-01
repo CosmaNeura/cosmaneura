@@ -6,8 +6,8 @@ from app.models.doctor import Doctor
 
 from tests.constants import CLERK_DEV_USER_PASSWORD
 from tests.integration.clerk import setup_clerk_testing_token
-from tests.integration.server import home_url, wait_for_loading
-from tests.integration.utils import login_as_dev_user
+from tests.integration.server import home_url
+from tests.integration.utils import login_as_dev_user, wait_for_loading
 
 
 def test_signin(server, page: Page, assert_snapshot) -> None:
@@ -43,6 +43,8 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
     )
     page.get_by_label("Password", exact=True).fill(CLERK_DEV_USER_PASSWORD)
     page.get_by_role("button", name="Continue", exact=True).click()
+
+    wait_for_loading(page)
 
     # wait_for_timeout is milliseconds
 

@@ -21,7 +21,7 @@ def perform(
     Handles processing a doctor uploading a visit audio file for an appointment
     """
 
-    # TODO wrap in transaction, needs to be addd to activemodel
+    # TODO wrap in transaction, needs to be added to activemodel
 
     # only care about the date, we want to optimize for matching
     normalized_date_of_birth = date_of_birth.replace(
@@ -46,4 +46,5 @@ def perform(
     ).save()
 
     log.info("processing audio file", id=file.id)
+
     app.jobs.transcribe.queue(file.id)
