@@ -20,7 +20,7 @@ def test_signin(server, page: Page, assert_snapshot) -> None:
 
     wait_for_loading(page)
 
-    # assert_snapshot(page)
+    assert_snapshot(page)
 
     assert Doctor.count() == 1
 
@@ -64,9 +64,7 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
 
     wait_for_loading(page)
 
-    # page.unroute("https://resolved-emu-53.clerk.accounts.dev/v1/**")
-
-    # assert_snapshot(page)
+    assert_snapshot(page)
 
     expect(page.locator("body")).to_contain_text("Select a patient")
 

@@ -12,7 +12,7 @@ from app.models.visit_audio_file import VisitAudioFile
 from tests.integration.utils import login_as_dev_user
 
 
-def test_audio_file_upload(server, page: Page) -> None:
+def test_audio_file_upload(server, page: Page, assert_snapshot) -> None:
     # paranoid ORM sanity check
     assert VisitAudioFile.count() == 0
 
@@ -21,8 +21,13 @@ def test_audio_file_upload(server, page: Page) -> None:
 
     login_as_dev_user(page)
 
+    assert_snapshot(page)
+
     page.get_by_role("button", name="Notetaking").click()
     page.get_by_role("button", name="Upload Recording").click()
+
+    assert_snapshot(page)
+
     page.locator('input[name="patient_name"]').fill("A Brand New Patient")
 
     page.get_by_role("textbox", name="Date of Birth").fill("august 1 1999")
