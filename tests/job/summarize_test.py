@@ -151,6 +151,10 @@ def test_summarize_is_idempotent():
     transcript = AIVisitTranscript.where(AIVisitTranscript.duration == 182).one()
     assert transcript is not None
 
+    appt = Appointment.get(transcript.appointment_id)
+    assert appt is not None
+    assert appt.appointment_name is None
+
     schema = DoctorNoteSchema.where(
         (DoctorNoteSchema.doctor_id == transcript.doctor_id)
         & (DoctorNoteSchema.note_type == "Test SOAP Note")
@@ -178,3 +182,9 @@ def test_summarize_is_idempotent():
         ).order_by(AIVisitNote.updated_at.desc()).limit(1).one().id
 
     assert note.id == last_id
+
+    # Appointment name has been updated.
+    appt = Appointment.get(transcript.appointment_id)
+    assert appt is not None
+    assert appt.appointment_name is not None
+    assert eval_llm(appt.appointment_name, "Should mention issues with breathing")
