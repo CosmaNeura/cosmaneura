@@ -75,7 +75,9 @@ jobs:
           # playwright traces, screenshots, logs, etc
           name: test-results
           # NOTE if direnv sourcing fails, this var will not be set and it will fail
-          path: ${{ env.TEST_RESULTS_DIRECTORY }}
+          path: |
+            ${{ env.TEST_RESULTS_DIRECTORY }}
+            ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
 
   web:
     name: Frontend
