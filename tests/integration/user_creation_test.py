@@ -46,8 +46,6 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
 
     wait_for_loading(page)
 
-    # wait_for_timeout is milliseconds
-
     page.get_by_label("Enter verification code. Digit").fill("4")
     page.wait_for_timeout(100)
     page.get_by_label("Digit 2").fill("2")
@@ -64,13 +62,9 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
 
     wait_for_loading(page)
 
-    assert_snapshot(page)
-
     expect(page.locator("body")).to_contain_text("Select a patient")
 
-    wait_for_loading(page)
-
-    # assert_snapshot(page)
+    assert_snapshot(page)
 
     # user should be created at this point!
     assert Doctor.count() == 1

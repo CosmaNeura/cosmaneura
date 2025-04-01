@@ -9,7 +9,7 @@ from app.utils.azure import download_blob
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
-from tests.integration.utils import login_as_dev_user
+from tests.integration.utils import login_as_dev_user, wait_for_loading
 
 
 def test_audio_file_upload(server, page: Page, assert_snapshot) -> None:
@@ -26,7 +26,18 @@ def test_audio_file_upload(server, page: Page, assert_snapshot) -> None:
     page.get_by_role("button", name="Notetaking").click()
     page.get_by_role("button", name="Upload Recording").click()
 
-    assert_snapshot(page)
+    # patient data loads via tanstack
+    wait_for_loading(page, extreme=True)
+
+    # dialog box, need to remove date
+    assert_snapshot(
+        page,
+        mask_elements=[
+            "[data-clerk-component='UserButton']",
+            # mask out the dynamic date
+            "input[name='appointment_date']",
+        ],
+    )
 
     page.locator('input[name="patient_name"]').fill("A Brand New Patient")
 
