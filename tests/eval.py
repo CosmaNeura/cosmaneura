@@ -58,7 +58,6 @@ def eval_llm(llm_output: str, criteria: str) -> bool:
       }}
     """)
 
-    print(prompt)
     response = openai.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "system", "content": prompt}],

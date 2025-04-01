@@ -10,8 +10,7 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.patient import Patient
 
-from tests.eval import eval_n_of_m
-
+from tests.eval import eval_llm, eval_n_of_m
 
 def assert_matches(regex, string):
     if not re.search(regex, string, re.IGNORECASE):
@@ -97,8 +96,36 @@ def test_note_includes_patient_action_items():
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=cirtieria, n=1, m=2)
 
+def test_summarize_updates_appointment_name_based_on_intake():
+    patient = Patient.where(Patient.name == "Ocie Dosie").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+    assert appt.appointment_name is None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).first()
+    assert schema is not None
+
+    transcript = (
+        AIVisitTranscript.select()
+        .where(AIVisitTranscript.appointment_id == appt.id)
+        .limit(1)
+        .one()
+    )
+
+    perform(transcript.id, schema.id)
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+    assert appt.appointment_name is not None
+    assert eval_llm(appt.appointment_name, "Should mention it is a follow up for diabetes management")
+
 # Done at the request of Teresa Jensen.
-def test_summarize_includes_all_actionable_steps_for_doctor():
+def test_note_includes_all_actionable_steps_for_doctor():
     patient = Patient.where(Patient.name == "Ocie Dosie").one()
     assert patient is not None
 
