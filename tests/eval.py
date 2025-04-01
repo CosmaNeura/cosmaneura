@@ -22,14 +22,14 @@ def eval_n_of_m(call_llm: Callable[[], str], criteria: str, n: int, m: int) -> b
     successes = 0
     for _ in range(m):
         output = call_llm()
-        if eval(output, criteria):
+        if eval_llm(output, criteria):
             successes += 1
             if successes >= n:
                 return True
     raise AssertionError(f"Failed to satisfy criteria {criteria} {n}/{m} times, only succeeded {successes}/{m} times.")
 
 
-def eval(llm_output: str, criteria: str) -> bool:
+def eval_llm(llm_output: str, criteria: str) -> bool:
     """
     Evaluate the LLM output against provided criteria.
 
