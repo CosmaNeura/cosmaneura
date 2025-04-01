@@ -12,9 +12,9 @@ from app.models.doctor import Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.intake import ExternalIntakeData, Intake
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
+from app.models.intake.intake import Intake, ExternalIntakeData
 
 from tests.routes.utils import get_clerk_seed_user
 from tests.log import log
@@ -28,7 +28,7 @@ def seed_test_data():
 
     if not doctor.biography:
         doctor.biography = dedent("""
-        Dr. Jensen sees patients of all ages for holistic primary care and convenient care. She has a special interest in the care of children and adults with developmental disabilities, and completing training as a Creighton FertilityCare Medical Consultant.
+        I have a dual focus on Internal Medicine and Pediatrics. I see patients of all ages for holistic primary care and convenient care. I have a special interest in the care of children and adults with developmental disabilities, and I have completed training as a Creighton FertilityCare Medical Consultant.
         """)
         doctor.save()
 

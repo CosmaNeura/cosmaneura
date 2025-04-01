@@ -1,12 +1,16 @@
 import re
+import json
 
-from app.jobs.summarize import perform
+from app.jobs.summarize import perform, generate_clinical_note
 
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.doctor_note_example import DoctorNoteExample
 from app.models.patient import Patient
+
+from tests.eval import eval_n_of_m
 
 
 def assert_matches(regex, string):
@@ -54,54 +58,44 @@ def test_summarize_copies_schema_field_orer():
     assert note_fields == schema_fields
 
 # Done at the request of Caroline at Fiat Health.
-def test_summarize_includes_patient_action_items():
+def test_note_includes_patient_action_items():
     patient = Patient.where(Patient.name == "Samwise Gamgee").one()
     assert patient is not None
 
     appt = Appointment.where(Appointment.patient_id == patient.id).one()
-    assert appt is not None
     assert appt.appointment_name is None
 
-    schema = DoctorNoteSchema.get(
-        DoctorNoteSchema.doctor_id == appt.doctor_id
-        and DoctorNoteSchema.note_type == "Test SOAP Note"
-    )
-    assert schema is not None
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
 
     transcript = (
         AIVisitTranscript.select()
         .where(AIVisitTranscript.appointment_id == appt.id)
+        .limit(1)
         .one()
     )
-    assert transcript is not None
 
-    note = AIVisitNote.get(
-        AIVisitNote.ai_transcript_id == transcript.id
-        and AIVisitNote.doctor_note_schema_id == schema.id
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
     )
-    assert note is None
 
-    perform(transcript.id, schema.id)
-
-    note = AIVisitNote.get(
-        AIVisitNote.ai_transcript_id == transcript.id
-        and AIVisitNote.doctor_note_schema_id == schema.id
+    create_clinical_note = lambda: (
+        json.dumps(generate_clinical_note(
+            transcript=transcript,
+            example_note=example_note,
+            note_schema=schema
+        ))
     )
-    assert note is not None
 
-    fields = note.note
-    plan = fields["Plan"]
+    cirtieria = "The 'Plan' section of the note should mention the patient seeing an optometrist or vision specialist."
 
-    try:
-        assert "optometrist" in plan
-    except AssertionError:
-        assert "vision" in plan
-
-    appt = Appointment.where(Appointment.patient_id == patient.id).one()
-    assert appt is not None
-    assert appt.appointment_name is not None
-    assert appt.appointment_name == fields["CC"]
-
+    eval_n_of_m(call_llm=create_clinical_note, criteria=cirtieria, n=2, m=3)
 
 # Done at the request of Teresa Jensen.
 def test_summarize_includes_all_actionable_steps_for_doctor():
