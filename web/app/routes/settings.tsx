@@ -335,7 +335,6 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         </header>
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
-          <Separator />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
         </InnerScrollableContent>
       </SidebarInset>
