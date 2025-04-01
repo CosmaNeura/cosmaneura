@@ -93,7 +93,7 @@ def test_note_includes_patient_action_items():
         ))
     )
 
-    cirtieria = "The 'Plan' section of the note should mention the patient seeing an optometrist or vision specialist."
+    cirtieria = "The 'Plan' section of the note should mention the patient monitoring for changes in vision."
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=cirtieria, n=1, m=2)
 
