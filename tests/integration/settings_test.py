@@ -24,12 +24,11 @@ def test_example_note_upload(server, page: Page, assert_snapshot) -> None:
     page.locator('[name="note_type"]').fill("Example Note")
     page.get_by_role("button", name="Upload Example Visit Note").click()
 
-    assert_snapshot(page)
-
     expect(page.get_by_text("Notification Upload")).to_be_visible()
 
-    assert DoctorNoteFile.count() == 1
+    assert_snapshot(page)
 
+    assert DoctorNoteFile.count() == 1
     doctor_note = DoctorNoteFile.first()
 
     assert doctor_note
