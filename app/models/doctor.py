@@ -68,7 +68,7 @@ class Doctor(
         return api_key
 
     def before_save(self):
-        if not self.clerk_id.startswith(CLERK_OBJECT_PREFIX):
+        if not self.clerk_id or not self.clerk_id.startswith(CLERK_OBJECT_PREFIX):
             raise ValueError(
                 f"clerk_id must start with {CLERK_OBJECT_PREFIX}, got {self.clerk_id}"
             )

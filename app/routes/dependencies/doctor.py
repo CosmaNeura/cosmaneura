@@ -14,7 +14,7 @@ def inject_doctor_record(request: Request):
     """
 
     clerk_id = request.state.auth_state.payload["sub"]
-    doctor = Doctor.find_or_create_by(clerk_id=clerk_id)
+    doctor = Doctor.upsert(data={"clerk_id": clerk_id}, unique_by="clerk_id")
 
     if doctor.deleted_at:
         raise HTTPException(
