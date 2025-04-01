@@ -212,8 +212,5 @@ rev = "custom"
 git = "https://github.com/iloveitaly/pretty-traceback.git"
 rev = "local-traceback"
 
-[tool.uv.sources.uv-development-toggle]
-git = "https://github.com/iloveitaly/uv-development-toggle.git"
-
 [tool.uv.sources.rpdb]
 git = "https://github.com/iloveitaly/rpdb.git"
