@@ -16,6 +16,7 @@ from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 
 OPENAI_MODEL = "gpt-4o"
@@ -115,14 +116,25 @@ def build_structured_prompt(
     action_items = extract_action_items(transcript)
 
     # TODO:
-    #  - add the doctor's bio to the prompt (includes specialties, types of
-    #    patients seen, appointment types, etc)
     #  - give access to intake information
 
-    return dedent(f"""
-        You are a medical professional tasked with creating a clinical note based on a transcript from a medical encounter. Your goal is to accurately summarize the key information from the encounter in a structured, professional format.
+    doctor = Doctor.get(id=transcript.doctor_id)
+    maybe_doctor_bio = "You are a medical professional.\n"
+    if doctor and doctor.biography:
+        maybe_doctor_bio = dedent(f"""
+        You are a medical professional with the following bio:
 
-        Here is the transcript from the encounter:
+        <bio>
+        {doctor.biography.strip()}
+        </bio>
+        """)
+
+    return dedent(f"""
+        {maybe_doctor_bio}
+
+        You need to write a clinical note for a medical appointment that you just had with a patient. Your goal is to accurately summarize the key information from the appointment in a structured, professional format.
+
+        Here is the transcript from the appointment:
 
         <transcript>
         {transcript_text}
@@ -149,16 +161,17 @@ def build_structured_prompt(
 
         When creating the clinical note:
 
-        1. Carefully review the transcript and extract all relevant medical information.
-        2. Organize the information into the appropriate sections of the clinical note schema.
-        3. Use clear, concise, and professional medical language.
-        4. Avoid including any irrelevant personal details or small talk from the transcript.
-        5. If certain information is not provided in the transcript, leave that section blank or write "Not mentioned in transcript" as appropriate. E.g. if the patient does not mention respiratory problems, do NOT assume that they do not have them.
-        6. Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information.
-        7. Ensure all action items are included in the relevant sections of the note.
-        8. Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient.
-        9. Respond only in JSON format with the schema above. JSON property values should be valid markdown. If you include a markdown list, each item in the list should be followed by a newline character.
-        10. Take a deep breath and think step by step.
+        1. Keep in mind your BIO and the kind of visit that the patient is coming in for. This will determine what information is most important to include in your note.
+        2. Carefully review the transcript and extract all relevant medical information.
+        3. Organize the information into the appropriate sections of the clinical note schema.
+        4. Use clear, concise, and professional medical language.
+        5. Avoid including any irrelevant personal details or small talk from the transcript.
+        6. If certain information is not provided in the transcript, leave that section blank or write "Not mentioned in transcript" as appropriate. E.g. if the patient does not mention respiratory problems, do NOT assume that they do not have them.
+        7. Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information.
+        8. Ensure all action items are included in the relevant sections of the note.
+        9. Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient.
+        10. Respond only in JSON format with the schema above. JSON property values should be valid markdown. If you include a markdown list, each item in the list should be followed by a newline character.
+        11. Take a deep breath and think step by step.
     """)
 
 
