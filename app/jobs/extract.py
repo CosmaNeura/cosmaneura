@@ -38,33 +38,39 @@ OPENAI_MODEL = "gpt-4o"
 def perform(doctor_note_file_id: str | TypeID | TypeIDType):
     """
     Extract a schema and content from an example clinical note.
+
+    If a schema for the note type already exists, we currently do NOT extract additional fields from the note.
     """
 
     log.info("extracting note", note_id=doctor_note_file_id)
 
-    note = DoctorNoteFile.get(id=doctor_note_file_id)
-    assert note
+    note = DoctorNoteFile.one(id=doctor_note_file_id)
+
+    log.local(doctor_id=note.doctor_id)
 
     note_pages = download_note(note)
 
     note_fields = extract_note_fields(note_pages)
     assert note_fields
 
-    instructions = explain_note_fields(note_fields)
-
     # there can (and should!) be multiple examples per schema, so find a schema by the type
     # TODO given that we are searching by fields, this will definitely cause a conflict, need to think this through
-    schema = DoctorNoteSchema(
+    schema = DoctorNoteSchema.find_or_initialize_by(
         doctor_id=note.doctor_id,
         note_type=note.note_type,
-        fields=instructions,
-    ).save()
+    )
+
+    if schema.is_new():
+        instructions = explain_note_fields(note_fields)
+        log.info("extracted note instructions", instructions=instructions)
+
+        schema.fields = instructions
+        schema.save()
 
     log.debug(
         "extracting note content",
         schema_id=schema.id,
         note_fields=note_fields,
-        instructions=instructions,
     )
 
     content = extract_note_content(note_pages, note_fields)
@@ -76,7 +82,7 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
         field_examples=content,
     )
 
-    log.debug("extracted note content", note_example_id=example.id, content=content)
+    log.info("extracted note content", note_example_id=example.id)
 
 
 perform_celery = celery.task(perform)
