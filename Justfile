@@ -563,8 +563,7 @@ py_test:
 		just _banner_echo "Building Javascript for Integration Tests"
 		just py_js-build
 	  just _banner_echo "Running Non-Integration Tests"
-		# TODO jobs are ignored since they are AI-based and not deterministic
-		uv run pytest . --verbosity=2 --ignore tests/integration --ignore tests/job {{PYTEST_COV_PARAMS}}
+		uv run pytest . --verbosity=2 --ignore tests/integration {{PYTEST_COV_PARAMS}}
 	  just _banner_echo "Running Integration"
 		uv run pytest tests/integration --verbosity=2 --cov-append {{PYTEST_COV_PARAMS}}
 	else
