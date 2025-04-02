@@ -16,6 +16,7 @@ from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
 from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
@@ -253,3 +254,8 @@ class DoctorNoteSchemaFactory(ActiveModelFactory[DoctorNoteSchema]):
         DoctorNoteExampleFactory.build(
             doctor_note_schema_id=model.id, doctor_id=model.doctor_id
         ).save()
+
+
+class DoctorNoteFileFactory(ActiveModelFactory[DoctorNoteFile]):
+    # TODO all we are trying to do here is setup a relationship, there's got to be a better way to do this...
+    doctor_id = lambda: DoctorFactory.build().save().id
