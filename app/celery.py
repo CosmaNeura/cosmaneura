@@ -1,8 +1,9 @@
+import celery_healthcheck
 from celery import Celery, signals
 from celery.app.task import Task
 from celery.schedules import crontab
 
-from app import celery_healthcheck, log, root
+from app import log, root
 from app.configuration.redis import redis_url
 from app.configuration.sentry import configure_sentry
 
