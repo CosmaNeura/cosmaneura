@@ -6,9 +6,9 @@ from app.models.visit_audio_file import VisitAudioFile
 
 def count_transcripts_for_audio_file(audio_file: VisitAudioFile) -> int:
     return AIVisitTranscript.select().where(
-        AIVisitTranscript.doctor_id == audio_file.doctor_id,
-        AIVisitTranscript.appointment_id == audio_file.appointment_id,
-        AIVisitTranscript.patient_id == audio_file.patient_id
+        (AIVisitTranscript.doctor_id == audio_file.doctor_id)
+        & (AIVisitTranscript.appointment_id == audio_file.appointment_id)
+        & (AIVisitTranscript.patient_id == audio_file.patient_id)
     ).count()
 
 def test_perform_idempotency():
