@@ -41,7 +41,10 @@ if is_production():
 
 class ORJSONSortedResponse(JSONResponse):
     """
-    Lifted from the non-sorted fastapi-built version
+    Lifted from the non-sorted fastapi-built version. ORJSONResponse is much faster than JSONResponse, but it does
+    not respect the order of the keys:
+
+    https://stackoverflow.com/questions/64408092/how-to-set-response-class-in-fastapi
     """
 
     def render(self, content: Any) -> bytes:
@@ -52,8 +55,6 @@ class ORJSONSortedResponse(JSONResponse):
 # NOTE `api_app` and not `app` is used intentionally here to make imports more specific
 api_app = FastAPI(
     **fast_api_args,  # type: ignore
-    # ORJSONResponse is much faster than JSONResponse, but it does not respect the order of the keys
-    # https://stackoverflow.com/questions/64408092/how-to-set-response-class-in-fastapi
     default_response_class=ORJSONSortedResponse,
 )
 

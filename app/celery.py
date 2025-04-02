@@ -1,19 +1,8 @@
-"""
-Configure job queue.
-
-Notes:
-
-- I tried RQ and ran into too many strange compatibility issues
-- celery-types is dead and seems to make the types *worse*
-- Spawn is not natively supported and fork has been depreciated https://github.com/celery/celery/issues/6036#issuecomment-1151224775
-"""
-
 from celery import Celery, signals
 from celery.app.task import Task
 from celery.schedules import crontab
 
-from app import log, root
-from app.celery_healthcheck import HealthCheckServer
+from app import celery_healthcheck, log, root
 from app.configuration.redis import redis_url
 from app.configuration.sentry import configure_sentry
 
@@ -36,7 +25,7 @@ celery = Celery(
     "tasks", broker=redis_url(), result_backend=redis_url(), task_cls=BaseTaskWithRetry
 )
 
-celery.steps["worker"].add(HealthCheckServer)
+celery_healthcheck.register(celery)
 
 # define a hard timeout to limit infinitely running processes
 # 35m is an arbitrary number, but should be long enough to handle most tasks

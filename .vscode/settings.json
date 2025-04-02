@@ -117,6 +117,12 @@
     "editor.formatOnSave": true
   },
 
-  // tmp thing to make sure we are using copilot
-  "cody.suggestions.mode": "off"
+  // copilot config https://code.visualstudio.com/docs/copilot/copilot-customization
+  "github.copilot.chat.codeGeneration.useInstructionFiles": true,
+  "github.copilot.chat.codeGeneration.instructions": [
+    {
+      // TODO unclear if this is necessary?
+      "file": "./.github/copilot-instructions.md"
+    }
+  ]
 }

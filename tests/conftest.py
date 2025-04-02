@@ -1,14 +1,23 @@
 import os
 import sys
 
-# when running locally, switching to the full-blown CI environment is a pain
-# to make it quick & easy to run tests, we force the environment to test
-# this will not be the same as CI, but it's closer and faster for devprod
+# When running locally, switching to the full-blown CI environment is a pain.
+# To make it quick & easy to run tests, we force the environment to test and load cached CI environment variables (if we can).
+# This will not be the same as CI, but it's closer and faster for devprod. It should never run on CI!
 if os.environ["PYTHON_ENV"] != "test":
-    print("\033[91mPYTHON_ENV is not set to test, forcing\033[0m")
+    print(
+        "\033[91m"
+        "PYTHON_ENV is not set to 'test', forcing.\n\n"
+        "Additional variables may set in '.env.test' and required to run tests.\n\n"
+        "Consider using `just py_test"
+        "\033[0m"
+        )
     os.environ["PYTHON_ENV"] = "test"
 
     assert 'app' not in sys.modules, "app modules should not be imported before environment is set"
+
+    from tests.direnv import load_ci_environment
+    load_ci_environment()
 
 # important to ensure model metadata is added to the application
 import app.models  # noqa: F401
@@ -22,11 +31,9 @@ from pytest import Config, FixtureRequest
 from activemodel.pytest import database_reset_transaction, database_reset_truncate
 from decouple import config as decouple_config
 
+from tests.constants import TEST_RESULTS_DIRECTORY
 from tests.utils import delete_all_clerk_users, log
 from tests.seeds import seed_test_data
-
-# this file is uploaded as an artifact
-TEST_RESULTS_DIRECTORY = Path(decouple_config("TEST_RESULTS_DIRECTORY", cast=str))
 
 log.info("multiprocess start method", start_method=multiprocessing.get_start_method())
 
@@ -61,10 +68,6 @@ def pytest_configure(config: Config):
     # TODO right now this option can only be set on ini, which is strange
     # config.option.asyncio_default_fixture_loop_scope = "session"
 
-    # visual testing config
-    config.option.playwright_visual_snapshot_threshold = 0.2
-    config.option.playwright_visual_failure_directory = TEST_RESULTS_DIRECTORY
-
     # without this, if the test succeeds, no output is provided
     # this is a good default, but makes it much harder to debug what is going on
     config.option.log_cli = True
@@ -82,7 +85,6 @@ def pytest_configure(config: Config):
     config.option.playwright_visual_snapshots_path = decouple_config("PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY", cast=Path)
     config.option.playwright_visual_snapshot_failures_path = TEST_RESULTS_DIRECTORY / "playwright_visual_snapshot_failures"
 
-
 def pytest_sessionstart(session):
     "only executes once if a test is run, at the beginning of the test suite execution"
 
@@ -93,6 +95,7 @@ def pytest_sessionstart(session):
     # we reseed the database with a base set of records
     seed_test_data()
 
+# TODO we should really throw an exception if integration and non-integration tests are mixed, this will cause DB related issues
 def is_integration_test(request: FixtureRequest):
     integration_tests = Path(__file__).parent / "integration"
 
@@ -135,8 +138,14 @@ def sync_celery():
     # Restore original values
     celery.conf.update(original_settings)
 
+
 @pytest.fixture(scope="function", autouse=True)
 def datatabase_reset_transaction_for_standard_tests(request):
+    """
+    Use a single entrypoint to determine what database reset strategy to use. It's important that transaction and truncation
+    are not mixed, I saw very odd DB related errors when this happened.
+    """
+
     if is_integration_test(request):
         # transaction truncation cannot be used with integration tests since the forked server does not retain the same
         # db connection in memory and therefore the transaction rollback does not work. To get around this, we truncate the

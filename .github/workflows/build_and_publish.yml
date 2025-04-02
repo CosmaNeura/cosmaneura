@@ -67,12 +67,12 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
         with: { detached: true }
 
-      # traces and pngs allow us to debug e2e test failures
       - name: Upload test artifacts
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
           # playwright traces, screenshots, logs, etc
+          # traces and pngs allow us to debug e2e test failures
           name: test-results
           # NOTE if direnv sourcing fails, this var will not be set and it will fail
           path: |

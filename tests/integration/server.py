@@ -16,7 +16,6 @@ import pytest
 import uvicorn
 from decouple import config
 from furl import furl
-from playwright.sync_api import Page
 
 from app import log
 from app.environments import is_local_testing
@@ -149,7 +148,7 @@ def server():
     # TODO should we install a signal trap to ensure the server is killed?
 
 
-def home_url() -> str:
+def home_url():
     # TODO should we just use `base_server_url` instead?
     return str(furl(scheme="https", host=PYTHON_TEST_SERVER_HOST))
 

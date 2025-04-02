@@ -598,6 +598,7 @@ py_playwright_visual-download:
 		gh run --dir ${PLAYWRIGHT_RESULT_DIRECTORY}/${failed_run_id} download $failed_run_id && \
 		cp -R ${PLAYWRIGHT_RESULT_DIRECTORY}/${failed_run_id}/test-results/${PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY}/ ${PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY}/
 
+
 # record playwright interactions for integration tests and dump them to a file
 [macos]
 [script]
@@ -759,7 +760,6 @@ db_downgrade:
 		uv run alembic downgrade $alembic_target_id && \
 		just _banner_echo "Downgrading Test Database..." && \
 		{{EXECUTE_IN_TEST}} uv run alembic downgrade $alembic_target_id
-
 
 # add seed data to dev and test
 db_seed: db_migrate
@@ -1128,6 +1128,10 @@ with_entries(
 	# TODO the `op daemon -d` hack above is to workaround a op bug:
 	# https://1password-devs.slack.com/archives/C03NJV34SSC/p1733771530356779
 	# https://github.com/direnv/direnv/issues/662
+
+@direnv_export_ci:
+	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
+		CI=true direnv export json | jq -r '{{jq_script}}'
 
 # export env variables for a particular file in a format docker can consume
 [doc("Export as docker '-e' params: --params\nExport as shell: --shell")]
