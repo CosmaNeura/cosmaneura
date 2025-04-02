@@ -22,9 +22,6 @@ OPENAI_MODEL = "gpt-4o"
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
-    """
-    Summarize a visit transcript into a clinical note.
-    """
     log.info("starting summarization", transcript_id=transcript_id, schema_id=schema_id)
 
     transcript = AIVisitTranscript.get(id=transcript_id)
@@ -68,13 +65,14 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     log.info("augmenting clinical note")
     note = augment_clinical_note(original=note, transcript=transcript)
 
-    appointment = Appointment.get(id=transcript.appointment_id)
-    assert appointment
+    appointment = Appointment.one(transcript.appointment_id)
 
     # CC == cheif complaint.
     appointment_name = note.get("CC", "General Appointment")
 
-    intake = Intake.one(appointment_id=appointment.id)
+    # TODO unclear if we definitely want the intake appointment name to always override the appointment_name above
+    # intake will not always exist, but if it does, let's pull the appointment name
+    intake = Intake.get(appointment_id=appointment.id)
     if intake and intake.cleaned_external_intake_data:
         data = intake.cleaned_external_intake_data
         appointment_name = f"{data.appointment_type} -- {data.reason_for_visit}"
