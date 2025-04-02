@@ -1,12 +1,16 @@
 import re
+from pathlib import Path
 
 import pytest
+from flexmock import flexmock
 
 from app.jobs.extract import perform
 
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
+
+from tests.factories import DoctorNoteFileFactory
 
 
 def assert_matches(regex, string):
@@ -314,3 +318,198 @@ def test_telehealth_H_and_P_note_extraction():
     assert "Lower abdominal pain" in fields["Plan"]
     assert "45 min visit" in fields["Plan"]
     assert "Teresa Asam-Jensen" not in fields["Plan"]  # De-identified
+
+
+def test_no_duplicates_on_failure():
+    """
+    If openai fails during the note extraction operation, we need to ensure duplicate note schemas or examples are not created."
+    """
+    import app.jobs.extract as extract_module
+
+    doctor_note_file = DoctorNoteFileFactory.build().save()
+
+    # Mock download_note so we don't need to touch Azure
+    sample_content = "This is a sample doctor note content"
+    flexmock(extract_module).should_receive("download_note").and_return(sample_content)
+
+    example_note_fields = [
+        "CC",
+        "Subjective",
+        "ROS",
+    ]
+
+    # let's mock out extract_note_fields and explain_note_fields to avoid hitting openai
+    flexmock(extract_module).should_receive("extract_note_fields").and_return(
+        example_note_fields
+    )
+
+    flexmock(extract_module).should_receive("explain_note_fields").and_return(
+        {
+            "CC": "Chief Complaint",
+            "Subjective": "Subjective Information",
+            "ROS": "Review of Systems",
+        }
+    )
+
+    # Mock extract_note_fields to throw an exception
+    flexmock(extract_module).should_receive("extract_note_content").and_raise(
+        Exception("OpenAI API error")
+    )
+
+    # paranoid: let's make sure we don't have any existing schemas or examples
+    assert (
+        DoctorNoteSchema.where(
+            DoctorNoteSchema.doctor_id == doctor_note_file.doctor_id
+        ).count()
+        == 0
+    )
+    assert (
+        DoctorNoteExample.where(
+            DoctorNoteSchema.doctor_id == doctor_note_file.doctor_id
+        ).count()
+        == 0
+    )
+
+    # Run the job, which should fail
+    with pytest.raises(Exception, match="OpenAI API error"):
+        perform(doctor_note_file.id)
+
+    # Verify no new schemas or examples were created
+    schema_count = DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor_note_file.doctor_id
+    ).count()
+    example_count = DoctorNoteExample.where(
+        DoctorNoteExample.doctor_id == doctor_note_file.doctor_id
+    ).count()
+
+    # now that it's failed, let's simulate rerunning the job and ensuring no additional schemas were created
+    with pytest.raises(Exception, match="OpenAI API error"):
+        perform(doctor_note_file.id)
+
+    schema_count_after = DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor_note_file.doctor_id
+    ).count()
+    example_count_after = DoctorNoteExample.where(
+        DoctorNoteExample.doctor_id == doctor_note_file.doctor_id
+    ).count()
+
+    assert schema_count == schema_count_after
+    assert example_count == example_count_after
+
+
+def test_multiple_examples_per_note():
+    """
+    As of 2025-04-02 we don't do anything with multiple notes per schema, but we do want to make sure it is supported.
+
+    let's upload multiple notes for a single schema and check:
+
+    1. example count
+    2. no additional schemas created
+    """
+    import app.jobs.extract as extract_module
+
+    # Create an initial doctor note file
+    doctor_note_file1 = DoctorNoteFileFactory.build().save()
+
+    # Mock download_note
+    sample_content1 = "This is the first sample doctor note content"
+    flexmock(extract_module).should_receive("download_note").and_return(
+        sample_content1
+    ).once()
+
+    # Mock extraction functions to return consistent data
+    # since we are uploading two notes, this will happen twice
+    flexmock(extract_module).should_receive("extract_note_fields").and_return(
+        ["CC", "Subjective", "ROS"]
+    ).times(2)
+
+    flexmock(extract_module).should_receive("explain_note_fields").and_return(
+        {
+            "CC": "Chief Complaint",
+            "Subjective": "Subjective Information",
+            "ROS": "Review of Systems",
+        }
+    ).times(1)
+
+    flexmock(extract_module).should_receive("extract_note_content").and_return(
+        {
+            "CC": "Headache",
+            "Subjective": "Patient reports mild headache for 2 days",
+            "ROS": "Otherwise negative",
+        }
+    ).once()
+
+    # Process the first file
+    perform(doctor_note_file1.id)
+
+    # Verify schema and example were created
+    initial_schema_count = DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor_note_file1.doctor_id
+    ).count()
+    initial_example_count = DoctorNoteExample.where(
+        DoctorNoteExample.doctor_id == doctor_note_file1.doctor_id
+    ).count()
+
+    assert initial_schema_count == 1
+    assert initial_example_count == 1
+
+    # Get the schema ID for the second note to reference
+    schema = DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor_note_file1.doctor_id
+    ).first()
+
+    # Create a second doctor note file of the same type
+    doctor_note_file2 = DoctorNoteFileFactory.build(
+        doctor_id=doctor_note_file1.doctor_id, note_type=doctor_note_file1.note_type
+    ).save()
+
+    # Mock for second file
+    sample_content2 = "This is the second sample doctor note content"
+    flexmock(extract_module).should_receive("download_note").and_return(
+        sample_content2
+    ).once()
+
+    # Don't need to extract fields and explain fields again since we reuse the schema
+    flexmock(extract_module).should_receive("extract_note_content").and_return(
+        {
+            "CC": "Sore throat",
+            "Subjective": "Patient reports sore throat for 3 days",
+            "ROS": "No other symptoms",
+        }
+    ).once()
+
+    # Process the second file
+    perform(doctor_note_file2.id)
+
+    # Verify a new example was created but no new schema
+    final_schema_count = DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor_note_file1.doctor_id
+    ).count()
+    final_example_count = DoctorNoteExample.where(
+        DoctorNoteExample.doctor_id == doctor_note_file1.doctor_id
+    ).count()
+
+    assert final_schema_count == initial_schema_count  # Should be same as before
+    assert final_example_count == initial_example_count + 1  # Should be one more
+
+    # Get both examples and verify they have different content
+    examples = list(
+        DoctorNoteExample.where(
+            DoctorNoteExample.doctor_id == doctor_note_file1.doctor_id
+        ).all()
+    )
+
+    assert len(examples) == 2
+
+    # Verify the examples have different content
+    example_ccs = [example.field_examples["CC"] for example in examples]
+    assert "Headache" in example_ccs
+    assert "Sore throat" in example_ccs
+    assert example_ccs[0] != example_ccs[1]
+
+    # Verify both examples refer to the same schema
+    schema_ids = [example.doctor_note_schema_id for example in examples]
+    assert schema_ids[0] == schema_ids[1]
+
+    # two examples for one note!
+    assert schema.example_count == 2
