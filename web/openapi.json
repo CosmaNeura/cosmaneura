@@ -481,7 +481,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "TypeID with prefix: visit_note"
           },
           "created_at": {
             "anyOf": [
@@ -554,7 +555,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "TypeID with prefix: ai_visit_transcript"
           },
           "deleted_at": {
             "type": "string",
@@ -633,7 +635,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "TypeID with prefix: appointment"
           },
           "created_at": {
             "anyOf": [
@@ -749,7 +752,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "TypeID with prefix: doctor_note_schema"
           },
           "deleted_at": {
             "type": "string",
@@ -865,7 +869,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "TypeID with prefix: intake"
           },
           "deleted_at": {
             "type": "string",
@@ -1122,7 +1127,8 @@
         "properties": {
           "id": {
             "type": "string",
-            "title": "Id"
+            "title": "Id",
+            "description": "TypeID with prefix: patient"
           },
           "created_at": {
             "anyOf": [
