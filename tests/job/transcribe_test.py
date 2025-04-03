@@ -5,7 +5,7 @@ from app.models.visit_audio_file import VisitAudioFile
 
 
 def count_transcripts_for_audio_file(audio_file: VisitAudioFile) -> int:
-    return AIVisitTranscript.select().where(
+    return AIVisitTranscript.where(
         (AIVisitTranscript.doctor_id == audio_file.doctor_id)
         & (AIVisitTranscript.appointment_id == audio_file.appointment_id)
         & (AIVisitTranscript.patient_id == audio_file.patient_id)
@@ -14,7 +14,7 @@ def count_transcripts_for_audio_file(audio_file: VisitAudioFile) -> int:
 def test_perform_idempotency():
   # Created in test seeds.
   audio_file = VisitAudioFile.get(
-     azure_file_name="teresa-jensen-mock-appointment-11-15-2024.m4a"
+     azure_file_name="SHORT-teresa-jensen-mock-appointment-11-15-2024.m4a"
   )
   assert audio_file is not None
   assert count_transcripts_for_audio_file(audio_file) == 0
@@ -42,75 +42,75 @@ def test_perform_idempotency():
 def test_wav_transcription():
   # Created in test seeds.
   audio_file = VisitAudioFile.get(
-     azure_file_name="teresa-jensen-mock-appointment-11-15-2024.wav"
+     azure_file_name="SHORT-teresa-jensen-mock-appointment-11-15-2024.wav"
   )
   assert audio_file is not None
 
   result = transcribe_audio(audio_file)
 
-  assert result.duration > 2200
+  assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 65
+  assert len(doctor_entries) >= 6
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
-  assert len(patient_entries) >= 65
+  assert len(patient_entries) >= 6
 
 def test_m4a_transcription():
   # Created in test seeds.
   audio_file = VisitAudioFile.get(
-     azure_file_name="teresa-jensen-mock-appointment-11-15-2024.m4a"
+     azure_file_name="SHORT-teresa-jensen-mock-appointment-11-15-2024.m4a"
   )
   assert audio_file is not None
 
   result = transcribe_audio(audio_file)
 
-  assert result.duration > 2200
+  assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 65
+  assert len(doctor_entries) >= 6
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
-  assert len(patient_entries) >= 65
+  assert len(patient_entries) >= 6
 
 def test_mp4_transcription():
   # Created in test seeds.
   audio_file = VisitAudioFile.get(
-     azure_file_name="teresa-jensen-mock-appointment-11-15-2024.mp4"
+     azure_file_name="SHORT-teresa-jensen-mock-appointment-11-15-2024.mp4"
   )
   assert audio_file is not None
 
   result = transcribe_audio(audio_file)
 
-  assert result.duration > 2200
+  assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 65
+  assert len(doctor_entries) >= 6
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
-  assert len(patient_entries) >= 65
+  assert len(patient_entries) >= 6
 
 def test_avi_transcription():
   # Created in test seeds.
   audio_file = VisitAudioFile.get(
-     azure_file_name="teresa-jensen-mock-appointment-11-15-2024.avi"
+     azure_file_name="SHORT-teresa-jensen-mock-appointment-11-15-2024.avi"
   )
   assert audio_file is not None
 
   result = transcribe_audio(audio_file)
 
-  assert result.duration > 2200
+  assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 65
+  assert len(doctor_entries) >= 6
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
-  assert len(patient_entries) >= 65
+  assert len(patient_entries) >= 6
 
 def test_mov_transcription():
   # Created in test seeds.
   audio_file = VisitAudioFile.get(
-     azure_file_name="teresa-jensen-mock-appointment-11-15-2024.mov"
+     azure_file_name="SHORT-teresa-jensen-mock-appointment-11-15-2024.mov"
   )
   assert audio_file is not None
 
   result = transcribe_audio(audio_file)
 
-  assert result.duration > 2200
+  assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 65
+  assert len(doctor_entries) >= 6
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
-  assert len(patient_entries) >= 65
+  assert len(patient_entries) >= 6
 
