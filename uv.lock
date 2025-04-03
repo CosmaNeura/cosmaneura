@@ -1063,7 +1063,7 @@ wheels = [
 [[package]]
 name = "flower"
 version = "2.0.0"
-source = { git = "https://github.com/iloveitaly/flower?rev=custom#ec812da948c2f8b1fa2dea1aeb18d619a0aced08" }
+source = { git = "https://github.com/iloveitaly/flower?rev=custom#6413e14389138ee8622aa1dbee391345a5a74cd7" }
 dependencies = [
     { name = "celery" },
     { name = "humanize" },
