@@ -48,6 +48,7 @@ def test_audio_file_upload(server, page: Page, assert_snapshot) -> None:
 
     page.get_by_role("button", name="Upload").click()
 
+    # this is problematic, as it dissappears after the upload
     expect(page.get_by_text("Notification Upload")).to_be_visible()
 
     assert VisitAudioFile.count() == 1

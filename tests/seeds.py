@@ -17,7 +17,7 @@ from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
 from tests.routes.utils import get_clerk_seed_user
-from tests.utils import log
+from tests.log import log
 
 
 def seed_test_data():
