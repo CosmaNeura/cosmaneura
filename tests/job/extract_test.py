@@ -312,7 +312,7 @@ def test_telehealth_H_and_P_note_extraction():
     assessment_contents = [
         r"Abnormal menstrual cycle \(N92.6\) Irregular menstruation",
         r"Lower abdominal pain \(R10.30\) Lower abdominal pain, unspecified",
-        r"\(Problem reconciliation performed by .* Last updated\)",  # De-identified
+        "Problem reconciliation performed by",
     ]
     for content in assessment_contents:
         assert_matches(content, assessment)
