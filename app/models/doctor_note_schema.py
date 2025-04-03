@@ -11,7 +11,7 @@ from activemodel.mixins import (
 )
 from activemodel.types import TypeIDType
 from sqlalchemy.dialects.postgresql import JSON
-from sqlmodel import Field, Relationship
+from sqlmodel import Field, Relationship, UniqueConstraint
 
 from .doctor import Doctor
 
@@ -43,6 +43,11 @@ class DoctorNoteSchema(
 
     examples: list["DoctorNoteExample"] = Relationship(
         back_populates="doctor_note_schema"
+    )
+
+    __table_args__ = (
+        # users should never see two schemas with the same name
+        UniqueConstraint("note_type", "doctor_id", name="doctor_and_note_type_unique"),
     )
 
     @computed_field
