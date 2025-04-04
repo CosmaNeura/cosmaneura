@@ -21,6 +21,38 @@ def count_visit_notes(transcript: AIVisitTranscript, schema: DoctorNoteSchema) -
         & (AIVisitNote.doctor_note_schema_id == schema.id)
     ).count()
 
+def test_summarize_copies_schema_field_orer():
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+    assert appt.appointment_name is None
+
+    schema = DoctorNoteSchema.get(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    )
+    assert schema is not None
+
+    transcript = (
+        AIVisitTranscript.where(AIVisitTranscript.appointment_id == appt.id).one()
+    )
+    assert transcript is not None
+
+    perform(transcript.id, schema.id)
+
+    note = AIVisitNote.get(
+        (AIVisitNote.ai_transcript_id == transcript.id)
+        & (AIVisitNote.doctor_note_schema_id == schema.id)
+    )
+    assert note is not None
+
+    note_fields = list(note.note.keys())
+    schema_fields = list(schema.fields.keys())
+
+    assert note_fields == schema_fields
+
 # Done at the request of Caroline at Fiat Health.
 def test_summarize_includes_patient_action_items():
     patient = Patient.where(Patient.name == "Samwise Gamgee").one()
