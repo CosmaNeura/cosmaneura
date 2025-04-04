@@ -31,8 +31,8 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     assert schema
 
     existing_note = AIVisitNote.get(
-        AIVisitNote.ai_transcript_id == transcript.id
-        and AIVisitNote.doctor_note_schema_id == schema.id
+        (AIVisitNote.ai_transcript_id == transcript.id)
+        & (AIVisitNote.doctor_note_schema_id == schema.id)
     )
 
     if existing_note:
