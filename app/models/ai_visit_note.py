@@ -5,7 +5,7 @@ from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_schema import DoctorNoteSchema
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSON
 from sqlmodel import Field, Relationship
 
 from .appointment import Appointment
@@ -48,5 +48,7 @@ class AIVisitNote(
     def note_type(self) -> str:
         return self.doctor_note_schema.note_type
 
-    note: dict[str, str] = Field(sa_type=JSONB)
+    # Order of note fields REALLY matters, so we cannot use JSONB, which will
+    # remove the ordering when it serializes to binary.
+    note: dict[str, str] = Field(sa_type=JSON)
     "key is name of section, value is markdown content"
