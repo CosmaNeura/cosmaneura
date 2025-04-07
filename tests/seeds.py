@@ -93,15 +93,15 @@ def seed_test_data():
         note_type="Test SOAP Note",
         fields={
             "CC": "Summarize the main reason for the patient's visit in one sentence.",
-            "ROS": "Conduct a review of systems to identify any additional symptoms the patient may be experiencing across different body systems.",
-            "Plan": "Outline the proposed management plan, including any treatments, medications, follow-up appointments, and patient education.",
-            "Vitals": "Record the patient's vital signs, including temperature, blood pressure, heart rate, respiratory rate, and oxygen saturation.",
-            "Allergies": "Note any known allergies the patient has, including drug, food, and environmental allergies, and describe the type of reaction if known.",
-            "Objective": "Include findings from the physical examination and any relevant diagnostic tests or imaging results.",
-            "Assessment": "List the primary diagnosis and any secondary diagnoses, along with the rationale for each diagnosis.",
             "Subjective": "Document the patient's own description of their symptoms, concerns, and any relevant personal or family medical history.",
             "Medications": "List all current medications the patient is taking, including dosages and frequency.",
-            "Mental/Functional": "Assess the patient's mental status and functional abilities, noting any cognitive or psychological concerns.",
+            "Allergies": "Note any known allergies the patient has, including drug, food, and environmental allergies, along with the type of reaction experienced.",
+            "Mental/Functional": "Assess and record the patient's mental status and functional abilities, including any cognitive or psychological concerns.",
+            "Vitals": "Record the patient's vital signs, including temperature, pulse, respiration rate, blood pressure, and any other relevant measurements.",
+
+            "Objective": "Include findings from the physical examination and any relevant diagnostic tests or imaging results.",
+            "Assessment": "List the primary diagnosis and any secondary diagnoses, along with the rationale for each diagnosis.",
+            "Plan": "Outline the proposed management plan, including treatments, medications, follow-up appointments, and any referrals to specialists."
         },
     ).save()
 
@@ -291,7 +291,7 @@ def seed_test_data():
         },
     ).save()
 
-    AIVisitNote.find_or_create_by(
+    AIVisitNote(
         doctor_id=doctor.id,
         appointment_id=appointment.id,
         ai_transcript_id=ai_visit_transcript.id,
@@ -302,7 +302,7 @@ def seed_test_data():
             "Assessment": "Recurring headaches of unknown etiology",
             "Plan": "Further evaluation needed to determine cause and appropriate treatment plan",
         },
-    )
+    ).save()
 
     patient2 = Patient.find_or_create_by(
         doctor_id=doctor.id,

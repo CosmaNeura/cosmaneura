@@ -167,7 +167,7 @@ doctor_note_example = DoctorNoteExample.find_or_create_by(
     },
 )
 
-AIVisitNote.find_or_create_by(
+AIVisitNote(
     doctor_id=doctor.id,
     appointment_id=appointment.id,
     ai_transcript_id=ai_visit_transcript.id,
@@ -178,7 +178,7 @@ AIVisitNote.find_or_create_by(
         "Assessment": "Recurring headaches of unknown etiology",
         "Plan": "Patient reports a wound from battle. Destroyed massive armies and is struggling to regain strength.\n\nRecommend lots of wine, rest, and some light exercise.",
     },
-)
+).save()
 
 incomplete_intake = SimpleIncompleteIntakeFactory.build(doctor_id=doctor.id).save()
 complete_intake = SimpleCompleteIntakeFactory.build(doctor_id=doctor.id).save()
