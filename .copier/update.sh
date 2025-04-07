@@ -10,4 +10,5 @@ uv tool run --with jinja2_shell_extension \
   --exclude web \
   --exclude infra \
   --exclude .copier \
+  --exclude app/jobs \
   --exclude .env.shared
