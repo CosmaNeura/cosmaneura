@@ -13,11 +13,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette import status
 
+from app.models.doctor import Doctor
 from app.routes.api import external_api_app
 from app.routes.errors import EarlyResponseException
 from app.routes.utils.openapi import simplify_operation_ids
-
-from app.models.doctor import Doctor
 
 from .environments import is_production
 from .routes.chat import chat_api_app
@@ -35,9 +34,6 @@ if is_production():
         "openapi_url": None,
     }
 
-# TODO should we set a debug flag? https://fastapi.tiangolo.com/reference/fastapi/?h=debug#fastapi.FastAPI--example
-# TODO set `version:` as GIT sha? Set `title:`? https://github.com/fastapiutils/fastapi-utils/blob/e9e7e2c834d703503a3bf5d5605db6232dd853b9/fastapi_utils/api_settings.py#L43
-
 
 class ORJSONSortedResponse(JSONResponse):
     """
@@ -49,6 +45,10 @@ class ORJSONSortedResponse(JSONResponse):
 
     def render(self, content: Any) -> bytes:
         return orjson.dumps(content, option=orjson.OPT_NON_STR_KEYS)
+
+
+# TODO should we set a debug flag? https://fastapi.tiangolo.com/reference/fastapi/?h=debug#fastapi.FastAPI--example
+# TODO set `version:` as GIT sha? Set `title:`? https://github.com/fastapiutils/fastapi-utils/blob/e9e7e2c834d703503a3bf5d5605db6232dd853b9/fastapi_utils/api_settings.py#L43
 
 
 # TODO not possible to type this properly :/ https://github.com/python/typing/discussions/1501
