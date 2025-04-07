@@ -1294,6 +1294,10 @@
             "type": "string",
             "title": "Clerk Id"
           },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
           "email": {
             "anyOf": [
               {
@@ -1309,6 +1313,7 @@
         "type": "object",
         "required": [
           "clerk_id",
+          "id",
           "email"
         ],
         "title": "UserSwitchData"
