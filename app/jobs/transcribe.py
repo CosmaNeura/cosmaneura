@@ -1,3 +1,7 @@
+"""
+This is the first step in the visit upload process
+"""
+
 import json
 import os
 import uuid
@@ -137,9 +141,9 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
         return temp_audio_path
 
     finally:
-        if os.path.exists(temp_download_path):
-            log.info("cleaning up temp download file", path=temp_download_path)
-            os.remove(temp_download_path)
+        if os.path.exists(temp_audio_path):
+            log.info("cleaning up temp download file", path=temp_audio_path)
+            os.remove(temp_audio_path)
 
 
 def extract_audio_from_video(
