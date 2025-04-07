@@ -13,13 +13,30 @@ register_celery_typeid_encoder()
 
 
 class BaseTaskWithRetry(Task):
-    "the default retry sequence is very fast, we use a longer retry sequence in case an external system is down"
+    """
+    Base task class with extended retry capabilities. The default retry sequence is very fast, we use a longer
+    retry sequence in case an external system is down.
+
+    This class extends the Celery Task class to implement a slower retry sequence,
+    which is useful when dealing with external systems (like openai) that might be temporarily down
+    or rate limited.
+
+    Attributes:
+        autoretry_for (tuple): Exceptions that trigger automatic retry. Default is (Exception,),
+                              which means any exception will trigger a retry.
+        max_retries (int): Maximum number of retry attempts. Default is 20.
+        retry_backoff (bool): Whether to use exponential backoff. Default is True.
+        retry_backoff_max (int): Maximum backoff time in seconds. Default is 700.
+        retry_jitter (bool): Whether to add random jitter to backoff. Default is True.
+    """
 
     autoretry_for = (Exception,)
     max_retries = 20
     retry_backoff = True
     retry_backoff_max = 700
     retry_jitter = True
+
+    # TODO should probably add a CM for the database session here...
 
 
 celery = Celery(
