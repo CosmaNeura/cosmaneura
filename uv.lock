@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 [[package]]
 name = "activemodel"
 version = "0.10.0"
-source = { git = "https://github.com/iloveitaly/activemodel.git#34e457488a6e59c4e7daf1d7495b59ac64bd7ea2" }
+source = { git = "https://github.com/iloveitaly/activemodel.git#c624ac0712598d06759166ce9f91a37f40fefcfe" }
 dependencies = [
     { name = "pydash" },
     { name = "python-decouple-typed" },
@@ -557,6 +557,7 @@ debugging-extras = [
     { name = "ipython-suggestions" },
     { name = "ipythonclipboard" },
     { name = "jedi" },
+    { name = "llm-sql-prompt" },
     { name = "pdbr", extra = ["ipython"] },
     { name = "pipdeptree" },
     { name = "pre-commit" },
@@ -661,6 +662,7 @@ debugging-extras = [
     { name = "ipython-suggestions", git = "https://github.com/iloveitaly/ipython-suggestions.git?rev=ipython-9.x" },
     { name = "ipythonclipboard", specifier = ">=1.0b2" },
     { name = "jedi", specifier = ">=0.19.2" },
+    { name = "llm-sql-prompt", specifier = ">=0.7.0" },
     { name = "pdbr", extras = ["ipython"], git = "https://github.com/iloveitaly/pdbr.git?rev=ipython-9.x" },
     { name = "pipdeptree", specifier = ">=2.25.0" },
     { name = "pre-commit", specifier = ">=4.1.0" },
@@ -1511,6 +1513,20 @@ wheels = [
 ]
 
 [[package]]
+name = "llm-sql-prompt"
+version = "0.7.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "mysql-connector-python" },
+    { name = "psycopg2" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/95/2a/b15d5ec1fdd850dac206fdedaa70a0b2a79fd265c1f70b74c727b2e8f0fd/llm_sql_prompt-0.7.0.tar.gz", hash = "sha256:d6bd8ab9d1495cc664bb211bd5cfabaeab4af963292a6ca05b6a8dc63aff141d", size = 14834 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f9/09/0aaf4cf7c210ef6bcde715d620a55dfd9eaa7c1da4756e37c0b6e784f738/llm_sql_prompt-0.7.0-py3-none-any.whl", hash = "sha256:54b4ec2c6cb476c3950ef49f1f8dfb9ba18b615d09961d54fe7164d5ca393a35", size = 9637 },
+]
+
+[[package]]
 name = "mailers"
 version = "3.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1646,6 +1662,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/98/a4/1ab47638b92648243faf97a5aeb6ea83059cc3624972ab6b8d2316078d3f/mypy_extensions-1.0.0.tar.gz", hash = "sha256:75dbf8955dc00442a438fc4d0666508a9a97b6bd41aa2f0ffe9d2f2725af0782", size = 4433 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/e2/5d3f6ada4297caebe1a2add3b126fe800c96f56dbe5d1988a2cbe0b267aa/mypy_extensions-1.0.0-py3-none-any.whl", hash = "sha256:4392f6c0eb8a5668a69e23d168ffa70f0be9ccfd32b5cc2d26a34ae5b844552d", size = 4695 },
+]
+
+[[package]]
+name = "mysql-connector-python"
+version = "9.2.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/2c/3c/ac29cab6a7bcabcda392a3b4762d19e1e7a1656ee78d0b8bd307a57471a6/mysql_connector_python-9.2.0-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:417c538dfd64e6d415280067f4d7ce3f901ce85c548e609247a794d205769276", size = 15149659 },
+    { url = "https://files.pythonhosted.org/packages/22/c0/77d7418d78e8017b720a2f610fe9113668d7e75922686c36b35b7ace7780/mysql_connector_python-9.2.0-cp313-cp313-macosx_14_0_x86_64.whl", hash = "sha256:4d97485eb3f63ab26f6438570c4a392bb1f53c3ad9dca1bfd8b61b5ec1bba690", size = 15968172 },
+    { url = "https://files.pythonhosted.org/packages/65/05/ff9b5c4cd58d1a2b64f55b4ca5a7ac3fca23a3adcac7e692fded4991f8d9/mysql_connector_python-9.2.0-cp313-cp313-manylinux_2_28_aarch64.whl", hash = "sha256:c2e973bcc6eab68e41e01438b706788e3f47b0b4d6a17fcb74583f7e0b990c5f", size = 33556035 },
+    { url = "https://files.pythonhosted.org/packages/11/fe/53f358b947997c6352642011d7f256e7fe8fec6f0badbda4aefad37d30e5/mysql_connector_python-9.2.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:2238ba121a30dd3a23d33ce3437642e38a1d4b86afaf7a487cdb0d7727db2010", size = 33954322 },
+    { url = "https://files.pythonhosted.org/packages/22/4b/4f5462a81d046bb54bbb62ffbcea654e78f3ae2a64eb24a14c2872c4d75e/mysql_connector_python-9.2.0-cp313-cp313-win_amd64.whl", hash = "sha256:6557942f6c6be3b41d2965456b53a244a7ce3e6fb81cb195c243549be72a6a24", size = 16096367 },
+    { url = "https://files.pythonhosted.org/packages/55/aa/0ff1b80fcce28abb7ce53c1d3d14ebb28fb4206ca561480cb8b7d54163ad/mysql_connector_python-9.2.0-py2.py3-none-any.whl", hash = "sha256:d007c05a48fc076e5ac7ad3d76e332fa5b0e885853c2da80071ade2d6e01aba5", size = 398150 },
 ]
 
 [[package]]
@@ -1988,6 +2017,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d7/d7/0d2cb4b42f231e2efe8ea1799ce917973d47486212a2c4d33cd331e7ac28/psycopg_binary-3.2.6-cp313-cp313-musllinux_1_2_ppc64le.whl", hash = "sha256:36f598300b55b3c983ae8df06473ad27333d2fd9f3e2cfdb913b3a5aaa3a8bcf", size = 3402335 },
     { url = "https://files.pythonhosted.org/packages/66/92/7050c372f78e53eba14695cec6c3a91b2d9ca56feaf0bfe95fe90facf730/psycopg_binary-3.2.6-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:0f4699fa5fe1fffb0d6b2d14b31fd8c29b7ea7375f89d5989f002aaf21728b21", size = 3440442 },
     { url = "https://files.pythonhosted.org/packages/5f/4c/bebcaf754189283b2f3d457822a3d9b233d08ff50973d8f1e8d51f4d35ed/psycopg_binary-3.2.6-cp313-cp313-win_amd64.whl", hash = "sha256:afe697b8b0071f497c5d4c0f41df9e038391534f5614f7fb3a8c1ca32d66e860", size = 2783465 },
+]
+
+[[package]]
+name = "psycopg2"
+version = "2.9.10"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/51/2007ea29e605957a17ac6357115d0c1a1b60c8c984951c19419b3474cdfd/psycopg2-2.9.10.tar.gz", hash = "sha256:12ec0b40b0273f95296233e8750441339298e6a572f7039da5b260e3c8b60e11", size = 385672 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/49/a6cfc94a9c483b1fa401fbcb23aca7892f60c7269c5ffa2ac408364f80dc/psycopg2-2.9.10-cp313-cp313-win_amd64.whl", hash = "sha256:91fd603a2155da8d0cfcdbf8ab24a2d54bca72795b90d2a3ed2b6da8d979dee2", size = 2569060 },
 ]
 
 [[package]]

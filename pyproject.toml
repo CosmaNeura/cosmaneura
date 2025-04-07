@@ -167,6 +167,7 @@ debugging-extras = [
     "ipython-suggestions",
     "ipythonclipboard>=1.0b2",
     "jedi>=0.19.2",
+    "llm-sql-prompt>=0.7.0",
     "pdbr[ipython]>=0.9.0",
     "pipdeptree>=2.25.0",
     "pre-commit>=4.1.0",
@@ -195,8 +196,6 @@ ipython-suggestions = { git = "https://github.com/iloveitaly/ipython-suggestions
 
 [tool.uv.sources.activemodel]
 git = "https://github.com/iloveitaly/activemodel.git"
-# path = "/Users/mike/Projects/python/activemodel"
-# editable = true
 
 [tool.uv.sources.djlint]
 git = "https://github.com/iloveitaly/djLint.git"
