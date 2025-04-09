@@ -1,3 +1,9 @@
+"""
+
+This is the first step in the visit upload process
+
+"""
+
 import json
 import os
 import uuid
