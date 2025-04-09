@@ -134,6 +134,24 @@ user flow
 - [ ] remove markdown formatting from the copy content
 - [ ] add note feedback tool so they can submit feedback
 
+#### 2025-04-04
+
+- [ ] "What they are using and how they are using it" wasn't included in the subjective, it's pushed into a separate category
+- [ ] plan at the end and, and
+- [ ] order: chief compliant, subjective, medications, allergies, vitals, objective, assessment, plan.
+- [ ] her idea order: chief compliant, subjective, objective, assessment, plan. this is the order she wants to see it in.
+- [ ] the plan is in a voice/tense that was ackward.
+- [ ] the order of each 'sub problem' within a visit is important. The system should understand the proper order of the sub problems and maintain this across the visit.
+
+### Lucy
+
+#### 04-09-2024
+
+- I uploaded one recording before we got the note templates figured out, so it would be nice to delete that one for my Type A brain.
+- There’s one I uploaded where I had selected the wrong date when uploading. Again, not that big a deal, but for the sake of organization, it would be nice to be able to correct that.
+- Yesterday I uploaded a recording under the wrong patient but there’s no way to go back and edit which patient it’s linked to.
+
+
 ## vFuture
 
 - [ ] job to deidentify transcripts so we can use as testing "no model weights will be effected by your data"
