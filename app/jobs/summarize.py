@@ -157,7 +157,7 @@ def build_structured_prompt(
         6. Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information.
         7. Ensure all action items are included in the relevant sections of the note.
         8. Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient.
-        9. Respond only in JSON format with the schema above. JSON property values should be valid markdown.
+        9. Respond only in JSON format with the schema above. JSON property values should be valid markdown. If you include a markdown list, each item in the list should be followed by a newline character.
         10. Take a deep breath and think step by step.
     """)
 
