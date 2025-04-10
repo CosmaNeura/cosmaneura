@@ -119,9 +119,16 @@ def download_blob(visit: VisitAudioFile) -> str:
         blob=filename,
     )
 
-    log.info("downloading blob", temp_path=temp_download_path)
+    log.info("blob download starting", temp_path=temp_download_path)
+
+    # TODO Set a timeout, this seems to hang.
+    download_stream = blob_client.download_blob(max_concurrency=8)
+
     with open(temp_download_path, "wb") as file:
-        file.write(blob_client.download_blob().readall())
+        for chunk in download_stream.chunks():
+            file.write(chunk)
+
+    log.info("blob download complete", temp_path=temp_download_path)
 
     return temp_download_path
 
