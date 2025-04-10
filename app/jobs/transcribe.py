@@ -12,7 +12,7 @@ from textwrap import dedent
 import assemblyai as assembly
 import sentry_sdk
 from azure.storage.blob import BlobServiceClient
-from pydub import AudioSegment
+import subprocess
 
 import app.jobs.summarize
 from app import log
@@ -158,9 +158,14 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
 def extract_audio_from_video(
     video_path, format, output_audio_path="extracted_audio.wav"
 ):
-    audio = AudioSegment.from_file(video_path, format=format)
-    audio.export(output_audio_path, format="wav")
-
+    subprocess.run([
+        "ffmpeg",
+        "-i", video_path,         # Input video file
+        "-vn",                    # Disable video
+        "-acodec", "pcm_s16le",   # Use WAV-compatible codec
+        "-f", "wav",              # Output format
+        output_audio_path         # Output file
+    ], check=True)
 
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
