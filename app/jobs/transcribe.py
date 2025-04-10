@@ -171,16 +171,16 @@ def extract_audio_from_video(
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
     log.info("starting audio transcription", file_name=visit_audio_file.azure_file_name)
 
-    ext = os.path.splitext(visit_audio_file.azure_file_name.lower())[1][1:]
-    if ext in SUPPORTED_AUDIO_FILE_TYPES:
-        audio_file = download_blob(visit_audio_file)
-    elif ext in SUPPORTED_VIDEO_FILE_TYPES:
-        audio_file = extract_audio_to_temp(visit_audio_file, format=ext)
-    else:
-        log.error("unsupported file format", extension=ext)
-        raise ValueError(f"Unsupported file format: .{ext}")
-
     try:
+        ext = os.path.splitext(visit_audio_file.azure_file_name.lower())[1][1:]
+        if ext in SUPPORTED_AUDIO_FILE_TYPES:
+            audio_file = download_blob(visit_audio_file)
+        elif ext in SUPPORTED_VIDEO_FILE_TYPES:
+            audio_file = extract_audio_to_temp(visit_audio_file, format=ext)
+        else:
+            log.error("unsupported file format", extension=ext)
+            raise ValueError(f"Unsupported file format: .{ext}")
+
         transcriber = assembly.Transcriber()
         config = assembly.TranscriptionConfig(speaker_labels=True, speakers_expected=2)
 
