@@ -35,7 +35,7 @@ class AppointmentRequest(BaseModel):
     date: datetime
     "date and time of the appointment"
 
-    doctor: SkipJsonSchema[Doctor | None]
+    doctor: SkipJsonSchema[Doctor | None] = None
 
     doctor_email: EmailStr | None = None
     "email of the doctor who the appointment is scheduled with"
