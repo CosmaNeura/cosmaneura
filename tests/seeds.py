@@ -79,7 +79,7 @@ def seed_test_data():
     DoctorNoteFile.find_or_create_by(
         doctor_id=doctor.id,
         azure_file_name="teresa-jensen-mock-appointment-note-11-22-2024.pdf",
-        note_type="Telehealth SOAP Note",
+        note_type="TEST Telehealth SOAP Note",
     )
 
     schema = DoctorNoteSchema(
