@@ -8,7 +8,7 @@ from textwrap import dedent
 
 from app import log
 from app.celery import celery
-from app.configuration.openai import openai
+from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -18,8 +18,6 @@ from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
-
-OPENAI_MODEL = "gpt-4o"
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
@@ -215,7 +213,7 @@ def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
 def extract_action_items(transcript: AIVisitTranscript) -> str:
     prompt = build_action_item_prompt(transcript)
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[{"role": "system", "content": prompt}],
         temperature=0,
         top_p=0.1,
@@ -240,7 +238,7 @@ def generate_clinical_note(
     # abilities to add fields and sections to their notes and they do.
     # https://platform.openai.com/docs/guides/structured-outputs
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[{"role": "system", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0,

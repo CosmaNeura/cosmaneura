@@ -10,7 +10,7 @@ from typeid import TypeID
 
 from app import log
 from app.celery import celery
-from app.configuration.openai import openai
+from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -18,8 +18,6 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
-
-OPENAI_MODEL = "gpt-4o"
 
 def perform(intake_id: str | TypeID | TypeIDType):
     """
@@ -105,7 +103,7 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
 def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
     prompt = extraction_prompt(intake, doctor)
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[{"role": "system", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0,
@@ -224,7 +222,7 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str|None:
 def generate_intake_questions(intake: Intake, doctor: Doctor) -> list[IntakeSchemaQuestion]:
     prompt = generate_questions_prompt(intake, doctor)
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[{"role": "system", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0,
