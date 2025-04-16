@@ -1,5 +1,8 @@
+import json
+
 from fastapi import status
 from fastapi.testclient import TestClient
+from pydantic import json as pydantic_json
 
 from app.server import api_app
 
@@ -7,6 +10,7 @@ from app.models.appointment import Appointment
 from app.models.intake.intake import Intake
 
 from tests.factories import (
+    EXAMPLE_INTAKE_QUESTIONS,
     AppointmentRequestFactory,
     DoctorFactory,
 )
@@ -18,21 +22,17 @@ def test_intake_creation(client: TestClient, sync_celery):
 
     initial_intake_count = Intake.count()
 
-    # TODO should be a option on the factory itself!
-    request = AppointmentRequestFactory.build(factory_use_construct=True)
-
-    # paranoid because we are adding this logic to polyfactory
-    assert request.intake_json
+    request_json = AppointmentRequestFactory.build_json()
 
     # use the same random email as the request
-    user = DoctorFactory.build(email=request.doctor_email)
+    user = DoctorFactory.build(email=request_json["doctor_email"])
     user.generate_api_key()
     user.save()
 
     response = client.post(
         api_app.url_path_for("create_intake"),
         headers={"Authorization": f"Bearer {user.api_key}"},
-        json=request.model_dump(mode="json"),
+        json=request_json,
     )
 
     assert_status(response)
@@ -63,7 +63,7 @@ def test_intake_creation(client: TestClient, sync_celery):
     response = client.post(
         api_app.url_path_for("create_intake"),
         headers={"Authorization": f"Bearer {user.api_key}"},
-        json=request.model_dump(mode="json"),
+        json=request_json,
     )
 
     assert_status(response)
@@ -73,7 +73,10 @@ def test_intake_creation(client: TestClient, sync_celery):
 
 
 def test_intake_without_doctor_email(client: TestClient):
+    # factory_use_contruct=True skips validations
     request = AppointmentRequestFactory.build(factory_use_construct=True)
+
+    assert request.doctor is None
 
     # email on the above request will not exist
     user = DoctorFactory.build()

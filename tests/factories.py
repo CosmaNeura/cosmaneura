@@ -4,7 +4,7 @@ Remove the alt once factoryboy is refactored out of the codebase
 
 import typing as t
 
-from polyfactory import BaseFactory, NeverNone
+from polyfactory import BaseFactory, Ignore, NeverNone, Use
 from polyfactory.decorators import post_generated
 from polyfactory.factories.pydantic_factory import ModelFactory
 from polyfactory.field_meta import FieldMeta
@@ -123,10 +123,36 @@ class FutureAppointmentFactory(AppointmentFactory):
 
 
 class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
-    # pick a random ID, in any format
+    "generate an API request that a user (clinic) would send to create an appointment"
+
+    # pick a random ID, in any format, since this is not a typeid
     id = BaseFactory.__faker__.uuid4
 
+    # make sure intake data always exist on the generated request
     intake_json = NeverNone()
+
+    # TODO this needs to be fixed upstream in polyfactory, these are all slightly different...
+    # doctor = None
+    # doctor = Use(lambda: None)
+    # doctor = lambda: None
+
+    # note that `Ignore()` will only set a None value if that default is defined on the underlying model
+    doctor = Ignore()
+    doctor_id = Ignore()
+
+    @classmethod
+    def build_json(cls):
+        request = cls.build(factory_use_construct=True)
+
+        # paranoid because we are adding this logic to polyfactory
+        assert request.intake_json
+
+        # fields exist, but are None
+        assert request.doctor is None
+        assert request.doctor_id is None
+
+        # in order to mock the user request, make sure the doctor fields don't end up in the request!
+        return request.model_dump(mode="json", exclude={"doctor", "doctor_id"})
 
     @classmethod
     def doctor_email(cls) -> str:
@@ -158,7 +184,7 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
     # TODO no...
     intake_questions = EXAMPLE_INTAKE_QUESTIONS
 
-    summary = None
+    summary = Ignore()
 
     # TODO should we use ignore instead and just default to server defaults?
     intake_questions_answers = list
