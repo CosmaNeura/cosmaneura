@@ -131,6 +131,16 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
     # make sure intake data always exist on the generated request
     intake_json = NeverNone()
 
+    # a date in the future, with and without an attached timezone
+    date = BaseFactory.__random__.choice(
+        [
+            BaseFactory.__faker__.date_time_this_year(),
+            BaseFactory.__faker__.date_time_this_year(
+                tzinfo=BaseFactory.__faker__.pytimezone()
+            ),
+        ]
+    )
+
     # TODO this needs to be fixed upstream in polyfactory, these are all slightly different...
     # doctor = None
     # doctor = Use(lambda: None)

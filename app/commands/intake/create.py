@@ -2,7 +2,7 @@
 Create a new intake form
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 from pydantic.json_schema import SkipJsonSchema
@@ -54,7 +54,7 @@ class AppointmentRequest(BaseModel):
         if not (self.doctor_email or self.doctor_id):
             raise ValueError("Either doctor_email or doctor_id must be provided")
 
-        if self.date > datetime.now():
+        if self.date.astimezone(timezone.utc) > datetime.now(timezone.utc):
             raise ValueError("Appointment date must be in the past")
 
         if self.doctor_email:
