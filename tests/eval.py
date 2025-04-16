@@ -2,6 +2,7 @@ import json
 from typing import Callable
 from textwrap import dedent
 from app.configuration.openai import openai
+from app import log
 
 OPENAI_MODEL = "gpt-4o-mini"
 
@@ -57,6 +58,8 @@ def eval_llm(llm_output: str, criteria: str) -> bool:
         satisfies_criteria: bool
       }}
     """)
+
+    log.info("evaluating LLM output against criteria")
 
     response = openai.chat.completions.create(
         model=OPENAI_MODEL,
