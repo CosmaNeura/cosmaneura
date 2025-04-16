@@ -165,12 +165,13 @@ def build_structured_prompt(
           - Within each section, you should group information based on condition.
           - E.g. if the patient discusses diabetes and hypertension, and 3 steps in the plan relate to diabetes and 2 steps relate to hypertension, the plan should list the 3 diabetes steps, THEN the 2 hyptertension steps.
           - Sort based on importance of the condition. If hypertension is the patient's main concern, it should be listed first.
-          - Be consistent with the order of conditions across fields. I.e. if anxiety is listed first in the plan, it should also be listed first in the assessment, subjective, and objective sections.
+          - Be consistent with the order of conditions across fields. I.e. if anxiety is covered first in the plan, it should also be covered first in the assessment, subjective, and objective sections.
+          - Do not create subsections within the fields for the conditions. Prefer "flat" lists of items unless absolutely necessary.
         4. Use clear, concise, and professional medical language.
         5. Avoid including any irrelevant personal details or small talk from the transcript.
         6. If certain information is not provided in the transcript, leave that section blank or write "Not mentioned in transcript" as appropriate. E.g. if the patient does not mention respiratory problems, do NOT assume that they do not have them.
         7. Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information.
-        8. Ensure all action items are included in the relevant sections of the note.
+        8. Ensure all action items are included in the relevant sections of the note. But do not repeat yourself -- if a section already mentions the action item, don't mention it again.
         9. Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient.
         10. Respond only in JSON format with the schema above. JSON property values should be valid markdown. If you include a markdown list, each item in the list should be followed by a newline character.
         11. Take a deep breath and think step by step.
