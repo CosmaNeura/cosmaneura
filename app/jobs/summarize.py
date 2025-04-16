@@ -162,6 +162,10 @@ def build_structured_prompt(
         1. Keep in mind your BIO and the kind of visit that the patient is coming in for. This will determine what information is most important to include in your note.
         2. Carefully review the transcript and extract all relevant medical information.
         3. Organize the information into the appropriate sections of the clinical note schema.
+          - Within each section, you should group information based on condition.
+          - E.g. if the patient discusses diabetes and hypertension, and 3 steps in the plan relate to diabetes and 2 steps relate to hypertension, the plan should list the 3 diabetes steps, THEN the 2 hyptertension steps.
+          - Sort based on importance of the condition. If hypertension is the patient's main concern, it should be listed first.
+          - Be consistent with the order of conditions across fields. I.e. if anxiety is listed first in the plan, it should also be listed first in the assessment, subjective, and objective sections.
         4. Use clear, concise, and professional medical language.
         5. Avoid including any irrelevant personal details or small talk from the transcript.
         6. If certain information is not provided in the transcript, leave that section blank or write "Not mentioned in transcript" as appropriate. E.g. if the patient does not mention respiratory problems, do NOT assume that they do not have them.
