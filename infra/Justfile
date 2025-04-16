@@ -80,7 +80,8 @@ tofu_output:
 
 # open a interactive terminal on a production container
 azure_shell container=AZURE_CONTAINER:
-	@echo "Run 'alembic upgrade head' once the console is online to migrate the database"
+	@echo "{{BLUE}}Run 'alembic upgrade head' once the console is online to migrate the database{{NORMAL}}"
+	@echo "{{BLUE}}Run './console.py' to open a python REPL{{NORMAL}}\n"
 	az containerapp exec -n {{container}} -g {{AZURE_RESOURCE_GROUP}} --command 'sh -l'
 
 # TODO azure doesn't like this :/
@@ -110,7 +111,9 @@ azure_logs container=AZURE_CONTAINER:
 	az containerapp logs show --follow -n {{container}} -g {{AZURE_RESOURCE_GROUP}}
 
 # TODO needs to actually be customized per user
+# https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.OperationalInsights/workspaces/cosmaneura-prod-logs/logs
 azure_logs_for_user:
+	# az monitor log-analytics query -w '2a7d954b-373c-4de6-884f-c050ecc1d863' --analytics-query "union * | where TimeGenerated > ago(1d) | where ContainerAppName_s == 'cosmaneura-prod-app'" -o json | jq -c '.[] | {Time: .TimeGenerated, Event: .Log_event_s, Method: .Log_method_s, Did: .Log_doctor_id_s, Path: .Log_path_s, Status: .Log_status_d, Level: .Log_level_s} | to_entries'
 	az monitor log-analytics query -w '2a7d954b-373c-4de6-884f-c050ecc1d863' --analytics-query "union * | where TimeGenerated > ago(1d) | where ContainerAppName_s == 'cosmaneura-prod-app' | where Log_doctor_id_s == 'doctor_01jqck1a5recnaqjs9hcebpvf7'" -o json | jq -c '.[] | {Time: .TimeGenerated, Event: .Log_event_s, Method: .Log_method_s, Did: .Log_doctor_id_s, Path: .Log_path_s, Status: .Log_status_d, Level: .Log_level_s} | to_entries'
 
 # TODO should be renamed
