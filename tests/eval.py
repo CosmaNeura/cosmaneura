@@ -41,6 +41,14 @@ def eval_llm(llm_output: str, criteria: str) -> bool:
     Returns:
         True if the output meets the criteria, False otherwise.
     """
+    return eval_llm_with_attmepts(llm_output, criteria, 1)
+
+def eval_llm_with_attmepts(llm_output: str, criteria: str, attempts: int) -> bool:
+    if attempts > 3:
+        raise AssertionError(
+            f"Model did not return proper schema after 3 attempts, criteria: {criteria}"
+        )
+
     prompt = dedent(f"""
       I am going to give you the OUTPUT of a large language model. Your task is to evaluate the output against CRITERIA that I will provide. If the output satisfies the criteria, return True. Otherwise, return False.
 
@@ -70,4 +78,9 @@ def eval_llm(llm_output: str, criteria: str) -> bool:
     )
     content = response.choices[0].message.content
     assert content
-    return json.loads(content).get("satisfies_criteria", False)
+
+    answer = json.loads(content).get("satisfies_criteria")
+    if answer is not None:
+        return answer
+    else:
+        return eval_llm_with_attmepts(llm_output, criteria, attempts + 1)
