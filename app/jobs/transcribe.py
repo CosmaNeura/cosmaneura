@@ -22,13 +22,11 @@ from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_CONTAINER_NAME,
 )
-from app.configuration.openai import openai
+from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.visit_audio_file import VisitAudioFile
-
-OPENAI_MODEL = "gpt-4o-2024-08-06"
 
 # https://support.assemblyai.com/articles/2616970375-what-audio-and-video-file-types-are-supported-by-your-api
 SUPPORTED_AUDIO_FILE_TYPES = ["wav", "mp3", "m4a", "flac", "ogg", "aac"]
@@ -263,7 +261,7 @@ def identify_doctor_from_transcript(transcript: str) -> str | None:
     """)
 
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[
             {"role": "system", "content": "You are an assistant."},
             {"role": "user", "content": prompt},
@@ -301,7 +299,7 @@ def extract_doctor_classification(reasoning: str | None) -> str | None:
     """)
 
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[
             {"role": "system", "content": "You are an assistant."},
             {"role": "user", "content": prompt},

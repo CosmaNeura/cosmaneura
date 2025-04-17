@@ -10,7 +10,7 @@ from typeid import TypeID
 
 from app import log
 from app.celery import celery
-from app.configuration.openai import openai
+from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -18,8 +18,6 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
-
-OPENAI_MODEL = "gpt-4o"
 
 def perform(intake_id: str | TypeID | TypeIDType):
     """
@@ -155,7 +153,7 @@ def generate_intake_summary(intake: Intake) -> str | None:
     prompt = generate_prompt(intake)
 
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[{"role": "system", "content": prompt}],
         temperature=0,
         top_p=0.1,

@@ -12,9 +12,9 @@ from app.models.doctor import Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.intake import ExternalIntakeData, Intake
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
+from app.models.intake.intake import Intake, ExternalIntakeData
 
 from tests.routes.utils import get_clerk_seed_user
 from tests.log import log
@@ -28,7 +28,7 @@ def seed_test_data():
 
     if not doctor.biography:
         doctor.biography = dedent("""
-        Dr. Jensen sees patients of all ages for holistic primary care and convenient care. She has a special interest in the care of children and adults with developmental disabilities, and completing training as a Creighton FertilityCare Medical Consultant.
+        I have a dual focus on Internal Medicine and Pediatrics. I see patients of all ages for holistic primary care and convenient care. I have a special interest in the care of children and adults with developmental disabilities, and I have completed training as a Creighton FertilityCare Medical Consultant.
         """)
         doctor.save()
 
@@ -51,31 +51,25 @@ def seed_test_data():
         azure_file_name="fiat-health-mock-patient-appointment-12-17-2024.m4a",
     )
 
-    # For testing different video filetypes.
+    # For testing different filetypes.
     eastern_tz = pytz.timezone("America/New_York")
     hour = 13
-    for file_type in ["mp4", "m4a", "mov", "avi"]:
+    for file_type in ["mp4", "m4a", "mov", "avi", "wav"]:
         date_no_zone = datetime(2024, 11, 15, hour, 0, 0)
         date_et = eastern_tz.localize(date_no_zone)
         hour += 1
         appt = Appointment.find_or_create_by(
             doctor_id=doctor.id, patient_id=patient.id, appointment_date=date_et
         )
-        log.info(f"seeding teresa-jensen-mock-appointment-11-15-2024.{file_type}")
+        # These files can be found in test-uploads container in
+        # cosmaneuraproduploads in Azure.
+        log.info(f"seeding SHORT-teresa-jensen-mock-appointment-11-15-2024.{file_type}")
         VisitAudioFile.find_or_create_by(
             doctor_id=doctor.id,
             patient_id=patient.id,
             appointment_id=appt.id,
-            azure_file_name=f"teresa-jensen-mock-appointment-11-15-2024.{file_type}",
+            azure_file_name=f"SHORT-teresa-jensen-mock-appointment-11-15-2024.{file_type}",
         )
-
-    # For audio-only files.
-    VisitAudioFile.find_or_create_by(
-        doctor_id=doctor.id,
-        patient_id=patient.id,
-        appointment_id=appointment.id,
-        azure_file_name="teresa-jensen-mock-appointment-11-15-2024.wav",
-    )
 
     DoctorNoteFile.find_or_create_by(
         doctor_id=doctor.id,
@@ -85,7 +79,7 @@ def seed_test_data():
     DoctorNoteFile.find_or_create_by(
         doctor_id=doctor.id,
         azure_file_name="teresa-jensen-mock-appointment-note-11-22-2024.pdf",
-        note_type="Telehealth SOAP Note",
+        note_type="TEST Telehealth SOAP Note",
     )
 
     schema = DoctorNoteSchema(

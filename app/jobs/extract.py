@@ -23,7 +23,7 @@ from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
-from app.configuration.openai import openai
+from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
 
 from activemodel.types import TypeIDType
 from app.models.doctor_note_example import DoctorNoteExample
@@ -31,8 +31,6 @@ from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 
 from .anonymize import deidentify
-
-OPENAI_MODEL = "gpt-4o"
 
 
 def perform(doctor_note_file_id: str | TypeID | TypeIDType):
@@ -157,7 +155,7 @@ def extract_note_fields(note_pages: list[str]) -> list[str]:
     """)
 
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {
@@ -201,7 +199,7 @@ def explain_note_fields(fields: list[str]) -> dict[str, str]:
     """)
 
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[
             {"role": "system", "content": prompt},
         ],
@@ -243,7 +241,7 @@ def extract_note_content(note_pages: list[str], fields: list[str]) -> dict[str, 
     """)
 
     response = openai.chat.completions.create(
-        model=OPENAI_MODEL,
+        model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[
             {"role": "system", "content": system_prompt},
             {
