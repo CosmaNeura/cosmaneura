@@ -4,7 +4,7 @@ from textwrap import dedent
 from app.configuration.openai import openai
 from app import log
 
-OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
 
 def eval_n_of_m(call_llm: Callable[[], str], criteria: str, n: int, m: int) -> bool:
     """
