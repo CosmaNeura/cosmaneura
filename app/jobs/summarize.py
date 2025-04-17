@@ -116,7 +116,7 @@ def build_structured_prompt(
     # TODO:
     #  - give access to intake information
 
-    doctor = Doctor.get(id=transcript.doctor_id)
+    doctor = Doctor.one(transcript.doctor_id)
     maybe_doctor_bio = "You are a medical professional.\n"
     if doctor and doctor.biography:
         maybe_doctor_bio = dedent(f"""
