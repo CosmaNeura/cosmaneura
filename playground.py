@@ -23,6 +23,7 @@ import funcy_pipe as fp
 from sqlmodel import create_engine
 from activemodel.utils import find_all_sqlmodels
 from app.configuration.clerk import clerk
+from app.configuration.openai import openai
 import ipython_playground
 
 # make all sqlmodels available in the repl
@@ -62,9 +63,6 @@ def retry_task(task_id):
     task = celery.tasks[meta['name']]
     task.apply_async(args=meta['args'], kwargs=meta['kwargs'])
 
-# https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/switching-endpoints
-def azure_openai_call():
-     client = AzureOpenAI(api_key="key_from_1p", azure_endpoint="https://northcentralus.api.cognitive.microsoft.com/", api_version="2025-01-01-preview")
-     client.chat.completions.create(model="gpt-4o", messages=[{"role":"system", "content":"tell me about yourself"}])
+# openai.chat.completions.create(model=DEFAULT_MULTI_MODAL_MODEL, messages=[{"role":"system", "content":"tell me about yourself"}])
 
 ipython_playground.output()
