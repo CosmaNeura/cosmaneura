@@ -134,7 +134,7 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
     # TODO this is not the best way to do this, but we need a way to customize generation of relationships
     # https://discord.com/channels/919193495116337154/1349843948809486398
     @classmethod
-    def post_create(cls, model):
+    def post_build(cls, model):
         """
         We need:
 
@@ -154,6 +154,8 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
             model.appointment_id = appointment.id
 
         model.save()
+
+        return model
 
 
 class SimpleCompleteIntakeFactory(SimpleIncompleteIntakeFactory):
@@ -181,8 +183,8 @@ class SimpleCompleteIntakeFactory(SimpleIncompleteIntakeFactory):
 """
 
     @classmethod
-    def post_create(cls, model):
-        super().post_create(model)
+    def post_build(cls, model):
+        super().post_build(model)
 
         "answer all questions"
         for question in model.intake_questions:
@@ -192,6 +194,8 @@ class SimpleCompleteIntakeFactory(SimpleIncompleteIntakeFactory):
         # IMPORTANT json objects are not automatically marked as dirty
         model.flag_modified("intake_questions")
         model.save()
+
+        return model
 
 
 class DoctorNoteExampleFactory(ActiveModelFactory[DoctorNoteExample]):
@@ -207,7 +211,7 @@ class DoctorNoteSchemaFactory(ActiveModelFactory[DoctorNoteSchema]):
     # fields = factory.Faker("pydict", allowed_types=(str,))
 
     @classmethod
-    def post_create(cls, model: DoctorNoteSchema):
+    def post_build(cls, model):
         # TODO why can't i do this on the header level?
         if not model.doctor_id:
             model.doctor = DoctorFactory.build().save()
@@ -219,6 +223,8 @@ class DoctorNoteSchemaFactory(ActiveModelFactory[DoctorNoteSchema]):
         DoctorNoteExampleFactory.build(
             doctor_note_schema_id=model.id, doctor_id=model.doctor_id
         ).save()
+
+        return model
 
 
 class DoctorNoteFileFactory(ActiveModelFactory[DoctorNoteFile]):
