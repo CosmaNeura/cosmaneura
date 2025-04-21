@@ -1,4 +1,5 @@
 # type: ignore
+# ruff: noqa
 
 """
 Should not be used in production. Helpful debugging tools for async code and other things.
