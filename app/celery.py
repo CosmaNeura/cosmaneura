@@ -39,18 +39,22 @@ class BaseTaskWithRetry(Task):
     # TODO should probably add a CM for the database session here...
 
 
-celery = Celery(
-    "tasks", broker=redis_url(), result_backend=redis_url(), task_cls=BaseTaskWithRetry
+celery_app = Celery(
+    "tasks",
+    broker=redis_url(),
+    result_backend=redis_url(),  # type: ignore
+    redbeat_redis_url=redis_url(),  # type: ignore
+    task_cls=BaseTaskWithRetry,
 )
 
-celery_healthcheck.register(celery)
+celery_healthcheck.register(celery_app)
 
 # define a hard timeout to limit infinitely running processes
 # 35m is an arbitrary number, but should be long enough to handle most tasks
-celery.conf.task_time_limit = 60 * 35
+celery_app.conf.task_time_limit = 60 * 35
 
 # keep results around for 30d, otherwise they are pulled from the flower UI and it's hard to see what happened
-celery.conf.result_expires = 60 * 60 * 24 * 30
+celery_app.conf.result_expires = 60 * 60 * 24 * 30
 
 # By default, is a worker is killed without warning (OOM, etc) which can occur more easily in containerized environments
 # the job will get into a stale state where it looks like it is executing indefinitely and will never be retried.
@@ -63,10 +67,10 @@ celery.conf.result_expires = 60 * 60 * 24 * 30
 #
 #   - https://stackoverflow.com/questions/45045980/what-different-between-task-reject-on-worker-lost-and-task-acks-late-in-celery
 #   - https://stackoverflow.com/questions/69107860/celery-what-is-the-reason-to-have-acks-late-true-without-setting-task-reject-on
-celery.conf.task_reject_on_worker_lost = True
-celery.conf.task_acks_late = True
+celery_app.conf.task_reject_on_worker_lost = True
+celery_app.conf.task_acks_late = True
 
-celery.conf.beat_schedule_filename = str(root / "tmp/celerybeat-schedule")
+celery_app.conf.beat_schedule_filename = str(root / "tmp/celerybeat-schedule")
 
 
 @signals.celeryd_init.connect
@@ -136,7 +140,7 @@ def capture_worker_stop(sender, **kwargs):
 # app.conf.accept_content = ["pickle", "json", "msgpack", "yaml"]
 # app.conf.worker_send_task_events = True
 
-celery.conf.beat_schedule = {
+celery_app.conf.beat_schedule = {
     "sync_clerk": {
         "task": "app.jobs.sync_clerk.perform",
         "schedule": crontab(minute="0", hour="0"),

@@ -17,13 +17,13 @@ from pdf2image import convert_from_path
 from typeid import TypeID
 
 from app import log
-from app.celery import celery
+from app.celery import celery_app
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
-from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
+from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 
 from activemodel.types import TypeIDType
 from app.models.doctor_note_example import DoctorNoteExample
@@ -83,7 +83,7 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
     log.info("extracted note content", note_example_id=example.id)
 
 
-perform_celery = celery.task(perform)
+perform_celery = celery_app.task(perform)
 
 
 # TODO there may be some fancy arg parsing we can do here? https://stackoverflow.com/questions/73856901/how-can-i-use-paramspec-with-method-decorators

@@ -13,4 +13,6 @@ uv tool run --with jinja2_shell_extension \
   --exclude app/jobs \
   --exclude .env.shared \
   --exclude pyproject.toml \
-  --exclude uv.lock
+  --exclude uv.lock \
+  --exclude .tool-versions \
+  --exclude tests/integration/__snapshots__

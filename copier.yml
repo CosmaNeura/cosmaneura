@@ -18,7 +18,7 @@ _message_before_copy: >-
 _message_after_copy: |
   Next steps:
 
-    1. Configure all 1p secret references in .env.shared and friends
+    1. Configure all 1p secret references in '.env*'
     2. Run 'direnv exec . just setup' or 'direnv exec . just setup --extras'
     3. Run 'direnv exec . just db_generate_migration "initial_commit"'
     4. Run 'direnv exec . just py_dev' to start a dev server
@@ -32,6 +32,11 @@ project_slug:
     {% if not (project_slug | regex_search('^[a-z][a-z0-9-]+$')) %}
     project_slug must start with a letter, followed one or more letters, digits or dashes all lowercase.
     {% endif %}
+
+# https://github.com/superlinear-ai/substrate/blob/main/copier.yml
+project_name_snake_case:
+  when: false
+  default: "{{ project_name | lower | replace('-', '_') }}"
 
 from_email:
   type: str
@@ -50,7 +55,7 @@ production_image_name:
 
 one_password_account:
   type: str
-  help: 'The domain of the 1password account to use. Example: "example.1password.com"'
+  help: 'The domain of the 1password account to use. Example: "example.1password.com". Use "op account list" to get the list of accounts.'
   default: "{{ \"op account list --format json | jq -r '.[0].url' || echo ''\" | shell() | trim }}"
 
 one_password_vault:
@@ -66,12 +71,12 @@ _exclude:
   - .github/workflows/repo-sync.yml
   - TODO
   - /.git
-  - migrations/versions/*
   - /README.md
+  - /LICENSE.md
+  - tests/integration/__snapshots__
 
 _tasks:
   - git init
-  - rm README.md
   - git add -A
   - git commit -m "🎉 Initial commit"
   - ["{{ _copier_python }}", .copier/bootstrap.py]

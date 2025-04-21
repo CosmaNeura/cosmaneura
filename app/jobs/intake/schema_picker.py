@@ -1,11 +1,11 @@
 from app import log
-from app.celery import celery
+from app.celery import celery_app
 
 from activemodel.types import TypeIDType
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
 
 
-@celery.task
+@celery_app.task
 def perform(intake_id: str | TypeIDType):
     log.local(intake_id=intake_id)
 
