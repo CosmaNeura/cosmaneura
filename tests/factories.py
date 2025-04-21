@@ -1,7 +1,3 @@
-"""
-Remove the alt once factoryboy is refactored out of the codebase
-"""
-
 import typing as t
 
 from polyfactory import BaseFactory, Ignore, NeverNone, Use
