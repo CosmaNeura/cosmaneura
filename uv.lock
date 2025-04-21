@@ -340,6 +340,21 @@ wheels = [
 ]
 
 [[package]]
+name = "celery-redbeat"
+version = "2.3.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "celery" },
+    { name = "python-dateutil" },
+    { name = "redis" },
+    { name = "tenacity" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9b/9d/7112d5454aba17857f4d30b12d9bfdd2daa66e0561e7f00906700d9db987/celery_redbeat-2.3.2.tar.gz", hash = "sha256:7d6e41e4b807fafba5d88b98e3d3863f0df95ac3ed1692d70b134c079b936b8b", size = 22022 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/97/e9c6147a2cf2bee08bd8f87d7b5af4a4359e82e7829e714bab25ed762a3f/celery_redbeat-2.3.2-py2.py3-none-any.whl", hash = "sha256:9d61ab6e29f59d676621a846c778a347d5acad22e90fb4386343a4852d4f7ac3", size = 15058 },
+]
+
+[[package]]
 name = "celery-types"
 version = "0.23.0"
 source = { registry = "https://pypi.org/simple" }
@@ -509,6 +524,7 @@ dependencies = [
     { name = "cachetools" },
     { name = "celery" },
     { name = "celery-healthcheck" },
+    { name = "celery-redbeat" },
     { name = "celery-types" },
     { name = "clerk-backend-api" },
     { name = "css-inline" },
@@ -535,6 +551,7 @@ dependencies = [
     { name = "sqlmodel" },
     { name = "starlette-context" },
     { name = "structlog" },
+    { name = "structlog-config" },
     { name = "typeid-python" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
@@ -614,6 +631,7 @@ requires-dist = [
     { name = "cachetools", specifier = ">=5.5.1" },
     { name = "celery", specifier = ">=5.4.0" },
     { name = "celery-healthcheck", specifier = ">=0.1.1" },
+    { name = "celery-redbeat", specifier = ">=2.3.2" },
     { name = "celery-types", specifier = ">=0.23.0" },
     { name = "clerk-backend-api", specifier = ">=2.0.0" },
     { name = "css-inline", specifier = ">=0.14.3" },
@@ -640,6 +658,7 @@ requires-dist = [
     { name = "sqlmodel", specifier = ">=0.0.22" },
     { name = "starlette-context", specifier = ">=0.3.6" },
     { name = "structlog", specifier = ">=24.4.0" },
+    { name = "structlog-config", specifier = ">=0.1.0" },
     { name = "typeid-python", extras = ["cli"], specifier = ">=0.3.2" },
     { name = "typer", specifier = ">=0.14.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
@@ -2871,6 +2890,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/78/b8/d3670aec25747e32d54cd5258102ae0d69b9c61c79e7aa326be61a570d0d/structlog-25.2.0.tar.gz", hash = "sha256:d9f9776944207d1035b8b26072b9b140c63702fd7aa57c2f85d28ab701bd8e92", size = 1367438 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/eb/244741c1abf7b4092686db0798a4c43491298f40ddec4226f5c4f6b5d3eb/structlog-25.2.0-py3-none-any.whl", hash = "sha256:0fecea2e345d5d491b72f3db2e5fcd6393abfc8cd06a4851f21fcd4d1a99f437", size = 68448 },
+]
+
+[[package]]
+name = "structlog-config"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "orjson" },
+    { name = "python-decouple-typed" },
+    { name = "structlog" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/7f/34/553edce452373278e0e20100381996ee44175c78b0f51fe26ab10001fa4f/structlog_config-0.1.0.tar.gz", hash = "sha256:7296b5a3991f4f1c44871bf4423c58d37fa56bacf564761a129cac64f6ea9b55", size = 76258 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/3e/ac125ad02d68614c32cd438fcf6e4834cbc912b2617be1dd40abef19c19a/structlog_config-0.1.0-py3-none-any.whl", hash = "sha256:63995f61221f8b13e302c54080a590686d6d54eaa059a40c65af4c66442ce529", size = 13323 },
 ]
 
 [[package]]
