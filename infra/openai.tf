@@ -1,25 +1,27 @@
 # https://medium.com/@williamwarley/streamlining-ai-with-azure-a-practical-guide-to-deploying-azure-openai-with-terraform-and-azure-bcbd01bbc3cf
 # https://github.com/mucsi96/aks-modules/blob/29f20ea4c56fe192816c2dbd9f4fa641502b7a19/modules/setup_ai/main.tf
-# https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#model-summary-table-and-region-availability
+# services x region: https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#model-summary-table-and-region-availability
 
 resource "azurerm_ai_services" "openai_service" {
   name                = "${local.base_name_alphanumeric}openai"
-  location            = azurerm_resource_group.main.location
   resource_group_name = azurerm_resource_group.main.name
+
+  # this seems to be the "primary" region for OpenAI, it has the most recent models
+  location            = "eastus2"
 
   sku_name = "S0" # Example SKU, adjust based on actual requirements
 }
 
-resource "azurerm_cognitive_deployment" "openai_deployment" {
+resource "azurerm_cognitive_deployment" "openai_4_1" {
   # must match the model name you specify in the OpenAI API call
-  name                 = "gpt-4o"
+  name                 = "gpt-4.1-2025-04-14"
   cognitive_account_id = azurerm_ai_services.openai_service.id
 
   # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#o1-and-o1-mini-models
   model {
     format  = "OpenAI"
-    name    = "gpt-4o"
-    version = "2024-11-20"
+    name    = "gpt-4.1"
+    version = "2025-04-14"
   }
 
   sku {
@@ -28,44 +30,22 @@ resource "azurerm_cognitive_deployment" "openai_deployment" {
   }
 }
 
-# https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/cognitive_deployment#capacity-1
-resource "azurerm_cognitive_deployment" "openai_4o_mini" {
+resource "azurerm_cognitive_deployment" "openai_4_1_mini" {
   # must match the model name you specify in the OpenAI API call
-  name                 = "gpt-4o-mini"
+  name                 = "gpt-4.1-mini-2025-04-14"
   cognitive_account_id = azurerm_ai_services.openai_service.id
 
-  # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#o1-and-o1-mini-models
   model {
     format  = "OpenAI"
-    name    = "gpt-4o-mini"
-    version = "2024-07-18"
+    name    = "gpt-4.1-mini"
+    version = "2025-04-14"
   }
 
   sku {
-    # standard is not valid
     name     = "GlobalStandard"
-    capacity = 5
+    capacity = 50
   }
 }
-
-# resource "azurerm_cognitive_deployment" "openai_4.1" {
-#   # must match the model name you specify in the OpenAI API call
-#   name                 = "gpt-4.1"
-#   cognitive_account_id = azurerm_ai_services.openai_service.id
-
-#   # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models?tabs=global-standard%2Cstandard-chat-completions#o1-and-o1-mini-models
-#   model {
-#     format  = "OpenAI"
-#     name    = "gpt-4.1"
-#     version = "2025-04-14"
-#   }
-
-#   sku {
-#     # standard is not valid
-#     name     = "GlobalStandard"
-#     capacity = 50
-#   }
-# }
 
 # restricted based on this form: https://aka.ms/OAI/o1access
 resource "azurerm_cognitive_deployment" "openai_o1" {
