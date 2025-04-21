@@ -9,8 +9,8 @@ from textwrap import dedent
 from typeid import TypeID
 
 from app import log
-from app.celery import celery
-from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
+from app.celery import celery_app
+from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -18,6 +18,7 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
+
 
 def perform(intake_id: str | TypeID | TypeIDType):
     """
@@ -37,8 +38,9 @@ def perform(intake_id: str | TypeID | TypeIDType):
         intake.save()
 
     if len(intake.intake_questions) > 0:
-        log.info("intake questions already exist, skipping generation",
-                 intake_id=intake_id)
+        log.info(
+            "intake questions already exist, skipping generation", intake_id=intake_id
+        )
         return
 
     questions = generate_intake_questions(intake, doctor)
@@ -49,16 +51,20 @@ def perform(intake_id: str | TypeID | TypeIDType):
 
     log.info(f"generated {len(questions)} intake questions", intake_id=intake_id)
 
-perform_celery = celery.task(perform)
+
+perform_celery = celery_app.task(perform)
+
 
 def queue(*args, **kwargs):
     "always use this method to queue jobs so it's easy to swap out the job system"
     perform_celery.delay(*args, **kwargs)
 
+
 def days_since(past_dt: datetime) -> int:
     past_date = past_dt.date()
     today = datetime.today().date()
     return (today - past_date).days
+
 
 def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
     return dedent(f"""
@@ -100,6 +106,7 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
         </SCHEMA>
     """)
 
+
 def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
     prompt = extraction_prompt(intake, doctor)
     response = openai.chat.completions.create(
@@ -120,21 +127,24 @@ def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
         appointment_category=intake_data.get("appointment_category"),
     )
 
-def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str|None:
+
+def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
-    intake_data = intake.cleaned_external_intake_data.dict() if intake.cleaned_external_intake_data else {}
+    intake_data = (
+        intake.cleaned_external_intake_data.dict()
+        if intake.cleaned_external_intake_data
+        else {}
+    )
 
     # TODO This should be time-limited, e.g. don't pull a note from 5 years ago.
     last_note = (
         AIVisitNote.select()
         .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
         .join(Patient, Appointment.patient_id == Patient.id)
-        .where(
-            (AIVisitNote.doctor_id == doctor.id)
-            & (Patient.id == patient.id)
-        ).order_by(Appointment.updated_at.desc())
+        .where((AIVisitNote.doctor_id == doctor.id) & (Patient.id == patient.id))
+        .order_by(Appointment.updated_at.desc())
         .limit(1)
         .first()
     )
@@ -219,7 +229,10 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str|None:
     </SCHEMA>
     """)
 
-def generate_intake_questions(intake: Intake, doctor: Doctor) -> list[IntakeSchemaQuestion]:
+
+def generate_intake_questions(
+    intake: Intake, doctor: Doctor
+) -> list[IntakeSchemaQuestion]:
     prompt = generate_questions_prompt(intake, doctor)
     response = openai.chat.completions.create(
         model=DEFAULT_MULTI_MODAL_MODEL,

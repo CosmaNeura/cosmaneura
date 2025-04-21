@@ -7,16 +7,16 @@ import math
 from textwrap import dedent
 
 from app import log
-from app.celery import celery
-from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
+from app.celery import celery_app
+from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
+from app.models.doctor import Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 
 
@@ -90,7 +90,7 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     ).save()
 
 
-perform_celery = celery.task(perform)
+perform_celery = celery_app.task(perform)
 
 
 def queue(*args, **kwargs):

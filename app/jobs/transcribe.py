@@ -6,23 +6,23 @@ This is the first step in the visit upload process
 
 import json
 import os
+import subprocess
 import uuid
 from textwrap import dedent
 
 import assemblyai as assembly
 import sentry_sdk
 from azure.storage.blob import BlobServiceClient
-import subprocess
 
 import app.jobs.summarize
 from app import log
-from app.celery import celery
+from app.celery import celery_app
 from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_KEY,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_CONTAINER_NAME,
 )
-from app.configuration.openai import openai, DEFAULT_MULTI_MODAL_MODEL
+from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -31,6 +31,7 @@ from app.models.visit_audio_file import VisitAudioFile
 # https://support.assemblyai.com/articles/2616970375-what-audio-and-video-file-types-are-supported-by-your-api
 SUPPORTED_AUDIO_FILE_TYPES = ["wav", "mp3", "m4a", "flac", "ogg", "aac"]
 SUPPORTED_VIDEO_FILE_TYPES = ["mp4", "m4a", "mov", "avi"]
+
 
 class TranscriptionResult:
     def __init__(self, transcript: list[TranscriptEntry], duration: int):
@@ -76,7 +77,7 @@ def perform(visit_audio_file_id: str):
     queue_schema_transcription(transcript)
 
 
-perform_celery = celery.task(perform)
+perform_celery = celery_app.task(perform)
 
 
 # TODO we lose the typing with this approach... is there a better way?
@@ -88,12 +89,10 @@ def queue(*args, **kwargs):
 def queue_schema_transcription(transcript: AIVisitTranscript):
     # now that the transcript exists, let's summarize it for each note type the doctor has
     # Get all note schemas for the doctor and issue summary jobs
-    note_schemas = (
-        DoctorNoteSchema.where(
-            (DoctorNoteSchema.doctor_id == transcript.doctor_id)
-            & DoctorNoteSchema.deleted_at.is_(None)
-        ).all()
-    )
+    note_schemas = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == transcript.doctor_id)
+        & DoctorNoteSchema.deleted_at.is_(None)
+    ).all()
 
     if not note_schemas:
         log.warning("no note schemas found for doctor", doctor_id=transcript.doctor_id)
@@ -101,6 +100,7 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
 
     for schema in note_schemas:
         app.jobs.summarize.queue(transcript_id=transcript.id, schema_id=schema.id)
+
 
 def download_blob(visit: VisitAudioFile) -> str:
     filename = visit.azure_file_name
@@ -130,6 +130,7 @@ def download_blob(visit: VisitAudioFile) -> str:
 
     return temp_download_path
 
+
 def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
     filename = visit.azure_file_name
     basename_no_ext = os.path.splitext(filename)[0]
@@ -156,14 +157,21 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
 def extract_audio_from_video(
     video_path, format, output_audio_path="extracted_audio.wav"
 ):
-    subprocess.run([
-        "ffmpeg",
-        "-i", video_path,         # Input video file
-        "-vn",                    # Disable video
-        "-acodec", "pcm_s16le",   # Use WAV-compatible codec
-        "-f", "wav",              # Output format
-        output_audio_path         # Output file
-    ], check=True)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-i",
+            video_path,  # Input video file
+            "-vn",  # Disable video
+            "-acodec",
+            "pcm_s16le",  # Use WAV-compatible codec
+            "-f",
+            "wav",  # Output format
+            output_audio_path,  # Output file
+        ],
+        check=True,
+    )
+
 
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
