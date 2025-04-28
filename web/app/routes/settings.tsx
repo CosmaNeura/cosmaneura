@@ -148,7 +148,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
           {expandedIds.includes(schema.id) && (
             <>
               <p className="text-sm">
-                Here's the note structure we've extracted so far from your note:
+                Here's the structure we've extracted from your note:
               </p>
               <div className="mt-4 border-l-2 pl-4">
                 <p className="text-muted-foreground text-sm">
