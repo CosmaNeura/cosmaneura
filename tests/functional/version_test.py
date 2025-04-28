@@ -21,15 +21,15 @@ VERSION_ERROR = "Service version mismatch for {}, run 'uv run python -m app.cli 
 
 
 def test_redis_version_matches():
-    persisted_chrome_version = json.loads(VERSIONS_FILE.read_bytes())["redis"]
+    persisted_redis_version = json.loads(VERSIONS_FILE.read_bytes())["redis"]
 
-    assert persisted_chrome_version == redis_version(), VERSION_ERROR.format("redis")
+    assert persisted_redis_version == redis_version(), VERSION_ERROR.format("redis")
 
 
 def test_postgres_version_matches():
-    persisted_chrome_version = json.loads(VERSIONS_FILE.read_bytes())["postgres"]
+    persisted_postgres_version = json.loads(VERSIONS_FILE.read_bytes())["postgres"]
 
-    assert persisted_chrome_version == postgres_version(), VERSION_ERROR.format(
+    assert persisted_postgres_version == postgres_version(), VERSION_ERROR.format(
         "postgres"
     )
 
