@@ -79,7 +79,7 @@ function BiographyInput({ biography }: { biography: string }) {
                   <textarea
                     className="w-full rounded-md border p-2"
                     rows={5}
-                    placeholder="I provide comprehensive dermatologic care for patients of all ages, focusing on medical, surgical, and cosmetic dermatology. I have a special interest in the early detection and treatment of skin cancer, as well as the management of complex inflammatory skin conditions such as eczema and psoriasis."
+                    placeholder="Tell us about yourself. For example... I provide comprehensive dermatologic care for patients of all ages, focusing on medical, surgical, and cosmetic dermatology. I have a special interest in the early detection and treatment of skin cancer, as well as the management of complex inflammatory skin conditions such as eczema and psoriasis."
                     {...field}
                   />
                 </FormControl>
