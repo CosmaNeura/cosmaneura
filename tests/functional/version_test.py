@@ -1,11 +1,16 @@
 """
 The service versions that we don't control through code are persisted to .service-versions.
+The source of truth for these versions is what `docker compose` uses to run the containers.
 
 We test to ensure the version used here matches the persisted version.
 
 Why? Chrome version changes often break integration tests in unpredictable ways, so we want to make any version
 drift intentional. The chance of this happening with redis or postgres is slim, but it doesn't hurt to enforce
 version alignment to reduce the risk of weird bugs occurring because of version drift.
+
+To update the persisted versions run:
+    just up
+    uv run python -m app.cli write-versions
 """
 
 import json
