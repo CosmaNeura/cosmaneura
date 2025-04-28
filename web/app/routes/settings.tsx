@@ -121,7 +121,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
       <h3>Note Types</h3>
-      {noteSchemas.length > 1 ? (
+      {noteSchemas.length > 0 ? (
         <p>Below are the notes you've uploaded.</p>
       ) : (
         <p>Once you upload note types, they'll appear here.</p>
