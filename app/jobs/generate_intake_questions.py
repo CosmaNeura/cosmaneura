@@ -212,7 +212,7 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
 
     <SCHEMA>
     {{
-      // The patient's cheif complaint, as extracted from the INTAKE form.
+      // The patient's chief complaint, as extracted from the INTAKE form.
       chief_complaint: str
 
       // The type of appointment the patient is coming in for, as extracted from

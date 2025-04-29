@@ -8,6 +8,7 @@ from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 import app.jobs.intake.schema_picker
+from app import log
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
@@ -115,10 +116,12 @@ def perform(
     if appointment_request.id and (
         appointment := Appointment.get(external_id=appointment_request.id)
     ):
+        intake = Intake.one(appointment_id=appointment.id)
+
         # TODO update the appointment with the new data
-        return AppointmentResponse(
-            url=HttpUrl("https://example.com"), id=str(appointment.id)
-        )
+        log.warning("found existing appointment, but update API not implemented")
+
+        return AppointmentResponse(url=intake.public_url, id=intake.id)
 
     doctor_id = appointment_request.doctor.id
 
@@ -138,6 +141,8 @@ def perform(
         external_id=appointment_request.id,
         created_by_system="api",
     ).save()
+
+    # TODO we should really be wrapping this in a transaction with the above operation as well
 
     # we are finally ready to create an intake
     intake = Intake(
