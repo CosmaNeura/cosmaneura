@@ -2,6 +2,7 @@ import typing as t
 
 import pytest
 from fastapi.testclient import TestClient
+from clerk_backend_api import User as ClerkUser
 from httpx import ASGITransport, AsyncClient
 
 from tests.routes.utils import (
@@ -70,6 +71,14 @@ def authenticated_client():
 
     with TestClient(api_app, base_url=base_server_url()) as client:
         client.cookies.clear()
+
+        def override_user(user: ClerkUser | None):
+            api_app.dependency_overrides[
+                authenticate_clerk_request_middleware
+            ] = MockAuthenticateRequest(user=user)
+
+        client.override_user = override_user  # type: ignore[attr-defined]
+
         yield client
 
     api_app.dependency_overrides = {}
