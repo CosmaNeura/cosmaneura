@@ -104,12 +104,9 @@ class AppointmentResponse(BaseModel):
 
 
 # TODO wrap the whole thing in a DB transaction
-def perform(
-    appointment_request: AppointmentRequest, api_doctor: Doctor
-) -> AppointmentResponse:
-    # the "doctor" is this case is an API user, not an actual doctor
-    # this means we shouldn't associate the appointment with that doctor
-
+def perform(appointment_request: AppointmentRequest) -> AppointmentResponse:
+    # This is set in the check_doctor_identifier callback during request
+    # validation.
     assert appointment_request.doctor
 
     # let's see if we can find the appointment by the external ID
