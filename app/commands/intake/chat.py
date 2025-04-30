@@ -18,21 +18,14 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
     # just in case, we never expect this to fail
     validate_question_structure(intake)
 
-    unanswered_questions = intake.unanswered_questions()
-
-    if not unanswered_questions:
+    current_question = intake.next_unanswered_question()
+    if not current_question:
         # All questions have been answered, we would handle follow-up questions here
         # This would involve LLM interaction - not implementing this part for now
         return None
 
-    # Sort unanswered questions by order
-    unanswered_questions.sort(key=lambda q: q.order)
-
     # Process the user input if provided
     if user_chat_input:
-        current_question = unanswered_questions[0]
-        assert current_question
-
         # Find the matching question in intake_questions and update it
         for index, question in enumerate(intake.intake_questions):
             if question.question == current_question.question:
@@ -46,9 +39,10 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
                 intake.save()
                 break
 
-    # Return the next question if there are any left
-    if unanswered_questions := intake.unanswered_questions():
-        return unanswered_questions[0]
+    if current_question := intake.next_unanswered_question():
+        return current_question
+    else:
+        # Otherwise, kick off the intake summary job.
 
     return None
 
