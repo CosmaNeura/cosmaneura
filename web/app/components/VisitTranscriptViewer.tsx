@@ -24,7 +24,21 @@ export default function VisitTranscriptViewer({
       <>
         <div className="mb-2 text-xl font-semibold">Visit Transcript</div>
         <div className="text-muted-foreground text-sm italic">
-          No Transcript Available
+          No Transcript Available.
+        </div>
+      </>
+    )
+  }
+
+  const now = new Date()
+  const createdAt = transcript.created_at ? new Date(transcript.created_at) : now
+  const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
+  if (transcript.deleted_at || (createdAt < twoWeeksAgo)) {
+    return (
+      <>
+        <div className="mb-2 text-xl font-semibold">Visit Transcript</div>
+        <div className="text-muted-foreground text-sm italic">
+          Transcript has been deleted.
         </div>
       </>
     )

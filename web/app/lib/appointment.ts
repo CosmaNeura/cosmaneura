@@ -1,7 +1,7 @@
 import { SidebarEntry } from "@/components/app-sidebar"
 import { Appointment } from "~/configuration/client"
 
-import { standardDateTimeFormat } from "../lib/date"
+import { standardDateFormat } from "../lib/date"
 import { invariant } from "@epic-web/invariant"
 
 export function appointmentsToSidebarEntries(
@@ -17,7 +17,7 @@ export function appointmentsToSidebarEntries(
       // location: appointment.location,
       // TODO wire up type of appointment
       // subTitle: appointment.appointment_name,
-      date: standardDateTimeFormat(appointment.appointment_date),
+      date: standardDateFormat(appointment.appointment_date),
       // status: appointment.status,
       status: appointment.appointment_name ? "completed" : "in-progress",
       preview: appointment.appointment_name,

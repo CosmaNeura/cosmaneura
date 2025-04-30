@@ -79,7 +79,7 @@ function BiographyInput({ biography }: { biography: string }) {
                   <textarea
                     className="w-full rounded-md border p-2"
                     rows={5}
-                    placeholder="Tell us about yourself..."
+                    placeholder="Tell us about yourself. For example... I provide comprehensive dermatologic care for patients of all ages, focusing on medical, surgical, and cosmetic dermatology. I have a special interest in the early detection and treatment of skin cancer, as well as the management of complex inflammatory skin conditions such as eczema and psoriasis."
                     {...field}
                   />
                 </FormControl>
@@ -121,7 +121,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
       <h3>Note Types</h3>
-      {noteSchemas.length > 1 ? (
+      {noteSchemas.length > 0 ? (
         <p>Below are the notes you've uploaded.</p>
       ) : (
         <p>Once you upload note types, they'll appear here.</p>
@@ -148,7 +148,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
           {expandedIds.includes(schema.id) && (
             <>
               <p className="text-sm">
-                Here's the note structure we've extracted so far from your note:
+                Here's the structure we've extracted from your note:
               </p>
               <div className="mt-4 border-l-2 pl-4">
                 <p className="text-muted-foreground text-sm">

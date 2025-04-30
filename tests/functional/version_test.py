@@ -1,11 +1,16 @@
 """
 The service versions that we don't control through code are persisted to .service-versions.
+The source of truth for these versions is what `docker compose` uses to run the containers.
 
 We test to ensure the version used here matches the persisted version.
 
 Why? Chrome version changes often break integration tests in unpredictable ways, so we want to make any version
 drift intentional. The chance of this happening with redis or postgres is slim, but it doesn't hurt to enforce
 version alignment to reduce the risk of weird bugs occurring because of version drift.
+
+To update the persisted versions run:
+    just up
+    uv run python -m app.cli write-versions
 """
 
 import json
@@ -21,15 +26,15 @@ VERSION_ERROR = "Service version mismatch for {}, run 'uv run python -m app.cli 
 
 
 def test_redis_version_matches():
-    persisted_chrome_version = json.loads(VERSIONS_FILE.read_bytes())["redis"]
+    persisted_redis_version = json.loads(VERSIONS_FILE.read_bytes())["redis"]
 
-    assert persisted_chrome_version == redis_version(), VERSION_ERROR.format("redis")
+    assert persisted_redis_version == redis_version(), VERSION_ERROR.format("redis")
 
 
 def test_postgres_version_matches():
-    persisted_chrome_version = json.loads(VERSIONS_FILE.read_bytes())["postgres"]
+    persisted_postgres_version = json.loads(VERSIONS_FILE.read_bytes())["postgres"]
 
-    assert persisted_chrome_version == postgres_version(), VERSION_ERROR.format(
+    assert persisted_postgres_version == postgres_version(), VERSION_ERROR.format(
         "postgres"
     )
 
