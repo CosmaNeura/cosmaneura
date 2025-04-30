@@ -36,6 +36,16 @@ class AppointmentRequest(BaseModel):
     date: datetime
     "date and time of the appointment"
 
+    @model_validator(mode="after")
+    def check_appointment_date(self):
+        """
+        - Validate that the appointment date is in the future
+        """
+        if self.date.astimezone(timezone.utc) < datetime.now(timezone.utc):
+            raise ValueError("Appointment date must be in the future")
+
+        return self
+
     doctor: SkipJsonSchema[Doctor | None] = None
 
     doctor_email: EmailStr | None = None
@@ -54,9 +64,6 @@ class AppointmentRequest(BaseModel):
 
         if not (self.doctor_email or self.doctor_id):
             raise ValueError("Either doctor_email or doctor_id must be provided")
-
-        if self.date.astimezone(timezone.utc) > datetime.now(timezone.utc):
-            raise ValueError("Appointment date must be in the past")
 
         if self.doctor_email:
             # TODO we should scope the doctor by domain associated with this doctor API

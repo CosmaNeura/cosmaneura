@@ -60,15 +60,13 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
     # make sure intake data always exist on the generated request
     intake_json = NeverNone()
 
-    # a date in the future, with and without an attached timezone
-    date = BaseFactory.__random__.choice(
-        [
-            BaseFactory.__faker__.date_time_this_year(),
-            BaseFactory.__faker__.date_time_this_year(
-                tzinfo=BaseFactory.__faker__.pytimezone()
-            ),
-        ]
-    )
+    # A date in the future, with or without an attached timezone.
+    date = Use(lambda: BaseFactory.__random__.choice([
+        BaseFactory.__faker__.future_datetime(),
+        BaseFactory.__faker__.future_datetime(
+            tzinfo=BaseFactory.__faker__.pytimezone()
+        ),
+    ]))
 
     # TODO this needs to be fixed upstream in polyfactory, these are all slightly different...
     # doctor = None
@@ -98,6 +96,16 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
         # optional by default, but make it required in the factory otherwise the randomness of doctor_{email,id} will cause us issues
         # TODO https://github.com/litestar-org/polyfactory/issues/655
         return cls.__faker__.ascii_email()
+
+
+class PastAppointmentRequestFactory(AppointmentRequestFactory):
+    """
+    Same as AppointmentRequestFactory, but always generates a date in the past.
+    """
+    date = BaseFactory.__faker__.date_time_between(
+        start_date="-1y",  # up to one year ago
+        end_date="now",    # up until this instant
+    )
 
 
 EXAMPLE_INTAKE_QUESTIONS = [

@@ -1,4 +1,5 @@
 import json
+import datetime
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from app.models.intake.intake import Intake
 from tests.factories import (
     EXAMPLE_INTAKE_QUESTIONS,
     AppointmentRequestFactory,
+    PastAppointmentRequestFactory,
     DoctorFactory,
 )
 from tests.routes.utils import assert_status
@@ -95,7 +97,7 @@ def test_intake_without_doctor_email(client: TestClient):
 
     data = response.json()
     assert "detail" in data
-    assert "Doctor not found" in data["detail"][0]["msg"]
+    assert any("Doctor not found" in err.get("msg", "") for err in data["detail"])
 
 
 def test_intake_without_doctor_id(client: TestClient):
@@ -119,4 +121,29 @@ def test_intake_without_doctor_id(client: TestClient):
     # the missing doctor ID should be specified in the error message
     data = response.json()
     assert "detail" in data
-    assert "doctor_id" in data["detail"][0]["msg"]
+    assert any("doctor_id" in err.get("msg", "") for err in data["detail"])
+
+
+def test_intake_with_past_date(client: TestClient):
+    request = PastAppointmentRequestFactory.build(factory_use_construct=True)
+    assert request.date <= datetime.datetime.now()
+
+    user = DoctorFactory.build(email=request.doctor_email)
+    user.generate_api_key()
+    user.save()
+
+    response = client.post(
+        api_app.url_path_for("create_intake"),
+        headers={"Authorization": f"Bearer {user.api_key}"},
+        json=request.model_dump(mode="json"),
+    )
+
+    assert_status(response, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    body = response.json()
+    assert "detail" in body, body
+
+    assert any(
+        "Appointment date must be in the future" in err.get("msg", "")
+        for err in body["detail"]
+    )
