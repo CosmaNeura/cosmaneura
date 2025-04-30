@@ -7,8 +7,8 @@ from datetime import date, datetime, timezone
 from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-import app.jobs.intake.schema_picker
 from app import log
+from app.jobs.intake.generate_questions import perform as generate_intake_questions
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
@@ -154,7 +154,7 @@ def perform(
         external_intake_data=appointment_request.intake_json,
     ).save()
 
-    app.jobs.intake.schema_picker.perform.delay(intake.id)
+    generate_intake_questions.delay(intake.id)
 
     # TODO something in activemodel is broken, without casting to string this breaks...
     return AppointmentResponse(url=intake.public_url, id=str(intake.id))
