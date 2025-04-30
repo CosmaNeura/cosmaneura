@@ -24,7 +24,9 @@ variable "python_secret_vars" {
   default = [
     "DATABASE_URL", "REDIS_URL",
     "SESSION_SECRET_KEY",
-    "CLERK_PRIVATE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
+    "CLERK_PRIVATE_KEY", "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
+    # azure openai secret
+    "AZURE_OPENAI_API_KEY",
     # azure upload
     "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL",
     # azure de-identification secrets
@@ -39,6 +41,8 @@ variable "python_public_vars" {
   type        = set(string)
   default = [
     "LOG_LEVEL", "EMAIL_FROM_ADDRESS", "PORT", "ALLOWED_HOST_LIST", "INTAKE_CHAT_DOMAIN",
+    # part of azure openai configuration
+    "AZURE_OPENAI_ENDPOINT",
     # upload container names
     "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME"
   ]
