@@ -1,11 +1,9 @@
-from app.jobs.generate_intake_questions import perform
+from app.jobs.intake.generate_questions import perform
 
 from app.models.intake.intake import Intake
 
 
-# should be idempotent
 # should not include PII in questions (idk how to test this)
-# should save questions to the model
 def test_should_generate_intake_questions():
     intake = Intake.where(Intake.external_intake_data.contains({"firstName": "Coulter"})).one()
     assert len(intake.intake_questions) == 0
