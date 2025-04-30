@@ -13,10 +13,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette import status
 
-from app.models.doctor import Doctor
 from app.routes.api import external_api_app
 from app.routes.errors import EarlyResponseException
 from app.routes.utils.openapi import simplify_operation_ids
+
+from app.models.doctor import Doctor
 
 from .environments import is_production
 from .routes.chat import chat_api_app
