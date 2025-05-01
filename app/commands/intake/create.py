@@ -83,7 +83,7 @@ class AppointmentRequest(BaseModel):
         return self
 
     intake_json: dict | None
-    "if available, JSON that is the result of an intake form"
+    "intake information collected by an external system"
 
     # TODO initial release only needs JSON, could easily support string input in the future
     # intake_text: str | None
