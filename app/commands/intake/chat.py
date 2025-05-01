@@ -3,6 +3,7 @@ import time
 from app import log
 
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
+from app.jobs.intake.summarize import queue as queue_intake_summarization
 
 
 def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion | None:
@@ -42,7 +43,8 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
     if current_question := intake.next_unanswered_question():
         return current_question
     else:
-        # Otherwise, kick off the intake summary job.
+        log.info("queueing intake summarization", intake_id=intake.id)
+        queue_intake_summarization(intake.id)
 
     return None
 
