@@ -16,7 +16,7 @@ from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.intake import Intake, IntakeSchemaQuestion
+from app.models.intake.intake import Intake, IntakeSchemaQuestion, ExternalIntakeData
 from app.models.patient import Patient
 
 
@@ -269,6 +269,13 @@ class SimpleIncompleteIntakeFactory(ActiveModelFactory[Intake]):
 
     # TODO should we use ignore instead and just default to server defaults?
     intake_questions_answers = list
+
+    cleaned_external_intake_data = ExternalIntakeData(
+        reason_for_visit="Acne on face",
+        appointment_type="Dermatology │ Existing Patient",
+        additional_info="Male, 19 years old, 6'0\", 155 lbs.",
+        appointment_category="Virtual Dermatology",
+    )
 
     # TODO automatically ignoring all relationships on sqlmodel needs to be upstreamed
     # https://discord.com/channels/919193495116337154/1349832200060665969
