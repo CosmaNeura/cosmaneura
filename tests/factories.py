@@ -1,3 +1,4 @@
+from copy import deepcopy
 import typing as t
 
 from polyfactory import BaseFactory, Ignore, NeverNone, Use
@@ -50,6 +51,140 @@ class FutureAppointmentFactory(AppointmentFactory):
         start_date="+1d", end_date="+90d"
     )
 
+_MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE = {
+    "type": "Dermatology - NEW Patient Consultation",
+    "category": "Virtual Dermatology",
+    "forms": [
+        {
+            "id": 1252863,
+            "name": "Patient DOB, Gender, Height, & Weight",
+            "values": [
+                {
+                    "id": 5577842739,
+                    "fieldID": 6851254,
+                    "value": None,
+                    "name": "Patient Date of Birth (MM/DD/YYYY)",
+                },
+                {
+                    "id": 5577842740,
+                    "fieldID": 8786185,
+                    "value": None,
+                    "name": "Patient Sex",
+                },
+                {
+                    "id": 5577842741,
+                    "fieldID": 13188233,
+                    "value": None,
+                    "name": "Patient Height",
+                },
+                {
+                    "id": 5577842742,
+                    "fieldID": 13188234,
+                    "value": None,
+                    "name": "Patient Weight",
+                },
+            ],
+        },
+        {
+            "id": 1249290,
+            "name": "Billing Address (Required)",
+            "values": [
+                {
+                    "id": 5577842743,
+                    "fieldID": 6829675,
+                    "value": None,
+                    "name": "Address",
+                },
+                {
+                    "id": 5577842744,
+                    "fieldID": 6829676,
+                    "value": None,
+                    "name": "Address 2",
+                },
+                {
+                    "id": 5577842745,
+                    "fieldID": 6829677,
+                    "value": None,
+                    "name": "City",
+                },
+                {
+                    "id": 5577842746,
+                    "fieldID": 6829678,
+                    "value": None,
+                    "name": "State",
+                },
+                {
+                    "id": 5577842747,
+                    "fieldID": 6829679,
+                    "value": None,
+                    "name": "Zip",
+                },
+                {
+                    "id": 5577842748,
+                    "fieldID": 7485296,
+                    "value": None,
+                    "name": "What is the primary reason for making this appointment?",
+                },
+            ],
+        },
+    ],
+}
+
+def _make_intake_json(faker):
+    def _builder():
+        data = deepcopy(_MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE)
+
+        for form in data["forms"]:
+            for v in form["values"]:
+                name = v["name"]
+
+                if name == "Patient Date of Birth (MM/DD/YYYY)":
+                    dob = faker.date_of_birth(minimum_age=0, maximum_age=90)
+                    v["value"] = dob.strftime("%-m/%-d/%Y")
+
+                elif name == "Patient Sex":
+                    v["value"] = faker.random_element(["Male", "Female", "Other"])
+
+                elif name == "Patient Height":
+                    feet = faker.random_int(4, 6)
+                    inches = faker.random_int(0, 11)
+                    v["value"] = f"{feet}'{inches}"
+
+                elif name == "Patient Weight":
+                    v["value"] = str(faker.random_int(90, 300))
+
+                elif name == "Address":
+                    v["value"] = faker.street_address()
+
+                elif name == "Address 2":
+                    v["value"] = faker.secondary_address()
+
+                elif name == "City":
+                    v["value"] = faker.city()
+
+                elif name == "State":
+                    state = faker.state()
+                    v["value"] = f"{state} – {faker.state_abbr()}"
+
+                elif name == "Zip":
+                    v["value"] = faker.zipcode()
+
+                elif name == "What is the primary reason for making this appointment?":
+                    choices = [
+                        "Annual mole check",
+                        "eczema",
+                        "Rash on upper back",
+                        "diaper rash",
+                        "Dermatitis flare-up review",
+                        "Hormonal Acne, Body Acne, Cysts",
+                        "Hair thinning on crown",
+                    ]
+                    v["value"] = faker.random_element(choices)
+
+        return data
+
+    return _builder
+
 
 class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
     "generate an API request that a user (clinic) would send to create an appointment"
@@ -57,8 +192,7 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
     # pick a random ID, in any format, since this is not a typeid
     id = BaseFactory.__faker__.uuid4
 
-    # make sure intake data always exist on the generated request
-    intake_json = NeverNone()
+    intake_json = Use(_make_intake_json(BaseFactory.__faker__))
 
     # A date in the future, with or without an attached timezone.
     date = Use(lambda: BaseFactory.__random__.choice([
