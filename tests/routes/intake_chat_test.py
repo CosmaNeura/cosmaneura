@@ -130,41 +130,46 @@ def test_next_question():
     assert answered_questions[0].answer == fake_response
 
 
-def test_terminal_question(client: TestClient):
+def test_terminal_question(client: TestClient, sync_celery):
     "can we properly exhaust the questions?"
 
     intake = SimpleIncompleteIntakeFactory.build().save()
 
-    count = 0
-    limit = len(intake.intake_questions)
-    last_unanswered_count = 0
+    response = client.get(
+        api_app.url_path_for("get_last_question", intake_id=intake.id)
+    )
+    assert_status(response)
+    next_question = response.json()["question"]
 
-    while True:
-        assert count < limit
-
-        # hit the api with a new answer
+    while next_question:
+        answer = BaseFactory.__faker__.sentence()
         response = client.post(
             api_app.url_path_for("get_next_question", intake_id=intake.id),
-            json={"answer": BaseFactory.__faker__.sentence()},
+            json={"answer": answer},
         )
-
-        assert_status(response)
-
-        intake.refresh()
-
-        assert last_unanswered_count != len(intake.unanswered_questions())
-
-        count += 1
-        last_unanswered_count = len(intake.unanswered_questions())
 
         assert_status(response)
         response = response.json()
 
-        if count != limit:
+        intake.refresh()
+
+        # Find the intake question that matches next_question
+        intake_question = next(
+            (q for q in intake.intake_questions if q.question == next_question), None
+        )
+        assert intake_question
+        assert intake_question.answer == answer
+        assert intake_question.answer_timestamp is not None
+
+        next_question = response["question"]
+
+        if next_question:
             assert response["status"] == "processing"
-            assert response["question"]
+            assert intake.summary is None
         else:
             assert response["status"] == "completed"
-            assert not response["question"]
             assert len(intake.unanswered_questions()) == 0
             break
+
+    intake.refresh()
+    assert intake.summary
