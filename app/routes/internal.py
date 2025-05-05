@@ -141,7 +141,7 @@ def note_detail(
             # Clear out transcript entries if it was "deleted" or more than 2 weeks old.
             # TODO This is a quick hack until we set up a job to auto-delete after 2 weeks.
             # https://github.com/CosmaNeura/cosmaneura/issues/29
-            transcript.deleted_at = transcript.deleted_at or tz_now
+            transcript.deleted_at = transcript.created_at + timedelta(days=14)
             transcript.transcript_data = []
 
     note_detail = NoteDetail(

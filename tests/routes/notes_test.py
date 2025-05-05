@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -66,7 +66,7 @@ def test_note_detail_deleted_transcript(authenticated_client: TestClient):
     appointment = Appointment.one(transcript.appointment_id)
 
     response = authenticated_client.get(
-        api_app.url_path_for("note_detail", appointment_id=transcript.appointment_id)
+        api_app.url_path_for("note_detail", appointment_id=appointment.id)
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -87,13 +87,54 @@ def test_note_detail_deleted_transcript(authenticated_client: TestClient):
     transcript.save()
 
     response = authenticated_client.get(
-        api_app.url_path_for("note_detail", appointment_id=transcript.appointment_id)
+        api_app.url_path_for("note_detail", appointment_id=appointment.id)
     )
 
     assert response.status_code == status.HTTP_200_OK
 
     result = response.json()
     transcript_json = result["transcript"]
+    assert transcript_json["id"] == str(transcript.id)
+    assert transcript_json["deleted_at"] is not None
+    assert len(transcript_json["transcript_data"]) == 0
+
+def test_note_detail_old_transcript(authenticated_client: TestClient):
+    "Old transcripts should be treated as deleted even if not marked as such."
+
+    # Use data from seeds.
+    _, _, seed_user = get_clerk_seed_user()
+    authenticated_client.override_user(seed_user)
+
+    transcript = AIVisitTranscript.where(AIVisitTranscript.duration == 180).one()
+    assert not transcript.deleted_at
+    appointment = Appointment.one(transcript.appointment_id)
+
+    response = authenticated_client.get(
+        api_app.url_path_for("note_detail", appointment_id=appointment.id)
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+
+    result = response.json()
+    transcript_json = result["transcript"]
+    assert transcript_json
+    assert transcript_json["id"] == str(transcript.id)
+    assert transcript_json["deleted_at"] is None
+    assert len(transcript_json["transcript_data"]) > 0
+
+    # Simulate old transcript.
+    transcript.created_at = datetime.now() - timedelta(days=15)
+    transcript.save()
+
+    response = authenticated_client.get(
+        api_app.url_path_for("note_detail", appointment_id=appointment.id)
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+
+    result = response.json()
+    transcript_json = result["transcript"]
+    assert transcript_json["id"] == str(transcript.id)
     assert transcript_json["deleted_at"] is not None
     assert len(transcript_json["transcript_data"]) == 0
 
