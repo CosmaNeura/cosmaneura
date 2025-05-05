@@ -16,37 +16,37 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
     Remember, this is not an authenticated endpoint, so we cannot return any content with PII
     """
 
-    # just in case, we never expect this to fail
+    # Validate just in case. We never expect this to fail.
     validate_question_structure(intake)
 
     current_question = intake.next_unanswered_question()
     if not current_question:
-        # All questions have been answered, we would handle follow-up questions here
-        # This would involve LLM interaction - not implementing this part for now
+        # This should never happen.
+        log.error("no current question", intake_id=intake.id)
         return None
 
-    # Process the user input if provided
-    if user_chat_input:
-        # Find the matching question in intake_questions and update it
-        for index, question in enumerate(intake.intake_questions):
-            if question.question == current_question.question:
-                intake.intake_questions[index].answer = user_chat_input
-                intake.intake_questions[index].answer_timestamp = int(time.time())
-
-                # IMPORTANT json objects are not automatically marked as dirty
-                intake.flag_modified("intake_questions")
-
-                log.info("updating question", order=question.order)
-                intake.save()
-                break
-
-    if current_question := intake.next_unanswered_question():
+    if not user_chat_input:
         return current_question
+
+    # Find the matching question in intake_questions and update it.
+    for index, question in enumerate(intake.intake_questions):
+        if question.question == current_question.question:
+            intake.intake_questions[index].answer = user_chat_input
+            intake.intake_questions[index].answer_timestamp = int(time.time())
+
+            # IMPORTANT: JSON objects are not automatically marked as dirty.
+            intake.flag_modified("intake_questions")
+
+            log.info("updating question", order=question.order)
+            intake.save()
+            break
+
+    if next_question := intake.next_unanswered_question():
+        return next_question
     else:
         log.info("queueing intake summarization", intake_id=intake.id)
         queue_intake_summarization(intake.id)
-
-    return None
+        return None
 
 
 def validate_question_structure(intake: Intake) -> None:
