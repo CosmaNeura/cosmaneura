@@ -131,7 +131,7 @@ def test_next_question():
 
 
 def test_terminal_question(client: TestClient, sync_celery):
-    "can we properly exhaust the questions?"
+    "can we properly exhaust the questions and kick off the intake summary?"
 
     intake = SimpleIncompleteIntakeFactory.build().save()
 
