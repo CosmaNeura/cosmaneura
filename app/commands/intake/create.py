@@ -8,14 +8,12 @@ from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from app import log
-from app.jobs.intake.generate_questions import perform as generate_intake_questions
-
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
-
+from app.jobs.intake.generate_questions import queue as queue_question_generation
 
 class PatientRequest(BaseModel):
     name: str
@@ -154,11 +152,11 @@ def perform(appointment_request: AppointmentRequest) -> AppointmentResponse:
         appointment_id=appointment.id,
         # copy intake schema questions into the intake object itself
         # this is slightly paranoid/unnecessary
-        intake_questions=None,
+        intake_questions=[],
         external_intake_data=appointment_request.intake_json,
     ).save()
 
-    generate_intake_questions.delay(intake.id)
+    queue_question_generation(intake.id)
 
     # TODO something in activemodel is broken, without casting to string this breaks...
     return AppointmentResponse(url=intake.public_url, id=str(intake.id))
