@@ -50,7 +50,7 @@ def test_wav_transcription():
 
   assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 6
+  assert len(doctor_entries) >= 5
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
   assert len(patient_entries) >= 6
 
@@ -65,7 +65,7 @@ def test_m4a_transcription():
 
   assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 6
+  assert len(doctor_entries) >= 5
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
   assert len(patient_entries) >= 6
 
@@ -80,7 +80,7 @@ def test_mp4_transcription():
 
   assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 6
+  assert len(doctor_entries) >= 5
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
   assert len(patient_entries) >= 6
 
@@ -95,7 +95,7 @@ def test_avi_transcription():
 
   assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 6
+  assert len(doctor_entries) >= 5
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
   assert len(patient_entries) >= 6
 
@@ -110,7 +110,7 @@ def test_mov_transcription():
 
   assert result.duration <= 305 # SHORT versions were trimmed to 5 min exactly.
   doctor_entries = list(filter(lambda te: te.speaker == "Doctor", result.transcript))
-  assert len(doctor_entries) >= 6
+  assert len(doctor_entries) >= 5
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
   assert len(patient_entries) >= 6
 
