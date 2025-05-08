@@ -10,7 +10,7 @@ import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { noteDetail } from "~/configuration/client"
-import { standardDateTimeFormat } from "~/lib/date"
+import { standardDateFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
 
@@ -105,7 +105,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
           title={loaderData.patient.name}
           status={hasNotes ? "completed" : "not-started"}
           dataFields={{
-            "Appointment Date": standardDateTimeFormat(
+            "Appointment Date": standardDateFormat(
               loaderData.appointment.appointment_date,
             ),
             // "Notes Created At": "Completed at",

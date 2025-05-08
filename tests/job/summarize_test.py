@@ -174,11 +174,10 @@ def test_note_includes_all_actionable_steps_for_doctor():
 
 
 def test_summarize_is_idempotent():
-    # Using duration to find the transcript isn't great but it keeps things consistent.
-    transcript = AIVisitTranscript.where(AIVisitTranscript.duration == 182).one()
-    assert transcript is not None
+    patient = Patient.where(Patient.name == "Ghengis Khan").one()
+    appt = Appointment.where(Appointment.patient_id == patient.id).first()
+    transcript = AIVisitTranscript.where(AIVisitTranscript.appointment_id == appt.id).one()
 
-    appt = Appointment.get(transcript.appointment_id)
     assert appt is not None
     assert appt.appointment_name is None
 

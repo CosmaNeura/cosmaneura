@@ -111,8 +111,15 @@ def get_clerk_admin_user():
 class MockAuthenticateRequest:
     "mock out the clerk interactions, note that `authenticated_client` must be used here"
 
+    # Optionally override the clerk user.
+    def __init__(self, user: ClerkUser | None = None):
+        self._user = user
+
     async def __call__(self, request: Request) -> RequestState:
-        _, _, user = get_clerk_dev_user()
+        if not self._user:
+            _, _, user = get_clerk_dev_user()
+        else:
+            user = self._user
 
         fake_auth_state = RequestState(
             status=AuthStatus.SIGNED_IN,

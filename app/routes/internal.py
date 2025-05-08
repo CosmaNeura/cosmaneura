@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Path, Request
@@ -133,9 +133,23 @@ def note_detail(
         AIVisitNote.appointment_id == appointment_id,
     ).all()
 
+    # There should only ever be one transcript per appointment. If this
+    # invariant is violated, this endpoint will start to cause issues.
+    transcript = AIVisitTranscript.get(appointment_id=appointment_id)
+
+    if transcript and transcript.created_at:
+        tz_now = datetime.now(transcript.created_at.tzinfo)
+        created_gte_two_weeks_ago = transcript.created_at < tz_now - timedelta(days=14)
+        if transcript.deleted_at or created_gte_two_weeks_ago:
+            # Clear out transcript entries if it was "deleted" or more than 2 weeks old.
+            # TODO This is a quick hack until we set up a job to auto-delete after 2 weeks.
+            # https://github.com/CosmaNeura/cosmaneura/issues/29
+            transcript.deleted_at = transcript.created_at + timedelta(days=14)
+            transcript.transcript_data = []
+
     note_detail = NoteDetail(
         appointment=appointment,
-        transcript=AIVisitTranscript.get(appointment_id=appointment_id),
+        transcript=transcript,
         # TODO should be able to handle a generator, right?
         notes=list(visit_notes),
     )
