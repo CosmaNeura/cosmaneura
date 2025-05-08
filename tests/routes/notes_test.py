@@ -105,7 +105,7 @@ def test_note_detail_old_transcript(authenticated_client: TestClient):
     _, _, seed_user = get_clerk_seed_user()
     authenticated_client.override_user(seed_user)
 
-    transcript = AIVisitTranscript.where(AIVisitTranscript.duration == 180).one()
+    transcript = AIVisitTranscript.sample()
     assert not transcript.deleted_at
     appointment = Appointment.one(transcript.appointment_id)
 

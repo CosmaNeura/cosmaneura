@@ -119,9 +119,7 @@ def seed_test_data():
     AIVisitTranscript.find_or_create_by(
         doctor_id=doctor.id,
         appointment_id=appointment.id,
-        patient_id=patient.id,
-        # This duration is used in some tests, so update tests if you're going
-        # to change it here.
+        patient_id=appointment.patient_id,
         duration=182,
         transcript_data=[
             TranscriptEntry(
@@ -247,10 +245,22 @@ def seed_test_data():
         ],
     )
 
+    patient4 = Patient.find_or_create_by(
+        doctor_id=doctor.id,
+        name="Burt Lancaster",
+        date_of_birth=datetime.strptime("1913-11-02", "%Y-%m-%d"),
+    )
+
+    appointment4 = Appointment.find_or_create_by(
+        doctor_id=doctor.id,
+        patient_id=patient4.id,
+        appointment_date=datetime.now(),
+    )
+
     ai_visit_transcript = AIVisitTranscript.find_or_create_by(
         doctor_id=doctor.id,
-        patient_id=patient.id,
-        appointment_id=appointment.id,
+        appointment_id=appointment4.id,
+        patient_id=appointment4.patient_id,
         duration=180,
         transcript_data=[
             TranscriptEntry(

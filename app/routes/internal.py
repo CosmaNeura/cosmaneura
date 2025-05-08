@@ -133,7 +133,10 @@ def note_detail(
         AIVisitNote.appointment_id == appointment_id,
     ).all()
 
+    # There should only ever be one transcript per appointment. If this
+    # invariant is violated, this endpoint will start to cause issues.
     transcript = AIVisitTranscript.get(appointment_id=appointment_id)
+
     if transcript and transcript.created_at:
         tz_now = datetime.now(transcript.created_at.tzinfo)
         created_gte_two_weeks_ago = transcript.created_at < tz_now - timedelta(days=14)
