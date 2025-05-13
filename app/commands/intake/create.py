@@ -7,15 +7,13 @@ from datetime import date, datetime, timezone
 from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-import app.jobs.intake.schema_picker
 from app import log
-
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
-
+from app.jobs.intake.generate_questions import queue as queue_question_generation
 
 class PatientRequest(BaseModel):
     name: str
@@ -36,6 +34,16 @@ class AppointmentRequest(BaseModel):
     date: datetime
     "date and time of the appointment"
 
+    @model_validator(mode="after")
+    def check_appointment_date(self):
+        """
+        - Validate that the appointment date is in the future
+        """
+        if self.date.astimezone(timezone.utc) < datetime.now(timezone.utc):
+            raise ValueError("Appointment date must be in the future")
+
+        return self
+
     doctor: SkipJsonSchema[Doctor | None] = None
 
     doctor_email: EmailStr | None = None
@@ -54,9 +62,6 @@ class AppointmentRequest(BaseModel):
 
         if not (self.doctor_email or self.doctor_id):
             raise ValueError("Either doctor_email or doctor_id must be provided")
-
-        if self.date.astimezone(timezone.utc) > datetime.now(timezone.utc):
-            raise ValueError("Appointment date must be in the past")
 
         if self.doctor_email:
             # TODO we should scope the doctor by domain associated with this doctor API
@@ -78,7 +83,7 @@ class AppointmentRequest(BaseModel):
         return self
 
     intake_json: dict | None
-    "if available, JSON that is the result of an intake form"
+    "intake information collected by an external system"
 
     # TODO initial release only needs JSON, could easily support string input in the future
     # intake_text: str | None
@@ -104,12 +109,9 @@ class AppointmentResponse(BaseModel):
 
 
 # TODO wrap the whole thing in a DB transaction
-def perform(
-    appointment_request: AppointmentRequest, api_doctor: Doctor
-) -> AppointmentResponse:
-    # the "doctor" is this case is an API user, not an actual doctor
-    # this means we shouldn't associate the appointment with that doctor
-
+def perform(appointment_request: AppointmentRequest) -> AppointmentResponse:
+    # This is set in the check_doctor_identifier callback during request
+    # validation.
     assert appointment_request.doctor
 
     # let's see if we can find the appointment by the external ID
@@ -150,11 +152,11 @@ def perform(
         appointment_id=appointment.id,
         # copy intake schema questions into the intake object itself
         # this is slightly paranoid/unnecessary
-        intake_questions=None,
+        intake_questions=[],
         external_intake_data=appointment_request.intake_json,
     ).save()
 
-    app.jobs.intake.schema_picker.perform.delay(intake.id)
+    queue_question_generation(intake.id)
 
     # TODO something in activemodel is broken, without casting to string this breaks...
     return AppointmentResponse(url=intake.public_url, id=str(intake.id))

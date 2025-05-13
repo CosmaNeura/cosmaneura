@@ -88,6 +88,13 @@ class Intake(
     def unanswered_questions(self) -> list[IntakeSchemaQuestion]:
         return [q for q in self.intake_questions if not q.answer]
 
+    def next_unanswered_question(self) -> IntakeSchemaQuestion | None:
+        """
+        Get the next unanswered question, if any.
+        """
+        unanswered = [q for q in self.intake_questions if not q.answer]
+        return next(iter(sorted(unanswered, key=lambda q: q.order)), None)
+
     def is_processing(self) -> bool:
         """
         Is AI still determining what questions to ask?

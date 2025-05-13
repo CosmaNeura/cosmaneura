@@ -37,22 +37,22 @@ def authenticate_api_request_middleware(
     if token_as_typeid.prefix != API_KEY_PREFIX:
         raise UNAUTHORIZED_EXCEPTION
 
-    api_doctor = Doctor.get(api_key=token_as_typeid.uuid)
+    api_user = Doctor.get(api_key=token_as_typeid.uuid)
 
-    if not api_doctor:
+    if not api_user:
         raise UNAUTHORIZED_EXCEPTION
 
-    if api_doctor.deleted_at:
+    if api_user.deleted_at:
         raise HTTPException(
             status_code=status.HTTP_410_GONE, detail="Your API access has been disabled"
         )
 
-    request.state.api_doctor = api_doctor
+    request.state.api_user = api_user
 
-    context["api_doctor"] = api_doctor
+    context["api_user"] = api_user
 
-    sentry_sdk.set_user({"id": api_doctor.id, "email": api_doctor.email})
-    sentry_sdk.set_extra("api_doctor", True)
+    sentry_sdk.set_user({"id": api_user.id, "email": api_user.email})
+    sentry_sdk.set_extra("api_user", True)
 
 
 external_api_app = APIRouter(
@@ -68,4 +68,4 @@ def external_api_ping():
 
 @external_api_app.post("/intake")
 def create_intake(request: Request, data: AppointmentRequest) -> AppointmentResponse:
-    return app.commands.intake.create.perform(data, request.state.api_doctor)
+    return app.commands.intake.create.perform(data)

@@ -71,19 +71,19 @@ def get_last_question(
     request: Request, intake: Intake = Depends(process_intake)
 ) -> ChatResponse:
     "when returning to the page, return the last question without accepting any user input"
-    next_question = app.commands.intake.chat.perform(intake, None)
-    assert next_question
+    chat = app.commands.intake.chat.perform(intake, None)
+    assert chat
 
-    return ChatResponse(question=next_question.question, status="in_progress")
+    return ChatResponse(question=chat.question, status="in_progress")
 
 
 @chat_api_app.post("/intake/{intake_id}/question")
 def get_next_question(
     request: Request, data: ChatInput, intake: Intake = Depends(process_intake)
 ) -> ChatResponse:
-    next_question = app.commands.intake.chat.perform(intake, data.answer)
+    chat = app.commands.intake.chat.perform(intake, data.answer)
 
     return ChatResponse(
-        question=next_question and next_question.question,
-        status="completed" if not next_question else "processing",
+        question=chat and chat.question,
+        status="completed" if not chat else "processing",
     )

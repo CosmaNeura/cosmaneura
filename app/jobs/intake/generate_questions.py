@@ -37,9 +37,10 @@ def perform(intake_id: str | TypeID | TypeIDType):
         intake.cleaned_external_intake_data = intake_data
         intake.save()
 
-    if len(intake.intake_questions) > 0:
+    if intake.intake_questions:
         log.info(
-            "intake questions already exist, skipping generation", intake_id=intake_id
+            "intake questions already exist, skipping generation",
+            intake_id=intake_id
         )
         return
 

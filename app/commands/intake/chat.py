@@ -3,6 +3,7 @@ import time
 from app import log
 
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
+from app.jobs.intake.summarize import queue as queue_intake_summarization
 
 
 def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion | None:
@@ -15,42 +16,37 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
     Remember, this is not an authenticated endpoint, so we cannot return any content with PII
     """
 
-    # just in case, we never expect this to fail
+    # Validate just in case. We never expect this to fail.
     validate_question_structure(intake)
 
-    unanswered_questions = intake.unanswered_questions()
-
-    if not unanswered_questions:
-        # All questions have been answered, we would handle follow-up questions here
-        # This would involve LLM interaction - not implementing this part for now
+    current_question = intake.next_unanswered_question()
+    if not current_question:
+        # This should never happen.
+        log.error("no current question", intake_id=intake.id)
         return None
 
-    # Sort unanswered questions by order
-    unanswered_questions.sort(key=lambda q: q.order)
+    if not user_chat_input:
+        return current_question
 
-    # Process the user input if provided
-    if user_chat_input:
-        current_question = unanswered_questions[0]
-        assert current_question
+    # Find the matching question in intake_questions and update it.
+    for index, question in enumerate(intake.intake_questions):
+        if question.question == current_question.question:
+            intake.intake_questions[index].answer = user_chat_input
+            intake.intake_questions[index].answer_timestamp = int(time.time())
 
-        # Find the matching question in intake_questions and update it
-        for index, question in enumerate(intake.intake_questions):
-            if question.question == current_question.question:
-                intake.intake_questions[index].answer = user_chat_input
-                intake.intake_questions[index].answer_timestamp = int(time.time())
+            # IMPORTANT: JSON objects are not automatically marked as dirty.
+            intake.flag_modified("intake_questions")
 
-                # IMPORTANT json objects are not automatically marked as dirty
-                intake.flag_modified("intake_questions")
+            log.info("updating question", order=question.order)
+            intake.save()
+            break
 
-                log.info("updating question", order=question.order)
-                intake.save()
-                break
-
-    # Return the next question if there are any left
-    if unanswered_questions := intake.unanswered_questions():
-        return unanswered_questions[0]
-
-    return None
+    if next_question := intake.next_unanswered_question():
+        return next_question
+    else:
+        log.info("queueing intake summarization", intake_id=intake.id)
+        queue_intake_summarization(intake.id)
+        return None
 
 
 def validate_question_structure(intake: Intake) -> None:
