@@ -1,7 +1,7 @@
-from app.jobs.intake.generate_questions import perform
+from app.jobs.intake.generate_questions import perform, generate_intake_questions
 
 from app.models.intake.intake import Intake
-
+from app.models.doctor import Doctor
 
 # should not include PII in questions (idk how to test this)
 def test_should_generate_intake_questions():
@@ -13,7 +13,7 @@ def test_should_generate_intake_questions():
 
     intake = Intake.get(id=intake.id)
     questions = intake.intake_questions
-    assert len(questions) > 0
+    assert len(questions) > 3
     assert len(questions) <= 10
     cleaned_data = intake.cleaned_external_intake_data
     assert cleaned_data
@@ -27,3 +27,42 @@ def test_should_generate_intake_questions():
     new_questions = intake.intake_questions
     assert questions == new_questions
     assert cleaned_data == intake.cleaned_external_intake_data
+
+def test_should_vary_question_count():
+    intake = (
+        Intake.where(
+            Intake.cleaned_external_intake_data.contains({
+                "reason_for_visit": "Diabetes management"
+            })
+        ).one()
+    )
+    doctor = Doctor.one(id=intake.doctor_id)
+
+    # Simple intake.
+    data = intake.cleaned_external_intake_data
+    data.reason_for_visit = "Seasonal influenza vaccination"
+    data.appointment_type = "Nurse visit – immunization"
+    data.additional_info = "No allergies to vaccines or components; received last flu shot 12 months ago; no current illness"
+    intake.cleaned_external_intake_data = data
+    intake.flag_modified("cleaned_external_intake_data")
+    intake.save()
+
+    simple_questions = []
+    for _ in range(5):
+        simple_questions += generate_intake_questions(intake, doctor)
+
+    # Complex intake.
+    data = intake.cleaned_external_intake_data
+    data.reason_for_visit = "Sudden episodes of palpitations, dizziness, and blurred vision while exercising; chest tightness when lying flat"
+    data.appointment_type = "New patient – cardiology referral"
+    data.additional_info = "Uses over-the-counter weight-loss supplements and energy drinks; syncopal event during a 10K run last week; personal history of repaired congenital heart defect; Apple Watch flagged an irregular rhythm"
+    intake.cleaned_external_intake_data = data
+    intake.flag_modified("cleaned_external_intake_data")
+    intake.save()
+
+    complex_questions = []
+    for _ in range(5):
+        complex_questions += generate_intake_questions(intake, doctor)
+
+    assert len(simple_questions) < len(complex_questions)
+    print(f"simple questions: {len(simple_questions)}, complex questions: {len(complex_questions)}")

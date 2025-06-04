@@ -192,10 +192,12 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
     3. Review your bio and think about why this patient, with this chief complaint, would come to see you.
     4. Think about what additional information you need to help the patient with their chief complaint.
     5. Generate questions to get the information you need from the patient.
-      - You may generate no more than 10 questions.
+      - Generate at least 3 questions, not more than 10, and not 5.
+      - Ask as few questions as possible to get the information you need.
       - Questions will be collected as free-form text, but you may ask multiple-choice questions.
       - Order often matters. Specify the order that the questions should be asked in.
       - Do NOT ask questions that are already answered in the INTAKE form.
+      - Do NOT ask questions that request the same information in different ways, e.g. "What is your pain level?" and "How much does it hurt?"
       - Do NOT ask administrative questions like "What is your name?" or "What is your date of birth?"
       - Questions may NOT include PII like the patient's name, address, DOB, phone number, email address, or any PII about you, the doctor.
     6. Respond only in JSON format with the following SCHEMA:
