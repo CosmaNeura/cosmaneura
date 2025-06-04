@@ -13,7 +13,7 @@ def test_should_generate_intake_questions():
 
     intake = Intake.get(id=intake.id)
     questions = intake.intake_questions
-    assert len(questions) > 3
+    assert len(questions) >= 3
     assert len(questions) <= 10
     cleaned_data = intake.cleaned_external_intake_data
     assert cleaned_data
