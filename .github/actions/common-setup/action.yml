@@ -10,7 +10,8 @@ runs:
       with:
         version: 2025.3.6
     # TODO document: https://github.com/actions/runner-images/issues/4849, https://github.com/actions/runner-images/issues/264
-    - uses: tecolicom/actions-use-apt-tools@v1
+    # - uses: tecolicom/actions-use-apt-tools@v1
+    - uses: iloveitaly/actions-use-apt-tools@grouped-logs
       with:
         method: timestamp
         tools: |
