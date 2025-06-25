@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta
 from urllib.request import urlopen
 
+from ipython_playground.extras import find_all_sqlmodels
 from typeid import TypeID
 
 # autoimport packages
@@ -18,7 +19,6 @@ import app.models
 from app import log
 from app.configuration.clerk import clerk  # noqa: F401
 
-from activemodel.utils import find_all_sqlmodels
 from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
