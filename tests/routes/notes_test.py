@@ -5,11 +5,11 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
+from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
-from app.models.ai_visit_transcript import AIVisitTranscript
 
 from tests.factories import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
 from tests.routes.utils import get_clerk_dev_user, get_clerk_seed_user

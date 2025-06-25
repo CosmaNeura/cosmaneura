@@ -145,6 +145,10 @@ celery_app.conf.beat_schedule = {
         "task": "app.jobs.sync_clerk.perform",
         "schedule": crontab(minute="0", hour="0"),
     },
+    "daily_transcript_cleanup": {
+        "task": "app.jobs.daily_transcript_cleanup.perform",
+        "schedule": crontab(minute="0", hour="2"),
+    },
 }
 
 # Import crontab at the top of the file

@@ -1,9 +1,7 @@
-import json
 import datetime
 
 from fastapi import status
 from fastapi.testclient import TestClient
-from pydantic import json as pydantic_json
 
 from app.server import api_app
 
@@ -11,10 +9,9 @@ from app.models.appointment import Appointment
 from app.models.intake.intake import Intake
 
 from tests.factories import (
-    EXAMPLE_INTAKE_QUESTIONS,
     AppointmentRequestFactory,
-    PastAppointmentRequestFactory,
     DoctorFactory,
+    PastAppointmentRequestFactory,
 )
 from tests.routes.utils import assert_status
 

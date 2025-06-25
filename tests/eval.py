@@ -1,8 +1,9 @@
 import json
-from typing import Callable
 from textwrap import dedent
-from app.configuration.openai import openai
+from typing import Callable
+
 from app import log
+from app.configuration.openai import openai
 
 OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
 

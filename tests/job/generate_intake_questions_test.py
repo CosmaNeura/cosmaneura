@@ -1,7 +1,8 @@
-from app.jobs.intake.generate_questions import perform, generate_intake_questions
+from app.jobs.intake.generate_questions import generate_intake_questions, perform
 
-from app.models.intake.intake import Intake
 from app.models.doctor import Doctor
+from app.models.intake.intake import Intake
+
 
 # should not include PII in questions (idk how to test this)
 def test_should_generate_intake_questions():

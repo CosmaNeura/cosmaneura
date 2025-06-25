@@ -1,6 +1,6 @@
 import time
-import pytest
 
+import pytest
 from playwright.sync_api import Page, expect
 
 from app.models.doctor import Doctor
@@ -9,6 +9,7 @@ from tests.constants import CLERK_DEV_USER_PASSWORD
 from tests.integration.clerk import setup_clerk_testing_token
 from tests.integration.server import home_url
 from tests.integration.utils import login_as_dev_user, wait_for_loading
+
 
 @pytest.mark.skip(reason="Fails on CI, clerk is requiring email verification")
 def test_signin(server, page: Page, assert_snapshot) -> None:

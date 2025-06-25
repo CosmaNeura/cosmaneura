@@ -1,9 +1,9 @@
 import time
 
 from app import log
+from app.jobs.intake.summarize import queue as queue_intake_summarization
 
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
-from app.jobs.intake.summarize import queue as queue_intake_summarization
 
 
 def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion | None:

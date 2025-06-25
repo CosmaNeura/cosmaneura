@@ -1,10 +1,8 @@
 from copy import deepcopy
-import typing as t
 
-from polyfactory import BaseFactory, Ignore, NeverNone, Use
+from polyfactory import BaseFactory, Ignore, Use
 from polyfactory.decorators import post_generated
 from polyfactory.factories.pydantic_factory import ModelFactory
-from polyfactory.field_meta import FieldMeta
 from typeid import TypeID
 
 from app.commands.intake.create import AppointmentRequest
@@ -16,7 +14,7 @@ from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.intake import Intake, IntakeSchemaQuestion, ExternalIntakeData
+from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
 
 

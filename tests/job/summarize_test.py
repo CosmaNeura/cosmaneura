@@ -1,16 +1,17 @@
-import re
 import json
+import re
 
-from app.jobs.summarize import perform, generate_clinical_note
+from app.jobs.summarize import generate_clinical_note, perform
 
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
-from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
 from tests.eval import eval_llm, eval_n_of_m
+
 
 def assert_matches(regex, string):
     if not re.search(regex, string, re.IGNORECASE):

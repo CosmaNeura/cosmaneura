@@ -1,8 +1,8 @@
 import typing as t
 
 import pytest
-from fastapi.testclient import TestClient
 from clerk_backend_api import User as ClerkUser
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from tests.routes.utils import (
