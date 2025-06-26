@@ -8,7 +8,7 @@ from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.ai_visit_transcript_non_phi import AIVisitTranscriptNonPHI
 
 
-def perform(transcript_id: TypeIDType) -> None:
+def perform(transcript_id: TypeIDType | str) -> None:
     """
     De-identify an AIVisitTranscript and create a non-PHI version.
 

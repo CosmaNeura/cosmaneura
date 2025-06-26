@@ -23,7 +23,7 @@ def perform() -> None:
     old_transcripts = list(
         AIVisitTranscript.where(
             (AIVisitTranscript.created_at < cutoff_date)
-            & (AIVisitTranscript.deleted_at.is_(None))
+            & (AIVisitTranscript.deleted_at == None)
         ).all()
     )
 
@@ -35,8 +35,8 @@ def perform() -> None:
 
     # Queue deletion jobs for each transcript
     for transcript in old_transcripts:
-        app.jobs.transcript_deletion.queue(str(transcript.id))
-        log.info("queued transcript for deletion", transcript_id=str(transcript.id))
+        app.jobs.transcript_deletion.queue(transcript.id)
+        log.info("queued transcript for deletion", transcript_id=transcript.id)
 
     log.info(
         "completed daily transcript cleanup", transcripts_queued=len(old_transcripts)

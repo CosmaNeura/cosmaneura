@@ -14,7 +14,7 @@ from app.configuration.azure import (
 )
 
 
-# TODO implement!
+# TODO this should really be moved over to be a command, not a job
 def perform(): ...
 
 

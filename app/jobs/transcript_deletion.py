@@ -14,7 +14,7 @@ def perform(transcript_id: TypeIDType | str) -> None:
     log.info("starting transcript deletion job", transcript_id=transcript_id)
 
     try:
-        app.commands.transcript_deletion.perform(str(transcript_id))
+        app.commands.transcript_deletion.perform(transcript_id)
         log.info("completed transcript deletion job", transcript_id=transcript_id)
     except Exception as e:
         log.error(

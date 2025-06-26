@@ -1,4 +1,3 @@
-
 from app.commands.transcript_deletion import perform as deletion_command
 from app.jobs.transcript_deletion import perform, queue
 
@@ -40,7 +39,7 @@ def test_transcript_deletion_command():
     transcript_id = transcript.id
 
     # Run deletion command
-    deletion_command(str(transcript_id))
+    deletion_command(transcript_id)
 
     # Verify non-PHI version was created
     non_phi_transcripts = list(AIVisitTranscriptNonPHI.where().all())
@@ -67,7 +66,7 @@ def test_transcript_deletion_job():
     transcript_id = transcript.id
 
     # Run job - should not raise an exception
-    perform(str(transcript_id))
+    perform(transcript_id)
 
 
 def test_queue_transcript_deletion():
@@ -88,4 +87,4 @@ def test_queue_transcript_deletion():
     ).save()
 
     # Queue should not raise an exception
-    queue(str(transcript.id))
+    queue(transcript.id)
