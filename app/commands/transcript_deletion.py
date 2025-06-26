@@ -1,15 +1,14 @@
 from datetime import datetime
 
-import click
-
+import app.jobs.anonymize
 from app import log
-from app.jobs.anonymize import deidentify
 
-from app.models.ai_visit_transcript import AIVisitTranscript
+from activemodel.types import TypeIDType
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.ai_visit_transcript_non_phi import AIVisitTranscriptNonPHI
 
 
-def perform(transcript_id: str) -> None:
+def perform(transcript_id: TypeIDType) -> None:
     """
     De-identify an AIVisitTranscript and create a non-PHI version.
 
@@ -32,27 +31,22 @@ def perform(transcript_id: str) -> None:
 
     # De-identify each transcript entry
     deidentified_entries = []
+
     for entry in transcript.transcript_data:
         if entry.content.strip():  # Only process non-empty content
-            deidentified_content = deidentify(entry.content)
+            deidentified_content = app.jobs.anonymize.deidentify(entry.content)
             deidentified_entries.append(
-                {
-                    "speaker": entry.speaker,  # Speaker labels (Doctor/Patient) are not PHI
-                    "content": deidentified_content,
-                    "startTime": entry.startTime,
-                    "endTime": entry.endTime,
-                }
+                TranscriptEntry(
+                    # Speaker labels (Doctor/Patient) are not PHI
+                    speaker=entry.speaker,
+                    content=deidentified_content,
+                    startTime=entry.startTime,
+                    endTime=entry.endTime,
+                )
             )
         else:
             # Keep empty entries as-is
-            deidentified_entries.append(
-                {
-                    "speaker": entry.speaker,
-                    "content": entry.content,
-                    "startTime": entry.startTime,
-                    "endTime": entry.endTime,
-                }
-            )
+            deidentified_entries.append(entry)
 
     # Create non-PHI transcript record
     non_phi_transcript = AIVisitTranscriptNonPHI(data=deidentified_entries).save()
@@ -70,10 +64,3 @@ def perform(transcript_id: str) -> None:
     transcript.save()
 
     log.info("deleted original transcript", transcript_id=transcript_id)
-
-
-@click.command()
-@click.argument("transcript_id")
-def cli(transcript_id: str) -> None:
-    """Delete and de-identify a transcript by ID."""
-    perform(transcript_id)
