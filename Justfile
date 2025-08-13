@@ -158,12 +158,8 @@ requirements *flags:
 
 # setup everything you need for local development
 [macos]
-setup: requirements && py_setup up db_seed js_build
+setup: requirements && py_setup up db_seed js_setup
 	# NOTE this task should be non-destructive, the user should opt-in to something like `nuke`
-
-	# some reasoning behind the logic here:
-	#
-	# 	- js_build is required for running e2e tests on the server
 
 	@if [ ! -f .env.dev.local ]; then \
 		cp .env.dev.local-example .env.dev.local; \
