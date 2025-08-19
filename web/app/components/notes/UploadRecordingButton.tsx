@@ -19,6 +19,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+
 import { Icons } from "~/components/icons"
 import { DateTimePicker } from "~/components/lingua-time/datetime-picker"
 import { AudioVideoDropzone } from "~/components/shared/AudioVideoDropzone"
@@ -39,6 +40,7 @@ import {
   client,
   generateSignedVisitRecordingUploadUrl,
   uploadVisitAudioFile,
+  settingsData,
 } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
@@ -49,6 +51,15 @@ import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery } from "@tanstack/react-query"
 import { patientListOptions } from "client/@tanstack/react-query.gen"
+
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+
 
 // TODO should really be extracted out to a shared component, but it's too married into this page at this point... :/
 function PatientComboboxSearch({
@@ -131,6 +142,15 @@ function VisitAudioUploadForm({
 }) {
   const { toast } = useToast()
   const tomorrow = addDays(new Date(), 1)
+  
+  // Fetch settings data to get available note schemas
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: async () => {
+      const response = await settingsData()
+      return response.data
+    }
+  })
 
   const formSchema = z.object({
     appointment_date: z
@@ -145,6 +165,7 @@ function VisitAudioUploadForm({
     date_of_birth: z.date().max(tomorrow, {
       message: "Date of birth cannot be in the future",
     }),
+    soap_note_type: z.string().min(1, { message: "Please select a SOAP note type" }),
     // most of the file validation is done within the dropzone component
     file: z.instanceof(File, {
       message: "Please select a valid audio or video file",
@@ -194,7 +215,7 @@ function VisitAudioUploadForm({
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
         <FormField
           control={form.control}
           name="appointment_date"
@@ -262,6 +283,40 @@ function VisitAudioUploadForm({
             </FormItem>
           )}
         />
+
+        <FormField
+          control={form.control}
+          name="soap_note_type"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Note Type</FormLabel>
+              <FormControl>
+                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {settings?.notes_schema && settings.notes_schema.length > 0 ? (
+                      settings.notes_schema.map((schema) => (
+                        <SelectItem key={schema.id} value={schema.note_type}>
+                          {schema.note_type}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value="no-schemas-available" disabled>
+                        Upload a sample template first
+                      </SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </FormControl>
+              <FormDescription>
+                Select the type of SOAP note to generate from this recording.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        /> 
 
         <FormField
           control={form.control}
