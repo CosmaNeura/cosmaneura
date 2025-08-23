@@ -6,7 +6,7 @@ export function generateDateTimeString(date: Date) {
 }
 
 export function generateDateString(date: Date) {
-  return format(date, "MMM do yyyy")
+  return format(date, "MM/dd/yyyy")
 }
 
 export function generateDate(date: string) {

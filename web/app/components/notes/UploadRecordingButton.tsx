@@ -14,12 +14,18 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-
 import { Icons } from "~/components/icons"
 import { DateTimePicker } from "~/components/lingua-time/datetime-picker"
 import { AudioVideoDropzone } from "~/components/shared/AudioVideoDropzone"
@@ -39,8 +45,8 @@ import {
   Patient,
   client,
   generateSignedVisitRecordingUploadUrl,
-  uploadVisitAudioFile,
   settingsData,
+  uploadVisitAudioFile,
 } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
@@ -51,15 +57,6 @@ import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery } from "@tanstack/react-query"
 import { patientListOptions } from "client/@tanstack/react-query.gen"
-
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-
 
 // TODO should really be extracted out to a shared component, but it's too married into this page at this point... :/
 function PatientComboboxSearch({
@@ -142,14 +139,14 @@ function VisitAudioUploadForm({
 }) {
   const { toast } = useToast()
   const tomorrow = addDays(new Date(), 1)
-  
+
   // Fetch settings data to get available note schemas
   const { data: settings } = useQuery({
-    queryKey: ['settings'],
+    queryKey: ["settings"],
     queryFn: async () => {
       const response = await settingsData()
       return response.data
-    }
+    },
   })
 
   const formSchema = z.object({
@@ -165,7 +162,9 @@ function VisitAudioUploadForm({
     date_of_birth: z.date().max(tomorrow, {
       message: "Date of birth cannot be in the future",
     }),
-    soap_note_type: z.string().min(1, { message: "Please select a SOAP note type" }),
+    soap_note_type: z
+      .string()
+      .min(1, { message: "Please select a SOAP note type" }),
     // most of the file validation is done within the dropzone component
     file: z.instanceof(File, {
       message: "Please select a valid audio or video file",
@@ -211,7 +210,7 @@ function VisitAudioUploadForm({
 
   // TODO should move a project constant
   const DATE_PLACEHOLDER =
-    "Enter date (i.e. 'August 10, 2023') or pick from the calendar"
+    "Enter date (e.g. 01/31/2000)"
 
   return (
     <Form {...form}>
@@ -291,12 +290,16 @@ function VisitAudioUploadForm({
             <FormItem>
               <FormLabel>Note Type</FormLabel>
               <FormControl>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <Select
+                  onValueChange={field.onChange}
+                  defaultValue={field.value}
+                >
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {settings?.notes_schema && settings.notes_schema.length > 0 ? (
+                    {settings?.notes_schema &&
+                    settings.notes_schema.length > 0 ? (
                       settings.notes_schema.map((schema) => (
                         <SelectItem key={schema.id} value={schema.note_type}>
                           {schema.note_type}
@@ -316,7 +319,7 @@ function VisitAudioUploadForm({
               <FormMessage />
             </FormItem>
           )}
-        /> 
+        />
 
         <FormField
           control={form.control}
