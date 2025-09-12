@@ -36,10 +36,9 @@ def deidentify(phi_text: str) -> str:
 
     log.info("running deid request")
 
-    # The deid service configuration JSON says that it uses API version
-    # "2024-09-20, but the SDK throws an error if you specify it.
-    # client = DeidentificationClient(endpoint, credential, api_version="2024-09-20")
-    client = DeidentificationClient(AZURE_DEID_ENDPOINT, credential)
+    # The supported API versions are: 2024-11-15, 2025-07-15-preview
+    # Using the stable version 2024-11-15
+    client = DeidentificationClient(AZURE_DEID_ENDPOINT, credential, api_version="2024-11-15")
     body = DeidentificationContent(input_text=text, operation="Surrogate")
 
     result: DeidentificationResult
