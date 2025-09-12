@@ -40,47 +40,74 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
     If a schema for the note type already exists, we currently do NOT extract additional fields from the note.
     """
 
-    log.info("extracting note", note_id=doctor_note_file_id)
+    log.info("template extraction started", note_id=doctor_note_file_id)
 
     note = DoctorNoteFile.one(id=doctor_note_file_id)
 
     log.local(doctor_id=note.doctor_id)
+    
+    log.info(
+        "template extraction loaded note file",
+        doctor_note_file_id=doctor_note_file_id,
+        doctor_id=note.doctor_id,
+        azure_file_name=note.azure_file_name,
+        note_type=note.note_type,
+    )
 
+    log.info("template extraction downloading note from azure", doctor_note_file_id=doctor_note_file_id)
     note_pages = download_note(note)
+    log.info("template extraction downloaded note", pages_count=len(note_pages), doctor_note_file_id=doctor_note_file_id)
 
+    log.info("template extraction extracting note fields", doctor_note_file_id=doctor_note_file_id)
     note_fields = extract_note_fields(note_pages)
     assert note_fields
+    log.info("template extraction extracted note fields", fields_count=len(note_fields), doctor_note_file_id=doctor_note_file_id)
 
     # there can (and should!) be multiple examples per schema, so find a schema by the type
     # TODO given that we are searching by fields, this will definitely cause a conflict, need to think this through
+    log.info("template extraction finding or creating schema", doctor_note_file_id=doctor_note_file_id, note_type=note.note_type)
     schema = DoctorNoteSchema.find_or_initialize_by(
         doctor_id=note.doctor_id,
         note_type=note.note_type,
     )
 
     if schema.is_new():
+        log.info("template extraction creating new schema", doctor_note_file_id=doctor_note_file_id, note_type=note.note_type)
         instructions = explain_note_fields(note_fields)
-        log.info("extracted note instructions", instructions=instructions)
+        log.info("extracted note instructions", instructions=instructions, doctor_note_file_id=doctor_note_file_id)
 
         schema.fields = instructions
         schema.save()
+        log.info("template extraction saved new schema", schema_id=schema.id, doctor_note_file_id=doctor_note_file_id)
+    else:
+        log.info("template extraction using existing schema", schema_id=schema.id, doctor_note_file_id=doctor_note_file_id)
 
-    log.debug(
-        "extracting note content",
+    log.info(
+        "template extraction extracting note content",
         schema_id=schema.id,
         note_fields=note_fields,
+        doctor_note_file_id=doctor_note_file_id,
     )
 
     content = extract_note_content(note_pages, note_fields)
     assert content
+    log.info("template extraction extracted note content", content_fields=len(content), doctor_note_file_id=doctor_note_file_id)
 
+    log.info("template extraction creating note example", doctor_note_file_id=doctor_note_file_id, schema_id=schema.id)
     example = DoctorNoteExample.find_or_create_by(
         doctor_id=note.doctor_id,
         doctor_note_schema_id=schema.id,
         field_examples=content,
     )
 
-    log.info("extracted note content", note_example_id=example.id)
+    log.info(
+        "template extraction completed successfully",
+        note_example_id=example.id,
+        doctor_note_file_id=doctor_note_file_id,
+        doctor_id=note.doctor_id,
+        note_type=note.note_type,
+        schema_id=schema.id,
+    )
 
 
 perform_celery = celery_app.task(perform)
@@ -106,6 +133,13 @@ def download_note(note: DoctorNoteFile) -> list[str]:
 
     # full upload url from azure is stored in the DB, we need to extract just the last path component
     filename = os.path.basename(full_upload_url)
+    
+    log.info(
+        "template extraction downloading from azure",
+        doctor_note_file_id=note.id,
+        azure_file_name=full_upload_url,
+        extracted_filename=filename,
+    )
 
     # TODO may cause issues in prod
     temp_download_path = f"./tmp/example-note-{uuid.uuid4()}-{filename}"
@@ -120,12 +154,17 @@ def download_note(note: DoctorNoteFile) -> list[str]:
     )
 
     try:
+        log.info("template extraction downloading blob from azure", doctor_note_file_id=note.id, filename=filename)
         with open(temp_download_path, "wb") as file:
             file.write(blob_client.download_blob().readall())
+        
+        log.info("template extraction converting PDF to images", doctor_note_file_id=note.id, temp_path=temp_download_path)
 
         # https://cookbook.openai.com/examples/parse_pdf_docs_for_rag
         # Split the PDF into pages, then convert each page to an image.
         pdf_pages = convert_from_path(temp_download_path, 500)
+        log.info("template extraction converted PDF to images", doctor_note_file_id=note.id, pages_count=len(pdf_pages))
+        
         return [get_img_uri(page) for page in pdf_pages]
 
     finally:
@@ -133,6 +172,7 @@ def download_note(note: DoctorNoteFile) -> list[str]:
         # from disk.
         if os.path.exists(temp_download_path):
             os.remove(temp_download_path)
+            log.info("template extraction cleaned up temp file", doctor_note_file_id=note.id, temp_path=temp_download_path)
 
 
 # Extract the fields from an example clinical note.
