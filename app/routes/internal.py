@@ -4,6 +4,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel, computed_field
 
+from app import log
+
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
@@ -224,11 +226,33 @@ def generate_signed_example_note_upload_url():
 def upload_example_note(request: Request, file_name: str, note_type: str) -> None:
     doctor: Doctor = request.state.doctor
 
+    log.info(
+        "template upload started",
+        doctor_id=doctor.id,
+        file_name=file_name,
+        note_type=note_type,
+    )
+
     doctor_note_file = DoctorNoteFile(
         doctor_id=doctor.id, azure_file_name=file_name, note_type=note_type
     ).save()
 
+    log.info(
+        "template upload saved to database",
+        doctor_note_file_id=doctor_note_file.id,
+        doctor_id=doctor.id,
+        file_name=file_name,
+        note_type=note_type,
+    )
+
     app.jobs.extract.queue(doctor_note_file.id)
+
+    log.info(
+        "template upload queued for extraction",
+        doctor_note_file_id=doctor_note_file.id,
+        doctor_id=doctor.id,
+        note_type=note_type,
+    )
 
 
 class SettingsData(BaseModel, extra="forbid"):
