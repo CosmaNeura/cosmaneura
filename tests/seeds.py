@@ -23,9 +23,36 @@ from tests.log import log
 def seed_test_data():
     log.info("creating test fixture data")
 
+    # Log before calling get_clerk_seed_user()
+    log.info("about to call get_clerk_seed_user()")
     username, password, user = get_clerk_seed_user()
+
+    # Log after getting the user object
+    log.info("Clerk user details",
+        username=username,
+        user_id=user.id if user else None,
+        user_exists=user is not None,
+        clerk_id_valid=user.id.startswith("user_") if user and user.id else False)
+
+    # Validate user object and throw error if it's None
+    if not user:
+        log.error("Failed to get/create Clerk user - user is None")
+        raise ValueError("Failed to get/create Clerk user - user is None")
+
+    if not user.id:
+        log.error("Clerk user has no ID", user=user)
+        raise ValueError("Clerk user has no ID")
+
+    if not user.id.startswith("user_"):
+        log.error("Invalid Clerk user ID format", user_id=user.id, expected_prefix="user_")
+
+    # Log before calling Doctor.find_or_create_by()
+    log.info("Attempting to create Doctor record", clerk_id=user.id)
     doctor = Doctor.find_or_create_by(clerk_id=user.id)
 
+    # Log after successful Doctor creation
+    log.info("Doctor record created/found", doctor_id=doctor.id, clerk_id=doctor.clerk_id)
+    
     if not doctor.biography:
         doctor.biography = dedent("""
         I have a dual focus on Internal Medicine and Pediatrics. I see patients of all ages for holistic primary care and convenient care. I have a special interest in the care of children and adults with developmental disabilities, and I have completed training as a Creighton FertilityCare Medical Consultant.

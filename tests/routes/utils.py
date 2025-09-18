@@ -13,6 +13,7 @@ from fastapi import Request, status
 from httpx import Response
 
 from app.configuration.clerk import clerk
+from tests.log import log
 
 from app.models.doctor import Doctor, DoctorRole
 
@@ -87,9 +88,19 @@ def get_clerk_seed_user():
 
     This user is used in both test and development environments.
     """
+    from app import log
+
+    # Log the email being used
+    log.info("Getting/creating Clerk seed user", email=CLERK_DEV_SEED_EMAIL)
     user = _get_or_create_clerk_user(CLERK_DEV_SEED_EMAIL)
+
     assert user
 
+    if not user:
+        log.error("Failed to get/create Clerk seed user", email=CLERK_DEV_SEED_EMAIL)
+        raise ValueError("Failed to get/create Clerk seed user: {CLERK_DEV_SEED_EMAIL}")
+
+    log.info("Clerk see user retrieved", user_id=user.id, email=CLERK_DEV_SEED_EMAIL)
     return CLERK_DEV_USER_EMAIL, CLERK_DEV_USER_PASSWORD, user
 
 

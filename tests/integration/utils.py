@@ -97,27 +97,45 @@ def wait_for_loading(page: Page, timeout: int = 30000, extreme: bool = False):
 
 
 def login_as_dev_user(page: Page):
+    from app import log
+    log.info("Starting login_as_dev_user")
+    log.info(f"Initial Doctor.count(): {Doctor.count()}")
+
     username, password, user = get_clerk_dev_user()
+    log.info(f"Got dev user: {username}")
 
     # paranoid: should not create a doctor record in the DB
     assert Doctor.count() == 0
-
+    log.info("Database state assertion passed - Doctor.count() == 0")
     # paranoid testing to ensure database cleaning is working
     assert Doctor.count() == 0
+    log.info("Second database state assertion passed")
 
+    log.info("Setting up Clerk testing token")
     setup_clerk_testing_token(page)
 
+    log.info("Navigating to home URL")
     page.goto(home_url())
 
+    log.info("Filling email address")
     page.get_by_label("Email address").fill(username)
+
+    log.info("Clicking Continue button")
     page.get_by_role("button", name="Continue", exact=True).click()
 
+    log.info("Filling password")
     page.get_by_label("Password", exact=True).fill(password)
+
+    log.info("Clicking Continue button")
     page.get_by_role("button", name="Continue").click()
 
+    log.info("Waiting for page to load")
     wait_for_loading(page)
 
     # only a single doctor should be created!
+    log.info(f"After login - Doctor.count() = {Doctor.count()}")
     assert Doctor.count() == 1
+    log.info("Login successful - Doctor.count() == 1")
 
+    log.info("=== login_as_dev_user completed ===")
     return Doctor.first()
