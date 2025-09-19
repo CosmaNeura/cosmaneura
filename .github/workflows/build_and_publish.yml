@@ -47,7 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/common-setup
-        timeout-minutes: 2
+        timeout-minutes: 5
       - uses: iloveitaly/github-action-localias@master
         with:
           chrome: true
@@ -89,7 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/common-setup
-        timeout-minutes: 2
+        timeout-minutes: 5
       - run: just js_setup
       - run: just js_lint
         # TODO temporarily disable, need to whitelist existing errors...
@@ -109,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/common-setup
-        timeout-minutes: 2
+        timeout-minutes: 5
 
       # TODO I think we can use the magic azure credentials for this, need to swap out password with those credentials
       # login before building so previous build image can be pulled for nixpacks cache
