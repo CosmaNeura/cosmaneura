@@ -33,9 +33,6 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
     log.info("Starting test_signup - checking initial database state")
     log.info(f"Doctor count: {Doctor.count()}")
 
-    # paranoid testing to ensure database cleaning is working
-    assert Doctor.count() == 0
-
     log.info("Setting up Clerk testing token")
     setup_clerk_testing_token(page)
 

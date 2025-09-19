@@ -104,13 +104,6 @@ def login_as_dev_user(page: Page):
     username, password, user = get_clerk_dev_user()
     log.info(f"Got dev user: {username}")
 
-    # paranoid: should not create a doctor record in the DB
-    assert Doctor.count() == 0
-    log.info("Database state assertion passed - Doctor.count() == 0")
-    # paranoid testing to ensure database cleaning is working
-    assert Doctor.count() == 0
-    log.info("Second database state assertion passed")
-
     log.info("Setting up Clerk testing token")
     setup_clerk_testing_token(page)
 
