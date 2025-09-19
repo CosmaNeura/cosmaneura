@@ -86,7 +86,7 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
                 label = input_elem.get_attribute("aria-label") or input_elem.get_attribute('placeholder') or 'no-label'
                 log.info(f"Input {i}: {label}")
             except:
-            log.info(f"Input {i}: could not get attributes")
+                log.info(f"Input {i}: could not get attributes")
         raise
         
     # TODO assert that `Fill in missing fields` is not displayed
