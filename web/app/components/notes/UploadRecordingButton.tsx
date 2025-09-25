@@ -210,7 +210,7 @@ function VisitAudioUploadForm({
 
   // TODO should move a project constant
   const DATE_PLACEHOLDER =
-    "Enter date (e.g. 01/31/2000)"
+    "(e.g. 01/31/2000)"
 
   return (
     <Form {...form}>
