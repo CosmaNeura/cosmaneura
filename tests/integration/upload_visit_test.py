@@ -43,6 +43,10 @@ def test_audio_file_upload(server, page: Page, assert_snapshot) -> None:
 
     page.get_by_role("textbox", name="Date of Birth").fill("august 1 1999")
     page.get_by_role("textbox", name="Date of Birth").press("Enter")
+    page.get_by_role("combobox", name="Note Type").click()
+    page.get_by_role("option", name="Test SOAP Note").click()
+
+    page.get_by_role("option", name="General Note").click()
 
     page.get_by_label("dropzone").locator("input").set_input_files(upload_file)
 
