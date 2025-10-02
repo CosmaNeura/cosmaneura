@@ -119,5 +119,57 @@ def login_as_dev_user(page: Page):
 
     # only a single doctor should be created!
     assert Doctor.count() == 1
+    doctor = Doctor.first()
 
-    return Doctor.first()
+    # create note schemas for testing
+    create_test_note_schemas(doctor)
+
+    return doctor
+
+
+def create_test_note_schemas(doctor: Doctor):
+    """Create standard note schemas for integration testing."""
+    from app.models.doctor_note_schema import DoctorNoteSchema
+    
+    # Create Test SOAP Note schema (only if it doesn't exist)
+    if not DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor.id,
+        DoctorNoteSchema.note_type == "Test SOAP Note"
+    ).first():
+        DoctorNoteSchema(
+            doctor_id=doctor.id,
+            note_type="Test SOAP Note",
+            fields={
+                "CC": "Summarize the main reason for the patient's visit in one sentence.",
+                "Subjective": "Document the patient's own description of their symptoms, concerns, and any relevant personal or family medical history.",
+                "Medications": "List all current medications the patient is taking, including dosages and frequency.",
+                "Allergies": "Note any known allergies the patient has, including drug, food, and environmental allergies, along with the type of reaction experienced.",
+                "Mental/Functional": "Assess and record the patient's mental status and functional abilities, including any cognitive or psychological concerns.",
+                "Vitals": "Record the patient's vital signs, including temperature, pulse, respiration rate, blood pressure, and any other relevant measurements.",
+                "Objective": "Include findings from the physical examination and any relevant diagnostic tests or imaging results.",
+                "Assessment": "List the primary diagnosis and any secondary diagnoses, along with the rationale for each diagnosis.",
+                "Plan": "Outline the proposed management plan, including treatments, medications, follow-up appointments, and any referrals to specialists."
+            },
+        ).save()
+    
+    # Create General Note schema (only if it doesn't exist)
+    if not DoctorNoteSchema.where(
+        DoctorNoteSchema.doctor_id == doctor.id,
+        DoctorNoteSchema.note_type == "General Note"
+    ).first():
+        DoctorNoteSchema(
+            doctor_id=doctor.id,
+            note_type="General Note",
+            fields={
+                "Chief Complaint": "The main reason for the patient's visit.",
+                "History of Present Illness": "Detailed description of the current symptoms and their progression.",
+                "Review of Systems": "Systematic review of body systems for additional symptoms.",
+                "Past Medical History": "Previous medical conditions and treatments.",
+                "Medications": "Current medications including dosages and frequency.",
+                "Allergies": "Known allergies and adverse reactions.",
+                "Social History": "Lifestyle factors, occupation, and social circumstances.",
+                "Family History": "Relevant family medical history.",
+                "Physical Examination": "Findings from the physical examination.",
+                "Assessment and Plan": "Diagnosis and treatment plan."
+            },
+        ).save()
