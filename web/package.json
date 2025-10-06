@@ -7,7 +7,7 @@
     "build": "pnpm run openapi && react-router typegen && react-router build",
     "test": "pnpm run openapi && vitest run",
     "start": "react-router-serve ./build/server/index.js",
-    "openapi": "pnpm dlx @hey-api/openapi-ts",
+    "openapi": "pnpm exec openapi-ts",
     "typecheck": "react-router typegen && tsc",
     "typegen:watch": "react-router typegen --watch"
   },
