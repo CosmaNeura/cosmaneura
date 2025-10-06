@@ -63,6 +63,10 @@ jobs:
         continue-on-error: true
 
       - run: just py_test
+        continue-on-error: true
+      - run: just py_test --update-snapshots
+        if: ${{ failure() }}
+
 
       # NOTE one important problem with `detached` is if something fails, the github environment does seem to get wiped
       # for instance GITHUB_ENV, seems to be cleared out.
