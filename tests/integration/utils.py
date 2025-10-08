@@ -100,10 +100,12 @@ def login_as_dev_user(page: Page):
     username, password, user = get_clerk_dev_user()
 
     # paranoid: should not create a doctor record in the DB
-    assert Doctor.count() == 0
-
-    # paranoid testing to ensure database cleaning is working
-    assert Doctor.count() == 0
+    doctor_count = Doctor.count()
+    print(f"\n[DEBUG] Doctor count before login: {doctor_count}")
+    if doctor_count > 0:
+        doctors = Doctor.all()
+        print(f"[DEBUG] Existing doctors: {[d.id for d in doctors]}")
+    assert doctor_count == 0, f"Expected 0 doctors, found {doctor_count}"
 
     setup_clerk_testing_token(page)
 
@@ -118,7 +120,12 @@ def login_as_dev_user(page: Page):
     wait_for_loading(page)
 
     # only a single doctor should be created!
-    assert Doctor.count() == 1
+    doctor_count_after = Doctor.count()
+    print(f"[DEBUG] Doctor count after login: {doctor_count_after}")
+    if doctor_count_after > 0:
+        doctors = Doctor.all()
+        print(f"[DEBUG] Doctors after login: {[d.id for d in doctors]}")
+    assert doctor_count_after == 1, f"Expected 1 doctor after login, found {doctor_count_after}"
     doctor = Doctor.first()
 
     # create note schemas for testing
