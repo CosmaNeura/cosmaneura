@@ -2,6 +2,7 @@ from playwright.sync_api import Page
 
 from app.models.doctor import Doctor
 
+from tests.constants import LONG_INTEGRATION_TEST_TIMEOUT
 from tests.integration.clerk import setup_clerk_testing_token
 from tests.integration.server import home_url
 from tests.routes.utils import get_clerk_dev_user
@@ -119,13 +120,24 @@ def login_as_dev_user(page: Page):
 
     wait_for_loading(page)
 
+    # The wait command above is brittle and does not guarantee that the clerk login process has finished.
+    # However, we know that if we've navigated away from the root URL that we properly logged into the application.
+    # In order to provide a more robust loading completion indicator, we assert that the
+    # current pages route is not the route that we started on. This will ensure that we've completed the login step and
+    # have moved into the application.
+    page.wait_for_url(
+        lambda url: url != home_url(), timeout=LONG_INTEGRATION_TEST_TIMEOUT
+    )
+
     # only a single doctor should be created!
     doctor_count_after = Doctor.count()
     print(f"[DEBUG] Doctor count after login: {doctor_count_after}")
     if doctor_count_after > 0:
         doctors = Doctor.all()
         print(f"[DEBUG] Doctors after login: {[d.id for d in doctors]}")
-    assert doctor_count_after == 1, f"Expected 1 doctor after login, found {doctor_count_after}"
+    assert doctor_count_after == 1, (
+        f"Expected 1 doctor after login, found {doctor_count_after}"
+    )
     doctor = Doctor.first()
 
     # create note schemas for testing
@@ -137,11 +149,11 @@ def login_as_dev_user(page: Page):
 def create_test_note_schemas(doctor: Doctor):
     """Create standard note schemas for integration testing."""
     from app.models.doctor_note_schema import DoctorNoteSchema
-    
+
     # Create Test SOAP Note schema (only if it doesn't exist)
     if not DoctorNoteSchema.where(
         DoctorNoteSchema.doctor_id == doctor.id,
-        DoctorNoteSchema.note_type == "Test SOAP Note"
+        DoctorNoteSchema.note_type == "Test SOAP Note",
     ).first():
         DoctorNoteSchema(
             doctor_id=doctor.id,
@@ -155,14 +167,14 @@ def create_test_note_schemas(doctor: Doctor):
                 "Vitals": "Record the patient's vital signs, including temperature, pulse, respiration rate, blood pressure, and any other relevant measurements.",
                 "Objective": "Include findings from the physical examination and any relevant diagnostic tests or imaging results.",
                 "Assessment": "List the primary diagnosis and any secondary diagnoses, along with the rationale for each diagnosis.",
-                "Plan": "Outline the proposed management plan, including treatments, medications, follow-up appointments, and any referrals to specialists."
+                "Plan": "Outline the proposed management plan, including treatments, medications, follow-up appointments, and any referrals to specialists.",
             },
         ).save()
-    
+
     # Create General Note schema (only if it doesn't exist)
     if not DoctorNoteSchema.where(
         DoctorNoteSchema.doctor_id == doctor.id,
-        DoctorNoteSchema.note_type == "General Note"
+        DoctorNoteSchema.note_type == "General Note",
     ).first():
         DoctorNoteSchema(
             doctor_id=doctor.id,
@@ -177,6 +189,6 @@ def create_test_note_schemas(doctor: Doctor):
                 "Social History": "Lifestyle factors, occupation, and social circumstances.",
                 "Family History": "Relevant family medical history.",
                 "Physical Examination": "Findings from the physical examination.",
-                "Assessment and Plan": "Diagnosis and treatment plan."
+                "Assessment and Plan": "Diagnosis and treatment plan.",
             },
         ).save()
