@@ -125,9 +125,20 @@ def login_as_dev_user(page: Page):
     # In order to provide a more robust loading completion indicator, we assert that the
     # current pages route is not the route that we started on. This will ensure that we've completed the login step and
     # have moved into the application.
+
+    # Debug logging to check our exact current URL
+
+    current_url = page.url
+    print(f"[DEBUG] URL before wait_for_url: {current_url}")
+    print(f"[DEBUG] Home URL: {home_url()}")
+    print(f"[DEBUG] Are they different? {current_url != home_url()}")
+
     page.wait_for_url(
         lambda url: url != home_url(), timeout=LONG_INTEGRATION_TEST_TIMEOUT
     )
+
+    # Debug logging after the wait_for_url call
+    print(f"[DEBUG] URL after wait_for_url: {page.url}")
 
     # only a single doctor should be created!
     doctor_count_after = Doctor.count()
