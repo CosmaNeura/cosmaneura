@@ -97,7 +97,13 @@ def wait_for_loading(page: Page, timeout: int = 30000, extreme: bool = False):
     page.wait_for_timeout(100)
 
 
-def login_as_dev_user(page: Page):
+def login_as_dev_user(page: Page, max_retries: int = 3):
+    """
+    Login as a dev user for integration tests.
+    
+    Retries login up to max_retries times to handle Clerk API flakiness.
+    Clerk's attempt_first_factor API intermittently hangs in CI environments.
+    """
     username, password, user = get_clerk_dev_user()
 
     # paranoid: should not create a doctor record in the DB
@@ -110,37 +116,54 @@ def login_as_dev_user(page: Page):
 
     setup_clerk_testing_token(page)
 
-    page.goto(home_url())
+    # Retry login if Clerk API is flaky
+    for attempt in range(max_retries):
+        try:
+            print(f"[DEBUG] Login attempt {attempt + 1} of {max_retries}")
+            page.goto(home_url())
 
-    page.get_by_label("Email address").fill(username)
-    page.get_by_role("button", name="Continue", exact=True).click()
+            page.get_by_label("Email address").fill(username)
+            page.get_by_role("button", name="Continue", exact=True).click()
 
-    page.get_by_label("Password", exact=True).fill(password)
-    page.get_by_role("button", name="Continue").click()
+            page.get_by_label("Password", exact=True).fill(password)
+            page.get_by_role("button", name="Continue").click()
 
-    wait_for_loading(page)
+            wait_for_loading(page)
 
-    # The wait command above is brittle and does not guarantee that the clerk login process has finished.
-    # However, we know that if we've navigated away from the root URL that we properly logged into the application.
-    # In order to provide a more robust loading completion indicator, we assert that the
-    # current pages route is not the route that we started on. This will ensure that we've completed the login step and
-    # have moved into the application.
+            # The wait command above is brittle and does not guarantee that the clerk login process has finished.
+            # However, we know that if we've navigated away from the root URL that we properly logged into the application.
+            # In order to provide a more robust loading completion indicator, we assert that the
+            # current pages route is not the route that we started on. This will ensure that we've completed the login step and
+            # have moved into the application.
 
-    # Debug logging to check our exact current URL
+            # Debug logging to check our exact current URL
+            current_url = page.url
+            print(f"[DEBUG] URL before wait_for_url: {current_url}")
+            print(f"[DEBUG] Home URL: {home_url()}")
+            print(f"[DEBUG] Are they different? {current_url != home_url()}")
 
-    current_url = page.url
-    print(f"[DEBUG] URL before wait_for_url: {current_url}")
-    print(f"[DEBUG] Home URL: {home_url()}")
-    print(f"[DEBUG] Are they different? {current_url != home_url()}")
+            page.wait_for_url(
+                # exclude multi-factor authentication pages
+                lambda url: url != home_url() and '#/factor' not in url, 
+                timeout=LONG_INTEGRATION_TEST_TIMEOUT
+            )
 
-    page.wait_for_url(
-        # exclude multi-factor authentication pages
-        lambda url: url != home_url() and '#/factor' not in url, 
-        timeout=LONG_INTEGRATION_TEST_TIMEOUT
-    )
+            # Debug logging after the wait_for_url call
+            print(f"[DEBUG] URL after wait_for_url: {page.url}")
 
-    # Debug logging after the wait_for_url call
-    print(f"[DEBUG] URL after wait_for_url: {page.url}")
+            # If we get this far, we've successfully logged in
+            break
+        
+        except Exception as e:
+            print(f"[DEBUG] Login attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                print(f"[DEBUG] Retrying login...")
+                # Brief pause before retry
+                page.wait_for_timeout(1000)
+            else:
+                # Final attempt failed, re-raise the error
+                print(f"[DEBUG] All {max_retries} login attempts failed")
+                raise
 
     # only a single doctor should be created!
     doctor_count_after = Doctor.count()
