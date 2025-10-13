@@ -134,7 +134,9 @@ def login_as_dev_user(page: Page):
     print(f"[DEBUG] Are they different? {current_url != home_url()}")
 
     page.wait_for_url(
-        lambda url: url != home_url(), timeout=LONG_INTEGRATION_TEST_TIMEOUT
+        # exclude multi-factor authentication pages
+        lambda url: url != home_url() and '#/factor' not in url, 
+        timeout=LONG_INTEGRATION_TEST_TIMEOUT
     )
 
     # Debug logging after the wait_for_url call
