@@ -1,3 +1,5 @@
+import re
+
 from decouple import config
 from fastapi import FastAPI
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -69,6 +71,14 @@ def add_middleware(app: FastAPI):
     # CORS require that a specific scheme is used for the request
     allowed_hosts_with_schemes = allowed_hosts(True)
 
+    # In development, browsers include the dynamic port in the Origin for local servers
+    # (e.g. Vite, Playwright, etc.). Since we don't know the port, allow any port for
+    # known development hosts via a regex while still enumerating explicit origins.
+    allow_origin_regex: str | None = None
+    if is_development():
+        # Allow any subdomain of localhost with any port (e.g. cosma.localhost:8207, api.cosma.localhost:8205)
+        allow_origin_regex = r"^http://([a-zA-Z0-9-]+\.)*localhost(?::\d+)?$"
+
     log.info("allowed_origins", allowed_origins=allowed_hosts_with_schemes)
 
     # even in development, CORS is required, especially since we are using separate domains for API & frontend
@@ -76,6 +86,7 @@ def add_middleware(app: FastAPI):
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_hosts_with_schemes,
+        allow_origin_regex=allow_origin_regex,
         # tells browsers to expose and include credentials (such as cookies, client-side certificates, and authorization headers) in cross-origin requests.
         allow_credentials=True,
         allow_methods=["*"],
