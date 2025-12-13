@@ -9,6 +9,7 @@ __pycache__
 .mypy_cache
 
 *.env.*local
+.env.staging.backend
 
 .nixpacks
 
@@ -28,5 +29,7 @@ __pycache__
 
 # plugin installation folder
 infra/.terraform
+infra-staging/.terraform
 # this contains secrets!
 infra/terraform.tfstate*
+infra-staging/terraform.tfstate*

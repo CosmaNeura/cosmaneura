@@ -1,0 +1,150 @@
+#######################
+# Deployment Scripts
+#
+# - Deploying a new image sets the image reference of the container app to the latest image SHA, but our terraform config
+#   uses `latest`. Each time you `tofu apply` you'll see this diff and that's completely ok since the latest container SHA
+#   is also `latest`.
+#
+# - The only environment variable that is important for these operations is your OP_SERVICE_ACCOUNT_TOKEN and AZURE_SUBSCRIPTION_ID.
+#   OP is required for pulling staging secrets from `.env.staging.backend` and AZURE_SUBSCRIPTION_ID is only required
+#   if you have multiple azure subscriptions.
+#
+# - You'll want to set new environment variables here first, and then deploy. If you don't do this in the correct order, the deployment will fail.
+#
+# tofu_apply & azure_deploy are the two commands you'll want to understand.
+#
+#######################
+
+# https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.App/containerApps/cosmaneura-staging-app-web/ingress
+
+install:
+	# yq is required for procfile parsing
+	@if ! brew list | grep -q yq; then \
+		echo "Installing yq..."; \
+		brew install yq; \
+	fi
+
+	# opentofu
+	@if ! brew list | grep -q opentofu; then \
+		echo "Installing opentofu"; \
+		brew install opentofu; \
+	fi
+
+	# azure cli
+	@if ! brew list | grep -q azure-cli; then \
+		echo "Installing azure-cli"; \
+		brew install azure-cli; \
+	fi
+
+upgrade:
+	az upgrade --yes
+	HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade opentofu
+	tofu init -upgrade
+
+#######################
+# Staging Deployment
+#######################
+
+# TOFU_GLOBAL_OPTIONS := "-chdir=infra"
+TOFU_GLOBAL_OPTIONS := ""
+
+# TODO run some scripts to setup remote GH repo state for security, this is still WIP
+# https://github.com/cli/cli/issues/8363
+
+gh_config_output:
+  gh api repos/$(gh repo view --json nameWithOwner -q '.nameWithOwner')/branches/master/protection/rules
+
+# TODO we may be able to get rid of this with the federated creds
+# set the container registry password in GHA which enables builds to be pushed to the registry
+azure_gh-secrets:
+	registry_password=$(just azure_output | jq -r '.acr_admin_password.value') && \
+		gh secret set CONTAINER_REGISTRY_PASSWORD --app actions --body "$registry_password"
+
+azure_open:
+	open "https://portal.azure.com/$(az account show --query tenantId -o tsv)/"
+
+tofu_init:
+	tofu init
+
+# init each run to make sure latest package versions are pulled
+tofu_apply:
+	tofu {{TOFU_GLOBAL_OPTIONS}} apply
+
+# additional azure configuration that cannot be done via tf
+azure_configure:
+	az extension add --name containerapp --allow-preview
+	az containerapp env update --resource-group {{AZURE_RESOURCE_GROUP}} --name cosmaneura-staging-app-environment --logs-dynamic-json-columns true
+
+tofu_output:
+	tofu {{TOFU_GLOBAL_OPTIONS}} output -json
+
+# open a interactive terminal on a staging container
+azure_shell container=AZURE_CONTAINER:
+	@echo "{{BLUE}}Run 'alembic upgrade head' once the console is online to migrate the database{{NORMAL}}"
+	@echo "{{BLUE}}Run './console.py' to open a python REPL{{NORMAL}}\n"
+	az containerapp exec -n {{container}} -g {{AZURE_RESOURCE_GROUP}} --command 'sh -l'
+
+# TODO azure doesn't like this :/
+# open an ipython console in a staging container
+azure_ipy:
+	az containerapp exec -n {{AZURE_CONTAINER}} -g {{AZURE_RESOURCE_GROUP}} --command '/app/console.py'
+
+# TODO there are multiple resource groups
+# TODO this string is copy/pasted in a couple of locations, should DRY up
+AZURE_RESOURCE_GROUP := "cosmaneura-staging"
+# TODO there are multiple containers in this app, need to document further
+AZURE_CONTAINER := "cosmaneura-staging-app"
+
+# view logs or open up a shell in a staging container
+azure_containers:
+	az containerapp list -g {{AZURE_RESOURCE_GROUP}} --query "[].name" -o tsv | fzf \
+		--height=40% \
+		--layout=reverse \
+		--no-preview \
+		--header="alt-l: logs | ctrl-e: shell" \
+		--prompt="Select Azure Container: " \
+		--bind="alt-l:abort+execute(just azure_logs {})" \
+		--bind="ctrl-e:execute(just azure_shell {})"
+
+# instead of `heroku logs` we have this insane command we have to remember
+azure_logs container=AZURE_CONTAINER:
+	az containerapp logs show --follow -n {{container}} -g {{AZURE_RESOURCE_GROUP}}
+
+# TODO needs to actually be customized per user
+# https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.OperationalInsights/workspaces/cosmaneura-staging-logs/logs
+azure_logs_for_user:
+	# az monitor log-analytics query -w '2a7d954b-373c-4de6-884f-c050ecc1d863' --analytics-query "union * | where TimeGenerated > ago(1d) | where ContainerAppName_s == 'cosmaneura-staging-app'" -o json | jq -c '.[] | {Time: .TimeGenerated, Event: .Log_event_s, Method: .Log_method_s, Did: .Log_doctor_id_s, Path: .Log_path_s, Status: .Log_status_d, Level: .Log_level_s} | to_entries'
+	az monitor log-analytics query -w '2a7d954b-373c-4de6-884f-c050ecc1d863' --analytics-query "union * | where TimeGenerated > ago(1d) | where ContainerAppName_s == 'cosmaneura-staging-app' | where Log_doctor_id_s == 'doctor_01jqck1a5recnaqjs9hcebpvf7'" -o json | jq -c '.[] | {Time: .TimeGenerated, Event: .Log_event_s, Method: .Log_method_s, Did: .Log_doctor_id_s, Path: .Log_path_s, Status: .Log_status_d, Level: .Log_level_s} | to_entries'
+
+# TODO should be renamed
+# opentofu repl
+azure_play:
+  tofu {{TOFU_GLOBAL_OPTIONS}} console
+
+azure_tags:
+	az acr repository show-tags --name cosmaneuraprodregistry.azurecr.io --repository 'cosmaneura/cosmaneura' --orderby time_desc
+
+azure_storage_browser:
+	# TODO is there a better way to create these shortcuts
+	open "https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.Storage/storageAccounts/cosmaneuraproduploads/storagebrowser"
+
+# TODO should implement
+# clean:
+
+# once an image is built and pushed to the registry, this deploys it across all containers
+azure_deploy:
+	./deploy.sh $(just _azure_last_image_id)
+
+@_azure_last_image_id:
+	# deprecated command, but seems to work a bit faster
+	# az acr repository show-manifests --name cosmaneuraprodregistry --repository cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]]"
+
+	# an alternative approach is to pull the image and inspect the digest
+	# however, this is slow and requires a full download of the image
+	# docker pull cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest
+	# docker image inspect cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest \
+	# 	--format='\{\{index .RepoDigests 0\}\}' \
+	# 	| cut -d '@' -f 2
+
+	# non-deprecated command, but is marked as preview (lol!)
+	az acr manifest list-metadata -r cosmaneuraprodregistry -n cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]].tags[0]" -o tsv 2>/dev/null
