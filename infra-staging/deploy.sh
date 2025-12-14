@@ -17,7 +17,7 @@ GIT_SHA="$1"
 # Define variables
 RESOURCE_GROUP="cosmaneura-staging"
 CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker cosmaneura-staging-app-jmon"
-STAGING_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
+STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
 if [[ -z "$GIT_SHA" ]]; then

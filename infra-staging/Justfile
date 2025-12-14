@@ -15,7 +15,8 @@
 #
 #######################
 
-# https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.App/containerApps/cosmaneura-staging-app-web/ingress
+# Azure Portal links (remove if repo becomes public):
+# Container App Ingress: https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.App/containerApps/cosmaneura-staging-app-web/ingress
 
 install:
 	# yq is required for procfile parsing
@@ -111,6 +112,7 @@ azure_logs container=AZURE_CONTAINER:
 	az containerapp logs show --follow -n {{container}} -g {{AZURE_RESOURCE_GROUP}}
 
 # TODO needs to actually be customized per user
+# Azure Portal Logs (remove if repo becomes public):
 # https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.OperationalInsights/workspaces/cosmaneura-staging-logs/logs
 azure_logs_for_user:
 	# az monitor log-analytics query -w '2a7d954b-373c-4de6-884f-c050ecc1d863' --analytics-query "union * | where TimeGenerated > ago(1d) | where ContainerAppName_s == 'cosmaneura-staging-app'" -o json | jq -c '.[] | {Time: .TimeGenerated, Event: .Log_event_s, Method: .Log_method_s, Did: .Log_doctor_id_s, Path: .Log_path_s, Status: .Log_status_d, Level: .Log_level_s} | to_entries'
@@ -122,11 +124,11 @@ azure_play:
   tofu {{TOFU_GLOBAL_OPTIONS}} console
 
 azure_tags:
-	az acr repository show-tags --name cosmaneuraprodregistry.azurecr.io --repository 'cosmaneura/cosmaneura' --orderby time_desc
+	az acr repository show-tags --name cosmaneurastagingregistry.azurecr.io --repository 'cosmaneura/cosmaneura' --orderby time_desc
 
 azure_storage_browser:
 	# TODO is there a better way to create these shortcuts
-	open "https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.Storage/storageAccounts/cosmaneuraproduploads/storagebrowser"
+	open "https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.Storage/storageAccounts/cosmaneurastaginguploads/storagebrowser"
 
 # TODO should implement
 # clean:
@@ -137,14 +139,14 @@ azure_deploy:
 
 @_azure_last_image_id:
 	# deprecated command, but seems to work a bit faster
-	# az acr repository show-manifests --name cosmaneuraprodregistry --repository cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]]"
+	# az acr repository show-manifests --name cosmaneurastagingregistry --repository cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]]"
 
 	# an alternative approach is to pull the image and inspect the digest
 	# however, this is slow and requires a full download of the image
-	# docker pull cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest
-	# docker image inspect cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura:latest \
+	# docker pull cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura:latest
+	# docker image inspect cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura:latest \
 	# 	--format='\{\{index .RepoDigests 0\}\}' \
 	# 	| cut -d '@' -f 2
 
 	# non-deprecated command, but is marked as preview (lol!)
-	az acr manifest list-metadata -r cosmaneuraprodregistry -n cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]].tags[0]" -o tsv 2>/dev/null
+	az acr manifest list-metadata -r cosmaneurastagingregistry -n cosmaneura/cosmaneura --query "[?tags[?contains(@, 'latest')]].tags[0]" -o tsv 2>/dev/null

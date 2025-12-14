@@ -1,10 +1,11 @@
-output "python_containers" {
-  value = [
-    azurerm_container_app.app.name,
-    azurerm_container_app.worker.name,
-    azurerm_container_app.job-monitor.name
-  ]
-}
+# TEMPORARY: Commented out until containers are created
+# output "python_containers" {
+#   value = [
+#     azurerm_container_app.app.name,
+#     azurerm_container_app.worker.name,
+#     azurerm_container_app.job-monitor.name
+#   ]
+# }
 
 output "resource_group" {
   value = azurerm_resource_group.main.name
