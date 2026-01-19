@@ -114,6 +114,9 @@ resource "azurerm_storage_account" "tfstate" {
   resource_group_name = azurerm_resource_group.tfstate.name
   location            = azurerm_resource_group.tfstate.location
 
+  # Enforce TLS 1.2 to meet Azure Storage minimum and avoid TLS 1.0/1.1 clients.
+  min_tls_version = "TLS1_2"
+
   account_tier = "Standard"
   # locally redundant storage is the cheapest
   account_replication_type = "LRS"
@@ -151,6 +154,9 @@ resource "azurerm_storage_account" "uploads" {
   name                = "${local.base_name_alphanumeric}uploads"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
+
+  # Enforce TLS 1.2 to meet Azure Storage minimum and avoid TLS 1.0/1.1 clients.
+  min_tls_version = "TLS1_2"
 
   account_tier = "Standard"
   # locally redundant storage is the cheapest
