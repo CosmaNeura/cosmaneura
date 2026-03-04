@@ -95,3 +95,107 @@ JS: `web/tsconfig.json`, `web/eslint.config.js`, `web/vite.config.ts`, `web/vite
 `web/react-router.config.ts`, `web/openapi-ts.config.ts`, `web/components.json`. Prettier
 inline en `web/package.json` (sin semicolons, orden de imports custom).
 Runtimes en `.tool-versions` (uv 0.7.15, pnpm 9.15.9, python 3.13.2, node 22.13.0).
+
+## Agent Context
+
+**For AI Coding Agents**: Read `.claude/AGENTS.md` FIRST for critical instructions, safety boundaries, and operational context.
+
+**Skill Files**: Domain-specific knowledge is in `.claude/skills/`. Load relevant skills before implementation work.
+
+---
+
+## Security-First Development Standards
+
+This project handles PHI and must maintain HIPAA compliance. All code must follow these security standards.
+
+### General Principles
+
+| Principle | Implementation |
+|-----------|----------------|
+| Defense in Depth | Layer validations throughout the codebase |
+| Fail Secure | Deny access by default on errors |
+| Least Privilege | Request only permissions needed |
+| Input Validation | Validate at all system boundaries |
+| PHI Protection | Never log or expose patient data |
+
+### Python Backend Security
+
+| Rule | Enforcement | Status |
+|------|-------------|--------|
+| No hardcoded secrets | Use environment variables | MANDATORY |
+| Validate all inputs | Pydantic/SQLModel schemas | MANDATORY |
+| Parameterized queries | SQLModel/SQLAlchemy only | MANDATORY |
+| No PHI in logs | Structured logging without PII | MANDATORY |
+| Handle errors properly | No bare except, no `.unwrap()` patterns | MANDATORY |
+| Dependency audit | `uv pip audit` regularly | MANDATORY |
+
+### TypeScript Frontend Security
+
+| Rule | Enforcement | Status |
+|------|-------------|--------|
+| No secrets in bundle | Server-side env vars only | MANDATORY |
+| XSS prevention | No `dangerouslySetInnerHTML` | MANDATORY |
+| Input validation | Zod schemas on forms | MANDATORY |
+| Secure storage | httpOnly cookies, not localStorage | MANDATORY |
+| Dependency audit | `pnpm audit` regularly | MANDATORY |
+
+### HIPAA Compliance
+
+| Rule | Enforcement | Status |
+|------|-------------|--------|
+| PHI de-identification | Azure Health Deidentification API | MANDATORY |
+| Access logging | All PHI access must be logged | MANDATORY |
+| Minimum necessary | Only access PHI required for task | MANDATORY |
+| Encryption in transit | HTTPS only | MANDATORY |
+| Session timeouts | Auto-logout on inactivity | MANDATORY |
+
+---
+
+## Coding Standards
+
+### Code Philosophy
+
+| Principle | Implementation |
+|-----------|----------------|
+| Least code wins | Minimum code to achieve the goal |
+| Exceptional organization | Clear structure, logical grouping |
+| No code bloat | Delete anything unused |
+| No over-engineering | Build exactly what's requested |
+| No premature abstraction | Wait for rule of 3 |
+
+### Python
+
+- **Python 3.13+** with type hints everywhere
+- **Pydantic models** for request/response validation
+- **SQLModel** for database models
+- **Async/await** for I/O operations
+- **Structlog** for structured logging
+
+### TypeScript
+
+- **Strict mode always** (`"strict": true`)
+- **No `any`** — use `unknown` and type guards
+- **Zod schemas** for runtime validation
+- **React Query** for data fetching
+
+### Git Conventions
+
+- **Conventional commits**: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`
+- **Branch naming**: `feat/feature-name`, `fix/bug-description`
+
+---
+
+## Skill Files
+
+Domain-specific knowledge in `.claude/skills/`:
+
+| Skill | Purpose | Triggers |
+|-------|---------|----------|
+| `security-review/` | Security vulnerability analysis | security, review, vulnerability, audit |
+| `audit-prep/` | Pre-audit readiness assessment | audit, compliance, checklist |
+| `code-quality/` | Minimal code philosophy | quality, refactor, clean |
+| `skill-creator/` | Create new skills | create skill, new skill |
+
+**Usage**: Load relevant skills before implementing features in that domain.
+
+For agent operational constraints, see `.claude/AGENTS.md`.
