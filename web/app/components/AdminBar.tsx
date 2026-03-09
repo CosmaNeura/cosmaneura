@@ -25,7 +25,11 @@ function AdminBar() {
     staleTime: 24 * 60 * 60 * 1000,
   })
 
+  // Debug logging
+  console.log("AdminBar render:", { data, error, hasData: !!data, hasError: !!error })
+
   if (!data || error) {
+    console.log("AdminBar returning early:", { data, error })
     return
   }
 
