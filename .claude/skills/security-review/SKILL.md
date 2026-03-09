@@ -169,19 +169,248 @@ If invoked with arguments (file paths or directories), review those specific tar
 **Auth Bypass**
 - Routes missing `<SignedIn>` / `<SignedOut>` guards
 - API calls without Clerk token validation
-- Backend endpoints missing auth middleware
+- Backend endpoints missing `Depends(AuthenticateClerkRequest)`
+- Public routes exposing sensitive data
+
+**Webhook Forgery**
+- Missing Svix signature verification on `/webhooks/clerk`
+- Processing webhook payload before signature validation
+- Webhook secret hardcoded or missing from environment
 
 ### P1 — High
 
 **Session Issues**
-- Tokens stored insecurely
-- Missing session invalidation
+- Tokens stored in localStorage (should use httpOnly cookies)
+- Missing session invalidation on logout
 - Token refresh vulnerabilities
+- Session timeout not configured
 
 **RBAC Bypass**
-- Role checks only on frontend
+- Role checks only on frontend (client-side easily bypassed)
 - Missing server-side role validation
-- Privilege escalation paths
+- `user.publicMetadata` or `user.privateMetadata` not validated server-side
+- Privilege escalation via metadata manipulation
+
+**Redirect URL Validation**
+- `redirectUrl` or `afterSignInUrl` not validated
+- Open redirect via Clerk sign-in flow
+- Missing allowlist for redirect domains
+
+### P2 — Medium
+
+**Multi-Tenant Boundary Issues**
+- Organization ID not validated on resource access
+- Cross-organization data leakage
+- Missing organization membership checks
+
+**Token Handling**
+- JWT payload trusted without verification
+- Claims not validated (exp, iss, aud)
+- Missing token revocation checks
+
+### Clerk Detection Commands
+
+```bash
+# Check for missing auth middleware on routes
+grep -rn "@router\." app/routes --include="*.py" | grep -v "Depends.*Clerk\|Depends.*auth"
+
+# Check for webhook endpoints
+grep -rn "webhook" app/routes --include="*.py" -A 20
+
+# Check for Svix usage (webhook verification)
+grep -rn "svix\|Webhook\|verify" app/ --include="*.py"
+
+# Check frontend auth guards
+grep -rn "SignedIn\|SignedOut\|useAuth\|useUser" web/ --include="*.tsx"
+
+# Check for redirect URL handling
+grep -rn "redirectUrl\|afterSignIn\|afterSignUp" web/ --include="*.tsx"
+
+# Check for role/permission checks
+grep -rn "role\|permission\|isAdmin\|publicMetadata" app/ web/ --include="*.py" --include="*.tsx"
+
+# Check for organization boundary enforcement
+grep -rn "org_id\|organization\|orgId" app/ --include="*.py"
+```
+
+### Clerk Security Checklist
+
+| Check | Location | Verification |
+|-------|----------|--------------|
+| Webhook signature validation | `/webhooks/clerk` endpoint | Uses `svix.Webhook.verify()` |
+| Auth middleware on all protected routes | `app/routes/*.py` | `Depends(AuthenticateClerkRequest)` |
+| Frontend route protection | `web/app/routes/*.tsx` | `<SignedIn>` guards |
+| Session cookies httpOnly | Clerk config | Clerk handles by default |
+| Redirect URL allowlist | Clerk Dashboard | Only trusted domains |
+| JWT validation | `AuthenticateClerkRequest` | Verifies with Clerk SDK |
+| Role checks server-side | Route handlers | Not trusting client claims |
+| Organization isolation | Data access layer | Validates `org_id` on queries |
+
+### Clerk Webhook Implementation Pattern
+
+```python
+# CORRECT: Validate signature before any processing
+from svix.webhooks import Webhook
+
+CLERK_WEBHOOK_SECRET = os.environ["CLERK_WEBHOOK_SECRET"]
+
+@router.post("/webhooks/clerk")
+async def clerk_webhook(request: Request):
+    payload = await request.body()
+    headers = {
+        "svix-id": request.headers.get("svix-id"),
+        "svix-timestamp": request.headers.get("svix-timestamp"),
+        "svix-signature": request.headers.get("svix-signature"),
+    }
+
+    try:
+        wh = Webhook(CLERK_WEBHOOK_SECRET)
+        event = wh.verify(payload, headers)
+    except Exception as e:
+        logger.warning("Webhook signature verification failed", error=str(e))
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    # Safe to process after verification
+    event_type = event.get("type")
+    if event_type == "user.created":
+        await handle_user_created(event["data"])
+    elif event_type == "user.deleted":
+        await handle_user_deleted(event["data"])
+
+    return {"status": "ok"}
+```
+
+### Frontend Auth Pattern
+
+```typescript
+// CORRECT: Protected route with server-side data fetching
+import { SignedIn, SignedOut, RedirectToSignIn } from "@clerk/remix";
+
+export default function ProtectedPage() {
+  return (
+    <>
+      <SignedIn>
+        <ProtectedContent />
+      </SignedIn>
+      <SignedOut>
+        <RedirectToSignIn />
+      </SignedOut>
+    </>
+  );
+}
+
+// CORRECT: API call includes auth token (handled by Clerk)
+const { data } = useQuery({
+  queryKey: ['patients'],
+  queryFn: async () => {
+    const res = await fetch('/api/patients', {
+      credentials: 'include',  // Includes Clerk session cookie
+    });
+    if (!res.ok) throw new Error('Unauthorized');
+    return res.json();
+  },
+});
+```
+
+---
+
+## Terraform/Azure Infrastructure
+
+### P0 — Critical
+
+**Secrets in Terraform**
+- Hardcoded credentials in `.tf` files
+- Secrets in `terraform.tfvars` committed to git
+- State file containing secrets accessible publicly
+- Sensitive outputs without `sensitive = true`
+
+**Overly Permissive Network Access**
+- Database `public_network_access_enabled = true` with open firewall
+- Firewall rules allowing `0.0.0.0/0` (all IPs)
+- Storage accounts with public blob access
+- Redis with `public_network_access_enabled = true`
+
+**Insecure Storage Configuration**
+- Storage containers with `container_access_type = "blob"` or `"container"`
+- Missing encryption at rest
+- Blob CORS allowing `*` origins
+
+### P1 — High
+
+**Container Security**
+- Container registry with `admin_enabled = true` (prefer managed identity)
+- Images pulled from untrusted registries
+- No image scanning configured
+- Running containers as root
+
+**Identity & Access**
+- Overly broad role assignments (`Owner`, `Contributor` at subscription level)
+- Missing managed identities (using shared keys instead)
+- Service principals with excessive permissions
+- No separation between environments (dev/staging/prod)
+
+**Encryption & TLS**
+- `minimum_tls_version` below 1.2
+- `non_ssl_port_enabled = true` on Redis
+- Missing HTTPS enforcement on ingress
+- Database connections without SSL
+
+### P2 — Medium
+
+**Logging & Monitoring Gaps**
+- No Log Analytics workspace configured
+- Missing diagnostic settings
+- Insufficient retention period (< 90 days for HIPAA)
+- No alerts for security events
+
+**Resource Configuration**
+- Missing resource locks on critical resources
+- No backup configuration or insufficient retention
+- Missing tags for cost allocation and ownership
+- Auto-scaling not configured (DoS risk)
+
+### Infrastructure Detection Commands
+
+```bash
+# Check for public network access
+grep -rn "public_network_access_enabled.*true" infra/
+
+# Check for overly permissive firewall rules
+grep -rn "0.0.0.0" infra/*.tf
+
+# Check for CORS wildcards
+grep -rn 'allowed_origins.*\*' infra/
+
+# Check for admin credentials enabled
+grep -rn "admin_enabled.*true" infra/
+
+# Check for missing TLS settings
+grep -rn "minimum_tls_version\|non_ssl_port" infra/
+
+# Check for public storage
+grep -rn "container_access_type" infra/ | grep -v "private"
+
+# Check for sensitive outputs
+grep -rn "^output" infra/*.tf -A 5 | grep -v "sensitive.*true"
+
+# Check for hardcoded secrets (high entropy strings)
+grep -rn "password\|secret\|key.*=" infra/*.tf | grep -v "var\.\|local\.\|data\."
+```
+
+### Azure-Specific Checks
+
+| Resource | Security Check | Detection |
+|----------|---------------|-----------|
+| PostgreSQL | Public access disabled | `public_network_access_enabled = false` |
+| PostgreSQL | Firewall not 0.0.0.0/0 | No `start_ip_address = "0.0.0.0"` with `end = "255.255.255.255"` |
+| PostgreSQL | SSL enforced | `ssl_enforcement_enabled = true` |
+| Redis | SSL only | `non_ssl_port_enabled = false` |
+| Redis | TLS 1.2+ | `minimum_tls_version = "1.2"` |
+| Storage | Private containers | `container_access_type = "private"` |
+| Storage | CORS restricted | No `allowed_origins = ["*"]` |
+| Container Registry | Managed identity auth | `admin_enabled = false` |
+| Container Apps | HTTPS only | Ingress configured with HTTPS |
+| Key Vault | Network rules | Private endpoint or service endpoint |
 
 ---
 
@@ -253,3 +482,9 @@ Remove or downgrade findings that fail these checks.
 | Missing auth middleware | FORBIDDEN | Check route decorators |
 | Bare `except:` | FORBIDDEN | Search for bare except clauses |
 | localStorage for tokens | FORBIDDEN | Search for token storage |
+| Open redirect | FORBIDDEN | Unvalidated redirect URLs |
+| Mass assignment | FORBIDDEN | `**kwargs` with user input |
+| Webhook without signature | FORBIDDEN | Missing Svix verification |
+| DB firewall 0.0.0.0/0 | FORBIDDEN | Public database access |
+| CORS `*` origins | FORBIDDEN | Wildcard CORS in production |
+| Container admin credentials | FORBIDDEN | Use managed identity instead |
