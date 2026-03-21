@@ -1,4 +1,3 @@
-
 from azure.storage.blob import BlobServiceClient
 
 from app.configuration.azure import (

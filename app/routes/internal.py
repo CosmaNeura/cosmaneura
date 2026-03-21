@@ -130,14 +130,14 @@ def note_detail(
     appointment = cast(
         Appointment,
         Appointment.where(
-        Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
+            Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
         ).one(),
     )
 
     visit_notes = cast(
         list[AIVisitNote],
         AIVisitNote.where(
-        AIVisitNote.appointment_id == appointment_id,
+            AIVisitNote.appointment_id == appointment_id,
         ).all(),
     )
 
@@ -182,7 +182,7 @@ def intake_detail(
     appointment = cast(
         Appointment,
         Appointment.where(
-        Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
+            Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
         ).one(),
     )
 

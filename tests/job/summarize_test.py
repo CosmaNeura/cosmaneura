@@ -1,7 +1,10 @@
 # pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportReturnType=false
 
 import json
+import os
 import re
+
+import pytest
 
 from app.jobs.summarize import generate_clinical_note, perform
 
@@ -13,6 +16,19 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
 from tests.eval import eval_llm, eval_n_of_m
+
+
+_RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
+_HAS_AZURE_OPENAI_CREDS = bool(
+    os.getenv("AZURE_OPENAI_API_KEY")
+    and os.getenv("AZURE_OPENAI_ENDPOINT")
+)
+pytestmark = pytest.mark.skipif(
+    not (_RUN_LIVE_LLM_TESTS and _HAS_AZURE_OPENAI_CREDS),
+    reason=(
+        "requires live Azure OpenAI access; set RUN_LIVE_LLM_TESTS=true and Azure OpenAI env vars"
+    ),
+)
 
 
 def assert_matches(regex, string):
@@ -43,9 +59,9 @@ def test_summarize_copies_schema_field_orer():
     )
     assert schema is not None
 
-    transcript = (
-        AIVisitTranscript.where(AIVisitTranscript.appointment_id == appt.id).one()
-    )
+    transcript = AIVisitTranscript.where(
+        AIVisitTranscript.appointment_id == appt.id
+    ).one()
     assert transcript is not None
 
     perform(transcript.id, schema.id)
@@ -60,6 +76,7 @@ def test_summarize_copies_schema_field_orer():
     schema_fields = list(schema.fields.keys())
 
     assert note_fields == schema_fields
+
 
 # Done at the request of Caroline at Fiat Health.
 def test_note_includes_patient_action_items():
@@ -129,7 +146,11 @@ def test_summarize_updates_appointment_name_based_on_intake():
     appt = Appointment.where(Appointment.patient_id == patient.id).one()
     assert appt is not None
     assert appt.appointment_name is not None
-    assert eval_llm(appt.appointment_name, "Should mention it is a follow up for diabetes management")
+    assert eval_llm(
+        appt.appointment_name,
+        "Should mention it is a follow up for diabetes management",
+    )
+
 
 # Done at the request of Teresa Jensen.
 def test_note_includes_all_actionable_steps_for_doctor():
@@ -184,7 +205,9 @@ def test_note_includes_all_actionable_steps_for_doctor():
 def test_summarize_is_idempotent():
     patient = Patient.where(Patient.name == "Ghengis Khan").one()
     appt = Appointment.where(Appointment.patient_id == patient.id).first()
-    transcript = AIVisitTranscript.where(AIVisitTranscript.appointment_id == appt.id).one()
+    transcript = AIVisitTranscript.where(
+        AIVisitTranscript.appointment_id == appt.id
+    ).one()
 
     assert appt is not None
     assert appt.appointment_name is None
@@ -201,19 +224,29 @@ def test_summarize_is_idempotent():
 
     assert count_visit_notes(transcript, schema) == init_note_count + 1
 
-    note = AIVisitNote.where(
-        (AIVisitNote.ai_transcript_id == transcript.id)
-        & (AIVisitNote.doctor_note_schema_id == schema.id)
-    ).limit(1).one()
+    note = (
+        AIVisitNote.where(
+            (AIVisitNote.ai_transcript_id == transcript.id)
+            & (AIVisitNote.doctor_note_schema_id == schema.id)
+        )
+        .limit(1)
+        .one()
+    )
 
     perform(transcript.id, schema.id)
 
     assert count_visit_notes(transcript, schema) == init_note_count + 1
 
-    last_id = AIVisitNote.where(
+    last_id = (
+        AIVisitNote.where(
             (AIVisitNote.ai_transcript_id == transcript.id)
             & (AIVisitNote.doctor_note_schema_id == schema.id)
-        ).order_by(AIVisitNote.updated_at.desc()).limit(1).one().id
+        )
+        .order_by(AIVisitNote.updated_at.desc())
+        .limit(1)
+        .one()
+        .id
+    )
 
     assert note.id == last_id
 

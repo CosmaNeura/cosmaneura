@@ -42,7 +42,9 @@ def test_user_list(client: TestClient):
 
     # create 3 users
     for i in range(users_to_create):
-        Doctor(email=f"test{i}@example.com", clerk_id=f"user_{i}", biography=None).save()
+        Doctor(
+            email=f"test{i}@example.com", clerk_id=f"user_{i}", biography=None
+        ).save()
 
     response = client.get(
         api_app.url_path_for("user_list"),

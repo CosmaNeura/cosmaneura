@@ -1,5 +1,6 @@
 # pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
+import os
 import re
 
 import pytest
@@ -14,6 +15,19 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 
 from tests.eval import eval_llm
 from tests.factories import DoctorNoteFileFactory
+
+
+_RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
+_HAS_AZURE_OPENAI_CREDS = bool(
+    os.getenv("AZURE_OPENAI_API_KEY")
+    and os.getenv("AZURE_OPENAI_ENDPOINT")
+)
+requires_live_llm = pytest.mark.skipif(
+    not (_RUN_LIVE_LLM_TESTS and _HAS_AZURE_OPENAI_CREDS),
+    reason=(
+        "requires live Azure OpenAI access; set RUN_LIVE_LLM_TESTS=true and Azure OpenAI env vars"
+    ),
+)
 
 
 class AssertionTracker:
@@ -60,9 +74,12 @@ def llm_matches(regex, string) -> bool:
 
 def assert_matches(regex, string):
     if not llm_matches(regex, string):
-        raise AssertionError(f"Regex '{regex}' materially differs from the string '{string}'")
+        raise AssertionError(
+            f"Regex '{regex}' materially differs from the string '{string}'"
+        )
 
 
+@requires_live_llm
 def test_field_order_is_preserved():
     file = DoctorNoteFile.get(note_type="TEST Telehealth SOAP Note")  # Seeded data.
     assert file is not None
@@ -73,7 +90,8 @@ def test_field_order_is_preserved():
         DoctorNoteSchema.where(
             (DoctorNoteSchema.doctor_id == file.doctor_id)
             & (DoctorNoteSchema.note_type == file.note_type)
-        ).order_by(DoctorNoteSchema.created_at.desc())
+        )
+        .order_by(DoctorNoteSchema.created_at.desc())
         .first()
     )
     assert schema is not None
@@ -97,6 +115,7 @@ def test_field_order_is_preserved():
         )
 
 
+@requires_live_llm
 def test_telehealth_SOAP_note_extraction():
     file = DoctorNoteFile.get(note_type="TEST Telehealth SOAP Note")  # Seeded data.
     assert file is not None
@@ -148,8 +167,7 @@ def test_telehealth_SOAP_note_extraction():
     fields = example.field_examples
     assert_("Thyroid" == fields["CC"])
     assert_("No known allergies" == fields["Allergies"])
-    assert_("Mood is good: denies depression, anxiety" ==
-            fields["Mental/Functional"])
+    assert_("Mood is good: denies depression, anxiety" == fields["Mental/Functional"])
     assert_("Hashimoto thyroiditis" in fields["Assessment"])
 
     subjective = fields["Subjective"].replace("\n", " ")
@@ -223,6 +241,7 @@ def test_telehealth_SOAP_note_extraction():
     assert_.threshold_met_or_raise(0.95)
 
 
+@requires_live_llm
 def test_telehealth_H_and_P_note_extraction():
     file = DoctorNoteFile.get(note_type="Telehealth H&P Note")  # Seeded data.
     assert file is not None
@@ -370,7 +389,7 @@ def test_telehealth_H_and_P_note_extraction():
     assert_("Abnormal menstrual cycle" in plan)
     assert_("Lower abdominal pain" in plan)
     assert_("45 min visit" in plan)
-    assert_("Teresa Asam-Jensen" not in plan) # Confirm it's been de-identified.
+    assert_("Teresa Asam-Jensen" not in plan)  # Confirm it's been de-identified.
 
     assert_.threshold_met_or_raise(0.95)
 

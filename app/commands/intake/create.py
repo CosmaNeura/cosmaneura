@@ -156,7 +156,9 @@ def perform(appointment_request: AppointmentRequest) -> AppointmentResponse:
         # copy intake schema questions into the intake object itself
         # this is slightly paranoid/unnecessary
         intake_questions=[],
-        external_intake_data=cast(dict[str, str], appointment_request.intake_json or {}),
+        external_intake_data=cast(
+            dict[str, str], appointment_request.intake_json or {}
+        ),
     ).save()
 
     queue_question_generation(intake.id)

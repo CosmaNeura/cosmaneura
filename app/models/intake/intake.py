@@ -1,4 +1,3 @@
-
 from furl import furl
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import HttpUrl, computed_field

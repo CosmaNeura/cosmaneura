@@ -75,9 +75,9 @@ def authenticated_client():
         client.cookies.clear()
 
         def override_user(user: ClerkUser | None):
-            api_app.dependency_overrides[
-                authenticate_clerk_request_middleware
-            ] = MockAuthenticateRequest(user=user)
+            api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
+                MockAuthenticateRequest(user=user)
+            )
 
         client.override_user = override_user  # type: ignore[attr-defined]
 

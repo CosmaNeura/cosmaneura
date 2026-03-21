@@ -111,7 +111,7 @@ export default defineConfig(({ mode }) => ({
   // TODO need to disable .env file loading https://discord.com/channels/804011606160703521/1307442221288656906
   // build.outDir is ignored and buildDirectory in react-router.config.ts is used instead
   build: {
-    sourcemap: true,
+    sourcemap: mode !== "production",
   },
   server: {
     // by default, vite will only listen on ipv6 loopback!

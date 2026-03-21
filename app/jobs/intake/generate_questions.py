@@ -40,8 +40,7 @@ def perform(intake_id: str | TypeID | TypeIDType):
 
     if intake.intake_questions:
         log.info(
-            "intake questions already exist, skipping generation",
-            intake_id=intake_id
+            "intake questions already exist, skipping generation", intake_id=intake_id
         )
         return
 

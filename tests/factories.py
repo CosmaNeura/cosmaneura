@@ -54,6 +54,7 @@ class FutureAppointmentFactory(AppointmentFactory):
         start_date="+1d", end_date="+90d"
     )
 
+
 _MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE = {
     "type": "Dermatology - NEW Patient Consultation",
     "category": "Virtual Dermatology",
@@ -133,6 +134,7 @@ _MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE = {
     ],
 }
 
+
 def _make_intake_json(faker):
     def _builder():
         data = deepcopy(_MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE)
@@ -198,12 +200,16 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
     intake_json = Use(_make_intake_json(BaseFactory.__faker__))
 
     # A date in the future, with or without an attached timezone.
-    date = Use(lambda: BaseFactory.__random__.choice([
-        BaseFactory.__faker__.future_datetime(),
-        BaseFactory.__faker__.future_datetime(
-            tzinfo=BaseFactory.__faker__.pytimezone()
-        ),
-    ]))
+    date = Use(
+        lambda: BaseFactory.__random__.choice(
+            [
+                BaseFactory.__faker__.future_datetime(),
+                BaseFactory.__faker__.future_datetime(
+                    tzinfo=BaseFactory.__faker__.pytimezone()
+                ),
+            ]
+        )
+    )
 
     # TODO this needs to be fixed upstream in polyfactory, these are all slightly different...
     # doctor = None
@@ -239,9 +245,10 @@ class PastAppointmentRequestFactory(AppointmentRequestFactory):
     """
     Same as AppointmentRequestFactory, but always generates a date in the past.
     """
+
     date = BaseFactory.__faker__.date_time_between(
         start_date="-1y",  # up to one year ago
-        end_date="now",    # up until this instant
+        end_date="now",  # up until this instant
     )
 
 

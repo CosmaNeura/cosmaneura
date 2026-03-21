@@ -99,6 +99,7 @@ def test_note_detail_deleted_transcript(authenticated_client: TestClient):
     assert transcript_json["deleted_at"] is not None
     assert len(transcript_json["transcript_data"]) == 0
 
+
 def test_note_detail_old_transcript(authenticated_client: TestClient):
     "Old transcripts should be treated as deleted even if not marked as such."
 
