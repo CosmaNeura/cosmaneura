@@ -13,6 +13,8 @@ import { standardDateTimeFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
 
+type Status = Parameters<typeof StatusBadge>[0]["status"]
+
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
   const { data } = await intakeDetail({
     path: {
@@ -98,7 +100,7 @@ function EmptyState({ intake }: { intake: Intake }) {
 }
 
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
-  const { appointment, intake, patient } = loaderData
+  const { intake } = loaderData
   const hasSummary = !!intake.summary
 
   return (

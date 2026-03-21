@@ -6,7 +6,10 @@ import withPostHogProvider from "./posthog"
 import withSentryProvider from "./sentry"
 import withTanstackQueryProvider from "./tanstack-query"
 
-const PROVIDERS: ((app: React.ComponentType) => JSX.Element)[] = [
+type AppComponent = React.ComponentType
+type Provider = (app: AppComponent) => AppComponent
+
+const PROVIDERS: Provider[] = [
   withPostHogProvider,
   withClerkProvider,
   withSentryProvider,
@@ -14,6 +17,6 @@ const PROVIDERS: ((app: React.ComponentType) => JSX.Element)[] = [
 ]
 
 // TODO(mbianco) figure out type issue here + move to config index
-export function withProviders(app: () => React.ComponentType) {
+export function withProviders(app: AppComponent): AppComponent {
   return PROVIDERS.reduce((acc, provider) => provider(acc), app)
 }

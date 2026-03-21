@@ -5,10 +5,7 @@ import { Route } from "./+types/notes"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { noteList } from "~/configuration/client"
-import {
-  appointmentToSidebarEntry,
-  appointmentsToSidebarEntries,
-} from "~/lib/appointment"
+import { appointmentsToSidebarEntries } from "~/lib/appointment"
 
 import { invariant } from "@epic-web/invariant"
 

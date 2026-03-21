@@ -6,10 +6,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import { Mail } from "@/data/mock"
 
 interface MessageIntakeProps {
-  mail: Mail
   isAccuityIntakeOpen?: boolean
   setIsAccuityIntakeOpen?: (open: boolean) => void
   isIntakeTranscriptOpen?: boolean
@@ -17,7 +15,6 @@ interface MessageIntakeProps {
 }
 
 export function MessageIntake({
-  mail,
   isAccuityIntakeOpen,
   setIsAccuityIntakeOpen,
   isIntakeTranscriptOpen,

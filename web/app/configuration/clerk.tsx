@@ -25,7 +25,29 @@ This whole situation isn't great. Here's what is happening:
 
 // this will check to make sure the user is logged in and redirect them if they are not
 export async function getClient() {
-  if (!window.Clerk) {
+  type ClerkUser = {
+    id: string
+    username?: string | null
+    primaryEmailAddress?: {
+      emailAddress?: string | null
+    } | null
+  }
+
+  type ClerkClient = {
+    loaded: boolean
+    load: () => Promise<void>
+    user?: ClerkUser
+    session?: {
+      getToken: () => Promise<string | null>
+    }
+    redirectToSignIn: () => Promise<void>
+  }
+
+  const clerkWindow = window as Window & {
+    Clerk?: ClerkClient
+  }
+
+  if (!clerkWindow.Clerk) {
     // recommended officially here:
     // https://clerk.com/docs/references/sdk/frontend-only#call-window-clerk-load
     await loadClerkJsScript({
@@ -33,9 +55,9 @@ export async function getClient() {
     })
   }
 
-  invariant(window.Clerk, "Clerk should be defined")
+  invariant(clerkWindow.Clerk, "Clerk should be defined")
 
-  const clerk = window.Clerk
+  const clerk = clerkWindow.Clerk
 
   if (!clerk.loaded) {
     await clerk.load()

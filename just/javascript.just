@@ -26,6 +26,7 @@ js_lint +FILES=".":
 	{{_pnpm}} prettier --check {{FILES}}
 	# `eslint-config-typescript` seems dead
 	{{_pnpm}} eslint --cache --cache-location ./node_modules/.cache/eslint {{FILES}}
+	{{_pnpm}} run typecheck
 
 	{{_pnpm}} dlx depcheck
 

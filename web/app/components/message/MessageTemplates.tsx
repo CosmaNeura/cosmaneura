@@ -6,10 +6,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import { Mail } from "@/data/mock"
 
 interface MessageTemplatesProps {
-  mail: Mail
   isSOAPOpen?: boolean
   setIsSOAPOpen?: (open: boolean) => void
   isNewPatientOpen?: boolean
@@ -23,7 +21,6 @@ interface MessageTemplatesProps {
 }
 
 export function MessageTemplates({
-  mail,
   isSOAPOpen,
   setIsSOAPOpen,
   isNewPatientOpen,
@@ -145,7 +142,7 @@ export function MessageTemplates({
           </div>
           <CollapsibleContent className="mt-3">
             <div className="text-left text-sm whitespace-pre-wrap">
-              {mail.content}
+              Transcript content and details
             </div>
           </CollapsibleContent>
         </Collapsible>

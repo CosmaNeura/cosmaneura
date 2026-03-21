@@ -1,4 +1,3 @@
-import { reactRouterDevTools } from "react-router-devtools"
 import { defineConfig } from "vite"
 import { loadEnv } from "vite"
 import viteCompression from "vite-plugin-compression"
@@ -121,7 +120,7 @@ export default defineConfig(({ mode }) => ({
     // if the port is in use, fail loudly
     strictPort: true,
     // random ports to avoid conflict with other projects
-    port: parseInt(process.env.JAVASCRIPT_SERVER_PORT),
+    port: parseInt(process.env.JAVASCRIPT_SERVER_PORT ?? "5173", 10),
   },
   // clearScreen: false,
   plugins: [

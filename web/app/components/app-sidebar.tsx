@@ -3,7 +3,7 @@ import { href, useLocation, useNavigate } from "react-router"
 
 import { Command, File, Inbox, Settings } from "lucide-react"
 
-import { Status } from "@/components/shared/StatusBadge"
+import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
 import {
   Sidebar,
@@ -100,7 +100,7 @@ export interface SidebarEntry {
   location: string
   subTitle?: string
   date: string
-  status: Status | "none"
+  status: StatusBadgeOptions | "none"
   preview: string
 }
 
@@ -160,7 +160,7 @@ function SelectionSidebar({
   isLoading,
   entries,
 }: {
-  header: string
+  header?: string
   isLoading: boolean
   entries: SidebarEntry[]
 }) {
@@ -192,7 +192,9 @@ function SelectionSidebar({
       {/* title with filters */}
       <SidebarHeader className="gap-3.5 border-b p-4">
         <div className="flex w-full items-center justify-between">
-          <div className="text-foreground text-base font-medium">{header}</div>
+          <div className="text-foreground text-base font-medium">
+            {header ?? "Appointments"}
+          </div>
           <Label className="flex items-center gap-2 text-sm">
             <span>This Week</span>
             <Switch

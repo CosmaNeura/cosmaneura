@@ -24,7 +24,6 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
-import { Separator } from "~/components/ui/separator"
 import {
   generateSignedExampleNoteUploadUrl,
   settingsData,
@@ -37,7 +36,9 @@ import { uploadFileToAzure } from "~/lib/azure-upload"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 
-function BiographyInput({ biography }: { biography: string }) {
+type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
+
+function BiographyInput({ biography }: { biography: string | null }) {
   const formSchema = z.object({
     biography: z.string().min(1, "Biography is required"),
   })
@@ -155,7 +156,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                   {Object.entries(schema.fields).map(([field, description]) => (
                     <div key={field} className="mb-2">
                       <span className="font-semibold">{field}:</span>{" "}
-                      {description}
+                      {String(description)}
                     </div>
                   ))}
                 </p>

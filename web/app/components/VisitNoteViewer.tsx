@@ -10,13 +10,13 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { CopyButton } from "~/components/shared/CopyButton"
-import { AIVisitNote } from "~/configuration/client"
+import type { AiVisitNote } from "~/configuration/client"
 
 export default function VisitNoteViewer({
   note,
   defaultOpen = false,
 }: {
-  note: AIVisitNote
+  note: AiVisitNote
   defaultOpen: boolean
 }) {
   const [isOpen, setOpen] = useState(defaultOpen)
