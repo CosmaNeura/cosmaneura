@@ -18,7 +18,9 @@ runs:
           zsh libnss3-tools \
           poppler-utils ffmpeg
     # without any additional options, this simply installs the latest version of the cli
+    # keep this non-blocking: CI can continue with direct GitHub secrets if OP auth is unavailable
     - uses: 1password/load-secrets-action@v2
+      continue-on-error: true
     - uses: iloveitaly/github-action-direnv-load-and-mask@master
       with:
         environment_allowlist: >
