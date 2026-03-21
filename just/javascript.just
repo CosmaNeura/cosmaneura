@@ -38,11 +38,7 @@ js_lint-fix:
 js_test:
 	# NOTE vitest automatically will detect GITHUB_ACTIONS and change the output format
 	# CI=true impacts how various JS tooling run
-	if [[ -n "${CI:-}" ]]; then \
-		{{_pnpm}} run test; \
-	else \
-		cd {{WEB_DIR}} && {{EXECUTE_IN_TEST}} pnpm run test; \
-	fi
+	cd {{WEB_DIR}} && {{EXECUTE_IN_TEST}} pnpm run test
 
 # run a development server
 js_dev:
