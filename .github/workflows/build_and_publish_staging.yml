@@ -11,6 +11,8 @@ concurrency:
 
 env:
   OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+  VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
+  CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
   GH_TOKEN: ${{ github.token }}
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
