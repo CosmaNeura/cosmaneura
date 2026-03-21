@@ -8,12 +8,14 @@ from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from app import log
+from app.jobs.intake.generate_questions import queue as queue_question_generation
+
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
-from app.jobs.intake.generate_questions import queue as queue_question_generation
+
 
 class PatientRequest(BaseModel):
     name: str
