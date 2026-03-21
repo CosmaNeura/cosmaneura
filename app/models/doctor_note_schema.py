@@ -1,4 +1,5 @@
 import typing as t
+from typing import cast
 
 from pydantic import computed_field
 
@@ -60,4 +61,4 @@ class DoctorNoteSchema(
             # generates a LEFT JOIN against examples table
             # .options(joinedload(self.__class__.examples))
             .count()
-        )
+        ) or cast(int, 0)

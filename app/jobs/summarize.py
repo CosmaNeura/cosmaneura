@@ -5,6 +5,7 @@ Summarize a patient visit into a clinical note with the specified schema.
 import json
 import math
 from textwrap import dedent
+from typing import Any, cast
 
 from app import log
 from app.celery import celery_app
@@ -47,10 +48,11 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         DoctorNoteExample.select()
         .where(DoctorNoteExample.doctor_note_schema_id == schema_id)
         # TODO is there a way to actually fix this type? Feels like a limitation on sqlmodel
-        .order_by(DoctorNoteExample.updated_at.desc())
+        .order_by(cast(Any, DoctorNoteExample.updated_at).desc())
         .limit(1)
         .one()
     )
+    example = cast(DoctorNoteExample, example)
 
     # TODO Validate the example note matches the schema.
 

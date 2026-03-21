@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel, computed_field
@@ -64,11 +64,11 @@ def intake_list(request: Request) -> IntakeList:
         .join(Intake)
         # TODO preload the intake object to avoid N+1 queries
         # .options(sa.joinedload(Appointment.intake))
-        .order_by(Appointment.appointment_date.asc())
+        .order_by(cast(Any, Appointment.appointment_date).asc())
         .all()
     )
 
-    return IntakeList(appointments=list(appointment_list))
+    return IntakeList(appointments=cast(list[Appointment], list(appointment_list)))
 
 
 class NotetakingData(BaseModel, extra="forbid"):
@@ -85,11 +85,11 @@ def note_list(request: Request) -> NotetakingData:
     doctor: Doctor = request.state.doctor
     appointment_list = (
         Appointment.where(Appointment.doctor_id == doctor.id)
-        .order_by(Appointment.appointment_date.desc())
+        .order_by(cast(Any, Appointment.appointment_date).desc())
         .all()
     )
 
-    return NotetakingData(appointments=list(appointment_list))
+    return NotetakingData(appointments=cast(list[Appointment], list(appointment_list)))
 
 
 # TODO what about doctors who have an insane patient list?
@@ -101,10 +101,12 @@ def patient_list(request: Request) -> list[Patient]:
 
     # TODO(mbianco) AM types should be fixed and the types should now display properly here...
     patient_list = (
-        Patient.where(Patient.doctor_id == doctor.id).order_by(Patient.name.asc()).all()
+        Patient.where(Patient.doctor_id == doctor.id)
+        .order_by(cast(Any, Patient.name).asc())
+        .all()
     )
 
-    return list(patient_list)
+    return cast(list[Patient], list(patient_list))
 
 
 class NoteDetail(BaseModel, extra="forbid"):
@@ -125,13 +127,19 @@ def note_detail(
 ) -> NoteDetail:
     # TODO error handling for bad IDs
     doctor: Doctor = request.state.doctor
-    appointment = Appointment.where(
+    appointment = cast(
+        Appointment,
+        Appointment.where(
         Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
-    ).one()
+        ).one(),
+    )
 
-    visit_notes = AIVisitNote.where(
+    visit_notes = cast(
+        list[AIVisitNote],
+        AIVisitNote.where(
         AIVisitNote.appointment_id == appointment_id,
-    ).all()
+        ).all(),
+    )
 
     # There should only ever be one transcript per appointment. If this
     # invariant is violated, this endpoint will start to cause issues.
@@ -151,7 +159,7 @@ def note_detail(
         appointment=appointment,
         transcript=transcript,
         # TODO should be able to handle a generator, right?
-        notes=list(visit_notes),
+        notes=visit_notes,
     )
 
     return note_detail
@@ -171,13 +179,16 @@ def intake_detail(
     # TODO error handling for bad IDs
     doctor: Doctor = request.state.doctor
 
-    appointment = Appointment.where(
+    appointment = cast(
+        Appointment,
+        Appointment.where(
         Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
-    ).one()
+        ).one(),
+    )
 
     assert appointment
 
-    intake = appointment.intake
+    intake = cast(Intake, appointment.intake)
 
     intake_detail = IntakeDetail(
         appointment=appointment,
@@ -243,11 +254,11 @@ def settings_data(request: Request) -> SettingsData:
 
     notes_schema = DoctorNoteSchema.where(
         (DoctorNoteSchema.doctor_id == doctor.id)
-        & DoctorNoteSchema.deleted_at.is_(None)
+        & cast(Any, DoctorNoteSchema.deleted_at).is_(None)
     ).all()
 
     return SettingsData(
-        notes_schema=list(notes_schema),
+        notes_schema=cast(list[DoctorNoteSchema], list(notes_schema)),
         doctor_id=str(doctor.id),
         biography=doctor.biography,
     )

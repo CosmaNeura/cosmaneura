@@ -5,11 +5,11 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
+from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
-from app.models.ai_visit_transcript import AIVisitTranscript
 
 from tests.factories import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
 from tests.routes.utils import get_clerk_dev_user, get_clerk_seed_user
@@ -40,6 +40,7 @@ def test_note_detail(authenticated_client: TestClient):
         doctor_id=doctor.id,
         patient_id=patient.id,
         appointment_date=datetime.now(),
+        external_id=None,
     ).save()
 
     response = authenticated_client.get(
@@ -59,7 +60,7 @@ def test_note_detail(authenticated_client: TestClient):
 def test_note_detail_deleted_transcript(authenticated_client: TestClient):
     # Use data from seeds.
     _, _, seed_user = get_clerk_seed_user()
-    authenticated_client.override_user(seed_user)
+    authenticated_client.override_user(seed_user)  # type: ignore[attr-defined]
 
     transcript = AIVisitTranscript.sample()
     assert not transcript.deleted_at
@@ -103,7 +104,7 @@ def test_note_detail_old_transcript(authenticated_client: TestClient):
 
     # Use data from seeds.
     _, _, seed_user = get_clerk_seed_user()
-    authenticated_client.override_user(seed_user)
+    authenticated_client.override_user(seed_user)  # type: ignore[attr-defined]
 
     transcript = AIVisitTranscript.sample()
     assert not transcript.deleted_at

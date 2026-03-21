@@ -5,6 +5,7 @@ Generate intake questions for a patient of a doctor.
 import json
 from datetime import datetime
 from textwrap import dedent
+from typing import Any, cast
 
 from typeid import TypeID
 
@@ -129,7 +130,7 @@ def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
     )
 
 
-def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
+def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
@@ -145,10 +146,11 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
         .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
         .join(Patient, Appointment.patient_id == Patient.id)
         .where((AIVisitNote.doctor_id == doctor.id) & (Patient.id == patient.id))
-        .order_by(Appointment.updated_at.desc())
+        .order_by(cast(Any, Appointment.updated_at).desc())
         .limit(1)
         .first()
     )
+    last_note = cast(AIVisitNote | None, last_note)
 
     last_visit_section = ""
     if last_note is not None:
@@ -239,7 +241,7 @@ def generate_intake_questions(
     prompt = generate_questions_prompt(intake, doctor)
     response = openai.chat.completions.create(
         model=DEFAULT_MULTI_MODAL_MODEL,
-        messages=[{"role": "system", "content": prompt}],
+        messages=[cast(Any, {"role": "system", "content": prompt})],
         response_format={"type": "json_object"},
         temperature=0,
         top_p=0.1,

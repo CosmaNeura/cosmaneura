@@ -1,3 +1,5 @@
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
+
 from app.jobs.intake.summarize import perform
 
 from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion

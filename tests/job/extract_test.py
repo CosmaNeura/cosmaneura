@@ -1,18 +1,20 @@
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
+
 import re
-from pathlib import Path
 
 import pytest
 from flexmock import flexmock
 
+from app import log
 from app.jobs.extract import perform
 
-from app import log
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
-from tests.eval import eval_llm
 
+from tests.eval import eval_llm
 from tests.factories import DoctorNoteFileFactory
+
 
 class AssertionTracker:
     def __init__(self):
@@ -48,11 +50,13 @@ class AssertionTracker:
                 f"Threshold not met: {self.passed_percentage()}% of assertions passed."
             )
 
+
 def llm_matches(regex, string) -> bool:
     if re.search(regex, string):
         return True
     criteria = f"Should not materially differ from the regex '{regex}' from the perspective of a physician."
     return eval_llm(string, criteria)
+
 
 def assert_matches(regex, string):
     if not llm_matches(regex, string):

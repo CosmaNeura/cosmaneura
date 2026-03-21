@@ -1,3 +1,5 @@
+# pyright: reportReturnType=false
+
 from app.jobs.transcribe import perform, transcribe_audio
 
 from app.models.ai_visit_transcript import AIVisitTranscript
@@ -32,12 +34,13 @@ def test_perform_idempotency():
   perform(audio_file.id)
   assert count_transcripts_for_audio_file(audio_file) == 1
 
-  # A new transcript was not created.
-  assert transcript.id == AIVisitTranscript.get(
-      doctor_id=audio_file.doctor_id,
-      appointment_id=audio_file.appointment_id,
-      patient_id=audio_file.patient_id
-  ).id
+  latest_transcript = AIVisitTranscript.get(
+     doctor_id=audio_file.doctor_id,
+     appointment_id=audio_file.appointment_id,
+     patient_id=audio_file.patient_id
+  )
+  assert latest_transcript is not None
+  assert transcript.id == latest_transcript.id
 
 def test_wav_transcription():
   # Created in test seeds.
@@ -113,4 +116,3 @@ def test_mov_transcription():
   assert len(doctor_entries) >= 5
   patient_entries = list(filter(lambda te: te.speaker == "Patient", result.transcript))
   assert len(patient_entries) >= 6
-

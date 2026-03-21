@@ -12,12 +12,12 @@ from app.models.doctor import Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.intake.intake import ExternalIntakeData, Intake
 from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
-from app.models.intake.intake import Intake, ExternalIntakeData
 
-from tests.routes.utils import get_clerk_seed_user
 from tests.log import log
+from tests.routes.utils import get_clerk_seed_user
 
 
 def seed_test_data():

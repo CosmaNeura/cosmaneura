@@ -1,3 +1,5 @@
+# pyright: reportOptionalMemberAccess=false
+
 from playwright.sync_api import Page, expect
 
 from app import root

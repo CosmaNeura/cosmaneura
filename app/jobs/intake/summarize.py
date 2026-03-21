@@ -5,6 +5,7 @@ Summarize all the intake data for a given appointment.
 import json
 from datetime import datetime
 from textwrap import dedent
+from typing import Any, cast
 
 from typeid import TypeID
 
@@ -82,10 +83,11 @@ def generate_prompt(intake: Intake) -> str:
         .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
         .join(Patient, Appointment.patient_id == Patient.id)
         .where((AIVisitNote.doctor_id == doctor.id) & (Patient.id == patient.id))
-        .order_by(Appointment.updated_at.desc())
+        .order_by(cast(Any, Appointment.updated_at).desc())
         .limit(1)
         .first()
     )
+    last_note = cast(AIVisitNote | None, last_note)
 
     follow_up_questions = [
         {"question": q.question, "answer": q.answer}
@@ -107,6 +109,9 @@ def generate_prompt(intake: Intake) -> str:
     # doctor's time to read. An average reader reads about 4 words per second.
     max_words = 250
 
+    cleaned_intake_data = intake.cleaned_external_intake_data
+    assert cleaned_intake_data is not None
+
     return dedent(f"""
     You are a doctor with the following bio:
 
@@ -118,7 +123,7 @@ def generate_prompt(intake: Intake) -> str:
     Your office has collected some information from the patient during intake to help you prepare.
 
     <INTAKE>
-    {json.dumps(intake.cleaned_external_intake_data.dict(), indent=2)}
+    {json.dumps(cast(dict, cleaned_intake_data.dict()), indent=2)}
     </INTAKE>
 
     The patient was asked some follow up questions, here are the questions and answers:

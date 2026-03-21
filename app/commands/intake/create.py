@@ -3,6 +3,7 @@ Create a new intake form
 """
 
 from datetime import date, datetime, timezone
+from typing import cast
 
 from pydantic import BaseModel, EmailStr, HttpUrl, model_validator
 from pydantic.json_schema import SkipJsonSchema
@@ -155,10 +156,9 @@ def perform(appointment_request: AppointmentRequest) -> AppointmentResponse:
         # copy intake schema questions into the intake object itself
         # this is slightly paranoid/unnecessary
         intake_questions=[],
-        external_intake_data=appointment_request.intake_json,
+        external_intake_data=cast(dict[str, str], appointment_request.intake_json or {}),
     ).save()
 
     queue_question_generation(intake.id)
 
-    # TODO something in activemodel is broken, without casting to string this breaks...
-    return AppointmentResponse(url=intake.public_url, id=str(intake.id))
+    return AppointmentResponse(url=intake.public_url, id=intake.id)

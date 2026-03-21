@@ -1,20 +1,24 @@
-import re
-import json
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportReturnType=false
 
-from app.jobs.summarize import perform, generate_clinical_note
+import json
+import re
+
+from app.jobs.summarize import generate_clinical_note, perform
 
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
-from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_note_example import DoctorNoteExample
+from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
 from tests.eval import eval_llm, eval_n_of_m
 
+
 def assert_matches(regex, string):
     if not re.search(regex, string, re.IGNORECASE):
         raise AssertionError(f"Regex '{regex}' does not match the string '{string}'")
+
 
 def count_visit_notes(transcript: AIVisitTranscript, schema: DoctorNoteSchema) -> int:
     return AIVisitNote.where(
@@ -23,6 +27,7 @@ def count_visit_notes(transcript: AIVisitTranscript, schema: DoctorNoteSchema) -
         & (AIVisitNote.ai_transcript_id == transcript.id)
         & (AIVisitNote.doctor_note_schema_id == schema.id)
     ).count()
+
 
 def test_summarize_copies_schema_field_orer():
     patient = Patient.where(Patient.name == "Samwise Gamgee").one()
@@ -84,17 +89,19 @@ def test_note_includes_patient_action_items():
         .one()
     )
 
-    create_clinical_note = lambda: (
-        json.dumps(generate_clinical_note(
-            transcript=transcript,
-            example_note=example_note,
-            note_schema=schema
-        ))
-    )
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
 
     cirtieria = "The 'Plan' section of the note should mention the patient monitoring for changes in vision."
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=cirtieria, n=1, m=2)
+
 
 def test_summarize_updates_appointment_name_based_on_intake():
     patient = Patient.where(Patient.name == "Ocie Dosie").one()
@@ -154,13 +161,14 @@ def test_note_includes_all_actionable_steps_for_doctor():
         .one()
     )
 
-    create_clinical_note = lambda: (
-        json.dumps(generate_clinical_note(
-            transcript=transcript,
-            example_note=example_note,
-            note_schema=schema
-        ))
-    )
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
 
     cirtieria = """
     The 'Plan' section of the note should mention:
