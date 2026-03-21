@@ -5,7 +5,6 @@ import os
 import pytest
 
 from app.jobs.intake.generate_questions import generate_intake_questions, perform
-
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 

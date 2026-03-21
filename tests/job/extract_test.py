@@ -8,7 +8,6 @@ from flexmock import flexmock
 
 from app import log
 from app.jobs.extract import perform
-
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema

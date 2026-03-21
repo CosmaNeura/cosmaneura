@@ -7,7 +7,6 @@ import re
 import pytest
 
 from app.jobs.summarize import generate_clinical_note, perform
-
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
