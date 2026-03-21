@@ -31,9 +31,11 @@ export default function VisitTranscriptViewer({
   }
 
   const now = new Date()
-  const createdAt = transcript.created_at ? new Date(transcript.created_at) : now
+  const createdAt = transcript.created_at
+    ? new Date(transcript.created_at)
+    : now
   const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
-  if (transcript.deleted_at || (createdAt < twoWeeksAgo)) {
+  if (transcript.deleted_at || createdAt < twoWeeksAgo) {
     return (
       <>
         <div className="mb-2 text-xl font-semibold">Visit Transcript</div>

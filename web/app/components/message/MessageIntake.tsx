@@ -1,18 +1,19 @@
-import { ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { ChevronDown } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { Mail } from '@/data/mock';
+} from "@/components/ui/collapsible"
+import { Mail } from "@/data/mock"
 
 interface MessageIntakeProps {
-  mail: Mail;
-  isAccuityIntakeOpen?: boolean;
-  setIsAccuityIntakeOpen?: (open: boolean) => void;
-  isIntakeTranscriptOpen?: boolean;
-  setIsIntakeTranscriptOpen?: (open: boolean) => void;
+  mail: Mail
+  isAccuityIntakeOpen?: boolean
+  setIsAccuityIntakeOpen?: (open: boolean) => void
+  isIntakeTranscriptOpen?: boolean
+  setIsIntakeTranscriptOpen?: (open: boolean) => void
 }
 
 export function MessageIntake({
@@ -25,13 +26,16 @@ export function MessageIntake({
   return (
     <>
       <div className="mt-6">
-        <Collapsible open={isAccuityIntakeOpen} onOpenChange={setIsAccuityIntakeOpen}>
+        <Collapsible
+          open={isAccuityIntakeOpen}
+          onOpenChange={setIsAccuityIntakeOpen}
+        >
           <div className="flex items-start">
             <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm" className="p-0 h-auto">
+              <Button variant="ghost" size="sm" className="h-auto p-0">
                 <ChevronDown
                   className={`h-4 w-4 transition-transform ${
-                    isAccuityIntakeOpen ? 'transform rotate-180' : ''
+                    isAccuityIntakeOpen ? "rotate-180 transform" : ""
                   }`}
                 />
                 <span className="ml-2 text-xl font-semibold">
@@ -41,7 +45,7 @@ export function MessageIntake({
             </CollapsibleTrigger>
           </div>
           <CollapsibleContent className="mt-3">
-            <div className="text-sm text-left">
+            <div className="text-left text-sm">
               Accuity intake form content and details
             </div>
           </CollapsibleContent>
@@ -49,13 +53,16 @@ export function MessageIntake({
       </div>
 
       <div className="mt-6">
-        <Collapsible open={isIntakeTranscriptOpen} onOpenChange={setIsIntakeTranscriptOpen}>
+        <Collapsible
+          open={isIntakeTranscriptOpen}
+          onOpenChange={setIsIntakeTranscriptOpen}
+        >
           <div className="flex items-start">
             <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm" className="p-0 h-auto">
+              <Button variant="ghost" size="sm" className="h-auto p-0">
                 <ChevronDown
                   className={`h-4 w-4 transition-transform ${
-                    isIntakeTranscriptOpen ? 'transform rotate-180' : ''
+                    isIntakeTranscriptOpen ? "rotate-180 transform" : ""
                   }`}
                 />
                 <span className="ml-2 text-xl font-semibold">
@@ -65,12 +72,12 @@ export function MessageIntake({
             </CollapsibleTrigger>
           </div>
           <CollapsibleContent className="mt-3">
-            <div className="text-sm text-left">
+            <div className="text-left text-sm">
               Intake transcript content and details
             </div>
           </CollapsibleContent>
         </Collapsible>
       </div>
     </>
-  );
+  )
 }

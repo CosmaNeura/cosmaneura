@@ -1,13 +1,14 @@
-import { useMemo, type ComponentPropsWithoutRef } from 'react';
-import { CircleIcon } from 'lucide-react';
+import { type ComponentPropsWithoutRef, useMemo } from "react"
 
-import { useComboboxContext } from './context';
-import { cn } from '~/lib/utils';
+import { CircleIcon } from "lucide-react"
 
-import type { ComboboxItemBase } from './types';
+import { cn } from "~/lib/utils"
+
+import { useComboboxContext } from "./context"
+import type { ComboboxItemBase } from "./types"
 
 export type ComboboxItemProps = ComboboxItemBase &
-  ComponentPropsWithoutRef<'li'>;
+  ComponentPropsWithoutRef<"li">
 
 export const ComboboxItem = ({
   label,
@@ -17,39 +18,39 @@ export const ComboboxItem = ({
   children,
   ...props
 }: ComboboxItemProps) => {
-  const { filteredItems, getItemProps, selectedItem } = useComboboxContext();
+  const { filteredItems, getItemProps, selectedItem } = useComboboxContext()
 
-  const isSelected = selectedItem?.value === value;
+  const isSelected = selectedItem?.value === value
   const item = useMemo(
     () => ({ disabled, label, value }),
-    [disabled, label, value]
-  );
+    [disabled, label, value],
+  )
   const index = (filteredItems || []).findIndex(
-    item => item.value.toLowerCase() === value.toLowerCase()
-  );
-  if (index < 0) return null;
+    (item) => item.value.toLowerCase() === value.toLowerCase(),
+  )
+  if (index < 0) return null
 
   return (
     <li
       {...props}
       data-index={index}
       className={cn(
-        `relative flex cursor-default select-none flex-col rounded-sm px-3 py-1.5 aria-disabled:pointer-events-none aria-disabled:opacity-50 aria-selected:bg-accent aria-selected:text-accent-foreground`,
-        !children && 'ps-8',
-        className
+        `aria-selected:bg-accent aria-selected:text-accent-foreground relative flex cursor-default flex-col rounded-sm px-3 py-1.5 select-none aria-disabled:pointer-events-none aria-disabled:opacity-50`,
+        !children && "ps-8",
+        className,
       )}
       {...getItemProps?.({ item, index })}
     >
       {children || (
         <>
-          <span className='text-sm text-foreground'>{label}</span>
+          <span className="text-foreground text-sm">{label}</span>
           {isSelected && (
-            <span className='absolute start-3 top-0 flex h-full items-center justify-center'>
-              <CircleIcon className='size-2 fill-current' />
+            <span className="absolute start-3 top-0 flex h-full items-center justify-center">
+              <CircleIcon className="size-2 fill-current" />
             </span>
           )}
         </>
       )}
     </li>
-  );
-};
+  )
+}

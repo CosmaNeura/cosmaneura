@@ -9,9 +9,9 @@ import {
 } from "~/components/ui/select"
 
 import {
+  type Period,
   display12HourValue,
   setDateByType,
-  type Period,
 } from "./time-picker-utils"
 
 export interface PeriodSelectorProps {
@@ -47,8 +47,8 @@ export const TimePeriodSelect = React.forwardRef<
           tempDate,
           hours.toString(),
           "12hours",
-          period === "AM" ? "PM" : "AM"
-        )
+          period === "AM" ? "PM" : "AM",
+        ),
       )
     }
   }
@@ -62,7 +62,7 @@ export const TimePeriodSelect = React.forwardRef<
         <SelectTrigger
           id="period"
           ref={ref}
-          className="w-[65px] focus:bg-accent focus:text-accent-foreground"
+          className="focus:bg-accent focus:text-accent-foreground w-[65px]"
           onKeyDown={handleKeyDown}
         >
           <SelectValue />

@@ -1,24 +1,25 @@
-import { ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { ChevronDown } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from '@/components/ui/collapsible';
-import { Mail } from '@/data/mock';
+} from "@/components/ui/collapsible"
+import { Mail } from "@/data/mock"
 
 interface MessageTemplatesProps {
-  mail: Mail;
-  isSOAPOpen?: boolean;
-  setIsSOAPOpen?: (open: boolean) => void;
-  isNewPatientOpen?: boolean;
-  setIsNewPatientOpen?: (open: boolean) => void;
-  isTelehealthSOAPOpen?: boolean;
-  setIsTelehealthSOAPOpen?: (open: boolean) => void;
-  isTelehealthHPOpen?: boolean;
-  setIsTelehealthHPOpen?: (open: boolean) => void;
-  isTranscriptOpen?: boolean;
-  setIsTranscriptOpen?: (open: boolean) => void;
+  mail: Mail
+  isSOAPOpen?: boolean
+  setIsSOAPOpen?: (open: boolean) => void
+  isNewPatientOpen?: boolean
+  setIsNewPatientOpen?: (open: boolean) => void
+  isTelehealthSOAPOpen?: boolean
+  setIsTelehealthSOAPOpen?: (open: boolean) => void
+  isTelehealthHPOpen?: boolean
+  setIsTelehealthHPOpen?: (open: boolean) => void
+  isTranscriptOpen?: boolean
+  setIsTranscriptOpen?: (open: boolean) => void
 }
 
 export function MessageTemplates({
@@ -39,10 +40,10 @@ export function MessageTemplates({
       <Collapsible open={isSOAPOpen} onOpenChange={setIsSOAPOpen}>
         <div className="flex items-start">
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="p-0 h-auto">
+            <Button variant="ghost" size="sm" className="h-auto p-0">
               <ChevronDown
                 className={`h-4 w-4 transition-transform ${
-                  isSOAPOpen ? 'transform rotate-180' : ''
+                  isSOAPOpen ? "rotate-180 transform" : ""
                 }`}
               />
               <span className="ml-2 text-xl font-semibold">SOAP</span>
@@ -50,7 +51,7 @@ export function MessageTemplates({
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="mt-3">
-          <div className="text-sm text-left">
+          <div className="text-left text-sm">
             Template content for SOAP note
           </div>
         </CollapsibleContent>
@@ -59,10 +60,10 @@ export function MessageTemplates({
       <Collapsible open={isNewPatientOpen} onOpenChange={setIsNewPatientOpen}>
         <div className="flex items-start">
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="p-0 h-auto">
+            <Button variant="ghost" size="sm" className="h-auto p-0">
               <ChevronDown
                 className={`h-4 w-4 transition-transform ${
-                  isNewPatientOpen ? 'transform rotate-180' : ''
+                  isNewPatientOpen ? "rotate-180 transform" : ""
                 }`}
               />
               <span className="ml-2 text-xl font-semibold">
@@ -72,19 +73,22 @@ export function MessageTemplates({
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="mt-3">
-          <div className="text-sm text-left">
+          <div className="text-left text-sm">
             Template content for new patient visit
           </div>
         </CollapsibleContent>
       </Collapsible>
 
-      <Collapsible open={isTelehealthSOAPOpen} onOpenChange={setIsTelehealthSOAPOpen}>
+      <Collapsible
+        open={isTelehealthSOAPOpen}
+        onOpenChange={setIsTelehealthSOAPOpen}
+      >
         <div className="flex items-start">
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="p-0 h-auto">
+            <Button variant="ghost" size="sm" className="h-auto p-0">
               <ChevronDown
                 className={`h-4 w-4 transition-transform ${
-                  isTelehealthSOAPOpen ? 'transform rotate-180' : ''
+                  isTelehealthSOAPOpen ? "rotate-180 transform" : ""
                 }`}
               />
               <span className="ml-2 text-xl font-semibold">
@@ -94,29 +98,30 @@ export function MessageTemplates({
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="mt-3">
-          <div className="text-sm text-left">
+          <div className="text-left text-sm">
             Template content for telehealth SOAP note
           </div>
         </CollapsibleContent>
       </Collapsible>
 
-      <Collapsible open={isTelehealthHPOpen} onOpenChange={setIsTelehealthHPOpen}>
+      <Collapsible
+        open={isTelehealthHPOpen}
+        onOpenChange={setIsTelehealthHPOpen}
+      >
         <div className="flex items-start">
           <CollapsibleTrigger asChild>
-            <Button variant="ghost" size="sm" className="p-0 h-auto">
+            <Button variant="ghost" size="sm" className="h-auto p-0">
               <ChevronDown
                 className={`h-4 w-4 transition-transform ${
-                  isTelehealthHPOpen ? 'transform rotate-180' : ''
+                  isTelehealthHPOpen ? "rotate-180 transform" : ""
                 }`}
               />
-              <span className="ml-2 text-xl font-semibold">
-                Telehealth H&P
-              </span>
+              <span className="ml-2 text-xl font-semibold">Telehealth H&P</span>
             </Button>
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="mt-3">
-          <div className="text-sm text-left">
+          <div className="text-left text-sm">
             Template content for telehealth H&P
           </div>
         </CollapsibleContent>
@@ -126,10 +131,10 @@ export function MessageTemplates({
         <Collapsible open={isTranscriptOpen} onOpenChange={setIsTranscriptOpen}>
           <div className="flex items-start">
             <CollapsibleTrigger asChild>
-              <Button variant="ghost" size="sm" className="p-0 h-auto">
+              <Button variant="ghost" size="sm" className="h-auto p-0">
                 <ChevronDown
                   className={`h-4 w-4 transition-transform ${
-                    isTranscriptOpen ? 'transform rotate-180' : ''
+                    isTranscriptOpen ? "rotate-180 transform" : ""
                   }`}
                 />
                 <span className="ml-2 text-xl font-semibold">
@@ -139,12 +144,12 @@ export function MessageTemplates({
             </CollapsibleTrigger>
           </div>
           <CollapsibleContent className="mt-3">
-            <div className="whitespace-pre-wrap text-sm text-left">
+            <div className="text-left text-sm whitespace-pre-wrap">
               {mail.content}
             </div>
           </CollapsibleContent>
         </Collapsible>
       </div>
     </div>
-  );
+  )
 }

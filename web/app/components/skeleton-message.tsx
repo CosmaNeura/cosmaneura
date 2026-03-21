@@ -1,9 +1,9 @@
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/ui/skeleton"
 
 export function SkeletonMessage() {
   return (
     <div className="space-y-6">
-      <div className="rounded-lg border bg-card p-6 shadow-sm">
+      <div className="bg-card rounded-lg border p-6 shadow-sm">
         <div className="mb-6 flex items-start justify-between">
           <div className="space-y-2">
             <Skeleton className="h-8 w-48" />
@@ -29,7 +29,7 @@ export function SkeletonMessage() {
         </div>
       </div>
 
-      <div className="rounded-lg border bg-card p-3 shadow-sm space-y-3">
+      <div className="bg-card space-y-3 rounded-lg border p-3 shadow-sm">
         <Skeleton className="h-4 w-36" />
         <div className="space-y-3">
           <div className="flex gap-2">
@@ -43,5 +43,5 @@ export function SkeletonMessage() {
         </div>
       </div>
     </div>
-  );
+  )
 }

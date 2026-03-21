@@ -35,7 +35,7 @@ function generateComboboxItems({
   }: ComboboxItemBase & { isSelected: boolean }) {
     return (
       <>
-        <span className="text-sm text-foreground">{label}</span>
+        <span className="text-foreground text-sm">{label}</span>
         {isSelected && (
           <span className="absolute start-2 top-0 flex h-full items-center justify-center">
             <CheckIcon className="size-4" />
