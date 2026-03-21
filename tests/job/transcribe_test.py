@@ -1,9 +1,34 @@
 # pyright: reportReturnType=false
 
+import os
+
+import pytest
+
 from app.jobs.transcribe import perform, transcribe_audio
 
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.visit_audio_file import VisitAudioFile
+
+_RUN_LIVE_TRANSCRIPTION_TESTS = os.getenv("RUN_LIVE_TRANSCRIPTION_TESTS") == "true"
+_HAS_TRANSCRIPTION_CREDS = all(
+    os.getenv(env_var)
+    for env_var in [
+        "AZURE_UPLOADS_ACCOUNT_URL",
+        "AZURE_UPLOADS_ACCOUNT_KEY",
+        "AZURE_UPLOADS_CONTAINER_NAME",
+        "ASSEMBLY_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+    ]
+)
+
+pytestmark = pytest.mark.skipif(
+    not (_RUN_LIVE_TRANSCRIPTION_TESTS and _HAS_TRANSCRIPTION_CREDS),
+    reason=(
+        "requires live transcription services; set RUN_LIVE_TRANSCRIPTION_TESTS=true "
+        "and Azure uploads, AssemblyAI, and Azure OpenAI credentials"
+    ),
+)
 
 
 def count_transcripts_for_audio_file(audio_file: VisitAudioFile) -> int:

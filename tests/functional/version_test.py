@@ -15,6 +15,8 @@ To update the persisted versions run:
 
 import json
 
+import pytest
+
 from app.configuration.versions import (
     VERSIONS_FILE,
     chrome_version,
@@ -42,4 +44,15 @@ def test_postgres_version_matches():
 def test_chrome_version_matches_persisted_version():
     persisted_chrome_version = json.loads(VERSIONS_FILE.read_bytes())["chrome"]
 
-    assert persisted_chrome_version == chrome_version(), VERSION_ERROR.format("chrome")
+    try:
+        current_chrome_version = chrome_version()
+    except Exception as exc:
+        if "Executable doesn't exist" in str(exc):
+            pytest.skip(
+                "Playwright Chromium is not installed; run 'uv run playwright install chromium'"
+            )
+        raise
+
+    assert persisted_chrome_version == current_chrome_version, VERSION_ERROR.format(
+        "chrome"
+    )

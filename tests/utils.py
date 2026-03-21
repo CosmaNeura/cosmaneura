@@ -1,6 +1,6 @@
 import funcy_pipe as fp
 
-from app.configuration.clerk import clerk
+from app.configuration.clerk import CLERK_PRIVATE_KEY, clerk
 from app.environments import is_testing
 
 from tests.constants import (
@@ -17,6 +17,10 @@ def delete_all_clerk_users():
 
     if not is_testing():
         raise RuntimeError("cannot delete dev users outside of testing")
+
+    if not CLERK_PRIVATE_KEY:
+        log.info("skipping clerk user cleanup: missing clerk private key")
+        return
 
     _deleted_users = (
         clerk.users.list()

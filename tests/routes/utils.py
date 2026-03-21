@@ -1,8 +1,11 @@
 import base64
+import hashlib
 import json
 import typing as t
+from dataclasses import dataclass
 
 import itsdangerous
+import pytest
 from cachetools import LRUCache, cached
 from clerk_backend_api import CreateSessionRequestBody
 from clerk_backend_api import User as ClerkUser
@@ -12,7 +15,7 @@ from decouple import config as decouple_config
 from fastapi import Request, status
 from httpx import Response
 
-from app.configuration.clerk import clerk
+from app.configuration.clerk import CLERK_PRIVATE_KEY, clerk
 
 from app.models.doctor import Doctor, DoctorRole
 
@@ -26,6 +29,17 @@ from tests.constants import (
 # TODO this is a bit dangerous, let's see how it performs
 clerk_cache_instance = LRUCache(maxsize=128)
 "to cache user and session keys for all live clerk api interactions"
+
+
+@dataclass
+class FakeEmailAddress:
+    email_address: str
+
+
+@dataclass
+class FakeClerkUser:
+    id: str
+    email_addresses: list[FakeEmailAddress]
 
 
 def base_server_url(protocol: t.Literal["http", "https"] = "https"):
@@ -53,8 +67,19 @@ def base_server_url(protocol: t.Literal["http", "https"] = "https"):
     return f"{protocol}://{url}/"
 
 
+def _build_local_clerk_user(email: str) -> FakeClerkUser:
+    digest = hashlib.sha1(email.encode()).hexdigest()[:16]
+    return FakeClerkUser(
+        id=f"user_{digest}",
+        email_addresses=[FakeEmailAddress(email_address=email)],
+    )
+
+
 @cached(cache=clerk_cache_instance)
 def _get_or_create_clerk_user(email: str):
+    if not CLERK_PRIVATE_KEY:
+        return _build_local_clerk_user(email)
+
     user_list = clerk.users.list(request={"email_address": [email]})
     assert user_list is not None
 
@@ -141,9 +166,12 @@ class MockAuthenticateRequest:
         return fake_auth_state
 
 
-@cached(cache=clerk_cache_instance, key=lambda user=None: user.id if user else None)
-def get_valid_token(user: ClerkUser | None = None):
+@cached(cache=clerk_cache_instance, key=lambda user=None: getattr(user, "id", None))
+def get_valid_token(user: ClerkUser | FakeClerkUser | None = None):
     "get a valid clerk session for a clerk user, the local user does not need to be created"
+
+    if not CLERK_PRIVATE_KEY:
+        pytest.skip("requires live Clerk access; set CLERK_PRIVATE_KEY for these tests")
 
     if not user:
         _, _, user = get_clerk_dev_user()

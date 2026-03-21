@@ -18,7 +18,6 @@ from decouple import config
 from furl import furl
 
 from app import log
-from app.environments import is_local_testing
 from app.server import api_app
 
 from tests.constants import PYTHON_TEST_SERVER_HOST
@@ -161,8 +160,8 @@ def report_localias_status():
 
     command = ["localias", "status"]
 
-    # on GHA we need to run localalias on sudo
-    if not is_local_testing():
+    # on GitHub Actions we need to run localalias with sudo, but local CI-mode runs should stay non-interactive
+    if os.getenv("GITHUB_ACTIONS") == "true":
         command.insert(0, "sudo")
 
     result = subprocess.run(command, capture_output=True, text=True)
@@ -173,3 +172,6 @@ def report_localias_status():
             "localias daemon is not running. Integration tests may fail.",
             output=result.stdout,
         )
+        return False
+
+    return True

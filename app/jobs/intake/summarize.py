@@ -3,6 +3,7 @@ Summarize all the intake data for a given appointment.
 """
 
 import json
+import os
 from datetime import datetime
 from textwrap import dedent
 from typing import Any, cast
@@ -19,6 +20,33 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
+
+
+def should_use_test_openai_fallback() -> bool:
+    return os.environ.get("PYTHON_ENV") == "test" and not (
+        os.environ.get("AZURE_OPENAI_API_KEY")
+        and os.environ.get("AZURE_OPENAI_ENDPOINT")
+    )
+
+
+def _local_generate_intake_summary(intake: Intake) -> str:
+    cleaned_intake_data = intake.cleaned_external_intake_data
+    assert cleaned_intake_data is not None
+
+    follow_up_lines = [
+        f"- {question.question}: {question.answer}"
+        for question in sorted(intake.intake_questions, key=lambda question: question.order)
+        if question.answer
+    ]
+
+    return dedent(f"""
+    - Reason for Visit: {cleaned_intake_data.reason_for_visit}
+    - Appointment Type: {cleaned_intake_data.appointment_type}
+    - Appointment Category: {cleaned_intake_data.appointment_category or "Not provided"}
+    - Additional Info: {cleaned_intake_data.additional_info}
+
+    {chr(10).join(follow_up_lines)}
+    """).strip()
 
 
 def perform(intake_id: str | TypeID | TypeIDType):
@@ -161,6 +189,9 @@ def generate_prompt(intake: Intake) -> str:
 
 
 def generate_intake_summary(intake: Intake) -> str | None:
+    if should_use_test_openai_fallback():
+        return _local_generate_intake_summary(intake)
+
     prompt = generate_prompt(intake)
 
     response = openai.chat.completions.create(

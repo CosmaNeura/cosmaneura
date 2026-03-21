@@ -32,6 +32,8 @@ from pytest import Config, FixtureRequest
 from activemodel.pytest import database_reset_transaction, database_reset_truncate
 from decouple import config as decouple_config
 
+from app.configuration.database import run_migrations
+
 from .constants import TEST_RESULTS_DIRECTORY
 from .utils import delete_all_clerk_users
 from .seeds import seed_test_data
@@ -95,6 +97,8 @@ def pytest_sessionstart(session):
 
     # without this, the clerk dev instance will get cluttered and throw errors
     delete_all_clerk_users()
+    # local test databases can drift when running pytest directly outside the full CI workflow
+    run_migrations()
     # clear out any previous cruft in this DB, which is why...
     database_reset_truncate()
     # we reseed the database with a base set of records

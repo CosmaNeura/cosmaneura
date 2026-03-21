@@ -152,6 +152,8 @@ py_test:
 		just py_js-build
 	  just _banner_echo "Running Non-Integration Tests"
 		uv run pytest . --verbosity=2 --ignore tests/integration {{PYTEST_COV_PARAMS}}
+		# ensure the Playwright headless shell exists for integration tests in CI-mode runs
+		uv run playwright install chromium --only-shell
 	  just _banner_echo "Running Integration"
 		uv run pytest tests/integration --verbosity=2 --cov-append {{PYTEST_COV_PARAMS}}
 	else
