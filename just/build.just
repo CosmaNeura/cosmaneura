@@ -64,7 +64,8 @@ PYTHON_IMAGE_TAG := PYTHON_IMAGE_NAME + ":" + GIT_SHA
 JAVASCRIPT_IMAGE_NAME := PYTHON_IMAGE_NAME + "-javascript"
 JAVASCRIPT_IMAGE_TAG := JAVASCRIPT_IMAGE_NAME + ":" + GIT_SHA
 
-PYTHON_PRODUCTION_IMAGE_NAME := "cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
+CONTAINER_REGISTRY_HOST_SANITIZED := `echo "${CONTAINER_REGISTRY_HOST:-cosmaneuraprodregistry.azurecr.io}" | sed -E 's#^https?://##; s#/$##'`
+PYTHON_PRODUCTION_IMAGE_NAME := CONTAINER_REGISTRY_HOST_SANITIZED + "/cosmaneura/cosmaneura"
 JAVASCRIPT_PRODUCTION_IMAGE_NAME := PYTHON_PRODUCTION_IMAGE_NAME + "-javascript"
 
 [script]
