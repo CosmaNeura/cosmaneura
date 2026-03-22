@@ -16,6 +16,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
@@ -23,6 +24,7 @@ import { StatusBadge } from "~/components/shared/StatusBadge"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { UserButton } from "@clerk/clerk-react"
+import { motion } from "motion/react"
 
 // logo icon at the top
 const IconSidebarHeader = () => (
@@ -187,48 +189,56 @@ function SelectionSidebar({
     return matchesSearch
   })
 
+  const { open } = useSidebar()
+
   return (
-    <Sidebar collapsible="none" className="hidden flex-1 border-r md:flex">
-      {/* title with filters */}
-      <SidebarHeader className="gap-3.5 border-b p-4">
-        <div className="flex w-full items-center justify-between">
-          <div className="text-foreground text-base font-medium">
-            {header ?? "Appointments"}
+    <motion.div
+      animate={{ width: open ? "var(--sidebar-width)" : 0 }}
+      transition={{ ease: [0.25, 0.46, 0.45, 0.94], duration: 0.2 }}
+      className="hidden shrink-0 overflow-hidden md:block"
+    >
+      <Sidebar collapsible="none" className="hidden flex-1 border-r md:flex">
+        {/* title with filters */}
+        <SidebarHeader className="gap-3.5 border-b p-4">
+          <div className="flex w-full items-center justify-between">
+            <div className="text-foreground text-base font-medium">
+              {header ?? "Appointments"}
+            </div>
+            <Label className="flex items-center gap-2 text-sm">
+              <span>This Week</span>
+              <Switch
+                className="shadow-none"
+                checked={showThisWeek}
+                onCheckedChange={setShowThisWeek}
+              />
+            </Label>
           </div>
-          <Label className="flex items-center gap-2 text-sm">
-            <span>This Week</span>
-            <Switch
-              className="shadow-none"
-              checked={showThisWeek}
-              onCheckedChange={setShowThisWeek}
-            />
-          </Label>
-        </div>
-        <SidebarInput
-          placeholder="Type to search..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup className="px-0">
-          {entries.length === 0 && (
-            <div className="p-4 text-center text-sm text-slate-500">
-              <p>No Appointments</p>
-              <p className="mt-2">Upload a visit recording to get started.</p>
-            </div>
-          )}
-          {entries.length > 0 && filteredEntries.length === 0 ? (
-            <div className="p-4 text-center text-sm text-slate-500">
-              <p>No results found.</p>
-              <p className="mt-2">Try adjusting your filters.</p>
-            </div>
-          ) : (
-            <SelectionList isLoading={isLoading} entries={filteredEntries} />
-          )}
-        </SidebarGroup>
-      </SidebarContent>
-    </Sidebar>
+          <SidebarInput
+            placeholder="Type to search..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup className="px-0">
+            {entries.length === 0 && (
+              <div className="p-4 text-center text-sm text-slate-500">
+                <p>No Appointments</p>
+                <p className="mt-2">Upload a visit recording to get started.</p>
+              </div>
+            )}
+            {entries.length > 0 && filteredEntries.length === 0 ? (
+              <div className="p-4 text-center text-sm text-slate-500">
+                <p>No results found.</p>
+                <p className="mt-2">Try adjusting your filters.</p>
+              </div>
+            ) : (
+              <SelectionList isLoading={isLoading} entries={filteredEntries} />
+            )}
+          </SidebarGroup>
+        </SidebarContent>
+      </Sidebar>
+    </motion.div>
   )
 }
 export function IconNavigation() {

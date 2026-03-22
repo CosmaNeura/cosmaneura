@@ -54,6 +54,7 @@
     "loglevel": "^1.9.2",
     "loglevel-plugin-prefix": "^0.8.4",
     "lucide-react": "^0.483.0",
+    "motion": "^12.38.0",
     "pluralize": "^8.0.0",
     "postcss": "^8.5.3",
     "posthog-js": "^1.232.6",
