@@ -11,8 +11,7 @@ from app.models.intake.intake import Intake
 
 _RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
 _HAS_AZURE_OPENAI_CREDS = bool(
-    os.getenv("AZURE_OPENAI_API_KEY")
-    and os.getenv("AZURE_OPENAI_ENDPOINT")
+    os.getenv("AZURE_OPENAI_API_KEY") and os.getenv("AZURE_OPENAI_ENDPOINT")
 )
 pytestmark = pytest.mark.skipif(
     not (_RUN_LIVE_LLM_TESTS and _HAS_AZURE_OPENAI_CREDS),

@@ -57,13 +57,17 @@ def _local_extract_intake_data(intake: Intake) -> ExternalIntakeData:
         _find_intake_value(intake_data, "Patient Height"),
         _find_intake_value(intake_data, "Patient Weight"),
     ]
-    additional_info = ", ".join(detail for detail in details if detail) or "Not provided"
+    additional_info = (
+        ", ".join(detail for detail in details if detail) or "Not provided"
+    )
 
     return ExternalIntakeData(
         reason_for_visit=reason or "Not provided",
         appointment_type=appointment_type,
         additional_info=additional_info,
-        appointment_category=str(appointment_category) if appointment_category else None,
+        appointment_category=str(appointment_category)
+        if appointment_category
+        else None,
     )
 
 

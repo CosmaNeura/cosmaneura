@@ -35,7 +35,9 @@ def _local_generate_intake_summary(intake: Intake) -> str:
 
     follow_up_lines = [
         f"- {question.question}: {question.answer}"
-        for question in sorted(intake.intake_questions, key=lambda question: question.order)
+        for question in sorted(
+            intake.intake_questions, key=lambda question: question.order
+        )
         if question.answer
     ]
 

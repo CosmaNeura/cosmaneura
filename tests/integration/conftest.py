@@ -25,7 +25,9 @@ def _has_clerk_integration_prereqs() -> bool:
         publishable_key = os.environ.get("CLERK_PUBLISHABLE_KEY") or os.environ.get(
             "VITE_CLERK_PUBLIC_KEY"
         )
-        if publishable_key and (parsed_publishable_key := parse_publishable_key(publishable_key)):
+        if publishable_key and (
+            parsed_publishable_key := parse_publishable_key(publishable_key)
+        ):
             frontend_api_url = parsed_publishable_key.frontend_api
 
     has_token_or_private_key = bool(
