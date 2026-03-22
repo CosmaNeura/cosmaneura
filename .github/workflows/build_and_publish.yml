@@ -104,6 +104,8 @@ jobs:
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5
       - run: just js_setup
+      - name: Generate OpenAPI client
+        run: cd web && pnpm run openapi
       - run: just js_lint
       - run: just js_test
 
