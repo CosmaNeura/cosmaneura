@@ -54,7 +54,7 @@ SHARED_ENV_FILE := ".env"
 PYTHON_PRODUCTION_ENV_FILE := ".env.production.backend"
 
 # .env file with production variables that are safe to share publicly (frontend)
-JAVASCRIPT_SECRETS_FILE := ".env.production.frontend"
+JAVASCRIPT_SECRETS_FILE := env("JAVASCRIPT_SECRETS_FILE", ".env.production.frontend")
 
 # by default, the py image name is pulled from the project name
 PYTHON_IMAGE_NAME := PROJECT_NAME
