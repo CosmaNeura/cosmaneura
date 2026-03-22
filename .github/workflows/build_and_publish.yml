@@ -105,8 +105,6 @@ jobs:
         timeout-minutes: 5
       - run: just js_setup
       - run: just js_lint
-        # TODO temporarily disable, need to whitelist existing errors...
-        continue-on-error: true
       - run: just js_test
 
   deploy:
