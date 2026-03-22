@@ -7,6 +7,7 @@ import re
 import pytest
 
 from app.jobs.summarize import generate_clinical_note, perform
+
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
@@ -15,7 +16,6 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
 
 from tests.eval import eval_llm, eval_n_of_m
-
 
 _RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
 _HAS_AZURE_OPENAI_CREDS = bool(

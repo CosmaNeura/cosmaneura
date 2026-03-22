@@ -5,6 +5,7 @@ import pytest
 
 # server is imported to expose that fixture to the tests, but keep it all organized in the server file
 from app import log
+
 from tests.integration.clerk import parse_publishable_key
 from tests.integration.javascript_build import start_js_build
 from tests.integration.server import (  # noqa: F401
@@ -13,7 +14,6 @@ from tests.integration.server import (  # noqa: F401
     server,
     terminate_server,
 )
-
 
 _LOCALIAS_READY = True
 _CLERK_READY = True

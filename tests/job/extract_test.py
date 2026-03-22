@@ -8,13 +8,13 @@ from flexmock import flexmock
 
 from app import log
 from app.jobs.extract import perform
+
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 
 from tests.eval import eval_llm
 from tests.factories import DoctorNoteFileFactory
-
 
 _RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
 _HAS_AZURE_OPENAI_CREDS = bool(

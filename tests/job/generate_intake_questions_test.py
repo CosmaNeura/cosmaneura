@@ -5,9 +5,9 @@ import os
 import pytest
 
 from app.jobs.intake.generate_questions import generate_intake_questions, perform
+
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
-
 
 _RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
 _HAS_AZURE_OPENAI_CREDS = bool(

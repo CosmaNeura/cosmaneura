@@ -5,8 +5,8 @@ import os
 import pytest
 
 from app.jobs.intake.summarize import perform
-from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 
+from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 
 _RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
 _HAS_AZURE_OPENAI_CREDS = bool(
