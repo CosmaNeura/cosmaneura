@@ -169,6 +169,7 @@ jobs:
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
       JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
+      PYTHON_ENV: staging
     permissions:
       contents: read
       id-token: write

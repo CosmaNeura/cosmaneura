@@ -23,7 +23,7 @@ NIXPACKS_BUILD_METADATA := (
 PYTHON_NIXPACKS_BUILD_CMD := "nixpacks build ." + \
 	" --name " + PYTHON_IMAGE_TAG + \
 	" " + NIXPACKS_BUILD_METADATA + \
-	" --env PYTHON_ENV=production" + \
+	" --env PYTHON_ENV=" + env("PYTHON_ENV", "production") + \
 	" --platform=linux/amd64" + \
 	" $(just direnv_export_docker '" + SHARED_ENV_FILE +"' --params)" + \
 	" --inline-cache --cache-from " + PYTHON_PRODUCTION_IMAGE_NAME + ":latest" + \
