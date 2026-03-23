@@ -54,6 +54,7 @@ def _already_processed(provider: str, event_id: str) -> bool:
 async def _queue_webhook(provider: str, request: Request, payload: dict[str, Any] | None = None) -> WebhookAck:
     if payload is None:
         payload = await request.json()
+    assert payload is not None
     headers = {k.lower(): v for k, v in request.headers.items()}
     event_id = _stable_event_id(provider=provider, payload=payload, headers=headers)
     event_type = str(payload.get("event", payload.get("event_type", "unknown")))

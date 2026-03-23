@@ -116,6 +116,7 @@ def handle_participant_joined(payload: dict[str, Any]):
         return
 
     if not appointment:
+        assert doctor_id, "doctor_id must be set to create appointment"
         appointment = _ensure_appointment(
             doctor_id=doctor_id,
             patient_name=participant.get("user_name") or "Unknown",
@@ -123,7 +124,7 @@ def handle_participant_joined(payload: dict[str, Any]):
         )
 
     ttl = timedelta(hours=24)
-    redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id, ex=ttl)
+    redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id or "", ex=ttl)
     redis.set(f"recall:recording:{recording_id}:appointment_id", str(appointment.id), ex=ttl)
     redis.set(f"recall:recording:{recording_id}:patient_id", str(appointment.patient_id), ex=ttl)
     # also key by bot_id since recording_id from start_recording != real recording_id in webhooks
@@ -170,7 +171,7 @@ def handle_participant_left(payload: dict[str, Any]):
         return
 
     count_key = f"recall:meeting:{meeting_id}:patient_count"
-    count = redis.decr(count_key)
+    count = int(redis.decr(count_key))
 
     if count > 0:
         log.info("patient left but others still present, still recording", meeting_id=meeting_id, count=count)
@@ -187,8 +188,8 @@ def handle_meeting_ended(payload: dict[str, Any]):
 
     redis = get_redis()
     count_key = f"recall:meeting:{meeting_id}:patient_count"
-    count_raw = redis.get(count_key)
-    count = int(count_raw) if count_raw else 0
+    count_str = _rget(redis, count_key)
+    count = int(count_str) if count_str else 0
 
     redis.delete(count_key)
 
