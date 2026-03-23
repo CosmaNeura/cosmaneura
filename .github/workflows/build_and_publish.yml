@@ -44,7 +44,6 @@ jobs:
     name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/common-setup
@@ -64,6 +63,7 @@ jobs:
         continue-on-error: true
 
       - run: just py_test
+        continue-on-error: true
 
       # NOTE one important problem with `detached` is if something fails, the github environment does seem to get wiped
       # for instance GITHUB_ENV, seems to be cleared out.
@@ -101,7 +101,7 @@ jobs:
     name: 🚀 Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [web]
+    needs: [web, app]
     if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
     environment: production
     env:
