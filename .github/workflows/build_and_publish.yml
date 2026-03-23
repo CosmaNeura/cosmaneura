@@ -44,6 +44,7 @@ jobs:
     name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    if: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/common-setup
@@ -100,7 +101,7 @@ jobs:
     name: 🚀 Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [web, app]
+    needs: [web]
     if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
     permissions:
       contents: read
