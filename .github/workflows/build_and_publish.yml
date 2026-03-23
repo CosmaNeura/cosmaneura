@@ -103,6 +103,14 @@ jobs:
     timeout-minutes: 20
     needs: [web]
     if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
+    environment: production
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+      CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+      CONTAINER_REGISTRY_PASSWORD: ${{ vars.CONTAINER_REGISTRY_PASSWORD || secrets.CONTAINER_REGISTRY_PASSWORD }}
     permissions:
       contents: read
       # TODO why exactly do we need id-token here?
@@ -118,7 +126,7 @@ jobs:
         with:
           registry: ${{ env.CONTAINER_REGISTRY_HOST }}
           username: ${{ env.CONTAINER_REGISTRY_USERNAME }}
-          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          password: ${{ env.CONTAINER_REGISTRY_PASSWORD }}
       - run: just build
       - run: just build_push
 
