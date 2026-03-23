@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Annotated, Any, cast
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Path, Request
 from pydantic import BaseModel, computed_field
@@ -21,10 +22,13 @@ from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
+from ..configuration.zoom import ZOOM_CLIENT_ID, ZOOM_REDIRECT_URI
 from .admin import admin_api_app
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.login_as import login_as
+
+ZOOM_OAUTH_AUTHORIZE_URL = "https://zoom.us/oauth/authorize"
 
 # extract into variable for test import to easily override dependencies
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
@@ -246,6 +250,7 @@ class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
     biography: str | None
+    zoom_user_id: str | None
 
 
 @internal_api_app.get("/settings")
@@ -261,7 +266,24 @@ def settings_data(request: Request) -> SettingsData:
         notes_schema=cast(list[DoctorNoteSchema], list(notes_schema)),
         doctor_id=str(doctor.id),
         biography=doctor.biography,
+        zoom_user_id=doctor.zoom_user_id,
     )
+
+
+class ZoomAuthUrlResponse(BaseModel):
+    url: str
+
+
+@internal_api_app.get("/zoom-auth-url")
+def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
+    doctor: Doctor = request.state.doctor
+    params = urlencode({
+        "response_type": "code",
+        "client_id": ZOOM_CLIENT_ID,
+        "redirect_uri": ZOOM_REDIRECT_URI,
+        "state": doctor.clerk_id,
+    })
+    return ZoomAuthUrlResponse(url=f"{ZOOM_OAUTH_AUTHORIZE_URL}?{params}")
 
 
 class UpdateSettingsData(BaseModel, extra="forbid"):

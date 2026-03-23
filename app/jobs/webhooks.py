@@ -1,5 +1,7 @@
 from typing import Any
 
+import app.jobs.recall_webhooks
+import app.jobs.zoom_webhooks
 from app import log
 from app.celery import celery_app
 
@@ -18,7 +20,6 @@ def perform(
         event_type=event_type,
     )
 
-    # phase 2 will dispatch to provider-specific command handlers.
     log.debug(
         "webhook payload received",
         provider=provider,
@@ -26,6 +27,11 @@ def perform(
         payload=payload,
         headers=headers,
     )
+
+    if provider == "zoom":
+        app.jobs.zoom_webhooks.dispatch(event_type=event_type, payload=payload)
+    elif provider == "recall":
+        app.jobs.recall_webhooks.dispatch(event_type=event_type, payload=payload)
 
 
 perform_celery = celery_app.task(perform)

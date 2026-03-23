@@ -103,7 +103,14 @@ def worker_process_init_setup_logging(**kwargs):
     #      https://github.com/celery/celery/discussions/9378
     # might need to grab this from? https://pypi.org/project/setproctitle/#history
     # log.local(celery_pid=sender.pid)
-    pass
+
+    # Dispose AND reset the SQLAlchemy engine after fork to prevent inherited
+    # file descriptors / libpq state from causing segfaults in psycopg.
+    from activemodel.session_manager import SessionManager
+    instance = SessionManager.get_instance()
+    if instance._engine is not None:
+        instance._engine.dispose()
+        instance._engine = None
 
 
 # tag all jobs with the job name (module path) and uuid for the task

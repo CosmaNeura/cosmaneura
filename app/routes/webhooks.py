@@ -1,14 +1,17 @@
 import hashlib
+import hmac
 import json
 from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import app.jobs.webhooks
 from app import log
 from app.configuration.redis import get_redis
+from app.configuration.zoom import ZOOM_SECRET_TOKEN
 
 webhook_api_app = APIRouter(prefix="/external/v1/webhooks", tags=["webhooks"])
 
@@ -48,8 +51,9 @@ def _already_processed(provider: str, event_id: str) -> bool:
     return inserted is None
 
 
-async def _queue_webhook(provider: str, request: Request) -> WebhookAck:
-    payload = await request.json()
+async def _queue_webhook(provider: str, request: Request, payload: dict[str, Any] | None = None) -> WebhookAck:
+    if payload is None:
+        payload = await request.json()
     headers = {k.lower(): v for k, v in request.headers.items()}
     event_id = _stable_event_id(provider=provider, payload=payload, headers=headers)
     event_type = str(payload.get("event", payload.get("event_type", "unknown")))
@@ -75,8 +79,20 @@ async def _queue_webhook(provider: str, request: Request) -> WebhookAck:
 
 
 @webhook_api_app.post("/zoom")
-async def zoom_webhook(request: Request) -> WebhookAck:
-    return await _queue_webhook(provider="zoom", request=request)
+async def zoom_webhook(request: Request):
+    payload = await request.json()
+
+    if payload.get("event") == "endpoint.url_validation":
+        plain_token = payload["payload"]["plainToken"]
+        encrypted_token = hmac.new(
+            ZOOM_SECRET_TOKEN.encode(),
+            plain_token.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        log.info("zoom url validation challenge received")
+        return JSONResponse({"plainToken": plain_token, "encryptedToken": encrypted_token})
+
+    return await _queue_webhook(provider="zoom", request=request, payload=payload)
 
 
 @webhook_api_app.post("/recall")

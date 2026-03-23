@@ -16,6 +16,7 @@ dependencies = [
     "azure-identity>=1.19.0",
     "azure-storage-blob>=12.24.0",
     "backoff>=2.2.1",
+    "httpx>=0.28.0",
     "beautifulsoup4>=4.12.3",
     "cachetools>=5.5.1",
     "celery>=5.4.0",

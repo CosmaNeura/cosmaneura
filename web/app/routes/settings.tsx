@@ -24,6 +24,7 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
+import { getClient } from "~/configuration/clerk"
 import {
   generateSignedExampleNoteUploadUrl,
   settingsData,
@@ -32,6 +33,7 @@ import {
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
+import { requireEnv } from "~/utils/environment"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -304,6 +306,52 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
     </Form>
   )
 }
+
+function ZoomConnect({ zoomUserId }: { zoomUserId: string | null }) {
+  const [loading, setLoading] = useState(false)
+
+  async function connectZoom() {
+    setLoading(true)
+    const clerk = await getClient()
+    const token = await clerk!.session!.getToken()
+    const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
+    const res = await fetch(`${base}/internal/v1/zoom-auth-url`, {
+      headers: { Authorization: `Bearer ${token}` },
+      credentials: "include",
+    })
+    const { url } = (await res.json()) as { url: string }
+    if (url) window.location.href = url
+    setLoading(false)
+  }
+
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>Zoom Integration</h3>
+      <p className="text-muted-foreground text-sm">
+        Connect your Zoom account so Cosma can automatically join your meetings
+        and generate visit notes.
+      </p>
+      {zoomUserId ? (
+        <div className="flex items-center gap-2 text-sm">
+          <div className="h-2 w-2 rounded-full bg-green-500" />
+          <span>Connected (Zoom user: {zoomUserId})</span>
+        </div>
+      ) : (
+        <Button onClick={connectZoom} disabled={loading}>
+          {loading ? (
+            <>
+              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+              Connecting...
+            </>
+          ) : (
+            "Connect Zoom"
+          )}
+        </Button>
+      )}
+    </section>
+  )
+}
+
 export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
   // TODO need idiomatic error handling here
   const { data } = await settingsData()
@@ -311,7 +359,6 @@ export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
 
   return data
 }
-
 export const meta: MetaFunction = () => {
   return [
     { title: "Settings" },
@@ -337,6 +384,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
+          <ZoomConnect zoomUserId={loaderData.zoom_user_id} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

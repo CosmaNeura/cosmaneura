@@ -68,7 +68,7 @@ dev: local-alias dev_kill
 	# create a tmp Procfile with all of the dev services we need running
 	cat << 'EOF' > tmp/Procfile.dev
 	py_dev: just py_dev
-	py_worker: {{PYTHON_WATCHMEDO}} $(yq '.worker' Procfile --output-format yaml)
+	py_worker: {{PYTHON_WATCHMEDO}} $(yq '.worker' Procfile --output-format yaml) --pool=solo
 	py_scheduler: {{PYTHON_WATCHMEDO}} $(yq '.scheduler' Procfile --output-format yaml)
 	js_dev: just js_dev
 	openapi: just js_generate-openapi --watch

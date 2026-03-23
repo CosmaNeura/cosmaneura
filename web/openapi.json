@@ -473,6 +473,32 @@
           }
         ]
       }
+    },
+    "/internal/v1/zoom-auth-url": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Zoom Auth Url",
+        "operationId": "zoom_auth_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoomAuthUrlResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1201,6 +1227,17 @@
               }
             ],
             "title": "Biography"
+          },
+          "zoom_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Zoom User Id"
           }
         },
         "additionalProperties": false,
@@ -1208,7 +1245,8 @@
         "required": [
           "doctor_id",
           "notes_schema",
-          "biography"
+          "biography",
+          "zoom_user_id"
         ],
         "title": "SettingsData"
       },
@@ -1380,6 +1418,19 @@
           "date_of_birth"
         ],
         "title": "VisitAudioUploadRequest"
+      },
+      "ZoomAuthUrlResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "ZoomAuthUrlResponse"
       }
     },
     "securitySchemes": {

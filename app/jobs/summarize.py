@@ -43,16 +43,15 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         )
         return
 
-    # Get most recently updated example note for this schema
-    example = (
+    # Get most recently updated example note for this schema (optional)
+    example = cast(
+        DoctorNoteExample | None,
         DoctorNoteExample.select()
         .where(DoctorNoteExample.doctor_note_schema_id == schema_id)
-        # TODO is there a way to actually fix this type? Feels like a limitation on sqlmodel
         .order_by(cast(Any, DoctorNoteExample.updated_at).desc())
         .limit(1)
-        .one()
+        .first(),
     )
-    example = cast(DoctorNoteExample, example)
 
     # TODO Validate the example note matches the schema.
 
@@ -106,7 +105,7 @@ def queue(*args, **kwargs):
 # point. See https://arxiv.org/html/2408.02442v3 for more information.
 def build_structured_prompt(
     transcript: AIVisitTranscript,
-    example_note: DoctorNoteExample,
+    example_note: DoctorNoteExample | None,
     note_schema: DoctorNoteSchema,
 ) -> str:
     transcript_text = "\n".join(
@@ -147,11 +146,11 @@ def build_structured_prompt(
         {json.dumps(note_schema.fields, indent=2)}
         </schema>
 
-        As an example to help guide you, here is a good clinical note from another encounter.
+        {f'''As an example to help guide you, here is a good clinical note from another encounter.
 
         <example_note>
         {json.dumps(example_note.field_examples, indent=2)}
-        </example_note>
+        </example_note>''' if example_note else ''}
 
         Ensure that the clinical note you create includes the following action items:
 
@@ -232,7 +231,7 @@ def extract_action_items(transcript: AIVisitTranscript) -> str:
 
 def generate_clinical_note(
     transcript: AIVisitTranscript,
-    example_note: DoctorNoteExample,
+    example_note: DoctorNoteExample | None,
     note_schema: DoctorNoteSchema,
 ) -> dict[str, str]:
     prompt = build_structured_prompt(transcript, example_note, note_schema)

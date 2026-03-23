@@ -59,6 +59,21 @@ class Doctor(
     biography: str | None
     "what type of doctor is this, what specialist, what they focus on, etc. Used for the intake process."
 
+    zoom_user_id: str | None = None
+    "Zoom user ID (host_id), used to correlate Zoom webhooks to a doctor"
+
+    zoom_access_token: str | None = None
+    "Zoom OAuth access token, used to obtain ZAK tokens for Recall bot authorization"
+
+    zoom_refresh_token: str | None = None
+    "Zoom OAuth refresh token, used to renew the access token when it expires"
+
+    zoom_token_expires_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "when the current zoom_access_token expires"
+
     def generate_api_key(self):
         api_key = TypeID(API_KEY_PREFIX)
 
