@@ -20,7 +20,10 @@ def handle_meeting_started(payload: dict[str, Any]):
 
     log.info("meeting.started received", host_id=host_id, meeting_id=meeting_id)
 
-    doctor = Doctor.where(Doctor.zoom_user_id == host_id).first()
+    doctor = cast(
+        Doctor | None,
+        Doctor.where(Doctor.zoom_user_id == host_id).first(),
+    )
     if not doctor:
         log.info("no doctor found for zoom host_id, skipping bot creation", host_id=host_id)
         return
@@ -82,7 +85,7 @@ def handle_participant_joined(payload: dict[str, Any]):
         return
 
     count_key = f"recall:meeting:{meeting_id}:patient_count"
-    count = redis.incr(count_key)
+    count = cast(int, redis.incr(count_key))
     redis.expire(count_key, int(timedelta(hours=24).total_seconds()))
 
     if count != 1:
@@ -171,7 +174,7 @@ def handle_participant_left(payload: dict[str, Any]):
         return
 
     count_key = f"recall:meeting:{meeting_id}:patient_count"
-    count = int(redis.decr(count_key))
+    count = cast(int, redis.decr(count_key))
 
     if count > 0:
         log.info("patient left but others still present, still recording", meeting_id=meeting_id, count=count)
