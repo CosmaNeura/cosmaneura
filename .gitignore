@@ -9,7 +9,6 @@ __pycache__
 .mypy_cache
 
 *.env.*local
-.env.staging.backend
 
 .nixpacks
 
