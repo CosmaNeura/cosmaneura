@@ -55,6 +55,7 @@ PYTHON_PRODUCTION_ENV_FILE := ".env.production.backend"
 
 # .env file with production variables that are safe to share publicly (frontend)
 JAVASCRIPT_SECRETS_FILE := env("JAVASCRIPT_SECRETS_FILE", ".env.production.frontend")
+JAVASCRIPT_BUILD_ENV := if JAVASCRIPT_SECRETS_FILE == ".env.staging.frontend" { "staging" } else { "production" }
 
 # by default, the py image name is pulled from the project name
 PYTHON_IMAGE_NAME := PROJECT_NAME
@@ -88,7 +89,7 @@ _production_build_assertions:
 	fi
 
 # within nixpacks, this is where the SPA client assets are built
-JAVASCRIPT_CONTAINER_BUILD_DIR := "/app/build/client"
+JAVASCRIPT_CONTAINER_BUILD_DIR := "/app/build/" + JAVASCRIPT_BUILD_ENV + "/client"
 # outside of nixpacks, within the python application folder, this is where the SPA assets are stored
 JAVASCRIPT_PRODUCTION_BUILD_DIR := "public"
 
@@ -104,7 +105,7 @@ build_javascript: _production_build_assertions
 	# Cannot extract files out of a image, only a container. We create a tmp container to extract assets.
 	docker rm tmp-js-container || true
 	docker create --name tmp-js-container {{JAVASCRIPT_IMAGE_TAG}}
-	docker cp tmp-js-container:/app/build/production/client "{{JAVASCRIPT_PRODUCTION_BUILD_DIR}}"
+	docker cp tmp-js-container:{{JAVASCRIPT_CONTAINER_BUILD_DIR}} "{{JAVASCRIPT_PRODUCTION_BUILD_DIR}}"
 
 # dump nixpacks-generated Dockerfile for manual build and production debugging
 build_javascript_dump:
