@@ -10,11 +10,12 @@ py_setup:
 	[ -d ".venv" ] || uv venv
 
 	# don't include debugging-extras on CI
-	# --no-sources to allow local dev packages to be used: https://github.com/astral-sh/uv/issues/9258#issuecomment-2499541207
+	# use the same locked sources in CI and locally, otherwise git-sourced packages like activemodel
+	# can resolve differently and cause schema drift between environments
 	if [ -z "${CI:-}" ]; then \
 		uv sync --group=debugging-extras; \
 	else \
-		uv sync --no-sources; \
+		uv sync; \
 	fi
 
 	# important for CI to install browsers for playwright
