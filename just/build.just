@@ -119,7 +119,11 @@ _build_requirements:
 
 # url of the repo on github for build metadata
 @_repo_url:
-	gh repo view --json url --jq ".url" | tr -d " \n"
+	if command -v gh >/dev/null 2>&1; then \
+		gh repo view --json url --jq ".url" | tr -d " \n"; \
+	else \
+		git remote get-url origin | sed -E 's#git@github.com:#https://github.com/#; s#\.git$##' | tr -d " \n"; \
+	fi
 
 # unique ID (mostly) to identify where/when this image was built for docker labeling
 @_build_id:
