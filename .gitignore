@@ -32,3 +32,4 @@ infra-staging/.terraform
 # this contains secrets!
 infra/terraform.tfstate*
 infra-staging/terraform.tfstate*
+.superpowers/
