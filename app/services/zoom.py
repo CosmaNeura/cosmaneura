@@ -132,5 +132,15 @@ def delete_meeting(doctor: Doctor, zoom_meeting_id: str) -> None:
             headers={"Authorization": f"Bearer {doctor.zoom_access_token}"},
         )
 
+    if response.status_code == httpx.codes.UNAUTHORIZED:
+        log.info("zoom access token rejected, refreshing", doctor_id=str(doctor.id), meeting_id=zoom_meeting_id)
+        doctor = refresh_access_token(doctor)
+
+        with httpx.Client() as client:
+            response = client.delete(
+                f"{ZOOM_API_BASE}/meetings/{zoom_meeting_id}",
+                headers={"Authorization": f"Bearer {doctor.zoom_access_token}"},
+            )
+
     response.raise_for_status()
     log.info("zoom meeting deleted", doctor_id=str(doctor.id), zoom_meeting_id=zoom_meeting_id)
