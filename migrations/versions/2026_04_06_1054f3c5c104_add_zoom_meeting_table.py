@@ -1,8 +1,8 @@
 """add_zoom_meeting_table
 
-Revision ID: c1633f97d5b8
+Revision ID: 1054f3c5c104
 Revises: 262b426e281a
-Create Date: 2026-04-06 20:36:30.895443
+Create Date: 2026-04-06 20:40:06.023795
 
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import activemodel
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision: str = 'c1633f97d5b8'
+revision: str = '1054f3c5c104'
 down_revision: Union[str, None] = '262b426e281a'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -36,7 +36,8 @@ def upgrade() -> None:
     sa.Column('status', postgresql.ENUM('scheduled', 'started', 'ended', 'cancelled', name='zoommeetingstatus', create_type=False), nullable=False, comment='Lifecycle status of the meeting'),
     sa.Column('appointment_id', activemodel.types.typeid.TypeIDType(prefix='appointment'), nullable=True, comment='Soft reference to Appointment — no FK constraint intentional: appointment is set async via webhook after meeting starts, and may not exist yet when the ZoomMeeting row is created'),
     sa.ForeignKeyConstraint(['doctor_id'], ['doctor.id'], name=op.f('zoom_meeting_doctor_id_fkey')),
-    sa.PrimaryKeyConstraint('id', name=op.f('zoom_meeting_pkey'))
+    sa.PrimaryKeyConstraint('id', name=op.f('zoom_meeting_pkey')),
+    sa.UniqueConstraint('doctor_id', 'zoom_meeting_id', name='uq_zoom_meeting_doctor_meeting')
     )
     op.create_index(op.f('zoom_meeting_zoom_meeting_id_idx'), 'zoom_meeting', ['zoom_meeting_id'], unique=False)
     # ### end Alembic commands ###

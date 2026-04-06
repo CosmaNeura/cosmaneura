@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
-from sqlmodel import Column, Field, Relationship
+from sqlmodel import Column, Field, Relationship, UniqueConstraint
 
 from app.models.doctor import Doctor
 
@@ -18,6 +18,10 @@ class ZoomMeetingStatus(str, Enum):
 
 
 class ZoomMeeting(BaseModel, TimestampsMixin, TypeIDMixin("zmtg"), table=True):
+    __table_args__ = (
+        UniqueConstraint("doctor_id", "zoom_meeting_id", name="uq_zoom_meeting_doctor_meeting"),
+    )
+
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
