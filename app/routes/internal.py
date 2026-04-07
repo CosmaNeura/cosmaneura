@@ -22,7 +22,7 @@ from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
-from ..configuration.zoom import ZOOM_CLIENT_ID, ZOOM_REDIRECT_URI
+from ..configuration.zoom import ZOOM_CLIENT_ID, zoom_redirect_uri
 from .admin import admin_api_app
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
@@ -280,7 +280,7 @@ def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
     params = urlencode({
         "response_type": "code",
         "client_id": ZOOM_CLIENT_ID,
-        "redirect_uri": ZOOM_REDIRECT_URI,
+        "redirect_uri": zoom_redirect_uri(request),
         "state": doctor.clerk_id,
     })
     return ZoomAuthUrlResponse(url=f"{ZOOM_OAUTH_AUTHORIZE_URL}?{params}")

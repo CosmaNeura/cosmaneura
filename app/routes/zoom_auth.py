@@ -11,8 +11,8 @@ from app.configuration.zoom import (
     ZOOM_CLIENT_ID,
     ZOOM_CLIENT_SECRET,
     ZOOM_OAUTH_TOKEN_URL,
-    ZOOM_REDIRECT_URI,
-    ZOOM_SUCCESS_REDIRECT,
+    zoom_redirect_uri,
+    zoom_success_redirect,
 )
 
 from app.models.doctor import Doctor
@@ -35,13 +35,14 @@ async def zoom_oauth_start(request: Request):
     params = urlencode({
         "response_type": "code",
         "client_id": ZOOM_CLIENT_ID,
-        "redirect_uri": ZOOM_REDIRECT_URI,
+        "redirect_uri": zoom_redirect_uri(request),
     })
     return RedirectResponse(url=f"{ZOOM_OAUTH_AUTHORIZE_URL}?{params}")
 
 
 @zoom_auth_app.get("/auth/zoom/callback")
 async def zoom_oauth_callback(request: Request):
+    redirect_uri = zoom_redirect_uri(request)
     code = request.query_params.get("code")
     error = request.query_params.get("error")
 
@@ -58,7 +59,7 @@ async def zoom_oauth_callback(request: Request):
             params={
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": ZOOM_REDIRECT_URI,
+                "redirect_uri": redirect_uri,
             },
         )
         token_response.raise_for_status()
@@ -92,4 +93,4 @@ async def zoom_oauth_callback(request: Request):
         zoom_user_id=zoom_user_id,
     )
 
-    return RedirectResponse(url=ZOOM_SUCCESS_REDIRECT)
+    return RedirectResponse(url=zoom_success_redirect(request))
