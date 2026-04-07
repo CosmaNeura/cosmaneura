@@ -16,6 +16,5 @@ for module_name in modules_in_folder(Path(__file__).parent, __package__):
 
     # validate that the module has a 'perform' method, this is a convention in this folder
     if not hasattr(module, "perform") or not callable(getattr(module, "perform")):
-        raise AttributeError(
-            f"Module {module_name} must have a callable 'perform' method"
-        )
+        log.warning("skipping module without perform", job=module_name)
+        continue
