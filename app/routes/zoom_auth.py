@@ -16,6 +16,7 @@ from app.configuration.zoom import (
 )
 
 from app.models.doctor import Doctor
+from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 
 ZOOM_OAUTH_AUTHORIZE_URL = "https://zoom.us/oauth/authorize"
 ZOOM_API_ME_URL = "https://api.zoom.us/v2/users/me"
@@ -81,11 +82,15 @@ async def zoom_oauth_callback(request: Request):
     doctor = Doctor.get(clerk_id=clerk_id)
     assert doctor, f"No doctor found with clerk_id {clerk_id}"
 
-    doctor.zoom_user_id = zoom_user_id
-    doctor.zoom_access_token = token_data["access_token"]
-    doctor.zoom_refresh_token = token_data["refresh_token"]
-    doctor.zoom_token_expires_at = expires_at
-    doctor.save()
+    integration = DoctorVideoIntegration.find_or_initialize_by(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+    )
+    integration.provider_user_id = zoom_user_id
+    integration.access_token = token_data["access_token"]
+    integration.refresh_token = token_data["refresh_token"]
+    integration.token_expires_at = expires_at
+    integration.save()
 
     log.info(
         "zoom oauth tokens saved",

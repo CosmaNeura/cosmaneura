@@ -1228,16 +1228,9 @@
             ],
             "title": "Biography"
           },
-          "zoom_user_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Zoom User Id"
+          "zoom_connected": {
+            "type": "boolean",
+            "title": "Zoom Connected"
           }
         },
         "additionalProperties": false,
@@ -1246,7 +1239,7 @@
           "doctor_id",
           "notes_schema",
           "biography",
-          "zoom_user_id"
+          "zoom_connected"
         ],
         "title": "SettingsData"
       },

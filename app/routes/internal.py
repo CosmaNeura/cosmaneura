@@ -18,6 +18,7 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
@@ -250,12 +251,14 @@ class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
     biography: str | None
-    zoom_user_id: str | None
+    zoom_connected: bool
 
 
 @internal_api_app.get("/settings")
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
+
+    zoom_integration = DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
 
     notes_schema = DoctorNoteSchema.where(
         (DoctorNoteSchema.doctor_id == doctor.id)
@@ -266,7 +269,7 @@ def settings_data(request: Request) -> SettingsData:
         notes_schema=cast(list[DoctorNoteSchema], list(notes_schema)),
         doctor_id=str(doctor.id),
         biography=doctor.biography,
-        zoom_user_id=doctor.zoom_user_id,
+        zoom_connected=zoom_integration is not None,
     )
 
 

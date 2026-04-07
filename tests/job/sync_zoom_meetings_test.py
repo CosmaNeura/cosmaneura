@@ -3,7 +3,19 @@ from unittest.mock import patch
 
 from tests.factories import DoctorFactory
 from app.jobs.sync_zoom_meetings import perform
+from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+
+
+def _create_zoom_integration(doctor):
+    return DoctorVideoIntegration(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+        provider_user_id="zoom_user_abc",
+        access_token="tok",
+        refresh_token="ref",
+        token_expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+    ).save()
 
 
 FAKE_MEETINGS = [
@@ -25,7 +37,8 @@ FAKE_MEETINGS = [
 
 
 def test_sync_creates_zoom_meetings(global_session):
-    doctor = DoctorFactory.build(zoom_user_id="zoom_user_abc", zoom_access_token="tok").save()
+    doctor = DoctorFactory.build().save()
+    _create_zoom_integration(doctor)
 
     with patch("app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings", return_value=FAKE_MEETINGS):
         perform(str(doctor.id))
@@ -37,7 +50,8 @@ def test_sync_creates_zoom_meetings(global_session):
 
 
 def test_sync_upserts_existing_meetings(global_session):
-    doctor = DoctorFactory.build(zoom_user_id="zoom_user_abc", zoom_access_token="tok").save()
+    doctor = DoctorFactory.build().save()
+    _create_zoom_integration(doctor)
 
     # pre-create one meeting
     ZoomMeeting(
@@ -60,7 +74,8 @@ def test_sync_upserts_existing_meetings(global_session):
 
 
 def test_sync_preserves_started_status(global_session):
-    doctor = DoctorFactory.build(zoom_user_id="zoom_user_abc", zoom_access_token="tok").save()
+    doctor = DoctorFactory.build().save()
+    _create_zoom_integration(doctor)
 
     ZoomMeeting(
         doctor_id=doctor.id,
@@ -80,7 +95,7 @@ def test_sync_preserves_started_status(global_session):
 
 
 def test_sync_skips_doctor_without_zoom(global_session):
-    doctor = DoctorFactory.build(zoom_user_id=None).save()
+    doctor = DoctorFactory.build().save()
 
     with patch("app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings") as mock_get:
         perform(str(doctor.id))

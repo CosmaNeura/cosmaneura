@@ -327,7 +327,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   )
 }
 
-function ZoomConnect({ zoomUserId }: { zoomUserId: string | null }) {
+function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
   const [loading, setLoading] = useState(false)
 
   async function connectZoom() {
@@ -351,10 +351,10 @@ function ZoomConnect({ zoomUserId }: { zoomUserId: string | null }) {
         Connect your Zoom account so Cosma can automatically join your meetings
         and generate visit notes.
       </p>
-      {zoomUserId ? (
+      {zoomConnected ? (
         <div className="flex items-center gap-2 text-sm">
           <div className="h-2 w-2 rounded-full bg-green-500" />
-          <span>Connected (Zoom user: {zoomUserId})</span>
+          <span>Connected</span>
         </div>
       ) : (
         <Button onClick={connectZoom} disabled={loading}>
@@ -404,7 +404,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
-          <ZoomConnect zoomUserId={loaderData.zoom_user_id} />
+          <ZoomConnect zoomConnected={loaderData.zoom_connected} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

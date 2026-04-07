@@ -6,6 +6,7 @@ from app.configuration.redis import get_redis
 from app.services import recall
 from app.services import zoom as zoom_service
 
+from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
@@ -22,14 +23,18 @@ def handle_meeting_started(payload: dict[str, Any]):
 
     doctor = cast(
         Doctor | None,
-        Doctor.where(Doctor.zoom_user_id == host_id).first(),
+        Doctor.where(Doctor.id == DoctorVideoIntegration.where(
+            (DoctorVideoIntegration.provider == VideoProvider.zoom)
+            & (DoctorVideoIntegration.provider_user_id == host_id)
+        ).select(DoctorVideoIntegration.doctor_id).scalar_subquery()).first(),
     )
     if not doctor:
         log.info("no doctor found for zoom host_id, skipping bot creation", host_id=host_id)
         return
 
-    if not doctor.zoom_access_token:
-        log.info("doctor has no zoom access token, skipping bot creation", doctor_id=str(doctor.id))
+    integration = zoom_service.get_zoom_integration(doctor)
+    if not integration or not integration.access_token:
+        log.info("doctor has no zoom integration, skipping bot creation", doctor_id=str(doctor.id))
         return
 
     redis = get_redis()
