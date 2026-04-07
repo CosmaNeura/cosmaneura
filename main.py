@@ -54,6 +54,9 @@ if __name__ == "__main__":
         log_config=None,
         # a custom access logger is implemted which plays nicely with structlog
         access_log=False,
+        # trust X-Forwarded-Proto / X-Forwarded-For from the Azure reverse proxy so that
+        # request.url, request.base_url, and url_for() use https:// instead of http://
+        proxy_headers=not is_development(),
         # loop="auto" is the default, which looks like anyio in a stacktrace, but anyio uses uvloop behind the scenes
         **additional_args,
     )
