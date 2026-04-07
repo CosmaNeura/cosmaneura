@@ -222,7 +222,3 @@ def dispatch(event_type: str, payload: dict[str, Any]):
         log.info("no handler for zoom event type", event_type=event_type)
         return
     handler(payload)
-
-
-# required by app/jobs/__init__.py auto-import convention
-perform = dispatch

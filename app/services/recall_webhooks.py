@@ -1,6 +1,6 @@
 from typing import Any
 
-import app.jobs.transcribe as transcribe_job
+import app.jobs.transcribe as transcribe_job  # noqa: E402 — job import intentional
 from app import log
 from app.configuration.redis import get_redis
 from app.services import recall as recall_service
@@ -101,6 +101,3 @@ def dispatch(event_type: str, payload: dict[str, Any]):
         log.info("no handler for recall event type", event_type=event_type)
         return
     handler(payload)
-
-
-perform = dispatch

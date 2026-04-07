@@ -215,12 +215,29 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
     })
   }
 
-  function noteSchemasToComboBoxItems(noteSchemas: NoteSchema[]) {
-    return noteSchemas.map((schema) => ({
-      // value: schema.note_type,
+  const PREDEFINED_NOTE_TYPES = [
+    "Telehealth SOAP Note",
+    "Dermatology Office Visit",
+    "Annual Wellness Visit",
+    "Psychiatry Follow-up Note",
+    "Urgent Care Visit",
+    "Post-Op Follow-up",
+    "Cardiology Consultation",
+    "Pediatric Well Visit",
+    "Pain Management Note",
+    "Physical Therapy Evaluation",
+  ]
+
+  function noteTypeComboBoxItems(noteSchemas: NoteSchema[]) {
+    const uploadedLabels = new Set(noteSchemas.map((s) => s.note_type))
+    const uploadedItems = noteSchemas.map((schema) => ({
       value: schema.id,
       label: schema.note_type,
     }))
+    const predefinedItems = PREDEFINED_NOTE_TYPES.filter(
+      (label) => !uploadedLabels.has(label),
+    ).map((label) => ({ value: label, label }))
+    return [...uploadedItems, ...predefinedItems]
   }
 
   return (
@@ -275,7 +292,10 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 <FormLabel>Note Type</FormLabel>
                 <FormControl>
                   <SimpleComboBox
-                    items={noteSchemasToComboBoxItems(noteSchemas)}
+                    items={noteTypeComboBoxItems(noteSchemas)}
+                    onSelectedItemChange={(item) =>
+                      item && field.onChange(item.label)
+                    }
                     {...field}
                   />
                 </FormControl>
