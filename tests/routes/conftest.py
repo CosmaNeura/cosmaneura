@@ -33,11 +33,14 @@ def global_session():
     with activemodel_global_session() as session:
         assert session
 
-        from factory.alchemy import SQLAlchemyModelFactory
+        try:
+            from factory.alchemy import SQLAlchemyModelFactory
 
-        # Ensure that all factories use the same session
-        for factory in SQLAlchemyModelFactory.__subclasses__():
-            factory._meta.sqlalchemy_session = session
+            # Ensure that all factories use the same session
+            for factory in SQLAlchemyModelFactory.__subclasses__():
+                factory._meta.sqlalchemy_session = session
+        except ModuleNotFoundError:
+            pass
 
         yield session
 

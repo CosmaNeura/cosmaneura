@@ -1,14 +1,18 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from pydantic import BaseModel, computed_field
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
+import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 from app.commands.uploads.sas import UploadType
+from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+import app.services.zoom as zoom_service
+from app.services.zoom import get_zoom_integration
 
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
@@ -298,3 +302,76 @@ def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor: Doctor = request.state.doctor
     doctor.biography = data.biography
     doctor.save()
+
+
+class ZoomMeetingResponse(BaseModel, extra="forbid"):
+    id: str
+    zoom_meeting_id: str
+    topic: str
+    start_time: datetime
+    duration: int
+    join_url: str
+    status: ZoomMeetingStatus
+    appointment_id: str | None
+
+
+class ScheduleResponse(BaseModel, extra="forbid"):
+    zoom_connected: bool
+    meetings: list[ZoomMeetingResponse]
+
+
+@internal_api_app.get("/schedule", name="schedule_list")
+def schedule_list(request: Request) -> ScheduleResponse:
+    doctor: Doctor = request.state.doctor
+
+    zoom_integration = get_zoom_integration(doctor)
+    if not zoom_integration:
+        return ScheduleResponse(zoom_connected=False, meetings=[])
+
+    sync_zoom_meetings.queue(str(doctor.id))
+
+    now = datetime.now(timezone.utc)
+    past_cutoff = now - timedelta(days=30)
+    future_cutoff = now + timedelta(days=90)
+
+    meetings = (
+        ZoomMeeting.where(
+            cast(Any, ZoomMeeting.doctor_id) == doctor.id,
+            cast(Any, ZoomMeeting.status) != ZoomMeetingStatus.cancelled,
+            cast(Any, ZoomMeeting.start_time) >= past_cutoff,
+            cast(Any, ZoomMeeting.start_time) <= future_cutoff,
+        )
+        .order_by(cast(Any, ZoomMeeting.start_time).asc())
+        .all()
+    )
+
+    return ScheduleResponse(
+        zoom_connected=True,
+        meetings=[
+            ZoomMeetingResponse(
+                id=str(m.id),
+                zoom_meeting_id=m.zoom_meeting_id,
+                topic=m.topic,
+                start_time=m.start_time,
+                duration=m.duration,
+                join_url=m.join_url,
+                status=m.status,
+                appointment_id=str(m.appointment_id) if m.appointment_id else None,
+            )
+            for m in cast(list[ZoomMeeting], list(meetings))
+        ],
+    )
+
+
+@internal_api_app.delete("/schedule/{zoom_meeting_id}", name="cancel_meeting", status_code=status.HTTP_204_NO_CONTENT)
+def cancel_meeting(request: Request, zoom_meeting_id: Annotated[str, Path()]) -> None:
+    doctor: Doctor = request.state.doctor
+
+    meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=zoom_meeting_id)
+    if not meeting:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+
+    zoom_service.delete_meeting(doctor, zoom_meeting_id)
+
+    meeting.status = ZoomMeetingStatus.cancelled
+    meeting.save()
