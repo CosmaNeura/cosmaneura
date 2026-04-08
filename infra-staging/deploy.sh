@@ -69,80 +69,64 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
-# Sync env vars from 1Password to all containers on every deploy.
-# This mirrors what `tofu apply` does for production — see infra-staging/variables.tf for the source
-# of truth on which vars belong in which list.
-sync_env_vars() {
+# Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
+# Must stay in sync with variables.tf python_secret_vars / python_public_vars.
+ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend)
+
+# Must match variables.tf python_secret_vars
+SECRET_VARS=(
+	DATABASE_URL REDIS_URL SESSION_SECRET_KEY
+	CLERK_PRIVATE_KEY SENTRY_DSN ASSEMBLY_API_KEY SMTP_URL
+	AZURE_OPENAI_API_KEY
+	AZURE_UPLOADS_ACCOUNT_NAME AZURE_UPLOADS_ACCOUNT_KEY AZURE_UPLOADS_ACCOUNT_URL
+	AZURE_DEID_TENANT_ID AZURE_DEID_CLIENT_ID AZURE_DEID_CLIENT_SECRET AZURE_DEID_ENDPOINT
+	RECALL_API_KEY
+	ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET ZOOM_SECRET_TOKEN
+)
+
+# Must match variables.tf python_public_vars
+PUBLIC_VARS=(
+	LOG_LEVEL EMAIL_FROM_ADDRESS PORT ALLOWED_HOST_LIST INTAKE_CHAT_DOMAIN
+	AZURE_OPENAI_ENDPOINT
+	AZURE_UPLOADS_CONTAINER_NAME AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
+	ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
+)
+
+initiate_deployment() {
 	local container_name=$1
+	local git_sha=$2
+	local image="${STAGING_IMAGE}:${git_sha}"
 
-	echo "Syncing environment variables for $container_name..."
-
-	# Read all staging secrets from 1Password via direnv (same mechanism as tofu uses)
-	local env_json
-	env_json=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend)
-
-	# Must match variables.tf python_secret_vars
-	local secret_vars=(
-		DATABASE_URL REDIS_URL SESSION_SECRET_KEY
-		CLERK_PRIVATE_KEY SENTRY_DSN ASSEMBLY_API_KEY SMTP_URL
-		AZURE_OPENAI_API_KEY
-		AZURE_UPLOADS_ACCOUNT_NAME AZURE_UPLOADS_ACCOUNT_KEY AZURE_UPLOADS_ACCOUNT_URL
-		AZURE_DEID_TENANT_ID AZURE_DEID_CLIENT_ID AZURE_DEID_CLIENT_SECRET AZURE_DEID_ENDPOINT
-		RECALL_API_KEY
-		ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET ZOOM_SECRET_TOKEN
-	)
-
-	# Must match variables.tf python_public_vars
-	local public_vars=(
-		LOG_LEVEL EMAIL_FROM_ADDRESS PORT ALLOWED_HOST_LIST INTAKE_CHAT_DOMAIN
-		AZURE_OPENAI_ENDPOINT
-		AZURE_UPLOADS_CONTAINER_NAME AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
-		ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
-	)
-
-	# Upsert Azure Container App secrets (sensitive values stored as named secrets)
+	# Build secrets and env var args — only include vars that have a value in 1Password.
+	# We skip missing vars so we never reference a secretref that doesn't exist.
 	local secrets_args=()
-	for var in "${secret_vars[@]}"; do
+	local env_args=()
+
+	for var in "${SECRET_VARS[@]}"; do
 		local value
-		value=$(echo "$env_json" | jq -r ".\"$var\" // empty")
+		value=$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")
 		[[ -z "$value" ]] && continue
 		local secret_name
 		secret_name=$(echo "$var" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 		secrets_args+=("${secret_name}=${value}")
-	done
-
-	if [[ ${#secrets_args[@]} -gt 0 ]]; then
-		az containerapp secret set -n "$container_name" -g "$RESOURCE_GROUP" \
-			--secrets "${secrets_args[@]}"
-	fi
-
-	# Set env vars: secret refs for sensitive vars, direct values for public vars
-	local env_args=()
-	for var in "${secret_vars[@]}"; do
-		local secret_name
-		secret_name=$(echo "$var" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 		env_args+=("${var}=secretref:${secret_name}")
 	done
-	for var in "${public_vars[@]}"; do
+
+	for var in "${PUBLIC_VARS[@]}"; do
 		local value
-		value=$(echo "$env_json" | jq -r ".\"$var\" // empty")
+		value=$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")
 		[[ -n "$value" ]] && env_args+=("${var}=${value}")
 	done
 
-	if [[ ${#env_args[@]} -gt 0 ]]; then
-		az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" \
-			--set-env-vars "${env_args[@]}"
-	fi
-
-	echo "Environment variables synced for $container_name."
-}
-
-initiate_deployment() {
-	local image="${STAGING_IMAGE}:${git_sha}"
-
 	echo "Initiating deployment for $container_name with image $image..."
-	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" -i "$image" --revision-suffix "$REVISION_STRING"
-	# --set-environment-variables "REVISION=$REVISION_STRING"
+
+	# Single update call: image + secrets + env vars + revision suffix.
+	# Combining into one call avoids Azure CLI race conditions from two consecutive updates.
+	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" \
+		-i "$image" \
+		--revision-suffix "$REVISION_STRING" \
+		--secrets "${secrets_args[@]}" \
+		--set-env-vars "${env_args[@]}"
 
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment initiation failed for $container_name."
@@ -195,11 +179,6 @@ check_deployment() {
 	echo "Deployment check failed for $container_name after $max_attempts attempts."
 	return 1
 }
-
-# Sync env vars for all containers first (idempotent, runs every deploy)
-for container in $CONTAINERS; do
-	sync_env_vars "$container"
-done
 
 # Deploy all containers first
 for container in $CONTAINERS; do
