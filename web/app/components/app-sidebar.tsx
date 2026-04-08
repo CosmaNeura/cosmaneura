@@ -1,7 +1,7 @@
 import * as React from "react"
 import { href, useLocation, useNavigate } from "react-router"
 
-import { Command, File, Inbox, Settings } from "lucide-react"
+import { Calendar, Command, File, Inbox, Settings } from "lucide-react"
 
 import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
@@ -57,6 +57,11 @@ const NAVIGATION_ITEMS = [
     title: "Notetaking",
     icon: File,
     url: href("/notes"),
+  },
+  {
+    title: "Schedule",
+    icon: Calendar,
+    url: href("/schedule"),
   },
   {
     title: "Settings",

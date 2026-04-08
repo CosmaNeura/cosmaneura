@@ -10,6 +10,7 @@ from app.models.doctor_video_integration import DoctorVideoIntegration, VideoPro
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
+from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
 BOT_NAME = "Cosma"
 
@@ -57,6 +58,11 @@ def handle_meeting_started(payload: dict[str, Any]):
     redis.set(f"recall:meeting:{meeting_id}:doctor_name", doctor_name, ex=ttl)
     redis.set(f"recall:bot:{bot_id}:doctor_id", str(doctor.id), ex=ttl)
     log.info("recall bot created, doctor identified", bot_id=bot_id, doctor_name=doctor_name)
+
+    zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=str(meeting_id))
+    if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
+        zoom_mtg.status = ZoomMeetingStatus.started
+        zoom_mtg.save()
 
 
 def _rget(redis, key: str) -> str | None:
@@ -139,6 +145,14 @@ def handle_participant_joined(payload: dict[str, Any]):
     redis.set(f"recall:bot:{bot_id}:appointment_id", str(appointment.id), ex=ttl)
     redis.set(f"recall:bot:{bot_id}:patient_id", str(appointment.patient_id), ex=ttl)
 
+    # Link ZoomMeeting to Appointment if a pre-synced record exists
+    if doctor_id:
+        zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
+        if zoom_mtg:
+            zoom_mtg.appointment_id = appointment.id
+            zoom_mtg.status = ZoomMeetingStatus.started
+            zoom_mtg.save()
+
 
 def _ensure_appointment(doctor_id: str, patient_name: str, now: datetime) -> Appointment:
     """Find or create a Patient + Appointment for an ad-hoc Zoom session."""
@@ -211,6 +225,12 @@ def handle_meeting_ended(payload: dict[str, Any]):
 
     log.info("meeting ended with active recording, stopping", meeting_id=meeting_id, bot_id=bot_id, count=count)
     recall.stop_recording(bot_id)
+
+    zoom_mtg = cast(ZoomMeeting | None, ZoomMeeting.where(cast(Any, ZoomMeeting.zoom_meeting_id) == str(meeting_id)).first())
+    if zoom_mtg:
+        zoom_mtg.status = ZoomMeetingStatus.ended
+        zoom_mtg.save()
+        log.info("zoom meeting status updated to ended", zoom_meeting_id=str(meeting_id))
 
 
 HANDLERS = {
