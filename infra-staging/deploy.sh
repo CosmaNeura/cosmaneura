@@ -120,12 +120,16 @@ initiate_deployment() {
 
 	echo "Initiating deployment for $container_name with image $image..."
 
-	# Single update call: image + secrets + env vars + revision suffix.
-	# Combining into one call avoids Azure CLI race conditions from two consecutive updates.
+	# Secrets must be set separately; az containerapp update does not support --secrets.
+	if [[ ${#secrets_args[@]} -gt 0 ]]; then
+		az containerapp secret set -n "$container_name" -g "$RESOURCE_GROUP" \
+			--secrets "${secrets_args[@]}"
+	fi
+
+	# Single update call: image + env vars + revision suffix.
 	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" \
 		-i "$image" \
 		--revision-suffix "$REVISION_STRING" \
-		--secrets "${secrets_args[@]}" \
 		--set-env-vars "${env_args[@]}"
 
 	if [[ $? -ne 0 ]]; then
