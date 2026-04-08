@@ -28,7 +28,7 @@ if __name__ == "__main__":
 
     if not is_development():
         import subprocess
-        subprocess.run(["uv", "run", "alembic", "upgrade", "head"], check=True)
+        subprocess.run(["/opt/venv/bin/alembic", "upgrade", "head"], check=True)
 
     additional_args = {}
 
