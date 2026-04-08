@@ -26,10 +26,6 @@ if __name__ == "__main__":
 
     from app.environments import is_development
 
-    if not is_development():
-        import subprocess
-        subprocess.run(["/opt/venv/bin/alembic", "upgrade", "head"], check=True)
-
     additional_args = {}
 
     if is_development():
