@@ -69,6 +69,18 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
+# Run database migrations before deploying
+echo "Running database migrations..."
+az containerapp exec -n cosmaneura-staging-app -g "$RESOURCE_GROUP" \
+	--command "uv run alembic upgrade head"
+
+if [[ $? -ne 0 ]]; then
+	echo "Migration failed. Exiting."
+	exit 1
+fi
+
+echo "Migrations complete."
+
 # Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
 # Must stay in sync with variables.tf python_secret_vars / python_public_vars.
 ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend)
