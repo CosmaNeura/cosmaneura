@@ -33,3 +33,4 @@ infra-staging/.terraform
 infra/terraform.tfstate*
 infra-staging/terraform.tfstate*
 .superpowers/
+.worktrees/
