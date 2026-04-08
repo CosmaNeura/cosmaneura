@@ -19,6 +19,12 @@ export default [
         route(":id", "routes/notes/detail.tsx"),
       ]),
     ]),
+    ...prefix("schedule", [
+      layout("layouts/schedule.tsx", [
+        index("routes/schedule/index.tsx"),
+        route(":zoom_meeting_id", "routes/schedule/detail.tsx"),
+      ]),
+    ]),
     route("/settings", "routes/settings.tsx"),
   ]),
   // public, unauthenticated, intake chat
