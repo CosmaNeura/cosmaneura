@@ -124,6 +124,18 @@ def on_task_prerun(sender, task_id, task, args, kwargs, **_kwargs):
 # TODO below should be cleaned up and is probably overkill
 
 
+@signals.task_failure.connect
+def on_task_failure(sender, task_id, exception, args, kwargs, traceback, einfo, **_kwargs):
+    import traceback as tb
+    log.error(
+        "task failed",
+        task_name=sender.name,
+        task_id=task_id,
+        exception=repr(exception),
+        traceback="".join(tb.format_exception(type(exception), exception, exception.__traceback__)),
+    )
+
+
 @signals.task_postrun.connect
 def on_task_postrun(sender, task_id, task, args, kwargs, retval, state, **_kwargs):
     log.clear()

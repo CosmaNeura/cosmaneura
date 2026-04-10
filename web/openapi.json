@@ -1,1 +1,1590 @@
-{"openapi": "3.1.0", "info": {"title": "FastAPI", "version": "0.1.0"}, "paths": {"/internal/v1/admin/users": {"get": {"tags": ["private"], "summary": "User List", "operationId": "user_list", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UserListResponse"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/admin/login_as/{user_id}": {"post": {"tags": ["private"], "summary": "Login As User", "operationId": "login_as_user", "security": [{"HTTPBearer": []}], "parameters": [{"name": "user_id", "in": "path", "required": true, "schema": {"type": "string", "title": "User Id"}}], "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/internal/v1/intake": {"get": {"tags": ["private"], "summary": "Intake List", "operationId": "intake_list", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IntakeList"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/notes": {"get": {"tags": ["private"], "summary": "Note List", "description": "A separate endpoint is used to pull data for an individual note, so we just need the appointment ID\nat this point.", "operationId": "note_list", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NotetakingData"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/patients": {"get": {"tags": ["private"], "summary": "Patient List", "description": "allows users to select an existing patient name and DOB when uploading a note", "operationId": "patient_list", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"items": {"$ref": "#/components/schemas/Patient"}, "type": "array", "title": "Response Patient List Internal V1 Patients Get"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/notes/{appointment_id}": {"get": {"tags": ["private"], "summary": "Note Detail", "operationId": "note_detail", "security": [{"HTTPBearer": []}], "parameters": [{"name": "appointment_id", "in": "path", "required": true, "schema": {"type": "string", "title": "Appointment Id"}}], "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/NoteDetail"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/internal/v1/intake/{appointment_id}": {"get": {"tags": ["private"], "summary": "Intake Detail", "operationId": "intake_detail", "security": [{"HTTPBearer": []}], "parameters": [{"name": "appointment_id", "in": "path", "required": true, "schema": {"type": "string", "title": "Appointment Id"}}], "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/IntakeDetail"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/internal/v1/visit-audio-file/get-signed-url": {"post": {"tags": ["private"], "summary": "Generate Signed Visit Recording Upload Url", "operationId": "generate_signed_visit_recording_upload_url", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"type": "string", "title": "Response Generate Signed Visit Recording Upload Url Internal V1 Visit Audio File Get Signed Url Post"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/visit-audio-file/upload-complete": {"post": {"tags": ["private"], "summary": "Upload Visit Audio File", "operationId": "upload_visit_audio_file", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/VisitAudioUploadRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/notes/get-signed-url": {"post": {"tags": ["private"], "summary": "Generate Signed Example Note Upload Url", "operationId": "generate_signed_example_note_upload_url", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"type": "string", "title": "Response Generate Signed Example Note Upload Url Internal V1 Notes Get Signed Url Post"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/notes/upload-example": {"post": {"tags": ["private"], "summary": "Upload Example Note", "operationId": "upload_example_note", "security": [{"HTTPBearer": []}], "parameters": [{"name": "file_name", "in": "query", "required": true, "schema": {"type": "string", "title": "File Name"}}, {"name": "note_type", "in": "query", "required": true, "schema": {"type": "string", "title": "Note Type"}}], "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/internal/v1/settings": {"get": {"tags": ["private"], "summary": "Settings Data", "operationId": "settings_data", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SettingsData"}}}}}, "security": [{"HTTPBearer": []}]}, "post": {"tags": ["private"], "summary": "Update Settings Data", "operationId": "update_settings_data", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateSettingsData"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/zoom-auth-url": {"get": {"tags": ["private"], "summary": "Zoom Auth Url", "operationId": "zoom_auth_url", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ZoomAuthUrlResponse"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/schedule": {"get": {"tags": ["private"], "summary": "Schedule List", "operationId": "schedule_list", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ScheduleResponse"}}}}}, "security": [{"HTTPBearer": []}]}}, "/internal/v1/schedule/{zoom_meeting_id}": {"delete": {"tags": ["private"], "summary": "Cancel Meeting", "operationId": "cancel_meeting", "security": [{"HTTPBearer": []}], "parameters": [{"name": "zoom_meeting_id", "in": "path", "required": true, "schema": {"type": "string", "title": "Zoom Meeting Id"}}], "responses": {"204": {"description": "Successful Response"}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/external/v1/ping": {"get": {"summary": "External Api Ping", "description": "basic uptime + API authentication check", "operationId": "external_api_ping", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}}, "security": [{"OAuth2PasswordBearer": []}]}}, "/external/v1/intake": {"post": {"summary": "Create Intake", "operationId": "create_intake", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AppointmentRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AppointmentResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}, "security": [{"OAuth2PasswordBearer": []}]}}, "/external/chat/intake/{intake_id}/question": {"get": {"summary": "Get Last Question", "description": "when returning to the page, return the last question without accepting any user input", "operationId": "get_last_question", "parameters": [{"name": "intake_id", "in": "path", "required": true, "schema": {"type": "string", "title": "Intake ID"}}], "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}, "post": {"summary": "Get Next Question", "operationId": "get_next_question", "parameters": [{"name": "intake_id", "in": "path", "required": true, "schema": {"type": "string", "title": "Intake ID"}}], "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatInput"}}}}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ChatResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/external/v1/webhooks/zoom": {"post": {"tags": ["webhooks"], "summary": "Zoom Webhook", "operationId": "zoom_webhook", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}}}}, "/external/v1/webhooks/recall": {"post": {"tags": ["webhooks"], "summary": "Recall Webhook", "operationId": "recall_webhook", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/WebhookAck"}}}}}}}, "/auth/zoom": {"get": {"tags": ["zoom-auth"], "summary": "Zoom Oauth Start", "description": "Redirects the doctor to Zoom's OAuth authorization page.", "operationId": "zoom_oauth_start", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}}}}, "/auth/zoom/callback": {"get": {"tags": ["zoom-auth"], "summary": "Zoom Oauth Callback", "operationId": "zoom_oauth_callback", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}}}}, "/healthcheck": {"get": {"summary": "Healthcheck", "operationId": "healthcheck", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}}}}, "/status": {"get": {"summary": "Active User Status", "description": "check if users have logged in within the last day", "operationId": "active_user_status", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {}}}}}}}}, "components": {"schemas": {"AIVisitNote": {"properties": {"id": {"type": "string", "title": "Id", "description": "TypeID with prefix: visit_note"}, "created_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Created At"}, "updated_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Updated At"}, "doctor_id": {"type": "string", "title": "Doctor Id"}, "appointment_id": {"type": "string", "title": "Appointment Id"}, "ai_transcript_id": {"type": "string", "title": "Ai Transcript Id"}, "doctor_note_schema_id": {"type": "string", "title": "Doctor Note Schema Id"}, "note": {"additionalProperties": {"type": "string"}, "type": "object", "title": "Note", "description": "key is name of section, value is markdown content"}, "note_type": {"type": "string", "title": "Note Type", "readOnly": true}}, "type": "object", "required": ["id", "doctor_id", "appointment_id", "ai_transcript_id", "doctor_note_schema_id", "note", "note_type"], "title": "AIVisitNote", "description": "This represents the note summary for a single specific note schema. A given appointment will have multiple\nAI visit notes.\n\nContents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted."}, "AIVisitTranscript": {"properties": {"id": {"type": "string", "title": "Id", "description": "TypeID with prefix: ai_visit_transcript"}, "deleted_at": {"type": "string", "format": "date-time", "title": "Deleted At"}, "created_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Created At"}, "updated_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Updated At"}, "doctor_id": {"type": "string", "title": "Doctor Id"}, "appointment_id": {"type": "string", "title": "Appointment Id"}, "patient_id": {"type": "string", "title": "Patient Id"}, "duration": {"anyOf": [{"type": "integer"}, {"type": "null"}], "title": "Duration", "description": "total length of the transcript, in seconds"}, "transcript_data": {"items": {"$ref": "#/components/schemas/TranscriptEntry"}, "type": "array", "title": "Transcript Data"}}, "type": "object", "required": ["id", "doctor_id", "appointment_id", "patient_id", "duration", "transcript_data"], "title": "AIVisitTranscript", "description": "Contents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted."}, "Appointment": {"properties": {"id": {"type": "string", "title": "Id", "description": "TypeID with prefix: appointment"}, "created_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Created At"}, "updated_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Updated At"}, "doctor_id": {"type": "string", "title": "Doctor Id"}, "patient_id": {"type": "string", "title": "Patient Id"}, "created_by_system": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Created By System", "description": "the system the appointment was created by. API, UI, etc", "default": "gui"}, "external_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "External Id", "description": "external ID of the appointment in acuity, or another external system"}, "appointment_date": {"type": "string", "format": "date-time", "title": "Appointment Date", "description": "date of the appointment"}, "appointment_name": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Appointment Name", "description": "a couple words about the appointment"}, "appointment_notes_preview": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Appointment Notes Preview", "description": "longer summary about the appointment"}, "patient_name": {"type": "string", "title": "Patient Name", "readOnly": true}, "intake_status": {"$ref": "#/components/schemas/IntakeStatus", "readOnly": true}}, "type": "object", "required": ["id", "doctor_id", "patient_id", "external_id", "appointment_date", "patient_name", "intake_status"], "title": "Appointment", "description": "Represents an appointment with a patient from accuity"}, "AppointmentRequest": {"properties": {"id": {"type": "string", "title": "Id"}, "date": {"type": "string", "format": "date-time", "title": "Date"}, "doctor_email": {"anyOf": [{"type": "string", "format": "email"}, {"type": "null"}], "title": "Doctor Email"}, "doctor_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Doctor Id"}, "intake_json": {"anyOf": [{"additionalProperties": true, "type": "object"}, {"type": "null"}], "title": "Intake Json"}, "patient": {"$ref": "#/components/schemas/PatientRequest"}, "appointment_type": {"type": "string", "title": "Appointment Type"}}, "type": "object", "required": ["id", "date", "intake_json", "patient", "appointment_type"], "title": "AppointmentRequest", "description": "A valid doctor association must be provided or the API will return an error."}, "AppointmentResponse": {"properties": {"id": {"type": "string", "title": "Id"}, "url": {"type": "string", "maxLength": 2083, "minLength": 1, "format": "uri", "title": "Url"}}, "type": "object", "required": ["id", "url"], "title": "AppointmentResponse"}, "ChatInput": {"properties": {"answer": {"type": "string", "title": "Answer"}}, "type": "object", "required": ["answer"], "title": "ChatInput"}, "ChatResponse": {"properties": {"question": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Question"}, "status": {"type": "string", "enum": ["processing", "completed", "in_progress"], "title": "Status"}}, "type": "object", "required": ["question", "status"], "title": "ChatResponse"}, "DoctorNoteSchema": {"properties": {"id": {"type": "string", "title": "Id", "description": "TypeID with prefix: doctor_note_schema"}, "deleted_at": {"type": "string", "format": "date-time", "title": "Deleted At"}, "created_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Created At"}, "updated_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Updated At"}, "doctor_id": {"type": "string", "title": "Doctor Id"}, "note_type": {"type": "string", "title": "Note Type", "description": "user generated name of the note type"}, "fields": {"additionalProperties": {"type": "string"}, "type": "object", "title": "Fields", "description": "key is field name, value is instruction"}, "example_count": {"type": "integer", "title": "Example Count", "readOnly": true}}, "type": "object", "required": ["id", "doctor_id", "note_type", "fields", "example_count"], "title": "DoctorNoteSchema", "description": "A description of the fields required for a specific note type and instructions on what information goes in each field"}, "ExternalIntakeData": {"properties": {"reason_for_visit": {"type": "string", "title": "Reason For Visit"}, "appointment_type": {"type": "string", "title": "Appointment Type"}, "additional_info": {"type": "string", "title": "Additional Info"}, "appointment_category": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Appointment Category"}}, "type": "object", "required": ["reason_for_visit", "appointment_type", "additional_info"], "title": "ExternalIntakeData"}, "HTTPValidationError": {"properties": {"detail": {"items": {"$ref": "#/components/schemas/ValidationError"}, "type": "array", "title": "Detail"}}, "type": "object", "title": "HTTPValidationError"}, "Intake": {"properties": {"id": {"type": "string", "title": "Id", "description": "TypeID with prefix: intake"}, "deleted_at": {"type": "string", "format": "date-time", "title": "Deleted At"}, "created_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Created At"}, "updated_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Updated At"}, "doctor_id": {"type": "string", "title": "Doctor Id"}, "appointment_id": {"type": "string", "title": "Appointment Id"}, "external_intake_data": {"additionalProperties": {"type": "string"}, "type": "object", "title": "External Intake Data", "description": "arbitrary blob of data from an external system representing any other intake data that has been collected"}, "cleaned_external_intake_data": {"anyOf": [{"$ref": "#/components/schemas/ExternalIntakeData"}, {"type": "null"}], "description": "data from an external intake system that has been cleaned and normalized"}, "intake_questions": {"items": {"$ref": "#/components/schemas/IntakeSchemaQuestion"}, "type": "array", "title": "Intake Questions", "description": "list of questions extracted from the intake schema when this intake URL was generated"}, "summary": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Summary", "description": "AI generated summary of all intake information"}, "public_url": {"type": "string", "maxLength": 2083, "minLength": 1, "format": "uri", "title": "Public Url", "readOnly": true}}, "type": "object", "required": ["id", "doctor_id", "appointment_id", "external_intake_data", "intake_questions", "public_url"], "title": "Intake", "description": "This represents a chat experience with a patient to gather information about them."}, "IntakeDetail": {"properties": {"appointment": {"$ref": "#/components/schemas/Appointment"}, "intake": {"$ref": "#/components/schemas/Intake"}, "patient": {"$ref": "#/components/schemas/Patient"}}, "additionalProperties": false, "type": "object", "required": ["appointment", "intake", "patient"], "title": "IntakeDetail"}, "IntakeList": {"properties": {"appointments": {"items": {"$ref": "#/components/schemas/Appointment"}, "type": "array", "title": "Appointments"}}, "additionalProperties": false, "type": "object", "required": ["appointments"], "title": "IntakeList"}, "IntakeSchemaQuestion": {"properties": {"order": {"type": "integer", "title": "Order"}, "question": {"type": "string", "title": "Question"}, "required_details": {"type": "string", "title": "Required Details"}, "answer": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Answer"}, "answer_timestamp": {"anyOf": [{"type": "integer"}, {"type": "null"}], "title": "Answer Timestamp"}}, "type": "object", "required": ["order", "question", "required_details"], "title": "IntakeSchemaQuestion"}, "IntakeStatus": {"type": "string", "enum": ["none", "pending", "processing", "complete"], "title": "IntakeStatus"}, "NoteDetail": {"properties": {"appointment": {"$ref": "#/components/schemas/Appointment"}, "transcript": {"anyOf": [{"$ref": "#/components/schemas/AIVisitTranscript"}, {"type": "null"}]}, "notes": {"anyOf": [{"items": {"$ref": "#/components/schemas/AIVisitNote"}, "type": "array"}, {"type": "null"}], "title": "Notes"}, "patient": {"$ref": "#/components/schemas/Patient", "readOnly": true}}, "additionalProperties": false, "type": "object", "required": ["appointment", "transcript", "notes", "patient"], "title": "NoteDetail"}, "NotetakingData": {"properties": {"appointments": {"items": {"$ref": "#/components/schemas/Appointment"}, "type": "array", "title": "Appointments"}}, "additionalProperties": false, "type": "object", "required": ["appointments"], "title": "NotetakingData"}, "Patient": {"properties": {"id": {"type": "string", "title": "Id", "description": "TypeID with prefix: patient"}, "created_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Created At"}, "updated_at": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}], "title": "Updated At"}, "doctor_id": {"type": "string", "title": "Doctor Id"}, "name": {"type": "string", "title": "Name"}, "date_of_birth": {"type": "string", "format": "date-time", "title": "Date Of Birth"}}, "type": "object", "required": ["id", "doctor_id", "name", "date_of_birth"], "title": "Patient", "description": "Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader."}, "PatientRequest": {"properties": {"name": {"type": "string", "title": "Name"}, "dob": {"type": "string", "format": "date", "title": "Dob"}}, "type": "object", "required": ["name", "dob"], "title": "PatientRequest"}, "ScheduleResponse": {"properties": {"zoom_connected": {"type": "boolean", "title": "Zoom Connected"}, "meetings": {"items": {"$ref": "#/components/schemas/ZoomMeetingResponse"}, "type": "array", "title": "Meetings"}}, "additionalProperties": false, "type": "object", "required": ["zoom_connected", "meetings"], "title": "ScheduleResponse"}, "SettingsData": {"properties": {"doctor_id": {"type": "string", "title": "Doctor Id"}, "notes_schema": {"items": {"$ref": "#/components/schemas/DoctorNoteSchema"}, "type": "array", "title": "Notes Schema"}, "biography": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Biography"}, "zoom_connected": {"type": "boolean", "title": "Zoom Connected"}}, "additionalProperties": false, "type": "object", "required": ["doctor_id", "notes_schema", "biography", "zoom_connected"], "title": "SettingsData"}, "TranscriptEntry": {"properties": {"speaker": {"type": "string", "title": "Speaker"}, "content": {"type": "string", "title": "Content"}, "startTime": {"type": "integer", "title": "Starttime"}, "endTime": {"type": "integer", "title": "Endtime"}}, "type": "object", "required": ["speaker", "content", "startTime", "endTime"], "title": "TranscriptEntry"}, "UpdateSettingsData": {"properties": {"biography": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Biography"}}, "additionalProperties": false, "type": "object", "required": ["biography"], "title": "UpdateSettingsData"}, "UserListResponse": {"properties": {"current_user": {"anyOf": [{"$ref": "#/components/schemas/UserSwitchData"}, {"type": "null"}]}, "users": {"items": {"$ref": "#/components/schemas/UserSwitchData"}, "type": "array", "title": "Users"}}, "type": "object", "required": ["current_user", "users"], "title": "UserListResponse"}, "UserSwitchData": {"properties": {"clerk_id": {"type": "string", "title": "Clerk Id"}, "id": {"type": "string", "title": "Id"}, "email": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Email"}}, "type": "object", "required": ["clerk_id", "id", "email"], "title": "UserSwitchData"}, "ValidationError": {"properties": {"loc": {"items": {"anyOf": [{"type": "string"}, {"type": "integer"}]}, "type": "array", "title": "Location"}, "msg": {"type": "string", "title": "Message"}, "type": {"type": "string", "title": "Error Type"}}, "type": "object", "required": ["loc", "msg", "type"], "title": "ValidationError"}, "VisitAudioUploadRequest": {"properties": {"file_name": {"type": "string", "title": "File Name"}, "appointment_date": {"type": "string", "format": "date-time", "title": "Appointment Date"}, "patient_name": {"type": "string", "title": "Patient Name"}, "date_of_birth": {"type": "string", "format": "date-time", "title": "Date Of Birth"}}, "type": "object", "required": ["file_name", "appointment_date", "patient_name", "date_of_birth"], "title": "VisitAudioUploadRequest"}, "WebhookAck": {"properties": {"status": {"type": "string", "title": "Status"}, "duplicate": {"type": "boolean", "title": "Duplicate", "default": false}}, "type": "object", "required": ["status"], "title": "WebhookAck"}, "ZoomAuthUrlResponse": {"properties": {"url": {"type": "string", "title": "Url"}}, "type": "object", "required": ["url"], "title": "ZoomAuthUrlResponse"}, "ZoomMeetingResponse": {"properties": {"id": {"type": "string", "title": "Id"}, "zoom_meeting_id": {"type": "string", "title": "Zoom Meeting Id"}, "topic": {"type": "string", "title": "Topic"}, "start_time": {"type": "string", "format": "date-time", "title": "Start Time"}, "duration": {"type": "integer", "title": "Duration"}, "join_url": {"type": "string", "title": "Join Url"}, "status": {"$ref": "#/components/schemas/ZoomMeetingStatus"}, "appointment_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Appointment Id"}}, "additionalProperties": false, "type": "object", "required": ["id", "zoom_meeting_id", "topic", "start_time", "duration", "join_url", "status", "appointment_id"], "title": "ZoomMeetingResponse"}, "ZoomMeetingStatus": {"type": "string", "enum": ["scheduled", "started", "ended", "cancelled"], "title": "ZoomMeetingStatus"}}, "securitySchemes": {"HTTPBearer": {"type": "http", "scheme": "bearer"}, "OAuth2PasswordBearer": {"type": "oauth2", "flows": {"password": {"scopes": {}, "tokenUrl": "token"}}}}}}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "APIRouter API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/internal/v1/admin/users": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "User List",
+        "operationId": "user_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/admin/login_as/{user_id}": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Login As User",
+        "operationId": "login_as_user",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/intake": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Intake List",
+        "operationId": "intake_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeList"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Note List",
+        "description": "A separate endpoint is used to pull data for an individual note, so we just need the appointment ID\nat this point.",
+        "operationId": "note_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotetakingData"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/patients": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Patient List",
+        "description": "allows users to select an existing patient name and DOB when uploading a note",
+        "operationId": "patient_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Patient"
+                  },
+                  "type": "array",
+                  "title": "Response Patient List Internal V1 Patients Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes/{appointment_id}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Note Detail",
+        "operationId": "note_detail",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/intake/{appointment_id}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Intake Detail",
+        "operationId": "intake_detail",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/visit-audio-file/get-signed-url": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Signed Visit Recording Upload Url",
+        "operationId": "generate_signed_visit_recording_upload_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "title": "Response Generate Signed Visit Recording Upload Url Internal V1 Visit Audio File Get Signed Url Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/visit-audio-file/upload-complete": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Upload Visit Audio File",
+        "operationId": "upload_visit_audio_file",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VisitAudioUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes/get-signed-url": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Signed Example Note Upload Url",
+        "operationId": "generate_signed_example_note_upload_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "title": "Response Generate Signed Example Note Upload Url Internal V1 Notes Get Signed Url Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes/upload-example": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Upload Example Note",
+        "operationId": "upload_example_note",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Name"
+            }
+          },
+          {
+            "name": "note_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/settings": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Settings Data",
+        "operationId": "settings_data",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsData"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Update Settings Data",
+        "operationId": "update_settings_data",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSettingsData"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/zoom-auth-url": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Zoom Auth Url",
+        "operationId": "zoom_auth_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoomAuthUrlResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/schedule": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Schedule List",
+        "operationId": "schedule_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/schedule/{zoom_meeting_id}": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Cancel Meeting",
+        "operationId": "cancel_meeting",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "zoom_meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Zoom Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AIVisitNote": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "TypeID with prefix: visit_note"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "ai_transcript_id": {
+            "type": "string",
+            "title": "Ai Transcript Id"
+          },
+          "doctor_note_schema_id": {
+            "type": "string",
+            "title": "Doctor Note Schema Id"
+          },
+          "note": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Note",
+            "description": "key is name of section, value is markdown content"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "doctor_id",
+          "appointment_id",
+          "ai_transcript_id",
+          "doctor_note_schema_id",
+          "note",
+          "note_type"
+        ],
+        "title": "AIVisitNote",
+        "description": "This represents the note summary for a single specific note schema. A given appointment will have multiple\nAI visit notes.\n\nContents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted."
+      },
+      "AIVisitTranscript": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "TypeID with prefix: ai_visit_transcript"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deleted At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration",
+            "description": "total length of the transcript, in seconds"
+          },
+          "transcript_data": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptEntry"
+            },
+            "type": "array",
+            "title": "Transcript Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "doctor_id",
+          "appointment_id",
+          "patient_id",
+          "duration",
+          "transcript_data"
+        ],
+        "title": "AIVisitTranscript",
+        "description": "Contents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted."
+      },
+      "Appointment": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "TypeID with prefix: appointment"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "created_by_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By System",
+            "description": "the system the appointment was created by. API, UI, etc",
+            "default": "gui"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id",
+            "description": "external ID of the appointment in acuity, or another external system"
+          },
+          "appointment_date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Appointment Date",
+            "description": "date of the appointment"
+          },
+          "appointment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Name",
+            "description": "a couple words about the appointment"
+          },
+          "appointment_notes_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Notes Preview",
+            "description": "longer summary about the appointment"
+          },
+          "patient_name": {
+            "type": "string",
+            "title": "Patient Name",
+            "readOnly": true
+          },
+          "intake_status": {
+            "$ref": "#/components/schemas/IntakeStatus",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "doctor_id",
+          "patient_id",
+          "external_id",
+          "appointment_date",
+          "patient_name",
+          "intake_status"
+        ],
+        "title": "Appointment",
+        "description": "Represents an appointment with a patient from accuity"
+      },
+      "DoctorNoteSchema": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "TypeID with prefix: doctor_note_schema"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deleted At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type",
+            "description": "user generated name of the note type"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Fields",
+            "description": "key is field name, value is instruction"
+          },
+          "example_count": {
+            "type": "integer",
+            "title": "Example Count",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "doctor_id",
+          "note_type",
+          "fields",
+          "example_count"
+        ],
+        "title": "DoctorNoteSchema",
+        "description": "A description of the fields required for a specific note type and instructions on what information goes in each field"
+      },
+      "ExternalIntakeData": {
+        "properties": {
+          "reason_for_visit": {
+            "type": "string",
+            "title": "Reason For Visit"
+          },
+          "appointment_type": {
+            "type": "string",
+            "title": "Appointment Type"
+          },
+          "additional_info": {
+            "type": "string",
+            "title": "Additional Info"
+          },
+          "appointment_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Category"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reason_for_visit",
+          "appointment_type",
+          "additional_info"
+        ],
+        "title": "ExternalIntakeData"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Intake": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "TypeID with prefix: intake"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deleted At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "external_intake_data": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "External Intake Data",
+            "description": "arbitrary blob of data from an external system representing any other intake data that has been collected"
+          },
+          "cleaned_external_intake_data": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExternalIntakeData"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "data from an external intake system that has been cleaned and normalized"
+          },
+          "intake_questions": {
+            "items": {
+              "$ref": "#/components/schemas/IntakeSchemaQuestion"
+            },
+            "type": "array",
+            "title": "Intake Questions",
+            "description": "list of questions extracted from the intake schema when this intake URL was generated"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary",
+            "description": "AI generated summary of all intake information"
+          },
+          "public_url": {
+            "type": "string",
+            "maxLength": 2083,
+            "minLength": 1,
+            "format": "uri",
+            "title": "Public Url",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "doctor_id",
+          "appointment_id",
+          "external_intake_data",
+          "intake_questions",
+          "public_url"
+        ],
+        "title": "Intake",
+        "description": "This represents a chat experience with a patient to gather information about them."
+      },
+      "IntakeDetail": {
+        "properties": {
+          "appointment": {
+            "$ref": "#/components/schemas/Appointment"
+          },
+          "intake": {
+            "$ref": "#/components/schemas/Intake"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/Patient"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment",
+          "intake",
+          "patient"
+        ],
+        "title": "IntakeDetail"
+      },
+      "IntakeList": {
+        "properties": {
+          "appointments": {
+            "items": {
+              "$ref": "#/components/schemas/Appointment"
+            },
+            "type": "array",
+            "title": "Appointments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointments"
+        ],
+        "title": "IntakeList"
+      },
+      "IntakeSchemaQuestion": {
+        "properties": {
+          "order": {
+            "type": "integer",
+            "title": "Order"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "required_details": {
+            "type": "string",
+            "title": "Required Details"
+          },
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answer_timestamp": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "order",
+          "question",
+          "required_details"
+        ],
+        "title": "IntakeSchemaQuestion"
+      },
+      "IntakeStatus": {
+        "type": "string",
+        "enum": [
+          "none",
+          "pending",
+          "processing",
+          "complete"
+        ],
+        "title": "IntakeStatus"
+      },
+      "NoteDetail": {
+        "properties": {
+          "appointment": {
+            "$ref": "#/components/schemas/Appointment"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AIVisitTranscript"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AIVisitNote"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/Patient",
+            "readOnly": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment",
+          "transcript",
+          "notes",
+          "patient"
+        ],
+        "title": "NoteDetail"
+      },
+      "NotetakingData": {
+        "properties": {
+          "appointments": {
+            "items": {
+              "$ref": "#/components/schemas/Appointment"
+            },
+            "type": "array",
+            "title": "Appointments"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointments"
+        ],
+        "title": "NotetakingData"
+      },
+      "Patient": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "TypeID with prefix: patient"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Date Of Birth"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "doctor_id",
+          "name",
+          "date_of_birth"
+        ],
+        "title": "Patient",
+        "description": "Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader."
+      },
+      "ScheduleResponse": {
+        "properties": {
+          "zoom_connected": {
+            "type": "boolean",
+            "title": "Zoom Connected"
+          },
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/ZoomMeetingResponse"
+            },
+            "type": "array",
+            "title": "Meetings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "zoom_connected",
+          "meetings"
+        ],
+        "title": "ScheduleResponse"
+      },
+      "SettingsData": {
+        "properties": {
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "notes_schema": {
+            "items": {
+              "$ref": "#/components/schemas/DoctorNoteSchema"
+            },
+            "type": "array",
+            "title": "Notes Schema"
+          },
+          "biography": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Biography"
+          },
+          "zoom_connected": {
+            "type": "boolean",
+            "title": "Zoom Connected"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doctor_id",
+          "notes_schema",
+          "biography",
+          "zoom_connected"
+        ],
+        "title": "SettingsData"
+      },
+      "TranscriptEntry": {
+        "properties": {
+          "speaker": {
+            "type": "string",
+            "title": "Speaker"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "startTime": {
+            "type": "integer",
+            "title": "Starttime"
+          },
+          "endTime": {
+            "type": "integer",
+            "title": "Endtime"
+          }
+        },
+        "type": "object",
+        "required": [
+          "speaker",
+          "content",
+          "startTime",
+          "endTime"
+        ],
+        "title": "TranscriptEntry"
+      },
+      "UpdateSettingsData": {
+        "properties": {
+          "biography": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Biography"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "biography"
+        ],
+        "title": "UpdateSettingsData"
+      },
+      "UserListResponse": {
+        "properties": {
+          "current_user": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserSwitchData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/UserSwitchData"
+            },
+            "type": "array",
+            "title": "Users"
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_user",
+          "users"
+        ],
+        "title": "UserListResponse"
+      },
+      "UserSwitchData": {
+        "properties": {
+          "clerk_id": {
+            "type": "string",
+            "title": "Clerk Id"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "type": "object",
+        "required": [
+          "clerk_id",
+          "id",
+          "email"
+        ],
+        "title": "UserSwitchData"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VisitAudioUploadRequest": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "appointment_date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Appointment Date"
+          },
+          "patient_name": {
+            "type": "string",
+            "title": "Patient Name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Date Of Birth"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_name",
+          "appointment_date",
+          "patient_name",
+          "date_of_birth"
+        ],
+        "title": "VisitAudioUploadRequest"
+      },
+      "ZoomAuthUrlResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "ZoomAuthUrlResponse"
+      },
+      "ZoomMeetingResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "zoom_meeting_id": {
+            "type": "string",
+            "title": "Zoom Meeting Id"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start Time"
+          },
+          "duration": {
+            "type": "integer",
+            "title": "Duration"
+          },
+          "join_url": {
+            "type": "string",
+            "title": "Join Url"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ZoomMeetingStatus"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "zoom_meeting_id",
+          "topic",
+          "start_time",
+          "duration",
+          "join_url",
+          "status",
+          "appointment_id"
+        ],
+        "title": "ZoomMeetingResponse"
+      },
+      "ZoomMeetingStatus": {
+        "type": "string",
+        "enum": [
+          "scheduled",
+          "started",
+          "ended",
+          "cancelled"
+        ],
+        "title": "ZoomMeetingStatus"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}

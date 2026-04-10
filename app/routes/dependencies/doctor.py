@@ -25,7 +25,9 @@ def inject_doctor_record(request: Request):
     doctor = Doctor.upsert(data={"clerk_id": clerk_id}, unique_by="clerk_id")
 
     if not doctor.email:
-        doctor.email = _fetch_clerk_email(clerk_id)
+        email = _fetch_clerk_email(clerk_id)
+        if email and not Doctor.find_by(email=email):
+            doctor.email = email
 
     if doctor.deleted_at:
         raise HTTPException(
