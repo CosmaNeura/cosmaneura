@@ -11,7 +11,6 @@ This is the primary repo for cosmaneura.com.
 * The top-level [Justfile](./Justfile) contains all of build scripts (`just build` will do it all for you)
 * `infra/` contains all terraform logic. `cd infra && just install && just azure_apply` will setup infrastructure.
 * Code is auto-deployed via GitHub Actions on every push to `main` branch, pending a successful build.
-* We also have added a staging environment from `staging` branch,
 ---
 
 ## Suggested Consent Script
