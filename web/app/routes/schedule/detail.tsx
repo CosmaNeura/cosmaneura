@@ -1,14 +1,16 @@
-import { href, useNavigate } from "react-router"
 import { useState } from "react"
+import { href, useNavigate } from "react-router"
+import { useRevalidator } from "react-router"
+
+import { Route } from "./+types/detail"
+
+import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
-import { Button } from "@/components/ui/button"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { cancelMeeting } from "~/configuration/client"
-import { toast } from "~/hooks/use-toast"
-import { Route } from "./+types/detail"
-import { useRevalidator } from "react-router"
 import type { ZoomMeetingResponse } from "~/configuration/client"
+import { toast } from "~/hooks/use-toast"
 
 function formatDateTime(isoString: string): string {
   return new Date(isoString).toLocaleString(undefined, {
@@ -26,7 +28,8 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
   const navigate = useNavigate()
 
   const isScheduled = meeting.status === "scheduled"
-  const isActive = meeting.status === "scheduled" || meeting.status === "started"
+  const isActive =
+    meeting.status === "scheduled" || meeting.status === "started"
   const isEnded = meeting.status === "ended"
 
   async function handleCancel() {
@@ -61,14 +64,22 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
             asChild
             className="bg-[#0E72ED] text-white hover:bg-[#0E72ED]/90"
           >
-            <a href={meeting.join_url} target="_blank" rel="noopener noreferrer">
+            <a
+              href={meeting.join_url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               Join Meeting
             </a>
           </Button>
         )}
 
         {isScheduled && (
-          <Button variant="outline" onClick={handleCancel} disabled={cancelling}>
+          <Button
+            variant="outline"
+            onClick={handleCancel}
+            disabled={cancelling}
+          >
             {cancelling ? "Cancelling..." : "Cancel Meeting"}
           </Button>
         )}
@@ -89,7 +100,8 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
             </div>
           ) : (
             <p className="text-muted-foreground text-sm italic">
-              Notes will appear here after the meeting ends and Cosma processes the recording.
+              Notes will appear here after the meeting ends and Cosma processes
+              the recording.
             </p>
           )}
         </div>
@@ -111,7 +123,7 @@ export async function clientLoader(args: Route.ClientLoaderArgs) {
   const { data } = await scheduleList()
 
   const meeting = data?.meetings.find(
-    (m) => m.zoom_meeting_id === args.params.zoom_meeting_id
+    (m) => m.zoom_meeting_id === args.params.zoom_meeting_id,
   )
 
   if (!meeting) {
@@ -121,7 +133,9 @@ export async function clientLoader(args: Route.ClientLoaderArgs) {
   return { meeting }
 }
 
-export default function ScheduleDetailPage({ loaderData }: Route.ComponentProps) {
+export default function ScheduleDetailPage({
+  loaderData,
+}: Route.ComponentProps) {
   const { meeting } = loaderData
 
   return (

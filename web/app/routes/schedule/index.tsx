@@ -1,12 +1,13 @@
-import { SidebarInset } from "@/components/ui/sidebar"
+import { useState } from "react"
+import { useRouteLoaderData } from "react-router"
+
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import { SidebarInset } from "@/components/ui/sidebar"
 import { SidebarTrigger } from "@/components/ui/sidebar"
+import { Icons } from "~/components/icons"
 import { getClient } from "~/configuration/clerk"
 import { requireEnv } from "~/utils/environment"
-import { useState } from "react"
-import { Icons } from "~/components/icons"
-import { useRouteLoaderData } from "react-router"
 
 function ZoomConnectPrompt() {
   const [loading, setLoading] = useState(false)
@@ -28,9 +29,12 @@ function ZoomConnectPrompt() {
   return (
     <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
       <div className="text-center">
-        <h2 className="mb-2 text-xl font-semibold">Connect your Zoom account</h2>
+        <h2 className="mb-2 text-xl font-semibold">
+          Connect your Zoom account
+        </h2>
         <p className="text-muted-foreground mb-6 text-sm">
-          Connect Zoom to view your meeting schedule and access AI notes after each session.
+          Connect Zoom to view your meeting schedule and access AI notes after
+          each session.
         </p>
         <Button onClick={connectZoom} disabled={loading}>
           {loading ? (
@@ -52,7 +56,9 @@ function EmptySelectionState() {
     <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
       <div className="text-muted-foreground text-center">
         <h2 className="mb-2 text-xl font-semibold">Select a meeting</h2>
-        <p className="text-sm">Choose a meeting from the list to view details</p>
+        <p className="text-sm">
+          Choose a meeting from the list to view details
+        </p>
       </div>
     </div>
   )
@@ -60,7 +66,9 @@ function EmptySelectionState() {
 
 export default function ScheduleIndexPage() {
   // loaderData comes from the parent layout (schedule.tsx clientLoader)
-  const loaderData = useRouteLoaderData("layouts/schedule") as { zoom_connected: boolean } | undefined
+  const loaderData = useRouteLoaderData("layouts/schedule") as
+    | { zoom_connected: boolean }
+    | undefined
 
   return (
     <SidebarInset>
