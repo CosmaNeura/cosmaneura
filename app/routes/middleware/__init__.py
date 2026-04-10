@@ -20,6 +20,8 @@ This is a very important configuration option:
 - Determines which hosts cookies are set for (first one in the list!)
 """
 
+COOKIE_DOMAIN = config("COOKIE_DOMAIN", default=None, cast=lambda v: v or None)
+
 
 def allowed_hosts(with_scheme: bool = False) -> list[str]:
     """
@@ -90,7 +92,7 @@ def add_middleware(app: FastAPI):
         TrustedHostMiddleware, allowed_hosts=allowed_hosts_without_scheme
     )
 
-    cookie_domain = allowed_hosts_without_scheme[0]
+    cookie_domain = COOKIE_DOMAIN or allowed_hosts_without_scheme[0]
     log.info("cookie_domain", cookie_domain=cookie_domain)
 
     # note that `domain_cookie` and `https_only` will cause issues if you are not using
