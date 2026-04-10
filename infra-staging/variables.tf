@@ -50,7 +50,11 @@ variable "python_public_vars" {
     # upload container names
     "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
     # zoom oauth redirects
-    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT"
+    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT",
+    # recall.ai region
+    "RECALL_API_BASE",
+    # explicit cookie domain to avoid using internal Azure Container App domains
+    "COOKIE_DOMAIN"
   ]
 }
 
