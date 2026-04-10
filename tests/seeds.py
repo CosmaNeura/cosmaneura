@@ -26,6 +26,10 @@ def seed_test_data():
     username, password, user = get_clerk_seed_user()
     doctor = Doctor.find_or_create_by(clerk_id=user.id)
 
+    if not doctor.email:
+        doctor.email = user.email_addresses[0].email_address
+        doctor.save()
+
     if not doctor.biography:
         doctor.biography = dedent("""
         I have a dual focus on Internal Medicine and Pediatrics. I see patients of all ages for holistic primary care and convenient care. I have a special interest in the care of children and adults with developmental disabilities, and I have completed training as a Creighton FertilityCare Medical Consultant.

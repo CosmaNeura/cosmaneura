@@ -30,6 +30,10 @@ def test_note_detail(authenticated_client: TestClient):
     _, _, clerk_user = get_clerk_dev_user()
     doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
 
+    if not doctor.email:
+        doctor.email = clerk_user.email_addresses[0].email_address
+        doctor.save()
+
     patient = Patient(
         doctor_id=doctor.id,
         name="Test Patient",

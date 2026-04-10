@@ -164,7 +164,7 @@ def test_login_as_user_route(client: TestClient):
     assert Doctor.get(clerk_id=clerk_user.id) is None
 
     # if the login_as user DNE it will throw an error
-    local_user = Doctor(clerk_id=clerk_user.id, biography=None).save()
+    local_user = Doctor(clerk_id=clerk_user.id, email=clerk_user.email_addresses[0].email_address, biography=None).save()
 
     # let's try a normal auth'd route
     settings_response = client.get(

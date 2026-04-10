@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from tests.routes.utils import (
     MockAuthenticateRequest,
     base_server_url,
+    get_clerk_dev_user,
 )
 
 
@@ -67,8 +68,15 @@ def client():
 def authenticated_client():
     "mocks out the clerk authentication and returns a static response"
 
+    from app.models.doctor import Doctor
     from app.routes.internal import authenticate_clerk_request_middleware
     from app.server import api_app
+
+    _, _, dev_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=dev_user.id)
+    if not doctor.email:
+        doctor.email = dev_user.email_addresses[0].email_address
+        doctor.save()
 
     api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
         MockAuthenticateRequest()
