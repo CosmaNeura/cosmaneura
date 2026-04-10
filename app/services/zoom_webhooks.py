@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from typing import Any, cast
 
+from sqlalchemy import select
+
 from app import log
 from app.configuration.redis import get_redis
 from app.services import recall
@@ -24,10 +26,10 @@ def handle_meeting_started(payload: dict[str, Any]):
 
     doctor = cast(
         Doctor | None,
-        Doctor.where(Doctor.id == DoctorVideoIntegration.where(
+        Doctor.where(Doctor.id == select(DoctorVideoIntegration.doctor_id).where(
             (DoctorVideoIntegration.provider == VideoProvider.zoom)
             & (DoctorVideoIntegration.provider_user_id == host_id)
-        ).select(DoctorVideoIntegration.doctor_id).scalar_subquery()).first(),
+        ).scalar_subquery()).first(),
     )
     if not doctor:
         log.info("no doctor found for zoom host_id, skipping bot creation", host_id=host_id)
