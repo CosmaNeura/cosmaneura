@@ -136,6 +136,20 @@ def on_task_failure(sender, task_id, exception, args, kwargs, traceback, einfo, 
     )
 
 
+@signals.task_retry.connect
+def on_task_retry(sender, request, reason, einfo, **_kwargs):
+    import traceback as tb
+    exc = reason if isinstance(reason, BaseException) else None
+    log.warning(
+        "task retrying",
+        task_name=sender.name,
+        task_id=request.id,
+        retries=request.retries,
+        reason=repr(reason),
+        traceback="".join(tb.format_exception(type(exc), exc, exc.__traceback__)) if exc else None,
+    )
+
+
 @signals.task_postrun.connect
 def on_task_postrun(sender, task_id, task, args, kwargs, retval, state, **_kwargs):
     log.clear()
