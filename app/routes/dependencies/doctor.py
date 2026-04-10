@@ -26,7 +26,7 @@ def inject_doctor_record(request: Request):
 
     if not doctor.email:
         email = _fetch_clerk_email(clerk_id)
-        if email and not Doctor.find_by(email=email):
+        if email and not Doctor.get(email=email):
             doctor.email = email
 
     if doctor.deleted_at:
