@@ -25,7 +25,7 @@ def _fetch_token() -> str:
         response = client.post(
             ZOOM_OAUTH_TOKEN_URL,
             headers={"Authorization": _basic_auth_header()},
-            params={
+            data={
                 "grant_type": "account_credentials",
                 "account_id": ZOOM_ACCOUNT_ID,
             },
@@ -33,8 +33,12 @@ def _fetch_token() -> str:
         response.raise_for_status()
         data = response.json()
 
+    token = data.get("access_token")
+    if not token:
+        raise ValueError(f"Unexpected Zoom token response: {data}")
+
     log.info("zoom s2s app token fetched")
-    return data["access_token"]
+    return token
 
 
 def get_app_token(*, force: bool = False) -> str:
