@@ -283,6 +283,40 @@ def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor.save()
 
 
+class ZoomConnectRequest(BaseModel, extra="forbid"):
+    email: str
+
+
+@internal_api_app.post("/zoom-connect", name="zoom_connect")
+def zoom_connect(request: Request, data: ZoomConnectRequest) -> None:
+    doctor: Doctor = request.state.doctor
+
+    zoom_user = zoom_service.get_user_by_email(data.email)
+    if not zoom_user:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="No Zoom user found with that email in your organization",
+        )
+
+    integration = DoctorVideoIntegration.find_or_initialize_by(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+    )
+    integration.provider_user_id = zoom_user["id"]
+    integration.save()
+
+
+@internal_api_app.delete("/zoom-connect", name="zoom_disconnect", status_code=status.HTTP_204_NO_CONTENT)
+def zoom_disconnect(request: Request) -> None:
+    doctor: Doctor = request.state.doctor
+
+    integration = DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
+    if not integration:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No Zoom integration found")
+
+    integration.delete()
+
+
 class ZoomMeetingResponse(BaseModel, extra="forbid"):
     id: str
     zoom_meeting_id: str
