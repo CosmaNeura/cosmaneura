@@ -474,23 +474,58 @@
         ]
       }
     },
-    "/internal/v1/zoom-auth-url": {
-      "get": {
+    "/internal/v1/zoom-connect": {
+      "post": {
         "tags": [
           "private"
         ],
-        "summary": "Zoom Auth Url",
-        "operationId": "zoom_auth_url",
+        "summary": "Zoom Connect",
+        "operationId": "zoom_connect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ZoomConnectRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ZoomAuthUrlResponse"
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Zoom Disconnect",
+        "operationId": "zoom_disconnect",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           }
         },
         "security": [
@@ -1500,18 +1535,19 @@
         ],
         "title": "VisitAudioUploadRequest"
       },
-      "ZoomAuthUrlResponse": {
+      "ZoomConnectRequest": {
         "properties": {
-          "url": {
+          "email": {
             "type": "string",
-            "title": "Url"
+            "title": "Email"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
-          "url"
+          "email"
         ],
-        "title": "ZoomAuthUrlResponse"
+        "title": "ZoomConnectRequest"
       },
       "ZoomMeetingResponse": {
         "properties": {
