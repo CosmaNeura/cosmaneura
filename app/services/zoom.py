@@ -87,6 +87,16 @@ def get_user_by_email(email: str) -> dict | None:
             headers={"Authorization": f"Bearer {token}"},
         )
 
+    if response.status_code == httpx.codes.UNAUTHORIZED:
+        log.info("zoom app token rejected, refreshing", path=f"/users/{email}")
+        token = get_app_token(force=True)
+
+        with httpx.Client() as client:
+            response = client.get(
+                f"{ZOOM_API_BASE}/users/{email}",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+
     if response.status_code == httpx.codes.NOT_FOUND:
         return None
 
