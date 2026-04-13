@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock, patch
 
+from app.services.zoom_token import get_app_token
+
 
 def test_get_app_token_cache_hit():
     """Returns the cached token from Redis without calling Zoom."""
@@ -8,7 +10,6 @@ def test_get_app_token_cache_hit():
 
     with patch("app.services.zoom_token.get_redis", return_value=mock_redis), \
          patch("app.services.zoom_token._fetch_token") as mock_fetch:
-        from app.services.zoom_token import get_app_token
         result = get_app_token()
 
     assert result == "cached_token"
@@ -22,7 +23,6 @@ def test_get_app_token_cache_miss():
 
     with patch("app.services.zoom_token.get_redis", return_value=mock_redis), \
          patch("app.services.zoom_token._fetch_token", return_value="new_token"):
-        from app.services.zoom_token import get_app_token
         result = get_app_token()
 
     assert result == "new_token"
@@ -36,7 +36,6 @@ def test_get_app_token_force_bypasses_cache():
 
     with patch("app.services.zoom_token.get_redis", return_value=mock_redis), \
          patch("app.services.zoom_token._fetch_token", return_value="fresh_token"):
-        from app.services.zoom_token import get_app_token
         result = get_app_token(force=True)
 
     assert result == "fresh_token"

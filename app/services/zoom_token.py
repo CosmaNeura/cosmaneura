@@ -45,7 +45,7 @@ def get_app_token(*, force: bool = False) -> str:
     redis = get_redis()
 
     if not force:
-        cached = redis.get(REDIS_TOKEN_KEY)
+        cached: bytes | None = redis.get(REDIS_TOKEN_KEY)  # type: ignore[assignment]
         if cached:
             return cached.decode()
 
