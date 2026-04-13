@@ -12,9 +12,6 @@ def _create_zoom_integration(doctor):
         doctor_id=doctor.id,
         provider=VideoProvider.zoom,
         provider_user_id="zoom_user_abc",
-        access_token="tok",
-        refresh_token="ref",
-        token_expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
     ).save()
 
 
