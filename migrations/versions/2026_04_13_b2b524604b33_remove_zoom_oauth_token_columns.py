@@ -9,7 +9,6 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
-import sqlmodel
 
 # revision identifiers, used by Alembic.
 revision: str = 'b2b524604b33'
@@ -32,6 +31,6 @@ def downgrade() -> None:
     op.add_column('doctor_video_integration',
         sa.Column('token_expires_at', sa.DateTime(timezone=True), nullable=True))
     op.add_column('doctor_video_integration',
-        sa.Column('refresh_token', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
+        sa.Column('refresh_token', sa.String(), nullable=True))
     op.add_column('doctor_video_integration',
-        sa.Column('access_token', sqlmodel.sql.sqltypes.AutoString(), nullable=True))
+        sa.Column('access_token', sa.String(), nullable=True))
