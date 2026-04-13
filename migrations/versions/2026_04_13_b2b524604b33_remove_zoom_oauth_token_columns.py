@@ -28,6 +28,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # NOTE: columns are restored as nullable because upgrade() deleted all token data.
+    # A full data restore would be required before tightening these back to NOT NULL.
     op.add_column('doctor_video_integration',
         sa.Column('token_expires_at', sa.DateTime(timezone=True), nullable=True))
     op.add_column('doctor_video_integration',
