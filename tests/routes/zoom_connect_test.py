@@ -66,6 +66,7 @@ def test_zoom_connect_replaces_existing(authenticated_client: TestClient):
 
     assert response.status_code == status.HTTP_200_OK
     integration = DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
+    assert integration is not None
     assert integration.provider_user_id == "new_zoom_id"
 
 
