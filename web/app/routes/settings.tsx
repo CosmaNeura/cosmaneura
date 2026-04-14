@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useForm } from "react-hook-form"
-import { MetaFunction } from "react-router"
+import { MetaFunction, useRevalidator } from "react-router"
 import { z } from "zod"
 
 import { ChevronDown, Upload } from "lucide-react"
@@ -24,16 +24,24 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
-import { getClient } from "~/configuration/clerk"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "~/components/ui/dialog"
+import { Input } from "~/components/ui/input"
 import {
   generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
   uploadExampleNote,
+  zoomConnect,
+  zoomDisconnect,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
-import { requireEnv } from "~/utils/environment"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -328,20 +336,49 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
 }
 
 function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
-  const [loading, setLoading] = useState(false)
+  const revalidator = useRevalidator()
+  const [open, setOpen] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
 
-  async function connectZoom() {
-    setLoading(true)
-    const clerk = await getClient()
-    const token = await clerk!.session!.getToken()
-    const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
-    const res = await fetch(`${base}/internal/v1/zoom-auth-url`, {
-      headers: { Authorization: `Bearer ${token}` },
-      credentials: "include",
-    })
-    const { url } = (await res.json()) as { url: string }
-    if (url) window.location.href = url
-    setLoading(false)
+  const formSchema = z.object({
+    email: z.string().email("Please enter a valid email address"),
+  })
+
+  const form = useForm({
+    resolver: zodResolver(formSchema),
+    defaultValues: { email: "" },
+  })
+
+  async function onConnect(values: z.infer<typeof formSchema>) {
+    const { error } = await zoomConnect({ body: { email: values.email } })
+    if (error) {
+      const detail =
+        error.detail && error.detail.length > 0
+          ? error.detail.map((e) => e.msg).join(", ")
+          : "Failed to connect Zoom. Please try again."
+      toast({ title: "Connection failed", description: detail, variant: "destructive" })
+      return
+    }
+    toast({ title: "Zoom connected successfully" })
+    setOpen(false)
+    form.reset()
+    revalidator.revalidate()
+  }
+
+  async function onDisconnect() {
+    setDisconnecting(true)
+    const { error } = await zoomDisconnect()
+    if (error) {
+      toast({
+        title: "Failed to disconnect. Please try again.",
+        variant: "destructive",
+      })
+      setDisconnecting(false)
+      return
+    }
+    toast({ title: "Zoom disconnected" })
+    revalidator.revalidate()
+    setDisconnecting(false)
   }
 
   return (
@@ -351,22 +388,80 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
         Connect your Zoom account so Cosma can automatically join your meetings
         and generate visit notes.
       </p>
+
       {zoomConnected ? (
-        <div className="flex items-center gap-2 text-sm">
-          <div className="h-2 w-2 rounded-full bg-green-500" />
-          <span>Connected</span>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-sm">
+            <div className="h-2 w-2 rounded-full bg-green-500" />
+            <span>Connected</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onDisconnect}
+            disabled={disconnecting}
+          >
+            {disconnecting ? (
+              <>
+                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                Disconnecting...
+              </>
+            ) : (
+              "Disconnect"
+            )}
+          </Button>
         </div>
       ) : (
-        <Button onClick={connectZoom} disabled={loading}>
-          {loading ? (
-            <>
-              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-              Connecting...
-            </>
-          ) : (
-            "Connect Zoom"
-          )}
-        </Button>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <Button onClick={() => setOpen(true)}>Connect Zoom</Button>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Connect your Zoom account</DialogTitle>
+              <DialogDescription>
+                Enter the email address associated with your Zoom account. It
+                must belong to the same Zoom organization as this app.
+              </DialogDescription>
+            </DialogHeader>
+            <Form {...form}>
+              <form
+                onSubmit={form.handleSubmit(onConnect)}
+                className="space-y-4"
+              >
+                <FormField
+                  control={form.control}
+                  name="email"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Zoom Email</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="email"
+                          placeholder="you@yourorganization.com"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <Button
+                  type="submit"
+                  disabled={form.formState.isSubmitting}
+                  className="w-full"
+                >
+                  {form.formState.isSubmitting ? (
+                    <>
+                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                      Connecting...
+                    </>
+                  ) : (
+                    "Connect"
+                  )}
+                </Button>
+              </form>
+            </Form>
+          </DialogContent>
+        </Dialog>
       )}
     </section>
   )
