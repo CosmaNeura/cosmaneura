@@ -30,6 +30,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "~/components/ui/dialog"
 import { Input } from "~/components/ui/input"
 import {
@@ -335,21 +336,21 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   )
 }
 
+const zoomFormSchema = z.object({
+  email: z.string().email("Please enter a valid email address"),
+})
+
 function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
   const revalidator = useRevalidator()
   const [open, setOpen] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
 
-  const formSchema = z.object({
-    email: z.string().email("Please enter a valid email address"),
-  })
-
   const form = useForm({
-    resolver: zodResolver(formSchema),
+    resolver: zodResolver(zoomFormSchema),
     defaultValues: { email: "" },
   })
 
-  async function onConnect(values: z.infer<typeof formSchema>) {
+  async function onConnect(values: z.infer<typeof zoomFormSchema>) {
     const { error } = await zoomConnect({ body: { email: values.email } })
     if (error) {
       const detail =
@@ -377,8 +378,8 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
       return
     }
     toast({ title: "Zoom disconnected" })
-    revalidator.revalidate()
     setDisconnecting(false)
+    revalidator.revalidate()
   }
 
   return (
@@ -412,8 +413,16 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
           </Button>
         </div>
       ) : (
-        <Dialog open={open} onOpenChange={setOpen}>
-          <Button onClick={() => setOpen(true)}>Connect Zoom</Button>
+        <Dialog
+          open={open}
+          onOpenChange={(next) => {
+            if (!next) form.reset()
+            setOpen(next)
+          }}
+        >
+          <DialogTrigger asChild>
+            <Button>Connect Zoom</Button>
+          </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Connect your Zoom account</DialogTitle>
