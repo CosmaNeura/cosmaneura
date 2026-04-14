@@ -340,14 +340,20 @@ const zoomFormSchema = z.object({
   email: z.string().email("Please enter a valid email address"),
 })
 
-function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
+function ZoomConnect({
+  zoomConnected,
+  email,
+}: {
+  zoomConnected: boolean
+  email: string | null
+}) {
   const revalidator = useRevalidator()
   const [open, setOpen] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
 
   const form = useForm({
     resolver: zodResolver(zoomFormSchema),
-    defaultValues: { email: "" },
+    defaultValues: { email: email ?? "" },
   })
 
   async function onConnect(values: z.infer<typeof zoomFormSchema>) {
@@ -508,7 +514,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
-          <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+          <ZoomConnect zoomConnected={loaderData.zoom_connected} email={loaderData.email} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

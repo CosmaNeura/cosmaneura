@@ -251,6 +251,7 @@ class SettingsData(BaseModel, extra="forbid"):
     notes_schema: list[DoctorNoteSchema]
     biography: str | None
     zoom_connected: bool
+    email: str | None
 
 
 @internal_api_app.get("/settings")
@@ -269,6 +270,7 @@ def settings_data(request: Request) -> SettingsData:
         doctor_id=str(doctor.id),
         biography=doctor.biography,
         zoom_connected=zoom_integration is not None,
+        email=doctor.email,
     )
 
 

@@ -1354,6 +1354,17 @@
           "zoom_connected": {
             "type": "boolean",
             "title": "Zoom Connected"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
           }
         },
         "additionalProperties": false,
@@ -1362,7 +1373,8 @@
           "doctor_id",
           "notes_schema",
           "biography",
-          "zoom_connected"
+          "zoom_connected",
+          "email"
         ],
         "title": "SettingsData"
       },
