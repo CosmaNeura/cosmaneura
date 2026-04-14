@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 
 from activemodel import BaseModel
@@ -27,3 +28,12 @@ class DoctorVideoIntegration(
 
     provider_user_id: str
     "User ID within the provider (e.g. Zoom host_id)"
+
+    access_token: str
+    "OAuth access token"
+
+    refresh_token: str
+    "OAuth refresh token, used to renew the access token when it expires"
+
+    token_expires_at: datetime
+    "When the current access_token expires"
