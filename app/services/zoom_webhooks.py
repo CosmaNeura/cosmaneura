@@ -41,10 +41,12 @@ def handle_meeting_started(payload: dict[str, Any]):
         return
 
     redis = get_redis()
-    existing_bot_id = redis.get(f"recall:meeting:{meeting_id}:bot_id")
-    if existing_bot_id:
-        log.info("bot already in meeting, skipping creation", meeting_id=meeting_id, bot_id=existing_bot_id)
-        return
+    # Clear any orphaned keys from a previous session with the same meeting_id
+    # (personal meeting rooms reuse the same ID, so stale keys from prior meetings
+    # would otherwise block bot creation for the entire 24h TTL)
+    for suffix in ("bot_id", "doctor_id", "host_id", "doctor_name", "patient_count"):
+        redis.delete(f"recall:meeting:{meeting_id}:{suffix}")
+    log.info("cleared stale meeting keys", meeting_id=meeting_id)
 
     zak_token = zoom_service.get_zak_token(doctor)
     meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
