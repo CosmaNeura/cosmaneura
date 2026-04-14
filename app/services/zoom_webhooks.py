@@ -41,11 +41,10 @@ def handle_meeting_started(payload: dict[str, Any]):
         return
 
     redis = get_redis()
-    # Clear any orphaned keys from a previous session with the same meeting_id
-    # (personal meeting rooms reuse the same ID, so stale keys from prior meetings
-    # would otherwise block bot creation for the entire 24h TTL)
-    for suffix in ("bot_id", "doctor_id", "host_id", "doctor_name", "patient_count"):
-        redis.delete(f"recall:meeting:{meeting_id}:{suffix}")
+    # Clear any orphaned state from a previous session with this meeting_id.
+    # Personal meeting rooms reuse the same ID, so meeting.ended may not have
+    # fired (or may have been missed) before the next meeting.started arrives.
+    _clear_meeting_keys(redis, meeting_id)
     log.info("cleared stale meeting keys", meeting_id=meeting_id)
 
     zak_token = zoom_service.get_zak_token(doctor)
@@ -204,8 +203,23 @@ def handle_participant_left(payload: dict[str, Any]):
         return
 
     redis.delete(count_key)
+
+    if count < 0:
+        # Out-of-order events: participant_left arrived without a prior participant_joined.
+        # Don't call stop_recording — there is no active recording to stop.
+        log.warning("patient_count went negative, out-of-order events, skipping stop", meeting_id=meeting_id, count=count)
+        return
+
     recall.stop_recording(bot_id)
     log.info("last patient left, stopped recording", meeting_id=meeting_id, bot_id=bot_id)
+
+
+def _clear_meeting_keys(redis, meeting_id: str) -> None:
+    """Delete all per-meeting Redis state. Called on meeting.ended so keys don't
+    linger for the full 24h TTL — especially important for personal meeting rooms
+    that reuse the same meeting_id across sessions."""
+    for suffix in ("bot_id", "doctor_id", "host_id", "doctor_name", "patient_count"):
+        redis.delete(f"recall:meeting:{meeting_id}:{suffix}")
 
 
 def handle_meeting_ended(payload: dict[str, Any]):
@@ -217,13 +231,14 @@ def handle_meeting_ended(payload: dict[str, Any]):
     count_str = _rget(redis, count_key)
     count = int(count_str) if count_str else 0
 
-    redis.delete(count_key)
+    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+
+    _clear_meeting_keys(redis, meeting_id)
 
     if count <= 0:
         log.info("meeting ended, no active recording to stop", meeting_id=meeting_id)
         return
 
-    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
     if not bot_id:
         return
 

@@ -53,9 +53,15 @@ def stop_recording(bot_id: str) -> None:
             f"{RECALL_API_BASE}/bot/{bot_id}/stop_recording/",
             headers={"Authorization": f"Token {RECALL_API_KEY}"},
         )
-        if not response.is_success:
-            log.error("recall stop_recording error", status=response.status_code, body=response.text)
-        response.raise_for_status()
+    if response.status_code == httpx.codes.BAD_REQUEST:
+        # Bot is not currently recording (already stopped or never started).
+        # Treat as success — this can happen in race conditions between
+        # participant_left and meeting.ended both trying to stop the same recording.
+        log.info("recall stop_recording skipped, bot not recording", bot_id=bot_id, body=response.text)
+        return
+    if not response.is_success:
+        log.error("recall stop_recording error", status=response.status_code, body=response.text)
+    response.raise_for_status()
     log.info("recall recording stopped", bot_id=bot_id)
 
 
