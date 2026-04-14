@@ -36,7 +36,7 @@ def handle_meeting_started(payload: dict[str, Any]):
         return
 
     integration = zoom_service.get_zoom_integration(doctor)
-    if not integration or not integration.access_token:
+    if not integration:
         log.info("doctor has no zoom integration, skipping bot creation", doctor_id=str(doctor.id))
         return
 
