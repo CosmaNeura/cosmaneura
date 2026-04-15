@@ -409,9 +409,13 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
 }
 
 export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
-  // TODO need idiomatic error handling here
-  const { data } = await settingsData()
-  invariant(data, "data should exist")
+  const { data, error, response } = await settingsData()
+
+  if (!data) {
+    throw new Error(
+      `Settings failed to load (HTTP ${response?.status}): ${JSON.stringify(error)}`,
+    )
+  }
 
   return data
 }
