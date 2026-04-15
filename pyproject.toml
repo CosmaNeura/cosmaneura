@@ -112,6 +112,9 @@ exclude = [
     # don't make playing less fun and force types
     "playground",
     ".copier",
+
+    # git worktrees are separate branches, not part of this branch's analysis
+    ".worktrees",
 ]
 
 [tool.djlint]
