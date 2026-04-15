@@ -10,7 +10,10 @@ import { appointmentsToSidebarEntries } from "~/lib/appointment"
 import { invariant } from "@epic-web/invariant"
 
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  const [notesResult, settingsResult] = await Promise.all([noteList(), settingsData()])
+  const [notesResult, settingsResult] = await Promise.all([
+    noteList(),
+    settingsData(),
+  ])
 
   invariant(notesResult.data, "data failed to load")
   invariant(settingsResult.data, "settings failed to load")

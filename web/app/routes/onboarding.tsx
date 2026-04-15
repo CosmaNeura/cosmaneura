@@ -1,16 +1,14 @@
 import { useState } from "react"
-import { redirect, href } from "react-router"
 import { useForm } from "react-hook-form"
+import { href, redirect } from "react-router"
 import { z } from "zod"
-import { zodResolver } from "@hookform/resolvers/zod"
-import { invariant } from "@epic-web/invariant"
 
 import type { Route } from "./+types/onboarding"
 
-import { Button } from "~/components/ui/button"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
+import { Button } from "~/components/ui/button"
 import {
   Form,
   FormControl,
@@ -20,17 +18,20 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
+import { getClient } from "~/configuration/clerk"
 import {
+  completeOnboarding,
+  generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
-  generateSignedExampleNoteUploadUrl,
   uploadExampleNote,
-  completeOnboarding,
 } from "~/configuration/client"
-import { uploadFileToAzure } from "~/lib/azure-upload"
-import { getClient } from "~/configuration/clerk"
-import { requireEnv } from "~/utils/environment"
 import { toast } from "~/hooks/use-toast"
+import { uploadFileToAzure } from "~/lib/azure-upload"
+import { requireEnv } from "~/utils/environment"
+
+import { invariant } from "@epic-web/invariant"
+import { zodResolver } from "@hookform/resolvers/zod"
 
 type Step = 0 | 1 | 2 | 3 | 4
 
@@ -244,10 +245,7 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
               </FormItem>
             )}
           />
-          <Button
-            type="submit"
-            disabled={!file || form.formState.isSubmitting}
-          >
+          <Button type="submit" disabled={!file || form.formState.isSubmitting}>
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -342,11 +340,7 @@ function AllSetStep() {
 function StepIndicator({ step }: { step: Step }) {
   if (step === 0 || step === 4) return null
 
-  return (
-    <p className="text-muted-foreground text-sm">
-      Step {step} of 3
-    </p>
-  )
+  return <p className="text-muted-foreground text-sm">Step {step} of 3</p>
 }
 
 // ─── Main component ──────────────────────────────────────────────────────────
@@ -364,7 +358,10 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
 
         {step === 0 && <WelcomeStep onNext={advance} />}
         {step === 1 && (
-          <BiographyStep biography={loaderData.biography} onComplete={advance} />
+          <BiographyStep
+            biography={loaderData.biography}
+            onComplete={advance}
+          />
         )}
         {step === 2 && <NotesStep onComplete={advance} />}
         {step === 3 && <ZoomStep onComplete={advance} />}
