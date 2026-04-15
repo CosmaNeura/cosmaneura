@@ -132,6 +132,7 @@ run_migrations() {
 			--environment "$ENVIRONMENT_NAME" \
 			--trigger-type Manual \
 			--replica-timeout 300 \
+			--replica-retry-limit 0 \
 			--image "$PRODUCTION_TAG" \
 			--command "sh" --args "-c,uv run alembic upgrade head" \
 			--cpu 0.5 --memory 1Gi \
