@@ -25,20 +25,11 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "~/components/ui/dialog"
-import { Input } from "~/components/ui/input"
-import {
   generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
   uploadExampleNote,
-  zoomConnect,
+  zoomAuthUrl,
   zoomDisconnect,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
@@ -336,40 +327,23 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   )
 }
 
-const zoomFormSchema = z.object({
-  email: z.string().email("Please enter a valid email address"),
-})
-
-function ZoomConnect({
-  zoomConnected,
-  email,
-}: {
-  zoomConnected: boolean
-  email: string | null
-}) {
+function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
   const revalidator = useRevalidator()
-  const [open, setOpen] = useState(false)
+  const [connecting, setConnecting] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
 
-  const form = useForm({
-    resolver: zodResolver(zoomFormSchema),
-    defaultValues: { email: email ?? "" },
-  })
-
-  async function onConnect(values: z.infer<typeof zoomFormSchema>) {
-    const { error } = await zoomConnect({ body: { email: values.email } })
-    if (error) {
-      const detail =
-        error.detail && error.detail.length > 0
-          ? error.detail.map((e) => e.msg).join(", ")
-          : "Failed to connect Zoom. Please try again."
-      toast({ title: "Connection failed", description: detail, variant: "destructive" })
-      return
+  async function onConnect() {
+    setConnecting(true)
+    const { data } = await zoomAuthUrl()
+    if (data?.url) {
+      window.location.href = data.url
+    } else {
+      toast({
+        title: "Failed to start Zoom connection. Please try again.",
+        variant: "destructive",
+      })
+      setConnecting(false)
     }
-    toast({ title: "Zoom connected successfully" })
-    setOpen(false)
-    form.reset()
-    revalidator.revalidate()
   }
 
   async function onDisconnect() {
@@ -419,64 +393,16 @@ function ZoomConnect({
           </Button>
         </div>
       ) : (
-        <Dialog
-          open={open}
-          onOpenChange={(next) => {
-            if (!next) form.reset()
-            setOpen(next)
-          }}
-        >
-          <DialogTrigger asChild>
-            <Button>Connect Zoom</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Connect your Zoom account</DialogTitle>
-              <DialogDescription>
-                Enter the email address associated with your Zoom account. It
-                must belong to the same Zoom organization as this app.
-              </DialogDescription>
-            </DialogHeader>
-            <Form {...form}>
-              <form
-                onSubmit={form.handleSubmit(onConnect)}
-                className="space-y-4"
-              >
-                <FormField
-                  control={form.control}
-                  name="email"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Zoom Email</FormLabel>
-                      <FormControl>
-                        <Input
-                          type="email"
-                          placeholder="you@yourorganization.com"
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <Button
-                  type="submit"
-                  disabled={form.formState.isSubmitting}
-                  className="w-full"
-                >
-                  {form.formState.isSubmitting ? (
-                    <>
-                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                      Connecting...
-                    </>
-                  ) : (
-                    "Connect"
-                  )}
-                </Button>
-              </form>
-            </Form>
-          </DialogContent>
-        </Dialog>
+        <Button onClick={onConnect} disabled={connecting}>
+          {connecting ? (
+            <>
+              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+              Connecting...
+            </>
+          ) : (
+            "Connect Zoom"
+          )}
+        </Button>
       )}
     </section>
   )
@@ -514,7 +440,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
-          <ZoomConnect zoomConnected={loaderData.zoom_connected} email={loaderData.email} />
+          <ZoomConnect zoomConnected={loaderData.zoom_connected} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

@@ -59,6 +59,12 @@ class Doctor(
     biography: str | None
     "what type of doctor is this, what specialist, what they focus on, etc. Used for the intake process."
 
+    onboarding_completed_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "set to now() when the doctor completes the onboarding wizard; null means onboarding not yet done"
+
     def generate_api_key(self):
         api_key = TypeID(API_KEY_PREFIX)
 

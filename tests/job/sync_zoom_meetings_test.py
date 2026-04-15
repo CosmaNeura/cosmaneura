@@ -1,10 +1,12 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from tests.factories import DoctorFactory
 from app.jobs.sync_zoom_meetings import perform
+
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+
+from tests.factories import DoctorFactory
 
 
 def _create_zoom_integration(doctor):
@@ -12,6 +14,9 @@ def _create_zoom_integration(doctor):
         doctor_id=doctor.id,
         provider=VideoProvider.zoom,
         provider_user_id="zoom_user_abc",
+        access_token="access_token",
+        refresh_token="refresh_token",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     ).save()
 
 

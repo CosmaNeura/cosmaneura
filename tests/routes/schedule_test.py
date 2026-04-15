@@ -4,10 +4,11 @@ from unittest.mock import ANY, patch
 from fastapi import status
 from fastapi.testclient import TestClient
 
+from app.server import api_app
+
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
-from app.server import api_app
 
 from tests.routes.utils import get_clerk_dev_user
 
@@ -29,6 +30,9 @@ def _create_zoom_integration(doctor):
         doctor_id=doctor.id,
         provider=VideoProvider.zoom,
         provider_user_id="zoom_user_abc",
+        access_token="access_token",
+        refresh_token="refresh_token",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
     ).save()
 
 
@@ -47,7 +51,7 @@ def _make_meeting(doctor, zoom_meeting_id="111222333", **kwargs):
 
 def test_schedule_list_no_zoom(authenticated_client: TestClient):
     """Doctor with no zoom integration returns zoom_connected=False and empty meetings; sync not called."""
-    doctor = _get_or_create_doctor()
+    _get_or_create_doctor()
 
     with patch("app.routes.internal.sync_zoom_meetings") as mock_sync:
         response = authenticated_client.get(api_app.url_path_for("schedule_list"))
@@ -97,7 +101,7 @@ def test_schedule_cancel(authenticated_client: TestClient):
     """Cancelling a meeting calls zoom_service.delete_meeting and sets status to cancelled."""
     doctor = _get_or_create_doctor()
     _create_zoom_integration(doctor)
-    meeting = _make_meeting(doctor, zoom_meeting_id="111222333")
+    _make_meeting(doctor, zoom_meeting_id="111222333")
 
     with patch("app.routes.internal.zoom_service.delete_meeting") as mock_delete:
         response = authenticated_client.delete(
@@ -113,7 +117,7 @@ def test_schedule_cancel(authenticated_client: TestClient):
 
 def test_schedule_cancel_not_found(authenticated_client: TestClient):
     """Cancelling a non-existent meeting returns 404."""
-    doctor = _get_or_create_doctor()
+    _get_or_create_doctor()
 
     with patch("app.routes.internal.zoom_service.delete_meeting"):
         response = authenticated_client.delete(

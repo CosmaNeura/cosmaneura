@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app import log
 from app.celery import celery_app
+from app.services import zoom as zoom_service
+
 from app.models.doctor import Doctor
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
-from app.services import zoom as zoom_service
 
 
 def perform(doctor_id: str) -> None:

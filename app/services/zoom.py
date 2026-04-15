@@ -1,8 +1,8 @@
 # app/services/zoom.py
 import base64
+from datetime import datetime, timedelta, timezone
 
 import httpx
-from datetime import datetime, timedelta, timezone
 
 from app import log
 from app.configuration.zoom import (
@@ -10,6 +10,7 @@ from app.configuration.zoom import (
     ZOOM_CLIENT_SECRET,
     ZOOM_OAUTH_TOKEN_URL,
 )
+
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 

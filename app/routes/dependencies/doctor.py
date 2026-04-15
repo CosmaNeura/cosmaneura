@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request, status
 from starlette_context import context
 
 from app.configuration.clerk import clerk
+
 from app.models.doctor import Doctor
 
 

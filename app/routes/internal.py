@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from pydantic import BaseModel, computed_field
 
@@ -7,9 +8,8 @@ import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
-from app.commands.uploads.sas import UploadType
-from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 import app.services.zoom as zoom_service
+from app.commands.uploads.sas import UploadType
 from app.services.zoom import get_zoom_integration
 
 from activemodel.session_manager import aglobal_session
@@ -23,6 +23,7 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
+from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
@@ -252,6 +253,7 @@ class SettingsData(BaseModel, extra="forbid"):
     biography: str | None
     zoom_connected: bool
     email: str | None
+    onboarding_completed: bool
 
 
 @internal_api_app.get("/settings")
@@ -271,6 +273,7 @@ def settings_data(request: Request) -> SettingsData:
         biography=doctor.biography,
         zoom_connected=zoom_integration is not None,
         email=doctor.email,
+        onboarding_completed=doctor.onboarding_completed_at is not None,
     )
 
 
@@ -285,38 +288,29 @@ def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor.save()
 
 
-class ZoomConnectRequest(BaseModel, extra="forbid"):
-    email: str
+class ZoomAuthUrlResponse(BaseModel, extra="forbid"):
+    url: str
 
 
-@internal_api_app.post("/zoom-connect", name="zoom_connect")
-def zoom_connect(request: Request, data: ZoomConnectRequest) -> None:
+@internal_api_app.get("/zoom-auth-url", name="zoom_auth_url")
+def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
     doctor: Doctor = request.state.doctor
-
-    zoom_user = zoom_service.get_user_by_email(data.email)
-    if not zoom_user:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="No Zoom user found with that email in your organization",
-        )
-
-    integration = DoctorVideoIntegration.find_or_initialize_by(
-        doctor_id=doctor.id,
-        provider=VideoProvider.zoom,
-    )
-    integration.provider_user_id = zoom_user["id"]
-    integration.save()
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/external/v1/zoom-oauth-start?state={doctor.clerk_id}"
+    return ZoomAuthUrlResponse(url=url)
 
 
 @internal_api_app.delete("/zoom-connect", name="zoom_disconnect", status_code=status.HTTP_204_NO_CONTENT)
 def zoom_disconnect(request: Request) -> None:
     doctor: Doctor = request.state.doctor
+    zoom_service.revoke_token(doctor)
 
-    integration = DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
-    if not integration:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No Zoom integration found")
 
-    integration.delete()
+@internal_api_app.post("/onboarding/complete", name="complete_onboarding", status_code=status.HTTP_200_OK)
+def complete_onboarding(request: Request) -> None:
+    doctor: Doctor = request.state.doctor
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
 
 
 class ZoomMeetingResponse(BaseModel, extra="forbid"):

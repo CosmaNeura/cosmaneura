@@ -1,18 +1,17 @@
 from datetime import datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import select
-
 from app import log
 from app.configuration.redis import get_redis
 from app.services import recall
 from app.services import zoom as zoom_service
 
-from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
+from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.patient import Patient
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+from sqlalchemy import select
 
 BOT_NAME = "Cosma"
 

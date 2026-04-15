@@ -4,9 +4,8 @@ from enum import Enum
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
-from sqlmodel import UniqueConstraint
-
 from app.models.doctor import Doctor
+from sqlmodel import UniqueConstraint
 
 
 class VideoProvider(str, Enum):

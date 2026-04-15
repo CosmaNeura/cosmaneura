@@ -474,38 +474,20 @@
         ]
       }
     },
-    "/internal/v1/zoom-connect": {
-      "post": {
+    "/internal/v1/zoom-auth-url": {
+      "get": {
         "tags": [
           "private"
         ],
-        "summary": "Zoom Connect",
-        "operationId": "zoom_connect",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ZoomConnectRequest"
-              }
-            }
-          },
-          "required": true
-        },
+        "summary": "Zoom Auth Url",
+        "operationId": "zoom_auth_url",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ZoomAuthUrlResponse"
                 }
               }
             }
@@ -516,7 +498,9 @@
             "HTTPBearer": []
           }
         ]
-      },
+      }
+    },
+    "/internal/v1/zoom-connect": {
       "delete": {
         "tags": [
           "private"
@@ -526,6 +510,30 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/onboarding/complete": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Complete Onboarding",
+        "operationId": "complete_onboarding",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
           }
         },
         "security": [
@@ -1365,6 +1373,10 @@
               }
             ],
             "title": "Email"
+          },
+          "onboarding_completed": {
+            "type": "boolean",
+            "title": "Onboarding Completed"
           }
         },
         "additionalProperties": false,
@@ -1374,7 +1386,8 @@
           "notes_schema",
           "biography",
           "zoom_connected",
-          "email"
+          "email",
+          "onboarding_completed"
         ],
         "title": "SettingsData"
       },
@@ -1547,19 +1560,19 @@
         ],
         "title": "VisitAudioUploadRequest"
       },
-      "ZoomConnectRequest": {
+      "ZoomAuthUrlResponse": {
         "properties": {
-          "email": {
+          "url": {
             "type": "string",
-            "title": "Email"
+            "title": "Url"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "email"
+          "url"
         ],
-        "title": "ZoomConnectRequest"
+        "title": "ZoomAuthUrlResponse"
       },
       "ZoomMeetingResponse": {
         "properties": {
