@@ -32,7 +32,16 @@ def configure_database():
     so the defaults are exactly what we want.
     """
 
-    if is_production() or is_staging():
+    # Skip auto-migration if we're being imported inside an alembic context —
+    # that means alembic is already running (e.g. the migration job), and
+    # calling run_migrations() here would cause a recursive alembic invocation.
+    try:
+        from alembic import context as _alembic_ctx
+        _in_alembic = _alembic_ctx.config is not None
+    except AttributeError:
+        _in_alembic = False
+
+    if not _in_alembic and (is_production() or is_staging()):
         run_migrations()
 
     activemodel.init(database_url())
