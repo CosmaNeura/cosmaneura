@@ -49,6 +49,11 @@ if ! docker manifest inspect "$STAGING_TAG" >/dev/null 2>&1; then
 	exit 1
 fi
 
+ACR_NAME=$(echo "$STAGING_IMAGE" | cut -d'.' -f1)
+ACR_USERNAME=$(az acr credential show -n "$ACR_NAME" --query "username" -o tsv)
+ACR_PASSWORD=$(az acr credential show -n "$ACR_NAME" --query "passwords[0].value" -o tsv)
+ACR_SERVER=$(echo "$STAGING_IMAGE" | cut -d'/' -f1)
+
 # Function to generate a revision string for the Git SHA
 gen_string_for_sha() {
 	local sha="$1"
@@ -140,7 +145,10 @@ run_migrations() {
 			--command "sh" --args "-c,uv run alembic upgrade head" \
 			--cpu 0.5 --memory 1Gi \
 			--secrets "${secrets_args[@]}" \
-			--env-vars "${env_args[@]}"
+			--env-vars "${env_args[@]}" \
+			--registry-server "$ACR_SERVER" \
+			--registry-username "$ACR_USERNAME" \
+			--registry-password "$ACR_PASSWORD"
 	fi
 
 	if [[ $? -ne 0 ]]; then
