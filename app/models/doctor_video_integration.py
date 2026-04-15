@@ -7,7 +7,7 @@ from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from app.models.doctor import Doctor
-from sqlalchemy import Column
+from sqlalchemy import Column, DateTime
 from sqlmodel import Field, UniqueConstraint
 
 
@@ -39,5 +39,5 @@ class DoctorVideoIntegration(
     refresh_token: str = Field(sa_column=Column(EncryptedType(), nullable=False))
     "OAuth refresh token — stored encrypted at rest (AES-256/Fernet)"
 
-    token_expires_at: datetime
+    token_expires_at: datetime = Field(sa_column=Column(DateTime(timezone=True), nullable=False))
     "When the current access_token expires"
