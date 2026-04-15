@@ -125,33 +125,26 @@ run_migrations() {
 	done
 
 	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
-		echo "Updating existing migration job..."
-		if [[ ${#secrets_args[@]} -gt 0 ]]; then
-			az containerapp job secret set -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-				--secrets "${secrets_args[@]}"
-		fi
-		az containerapp job update -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-			--image "$STAGING_TAG" \
-			--env-vars "${env_args[@]}" \
-			--command "sh" --args "-c" "uv run alembic upgrade head"
-	else
-		echo "Creating migration job for the first time..."
-		az containerapp job create \
-			--name "$MIGRATION_JOB" \
-			--resource-group "$RESOURCE_GROUP" \
-			--environment "$ENVIRONMENT_NAME" \
-			--trigger-type Manual \
-			--replica-timeout 300 \
-			--replica-retry-limit 0 \
-			--image "$STAGING_TAG" \
-			--command "sh" --args "-c" "uv run alembic upgrade head" \
-			--cpu 0.5 --memory 1Gi \
-			--secrets "${secrets_args[@]}" \
-			--env-vars "${env_args[@]}" \
-			--registry-server "$ACR_SERVER" \
-			--registry-username "$ACR_USERNAME" \
-			--registry-password "$ACR_PASSWORD"
+		echo "Deleting existing migration job to recreate with fresh config..."
+		az containerapp job delete -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" --yes
 	fi
+
+	echo "Creating migration job..."
+	az containerapp job create \
+		--name "$MIGRATION_JOB" \
+		--resource-group "$RESOURCE_GROUP" \
+		--environment "$ENVIRONMENT_NAME" \
+		--trigger-type Manual \
+		--replica-timeout 300 \
+		--replica-retry-limit 0 \
+		--image "$STAGING_TAG" \
+		--command "sh" --args "-c" "uv run alembic upgrade head" \
+		--cpu 0.5 --memory 1Gi \
+		--secrets "${secrets_args[@]}" \
+		--env-vars "${env_args[@]}" \
+		--registry-server "$ACR_SERVER" \
+		--registry-username "$ACR_USERNAME" \
+		--registry-password "$ACR_PASSWORD"
 
 	if [[ $? -ne 0 ]]; then
 		echo "Failed to configure migration job."
