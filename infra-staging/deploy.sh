@@ -131,7 +131,9 @@ run_migrations() {
 				--secrets "${secrets_args[@]}"
 		fi
 		az containerapp job update -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-			--image "$STAGING_TAG"
+			--image "$STAGING_TAG" \
+			--env-vars "${env_args[@]}" \
+			--command "sh" --args "-c" "uv run alembic upgrade head"
 	else
 		echo "Creating migration job for the first time..."
 		az containerapp job create \
