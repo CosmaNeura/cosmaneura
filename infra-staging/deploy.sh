@@ -142,7 +142,7 @@ run_migrations() {
 			--replica-timeout 300 \
 			--replica-retry-limit 0 \
 			--image "$STAGING_TAG" \
-			--command "sh" --args "-c,uv run alembic upgrade head" \
+			--command "sh" --args "-c" "uv run alembic upgrade head" \
 			--cpu 0.5 --memory 1Gi \
 			--secrets "${secrets_args[@]}" \
 			--env-vars "${env_args[@]}" \

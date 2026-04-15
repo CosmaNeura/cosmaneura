@@ -6,6 +6,7 @@ import { index, layout, prefix, route } from "@react-router/dev/routes"
 
 export default [
   index("routes/index.tsx"),
+  route("/onboarding", "routes/onboarding.tsx"),
   layout("layouts/authenticated.tsx", [
     ...prefix("intake", [
       layout("layouts/intake.tsx", [
