@@ -1,10 +1,22 @@
-import { Outlet } from "react-router"
+import { Outlet, href, redirect } from "react-router"
+
+import type { Route } from "./+types/authenticated"
 
 import AdminBar from "~/components/AdminBar"
+import { settingsData } from "~/configuration/client"
 
-// This layout assumes the user is authenticated. Any clientLoaders making authenticated
-// requests will run an additional check and redirect the user to the login page if it fails.
-// Additionally, all authenticated routes will 400 if not auth'd propely.
+// Guard: any authenticated route redirects to /onboarding until the doctor completes it.
+// This runs in parallel with child loaders; if onboarding is incomplete React Router
+// cancels the child loaders and performs the redirect.
+export async function clientLoader(_: Route.ClientLoaderArgs) {
+  const { data } = await settingsData()
+
+  if (data && !data.onboarding_completed) {
+    throw redirect(href("/onboarding"))
+  }
+
+  return null
+}
 
 export default function AuthenticatedLayout() {
   return (

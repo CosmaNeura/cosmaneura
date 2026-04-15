@@ -8,6 +8,7 @@ import type { Route } from "./+types/onboarding"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
+import { StepIndicator } from "~/components/shared/StepIndicator"
 import { Button } from "~/components/ui/button"
 import {
   Form,
@@ -337,10 +338,12 @@ function AllSetStep() {
 
 // ─── Step indicator ──────────────────────────────────────────────────────────
 
-function StepIndicator({ step }: { step: Step }) {
+const STEP_LABELS = ["Perfil", "Historial", "Zoom"]
+
+function OnboardingStepIndicator({ step }: { step: Step }) {
   if (step === 0 || step === 4) return null
 
-  return <p className="text-muted-foreground text-sm">Step {step} of 3</p>
+  return <StepIndicator currentStep={step} totalSteps={3} labels={STEP_LABELS} />
 }
 
 // ─── Main component ──────────────────────────────────────────────────────────
@@ -354,7 +357,7 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
   return (
     <div className="flex min-h-screen items-center justify-center">
       <div className="w-full max-w-lg space-y-6 px-8 py-16">
-        <StepIndicator step={step} />
+        <OnboardingStepIndicator step={step} />
 
         {step === 0 && <WelcomeStep onNext={advance} />}
         {step === 1 && (
