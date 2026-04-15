@@ -260,7 +260,9 @@ class SettingsData(BaseModel, extra="forbid"):
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
 
-    zoom_integration = DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
+    zoom_integration = DoctorVideoIntegration.get(
+        doctor_id=doctor.id, provider=VideoProvider.zoom
+    )
 
     notes_schema = DoctorNoteSchema.where(
         (DoctorNoteSchema.doctor_id == doctor.id)
@@ -300,13 +302,17 @@ def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
     return ZoomAuthUrlResponse(url=url)
 
 
-@internal_api_app.delete("/zoom-connect", name="zoom_disconnect", status_code=status.HTTP_204_NO_CONTENT)
+@internal_api_app.delete(
+    "/zoom-connect", name="zoom_disconnect", status_code=status.HTTP_204_NO_CONTENT
+)
 def zoom_disconnect(request: Request) -> None:
     doctor: Doctor = request.state.doctor
     zoom_service.revoke_token(doctor)
 
 
-@internal_api_app.post("/onboarding/complete", name="complete_onboarding", status_code=status.HTTP_200_OK)
+@internal_api_app.post(
+    "/onboarding/complete", name="complete_onboarding", status_code=status.HTTP_200_OK
+)
 def complete_onboarding(request: Request) -> None:
     doctor: Doctor = request.state.doctor
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
@@ -372,13 +378,19 @@ def schedule_list(request: Request) -> ScheduleResponse:
     )
 
 
-@internal_api_app.delete("/schedule/{zoom_meeting_id}", name="cancel_meeting", status_code=status.HTTP_204_NO_CONTENT)
+@internal_api_app.delete(
+    "/schedule/{zoom_meeting_id}",
+    name="cancel_meeting",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
 def cancel_meeting(request: Request, zoom_meeting_id: Annotated[str, Path()]) -> None:
     doctor: Doctor = request.state.doctor
 
     meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=zoom_meeting_id)
     if not meeting:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found"
+        )
 
     zoom_service.delete_meeting(doctor, zoom_meeting_id)
 

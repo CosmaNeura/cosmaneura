@@ -107,6 +107,7 @@ def worker_process_init_setup_logging(**kwargs):
     # Dispose AND reset the SQLAlchemy engine after fork to prevent inherited
     # file descriptors / libpq state from causing segfaults in psycopg.
     from activemodel.session_manager import SessionManager
+
     instance = SessionManager.get_instance()
     if instance._engine is not None:
         instance._engine.dispose()
@@ -125,20 +126,26 @@ def on_task_prerun(sender, task_id, task, args, kwargs, **_kwargs):
 
 
 @signals.task_failure.connect
-def on_task_failure(sender, task_id, exception, args, kwargs, traceback, einfo, **_kwargs):
+def on_task_failure(
+    sender, task_id, exception, args, kwargs, traceback, einfo, **_kwargs
+):
     import traceback as tb
+
     log.error(
         "task failed",
         task_name=sender.name,
         task_id=task_id,
         exception=repr(exception),
-        traceback="".join(tb.format_exception(type(exception), exception, exception.__traceback__)),
+        traceback="".join(
+            tb.format_exception(type(exception), exception, exception.__traceback__)
+        ),
     )
 
 
 @signals.task_retry.connect
 def on_task_retry(sender, request, reason, einfo, **_kwargs):
     import traceback as tb
+
     exc = reason if isinstance(reason, BaseException) else None
     log.warning(
         "task retrying",
@@ -146,7 +153,9 @@ def on_task_retry(sender, request, reason, einfo, **_kwargs):
         task_id=request.id,
         retries=request.retries,
         reason=repr(reason),
-        traceback="".join(tb.format_exception(type(exc), exc, exc.__traceback__)) if exc else None,
+        traceback="".join(tb.format_exception(type(exc), exc, exc.__traceback__))
+        if exc
+        else None,
     )
 
 

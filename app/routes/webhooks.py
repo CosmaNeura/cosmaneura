@@ -51,7 +51,9 @@ def _already_processed(provider: str, event_id: str) -> bool:
     return inserted is None
 
 
-async def _queue_webhook(provider: str, request: Request, payload: dict[str, Any] | None = None) -> WebhookAck:
+async def _queue_webhook(
+    provider: str, request: Request, payload: dict[str, Any] | None = None
+) -> WebhookAck:
     if payload is None:
         payload = await request.json()
     assert payload is not None
@@ -91,7 +93,9 @@ async def zoom_webhook(request: Request):
             hashlib.sha256,
         ).hexdigest()
         log.info("zoom url validation challenge received")
-        return JSONResponse({"plainToken": plain_token, "encryptedToken": encrypted_token})
+        return JSONResponse(
+            {"plainToken": plain_token, "encryptedToken": encrypted_token}
+        )
 
     return await _queue_webhook(provider="zoom", request=request, payload=payload)
 

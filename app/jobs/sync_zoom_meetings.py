@@ -13,7 +13,9 @@ def perform(doctor_id: str) -> None:
     doctor = Doctor.get(id=doctor_id)
 
     if not doctor or not zoom_service.get_zoom_integration(doctor):
-        log.info("skipping zoom sync: no doctor or zoom integration", doctor_id=doctor_id)
+        log.info(
+            "skipping zoom sync: no doctor or zoom integration", doctor_id=doctor_id
+        )
         return
 
     meetings = zoom_service.get_user_meetings(doctor)

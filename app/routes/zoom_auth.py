@@ -83,7 +83,9 @@ def zoom_oauth_callback(
     integration.save()
 
     log.info("zoom oauth connected", doctor_id=str(doctor.id))
-    return RedirectResponse(url=ZOOM_SUCCESS_REDIRECT, status_code=status.HTTP_302_FOUND)
+    return RedirectResponse(
+        url=ZOOM_SUCCESS_REDIRECT, status_code=status.HTTP_302_FOUND
+    )
 
 
 def _exchange_code_for_tokens(code: str) -> dict:

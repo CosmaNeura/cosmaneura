@@ -25,18 +25,28 @@ def handle_meeting_started(payload: dict[str, Any]):
 
     doctor = cast(
         Doctor | None,
-        Doctor.where(Doctor.id == select(DoctorVideoIntegration.doctor_id).where(
-            (DoctorVideoIntegration.provider == VideoProvider.zoom)
-            & (DoctorVideoIntegration.provider_user_id == host_id)
-        ).scalar_subquery()).first(),
+        Doctor.where(
+            Doctor.id
+            == select(DoctorVideoIntegration.doctor_id)
+            .where(
+                (DoctorVideoIntegration.provider == VideoProvider.zoom)
+                & (DoctorVideoIntegration.provider_user_id == host_id)
+            )
+            .scalar_subquery()
+        ).first(),
     )
     if not doctor:
-        log.info("no doctor found for zoom host_id, skipping bot creation", host_id=host_id)
+        log.info(
+            "no doctor found for zoom host_id, skipping bot creation", host_id=host_id
+        )
         return
 
     integration = zoom_service.get_zoom_integration(doctor)
     if not integration:
-        log.info("doctor has no zoom integration, skipping bot creation", doctor_id=str(doctor.id))
+        log.info(
+            "doctor has no zoom integration, skipping bot creation",
+            doctor_id=str(doctor.id),
+        )
         return
 
     redis = get_redis()
@@ -48,7 +58,9 @@ def handle_meeting_started(payload: dict[str, Any]):
 
     zak_token = zoom_service.get_zak_token(doctor)
     meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
-    bot_data = recall.create_bot(meeting_url=meeting_url, zak_token=zak_token, manual_recording=True)
+    bot_data = recall.create_bot(
+        meeting_url=meeting_url, zak_token=zak_token, manual_recording=True
+    )
     bot_id = bot_data["id"]
 
     doctor_name = zoom_service.get_user_display_name(doctor)
@@ -59,7 +71,9 @@ def handle_meeting_started(payload: dict[str, Any]):
     redis.set(f"recall:meeting:{meeting_id}:host_id", host_id, ex=ttl)
     redis.set(f"recall:meeting:{meeting_id}:doctor_name", doctor_name, ex=ttl)
     redis.set(f"recall:bot:{bot_id}:doctor_id", str(doctor.id), ex=ttl)
-    log.info("recall bot created, doctor identified", bot_id=bot_id, doctor_name=doctor_name)
+    log.info(
+        "recall bot created, doctor identified", bot_id=bot_id, doctor_name=doctor_name
+    )
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=str(meeting_id))
     if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
@@ -94,7 +108,9 @@ def handle_participant_joined(payload: dict[str, Any]):
     doctor_id = _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
 
     if not bot_id:
-        log.warning("no bot found for meeting, cannot start recording", meeting_id=meeting_id)
+        log.warning(
+            "no bot found for meeting, cannot start recording", meeting_id=meeting_id
+        )
         return
 
     count_key = f"recall:meeting:{meeting_id}:patient_count"
@@ -102,7 +118,11 @@ def handle_participant_joined(payload: dict[str, Any]):
     redis.expire(count_key, int(timedelta(hours=24).total_seconds()))
 
     if count != 1:
-        log.info("additional patient joined, already recording", meeting_id=meeting_id, count=count)
+        log.info(
+            "additional patient joined, already recording",
+            meeting_id=meeting_id,
+            count=count,
+        )
         return
 
     now = datetime.utcnow()
@@ -141,8 +161,14 @@ def handle_participant_joined(payload: dict[str, Any]):
 
     ttl = timedelta(hours=24)
     redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id or "", ex=ttl)
-    redis.set(f"recall:recording:{recording_id}:appointment_id", str(appointment.id), ex=ttl)
-    redis.set(f"recall:recording:{recording_id}:patient_id", str(appointment.patient_id), ex=ttl)
+    redis.set(
+        f"recall:recording:{recording_id}:appointment_id", str(appointment.id), ex=ttl
+    )
+    redis.set(
+        f"recall:recording:{recording_id}:patient_id",
+        str(appointment.patient_id),
+        ex=ttl,
+    )
     # also key by bot_id since recording_id from start_recording != real recording_id in webhooks
     redis.set(f"recall:bot:{bot_id}:appointment_id", str(appointment.id), ex=ttl)
     redis.set(f"recall:bot:{bot_id}:patient_id", str(appointment.patient_id), ex=ttl)
@@ -156,11 +182,15 @@ def handle_participant_joined(payload: dict[str, Any]):
             zoom_mtg.save()
 
 
-def _ensure_appointment(doctor_id: str, patient_name: str, now: datetime) -> Appointment:
+def _ensure_appointment(
+    doctor_id: str, patient_name: str, now: datetime
+) -> Appointment:
     """Find or create a Patient + Appointment for an ad-hoc Zoom session."""
     patient = cast(
         Patient | None,
-        Patient.where((Patient.doctor_id == doctor_id) & (Patient.name == patient_name)).first(),
+        Patient.where(
+            (Patient.doctor_id == doctor_id) & (Patient.name == patient_name)
+        ).first(),
     )
     if not patient:
         # date_of_birth is required — use sentinel; doctor should update later
@@ -169,7 +199,11 @@ def _ensure_appointment(doctor_id: str, patient_name: str, now: datetime) -> App
             name=patient_name,
             date_of_birth=datetime(1900, 1, 1),
         )
-        log.info("created patient for zoom participant", doctor_id=doctor_id, patient_name=patient_name)
+        log.info(
+            "created patient for zoom participant",
+            doctor_id=doctor_id,
+            patient_name=patient_name,
+        )
 
     appointment = Appointment.find_or_create_by(
         doctor_id=doctor_id,
@@ -177,7 +211,11 @@ def _ensure_appointment(doctor_id: str, patient_name: str, now: datetime) -> App
         appointment_date=now,
         created_by_system="recall",
     )
-    log.info("created appointment for zoom session", doctor_id=doctor_id, appointment_id=str(appointment.id))
+    log.info(
+        "created appointment for zoom session",
+        doctor_id=doctor_id,
+        appointment_id=str(appointment.id),
+    )
     return cast(Appointment, appointment)
 
 
@@ -198,7 +236,11 @@ def handle_participant_left(payload: dict[str, Any]):
     count = cast(int, redis.decr(count_key))
 
     if count > 0:
-        log.info("patient left but others still present, still recording", meeting_id=meeting_id, count=count)
+        log.info(
+            "patient left but others still present, still recording",
+            meeting_id=meeting_id,
+            count=count,
+        )
         return
 
     redis.delete(count_key)
@@ -206,11 +248,17 @@ def handle_participant_left(payload: dict[str, Any]):
     if count < 0:
         # Out-of-order events: participant_left arrived without a prior participant_joined.
         # Don't call stop_recording — there is no active recording to stop.
-        log.warning("patient_count went negative, out-of-order events, skipping stop", meeting_id=meeting_id, count=count)
+        log.warning(
+            "patient_count went negative, out-of-order events, skipping stop",
+            meeting_id=meeting_id,
+            count=count,
+        )
         return
 
     recall.stop_recording(bot_id)
-    log.info("last patient left, stopped recording", meeting_id=meeting_id, bot_id=bot_id)
+    log.info(
+        "last patient left, stopped recording", meeting_id=meeting_id, bot_id=bot_id
+    )
 
 
 def _clear_meeting_keys(redis, meeting_id: str) -> None:
@@ -241,14 +289,26 @@ def handle_meeting_ended(payload: dict[str, Any]):
     if not bot_id:
         return
 
-    log.info("meeting ended with active recording, stopping", meeting_id=meeting_id, bot_id=bot_id, count=count)
+    log.info(
+        "meeting ended with active recording, stopping",
+        meeting_id=meeting_id,
+        bot_id=bot_id,
+        count=count,
+    )
     recall.stop_recording(bot_id)
 
-    zoom_mtg = cast(ZoomMeeting | None, ZoomMeeting.where(cast(Any, ZoomMeeting.zoom_meeting_id) == str(meeting_id)).first())
+    zoom_mtg = cast(
+        ZoomMeeting | None,
+        ZoomMeeting.where(
+            cast(Any, ZoomMeeting.zoom_meeting_id) == str(meeting_id)
+        ).first(),
+    )
     if zoom_mtg:
         zoom_mtg.status = ZoomMeetingStatus.ended
         zoom_mtg.save()
-        log.info("zoom meeting status updated to ended", zoom_meeting_id=str(meeting_id))
+        log.info(
+            "zoom meeting status updated to ended", zoom_meeting_id=str(meeting_id)
+        )
 
 
 HANDLERS = {

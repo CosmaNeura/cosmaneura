@@ -26,7 +26,9 @@ def _get_or_create_doctor():
     return doctor
 
 
-def _make_integration(doctor: Doctor, provider_user_id: str = "zoom_abc123") -> DoctorVideoIntegration:
+def _make_integration(
+    doctor: Doctor, provider_user_id: str = "zoom_abc123"
+) -> DoctorVideoIntegration:
     return DoctorVideoIntegration(
         doctor_id=doctor.id,
         provider=VideoProvider.zoom,
@@ -38,6 +40,7 @@ def _make_integration(doctor: Doctor, provider_user_id: str = "zoom_abc123") -> 
 
 
 # --- zoom-auth-url ---
+
 
 def test_zoom_auth_url_returns_start_url(authenticated_client: TestClient):
     """GET /zoom-auth-url returns a URL pointing to the OAuth start endpoint."""
@@ -52,6 +55,7 @@ def test_zoom_auth_url_returns_start_url(authenticated_client: TestClient):
 
 
 # --- zoom-oauth-start ---
+
 
 def test_zoom_oauth_start_redirects(client: TestClient):
     """GET /zoom-oauth-start redirects to Zoom authorization page."""
@@ -80,9 +84,13 @@ def test_zoom_oauth_callback_creates_integration(client: TestClient):
     doctor = _get_or_create_doctor()
 
     with (
-        patch("app.routes.zoom_auth._exchange_code_for_tokens", return_value=_FAKE_TOKENS),
+        patch(
+            "app.routes.zoom_auth._exchange_code_for_tokens", return_value=_FAKE_TOKENS
+        ),
         patch("app.routes.zoom_auth._get_zoom_user_id", return_value="zoom_xyz"),
-        patch("app.routes.zoom_auth.ZOOM_SUCCESS_REDIRECT", "https://example.com/settings"),
+        patch(
+            "app.routes.zoom_auth.ZOOM_SUCCESS_REDIRECT", "https://example.com/settings"
+        ),
     ):
         response = client.get(
             api_app.url_path_for("zoom_oauth_callback"),
@@ -91,7 +99,9 @@ def test_zoom_oauth_callback_creates_integration(client: TestClient):
         )
 
     assert response.status_code == status.HTTP_302_FOUND
-    integration = DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
+    integration = DoctorVideoIntegration.get(
+        doctor_id=doctor.id, provider=VideoProvider.zoom
+    )
     assert integration is not None
     assert integration.provider_user_id == "zoom_xyz"
     assert integration.access_token == "new_access"
@@ -103,9 +113,13 @@ def test_zoom_oauth_callback_updates_existing_integration(client: TestClient):
     _make_integration(doctor, provider_user_id="old_zoom_id")
 
     with (
-        patch("app.routes.zoom_auth._exchange_code_for_tokens", return_value=_FAKE_TOKENS),
+        patch(
+            "app.routes.zoom_auth._exchange_code_for_tokens", return_value=_FAKE_TOKENS
+        ),
         patch("app.routes.zoom_auth._get_zoom_user_id", return_value="new_zoom_id"),
-        patch("app.routes.zoom_auth.ZOOM_SUCCESS_REDIRECT", "https://example.com/settings"),
+        patch(
+            "app.routes.zoom_auth.ZOOM_SUCCESS_REDIRECT", "https://example.com/settings"
+        ),
     ):
         response = client.get(
             api_app.url_path_for("zoom_oauth_callback"),
@@ -114,7 +128,9 @@ def test_zoom_oauth_callback_updates_existing_integration(client: TestClient):
         )
 
     assert response.status_code == status.HTTP_302_FOUND
-    integration = DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
+    integration = DoctorVideoIntegration.get(
+        doctor_id=doctor.id, provider=VideoProvider.zoom
+    )
     assert integration.provider_user_id == "new_zoom_id"
 
 
@@ -122,7 +138,9 @@ def test_zoom_oauth_callback_error_param(client: TestClient):
     """Callback with error param redirects without creating an integration."""
     doctor = _get_or_create_doctor()
 
-    with patch("app.routes.zoom_auth.ZOOM_SUCCESS_REDIRECT", "https://example.com/settings"):
+    with patch(
+        "app.routes.zoom_auth.ZOOM_SUCCESS_REDIRECT", "https://example.com/settings"
+    ):
         response = client.get(
             api_app.url_path_for("zoom_oauth_callback"),
             params={"error": "access_denied", "state": doctor.clerk_id},
@@ -134,6 +152,7 @@ def test_zoom_oauth_callback_error_param(client: TestClient):
 
 
 # --- zoom-disconnect ---
+
 
 def test_zoom_disconnect_revokes_and_deletes(authenticated_client: TestClient):
     """DELETE /zoom-connect calls revoke_token, deleting the integration."""
@@ -152,7 +171,9 @@ def test_zoom_disconnect_not_connected_raises(authenticated_client: TestClient):
     _get_or_create_doctor()
 
     with (
-        patch("app.routes.internal.zoom_service.revoke_token", side_effect=AssertionError),
+        patch(
+            "app.routes.internal.zoom_service.revoke_token", side_effect=AssertionError
+        ),
         pytest.raises(AssertionError),
     ):
         authenticated_client.delete(api_app.url_path_for("zoom_disconnect"))

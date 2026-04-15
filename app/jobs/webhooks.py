@@ -28,9 +28,11 @@ def perform(
 
     if provider == "zoom":
         from app.services import zoom_webhooks
+
         zoom_webhooks.dispatch(event_type=event_type, payload=payload)
     elif provider == "recall":
         from app.services import recall_webhooks
+
         recall_webhooks.dispatch(event_type=event_type, payload=payload)
 
 

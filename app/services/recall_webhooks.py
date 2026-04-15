@@ -18,7 +18,11 @@ def handle_recording_done(payload: dict[str, Any]):
     bot_id = data.get("bot", {}).get("id")
     recording_id = data.get("recording", {}).get("id")
 
-    log.info("recall recording done — kicking off async transcript", bot_id=bot_id, recording_id=recording_id)
+    log.info(
+        "recall recording done — kicking off async transcript",
+        bot_id=bot_id,
+        recording_id=recording_id,
+    )
     recall_service.create_async_transcript(recording_id)
 
 
@@ -28,13 +32,24 @@ def handle_transcript_done(payload: dict[str, Any]):
     recording_id = (data.get("recording") or {}).get("id")
     transcript_id = data.get("transcript", {}).get("id")
 
-    log.info("recall transcript done", bot_id=bot_id, recording_id=recording_id, transcript_id=transcript_id)
+    log.info(
+        "recall transcript done",
+        bot_id=bot_id,
+        recording_id=recording_id,
+        transcript_id=transcript_id,
+    )
 
     redis = get_redis()
     # recording-scoped keys (new per-patient flow) take precedence over bot-scoped (legacy)
-    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id") or _rget(redis, f"recall:bot:{bot_id}:doctor_id")
-    appointment_id = _rget(redis, f"recall:recording:{recording_id}:appointment_id") or _rget(redis, f"recall:bot:{bot_id}:appointment_id")
-    patient_id = _rget(redis, f"recall:recording:{recording_id}:patient_id") or _rget(redis, f"recall:bot:{bot_id}:patient_id")
+    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id") or _rget(
+        redis, f"recall:bot:{bot_id}:doctor_id"
+    )
+    appointment_id = _rget(
+        redis, f"recall:recording:{recording_id}:appointment_id"
+    ) or _rget(redis, f"recall:bot:{bot_id}:appointment_id")
+    patient_id = _rget(redis, f"recall:recording:{recording_id}:patient_id") or _rget(
+        redis, f"recall:bot:{bot_id}:patient_id"
+    )
 
     if not doctor_id or not appointment_id or not patient_id:
         log.warning(
@@ -65,7 +80,11 @@ def handle_transcript_done(payload: dict[str, Any]):
         transcript_data=[e.model_dump() for e in entries],
     )
 
-    log.info("recall AIVisitTranscript saved", transcript_id=str(transcript.id), entries=len(entries))
+    log.info(
+        "recall AIVisitTranscript saved",
+        transcript_id=str(transcript.id),
+        entries=len(entries),
+    )
     transcribe_job.queue_schema_transcription(transcript)
 
 
@@ -79,7 +98,11 @@ def _map_transcript_entries(raw_data: list[dict]) -> list[TranscriptEntry]:
         content = " ".join(w["text"] for w in words)
         start_ms = int(words[0]["start_timestamp"]["relative"] * 1000)
         end_ms = int(words[-1]["end_timestamp"]["relative"] * 1000)
-        entries.append(TranscriptEntry(speaker=speaker, content=content, startTime=start_ms, endTime=end_ms))
+        entries.append(
+            TranscriptEntry(
+                speaker=speaker, content=content, startTime=start_ms, endTime=end_ms
+            )
+        )
     return entries
 
 

@@ -146,11 +146,15 @@ def build_structured_prompt(
         {json.dumps(note_schema.fields, indent=2)}
         </schema>
 
-        {f'''As an example to help guide you, here is a good clinical note from another encounter.
+        {
+        f'''As an example to help guide you, here is a good clinical note from another encounter.
 
         <example_note>
         {json.dumps(example_note.field_examples, indent=2)}
-        </example_note>''' if example_note else ''}
+        </example_note>'''
+        if example_note
+        else ""
+    }
 
         Ensure that the clinical note you create includes the following action items:
 

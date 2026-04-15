@@ -28,7 +28,9 @@ def _basic_auth_header() -> str:
     return "Basic " + base64.b64encode(credentials.encode()).decode()
 
 
-def _get_doctor_token(integration: DoctorVideoIntegration, *, force: bool = False) -> str:
+def _get_doctor_token(
+    integration: DoctorVideoIntegration, *, force: bool = False
+) -> str:
     """Return a valid access token for this integration, refreshing if needed.
 
     Refreshes proactively if the token expires within 5 minutes, or immediately
@@ -153,7 +155,10 @@ def get_user_display_name(doctor: Doctor) -> str:
     assert integration, f"doctor {doctor.id} has no zoom integration"
 
     data = _zoom_get(f"/users/{integration.provider_user_id}", integration=integration)
-    return f"{data.get('first_name', '')} {data.get('last_name', '')}".strip() or data.get("email", "")
+    return (
+        f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
+        or data.get("email", "")
+    )
 
 
 def get_meeting_join_url(doctor: Doctor, meeting_id: str) -> str:
@@ -174,7 +179,11 @@ def get_user_meetings(doctor: Doctor) -> list[dict]:
         integration=integration,
         params={"type": "upcoming", "page_size": "100"},
     )
-    log.info("zoom meetings fetched", doctor_id=str(doctor.id), count=len(data.get("meetings", [])))
+    log.info(
+        "zoom meetings fetched",
+        doctor_id=str(doctor.id),
+        count=len(data.get("meetings", [])),
+    )
     return data.get("meetings", [])
 
 
@@ -183,6 +192,12 @@ def delete_meeting(doctor: Doctor, zoom_meeting_id: str) -> None:
     integration = get_zoom_integration(doctor)
     assert integration, f"doctor {doctor.id} has no zoom integration"
 
-    response = _zoom_request("DELETE", f"/meetings/{zoom_meeting_id}", integration=integration)
+    response = _zoom_request(
+        "DELETE", f"/meetings/{zoom_meeting_id}", integration=integration
+    )
     response.raise_for_status()
-    log.info("zoom meeting deleted", doctor_id=str(doctor.id), zoom_meeting_id=zoom_meeting_id)
+    log.info(
+        "zoom meeting deleted",
+        doctor_id=str(doctor.id),
+        zoom_meeting_id=zoom_meeting_id,
+    )

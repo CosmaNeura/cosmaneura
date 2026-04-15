@@ -82,7 +82,7 @@ ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend)
 
 # Must match variables.tf python_secret_vars
 SECRET_VARS=(
-	DATABASE_URL REDIS_URL SESSION_SECRET_KEY
+	DATABASE_URL REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
 	CLERK_PRIVATE_KEY SENTRY_DSN ASSEMBLY_API_KEY SMTP_URL
 	AZURE_OPENAI_API_KEY
 	AZURE_UPLOADS_ACCOUNT_NAME AZURE_UPLOADS_ACCOUNT_KEY AZURE_UPLOADS_ACCOUNT_URL
@@ -138,7 +138,7 @@ run_migrations() {
 		--replica-timeout 300 \
 		--replica-retry-limit 0 \
 		--image "$STAGING_TAG" \
-		--args "uv run alembic upgrade head" \
+		--args "/opt/venv/bin/alembic upgrade head" \
 		--cpu 0.5 --memory 1Gi \
 		--secrets "${secrets_args[@]}" \
 		--env-vars "${env_args[@]}" \

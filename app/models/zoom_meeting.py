@@ -18,7 +18,9 @@ class ZoomMeetingStatus(str, Enum):
 
 class ZoomMeeting(BaseModel, TimestampsMixin, TypeIDMixin("zmtg"), table=True):
     __table_args__ = (
-        UniqueConstraint("doctor_id", "zoom_meeting_id", name="uq_zoom_meeting_doctor_meeting"),
+        UniqueConstraint(
+            "doctor_id", "zoom_meeting_id", name="uq_zoom_meeting_doctor_meeting"
+        ),
     )
 
     doctor_id: TypeIDType = Doctor.foreign_key()

@@ -85,7 +85,9 @@ def test_schedule_list_excludes_cancelled(authenticated_client: TestClient):
     _create_zoom_integration(doctor)
 
     _make_meeting(doctor, zoom_meeting_id="111222333")
-    _make_meeting(doctor, zoom_meeting_id="999888777", status=ZoomMeetingStatus.cancelled)
+    _make_meeting(
+        doctor, zoom_meeting_id="999888777", status=ZoomMeetingStatus.cancelled
+    )
 
     with patch("app.routes.internal.sync_zoom_meetings"):
         response = authenticated_client.get(api_app.url_path_for("schedule_list"))

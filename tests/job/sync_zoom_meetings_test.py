@@ -42,7 +42,10 @@ def test_sync_creates_zoom_meetings(global_session):
     doctor = DoctorFactory.build().save()
     _create_zoom_integration(doctor)
 
-    with patch("app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings", return_value=FAKE_MEETINGS):
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=FAKE_MEETINGS,
+    ):
         perform(str(doctor.id))
 
     meetings = list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all())
@@ -65,7 +68,10 @@ def test_sync_upserts_existing_meetings(global_session):
         join_url="https://zoom.us/j/123456789",
     ).save()
 
-    with patch("app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings", return_value=FAKE_MEETINGS):
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=FAKE_MEETINGS,
+    ):
         perform(str(doctor.id))
 
     meetings = list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all())
@@ -89,7 +95,10 @@ def test_sync_preserves_started_status(global_session):
         status=ZoomMeetingStatus.started,
     ).save()
 
-    with patch("app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings", return_value=FAKE_MEETINGS):
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=FAKE_MEETINGS,
+    ):
         perform(str(doctor.id))
 
     meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id="123456789")
@@ -99,6 +108,8 @@ def test_sync_preserves_started_status(global_session):
 def test_sync_skips_doctor_without_zoom(global_session):
     doctor = DoctorFactory.build().save()
 
-    with patch("app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings") as mock_get:
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings"
+    ) as mock_get:
         perform(str(doctor.id))
         mock_get.assert_not_called()
