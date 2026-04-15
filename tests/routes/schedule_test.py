@@ -37,7 +37,7 @@ def _create_zoom_integration(doctor):
 
 
 def _make_meeting(doctor, zoom_meeting_id="111222333", **kwargs):
-    defaults = dict(
+    defaults: dict = dict(
         doctor_id=doctor.id,
         zoom_meeting_id=zoom_meeting_id,
         topic="Test Meeting",
@@ -114,6 +114,7 @@ def test_schedule_cancel(authenticated_client: TestClient):
     mock_delete.assert_called_once_with(ANY, "111222333")
 
     updated = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id="111222333")
+    assert updated is not None
     assert updated.status == ZoomMeetingStatus.cancelled
 
 

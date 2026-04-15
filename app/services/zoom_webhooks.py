@@ -27,7 +27,7 @@ def handle_meeting_started(payload: dict[str, Any]):
         Doctor | None,
         Doctor.where(
             Doctor.id
-            == select(DoctorVideoIntegration.doctor_id)
+            == select(cast(Any, DoctorVideoIntegration.doctor_id))
             .where(
                 (DoctorVideoIntegration.provider == VideoProvider.zoom)
                 & (DoctorVideoIntegration.provider_user_id == host_id)

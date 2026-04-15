@@ -23,10 +23,11 @@ from tests.routes.utils import get_clerk_seed_user
 def seed_test_data():
     log.info("creating test fixture data")
 
-    username, password, user = get_clerk_seed_user()
+    _username, _password, user = get_clerk_seed_user()
     doctor = Doctor.find_or_create_by(clerk_id=user.id)
 
     if not doctor.email:
+        assert user.email_addresses
         doctor.email = user.email_addresses[0].email_address
         doctor.save()
 

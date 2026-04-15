@@ -76,6 +76,7 @@ def authenticated_client():
     _, _, dev_user = get_clerk_dev_user()
     doctor = Doctor.find_or_create_by(clerk_id=dev_user.id)
     if not doctor.email:
+        assert dev_user.email_addresses
         doctor.email = dev_user.email_addresses[0].email_address
         doctor.save()
 

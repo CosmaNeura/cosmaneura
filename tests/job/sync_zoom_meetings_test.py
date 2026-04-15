@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import cast
 from unittest.mock import patch
 
 from app.jobs.sync_zoom_meetings import perform
@@ -48,7 +49,7 @@ def test_sync_creates_zoom_meetings(global_session):
     ):
         perform(str(doctor.id))
 
-    meetings = list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all())
+    meetings = cast(list[ZoomMeeting], list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()))
     assert len(meetings) == 2
     topics = {m.topic for m in meetings}
     assert topics == {"Patient Follow-up", "New Patient Intake"}
@@ -74,10 +75,11 @@ def test_sync_upserts_existing_meetings(global_session):
     ):
         perform(str(doctor.id))
 
-    meetings = list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all())
+    meetings = cast(list[ZoomMeeting], list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()))
     assert len(meetings) == 2  # not duplicated
 
     updated = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id="123456789")
+    assert updated is not None
     assert updated.topic == "Patient Follow-up"  # updated from Zoom
 
 
@@ -102,6 +104,7 @@ def test_sync_preserves_started_status(global_session):
         perform(str(doctor.id))
 
     meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id="123456789")
+    assert meeting is not None
     assert meeting.status == ZoomMeetingStatus.started  # not reset to scheduled
 
 

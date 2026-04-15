@@ -131,6 +131,7 @@ def test_zoom_oauth_callback_updates_existing_integration(client: TestClient):
     integration = DoctorVideoIntegration.get(
         doctor_id=doctor.id, provider=VideoProvider.zoom
     )
+    assert integration is not None
     assert integration.provider_user_id == "new_zoom_id"
 
 
