@@ -34,3 +34,5 @@ infra/terraform.tfstate*
 infra-staging/terraform.tfstate*
 .superpowers/
 .worktrees/
+
+docs/superporwers
