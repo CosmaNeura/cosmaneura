@@ -343,7 +343,9 @@ const STEP_LABELS = ["Perfil", "Historial", "Zoom"]
 function OnboardingStepIndicator({ step }: { step: Step }) {
   if (step === 0 || step === 4) return null
 
-  return <StepIndicator currentStep={step} totalSteps={3} labels={STEP_LABELS} />
+  return (
+    <StepIndicator currentStep={step} totalSteps={3} labels={STEP_LABELS} />
+  )
 }
 
 // ─── Main component ──────────────────────────────────────────────────────────
