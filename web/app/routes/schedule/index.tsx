@@ -9,6 +9,8 @@ import { Icons } from "~/components/icons"
 import { getClient } from "~/configuration/clerk"
 import { requireEnv } from "~/utils/environment"
 
+const ZOOM_COMING_SOON = true
+
 function ZoomConnectPrompt() {
   const [loading, setLoading] = useState(false)
 
@@ -24,6 +26,22 @@ function ZoomConnectPrompt() {
     const { url } = (await res.json()) as { url: string }
     if (url) window.location.href = url
     setLoading(false)
+  }
+
+  if (ZOOM_COMING_SOON) {
+    return (
+      <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
+        <div className="text-center">
+          <h2 className="mb-2 text-xl font-semibold">
+            Zoom integration coming soon
+          </h2>
+          <p className="text-muted-foreground text-sm">
+            You'll be able to connect Zoom to view your meeting schedule and
+            access AI notes after each session.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (

@@ -33,6 +33,8 @@ import {
   zoomDisconnect,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+
+const ZOOM_COMING_SOON = true
 import { uploadFileToAzure } from "~/lib/azure-upload"
 
 import { invariant } from "@epic-web/invariant"
@@ -360,6 +362,24 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
     toast({ title: "Zoom disconnected" })
     setDisconnecting(false)
     revalidator.revalidate()
+  }
+
+  if (ZOOM_COMING_SOON) {
+    return (
+      <section className="prose-headings prose w-1/2 space-y-4">
+        <div className="flex items-center gap-2">
+          <h3 className="!mb-0">Zoom Integration</h3>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+            Coming Soon
+          </span>
+        </div>
+        <p className="text-muted-foreground text-sm">
+          Zoom integration is coming soon. You'll be able to connect your
+          account so Cosma can automatically join your meetings and generate
+          visit notes.
+        </p>
+      </section>
+    )
   }
 
   return (

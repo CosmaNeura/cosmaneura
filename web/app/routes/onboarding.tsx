@@ -27,9 +27,11 @@ import {
   updateSettingsData,
   uploadExampleNote,
 } from "~/configuration/client"
+import { requireEnv } from "~/utils/environment"
+
+const ZOOM_COMING_SOON = true
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
-import { requireEnv } from "~/utils/environment"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -43,7 +45,7 @@ function getInitialStep(data: {
 }): Step {
   if (!data.biography) return 0
   if (data.notes_schema.length === 0) return 2
-  if (!data.zoom_connected) return 3
+  if (!ZOOM_COMING_SOON && !data.zoom_connected) return 3
   return 4
 }
 
@@ -104,7 +106,7 @@ function BiographyStep({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col items-center gap-6 text-center">
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold">Tell us about yourself</h2>
         <p className="text-muted-foreground text-sm">
@@ -134,7 +136,7 @@ function BiographyStep({
               </FormItem>
             )}
           />
-          <Button type="submit" disabled={form.formState.isSubmitting}>
+          <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -193,7 +195,7 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col items-center gap-6 text-center">
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold">Upload an example note</h2>
         <p className="text-muted-foreground text-sm">
@@ -246,7 +248,7 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
               </FormItem>
             )}
           />
-          <Button type="submit" disabled={!file || form.formState.isSubmitting}>
+          <Button type="submit" className="w-full" disabled={!file || form.formState.isSubmitting}>
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -264,7 +266,7 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
 
 // ─── Step 3: Zoom ────────────────────────────────────────────────────────────
 
-function ZoomStep({ onComplete: _onComplete }: { onComplete: () => void }) {
+function ZoomStep({ onComplete }: { onComplete: () => void }) {
   const [loading, setLoading] = useState(false)
 
   async function connectZoom() {
@@ -281,8 +283,31 @@ function ZoomStep({ onComplete: _onComplete }: { onComplete: () => void }) {
     setLoading(false)
   }
 
+  if (ZOOM_COMING_SOON) {
+    return (
+      <div className="flex flex-col items-center gap-6 text-center">
+        <div className="space-y-1">
+          <div className="flex items-center justify-center gap-2">
+            <h2 className="text-2xl font-semibold">Connect Zoom</h2>
+            <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              Coming Soon
+            </span>
+          </div>
+          <p className="text-muted-foreground text-sm">
+            Zoom integration is coming soon. You'll be able to connect your
+            account so Cosma can automatically join your meetings and generate
+            visit notes after each session.
+          </p>
+        </div>
+        <Button onClick={onComplete}>
+          Continue
+        </Button>
+      </div>
+    )
+  }
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col items-center gap-6 text-center">
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold">Connect Zoom</h2>
         <p className="text-muted-foreground text-sm">
@@ -290,7 +315,7 @@ function ZoomStep({ onComplete: _onComplete }: { onComplete: () => void }) {
           meetings and generate visit notes after each session.
         </p>
       </div>
-      <Button onClick={connectZoom} disabled={loading} className="w-fit">
+      <Button onClick={connectZoom} disabled={loading}>
         {loading ? (
           <>
             <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
