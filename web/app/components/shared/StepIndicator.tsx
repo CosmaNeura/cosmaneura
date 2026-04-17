@@ -26,9 +26,9 @@ export function StepIndicator({
               <div
                 className={cn(
                   "relative flex size-14 items-center justify-center rounded-full text-lg font-bold transition-all duration-500 ease-out",
-                  isCompleted && "bg-blue-900 text-white scale-100",
+                  isCompleted && "bg-primary text-primary-foreground scale-100",
                   isActive &&
-                    "bg-blue-900 text-white scale-110 shadow-[0_0_28px_rgba(30,64,175,0.6)]",
+                    "bg-primary text-primary-foreground scale-110 shadow-[0_0_28px_rgba(11,35,65,0.5)]",
                   !isCompleted &&
                     !isActive &&
                     "bg-secondary text-muted-foreground border-border border",
@@ -40,14 +40,14 @@ export function StepIndicator({
                   <span>{stepNum}</span>
                 )}
                 {isActive && (
-                  <span className="absolute inset-0 animate-ping rounded-full bg-blue-800/40" />
+                  <span className="absolute inset-0 animate-ping rounded-full bg-primary/30" />
                 )}
               </div>
               <span
                 className={cn(
                   "text-sm font-semibold whitespace-nowrap transition-colors duration-300",
                   isActive
-                    ? "text-blue-900"
+                    ? "text-primary"
                     : isCompleted
                       ? "text-foreground"
                       : "text-muted-foreground",
@@ -60,7 +60,7 @@ export function StepIndicator({
               <div className="mx-4 mb-8 flex-1">
                 <div className="bg-border relative h-0.5 overflow-hidden rounded-full">
                   <div
-                    className="absolute inset-y-0 left-0 rounded-full bg-blue-900 transition-all duration-700 ease-out"
+                    className="absolute inset-y-0 left-0 rounded-full bg-primary transition-all duration-700 ease-out"
                     style={{
                       width: isCompleted ? "100%" : isActive ? "50%" : "0%",
                     }}

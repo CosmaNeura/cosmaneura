@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { motion } from "motion/react"
 import { useForm } from "react-hook-form"
 import { href, redirect } from "react-router"
 import { z } from "zod"
@@ -179,7 +180,18 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
     const { data: sasSignature } = await generateSignedExampleNoteUploadUrl()
     invariant(sasSignature, "SAS signature should exist")
 
-    const { stampedFileName } = await uploadFileToAzure(file, sasSignature)
+    const { stampedFileName, error: uploadError } = await uploadFileToAzure(
+      file,
+      sasSignature,
+    )
+
+    if (uploadError) {
+      toast({
+        title: "Failed to upload note. Please try again.",
+        variant: "destructive",
+      })
+      return
+    }
 
     await uploadExampleNote({
       query: { file_name: stampedFileName, note_type: values.note_type },
@@ -342,21 +354,62 @@ function AllSetStep() {
 
   return (
     <div className="flex flex-col items-center gap-6 text-center">
-      <h2 className="text-3xl font-bold">You're all set!</h2>
-      <p className="text-muted-foreground max-w-md text-base">
-        Your biography is saved, your note style is loaded, and Cosma will join
-        your Zoom meetings automatically. You're ready to start using Cosma.
-      </p>
-      <Button size="lg" onClick={handleGoToCosma} disabled={loading}>
-        {loading ? (
-          <>
-            <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-            Loading...
-          </>
-        ) : (
-          "Go to Cosma"
-        )}
-      </Button>
+      <motion.div
+        initial={{ scale: 0, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ type: "spring", stiffness: 200, damping: 15, delay: 0.1 }}
+        className="relative flex size-24 items-center justify-center rounded-full"
+        style={{ background: "var(--brand-navy-deep)" }}
+      >
+        {/* ping ring */}
+        <motion.span
+          initial={{ scale: 0.8, opacity: 0.6 }}
+          animate={{ scale: 1.6, opacity: 0 }}
+          transition={{ duration: 1.2, repeat: Infinity, ease: "easeOut" }}
+          className="absolute inset-0 rounded-full"
+          style={{ background: "var(--brand-navy-deep)" }}
+        />
+        {/* checkmark */}
+        <svg
+          viewBox="0 0 52 52"
+          className="size-12"
+          fill="none"
+          stroke="var(--brand-gold)"
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <motion.path
+            d="M14 27 L23 36 L38 18"
+            initial={{ pathLength: 0 }}
+            animate={{ pathLength: 1 }}
+            transition={{ duration: 0.5, delay: 0.4, ease: "easeOut" }}
+          />
+        </svg>
+      </motion.div>
+
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.7, duration: 0.4 }}
+        className="flex flex-col items-center gap-3"
+      >
+        <h2 className="text-3xl font-bold">You're all set!</h2>
+        <p className="text-muted-foreground max-w-md text-base">
+          Your biography is saved, your note style is loaded, and Cosma will join
+          your Zoom meetings automatically. You're ready to start using Cosma.
+        </p>
+        <Button size="lg" onClick={handleGoToCosma} disabled={loading} className="mt-2">
+          {loading ? (
+            <>
+              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+              Loading...
+            </>
+          ) : (
+            "Go to Cosma"
+          )}
+        </Button>
+      </motion.div>
     </div>
   )
 }

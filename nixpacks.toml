@@ -1,0 +1,3 @@
+[phases.setup]
+# poppler_utils provides pdftoppm and pdfinfo, required by pdf2image
+nixPkgs = ["poppler_utils"]

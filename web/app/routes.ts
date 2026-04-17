@@ -30,4 +30,8 @@ export default [
   ]),
   // public, unauthenticated, intake chat
   route("chat/intake/:id", "routes/chat/intake.tsx"),
+  // public legal / support pages
+  route("privacy-policy", "routes/privacy-policy.tsx"),
+  route("terms-of-service", "routes/terms-of-service.tsx"),
+  route("support", "routes/support.tsx"),
 ] satisfies RouteConfig

@@ -1,7 +1,8 @@
 import * as React from "react"
 import { href, useLocation, useNavigate } from "react-router"
 
-import { Calendar, Command, File, Inbox, Settings } from "lucide-react"
+import { Calendar, File, Inbox, Settings } from "lucide-react"
+import { BrandLogo } from "~/components/brand/BrandLogo"
 
 import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
@@ -32,14 +33,8 @@ const IconSidebarHeader = () => (
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton size="lg" asChild className="md:h-8 md:p-0">
-          <a href="#">
-            <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-              <Command className="size-4" />
-            </div>
-            <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-semibold">Acme Inc</span>
-              <span className="truncate text-xs">Enterprise</span>
-            </div>
+          <a href="/">
+            <BrandLogo variant="light" size="sm" />
           </a>
         </SidebarMenuButton>
       </SidebarMenuItem>
@@ -135,7 +130,7 @@ function SelectionList({
             key={entry.id}
             onClick={() => currentUrl !== entry.url && navigate(entry.url)}
             className={cn(
-              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b p-4 text-sm leading-tight",
+              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight text-sidebar-foreground",
               currentUrl === entry.url &&
                 true &&
                 "bg-sidebar-accent text-sidebar-accent-foreground",
@@ -143,10 +138,10 @@ function SelectionList({
           >
             <div className="flex w-full items-center justify-between gap-2">
               <span className="font-medium">{entry.title}</span>
-              <span className="text-xs text-slate-500">{entry.date}</span>
+              <span className="text-xs text-on-navy-muted">{entry.date}</span>
             </div>
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-left text-xs text-slate-500">
+              <span className="text-left text-xs text-on-navy-muted">
                 {entry.preview}
               </span>
               {entry.status !== "none" && <StatusBadge status={entry.status} />}
@@ -206,10 +201,10 @@ function SelectionSidebar({
         {/* title with filters */}
         <SidebarHeader className="gap-3.5 border-b p-4">
           <div className="flex w-full items-center justify-between">
-            <div className="text-foreground text-base font-medium">
+            <div className="text-sidebar-foreground text-base font-medium">
               {header ?? "Appointments"}
             </div>
-            <Label className="flex items-center gap-2 text-sm">
+            <Label className="flex items-center gap-2 text-sm text-on-navy-muted">
               <span>This Week</span>
               <Switch
                 className="shadow-none"
@@ -227,13 +222,13 @@ function SelectionSidebar({
         <SidebarContent>
           <SidebarGroup className="px-0">
             {entries.length === 0 && (
-              <div className="p-4 text-center text-sm text-slate-500">
+            <div className="p-4 text-center text-sm text-on-navy-muted">
                 <p>No Appointments</p>
                 <p className="mt-2">Upload a visit recording to get started.</p>
               </div>
             )}
             {entries.length > 0 && filteredEntries.length === 0 ? (
-              <div className="p-4 text-center text-sm text-slate-500">
+              <div className="p-4 text-center text-sm text-on-navy-muted">
                 <p>No results found.</p>
                 <p className="mt-2">Try adjusting your filters.</p>
               </div>
