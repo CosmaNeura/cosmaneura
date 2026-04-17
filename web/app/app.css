@@ -56,7 +56,7 @@
   --sidebar-primary-foreground: #0b2341;
   --sidebar-accent: #18365c;
   --sidebar-accent-foreground: #f5f0e4;
-  --sidebar-border: #18365c;
+  --sidebar-border: rgba(197, 186, 161, 0.18);
   --sidebar-ring: #c9a961;
 
   --success: hsl(142.1 76.2% 36.3%);
