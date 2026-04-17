@@ -1,392 +1,778 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Terms of Service — Cosmas by CosmaNeura</title>
-<meta name="description" content="Terms of Service for Cosmas, an AI medical scribe for Zoom visits, operated by CosmaNeura, Inc." />
-<link rel="icon" type="image/png" href="/cosmas-icon-128.png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
-<style>
-  :root {
-    --navy-deep: #0B2341;
-    --navy-mid: #18365C;
-    --gold: #C9A961;
-    --gold-bright: #E0BF74;
-    --cream: #F5F0E4;
-    --ink: #1A1A1A;
-    --muted: #55596B;
-    --rule: #E5DFD1;
-    --bg: #FBF9F4;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
-  body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 16px;
-    line-height: 1.7;
-    color: var(--ink);
-    background: var(--bg);
-    -webkit-font-smoothing: antialiased;
-  }
-  .masthead {
-    background: linear-gradient(135deg, var(--navy-deep) 0%, var(--navy-mid) 100%);
-    color: var(--cream);
-    padding: 48px 0 56px;
-    border-bottom: 3px solid var(--gold);
-    position: relative;
-  }
-  .masthead::after {
-    content: "";
-    position: absolute;
-    left: 0; right: 0; bottom: 3px;
-    height: 1px;
-    background: var(--gold);
-    opacity: 0.3;
-    transform: translateY(4px);
-  }
-  .container {
-    max-width: 820px;
-    margin: 0 auto;
-    padding: 0 32px;
-  }
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 24px;
-  }
-  .brand img {
-    width: 56px;
-    height: 56px;
-    border-radius: 12px;
-  }
-  .brand-text { display: flex; flex-direction: column; line-height: 1.1; }
-  .brand-name {
-    font-family: 'Cormorant Garamond', serif;
-    font-weight: 600;
-    font-size: 28px;
-    color: var(--cream);
-    letter-spacing: 0.5px;
-  }
-  .brand-co {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 2.5px;
-    color: var(--gold);
-    margin-top: 4px;
-  }
-  h1.page-title {
-    font-family: 'Cormorant Garamond', serif;
-    font-weight: 600;
-    font-size: 52px;
-    line-height: 1.1;
-    margin: 8px 0 12px;
-    color: var(--cream);
-  }
-  .eyebrow {
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 3px;
-    color: var(--gold);
-    font-weight: 500;
-  }
-  .meta {
-    font-size: 14px;
-    color: rgba(245, 240, 228, 0.75);
-    margin-top: 12px;
-  }
-  main {
-    padding: 56px 0 80px;
-  }
-  .intro {
-    font-size: 18px;
-    line-height: 1.7;
-    color: var(--ink);
-    border-left: 3px solid var(--gold);
-    padding: 6px 0 6px 22px;
-    margin-bottom: 40px;
-  }
-  h2 {
-    font-family: 'Cormorant Garamond', serif;
-    font-weight: 600;
-    font-size: 30px;
-    line-height: 1.2;
-    margin: 48px 0 4px;
-    color: var(--navy-deep);
-  }
-  h2 .num {
-    font-family: 'Inter', sans-serif;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 3px;
-    color: var(--gold);
-    display: block;
-    margin-bottom: 8px;
-    text-transform: uppercase;
-  }
-  h3 {
-    font-family: 'Inter', sans-serif;
-    font-weight: 600;
-    font-size: 17px;
-    margin: 28px 0 8px;
-    color: var(--navy-deep);
-  }
-  p { margin: 12px 0; }
-  ul, ol { padding-left: 22px; }
-  li { margin: 6px 0; }
-  strong { color: var(--navy-deep); font-weight: 600; }
-  a {
-    color: var(--navy-mid);
-    text-decoration: underline;
-    text-decoration-color: var(--gold);
-    text-underline-offset: 3px;
-  }
-  a:hover { color: var(--gold); }
-  .callout {
-    background: #FFFDF6;
-    border: 1px solid var(--rule);
-    border-left: 4px solid var(--gold);
-    padding: 18px 22px;
-    margin: 20px 0;
-    border-radius: 2px;
-    font-size: 15px;
-  }
-  .callout strong { color: var(--navy-deep); }
-  hr.rule {
-    border: 0;
-    border-top: 1px solid var(--rule);
-    margin: 56px 0 32px;
-  }
-  footer {
-    background: var(--navy-deep);
-    color: rgba(245, 240, 228, 0.8);
-    padding: 40px 0;
-    font-size: 14px;
-  }
-  footer .container { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
-  footer a { color: var(--gold-bright); }
-  .toc {
-    background: #FFFDF6;
-    border: 1px solid var(--rule);
-    padding: 24px 28px;
-    margin: 0 0 40px;
-    border-radius: 2px;
-  }
-  .toc h4 {
-    margin: 0 0 12px;
-    font-size: 12px;
-    text-transform: uppercase;
-    letter-spacing: 2.5px;
-    color: var(--gold);
-    font-weight: 600;
-  }
-  .toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; font-size: 14px; }
-  .toc li { margin: 4px 0; break-inside: avoid; }
-  @media (max-width: 640px) {
-    h1.page-title { font-size: 38px; }
-    h2 { font-size: 24px; }
-    .container { padding: 0 20px; }
-    .toc ol { columns: 1; }
-  }
-</style>
-</head>
-<body>
-
-<header class="masthead">
-  <div class="container">
-    <div class="brand">
-      <img src="cosmas-icon-128.png" alt="Cosmas logo" />
-      <div class="brand-text">
-        <span class="brand-name">Cosmas</span>
-        <span class="brand-co">by CosmaNeura, Inc.</span>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Terms of Service — Cosmas by CosmaNeura</title>
+    <meta
+      name="description"
+      content="Terms of Service for Cosmas, an AI medical scribe for Zoom visits, operated by CosmaNeura, Inc."
+    />
+    <link rel="icon" type="image/png" href="/cosmas-icon-128.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --navy-deep: #0b2341;
+        --navy-mid: #18365c;
+        --gold: #c9a961;
+        --gold-bright: #e0bf74;
+        --cream: #f5f0e4;
+        --ink: #1a1a1a;
+        --muted: #55596b;
+        --rule: #e5dfd1;
+        --bg: #fbf9f4;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family:
+          "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        font-size: 16px;
+        line-height: 1.7;
+        color: var(--ink);
+        background: var(--bg);
+        -webkit-font-smoothing: antialiased;
+      }
+      .masthead {
+        background: linear-gradient(
+          135deg,
+          var(--navy-deep) 0%,
+          var(--navy-mid) 100%
+        );
+        color: var(--cream);
+        padding: 48px 0 56px;
+        border-bottom: 3px solid var(--gold);
+        position: relative;
+      }
+      .masthead::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 3px;
+        height: 1px;
+        background: var(--gold);
+        opacity: 0.3;
+        transform: translateY(4px);
+      }
+      .container {
+        max-width: 820px;
+        margin: 0 auto;
+        padding: 0 32px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .brand img {
+        width: 56px;
+        height: 56px;
+        border-radius: 12px;
+      }
+      .brand-text {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.1;
+      }
+      .brand-name {
+        font-family: "Cormorant Garamond", serif;
+        font-weight: 600;
+        font-size: 28px;
+        color: var(--cream);
+        letter-spacing: 0.5px;
+      }
+      .brand-co {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 2.5px;
+        color: var(--gold);
+        margin-top: 4px;
+      }
+      h1.page-title {
+        font-family: "Cormorant Garamond", serif;
+        font-weight: 600;
+        font-size: 52px;
+        line-height: 1.1;
+        margin: 8px 0 12px;
+        color: var(--cream);
+      }
+      .eyebrow {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        color: var(--gold);
+        font-weight: 500;
+      }
+      .meta {
+        font-size: 14px;
+        color: rgba(245, 240, 228, 0.75);
+        margin-top: 12px;
+      }
+      main {
+        padding: 56px 0 80px;
+      }
+      .intro {
+        font-size: 18px;
+        line-height: 1.7;
+        color: var(--ink);
+        border-left: 3px solid var(--gold);
+        padding: 6px 0 6px 22px;
+        margin-bottom: 40px;
+      }
+      h2 {
+        font-family: "Cormorant Garamond", serif;
+        font-weight: 600;
+        font-size: 30px;
+        line-height: 1.2;
+        margin: 48px 0 4px;
+        color: var(--navy-deep);
+      }
+      h2 .num {
+        font-family: "Inter", sans-serif;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 3px;
+        color: var(--gold);
+        display: block;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+      }
+      h3 {
+        font-family: "Inter", sans-serif;
+        font-weight: 600;
+        font-size: 17px;
+        margin: 28px 0 8px;
+        color: var(--navy-deep);
+      }
+      p {
+        margin: 12px 0;
+      }
+      ul,
+      ol {
+        padding-left: 22px;
+      }
+      li {
+        margin: 6px 0;
+      }
+      strong {
+        color: var(--navy-deep);
+        font-weight: 600;
+      }
+      a {
+        color: var(--navy-mid);
+        text-decoration: underline;
+        text-decoration-color: var(--gold);
+        text-underline-offset: 3px;
+      }
+      a:hover {
+        color: var(--gold);
+      }
+      .callout {
+        background: #fffdf6;
+        border: 1px solid var(--rule);
+        border-left: 4px solid var(--gold);
+        padding: 18px 22px;
+        margin: 20px 0;
+        border-radius: 2px;
+        font-size: 15px;
+      }
+      .callout strong {
+        color: var(--navy-deep);
+      }
+      hr.rule {
+        border: 0;
+        border-top: 1px solid var(--rule);
+        margin: 56px 0 32px;
+      }
+      footer {
+        background: var(--navy-deep);
+        color: rgba(245, 240, 228, 0.8);
+        padding: 40px 0;
+        font-size: 14px;
+      }
+      footer .container {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      footer a {
+        color: var(--gold-bright);
+      }
+      .toc {
+        background: #fffdf6;
+        border: 1px solid var(--rule);
+        padding: 24px 28px;
+        margin: 0 0 40px;
+        border-radius: 2px;
+      }
+      .toc h4 {
+        margin: 0 0 12px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 2.5px;
+        color: var(--gold);
+        font-weight: 600;
+      }
+      .toc ol {
+        margin: 0;
+        padding-left: 20px;
+        columns: 2;
+        column-gap: 32px;
+        font-size: 14px;
+      }
+      .toc li {
+        margin: 4px 0;
+        break-inside: avoid;
+      }
+      @media (max-width: 640px) {
+        h1.page-title {
+          font-size: 38px;
+        }
+        h2 {
+          font-size: 24px;
+        }
+        .container {
+          padding: 0 20px;
+        }
+        .toc ol {
+          columns: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="container">
+        <div class="brand">
+          <img src="cosmas-icon-128.png" alt="Cosmas logo" />
+          <div class="brand-text">
+            <span class="brand-name">Cosmas</span>
+            <span class="brand-co">by CosmaNeura, Inc.</span>
+          </div>
+        </div>
+        <span class="eyebrow">Legal</span>
+        <h1 class="page-title">Terms of Service</h1>
+        <p class="meta">
+          Effective date: April 16, 2026 · Last updated: April 16, 2026
+        </p>
       </div>
-    </div>
-    <span class="eyebrow">Legal</span>
-    <h1 class="page-title">Terms of Service</h1>
-    <p class="meta">Effective date: April 16, 2026 · Last updated: April 16, 2026</p>
-  </div>
-</header>
+    </header>
 
-<main>
-  <div class="container">
+    <main>
+      <div class="container">
+        <p class="intro">
+          These Terms of Service (&ldquo;Terms&rdquo;) govern your access to and
+          use of Cosmas, an AI-assisted clinical documentation application
+          operated by CosmaNeura, Inc. (&ldquo;CosmaNeura,&rdquo;
+          &ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;). Please read
+          them carefully. By installing, enabling, or using Cosmas, you agree to
+          be bound by these Terms.
+        </p>
 
-    <p class="intro">
-      These Terms of Service (&ldquo;Terms&rdquo;) govern your access to and use of Cosmas, an AI-assisted clinical documentation application operated by CosmaNeura, Inc. (&ldquo;CosmaNeura,&rdquo; &ldquo;we,&rdquo; &ldquo;us,&rdquo; or &ldquo;our&rdquo;). Please read them carefully. By installing, enabling, or using Cosmas, you agree to be bound by these Terms.
-    </p>
+        <div class="toc">
+          <h4>Contents</h4>
+          <ol>
+            <li><a href="#s1">Acceptance &amp; eligibility</a></li>
+            <li><a href="#s2">The service</a></li>
+            <li><a href="#s3">Account &amp; access</a></li>
+            <li><a href="#s4">Your responsibilities</a></li>
+            <li><a href="#s5">HIPAA &amp; PHI</a></li>
+            <li><a href="#s6">Your data &amp; our AI</a></li>
+            <li><a href="#s7">Third-party services</a></li>
+            <li><a href="#s8">Prohibited uses</a></li>
+            <li><a href="#s9">Intellectual property</a></li>
+            <li><a href="#s10">Fees &amp; billing</a></li>
+            <li><a href="#s11">Medical disclaimer</a></li>
+            <li><a href="#s12">Warranties &amp; disclaimers</a></li>
+            <li><a href="#s13">Limitation of liability</a></li>
+            <li><a href="#s14">Indemnification</a></li>
+            <li><a href="#s15">Term &amp; termination</a></li>
+            <li><a href="#s16">Governing law</a></li>
+            <li><a href="#s17">Dispute resolution</a></li>
+            <li><a href="#s18">Changes to these Terms</a></li>
+            <li><a href="#s19">Contact us</a></li>
+          </ol>
+        </div>
 
-    <div class="toc">
-      <h4>Contents</h4>
-      <ol>
-        <li><a href="#s1">Acceptance &amp; eligibility</a></li>
-        <li><a href="#s2">The service</a></li>
-        <li><a href="#s3">Account &amp; access</a></li>
-        <li><a href="#s4">Your responsibilities</a></li>
-        <li><a href="#s5">HIPAA &amp; PHI</a></li>
-        <li><a href="#s6">Your data &amp; our AI</a></li>
-        <li><a href="#s7">Third-party services</a></li>
-        <li><a href="#s8">Prohibited uses</a></li>
-        <li><a href="#s9">Intellectual property</a></li>
-        <li><a href="#s10">Fees &amp; billing</a></li>
-        <li><a href="#s11">Medical disclaimer</a></li>
-        <li><a href="#s12">Warranties &amp; disclaimers</a></li>
-        <li><a href="#s13">Limitation of liability</a></li>
-        <li><a href="#s14">Indemnification</a></li>
-        <li><a href="#s15">Term &amp; termination</a></li>
-        <li><a href="#s16">Governing law</a></li>
-        <li><a href="#s17">Dispute resolution</a></li>
-        <li><a href="#s18">Changes to these Terms</a></li>
-        <li><a href="#s19">Contact us</a></li>
-      </ol>
-    </div>
+        <h2 id="s1">
+          <span class="num">§ 01</span>Acceptance &amp; Eligibility
+        </h2>
+        <p>
+          By installing, enabling, or using Cosmas (the &ldquo;Service&rdquo;),
+          you represent that you are (a) a licensed healthcare professional, a
+          member of a healthcare professional&rsquo;s workforce, or a person
+          authorized to act on their behalf; (b) at least 18 years of age; and
+          (c) legally capable of entering into a binding contract in your
+          jurisdiction. If you are accepting these Terms on behalf of an
+          organization (a clinic, practice, or employer), you represent that you
+          have authority to bind that organization to these Terms, and
+          &ldquo;you&rdquo; refers to that organization.
+        </p>
+        <p>
+          Cosmas is a business-to-professional tool. It is not offered to
+          consumers, patients, or individuals seeking personal medical advice.
+        </p>
 
-    <h2 id="s1"><span class="num">§ 01</span>Acceptance &amp; Eligibility</h2>
-    <p>By installing, enabling, or using Cosmas (the &ldquo;Service&rdquo;), you represent that you are (a) a licensed healthcare professional, a member of a healthcare professional&rsquo;s workforce, or a person authorized to act on their behalf; (b) at least 18 years of age; and (c) legally capable of entering into a binding contract in your jurisdiction. If you are accepting these Terms on behalf of an organization (a clinic, practice, or employer), you represent that you have authority to bind that organization to these Terms, and &ldquo;you&rdquo; refers to that organization.</p>
-    <p>Cosmas is a business-to-professional tool. It is not offered to consumers, patients, or individuals seeking personal medical advice.</p>
+        <h2 id="s2"><span class="num">§ 02</span>The Service</h2>
+        <p>
+          Cosmas is a multi-tenant software application that integrates with
+          Zoom and other supported platforms to assist physicians and clinicians
+          with the preparation of clinical documentation. Current and planned
+          capabilities include, without limitation:
+        </p>
+        <ul>
+          <li>
+            Auto-joining scheduled Zoom visits as a participant (the
+            &ldquo;bot&rdquo;) to capture audio and, where authorized, video and
+            chat;
+          </li>
+          <li>
+            Generating transcripts, SOAP notes, visit summaries, and related
+            clinical documentation drafts;
+          </li>
+          <li>
+            Performing related intake, scheduling, and documentation-workflow
+            functions.
+          </li>
+        </ul>
+        <p>
+          CosmaNeura may update, add, modify, suspend, or remove features of the
+          Service at any time. We will use reasonable efforts to notify you of
+          material changes.
+        </p>
 
-    <h2 id="s2"><span class="num">§ 02</span>The Service</h2>
-    <p>Cosmas is a multi-tenant software application that integrates with Zoom and other supported platforms to assist physicians and clinicians with the preparation of clinical documentation. Current and planned capabilities include, without limitation:</p>
-    <ul>
-      <li>Auto-joining scheduled Zoom visits as a participant (the &ldquo;bot&rdquo;) to capture audio and, where authorized, video and chat;</li>
-      <li>Generating transcripts, SOAP notes, visit summaries, and related clinical documentation drafts;</li>
-      <li>Performing related intake, scheduling, and documentation-workflow functions.</li>
-    </ul>
-    <p>CosmaNeura may update, add, modify, suspend, or remove features of the Service at any time. We will use reasonable efforts to notify you of material changes.</p>
+        <h2 id="s3"><span class="num">§ 03</span>Account &amp; Access</h2>
+        <p>
+          You access Cosmas by authorizing the application through your Zoom
+          account (and, where applicable, your calendar or scheduling system)
+          using OAuth or a similar authorization flow. You are responsible for
+          (i) maintaining the security and confidentiality of your login
+          credentials; (ii) all activity that occurs under your account; and
+          (iii) promptly notifying us of any unauthorized use. We are not liable
+          for losses resulting from unauthorized use of your account that was
+          not caused by us.
+        </p>
 
-    <h2 id="s3"><span class="num">§ 03</span>Account &amp; Access</h2>
-    <p>You access Cosmas by authorizing the application through your Zoom account (and, where applicable, your calendar or scheduling system) using OAuth or a similar authorization flow. You are responsible for (i) maintaining the security and confidentiality of your login credentials; (ii) all activity that occurs under your account; and (iii) promptly notifying us of any unauthorized use. We are not liable for losses resulting from unauthorized use of your account that was not caused by us.</p>
+        <h2 id="s4"><span class="num">§ 04</span>Your Responsibilities</h2>
+        <h3>Lawful use and patient consent</h3>
+        <p>
+          You are solely responsible for ensuring that your use of Cosmas
+          complies with all applicable federal, state, and local laws, rules,
+          and regulations, including without limitation HIPAA, state
+          medical-recording and wiretapping laws, state telehealth rules,
+          professional-licensure requirements, and any applicable institutional
+          policies. You agree to:
+        </p>
+        <ul>
+          <li>
+            Obtain and document all patient consents required for recording,
+            transcription, and AI-assisted documentation under applicable law
+            and your professional standards;
+          </li>
+          <li>
+            Provide patients with clear notice, before recording begins, that an
+            AI assistant is participating in the visit;
+          </li>
+          <li>
+            Maintain your own Business Associate Agreement (&ldquo;BAA&rdquo;)
+            with Zoom (via a Zoom plan that supports HIPAA use) and with any
+            other platform you connect to Cosmas;
+          </li>
+          <li>
+            Review, edit, and clinically verify every draft note, transcript,
+            and other output before using, signing, or submitting it for any
+            clinical, billing, or legal purpose.
+          </li>
+        </ul>
 
-    <h2 id="s4"><span class="num">§ 04</span>Your Responsibilities</h2>
-    <h3>Lawful use and patient consent</h3>
-    <p>You are solely responsible for ensuring that your use of Cosmas complies with all applicable federal, state, and local laws, rules, and regulations, including without limitation HIPAA, state medical-recording and wiretapping laws, state telehealth rules, professional-licensure requirements, and any applicable institutional policies. You agree to:</p>
-    <ul>
-      <li>Obtain and document all patient consents required for recording, transcription, and AI-assisted documentation under applicable law and your professional standards;</li>
-      <li>Provide patients with clear notice, before recording begins, that an AI assistant is participating in the visit;</li>
-      <li>Maintain your own Business Associate Agreement (&ldquo;BAA&rdquo;) with Zoom (via a Zoom plan that supports HIPAA use) and with any other platform you connect to Cosmas;</li>
-      <li>Review, edit, and clinically verify every draft note, transcript, and other output before using, signing, or submitting it for any clinical, billing, or legal purpose.</li>
-    </ul>
+        <h3>Accuracy of inputs</h3>
+        <p>
+          You are responsible for the accuracy of information you provide to
+          Cosmas, including meeting details, participant identities, clinical
+          context, and any manual corrections.
+        </p>
 
-    <h3>Accuracy of inputs</h3>
-    <p>You are responsible for the accuracy of information you provide to Cosmas, including meeting details, participant identities, clinical context, and any manual corrections.</p>
+        <h3>Workforce training</h3>
+        <p>
+          If you are an organization, you are responsible for training your
+          workforce on proper use of Cosmas, including consent workflows,
+          review-before-sign-off practices, and HIPAA Privacy and Security Rule
+          requirements.
+        </p>
 
-    <h3>Workforce training</h3>
-    <p>If you are an organization, you are responsible for training your workforce on proper use of Cosmas, including consent workflows, review-before-sign-off practices, and HIPAA Privacy and Security Rule requirements.</p>
+        <h2 id="s5">
+          <span class="num">§ 05</span>HIPAA &amp; Protected Health Information
+        </h2>
+        <p>
+          To the extent you are a HIPAA Covered Entity (or a Business Associate
+          of one) and you use Cosmas to create, receive, maintain, or transmit
+          Protected Health Information (&ldquo;PHI&rdquo;), CosmaNeura will act
+          as your Business Associate. A Business Associate Agreement
+          (&ldquo;BAA&rdquo;) between you and CosmaNeura is required
+          <em>before</em> any PHI is processed through Cosmas.
+        </p>
+        <div class="callout">
+          <strong>Required step before go-live.</strong> If you have not
+          executed a BAA with CosmaNeura, do not transmit PHI through the
+          Service. Request a BAA by emailing
+          <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
+        </div>
+        <p>
+          Where a BAA is in place, CosmaNeura will use and disclose PHI only as
+          permitted by that BAA, by these Terms, and by applicable law, and will
+          implement the administrative, physical, and technical safeguards
+          required by the HIPAA Security Rule.
+        </p>
+        <p>
+          Where you use Cosmas outside a HIPAA-covered context, you remain
+          responsible for compliance with any other applicable data-protection
+          laws (for example, state consumer health-data laws, GDPR for EU
+          residents, and similar regimes).
+        </p>
 
-    <h2 id="s5"><span class="num">§ 05</span>HIPAA &amp; Protected Health Information</h2>
-    <p>To the extent you are a HIPAA Covered Entity (or a Business Associate of one) and you use Cosmas to create, receive, maintain, or transmit Protected Health Information (&ldquo;PHI&rdquo;), CosmaNeura will act as your Business Associate. A Business Associate Agreement (&ldquo;BAA&rdquo;) between you and CosmaNeura is required <em>before</em> any PHI is processed through Cosmas.</p>
-    <div class="callout">
-      <strong>Required step before go-live.</strong> If you have not executed a BAA with CosmaNeura, do not transmit PHI through the Service. Request a BAA by emailing <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
-    </div>
-    <p>Where a BAA is in place, CosmaNeura will use and disclose PHI only as permitted by that BAA, by these Terms, and by applicable law, and will implement the administrative, physical, and technical safeguards required by the HIPAA Security Rule.</p>
-    <p>Where you use Cosmas outside a HIPAA-covered context, you remain responsible for compliance with any other applicable data-protection laws (for example, state consumer health-data laws, GDPR for EU residents, and similar regimes).</p>
+        <h2 id="s6"><span class="num">§ 06</span>Your Data &amp; Our AI</h2>
+        <p>
+          We treat your data with care, and we are deliberate about how we may
+          use it to improve Cosmas. The following terms control:
+        </p>
 
-    <h2 id="s6"><span class="num">§ 06</span>Your Data &amp; Our AI</h2>
-    <p>We treat your data with care, and we are deliberate about how we may use it to improve Cosmas. The following terms control:</p>
+        <h3>Your ownership</h3>
+        <p>
+          You retain all rights, title, and interest in and to the content you,
+          your workforce, or your patients provide to or create within Cosmas,
+          including recordings, transcripts, notes, and clinical documentation
+          (&ldquo;Customer Content&rdquo;). Nothing in these Terms transfers
+          ownership of Customer Content or PHI to CosmaNeura.
+        </p>
 
-    <h3>Your ownership</h3>
-    <p>You retain all rights, title, and interest in and to the content you, your workforce, or your patients provide to or create within Cosmas, including recordings, transcripts, notes, and clinical documentation (&ldquo;Customer Content&rdquo;). Nothing in these Terms transfers ownership of Customer Content or PHI to CosmaNeura.</p>
+        <h3>License you grant us</h3>
+        <p>
+          You grant CosmaNeura a worldwide, non-exclusive, royalty-free license
+          to host, store, process, transmit, display, and otherwise use Customer
+          Content solely for the purposes permitted in these Terms and in the
+          BAA (if any), namely:
+        </p>
+        <ol>
+          <li>
+            <strong>Service delivery.</strong> To operate, maintain, support,
+            secure, and troubleshoot Cosmas and to provide the functionality you
+            request.
+          </li>
+          <li>
+            <strong>Product improvement and new features.</strong> To analyze,
+            test, fine-tune, train, and evaluate machine-learning models,
+            prompts, workflows, and features that are part of, or may become
+            part of, Cosmas.
+          </li>
+          <li>
+            <strong>Aggregate analytics.</strong> To generate de-identified,
+            aggregated statistics about usage and performance of the Service.
+          </li>
+        </ol>
 
-    <h3>License you grant us</h3>
-    <p>You grant CosmaNeura a worldwide, non-exclusive, royalty-free license to host, store, process, transmit, display, and otherwise use Customer Content solely for the purposes permitted in these Terms and in the BAA (if any), namely:</p>
-    <ol>
-      <li><strong>Service delivery.</strong> To operate, maintain, support, secure, and troubleshoot Cosmas and to provide the functionality you request.</li>
-      <li><strong>Product improvement and new features.</strong> To analyze, test, fine-tune, train, and evaluate machine-learning models, prompts, workflows, and features that are part of, or may become part of, Cosmas.</li>
-      <li><strong>Aggregate analytics.</strong> To generate de-identified, aggregated statistics about usage and performance of the Service.</li>
-    </ol>
+        <h3>What we will not do</h3>
+        <div class="callout">
+          <strong
+            >CosmaNeura will not sell, rent, or license Customer Content — and
+            will not sell, rent, or license models, datasets, or insights
+            derived from your Customer Content — to any third party.</strong
+          >
+          We will not use Customer Content to deliver advertising, to monetize
+          data through a data broker, or to provide a competing data product to
+          third parties. Model and product improvements developed using Customer
+          Content benefit Cosmas and its users; we do not commercialize your
+          data as a standalone asset.
+        </div>
 
-    <h3>What we will not do</h3>
-    <div class="callout">
-      <strong>CosmaNeura will not sell, rent, or license Customer Content — and will not sell, rent, or license models, datasets, or insights derived from your Customer Content — to any third party.</strong> We will not use Customer Content to deliver advertising, to monetize data through a data broker, or to provide a competing data product to third parties. Model and product improvements developed using Customer Content benefit Cosmas and its users; we do not commercialize your data as a standalone asset.
-    </div>
+        <h3>How we handle PHI for improvement</h3>
+        <p>
+          Where Customer Content includes PHI, we will only use that PHI for
+          product improvement (Section 6.2 above) to the extent expressly
+          permitted by our BAA with you and by 45 C.F.R. § 164.504(e)(2)(i)(B) —
+          that is, for our proper management and administration and to provide
+          data aggregation services relating to your health care operations,
+          and/or after the PHI has been de-identified in accordance with 45
+          C.F.R. § 164.514. We will never use identifiable PHI to train models
+          where our BAA or applicable law prohibits it.
+        </p>
 
-    <h3>How we handle PHI for improvement</h3>
-    <p>Where Customer Content includes PHI, we will only use that PHI for product improvement (Section 6.2 above) to the extent expressly permitted by our BAA with you and by 45 C.F.R. § 164.504(e)(2)(i)(B) — that is, for our proper management and administration and to provide data aggregation services relating to your health care operations, and/or after the PHI has been de-identified in accordance with 45 C.F.R. § 164.514. We will never use identifiable PHI to train models where our BAA or applicable law prohibits it.</p>
+        <h3>Your controls</h3>
+        <p>
+          You may request, at any time, that we stop using your Customer Content
+          for product-improvement purposes by emailing
+          <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. Honoring
+          such a request will not affect model improvements that have already
+          been incorporated (which cannot technically be reversed), but will
+          prevent future use of your Customer Content for those purposes.
+        </p>
 
-    <h3>Your controls</h3>
-    <p>You may request, at any time, that we stop using your Customer Content for product-improvement purposes by emailing <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. Honoring such a request will not affect model improvements that have already been incorporated (which cannot technically be reversed), but will prevent future use of your Customer Content for those purposes.</p>
+        <h3>Our outputs</h3>
+        <p>
+          As between you and CosmaNeura, you own the specific outputs
+          (transcripts, draft notes, summaries) that Cosmas generates from your
+          inputs, subject to (i) CosmaNeura&rsquo;s underlying
+          intellectual-property rights in the Service (see § 9) and (ii) the
+          license you grant us in this § 6. Because the Service is used by many
+          customers, similar or identical outputs may be generated for others;
+          you do not obtain exclusive rights to outputs.
+        </p>
 
-    <h3>Our outputs</h3>
-    <p>As between you and CosmaNeura, you own the specific outputs (transcripts, draft notes, summaries) that Cosmas generates from your inputs, subject to (i) CosmaNeura&rsquo;s underlying intellectual-property rights in the Service (see § 9) and (ii) the license you grant us in this § 6. Because the Service is used by many customers, similar or identical outputs may be generated for others; you do not obtain exclusive rights to outputs.</p>
+        <h2 id="s7"><span class="num">§ 07</span>Third-Party Services</h2>
+        <p>
+          Cosmas integrates with third-party platforms and subprocessors,
+          including Zoom Video Communications, Inc. and meeting-bot /
+          transcription providers. Your use of those platforms is governed by
+          their own terms and privacy policies. You are responsible for
+          maintaining a compliant account (including any required BAA) with each
+          third-party platform you connect to Cosmas. CosmaNeura is not
+          responsible for third-party service availability, accuracy, security
+          practices, or pricing.
+        </p>
 
-    <h2 id="s7"><span class="num">§ 07</span>Third-Party Services</h2>
-    <p>Cosmas integrates with third-party platforms and subprocessors, including Zoom Video Communications, Inc. and meeting-bot / transcription providers. Your use of those platforms is governed by their own terms and privacy policies. You are responsible for maintaining a compliant account (including any required BAA) with each third-party platform you connect to Cosmas. CosmaNeura is not responsible for third-party service availability, accuracy, security practices, or pricing.</p>
+        <h2 id="s8"><span class="num">§ 08</span>Prohibited Uses</h2>
+        <p>You agree not to, and not to permit any third party to:</p>
+        <ul>
+          <li>
+            Use Cosmas to record any person without the consent required by
+            applicable law;
+          </li>
+          <li>
+            Use Cosmas for any purpose that is illegal, harmful, deceptive, or
+            infringes another person&rsquo;s rights;
+          </li>
+          <li>
+            Reverse engineer, decompile, or attempt to extract source code,
+            models, or weights, except where applicable law expressly prohibits
+            such a restriction;
+          </li>
+          <li>
+            Resell, sublicense, or provide the Service to third parties outside
+            your organization without our written permission;
+          </li>
+          <li>
+            Attempt to bypass rate limits, security controls, or access
+            controls;
+          </li>
+          <li>
+            Input content you do not have the right to input (for example,
+            content that violates another person&rsquo;s privacy,
+            intellectual-property, or publicity rights);
+          </li>
+          <li>
+            Use Cosmas to generate content intended to deceive, impersonate, or
+            cause harm;
+          </li>
+          <li>
+            Use outputs as a substitute for independent clinical judgment (see §
+            11).
+          </li>
+        </ul>
 
-    <h2 id="s8"><span class="num">§ 08</span>Prohibited Uses</h2>
-    <p>You agree not to, and not to permit any third party to:</p>
-    <ul>
-      <li>Use Cosmas to record any person without the consent required by applicable law;</li>
-      <li>Use Cosmas for any purpose that is illegal, harmful, deceptive, or infringes another person&rsquo;s rights;</li>
-      <li>Reverse engineer, decompile, or attempt to extract source code, models, or weights, except where applicable law expressly prohibits such a restriction;</li>
-      <li>Resell, sublicense, or provide the Service to third parties outside your organization without our written permission;</li>
-      <li>Attempt to bypass rate limits, security controls, or access controls;</li>
-      <li>Input content you do not have the right to input (for example, content that violates another person&rsquo;s privacy, intellectual-property, or publicity rights);</li>
-      <li>Use Cosmas to generate content intended to deceive, impersonate, or cause harm;</li>
-      <li>Use outputs as a substitute for independent clinical judgment (see § 11).</li>
-    </ul>
+        <h2 id="s9"><span class="num">§ 09</span>Intellectual Property</h2>
+        <p>
+          The Service, including all software, models, designs, user interfaces,
+          documentation, and trademarks (including the marks
+          &ldquo;Cosmas&rdquo; and &ldquo;CosmaNeura&rdquo;), is and will remain
+          the exclusive property of CosmaNeura, its licensors, and third parties
+          whose content is integrated into the Service. Subject to these Terms,
+          CosmaNeura grants you a limited, non-exclusive, non-transferable,
+          revocable license to access and use the Service for your internal
+          clinical and administrative purposes.
+        </p>
+        <p>
+          You may submit feedback, suggestions, or feature requests
+          (&ldquo;Feedback&rdquo;). You grant CosmaNeura a perpetual,
+          irrevocable, royalty-free license to use Feedback for any purpose,
+          including to improve the Service, without obligation to you.
+        </p>
 
-    <h2 id="s9"><span class="num">§ 09</span>Intellectual Property</h2>
-    <p>The Service, including all software, models, designs, user interfaces, documentation, and trademarks (including the marks &ldquo;Cosmas&rdquo; and &ldquo;CosmaNeura&rdquo;), is and will remain the exclusive property of CosmaNeura, its licensors, and third parties whose content is integrated into the Service. Subject to these Terms, CosmaNeura grants you a limited, non-exclusive, non-transferable, revocable license to access and use the Service for your internal clinical and administrative purposes.</p>
-    <p>You may submit feedback, suggestions, or feature requests (&ldquo;Feedback&rdquo;). You grant CosmaNeura a perpetual, irrevocable, royalty-free license to use Feedback for any purpose, including to improve the Service, without obligation to you.</p>
+        <h2 id="s10"><span class="num">§ 10</span>Fees &amp; Billing</h2>
+        <p>
+          Some or all of the Service may be offered free of charge, on a
+          subscription basis, or on a per-use basis. Applicable fees will be
+          described in a separate order form, subscription plan, or partner
+          agreement. Fees are non-refundable except as required by law or
+          expressly stated in the applicable order. You are responsible for all
+          taxes associated with your use of the Service other than taxes based
+          on CosmaNeura&rsquo;s net income.
+        </p>
 
-    <h2 id="s10"><span class="num">§ 10</span>Fees &amp; Billing</h2>
-    <p>Some or all of the Service may be offered free of charge, on a subscription basis, or on a per-use basis. Applicable fees will be described in a separate order form, subscription plan, or partner agreement. Fees are non-refundable except as required by law or expressly stated in the applicable order. You are responsible for all taxes associated with your use of the Service other than taxes based on CosmaNeura&rsquo;s net income.</p>
+        <h2 id="s11"><span class="num">§ 11</span>Medical Disclaimer</h2>
+        <div class="callout">
+          <strong
+            >Cosmas is a clinical-documentation assistant. It is not a medical
+            device, diagnostic tool, or source of medical advice.</strong
+          >
+          Outputs are draft materials intended to support — not replace — the
+          independent clinical judgment of a licensed healthcare professional.
+          Every transcript, summary, or note produced by Cosmas must be
+          reviewed, corrected as needed, and approved by a qualified clinician
+          before it is used for any clinical, billing, regulatory, or legal
+          purpose. CosmaNeura does not practice medicine and does not guarantee
+          clinical outcomes or the accuracy of any output.
+        </div>
 
-    <h2 id="s11"><span class="num">§ 11</span>Medical Disclaimer</h2>
-    <div class="callout">
-      <strong>Cosmas is a clinical-documentation assistant. It is not a medical device, diagnostic tool, or source of medical advice.</strong> Outputs are draft materials intended to support — not replace — the independent clinical judgment of a licensed healthcare professional. Every transcript, summary, or note produced by Cosmas must be reviewed, corrected as needed, and approved by a qualified clinician before it is used for any clinical, billing, regulatory, or legal purpose. CosmaNeura does not practice medicine and does not guarantee clinical outcomes or the accuracy of any output.
-    </div>
+        <h2 id="s12">
+          <span class="num">§ 12</span>Warranties &amp; Disclaimers
+        </h2>
+        <p>
+          EXCEPT AS EXPRESSLY STATED IN A SEPARATE WRITTEN AGREEMENT WITH
+          COSMANEURA, THE SERVICE IS PROVIDED &ldquo;AS IS&rdquo; AND &ldquo;AS
+          AVAILABLE.&rdquo; TO THE MAXIMUM EXTENT PERMITTED BY LAW, COSMANEURA
+          AND ITS LICENSORS DISCLAIM ALL WARRANTIES, WHETHER EXPRESS, IMPLIED,
+          STATUTORY, OR OTHERWISE, INCLUDING ANY WARRANTIES OF MERCHANTABILITY,
+          FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, AND ANY
+          WARRANTIES ARISING OUT OF A COURSE OF DEALING OR USAGE OF TRADE. WE DO
+          NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, SECURE, OR
+          ERROR-FREE, THAT DEFECTS WILL BE CORRECTED, OR THAT OUTPUTS WILL BE
+          ACCURATE OR COMPLETE.
+        </p>
 
-    <h2 id="s12"><span class="num">§ 12</span>Warranties &amp; Disclaimers</h2>
-    <p>EXCEPT AS EXPRESSLY STATED IN A SEPARATE WRITTEN AGREEMENT WITH COSMANEURA, THE SERVICE IS PROVIDED &ldquo;AS IS&rdquo; AND &ldquo;AS AVAILABLE.&rdquo; TO THE MAXIMUM EXTENT PERMITTED BY LAW, COSMANEURA AND ITS LICENSORS DISCLAIM ALL WARRANTIES, WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHERWISE, INCLUDING ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, AND ANY WARRANTIES ARISING OUT OF A COURSE OF DEALING OR USAGE OF TRADE. WE DO NOT WARRANT THAT THE SERVICE WILL BE UNINTERRUPTED, SECURE, OR ERROR-FREE, THAT DEFECTS WILL BE CORRECTED, OR THAT OUTPUTS WILL BE ACCURATE OR COMPLETE.</p>
+        <h2 id="s13"><span class="num">§ 13</span>Limitation of Liability</h2>
+        <p>
+          TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT WILL COSMANEURA,
+          ITS AFFILIATES, OR ITS LICENSORS BE LIABLE FOR ANY INDIRECT,
+          INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR
+          FOR ANY LOSS OF PROFITS, REVENUES, DATA, GOODWILL, OR BUSINESS
+          OPPORTUNITY, ARISING OUT OF OR RELATED TO THESE TERMS OR THE SERVICE,
+          WHETHER BASED IN CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT
+          LIABILITY, OR ANY OTHER LEGAL THEORY, EVEN IF COSMANEURA HAS BEEN
+          ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+        </p>
+        <p>
+          COSMANEURA&rsquo;S TOTAL CUMULATIVE LIABILITY ARISING OUT OF OR
+          RELATED TO THESE TERMS OR THE SERVICE WILL NOT EXCEED THE GREATER OF
+          (A) THE AMOUNTS YOU PAID TO COSMANEURA FOR THE SERVICE IN THE TWELVE
+          (12) MONTHS IMMEDIATELY PRECEDING THE EVENT GIVING RISE TO THE CLAIM
+          OR (B) ONE HUNDRED U.S. DOLLARS (US$100).
+        </p>
+        <p>
+          The limitations in this § 13 apply to the fullest extent permitted by
+          law. Some jurisdictions do not allow the exclusion or limitation of
+          certain damages, so some of the above may not apply to you.
+        </p>
 
-    <h2 id="s13"><span class="num">§ 13</span>Limitation of Liability</h2>
-    <p>TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT WILL COSMANEURA, ITS AFFILIATES, OR ITS LICENSORS BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUES, DATA, GOODWILL, OR BUSINESS OPPORTUNITY, ARISING OUT OF OR RELATED TO THESE TERMS OR THE SERVICE, WHETHER BASED IN CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, OR ANY OTHER LEGAL THEORY, EVEN IF COSMANEURA HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.</p>
-    <p>COSMANEURA&rsquo;S TOTAL CUMULATIVE LIABILITY ARISING OUT OF OR RELATED TO THESE TERMS OR THE SERVICE WILL NOT EXCEED THE GREATER OF (A) THE AMOUNTS YOU PAID TO COSMANEURA FOR THE SERVICE IN THE TWELVE (12) MONTHS IMMEDIATELY PRECEDING THE EVENT GIVING RISE TO THE CLAIM OR (B) ONE HUNDRED U.S. DOLLARS (US$100).</p>
-    <p>The limitations in this § 13 apply to the fullest extent permitted by law. Some jurisdictions do not allow the exclusion or limitation of certain damages, so some of the above may not apply to you.</p>
+        <h2 id="s14"><span class="num">§ 14</span>Indemnification</h2>
+        <p>
+          You will defend, indemnify, and hold harmless CosmaNeura, its
+          affiliates, and their respective officers, directors, employees, and
+          agents from and against any third-party claims, damages, liabilities,
+          costs, and expenses (including reasonable attorneys&rsquo; fees)
+          arising out of or related to: (i) your breach of these Terms or
+          applicable law; (ii) your failure to obtain required patient consents;
+          (iii) your Customer Content or any unauthorized inputs; (iv) your use
+          of the Service in combination with any third-party product or service;
+          or (v) reliance on Cosmas outputs without independent clinical review.
+        </p>
 
-    <h2 id="s14"><span class="num">§ 14</span>Indemnification</h2>
-    <p>You will defend, indemnify, and hold harmless CosmaNeura, its affiliates, and their respective officers, directors, employees, and agents from and against any third-party claims, damages, liabilities, costs, and expenses (including reasonable attorneys&rsquo; fees) arising out of or related to: (i) your breach of these Terms or applicable law; (ii) your failure to obtain required patient consents; (iii) your Customer Content or any unauthorized inputs; (iv) your use of the Service in combination with any third-party product or service; or (v) reliance on Cosmas outputs without independent clinical review.</p>
+        <h2 id="s15"><span class="num">§ 15</span>Term &amp; Termination</h2>
+        <p>
+          These Terms begin when you first accept them and continue until
+          terminated. You may terminate at any time by uninstalling the Service
+          and revoking its authorization in Zoom and any connected platforms. We
+          may suspend or terminate your access, with or without notice, if we
+          believe (in our reasonable discretion) that you have violated these
+          Terms, that continued use poses a security or legal risk, or that we
+          are required to do so by law.
+        </p>
+        <p>
+          Upon termination, the license in § 9 terminates and you must stop
+          using the Service. Provisions that by their nature should survive
+          termination will survive, including §§ 6 (to the extent of
+          pre-termination use), 9, 11, 12, 13, 14, 16, and 17.
+        </p>
+        <p>
+          We will retain and delete your data after termination in accordance
+          with our <a href="privacy-policy.html">Privacy Policy</a> and any
+          applicable BAA.
+        </p>
 
-    <h2 id="s15"><span class="num">§ 15</span>Term &amp; Termination</h2>
-    <p>These Terms begin when you first accept them and continue until terminated. You may terminate at any time by uninstalling the Service and revoking its authorization in Zoom and any connected platforms. We may suspend or terminate your access, with or without notice, if we believe (in our reasonable discretion) that you have violated these Terms, that continued use poses a security or legal risk, or that we are required to do so by law.</p>
-    <p>Upon termination, the license in § 9 terminates and you must stop using the Service. Provisions that by their nature should survive termination will survive, including §§ 6 (to the extent of pre-termination use), 9, 11, 12, 13, 14, 16, and 17.</p>
-    <p>We will retain and delete your data after termination in accordance with our <a href="privacy-policy.html">Privacy Policy</a> and any applicable BAA.</p>
+        <h2 id="s16"><span class="num">§ 16</span>Governing Law</h2>
+        <p>
+          These Terms are governed by the laws of the State of New Hampshire,
+          United States, without regard to its conflict-of-laws principles. The
+          United Nations Convention on Contracts for the International Sale of
+          Goods does not apply.
+        </p>
 
-    <h2 id="s16"><span class="num">§ 16</span>Governing Law</h2>
-    <p>These Terms are governed by the laws of the State of New Hampshire, United States, without regard to its conflict-of-laws principles. The United Nations Convention on Contracts for the International Sale of Goods does not apply.</p>
+        <h2 id="s17"><span class="num">§ 17</span>Dispute Resolution</h2>
+        <p>
+          The parties will first attempt in good faith to resolve any dispute
+          through informal negotiation. If a dispute is not resolved within
+          thirty (30) days, either party may initiate binding arbitration
+          administered by the American Arbitration Association (AAA) under its
+          Commercial Arbitration Rules, seated in Manchester, New Hampshire (or
+          another location mutually agreed in writing). The arbitrator&rsquo;s
+          award may be entered as a judgment in any court of competent
+          jurisdiction. Nothing in this § 17 prevents either party from seeking
+          injunctive or equitable relief in a court of competent jurisdiction to
+          protect its intellectual-property or confidential-information rights.
+          <strong>Class-action waiver:</strong> disputes must be brought on an
+          individual basis; class, collective, and representative actions are
+          not permitted.
+        </p>
 
-    <h2 id="s17"><span class="num">§ 17</span>Dispute Resolution</h2>
-    <p>The parties will first attempt in good faith to resolve any dispute through informal negotiation. If a dispute is not resolved within thirty (30) days, either party may initiate binding arbitration administered by the American Arbitration Association (AAA) under its Commercial Arbitration Rules, seated in Manchester, New Hampshire (or another location mutually agreed in writing). The arbitrator&rsquo;s award may be entered as a judgment in any court of competent jurisdiction. Nothing in this § 17 prevents either party from seeking injunctive or equitable relief in a court of competent jurisdiction to protect its intellectual-property or confidential-information rights. <strong>Class-action waiver:</strong> disputes must be brought on an individual basis; class, collective, and representative actions are not permitted.</p>
+        <h2 id="s18"><span class="num">§ 18</span>Changes to These Terms</h2>
+        <p>
+          We may update these Terms from time to time. When we make material
+          changes, we will update the &ldquo;Effective date&rdquo; above and,
+          where practicable, provide additional notice (for example, by email or
+          in-app notification). Your continued use of the Service after the
+          effective date of a revised version constitutes acceptance of the
+          changes.
+        </p>
 
-    <h2 id="s18"><span class="num">§ 18</span>Changes to These Terms</h2>
-    <p>We may update these Terms from time to time. When we make material changes, we will update the &ldquo;Effective date&rdquo; above and, where practicable, provide additional notice (for example, by email or in-app notification). Your continued use of the Service after the effective date of a revised version constitutes acceptance of the changes.</p>
+        <h2 id="s19"><span class="num">§ 19</span>Contact Us</h2>
+        <p>Questions about these Terms? Need a BAA? Tell us:</p>
+        <ul>
+          <li>
+            General &amp; legal:
+            <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>
+          </li>
+          <li>
+            Technical &amp; developer:
+            <a href="mailto:dev@cosmaneura.com">dev@cosmaneura.com</a>
+          </li>
+          <li>CosmaNeura, Inc. — New Hampshire, USA</li>
+        </ul>
 
-    <h2 id="s19"><span class="num">§ 19</span>Contact Us</h2>
-    <p>Questions about these Terms? Need a BAA? Tell us:</p>
-    <ul>
-      <li>General &amp; legal: <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a></li>
-      <li>Technical &amp; developer: <a href="mailto:dev@cosmaneura.com">dev@cosmaneura.com</a></li>
-      <li>CosmaNeura, Inc. — New Hampshire, USA</li>
-    </ul>
+        <hr class="rule" />
+        <p style="font-size: 13px; color: var(--muted)">
+          &copy; 2026 CosmaNeura, Inc. All rights reserved. &ldquo;Cosmas&rdquo;
+          and &ldquo;CosmaNeura&rdquo; are trademarks of CosmaNeura, Inc.
+        </p>
+      </div>
+    </main>
 
-    <hr class="rule" />
-    <p style="font-size: 13px; color: var(--muted);">&copy; 2026 CosmaNeura, Inc. All rights reserved. &ldquo;Cosmas&rdquo; and &ldquo;CosmaNeura&rdquo; are trademarks of CosmaNeura, Inc.</p>
-
-  </div>
-</main>
-
-<footer>
-  <div class="container">
-    <div>CosmaNeura, Inc. &middot; Dignified Intelligence for clinical care</div>
-    <div>
-      <a href="terms-of-service.html">Terms</a> &nbsp;&middot;&nbsp;
-      <a href="privacy-policy.html">Privacy</a> &nbsp;&middot;&nbsp;
-      <a href="support.html">Support</a>
-    </div>
-  </div>
-</footer>
-
-</body>
+    <footer>
+      <div class="container">
+        <div>
+          CosmaNeura, Inc. &middot; Dignified Intelligence for clinical care
+        </div>
+        <div>
+          <a href="terms-of-service.html">Terms</a> &nbsp;&middot;&nbsp;
+          <a href="privacy-policy.html">Privacy</a> &nbsp;&middot;&nbsp;
+          <a href="support.html">Support</a>
+        </div>
+      </div>
+    </footer>
+  </body>
 </html>

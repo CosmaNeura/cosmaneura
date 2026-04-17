@@ -1,5 +1,4 @@
 import { useState } from "react"
-import { motion } from "motion/react"
 import { useForm } from "react-hook-form"
 import { href, redirect } from "react-router"
 import { z } from "zod"
@@ -28,14 +27,15 @@ import {
   updateSettingsData,
   uploadExampleNote,
 } from "~/configuration/client"
-import { requireEnv } from "~/utils/environment"
-
-const ZOOM_COMING_SOON = true
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
+import { requireEnv } from "~/utils/environment"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
+import { motion } from "motion/react"
+
+const ZOOM_COMING_SOON = true
 
 type Step = 0 | 1 | 2 | 3 | 4
 
@@ -137,7 +137,11 @@ function BiographyStep({
               </FormItem>
             )}
           />
-          <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={form.formState.isSubmitting}
+          >
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -260,7 +264,11 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
               </FormItem>
             )}
           />
-          <Button type="submit" className="w-full" disabled={!file || form.formState.isSubmitting}>
+          <Button
+            type="submit"
+            className="w-full"
+            disabled={!file || form.formState.isSubmitting}
+          >
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -301,7 +309,7 @@ function ZoomStep({ onComplete }: { onComplete: () => void }) {
         <div className="space-y-1">
           <div className="flex items-center justify-center gap-2">
             <h2 className="text-2xl font-semibold">Connect Zoom</h2>
-            <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+            <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
               Coming Soon
             </span>
           </div>
@@ -311,9 +319,7 @@ function ZoomStep({ onComplete }: { onComplete: () => void }) {
             visit notes after each session.
           </p>
         </div>
-        <Button onClick={onComplete}>
-          Continue
-        </Button>
+        <Button onClick={onComplete}>Continue</Button>
       </div>
     )
   }
@@ -396,10 +402,16 @@ function AllSetStep() {
       >
         <h2 className="text-3xl font-bold">You're all set!</h2>
         <p className="text-muted-foreground max-w-md text-base">
-          Your biography is saved, your note style is loaded, and Cosma will join
-          your Zoom meetings automatically. You're ready to start using Cosma.
+          Your biography is saved, your note style is loaded, and Cosma will
+          join your Zoom meetings automatically. You're ready to start using
+          Cosma.
         </p>
-        <Button size="lg" onClick={handleGoToCosma} disabled={loading} className="mt-2">
+        <Button
+          size="lg"
+          onClick={handleGoToCosma}
+          disabled={loading}
+          className="mt-2"
+        >
           {loading ? (
             <>
               <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />

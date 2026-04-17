@@ -1,325 +1,848 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Privacy Policy — Cosmas by CosmaNeura</title>
-<meta name="description" content="Privacy Policy for Cosmas, an AI medical scribe for Zoom visits, operated by CosmaNeura, Inc." />
-<link rel="icon" type="image/png" href="/cosmas-icon-128.png" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
-<style>
-  :root {
-    --navy-deep: #0B2341;
-    --navy-mid: #18365C;
-    --gold: #C9A961;
-    --gold-bright: #E0BF74;
-    --cream: #F5F0E4;
-    --ink: #1A1A1A;
-    --muted: #55596B;
-    --rule: #E5DFD1;
-    --bg: #FBF9F4;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; padding: 0; }
-  body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 16px;
-    line-height: 1.7;
-    color: var(--ink);
-    background: var(--bg);
-    -webkit-font-smoothing: antialiased;
-  }
-  .masthead {
-    background: linear-gradient(135deg, var(--navy-deep) 0%, var(--navy-mid) 100%);
-    color: var(--cream);
-    padding: 48px 0 56px;
-    border-bottom: 3px solid var(--gold);
-    position: relative;
-  }
-  .masthead::after {
-    content: "";
-    position: absolute;
-    left: 0; right: 0; bottom: 3px;
-    height: 1px;
-    background: var(--gold);
-    opacity: 0.3;
-    transform: translateY(4px);
-  }
-  .container { max-width: 820px; margin: 0 auto; padding: 0 32px; }
-  .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-  .brand img { width: 56px; height: 56px; border-radius: 12px; }
-  .brand-text { display: flex; flex-direction: column; line-height: 1.1; }
-  .brand-name { font-family: 'Cormorant Garamond', serif; font-weight: 600; font-size: 28px; color: var(--cream); letter-spacing: 0.5px; }
-  .brand-co { font-size: 12px; text-transform: uppercase; letter-spacing: 2.5px; color: var(--gold); margin-top: 4px; }
-  h1.page-title { font-family: 'Cormorant Garamond', serif; font-weight: 600; font-size: 52px; line-height: 1.1; margin: 8px 0 12px; color: var(--cream); }
-  .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 3px; color: var(--gold); font-weight: 500; }
-  .meta { font-size: 14px; color: rgba(245, 240, 228, 0.75); margin-top: 12px; }
-  main { padding: 56px 0 80px; }
-  .intro { font-size: 18px; line-height: 1.7; color: var(--ink); border-left: 3px solid var(--gold); padding: 6px 0 6px 22px; margin-bottom: 40px; }
-  h2 { font-family: 'Cormorant Garamond', serif; font-weight: 600; font-size: 30px; line-height: 1.2; margin: 48px 0 4px; color: var(--navy-deep); }
-  h2 .num { font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 3px; color: var(--gold); display: block; margin-bottom: 8px; text-transform: uppercase; }
-  h3 { font-family: 'Inter', sans-serif; font-weight: 600; font-size: 17px; margin: 28px 0 8px; color: var(--navy-deep); }
-  p { margin: 12px 0; }
-  ul, ol { padding-left: 22px; }
-  li { margin: 6px 0; }
-  strong { color: var(--navy-deep); font-weight: 600; }
-  a { color: var(--navy-mid); text-decoration: underline; text-decoration-color: var(--gold); text-underline-offset: 3px; }
-  a:hover { color: var(--gold); }
-  .callout { background: #FFFDF6; border: 1px solid var(--rule); border-left: 4px solid var(--gold); padding: 18px 22px; margin: 20px 0; border-radius: 2px; font-size: 15px; }
-  .callout strong { color: var(--navy-deep); }
-  hr.rule { border: 0; border-top: 1px solid var(--rule); margin: 56px 0 32px; }
-  footer { background: var(--navy-deep); color: rgba(245, 240, 228, 0.8); padding: 40px 0; font-size: 14px; }
-  footer .container { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
-  footer a { color: var(--gold-bright); }
-  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14.5px; }
-  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
-  th { background: #FFFDF6; font-weight: 600; color: var(--navy-deep); font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
-  .toc { background: #FFFDF6; border: 1px solid var(--rule); padding: 24px 28px; margin: 0 0 40px; border-radius: 2px; }
-  .toc h4 { margin: 0 0 12px; font-size: 12px; text-transform: uppercase; letter-spacing: 2.5px; color: var(--gold); font-weight: 600; }
-  .toc ol { margin: 0; padding-left: 20px; columns: 2; column-gap: 32px; font-size: 14px; }
-  .toc li { margin: 4px 0; break-inside: avoid; }
-  @media (max-width: 640px) {
-    h1.page-title { font-size: 38px; }
-    h2 { font-size: 24px; }
-    .container { padding: 0 20px; }
-    .toc ol { columns: 1; }
-    table { font-size: 13.5px; }
-  }
-</style>
-</head>
-<body>
-
-<header class="masthead">
-  <div class="container">
-    <div class="brand">
-      <img src="cosmas-icon-128.png" alt="Cosmas logo" />
-      <div class="brand-text">
-        <span class="brand-name">Cosmas</span>
-        <span class="brand-co">by CosmaNeura, Inc.</span>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy Policy — Cosmas by CosmaNeura</title>
+    <meta
+      name="description"
+      content="Privacy Policy for Cosmas, an AI medical scribe for Zoom visits, operated by CosmaNeura, Inc."
+    />
+    <link rel="icon" type="image/png" href="/cosmas-icon-128.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --navy-deep: #0b2341;
+        --navy-mid: #18365c;
+        --gold: #c9a961;
+        --gold-bright: #e0bf74;
+        --cream: #f5f0e4;
+        --ink: #1a1a1a;
+        --muted: #55596b;
+        --rule: #e5dfd1;
+        --bg: #fbf9f4;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        font-family:
+          "Inter",
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        font-size: 16px;
+        line-height: 1.7;
+        color: var(--ink);
+        background: var(--bg);
+        -webkit-font-smoothing: antialiased;
+      }
+      .masthead {
+        background: linear-gradient(
+          135deg,
+          var(--navy-deep) 0%,
+          var(--navy-mid) 100%
+        );
+        color: var(--cream);
+        padding: 48px 0 56px;
+        border-bottom: 3px solid var(--gold);
+        position: relative;
+      }
+      .masthead::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 3px;
+        height: 1px;
+        background: var(--gold);
+        opacity: 0.3;
+        transform: translateY(4px);
+      }
+      .container {
+        max-width: 820px;
+        margin: 0 auto;
+        padding: 0 32px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .brand img {
+        width: 56px;
+        height: 56px;
+        border-radius: 12px;
+      }
+      .brand-text {
+        display: flex;
+        flex-direction: column;
+        line-height: 1.1;
+      }
+      .brand-name {
+        font-family: "Cormorant Garamond", serif;
+        font-weight: 600;
+        font-size: 28px;
+        color: var(--cream);
+        letter-spacing: 0.5px;
+      }
+      .brand-co {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 2.5px;
+        color: var(--gold);
+        margin-top: 4px;
+      }
+      h1.page-title {
+        font-family: "Cormorant Garamond", serif;
+        font-weight: 600;
+        font-size: 52px;
+        line-height: 1.1;
+        margin: 8px 0 12px;
+        color: var(--cream);
+      }
+      .eyebrow {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 3px;
+        color: var(--gold);
+        font-weight: 500;
+      }
+      .meta {
+        font-size: 14px;
+        color: rgba(245, 240, 228, 0.75);
+        margin-top: 12px;
+      }
+      main {
+        padding: 56px 0 80px;
+      }
+      .intro {
+        font-size: 18px;
+        line-height: 1.7;
+        color: var(--ink);
+        border-left: 3px solid var(--gold);
+        padding: 6px 0 6px 22px;
+        margin-bottom: 40px;
+      }
+      h2 {
+        font-family: "Cormorant Garamond", serif;
+        font-weight: 600;
+        font-size: 30px;
+        line-height: 1.2;
+        margin: 48px 0 4px;
+        color: var(--navy-deep);
+      }
+      h2 .num {
+        font-family: "Inter", sans-serif;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 3px;
+        color: var(--gold);
+        display: block;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+      }
+      h3 {
+        font-family: "Inter", sans-serif;
+        font-weight: 600;
+        font-size: 17px;
+        margin: 28px 0 8px;
+        color: var(--navy-deep);
+      }
+      p {
+        margin: 12px 0;
+      }
+      ul,
+      ol {
+        padding-left: 22px;
+      }
+      li {
+        margin: 6px 0;
+      }
+      strong {
+        color: var(--navy-deep);
+        font-weight: 600;
+      }
+      a {
+        color: var(--navy-mid);
+        text-decoration: underline;
+        text-decoration-color: var(--gold);
+        text-underline-offset: 3px;
+      }
+      a:hover {
+        color: var(--gold);
+      }
+      .callout {
+        background: #fffdf6;
+        border: 1px solid var(--rule);
+        border-left: 4px solid var(--gold);
+        padding: 18px 22px;
+        margin: 20px 0;
+        border-radius: 2px;
+        font-size: 15px;
+      }
+      .callout strong {
+        color: var(--navy-deep);
+      }
+      hr.rule {
+        border: 0;
+        border-top: 1px solid var(--rule);
+        margin: 56px 0 32px;
+      }
+      footer {
+        background: var(--navy-deep);
+        color: rgba(245, 240, 228, 0.8);
+        padding: 40px 0;
+        font-size: 14px;
+      }
+      footer .container {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 16px;
+      }
+      footer a {
+        color: var(--gold-bright);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 18px 0;
+        font-size: 14.5px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--rule);
+        vertical-align: top;
+      }
+      th {
+        background: #fffdf6;
+        font-weight: 600;
+        color: var(--navy-deep);
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .toc {
+        background: #fffdf6;
+        border: 1px solid var(--rule);
+        padding: 24px 28px;
+        margin: 0 0 40px;
+        border-radius: 2px;
+      }
+      .toc h4 {
+        margin: 0 0 12px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 2.5px;
+        color: var(--gold);
+        font-weight: 600;
+      }
+      .toc ol {
+        margin: 0;
+        padding-left: 20px;
+        columns: 2;
+        column-gap: 32px;
+        font-size: 14px;
+      }
+      .toc li {
+        margin: 4px 0;
+        break-inside: avoid;
+      }
+      @media (max-width: 640px) {
+        h1.page-title {
+          font-size: 38px;
+        }
+        h2 {
+          font-size: 24px;
+        }
+        .container {
+          padding: 0 20px;
+        }
+        .toc ol {
+          columns: 1;
+        }
+        table {
+          font-size: 13.5px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="container">
+        <div class="brand">
+          <img src="cosmas-icon-128.png" alt="Cosmas logo" />
+          <div class="brand-text">
+            <span class="brand-name">Cosmas</span>
+            <span class="brand-co">by CosmaNeura, Inc.</span>
+          </div>
+        </div>
+        <span class="eyebrow">Legal</span>
+        <h1 class="page-title">Privacy Policy</h1>
+        <p class="meta">
+          Effective date: April 16, 2026 · Last updated: April 16, 2026
+        </p>
       </div>
-    </div>
-    <span class="eyebrow">Legal</span>
-    <h1 class="page-title">Privacy Policy</h1>
-    <p class="meta">Effective date: April 16, 2026 · Last updated: April 16, 2026</p>
-  </div>
-</header>
+    </header>
 
-<main>
-  <div class="container">
+    <main>
+      <div class="container">
+        <p class="intro">
+          CosmaNeura, Inc. (&ldquo;CosmaNeura,&rdquo; &ldquo;we,&rdquo;
+          &ldquo;us&rdquo;) respects the privacy of clinicians, their patients,
+          and their staff. This Privacy Policy explains what information we
+          collect through Cosmas, how we use and share it, and the choices you
+          have. It works together with our
+          <a href="terms-of-service.html">Terms of Service</a> and, where
+          applicable, your Business Associate Agreement (&ldquo;BAA&rdquo;) with
+          us.
+        </p>
 
-    <p class="intro">
-      CosmaNeura, Inc. (&ldquo;CosmaNeura,&rdquo; &ldquo;we,&rdquo; &ldquo;us&rdquo;) respects the privacy of clinicians, their patients, and their staff. This Privacy Policy explains what information we collect through Cosmas, how we use and share it, and the choices you have. It works together with our <a href="terms-of-service.html">Terms of Service</a> and, where applicable, your Business Associate Agreement (&ldquo;BAA&rdquo;) with us.
-    </p>
+        <div class="callout">
+          <strong>In one sentence:</strong> Cosmas processes meeting content and
+          related data so clinicians can spend more time with patients and less
+          time on paperwork; we may use that content — within the limits of
+          HIPAA and our BAA — to improve Cosmas and build new features for our
+          users, and we do <em>not</em> sell it, rent it, or monetize it as a
+          data product.
+        </div>
 
-    <div class="callout">
-      <strong>In one sentence:</strong> Cosmas processes meeting content and related data so clinicians can spend more time with patients and less time on paperwork; we may use that content — within the limits of HIPAA and our BAA — to improve Cosmas and build new features for our users, and we do <em>not</em> sell it, rent it, or monetize it as a data product.
-    </div>
+        <div class="toc">
+          <h4>Contents</h4>
+          <ol>
+            <li><a href="#s1">Who this policy applies to</a></li>
+            <li><a href="#s2">Information we collect</a></li>
+            <li><a href="#s3">How we use information</a></li>
+            <li><a href="#s4">HIPAA &amp; PHI</a></li>
+            <li><a href="#s5">AI training &amp; product improvement</a></li>
+            <li><a href="#s6">How we share information</a></li>
+            <li><a href="#s7">Subprocessors</a></li>
+            <li>
+              <a href="#s8">What we do <em>not</em> do</a>
+            </li>
+            <li><a href="#s9">Data security</a></li>
+            <li><a href="#s10">Data retention &amp; deletion</a></li>
+            <li><a href="#s11">Your rights &amp; choices</a></li>
+            <li><a href="#s12">State privacy rights</a></li>
+            <li><a href="#s13">International transfers</a></li>
+            <li><a href="#s14">Children&rsquo;s privacy</a></li>
+            <li><a href="#s15">Changes to this policy</a></li>
+            <li><a href="#s16">Contact us</a></li>
+          </ol>
+        </div>
 
-    <div class="toc">
-      <h4>Contents</h4>
-      <ol>
-        <li><a href="#s1">Who this policy applies to</a></li>
-        <li><a href="#s2">Information we collect</a></li>
-        <li><a href="#s3">How we use information</a></li>
-        <li><a href="#s4">HIPAA &amp; PHI</a></li>
-        <li><a href="#s5">AI training &amp; product improvement</a></li>
-        <li><a href="#s6">How we share information</a></li>
-        <li><a href="#s7">Subprocessors</a></li>
-        <li><a href="#s8">What we do <em>not</em> do</a></li>
-        <li><a href="#s9">Data security</a></li>
-        <li><a href="#s10">Data retention &amp; deletion</a></li>
-        <li><a href="#s11">Your rights &amp; choices</a></li>
-        <li><a href="#s12">State privacy rights</a></li>
-        <li><a href="#s13">International transfers</a></li>
-        <li><a href="#s14">Children&rsquo;s privacy</a></li>
-        <li><a href="#s15">Changes to this policy</a></li>
-        <li><a href="#s16">Contact us</a></li>
-      </ol>
-    </div>
+        <h2 id="s1"><span class="num">§ 01</span>Who This Policy Applies To</h2>
+        <p>
+          Cosmas is a business-to-professional service designed for licensed
+          healthcare professionals and the staff of clinical practices. This
+          policy addresses information handled by CosmaNeura when a clinician,
+          practice, or authorized user installs, configures, or uses Cosmas.
+        </p>
+        <p>
+          If you are a patient whose visit is documented by Cosmas on behalf of
+          your clinician, your clinician (not CosmaNeura) is the party
+          responsible, under HIPAA and state privacy laws, for the collection,
+          use, and disclosure of your Protected Health Information
+          (&ldquo;PHI&rdquo;). Please direct privacy questions about your
+          clinical record to your clinician&rsquo;s practice.
+        </p>
 
-    <h2 id="s1"><span class="num">§ 01</span>Who This Policy Applies To</h2>
-    <p>Cosmas is a business-to-professional service designed for licensed healthcare professionals and the staff of clinical practices. This policy addresses information handled by CosmaNeura when a clinician, practice, or authorized user installs, configures, or uses Cosmas.</p>
-    <p>If you are a patient whose visit is documented by Cosmas on behalf of your clinician, your clinician (not CosmaNeura) is the party responsible, under HIPAA and state privacy laws, for the collection, use, and disclosure of your Protected Health Information (&ldquo;PHI&rdquo;). Please direct privacy questions about your clinical record to your clinician&rsquo;s practice.</p>
+        <h2 id="s2"><span class="num">§ 02</span>Information We Collect</h2>
 
-    <h2 id="s2"><span class="num">§ 02</span>Information We Collect</h2>
+        <h3>Account and contact information</h3>
+        <ul>
+          <li>
+            Name, professional email address, practice name, role, and time
+            zone;
+          </li>
+          <li>
+            Authentication data received from Zoom, Google, or other identity
+            providers when you authorize Cosmas (we do not receive or store your
+            passwords for those services);
+          </li>
+          <li>
+            Billing and payment information, if you purchase a paid plan,
+            processed by a third-party payment processor.
+          </li>
+        </ul>
 
-    <h3>Account and contact information</h3>
-    <ul>
-      <li>Name, professional email address, practice name, role, and time zone;</li>
-      <li>Authentication data received from Zoom, Google, or other identity providers when you authorize Cosmas (we do not receive or store your passwords for those services);</li>
-      <li>Billing and payment information, if you purchase a paid plan, processed by a third-party payment processor.</li>
-    </ul>
+        <h3>Meeting content (may include PHI)</h3>
+        <ul>
+          <li>
+            Audio, and where authorized, video and in-meeting chat of Zoom
+            visits that you schedule Cosmas to join;
+          </li>
+          <li>Transcripts generated from those recordings;</li>
+          <li>
+            Draft SOAP notes, summaries, and other clinical-documentation
+            outputs produced by our models;
+          </li>
+          <li>Edits, corrections, and annotations you make to outputs.</li>
+        </ul>
 
-    <h3>Meeting content (may include PHI)</h3>
-    <ul>
-      <li>Audio, and where authorized, video and in-meeting chat of Zoom visits that you schedule Cosmas to join;</li>
-      <li>Transcripts generated from those recordings;</li>
-      <li>Draft SOAP notes, summaries, and other clinical-documentation outputs produced by our models;</li>
-      <li>Edits, corrections, and annotations you make to outputs.</li>
-    </ul>
+        <h3>Scheduling and integration data</h3>
+        <ul>
+          <li>
+            Calendar events and meeting metadata (date, time, title,
+            participants, join URL) from Zoom, Acuity, Google Calendar, or other
+            systems you connect;
+          </li>
+          <li>
+            Patient identifiers you send us through integrations (for example,
+            appointment type or patient reference IDs).
+          </li>
+        </ul>
 
-    <h3>Scheduling and integration data</h3>
-    <ul>
-      <li>Calendar events and meeting metadata (date, time, title, participants, join URL) from Zoom, Acuity, Google Calendar, or other systems you connect;</li>
-      <li>Patient identifiers you send us through integrations (for example, appointment type or patient reference IDs).</li>
-    </ul>
+        <h3>Usage and technical data</h3>
+        <ul>
+          <li>
+            Pages viewed, features used, clicks, session duration, and error
+            events in Cosmas;
+          </li>
+          <li>
+            Device and browser type, operating system, IP address, and
+            approximate location;
+          </li>
+          <li>
+            Log files, cookies, and similar technologies. We limit cookies to
+            those necessary to operate and secure the Service and to measure
+            aggregate usage.
+          </li>
+        </ul>
 
-    <h3>Usage and technical data</h3>
-    <ul>
-      <li>Pages viewed, features used, clicks, session duration, and error events in Cosmas;</li>
-      <li>Device and browser type, operating system, IP address, and approximate location;</li>
-      <li>Log files, cookies, and similar technologies. We limit cookies to those necessary to operate and secure the Service and to measure aggregate usage.</li>
-    </ul>
+        <h3>Communications</h3>
+        <p>
+          Email and support-ticket content you send to us, including via
+          <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
+        </p>
 
-    <h3>Communications</h3>
-    <p>Email and support-ticket content you send to us, including via <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.</p>
+        <h2 id="s3"><span class="num">§ 03</span>How We Use Information</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Purpose</th>
+              <th>Legal basis / authority</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                Provide the Service (join meetings, transcribe, generate notes,
+                sync calendars)
+              </td>
+              <td>Performance of contract; BAA permitted use</td>
+            </tr>
+            <tr>
+              <td>
+                Authenticate users, secure accounts, and prevent fraud or abuse
+              </td>
+              <td>Legitimate interest; BAA security obligations</td>
+            </tr>
+            <tr>
+              <td>Provide customer support and respond to requests</td>
+              <td>Performance of contract; your consent</td>
+            </tr>
+            <tr>
+              <td>
+                Improve Cosmas &mdash; debug, test, evaluate, fine-tune models
+                and prompts, and build new features (see § 5)
+              </td>
+              <td>
+                Legitimate interest; BAA health care operations;
+                de-identification under 45 C.F.R. § 164.514
+              </td>
+            </tr>
+            <tr>
+              <td>Generate de-identified, aggregated analytics and reports</td>
+              <td>Legitimate interest; HIPAA-compliant de-identification</td>
+            </tr>
+            <tr>
+              <td>Comply with law and respond to lawful requests</td>
+              <td>Legal obligation</td>
+            </tr>
+            <tr>
+              <td>Send service, security, and product-update communications</td>
+              <td>Performance of contract; legitimate interest</td>
+            </tr>
+          </tbody>
+        </table>
 
-    <h2 id="s3"><span class="num">§ 03</span>How We Use Information</h2>
-    <table>
-      <thead>
-        <tr><th>Purpose</th><th>Legal basis / authority</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>Provide the Service (join meetings, transcribe, generate notes, sync calendars)</td><td>Performance of contract; BAA permitted use</td></tr>
-        <tr><td>Authenticate users, secure accounts, and prevent fraud or abuse</td><td>Legitimate interest; BAA security obligations</td></tr>
-        <tr><td>Provide customer support and respond to requests</td><td>Performance of contract; your consent</td></tr>
-        <tr><td>Improve Cosmas &mdash; debug, test, evaluate, fine-tune models and prompts, and build new features (see § 5)</td><td>Legitimate interest; BAA health care operations; de-identification under 45 C.F.R. § 164.514</td></tr>
-        <tr><td>Generate de-identified, aggregated analytics and reports</td><td>Legitimate interest; HIPAA-compliant de-identification</td></tr>
-        <tr><td>Comply with law and respond to lawful requests</td><td>Legal obligation</td></tr>
-        <tr><td>Send service, security, and product-update communications</td><td>Performance of contract; legitimate interest</td></tr>
-      </tbody>
-    </table>
+        <h2 id="s4">
+          <span class="num">§ 04</span>HIPAA &amp; Protected Health Information
+        </h2>
+        <p>
+          When Cosmas processes PHI on behalf of a HIPAA Covered Entity (or a
+          Business Associate of one), CosmaNeura acts as a Business Associate.
+          Our use and disclosure of PHI is governed by:
+        </p>
+        <ul>
+          <li>
+            The HIPAA Privacy Rule (45 C.F.R. Part 164, Subpart E) and Security
+            Rule (Subpart C);
+          </li>
+          <li>The Breach Notification Rule (Subpart D);</li>
+          <li>The BAA executed between you and CosmaNeura.</li>
+        </ul>
+        <p>Under that framework, we will:</p>
+        <ul>
+          <li>
+            Use and disclose PHI only as permitted by the BAA and these
+            documents;
+          </li>
+          <li>
+            Implement administrative, physical, and technical safeguards to
+            protect PHI, including encryption in transit (TLS 1.2+) and at rest;
+          </li>
+          <li>
+            Require our subprocessors that handle PHI to provide written
+            assurances (including, where required, their own BAAs) that are at
+            least as protective as our BAA with you;
+          </li>
+          <li>
+            Report Security Incidents and Breaches to you in accordance with the
+            BAA and applicable law;
+          </li>
+          <li>
+            Make PHI available to you, or directly to an individual, as
+            necessary to satisfy a Covered Entity&rsquo;s obligations under 45
+            C.F.R. §§ 164.524 and 164.526.
+          </li>
+        </ul>
+        <div class="callout">
+          <strong>No BAA, no PHI.</strong> If you have not executed a BAA with
+          CosmaNeura, please do not use Cosmas to process PHI. To request a BAA,
+          email <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
+        </div>
 
-    <h2 id="s4"><span class="num">§ 04</span>HIPAA &amp; Protected Health Information</h2>
-    <p>When Cosmas processes PHI on behalf of a HIPAA Covered Entity (or a Business Associate of one), CosmaNeura acts as a Business Associate. Our use and disclosure of PHI is governed by:</p>
-    <ul>
-      <li>The HIPAA Privacy Rule (45 C.F.R. Part 164, Subpart E) and Security Rule (Subpart C);</li>
-      <li>The Breach Notification Rule (Subpart D);</li>
-      <li>The BAA executed between you and CosmaNeura.</li>
-    </ul>
-    <p>Under that framework, we will:</p>
-    <ul>
-      <li>Use and disclose PHI only as permitted by the BAA and these documents;</li>
-      <li>Implement administrative, physical, and technical safeguards to protect PHI, including encryption in transit (TLS 1.2+) and at rest;</li>
-      <li>Require our subprocessors that handle PHI to provide written assurances (including, where required, their own BAAs) that are at least as protective as our BAA with you;</li>
-      <li>Report Security Incidents and Breaches to you in accordance with the BAA and applicable law;</li>
-      <li>Make PHI available to you, or directly to an individual, as necessary to satisfy a Covered Entity&rsquo;s obligations under 45 C.F.R. §§ 164.524 and 164.526.</li>
-    </ul>
-    <div class="callout">
-      <strong>No BAA, no PHI.</strong> If you have not executed a BAA with CosmaNeura, please do not use Cosmas to process PHI. To request a BAA, email <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
-    </div>
+        <h2 id="s5">
+          <span class="num">§ 05</span>AI Training &amp; Product Improvement
+        </h2>
+        <p>
+          Cosmas is an AI-driven product, and we believe being transparent about
+          how we use data to improve it is a core commitment to our users.
+        </p>
 
-    <h2 id="s5"><span class="num">§ 05</span>AI Training &amp; Product Improvement</h2>
-    <p>Cosmas is an AI-driven product, and we believe being transparent about how we use data to improve it is a core commitment to our users.</p>
+        <h3>What we do</h3>
+        <p>We use information processed through Cosmas to:</p>
+        <ul>
+          <li>
+            Test and measure model accuracy, safety, and clinical utility;
+          </li>
+          <li>
+            Fine-tune, prompt-engineer, and evaluate the models, workflows, and
+            features that power Cosmas;
+          </li>
+          <li>
+            Build new features that serve our users (for example, new note
+            templates, new specialty workflows, new integrations);
+          </li>
+          <li>
+            Generate de-identified analytics about how clinicians use Cosmas.
+          </li>
+        </ul>
 
-    <h3>What we do</h3>
-    <p>We use information processed through Cosmas to:</p>
-    <ul>
-      <li>Test and measure model accuracy, safety, and clinical utility;</li>
-      <li>Fine-tune, prompt-engineer, and evaluate the models, workflows, and features that power Cosmas;</li>
-      <li>Build new features that serve our users (for example, new note templates, new specialty workflows, new integrations);</li>
-      <li>Generate de-identified analytics about how clinicians use Cosmas.</li>
-    </ul>
+        <h3>How we do it responsibly</h3>
+        <ul>
+          <li>
+            <strong>PHI is treated as PHI.</strong> Where content includes PHI,
+            we only use it for improvement purposes to the extent permitted by
+            our BAA with you and by HIPAA, including the &ldquo;proper
+            management and administration&rdquo; and &ldquo;data
+            aggregation&rdquo; provisions at 45 C.F.R. § 164.504(e)(2)(i)(B) and
+            § 164.504(e)(2)(i)(A), or after de-identification per 45 C.F.R. §
+            164.514.
+          </li>
+          <li>
+            <strong>De-identification first.</strong> Wherever feasible, we
+            de-identify content before using it to train or evaluate models.
+          </li>
+          <li>
+            <strong>Access controls.</strong> Access to raw, identifiable
+            content is limited to authorized personnel under strict need-to-know
+            rules and is logged.
+          </li>
+          <li>
+            <strong>No training on data from users who opt out.</strong> You may
+            opt out of having your Customer Content used for product-improvement
+            purposes (see § 11).
+          </li>
+          <li>
+            <strong>Not every third-party model provider.</strong> Where we
+            route content to third-party AI providers to generate outputs, we
+            only use providers that (i) have a BAA with us when PHI is involved,
+            and (ii) contractually commit not to use your content to train their
+            own models.
+          </li>
+        </ul>
 
-    <h3>How we do it responsibly</h3>
-    <ul>
-      <li><strong>PHI is treated as PHI.</strong> Where content includes PHI, we only use it for improvement purposes to the extent permitted by our BAA with you and by HIPAA, including the &ldquo;proper management and administration&rdquo; and &ldquo;data aggregation&rdquo; provisions at 45 C.F.R. § 164.504(e)(2)(i)(B) and § 164.504(e)(2)(i)(A), or after de-identification per 45 C.F.R. § 164.514.</li>
-      <li><strong>De-identification first.</strong> Wherever feasible, we de-identify content before using it to train or evaluate models.</li>
-      <li><strong>Access controls.</strong> Access to raw, identifiable content is limited to authorized personnel under strict need-to-know rules and is logged.</li>
-      <li><strong>No training on data from users who opt out.</strong> You may opt out of having your Customer Content used for product-improvement purposes (see § 11).</li>
-      <li><strong>Not every third-party model provider.</strong> Where we route content to third-party AI providers to generate outputs, we only use providers that (i) have a BAA with us when PHI is involved, and (ii) contractually commit not to use your content to train their own models.</li>
-    </ul>
+        <h2 id="s6"><span class="num">§ 06</span>How We Share Information</h2>
+        <p>
+          We share information only in the following, limited circumstances:
+        </p>
+        <ul>
+          <li>
+            <strong>Service providers and subprocessors</strong> that help us
+            operate Cosmas (hosting, security, meeting-bot services,
+            transcription, AI model inference, analytics, and customer support).
+            These providers process data on our behalf, under written contracts
+            that restrict their use of the data and, where applicable, include a
+            BAA.
+          </li>
+          <li>
+            <strong>Your organization.</strong> If you use Cosmas through a
+            clinic or employer account, that organization&rsquo;s administrators
+            may access your account information, usage, and content.
+          </li>
+          <li>
+            <strong>Legal and safety disclosures</strong> when we reasonably
+            believe disclosure is required by law, legal process, or to protect
+            the rights, property, or safety of CosmaNeura, our users, or the
+            public.
+          </li>
+          <li>
+            <strong>Business transfers.</strong> If CosmaNeura is involved in a
+            merger, acquisition, financing, or sale of assets, information may
+            be transferred as part of that transaction, subject to protections
+            at least as strong as those in this Policy.
+          </li>
+          <li>
+            <strong>With your direction or consent</strong> &mdash; for example,
+            when you integrate Cosmas with another service and instruct us to
+            send data to it.
+          </li>
+        </ul>
 
-    <h2 id="s6"><span class="num">§ 06</span>How We Share Information</h2>
-    <p>We share information only in the following, limited circumstances:</p>
-    <ul>
-      <li><strong>Service providers and subprocessors</strong> that help us operate Cosmas (hosting, security, meeting-bot services, transcription, AI model inference, analytics, and customer support). These providers process data on our behalf, under written contracts that restrict their use of the data and, where applicable, include a BAA.</li>
-      <li><strong>Your organization.</strong> If you use Cosmas through a clinic or employer account, that organization&rsquo;s administrators may access your account information, usage, and content.</li>
-      <li><strong>Legal and safety disclosures</strong> when we reasonably believe disclosure is required by law, legal process, or to protect the rights, property, or safety of CosmaNeura, our users, or the public.</li>
-      <li><strong>Business transfers.</strong> If CosmaNeura is involved in a merger, acquisition, financing, or sale of assets, information may be transferred as part of that transaction, subject to protections at least as strong as those in this Policy.</li>
-      <li><strong>With your direction or consent</strong> &mdash; for example, when you integrate Cosmas with another service and instruct us to send data to it.</li>
-    </ul>
+        <h2 id="s7"><span class="num">§ 07</span>Subprocessors</h2>
+        <p>
+          A current list of CosmaNeura&rsquo;s material subprocessors (including
+          meeting-capture, AI model, and cloud-hosting providers) is available
+          on request from
+          <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. We will
+          notify customers in advance of material changes to this list,
+          consistent with our BAAs and applicable data-protection agreements.
+        </p>
 
-    <h2 id="s7"><span class="num">§ 07</span>Subprocessors</h2>
-    <p>A current list of CosmaNeura&rsquo;s material subprocessors (including meeting-capture, AI model, and cloud-hosting providers) is available on request from <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. We will notify customers in advance of material changes to this list, consistent with our BAAs and applicable data-protection agreements.</p>
+        <h2 id="s8"><span class="num">§ 08</span>What We Do <em>Not</em> Do</h2>
+        <div class="callout">
+          <strong>We will not:</strong>
+          <ul style="margin: 10px 0 0 0">
+            <li>
+              Sell, rent, or lease your Customer Content or personal information
+              to any third party;
+            </li>
+            <li>
+              Sell, rent, or license datasets, models, or insights derived from
+              your Customer Content to any third party;
+            </li>
+            <li>
+              Use your Customer Content to deliver advertising to you or anyone
+              else;
+            </li>
+            <li>
+              Use identifiable PHI to train models where our BAA or applicable
+              law prohibits it;
+            </li>
+            <li>
+              Use your Customer Content to build products competitive with your
+              practice.
+            </li>
+          </ul>
+          Product and model improvements developed with your Customer Content
+          serve Cosmas and its users. We do not commercialize your data as a
+          standalone asset.
+        </div>
 
-    <h2 id="s8"><span class="num">§ 08</span>What We Do <em>Not</em> Do</h2>
-    <div class="callout">
-      <strong>We will not:</strong>
-      <ul style="margin: 10px 0 0 0;">
-        <li>Sell, rent, or lease your Customer Content or personal information to any third party;</li>
-        <li>Sell, rent, or license datasets, models, or insights derived from your Customer Content to any third party;</li>
-        <li>Use your Customer Content to deliver advertising to you or anyone else;</li>
-        <li>Use identifiable PHI to train models where our BAA or applicable law prohibits it;</li>
-        <li>Use your Customer Content to build products competitive with your practice.</li>
-      </ul>
-      Product and model improvements developed with your Customer Content serve Cosmas and its users. We do not commercialize your data as a standalone asset.
-    </div>
+        <h2 id="s9"><span class="num">§ 09</span>Data Security</h2>
+        <p>
+          We maintain administrative, physical, and technical safeguards
+          designed to protect information we process. These include:
+        </p>
+        <ul>
+          <li>Encryption of data in transit (TLS 1.2+) and at rest;</li>
+          <li>
+            Role-based access controls, multi-factor authentication for
+            administrative access, and least-privilege principles;
+          </li>
+          <li>
+            Network isolation, continuous monitoring, and logging of access to
+            sensitive systems;
+          </li>
+          <li>
+            Vulnerability management, regular patching, and independent security
+            review as we scale;
+          </li>
+          <li>
+            A documented incident-response plan, including breach notification
+            procedures consistent with HIPAA and applicable state laws.
+          </li>
+        </ul>
+        <p>
+          No system is perfectly secure. If you believe your account or data has
+          been compromised, contact us immediately at
+          <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
+        </p>
 
-    <h2 id="s9"><span class="num">§ 09</span>Data Security</h2>
-    <p>We maintain administrative, physical, and technical safeguards designed to protect information we process. These include:</p>
-    <ul>
-      <li>Encryption of data in transit (TLS 1.2+) and at rest;</li>
-      <li>Role-based access controls, multi-factor authentication for administrative access, and least-privilege principles;</li>
-      <li>Network isolation, continuous monitoring, and logging of access to sensitive systems;</li>
-      <li>Vulnerability management, regular patching, and independent security review as we scale;</li>
-      <li>A documented incident-response plan, including breach notification procedures consistent with HIPAA and applicable state laws.</li>
-    </ul>
-    <p>No system is perfectly secure. If you believe your account or data has been compromised, contact us immediately at <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.</p>
+        <h2 id="s10">
+          <span class="num">§ 10</span>Data Retention &amp; Deletion
+        </h2>
+        <p>
+          We retain Customer Content and account information for as long as
+          needed to provide the Service to you, comply with our legal
+          obligations, resolve disputes, and enforce our agreements. Specific
+          retention periods are governed by your BAA and subscription agreement
+          where applicable.
+        </p>
+        <p>
+          You may request deletion of your account and associated Customer
+          Content by emailing
+          <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. We will
+          process deletion requests consistent with HIPAA, state
+          record-retention requirements (which may require your
+          <em>clinical</em> record to be retained by the clinician even if it is
+          deleted from Cosmas), and reasonable technical limitations.
+        </p>
+        <p>
+          De-identified and aggregated data may be retained indefinitely because
+          it no longer relates to an identifiable individual.
+        </p>
 
-    <h2 id="s10"><span class="num">§ 10</span>Data Retention &amp; Deletion</h2>
-    <p>We retain Customer Content and account information for as long as needed to provide the Service to you, comply with our legal obligations, resolve disputes, and enforce our agreements. Specific retention periods are governed by your BAA and subscription agreement where applicable.</p>
-    <p>You may request deletion of your account and associated Customer Content by emailing <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. We will process deletion requests consistent with HIPAA, state record-retention requirements (which may require your <em>clinical</em> record to be retained by the clinician even if it is deleted from Cosmas), and reasonable technical limitations.</p>
-    <p>De-identified and aggregated data may be retained indefinitely because it no longer relates to an identifiable individual.</p>
+        <h2 id="s11"><span class="num">§ 11</span>Your Rights &amp; Choices</h2>
+        <ul>
+          <li>
+            <strong>Access, correction, and deletion.</strong> You may request
+            access to, correction of, or deletion of your account information at
+            any time by emailing
+            <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
+          </li>
+          <li>
+            <strong>Opt out of product-improvement use.</strong> You may request
+            that we stop using your Customer Content for AI training and product
+            improvement by emailing
+            <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.
+            Honoring your request prevents future use for those purposes; we
+            cannot retroactively remove your data&rsquo;s influence on
+            already-trained models.
+          </li>
+          <li>
+            <strong>Disconnect integrations.</strong> You may revoke
+            Cosmas&rsquo;s access to Zoom or other connected platforms at any
+            time from within the connected platform&rsquo;s settings.
+          </li>
+          <li>
+            <strong>Marketing communications.</strong> You may unsubscribe from
+            non-essential emails at any time. Transactional and security
+            communications are not subject to unsubscribe.
+          </li>
+        </ul>
 
-    <h2 id="s11"><span class="num">§ 11</span>Your Rights &amp; Choices</h2>
-    <ul>
-      <li><strong>Access, correction, and deletion.</strong> You may request access to, correction of, or deletion of your account information at any time by emailing <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>.</li>
-      <li><strong>Opt out of product-improvement use.</strong> You may request that we stop using your Customer Content for AI training and product improvement by emailing <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. Honoring your request prevents future use for those purposes; we cannot retroactively remove your data&rsquo;s influence on already-trained models.</li>
-      <li><strong>Disconnect integrations.</strong> You may revoke Cosmas&rsquo;s access to Zoom or other connected platforms at any time from within the connected platform&rsquo;s settings.</li>
-      <li><strong>Marketing communications.</strong> You may unsubscribe from non-essential emails at any time. Transactional and security communications are not subject to unsubscribe.</li>
-    </ul>
+        <h2 id="s12"><span class="num">§ 12</span>State Privacy Rights</h2>
+        <p>
+          Certain U.S. state privacy laws (including California&rsquo;s
+          CCPA/CPRA, and similar laws in Virginia, Colorado, Connecticut, Utah,
+          Texas, and other states) provide rights to residents of those states,
+          including the right to know, access, delete, correct, and opt out of
+          the &ldquo;sale&rdquo; or &ldquo;sharing&rdquo; of personal
+          information for cross-context behavioral advertising.
+        </p>
+        <p>
+          <strong
+            >We do not sell or share personal information as those terms are
+            defined under those laws.</strong
+          >
+          Many categories of information processed through Cosmas are PHI
+          subject to HIPAA and are therefore exempt from most state
+          consumer-privacy laws. To exercise any applicable state privacy right,
+          email <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. We
+          may need to verify your identity before responding.
+        </p>
 
-    <h2 id="s12"><span class="num">§ 12</span>State Privacy Rights</h2>
-    <p>Certain U.S. state privacy laws (including California&rsquo;s CCPA/CPRA, and similar laws in Virginia, Colorado, Connecticut, Utah, Texas, and other states) provide rights to residents of those states, including the right to know, access, delete, correct, and opt out of the &ldquo;sale&rdquo; or &ldquo;sharing&rdquo; of personal information for cross-context behavioral advertising.</p>
-    <p><strong>We do not sell or share personal information as those terms are defined under those laws.</strong> Many categories of information processed through Cosmas are PHI subject to HIPAA and are therefore exempt from most state consumer-privacy laws. To exercise any applicable state privacy right, email <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>. We may need to verify your identity before responding.</p>
+        <h2 id="s13"><span class="num">§ 13</span>International Transfers</h2>
+        <p>
+          Cosmas is designed primarily for users in the United States. If you
+          access the Service from outside the U.S., your information will be
+          transferred to, stored, and processed in the United States. By using
+          Cosmas, you consent to that transfer.
+        </p>
 
-    <h2 id="s13"><span class="num">§ 13</span>International Transfers</h2>
-    <p>Cosmas is designed primarily for users in the United States. If you access the Service from outside the U.S., your information will be transferred to, stored, and processed in the United States. By using Cosmas, you consent to that transfer.</p>
+        <h2 id="s14"><span class="num">§ 14</span>Children&rsquo;s Privacy</h2>
+        <p>
+          Cosmas is a professional tool and is not directed to children. We do
+          not knowingly collect personal information directly from individuals
+          under 13 in a consumer context. PHI of pediatric patients may be
+          processed through Cosmas on behalf of a clinician, subject to HIPAA
+          and the clinician&rsquo;s own patient-privacy obligations.
+        </p>
 
-    <h2 id="s14"><span class="num">§ 14</span>Children&rsquo;s Privacy</h2>
-    <p>Cosmas is a professional tool and is not directed to children. We do not knowingly collect personal information directly from individuals under 13 in a consumer context. PHI of pediatric patients may be processed through Cosmas on behalf of a clinician, subject to HIPAA and the clinician&rsquo;s own patient-privacy obligations.</p>
+        <h2 id="s15"><span class="num">§ 15</span>Changes to This Policy</h2>
+        <p>
+          We may update this Privacy Policy from time to time. When we make
+          material changes, we will update the &ldquo;Effective date&rdquo; and,
+          where practicable, provide additional notice. Your continued use of
+          the Service after the effective date of a revised version constitutes
+          acceptance of the changes.
+        </p>
 
-    <h2 id="s15"><span class="num">§ 15</span>Changes to This Policy</h2>
-    <p>We may update this Privacy Policy from time to time. When we make material changes, we will update the &ldquo;Effective date&rdquo; and, where practicable, provide additional notice. Your continued use of the Service after the effective date of a revised version constitutes acceptance of the changes.</p>
+        <h2 id="s16"><span class="num">§ 16</span>Contact Us</h2>
+        <p>
+          If you have questions, concerns, or requests about this Privacy Policy
+          or our handling of your information:
+        </p>
+        <ul>
+          <li>
+            Primary contact:
+            <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a>
+          </li>
+          <li>
+            Technical &amp; developer:
+            <a href="mailto:dev@cosmaneura.com">dev@cosmaneura.com</a>
+          </li>
+          <li>CosmaNeura, Inc. &mdash; New Hampshire, USA</li>
+        </ul>
+        <p>
+          U.S. residents may also contact the Office for Civil Rights at the
+          U.S. Department of Health and Human Services if they believe their
+          HIPAA rights have been violated (<a
+            href="https://www.hhs.gov/ocr"
+            target="_blank"
+            rel="noopener"
+            >www.hhs.gov/ocr</a
+          >).
+        </p>
 
-    <h2 id="s16"><span class="num">§ 16</span>Contact Us</h2>
-    <p>If you have questions, concerns, or requests about this Privacy Policy or our handling of your information:</p>
-    <ul>
-      <li>Primary contact: <a href="mailto:info@cosmaneura.com">info@cosmaneura.com</a></li>
-      <li>Technical &amp; developer: <a href="mailto:dev@cosmaneura.com">dev@cosmaneura.com</a></li>
-      <li>CosmaNeura, Inc. &mdash; New Hampshire, USA</li>
-    </ul>
-    <p>U.S. residents may also contact the Office for Civil Rights at the U.S. Department of Health and Human Services if they believe their HIPAA rights have been violated (<a href="https://www.hhs.gov/ocr" target="_blank" rel="noopener">www.hhs.gov/ocr</a>).</p>
+        <hr class="rule" />
+        <p style="font-size: 13px; color: var(--muted)">
+          &copy; 2026 CosmaNeura, Inc. All rights reserved. &ldquo;Cosmas&rdquo;
+          and &ldquo;CosmaNeura&rdquo; are trademarks of CosmaNeura, Inc.
+        </p>
+      </div>
+    </main>
 
-    <hr class="rule" />
-    <p style="font-size: 13px; color: var(--muted);">&copy; 2026 CosmaNeura, Inc. All rights reserved. &ldquo;Cosmas&rdquo; and &ldquo;CosmaNeura&rdquo; are trademarks of CosmaNeura, Inc.</p>
-
-  </div>
-</main>
-
-<footer>
-  <div class="container">
-    <div>CosmaNeura, Inc. &middot; Dignified Intelligence for clinical care</div>
-    <div>
-      <a href="terms-of-service.html">Terms</a> &nbsp;&middot;&nbsp;
-      <a href="privacy-policy.html">Privacy</a> &nbsp;&middot;&nbsp;
-      <a href="support.html">Support</a>
-    </div>
-  </div>
-</footer>
-
-</body>
+    <footer>
+      <div class="container">
+        <div>
+          CosmaNeura, Inc. &middot; Dignified Intelligence for clinical care
+        </div>
+        <div>
+          <a href="terms-of-service.html">Terms</a> &nbsp;&middot;&nbsp;
+          <a href="privacy-policy.html">Privacy</a> &nbsp;&middot;&nbsp;
+          <a href="support.html">Support</a>
+        </div>
+      </div>
+    </footer>
+  </body>
 </html>

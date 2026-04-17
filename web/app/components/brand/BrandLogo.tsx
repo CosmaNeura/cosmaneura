@@ -11,7 +11,10 @@ const sizes = {
 
 export function BrandLogo({ variant = "light", size = "md" }: BrandLogoProps) {
   const s = sizes[size]
-  const nameColor = variant === "light" ? "text-[var(--brand-cream)]" : "text-[var(--brand-navy-deep)]"
+  const nameColor =
+    variant === "light"
+      ? "text-[var(--brand-cream)]"
+      : "text-[var(--brand-navy-deep)]"
   const coColor = "text-[var(--brand-gold)]"
 
   return (
@@ -28,7 +31,9 @@ export function BrandLogo({ variant = "light", size = "md" }: BrandLogoProps) {
         >
           Cosmas
         </span>
-        <span className={`${s.co} ${coColor} uppercase tracking-[2.5px] mt-1 font-semibold`}>
+        <span
+          className={`${s.co} ${coColor} mt-1 font-semibold tracking-[2.5px] uppercase`}
+        >
           by CosmaNeura, Inc.
         </span>
       </div>

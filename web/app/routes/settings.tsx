@@ -33,12 +33,12 @@ import {
   zoomDisconnect,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
-
-const ZOOM_COMING_SOON = true
 import { uploadFileToAzure } from "~/lib/azure-upload"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
+
+const ZOOM_COMING_SOON = true
 
 type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
 
@@ -369,7 +369,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
       <section className="prose-headings prose w-1/2 space-y-4">
         <div className="flex items-center gap-2">
           <h3 className="!mb-0">Zoom Integration</h3>
-          <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+          <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
             Coming Soon
           </span>
         </div>

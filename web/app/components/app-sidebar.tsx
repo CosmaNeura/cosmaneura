@@ -2,7 +2,6 @@ import * as React from "react"
 import { href, useLocation, useNavigate } from "react-router"
 
 import { Calendar, File, Inbox, Settings } from "lucide-react"
-import { BrandLogo } from "~/components/brand/BrandLogo"
 
 import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
@@ -21,6 +20,7 @@ import {
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { BrandLogo } from "~/components/brand/BrandLogo"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
@@ -130,7 +130,7 @@ function SelectionList({
             key={entry.id}
             onClick={() => currentUrl !== entry.url && navigate(entry.url)}
             className={cn(
-              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight text-sidebar-foreground",
+              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight",
               currentUrl === entry.url &&
                 true &&
                 "bg-sidebar-accent text-sidebar-accent-foreground",
@@ -138,10 +138,10 @@ function SelectionList({
           >
             <div className="flex w-full items-center justify-between gap-2">
               <span className="font-medium">{entry.title}</span>
-              <span className="text-xs text-on-navy-muted">{entry.date}</span>
+              <span className="text-on-navy-muted text-xs">{entry.date}</span>
             </div>
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-left text-xs text-on-navy-muted">
+              <span className="text-on-navy-muted text-left text-xs">
                 {entry.preview}
               </span>
               {entry.status !== "none" && <StatusBadge status={entry.status} />}
@@ -204,7 +204,7 @@ function SelectionSidebar({
             <div className="text-sidebar-foreground text-base font-medium">
               {header ?? "Appointments"}
             </div>
-            <Label className="flex items-center gap-2 text-sm text-on-navy-muted">
+            <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
               <span>This Week</span>
               <Switch
                 className="shadow-none"
@@ -222,13 +222,13 @@ function SelectionSidebar({
         <SidebarContent>
           <SidebarGroup className="px-0">
             {entries.length === 0 && (
-            <div className="p-4 text-center text-sm text-on-navy-muted">
+              <div className="text-on-navy-muted p-4 text-center text-sm">
                 <p>No Appointments</p>
                 <p className="mt-2">Upload a visit recording to get started.</p>
               </div>
             )}
             {entries.length > 0 && filteredEntries.length === 0 ? (
-              <div className="p-4 text-center text-sm text-on-navy-muted">
+              <div className="text-on-navy-muted p-4 text-center text-sm">
                 <p>No results found.</p>
                 <p className="mt-2">Try adjusting your filters.</p>
               </div>

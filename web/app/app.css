@@ -9,35 +9,35 @@
 
 :root {
   /* Cosmas brand palette */
-  --brand-navy-deep: #0B2341;
-  --brand-navy-mid: #18365C;
-  --brand-gold: #C9A961;
-  --brand-gold-bright: #E0BF74;
-  --brand-cream: #F5F0E4;
-  --brand-ink: #1A1A1A;
-  --brand-muted-text: #55596B;
-  --brand-rule: #E5DFD1;
-  --brand-bg: #FBF9F4;
+  --brand-navy-deep: #0b2341;
+  --brand-navy-mid: #18365c;
+  --brand-gold: #c9a961;
+  --brand-gold-bright: #e0bf74;
+  --brand-cream: #f5f0e4;
+  --brand-ink: #1a1a1a;
+  --brand-muted-text: #55596b;
+  --brand-rule: #e5dfd1;
+  --brand-bg: #fbf9f4;
 
-  --background: #FBF9F4;
-  --foreground: #1A1A1A;
-  --card: #FFFDF6;
-  --card-foreground: #1A1A1A;
-  --popover: #FFFDF6;
-  --popover-foreground: #1A1A1A;
-  --primary: #0B2341;
-  --primary-foreground: #F5F0E4;
-  --secondary: #E5DFD1;
-  --secondary-foreground: #0B2341;
-  --muted: #E5DFD1;
-  --muted-foreground: #55596B;
-  --accent: #C9A961;
-  --accent-foreground: #0B2341;
+  --background: #fbf9f4;
+  --foreground: #1a1a1a;
+  --card: #fffdf6;
+  --card-foreground: #1a1a1a;
+  --popover: #fffdf6;
+  --popover-foreground: #1a1a1a;
+  --primary: #0b2341;
+  --primary-foreground: #f5f0e4;
+  --secondary: #e5dfd1;
+  --secondary-foreground: #0b2341;
+  --muted: #e5dfd1;
+  --muted-foreground: #55596b;
+  --accent: #c9a961;
+  --accent-foreground: #0b2341;
   --destructive: hsl(0 84.2% 60.2%);
   --destructive-foreground: hsl(0 0% 98%);
-  --border: #E5DFD1;
-  --input: #E5DFD1;
-  --ring: #C9A961;
+  --border: #e5dfd1;
+  --input: #e5dfd1;
+  --ring: #c9a961;
   --chart-1: hsl(12 76% 61%);
   --chart-2: hsl(173 58% 39%);
   --chart-3: hsl(197 37% 24%);
@@ -45,19 +45,19 @@
   --chart-5: hsl(27 87% 67%);
   --radius: 0.6rem;
 
-  --chat-user-bg: #0B2341;
-  --chat-user-fg: #F5F0E4;
-  --chat-assistant-fg: #1A1A1A;
-  --chat-assistant-bg: #E5DFD1;
+  --chat-user-bg: #0b2341;
+  --chat-user-fg: #f5f0e4;
+  --chat-assistant-fg: #1a1a1a;
+  --chat-assistant-bg: #e5dfd1;
 
-  --sidebar-background: #0B2341;
-  --sidebar-foreground: #F5F0E4;
-  --sidebar-primary: #C9A961;
-  --sidebar-primary-foreground: #0B2341;
-  --sidebar-accent: #18365C;
-  --sidebar-accent-foreground: #F5F0E4;
-  --sidebar-border: #18365C;
-  --sidebar-ring: #C9A961;
+  --sidebar-background: #0b2341;
+  --sidebar-foreground: #f5f0e4;
+  --sidebar-primary: #c9a961;
+  --sidebar-primary-foreground: #0b2341;
+  --sidebar-accent: #18365c;
+  --sidebar-accent-foreground: #f5f0e4;
+  --sidebar-border: #18365c;
+  --sidebar-ring: #c9a961;
 
   --success: hsl(142.1 76.2% 36.3%);
   --success-foreground: hsl(355.7 100% 97.3%);
@@ -184,7 +184,8 @@
     @apply bg-background text-foreground;
   }
 
-  button, [role="button"] {
+  button,
+  [role="button"] {
     @apply cursor-pointer;
   }
 }

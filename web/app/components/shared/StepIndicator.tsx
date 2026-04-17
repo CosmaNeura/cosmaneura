@@ -40,7 +40,7 @@ export function StepIndicator({
                   <span>{stepNum}</span>
                 )}
                 {isActive && (
-                  <span className="absolute inset-0 animate-ping rounded-full bg-primary/30" />
+                  <span className="bg-primary/30 absolute inset-0 animate-ping rounded-full" />
                 )}
               </div>
               <span
@@ -60,7 +60,7 @@ export function StepIndicator({
               <div className="mx-4 mb-8 flex-1">
                 <div className="bg-border relative h-0.5 overflow-hidden rounded-full">
                   <div
-                    className="absolute inset-y-0 left-0 rounded-full bg-primary transition-all duration-700 ease-out"
+                    className="bg-primary absolute inset-y-0 left-0 rounded-full transition-all duration-700 ease-out"
                     style={{
                       width: isCompleted ? "100%" : isActive ? "50%" : "0%",
                     }}

@@ -7,7 +7,7 @@ interface LegalCalloutProps {
 export function LegalCallout({ children }: LegalCalloutProps) {
   return (
     <div
-      className="rounded-sm text-[15px] my-5 px-[22px] py-[18px]"
+      className="my-5 rounded-sm px-[22px] py-[18px] text-[15px]"
       style={{
         background: "#FFFDF6",
         border: "1px solid var(--brand-rule)",
@@ -31,10 +31,19 @@ export function LegalSection({ id, num, title, children }: LegalSectionProps) {
     <section>
       <h2
         id={id}
-        className="font-semibold text-[30px] leading-snug mt-12 mb-1"
-        style={{ fontFamily: "'Cormorant Garamond', serif", color: "var(--brand-navy-deep)" }}
+        className="mt-12 mb-1 text-[30px] leading-snug font-semibold"
+        style={{
+          fontFamily: "'Cormorant Garamond', serif",
+          color: "var(--brand-navy-deep)",
+        }}
       >
-        <span className="block text-[11px] font-semibold tracking-[3px] uppercase mb-2 font-sans" style={{ color: "var(--brand-gold)", fontFamily: "Inter, sans-serif" }}>
+        <span
+          className="mb-2 block font-sans text-[11px] font-semibold tracking-[3px] uppercase"
+          style={{
+            color: "var(--brand-gold)",
+            fontFamily: "Inter, sans-serif",
+          }}
+        >
           {num}
         </span>
         {title}
@@ -51,8 +60,11 @@ interface LegalSubheadingProps {
 export function LegalSubheading({ children }: LegalSubheadingProps) {
   return (
     <h3
-      className="font-semibold text-[17px] mt-7 mb-2"
-      style={{ color: "var(--brand-navy-deep)", fontFamily: "Inter, sans-serif" }}
+      className="mt-7 mb-2 text-[17px] font-semibold"
+      style={{
+        color: "var(--brand-navy-deep)",
+        fontFamily: "Inter, sans-serif",
+      }}
     >
       {children}
     </h3>
@@ -66,15 +78,18 @@ interface LegalTableProps {
 
 export function LegalTable({ headers, rows }: LegalTableProps) {
   return (
-    <div className="overflow-x-auto my-[18px]">
+    <div className="my-[18px] overflow-x-auto">
       <table className="w-full border-collapse text-[14.5px]">
         <thead>
           <tr>
             {headers.map((h) => (
               <th
                 key={h}
-                className="text-left px-[14px] py-3 text-[13px] uppercase tracking-[1px] font-semibold border-b border-[var(--brand-rule)]"
-                style={{ background: "#FFFDF6", color: "var(--brand-navy-deep)" }}
+                className="border-b border-[var(--brand-rule)] px-[14px] py-3 text-left text-[13px] font-semibold tracking-[1px] uppercase"
+                style={{
+                  background: "#FFFDF6",
+                  color: "var(--brand-navy-deep)",
+                }}
               >
                 {h}
               </th>
@@ -87,7 +102,7 @@ export function LegalTable({ headers, rows }: LegalTableProps) {
               {row.map((cell, j) => (
                 <td
                   key={j}
-                  className="text-left px-[14px] py-3 border-b border-[var(--brand-rule)] align-top"
+                  className="border-b border-[var(--brand-rule)] px-[14px] py-3 text-left align-top"
                   dangerouslySetInnerHTML={{ __html: cell }}
                 />
               ))}
@@ -106,22 +121,25 @@ interface TocProps {
 export function LegalToc({ items }: TocProps) {
   return (
     <div
-      className="rounded-sm px-7 py-6 mb-10"
+      className="mb-10 rounded-sm px-7 py-6"
       style={{ background: "#FFFDF6", border: "1px solid var(--brand-rule)" }}
     >
       <h4
-        className="text-[11px] uppercase tracking-[2.5px] font-semibold mb-3"
+        className="mb-3 text-[11px] font-semibold tracking-[2.5px] uppercase"
         style={{ color: "var(--brand-gold)" }}
       >
         Contents
       </h4>
-      <ol className="columns-2 gap-8 text-[14px] list-decimal pl-5 m-0 sm:columns-1">
+      <ol className="m-0 list-decimal columns-2 gap-8 pl-5 text-[14px] sm:columns-1">
         {items.map((item) => (
           <li key={item.href} className="my-1 break-inside-avoid">
             <a
               href={item.href}
               className="underline"
-              style={{ color: "var(--brand-navy-mid)", textDecorationColor: "var(--brand-gold)" }}
+              style={{
+                color: "var(--brand-navy-mid)",
+                textDecorationColor: "var(--brand-gold)",
+              }}
             >
               {item.label}
             </a>
