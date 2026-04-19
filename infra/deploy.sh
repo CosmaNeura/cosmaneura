@@ -143,7 +143,7 @@ run_migrations() {
 			--replica-timeout 300 \
 			--replica-retry-limit 0 \
 			--image "$PRODUCTION_TAG" \
-			--command "uv" --args "run alembic upgrade head" \
+			--args "/opt/venv/bin/alembic upgrade head" \
 			--cpu 0.5 --memory 1Gi \
 			--registry-server "$acr_server" \
 			--registry-username "$acr_user" \
