@@ -139,9 +139,11 @@ jobs:
       - run: just build
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          PYTHON_ENV: production
       - run: just build_push
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          PYTHON_ENV: production
 
       - uses: azure/login@v2
         with:
