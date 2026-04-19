@@ -116,12 +116,21 @@ run_migrations() {
 		[[ -n "$value" ]] && env_args+=("${var}=${value}")
 	done
 
+	# ACR admin creds so the job can pull the image
+	local acr_name="cosmaneuraprodregistry"
+	local acr_server acr_user acr_pw
+	acr_server=$(az acr show --name "$acr_name" --query loginServer -o tsv)
+	acr_user=$(az acr credential show --name "$acr_name" --query username -o tsv)
+	acr_pw=$(az acr credential show --name "$acr_name" --query 'passwords[0].value' -o tsv)
+
 	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
 		echo "Updating existing migration job..."
 		if [[ ${#secrets_args[@]} -gt 0 ]]; then
 			az containerapp job secret set -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
 				--secrets "${secrets_args[@]}"
 		fi
+		az containerapp job registry set -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+			--server "$acr_server" --username "$acr_user" --password "$acr_pw"
 		az containerapp job update -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
 			--image "$PRODUCTION_TAG"
 	else
@@ -136,6 +145,9 @@ run_migrations() {
 			--image "$PRODUCTION_TAG" \
 			--command "sh" --args "-c,uv run alembic upgrade head" \
 			--cpu 0.5 --memory 1Gi \
+			--registry-server "$acr_server" \
+			--registry-username "$acr_user" \
+			--registry-password "$acr_pw" \
 			--secrets "${secrets_args[@]}" \
 			--env-vars "${env_args[@]}"
 	fi
