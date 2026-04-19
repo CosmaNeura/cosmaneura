@@ -231,7 +231,7 @@ resource "azurerm_storage_container" "test_example_notes" {
 # https://github.com/1Password/terraform-provider-onepassword/issues/17
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
 resource "onepassword_item" "upload_blob_storage" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title    = "Azure ${local.environment} Storage File Uploads"
   category = "login"
@@ -289,7 +289,7 @@ resource "azurerm_container_registry" "main" {
 }
 
 resource "onepassword_item" "azure_container_registry" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title    = "Azure ${local.environment} Container Registry"
   category = "login"
@@ -331,7 +331,7 @@ resource "azurerm_redis_cache" "main" {
 }
 
 resource "onepassword_item" "production_redis" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title    = "Azure ${local.environment} Redis Database"
   category = "database"
@@ -425,7 +425,7 @@ locals {
 # add postgres connection string to 1password
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
 resource "onepassword_item" "production_postgres" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title    = "Azure ${local.environment} Postgres Database"
   category = "database"
@@ -726,7 +726,7 @@ resource "azurerm_container_app" "worker" {
 # create a new password and sync it to 1p for the job monitoring dashboard
 
 resource "onepassword_item" "job_monitor_login" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title    = "${local.environment} Job Monitor Flower Login"
   category = "login"
@@ -744,7 +744,7 @@ resource "onepassword_item" "job_monitor_login" {
 }
 
 resource "onepassword_item" "session_secret" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title    = "${local.environment} Session Secret"
   category = "password"
@@ -890,7 +890,7 @@ resource "azurerm_container_app" "job-monitor" {
 
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs/resources/item
 resource "onepassword_item" "squarespace_domain" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title      = "Azure ${local.environment} Hosting Metadata"
   category   = "secure_note"
@@ -1021,7 +1021,7 @@ resource "azurerm_role_assignment" "github_container_app_3_operator" {
 # https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure#adding-the-federated-credentials-to-azure
 
 resource "onepassword_item" "azure_github_actions" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
 
   title    = "Azure ${local.environment} GitHub Actions Credentials"
   category = "login"

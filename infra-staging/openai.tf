@@ -66,7 +66,7 @@ resource "azurerm_cognitive_deployment" "openai_o1" {
 
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
 resource "onepassword_item" "azure_openai_service" {
-  vault = data.external.secrets.result["OP_VAULT_UID"]
+  vault = data.external.secrets.result["OP_STAGING_VAULT_UID"]
 
   title    = "Azure ${local.environment} Open AI Service"
   category = "login"
