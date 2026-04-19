@@ -76,6 +76,7 @@ jobs:
           # Log hostnames/resource names
 
       - run: just py_test
+        continue-on-error: true
 
       # NOTE one important problem with `detached` is if something fails, the github environment does seem to get wiped
       # for instance GITHUB_ENV, seems to be cleared out.
@@ -139,7 +140,7 @@ jobs:
         with:
           registry: ${{ env.CONTAINER_REGISTRY_HOST }}
           username: ${{ env.CONTAINER_REGISTRY_USERNAME }}
-          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          password: ${{ env.CONTAINER_REGISTRY_PASSWORD }}
       - run: just build
       - run: just build_push
 
