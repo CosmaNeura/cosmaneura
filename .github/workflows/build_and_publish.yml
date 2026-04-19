@@ -140,7 +140,7 @@ jobs:
         with:
           registry: ${{ env.CONTAINER_REGISTRY_HOST }}
           username: ${{ env.CONTAINER_REGISTRY_USERNAME }}
-          password: ${{ env.CONTAINER_REGISTRY_PASSWORD }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
       - run: just build
       - run: just build_push
 
