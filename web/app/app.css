@@ -8,25 +8,36 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: hsl(0 0% 100%);
-  --foreground: hsl(240 10% 3.9%);
-  --card: hsl(0 0% 100%);
-  --card-foreground: hsl(240 10% 3.9%);
-  --popover: hsl(0 0% 100%);
-  --popover-foreground: hsl(240 10% 3.9%);
-  --primary: hsl(240 5.9% 10%);
-  --primary-foreground: hsl(0 0% 98%);
-  --secondary: hsl(240 4.8% 95.9%);
-  --secondary-foreground: hsl(240 5.9% 10%);
-  --muted: hsl(240 4.8% 95.9%);
-  --muted-foreground: hsl(240 3.8% 46.1%);
-  --accent: hsl(240 4.8% 95.9%);
-  --accent-foreground: hsl(240 5.9% 10%);
+  /* Cosmas brand palette */
+  --brand-navy-deep: #0b2341;
+  --brand-navy-mid: #18365c;
+  --brand-gold: #c9a961;
+  --brand-gold-bright: #e0bf74;
+  --brand-cream: #f5f0e4;
+  --brand-ink: #1a1a1a;
+  --brand-muted-text: #55596b;
+  --brand-rule: #e5dfd1;
+  --brand-bg: #fbf9f4;
+
+  --background: #fbf9f4;
+  --foreground: #1a1a1a;
+  --card: #fffdf6;
+  --card-foreground: #1a1a1a;
+  --popover: #fffdf6;
+  --popover-foreground: #1a1a1a;
+  --primary: #0b2341;
+  --primary-foreground: #f5f0e4;
+  --secondary: #e5dfd1;
+  --secondary-foreground: #0b2341;
+  --muted: #e5dfd1;
+  --muted-foreground: #55596b;
+  --accent: #c9a961;
+  --accent-foreground: #0b2341;
   --destructive: hsl(0 84.2% 60.2%);
   --destructive-foreground: hsl(0 0% 98%);
-  --border: hsl(240 5.9% 90%);
-  --input: hsl(240 5.9% 90%);
-  --ring: hsl(240 10% 3.9%);
+  --border: #e5dfd1;
+  --input: #e5dfd1;
+  --ring: #c9a961;
   --chart-1: hsl(12 76% 61%);
   --chart-2: hsl(173 58% 39%);
   --chart-3: hsl(197 37% 24%);
@@ -34,19 +45,19 @@
   --chart-5: hsl(27 87% 67%);
   --radius: 0.6rem;
 
-  --chat-user-bg: #344ffb;
-  --chat-user-fg: #ffffff;
-  --chat-assistant-fg: #202124;
-  --chat-assistant-bg: #ededed;
+  --chat-user-bg: #0b2341;
+  --chat-user-fg: #f5f0e4;
+  --chat-assistant-fg: #1a1a1a;
+  --chat-assistant-bg: #e5dfd1;
 
-  --sidebar-background: hsl(0 0% 98%);
-  --sidebar-foreground: hsl(240 5.3% 26.1%);
-  --sidebar-primary: hsl(240 5.9% 10%);
-  --sidebar-primary-foreground: hsl(0 0% 98%);
-  --sidebar-accent: hsl(240 4.8% 95.9%);
-  --sidebar-accent-foreground: hsl(240 5.9% 10%);
-  --sidebar-border: hsl(220 13% 91%);
-  --sidebar-ring: hsl(217.2 91.2% 59.8%);
+  --sidebar-background: #0b2341;
+  --sidebar-foreground: #f5f0e4;
+  --sidebar-primary: #c9a961;
+  --sidebar-primary-foreground: #0b2341;
+  --sidebar-accent: #18365c;
+  --sidebar-accent-foreground: #f5f0e4;
+  --sidebar-border: rgba(197, 186, 161, 0.18);
+  --sidebar-ring: #c9a961;
 
   --success: hsl(142.1 76.2% 36.3%);
   --success-foreground: hsl(355.7 100% 97.3%);
@@ -171,5 +182,29 @@
 
   body {
     @apply bg-background text-foreground;
+  }
+
+  button,
+  [role="button"] {
+    @apply cursor-pointer;
+  }
+}
+
+@layer utilities {
+  /* Navy surface: dark background, cream text */
+  .surface-navy {
+    @apply bg-[var(--brand-navy-deep)] text-[var(--brand-cream)];
+  }
+  /* Cream surface: warm light background, ink text */
+  .surface-cream {
+    @apply bg-[var(--brand-bg)] text-[var(--brand-ink)];
+  }
+  /* Muted text for secondary content on navy */
+  .text-on-navy-muted {
+    color: rgba(245, 240, 228, 0.6);
+  }
+  /* Gold accent text */
+  .text-gold {
+    color: var(--brand-gold);
   }
 }

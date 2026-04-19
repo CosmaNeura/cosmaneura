@@ -33,6 +33,7 @@ client.setConfig({
   auth: async () => {
     const client = await getClient()
     invariant(client && client.session, "client and session should exist")
+    invariant(client.user, "client user should exist")
 
     const token = await client.session.getToken()
     invariant(token, "token should exist")
@@ -45,8 +46,8 @@ client.setConfig({
     Sentry.setUser({
       id: client.user.id,
       // username + email are picked up by the feedback widget if we include thems
-      username: client.user.username,
-      email: client.user.primaryEmailAddress.emailAddress,
+      username: client.user.username ?? undefined,
+      email: client.user.primaryEmailAddress?.emailAddress ?? undefined,
     })
 
     return token

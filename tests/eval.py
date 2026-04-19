@@ -1,10 +1,12 @@
 import json
-from typing import Callable
 from textwrap import dedent
-from app.configuration.openai import openai
+from typing import Callable
+
 from app import log
+from app.configuration.openai import openai
 
 OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
+
 
 def eval_n_of_m(call_llm: Callable[[], str], criteria: str, n: int, m: int) -> bool:
     """
@@ -27,7 +29,9 @@ def eval_n_of_m(call_llm: Callable[[], str], criteria: str, n: int, m: int) -> b
             successes += 1
             if successes >= n:
                 return True
-    raise AssertionError(f"Failed to satisfy criteria {criteria} {n}/{m} times, only succeeded {successes}/{m} times.")
+    raise AssertionError(
+        f"Failed to satisfy criteria {criteria} {n}/{m} times, only succeeded {successes}/{m} times."
+    )
 
 
 def eval_llm(llm_output: str, criteria: str) -> bool:
@@ -42,6 +46,7 @@ def eval_llm(llm_output: str, criteria: str) -> bool:
         True if the output meets the criteria, False otherwise.
     """
     return eval_llm_with_attmepts(llm_output, criteria, 1)
+
 
 def eval_llm_with_attmepts(llm_output: str, criteria: str, attempts: int) -> bool:
     if attempts > 3:

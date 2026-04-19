@@ -12,6 +12,7 @@ import {
 import { getClient } from "~/configuration/clerk"
 import { loginAsUser } from "~/configuration/client"
 
+import { invariant } from "@epic-web/invariant"
 import { useQuery } from "@tanstack/react-query"
 import { userListOptions } from "client/@tanstack/react-query.gen"
 
@@ -39,7 +40,10 @@ function AdminBar() {
   }
 
   const handleLogout = async () => {
-    await loginAsUser({ path: { user_id: (await getClient()).user.id } })
+    const client = await getClient()
+    invariant(client?.user, "client user should exist")
+
+    await loginAsUser({ path: { user_id: client.user.id } })
 
     window.location.replace(href("/"))
   }

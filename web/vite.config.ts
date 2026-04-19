@@ -1,4 +1,3 @@
-import { reactRouterDevTools } from "react-router-devtools"
 import { defineConfig } from "vite"
 import { loadEnv } from "vite"
 import viteCompression from "vite-plugin-compression"
@@ -111,7 +110,7 @@ export default defineConfig(({ mode }) => ({
   // TODO need to disable .env file loading https://discord.com/channels/804011606160703521/1307442221288656906
   // build.outDir is ignored and buildDirectory in react-router.config.ts is used instead
   build: {
-    sourcemap: true,
+    sourcemap: mode !== "production",
   },
   server: {
     // by default, vite will only listen on ipv6 loopback!
@@ -121,7 +120,7 @@ export default defineConfig(({ mode }) => ({
     // if the port is in use, fail loudly
     strictPort: true,
     // random ports to avoid conflict with other projects
-    port: parseInt(process.env.JAVASCRIPT_SERVER_PORT),
+    port: parseInt(process.env.JAVASCRIPT_SERVER_PORT ?? "5173", 10),
   },
   // clearScreen: false,
   plugins: [

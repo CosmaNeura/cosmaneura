@@ -3,8 +3,10 @@ Generate intake questions for a patient of a doctor.
 """
 
 import json
+import os
 from datetime import datetime
 from textwrap import dedent
+from typing import Any, cast
 
 from typeid import TypeID
 
@@ -18,6 +20,80 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
+
+
+def should_use_test_openai_fallback() -> bool:
+    return os.environ.get("PYTHON_ENV") == "test" and not (
+        os.environ.get("AZURE_OPENAI_API_KEY")
+        and os.environ.get("AZURE_OPENAI_ENDPOINT")
+    )
+
+
+def _find_intake_value(intake_data: dict[str, Any], field_name: str) -> str | None:
+    forms = intake_data.get("forms") or []
+    for form in forms:
+        values = form.get("values") or []
+        for value in values:
+            if value.get("name") != field_name:
+                continue
+
+            field_value = value.get("value")
+            if field_value:
+                return str(field_value)
+
+    return None
+
+
+def _local_extract_intake_data(intake: Intake) -> ExternalIntakeData:
+    intake_data = cast(dict[str, Any], intake.external_intake_data or {})
+    reason = _find_intake_value(
+        intake_data, "What is the primary reason for making this appointment?"
+    )
+    appointment_type = str(intake_data.get("type") or "General consultation")
+    appointment_category = intake_data.get("category")
+
+    details = [
+        _find_intake_value(intake_data, "Patient Sex"),
+        _find_intake_value(intake_data, "Patient Height"),
+        _find_intake_value(intake_data, "Patient Weight"),
+    ]
+    additional_info = (
+        ", ".join(detail for detail in details if detail) or "Not provided"
+    )
+
+    return ExternalIntakeData(
+        reason_for_visit=reason or "Not provided",
+        appointment_type=appointment_type,
+        additional_info=additional_info,
+        appointment_category=str(appointment_category)
+        if appointment_category
+        else None,
+    )
+
+
+def _local_generate_intake_questions(intake: Intake) -> list[IntakeSchemaQuestion]:
+    intake_data = intake.cleaned_external_intake_data
+    assert intake_data is not None
+
+    reason = intake_data.reason_for_visit or "your main concern"
+
+    return [
+        IntakeSchemaQuestion(
+            order=1,
+            question=f"How has {reason.lower()} changed over time?",
+            required_details="Include onset, duration, and any recent changes.",
+        ),
+        IntakeSchemaQuestion(
+            order=2,
+            question="What treatments, medications, or home remedies have you tried?",
+            required_details="Include what you tried and whether it helped.",
+        ),
+        IntakeSchemaQuestion(
+            order=3,
+            question="Are there any triggers, related symptoms, or relevant medical history?",
+            required_details="Include triggers, associated symptoms, and pertinent history.",
+        ),
+    ]
 
 
 def perform(intake_id: str | TypeID | TypeIDType):
@@ -39,8 +115,7 @@ def perform(intake_id: str | TypeID | TypeIDType):
 
     if intake.intake_questions:
         log.info(
-            "intake questions already exist, skipping generation",
-            intake_id=intake_id
+            "intake questions already exist, skipping generation", intake_id=intake_id
         )
         return
 
@@ -109,6 +184,9 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
 
 
 def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
+    if should_use_test_openai_fallback():
+        return _local_extract_intake_data(intake)
+
     prompt = extraction_prompt(intake, doctor)
     response = openai.chat.completions.create(
         model=DEFAULT_MULTI_MODAL_MODEL,
@@ -129,7 +207,7 @@ def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
     )
 
 
-def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
+def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
@@ -145,10 +223,11 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
         .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
         .join(Patient, Appointment.patient_id == Patient.id)
         .where((AIVisitNote.doctor_id == doctor.id) & (Patient.id == patient.id))
-        .order_by(Appointment.updated_at.desc())
+        .order_by(cast(Any, Appointment.updated_at).desc())
         .limit(1)
         .first()
     )
+    last_note = cast(AIVisitNote | None, last_note)
 
     last_visit_section = ""
     if last_note is not None:
@@ -236,10 +315,13 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str | None:
 def generate_intake_questions(
     intake: Intake, doctor: Doctor
 ) -> list[IntakeSchemaQuestion]:
+    if should_use_test_openai_fallback():
+        return _local_generate_intake_questions(intake)
+
     prompt = generate_questions_prompt(intake, doctor)
     response = openai.chat.completions.create(
         model=DEFAULT_MULTI_MODAL_MODEL,
-        messages=[{"role": "system", "content": prompt}],
+        messages=[cast(Any, {"role": "system", "content": prompt})],
         response_format={"type": "json_object"},
         temperature=0,
         top_p=0.1,

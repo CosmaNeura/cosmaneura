@@ -14,6 +14,8 @@ import { standardDateFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
 
+type Status = Parameters<typeof StatusBadge>[0]["status"]
+
 export function EmptyNotes() {
   return (
     <div className="mb-4">

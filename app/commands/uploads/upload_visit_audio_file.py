@@ -36,6 +36,7 @@ def perform(
         doctor_id=doctor.id,
         patient_id=patient.id,
         appointment_date=appointment_date,
+        external_id=None,
     ).save()
 
     file = VisitAudioFile(

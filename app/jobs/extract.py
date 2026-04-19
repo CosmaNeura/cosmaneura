@@ -218,7 +218,7 @@ def explain_note_fields(fields: list[str]) -> dict[str, str]:
 
 
 def extract_note_content(note_pages: list[str], fields: list[str]) -> dict[str, str]:
-    system_prompt = dedent("""
+    system_prompt = dedent(f"""
         You will be provided with a series of images of the pages of a PDF.
         The PDF is a clinical note created by a doctor from a patient encounter.
         What I want you to do is extract information from it.

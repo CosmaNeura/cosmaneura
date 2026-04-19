@@ -4,6 +4,10 @@ ignores:
   - isbot
   - react-router-devtools
   - react-icons
+  - tailwindcss
+  - tailwindcss-animate
+  - "@tailwindcss/typography"
+  - prettier-plugin-tailwindcss
   # linting
   - "@trivago/prettier-plugin-sort-imports"
   - prettier

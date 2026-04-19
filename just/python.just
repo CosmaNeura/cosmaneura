@@ -10,11 +10,12 @@ py_setup:
 	[ -d ".venv" ] || uv venv
 
 	# don't include debugging-extras on CI
-	# --no-sources to allow local dev packages to be used: https://github.com/astral-sh/uv/issues/9258#issuecomment-2499541207
+	# use the same locked sources in CI and locally, otherwise git-sourced packages like activemodel
+	# can resolve differently and cause schema drift between environments
 	if [ -z "${CI:-}" ]; then \
 		uv sync --group=debugging-extras; \
 	else \
-		uv sync --no-sources; \
+		uv sync; \
 	fi
 
 	# important for CI to install browsers for playwright
@@ -124,7 +125,14 @@ py_lint_fix:
 py_js-build:
 	# integration tests should mimic production as closely as possible
 	# to do this, we build the app and serve it like it will be served in production
-	export PNPM_GLOBAL_FLAGS="--silent" && {{EXECUTE_IN_TEST}} just js_build
+	{{EXECUTE_IN_TEST}} env \
+		PNPM_GLOBAL_FLAGS="--silent" \
+		VITE_CLERK_PUBLIC_KEY="${VITE_CLERK_PUBLIC_KEY:-pk_test_placeholder}" \
+		VITE_INTAKE_CHAT_DOMAIN="${VITE_INTAKE_CHAT_DOMAIN:-cosma.localhost}" \
+		VITE_POSTHOG_KEY="${VITE_POSTHOG_KEY:-test-posthog-key}" \
+		VITE_POSTHOG_HOST="${VITE_POSTHOG_HOST:-https://app.posthog.com}" \
+		VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-https://examplePublicKey@o0.ingest.sentry.io/0}" \
+		just js_build
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
 
@@ -145,6 +153,8 @@ py_test:
 		just py_js-build
 	  just _banner_echo "Running Non-Integration Tests"
 		uv run pytest . --verbosity=2 --ignore tests/integration {{PYTEST_COV_PARAMS}}
+		# ensure the Playwright headless shell exists for integration tests in CI-mode runs
+		uv run playwright install chromium --only-shell
 	  just _banner_echo "Running Integration"
 		uv run pytest tests/integration --verbosity=2 --cov-append {{PYTEST_COV_PARAMS}}
 	else

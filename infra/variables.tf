@@ -30,7 +30,11 @@ variable "python_secret_vars" {
     # azure upload
     "AZURE_UPLOADS_ACCOUNT_NAME", "AZURE_UPLOADS_ACCOUNT_KEY", "AZURE_UPLOADS_ACCOUNT_URL",
     # azure de-identification secrets
-    "AZURE_DEID_TENANT_ID", "AZURE_DEID_CLIENT_ID", "AZURE_DEID_CLIENT_SECRET", "AZURE_DEID_ENDPOINT"
+    "AZURE_DEID_TENANT_ID", "AZURE_DEID_CLIENT_ID", "AZURE_DEID_CLIENT_SECRET", "AZURE_DEID_ENDPOINT",
+    # recall.ai
+    "RECALL_API_KEY",
+    # zoom oauth
+    "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "ZOOM_SECRET_TOKEN"
   ]
 }
 
@@ -44,7 +48,9 @@ variable "python_public_vars" {
     # part of azure openai configuration
     "AZURE_OPENAI_ENDPOINT",
     # upload container names
-    "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME"
+    "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
+    # zoom oauth redirects
+    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT"
   ]
 }
 

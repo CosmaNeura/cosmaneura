@@ -19,7 +19,7 @@ This migration is more complex:
 
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 import sqlmodel
 import activemodel
@@ -156,6 +156,10 @@ def upgrade() -> None:
     2. Then, I want to validate that we could add a unique constraint without failure
     3. If that's true, I want to commit the changes and add the unique constraint
     """
+
+    if context.is_offline_mode():
+        op.create_unique_constraint('doctor_and_note_type_unique', 'doctor_note_schema', ['note_type', 'doctor_id'])
+        return
 
     session = Session(bind=op.get_bind())
 

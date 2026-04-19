@@ -42,7 +42,9 @@ def test_user_list(client: TestClient):
 
     # create 3 users
     for i in range(users_to_create):
-        Doctor(email=f"test{i}@example.com", clerk_id=f"user_{i}").save()
+        Doctor(
+            email=f"test{i}@example.com", clerk_id=f"user_{i}", biography=None
+        ).save()
 
     response = client.get(
         api_app.url_path_for("user_list"),
@@ -69,6 +71,7 @@ def test_login_as_authorized_good_credentials(client: TestClient):
 
     # paranoid conditions to assert on the general test structure
     local_admin = Doctor.get(clerk_id=clerk_admin.id)
+    assert local_admin is not None
     assert local_admin and local_admin.role == DoctorRole.admin
 
     # if the login_as user DNE it will throw an error
@@ -155,12 +158,18 @@ def test_login_as_user_route(client: TestClient):
     assert clerk_user and clerk_user.id
 
     local_admin = Doctor.get(clerk_id=clerk_admin.id)
+    assert local_admin is not None
 
     # paranoid: does this doctor already exist?
     assert Doctor.get(clerk_id=clerk_user.id) is None
 
     # if the login_as user DNE it will throw an error
-    local_user = Doctor(clerk_id=clerk_user.id).save()
+    assert clerk_user.email_addresses
+    local_user = Doctor(
+        clerk_id=clerk_user.id,
+        email=clerk_user.email_addresses[0].email_address,
+        biography=None,
+    ).save()
 
     # let's try a normal auth'd route
     settings_response = client.get(

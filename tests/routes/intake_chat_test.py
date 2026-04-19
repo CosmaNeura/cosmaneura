@@ -1,13 +1,9 @@
-from datetime import datetime
-
 from fastapi import status
 from fastapi.testclient import TestClient
 from polyfactory import BaseFactory
 from typeid import TypeID
 
 import app.commands.intake.chat
-
-from app.models.intake.intake import Intake
 
 from tests.factories import (
     EXAMPLE_INTAKE_QUESTIONS,
@@ -27,10 +23,7 @@ def test_invalid_intake_uuid(client: TestClient):
 
 
 def test_uuid_cannot_be_found(client: TestClient):
-    # TODO so ugly, there has to be a better way...
-    # TypeID(Intake.model_fields["id"].sa_column.type.prefix)
-    # fake_id = Intake.model_fields["id"].sa_column.type.generate()
-    fake_id = TypeID(Intake.model_fields["id"].sa_column.type.prefix)
+    fake_id = TypeID("intake")
 
     response = client.get(api_app.url_path_for("get_last_question", intake_id=fake_id))
     assert_status(response, status.HTTP_404_NOT_FOUND)

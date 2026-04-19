@@ -23,7 +23,7 @@ NIXPACKS_BUILD_METADATA := (
 PYTHON_NIXPACKS_BUILD_CMD := "nixpacks build ." + \
 	" --name " + PYTHON_IMAGE_TAG + \
 	" " + NIXPACKS_BUILD_METADATA + \
-	" --env PYTHON_ENV=production" + \
+	" --env PYTHON_ENV=" + env("PYTHON_ENV", "production") + \
 	" --platform=linux/amd64" + \
 	" $(just direnv_export_docker '" + SHARED_ENV_FILE +"' --params)" + \
 	" --inline-cache --cache-from " + PYTHON_PRODUCTION_IMAGE_NAME + ":latest" + \
@@ -54,7 +54,8 @@ SHARED_ENV_FILE := ".env"
 PYTHON_PRODUCTION_ENV_FILE := ".env.production.backend"
 
 # .env file with production variables that are safe to share publicly (frontend)
-JAVASCRIPT_SECRETS_FILE := ".env.production.frontend"
+JAVASCRIPT_SECRETS_FILE := env("JAVASCRIPT_SECRETS_FILE", ".env.production.frontend")
+JAVASCRIPT_BUILD_ENV := if JAVASCRIPT_SECRETS_FILE == ".env.staging.frontend" { "staging" } else { "production" }
 
 # by default, the py image name is pulled from the project name
 PYTHON_IMAGE_NAME := PROJECT_NAME
@@ -64,7 +65,8 @@ PYTHON_IMAGE_TAG := PYTHON_IMAGE_NAME + ":" + GIT_SHA
 JAVASCRIPT_IMAGE_NAME := PYTHON_IMAGE_NAME + "-javascript"
 JAVASCRIPT_IMAGE_TAG := JAVASCRIPT_IMAGE_NAME + ":" + GIT_SHA
 
-PYTHON_PRODUCTION_IMAGE_NAME := "cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
+CONTAINER_REGISTRY_HOST_SANITIZED := `echo "${CONTAINER_REGISTRY_HOST:-cosmaneuraprodregistry.azurecr.io}" | sed -E 's#^https?://##; s#/$##'`
+PYTHON_PRODUCTION_IMAGE_NAME := CONTAINER_REGISTRY_HOST_SANITIZED + "/cosmaneura/cosmaneura"
 JAVASCRIPT_PRODUCTION_IMAGE_NAME := PYTHON_PRODUCTION_IMAGE_NAME + "-javascript"
 
 [script]
@@ -87,7 +89,7 @@ _production_build_assertions:
 	fi
 
 # within nixpacks, this is where the SPA client assets are built
-JAVASCRIPT_CONTAINER_BUILD_DIR := "/app/build/client"
+JAVASCRIPT_CONTAINER_BUILD_DIR := "/app/build/" + JAVASCRIPT_BUILD_ENV + "/client"
 # outside of nixpacks, within the python application folder, this is where the SPA assets are stored
 JAVASCRIPT_PRODUCTION_BUILD_DIR := "public"
 
@@ -103,7 +105,7 @@ build_javascript: _production_build_assertions
 	# Cannot extract files out of a image, only a container. We create a tmp container to extract assets.
 	docker rm tmp-js-container || true
 	docker create --name tmp-js-container {{JAVASCRIPT_IMAGE_TAG}}
-	docker cp tmp-js-container:/app/build/production/client "{{JAVASCRIPT_PRODUCTION_BUILD_DIR}}"
+	docker cp tmp-js-container:{{JAVASCRIPT_CONTAINER_BUILD_DIR}} "{{JAVASCRIPT_PRODUCTION_BUILD_DIR}}"
 
 # dump nixpacks-generated Dockerfile for manual build and production debugging
 build_javascript_dump:
@@ -118,7 +120,11 @@ _build_requirements:
 
 # url of the repo on github for build metadata
 @_repo_url:
-	gh repo view --json url --jq ".url" | tr -d " \n"
+	if command -v gh >/dev/null 2>&1; then \
+		gh repo view --json url --jq ".url" | tr -d " \n"; \
+	else \
+		git remote get-url origin | sed -E 's#git@github.com:#https://github.com/#; s#\.git$##' | tr -d " \n"; \
+	fi
 
 # unique ID (mostly) to identify where/when this image was built for docker labeling
 @_build_id:

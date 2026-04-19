@@ -29,16 +29,19 @@ db_lint:
 	# TODO there's also a more advanced github integration, but seems a bit cleaner:
 	# https://squawkhq.com/docs/github_app
 
-	# TODO don't fail on warnings https://github.com/sbdchd/squawk/issues/348
 	# TODO remove rule exclusion when https://github.com/sbdchd/squawk/issues/392 is fixed
 	# TODO should submit upstream for the jq transformations so others can copy, add to docs
-	if [ -n "${CI:-}" ]; then \
+	squawk_report=$(mktemp) && \
 		LOG_LEVEL=error uv run alembic upgrade head --sql | \
-			uv run squawk --reporter=json --exclude=prefer-text-field | \
-			jq -r '.[] | "::\(if .level == "Error" then "error" else "warning" end) file=\(.file),line=\(.line),col=\(.column),title=\(.rule_name)::\(.messages[0].Note)"'; \
-	else \
-		LOG_LEVEL=error uv run alembic upgrade head --sql | uv run squawk --exclude=prefer-text-field; \
-	fi
+			uv run squawk --reporter=json --exclude=prefer-text-field > "$squawk_report" || true && \
+		if [ -n "${CI:-}" ]; then \
+			jq -r '.[] | "::\(if .level == "Error" then "error" else "warning" end) file=\(.file),line=\(.line),col=\(.column),title=\(.rule_name)::\(.messages[0].Note)"' "$squawk_report"; \
+		else \
+			jq -r '.[] | "\(.file):\(.line):\(.column): \(.level) [\(.rule_name)] \(.messages[0].Note)"' "$squawk_report"; \
+		fi && \
+		error_count=$(jq '[.[] | select(.level == "Error")] | length' "$squawk_report") && \
+		rm -f "$squawk_report" && \
+		[ "$error_count" -eq 0 ]
 
 # open the database in the default macos GUI
 [macos]

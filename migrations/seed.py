@@ -2,6 +2,7 @@
 
 import json
 from datetime import datetime
+from typing import Any, cast
 
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -117,7 +118,8 @@ EXAMPLE_NOTE_SCHEMA_FIELDS = {
 doctor_note_schema = DoctorNoteSchema.where(
     DoctorNoteSchema.doctor_id == doctor.id,
     DoctorNoteSchema.note_type == "Telehealth SOAP Note",
-    DoctorNoteSchema.fields["fields"].astext == json.dumps(EXAMPLE_NOTE_SCHEMA_FIELDS),
+    cast(Any, DoctorNoteSchema.fields)["fields"].astext
+    == json.dumps(EXAMPLE_NOTE_SCHEMA_FIELDS),
 ).first()
 
 if not doctor_note_schema:
@@ -131,7 +133,8 @@ if not doctor_note_schema:
 doctor2_note_schema = DoctorNoteSchema.where(
     DoctorNoteSchema.doctor_id == doctor_2.id,
     DoctorNoteSchema.note_type == "In-person SOAP Note",
-    DoctorNoteSchema.fields["fields"].astext == json.dumps(EXAMPLE_NOTE_SCHEMA_FIELDS),
+    cast(Any, DoctorNoteSchema.fields)["fields"].astext
+    == json.dumps(EXAMPLE_NOTE_SCHEMA_FIELDS),
 ).first()
 
 if not doctor2_note_schema:
@@ -142,6 +145,7 @@ if not doctor2_note_schema:
     ).save()
 
 assert isinstance(doctor_note_schema, DoctorNoteSchema)
+assert isinstance(doctor2_note_schema, DoctorNoteSchema)
 
 # TODO this is AI generated, we should improve seed data here
 # each schema must have at least a single example
@@ -158,7 +162,7 @@ doctor_note_example = DoctorNoteExample.find_or_create_by(
 
 doctor_note_example = DoctorNoteExample.find_or_create_by(
     doctor_id=doctor_2.id,
-    doctor_note_schema_id=doctor2_note_schema.id,
+    doctor_note_schema_id=cast(DoctorNoteSchema, doctor2_note_schema).id,
     field_examples={
         "Chief Complaint": "Patient reports recurring headaches",
         "History of Present Illness": "Patient has been experiencing headaches recently. Frequency and duration to be determined.",

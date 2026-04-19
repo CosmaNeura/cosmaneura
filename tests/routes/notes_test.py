@@ -5,11 +5,11 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
+from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
-from app.models.ai_visit_transcript import AIVisitTranscript
 
 from tests.factories import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
 from tests.routes.utils import get_clerk_dev_user, get_clerk_seed_user
@@ -30,6 +30,11 @@ def test_note_detail(authenticated_client: TestClient):
     _, _, clerk_user = get_clerk_dev_user()
     doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
 
+    if not doctor.email:
+        assert clerk_user.email_addresses
+        doctor.email = clerk_user.email_addresses[0].email_address
+        doctor.save()
+
     patient = Patient(
         doctor_id=doctor.id,
         name="Test Patient",
@@ -40,6 +45,7 @@ def test_note_detail(authenticated_client: TestClient):
         doctor_id=doctor.id,
         patient_id=patient.id,
         appointment_date=datetime.now(),
+        external_id=None,
     ).save()
 
     response = authenticated_client.get(
@@ -59,7 +65,7 @@ def test_note_detail(authenticated_client: TestClient):
 def test_note_detail_deleted_transcript(authenticated_client: TestClient):
     # Use data from seeds.
     _, _, seed_user = get_clerk_seed_user()
-    authenticated_client.override_user(seed_user)
+    authenticated_client.override_user(seed_user)  # type: ignore[attr-defined]
 
     transcript = AIVisitTranscript.sample()
     assert not transcript.deleted_at
@@ -98,12 +104,13 @@ def test_note_detail_deleted_transcript(authenticated_client: TestClient):
     assert transcript_json["deleted_at"] is not None
     assert len(transcript_json["transcript_data"]) == 0
 
+
 def test_note_detail_old_transcript(authenticated_client: TestClient):
     "Old transcripts should be treated as deleted even if not marked as such."
 
     # Use data from seeds.
     _, _, seed_user = get_clerk_seed_user()
-    authenticated_client.override_user(seed_user)
+    authenticated_client.override_user(seed_user)  # type: ignore[attr-defined]
 
     transcript = AIVisitTranscript.sample()
     assert not transcript.deleted_at

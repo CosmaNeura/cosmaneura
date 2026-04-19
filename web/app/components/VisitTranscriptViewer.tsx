@@ -11,13 +11,13 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 // TODO https://github.com/hey-api/openapi-ts/issues/1571
-import type { AIVisitTranscript } from "~/configuration/client"
+import type { AiVisitTranscript, TranscriptEntry } from "~/configuration/client"
 import { secondsToMinutes } from "~/lib/date"
 
 export default function VisitTranscriptViewer({
   transcript,
 }: {
-  transcript: AIVisitTranscript
+  transcript: AiVisitTranscript | null
 }) {
   if (!transcript) {
     return (
@@ -31,9 +31,11 @@ export default function VisitTranscriptViewer({
   }
 
   const now = new Date()
-  const createdAt = transcript.created_at ? new Date(transcript.created_at) : now
+  const createdAt = transcript.created_at
+    ? new Date(transcript.created_at)
+    : now
   const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000)
-  if (transcript.deleted_at || (createdAt < twoWeeksAgo)) {
+  if (transcript.deleted_at || createdAt < twoWeeksAgo) {
     return (
       <>
         <div className="mb-2 text-xl font-semibold">Visit Transcript</div>
@@ -63,12 +65,12 @@ export default function VisitTranscriptViewer({
       </div>
       <CollapsibleContent className="mt-3">
         <div className="text-muted-foreground mb-2 text-sm italic">
-          Duration: {secondsToMinutes(transcript.duration)}
+          Duration: {secondsToMinutes(transcript.duration ?? undefined)}
         </div>
         <div className="text-muted-foreground mb-2 text-sm italic">
           Transcripts are automatically deleted after a couple weeks.
         </div>
-        {transcript.transcript_data.map((transcriptEntry) => {
+        {transcript.transcript_data.map((transcriptEntry: TranscriptEntry) => {
           return (
             <div className="mb-2 break-all" key={transcriptEntry.startTime}>
               <span className="font-bold">{transcriptEntry.speaker}: </span>

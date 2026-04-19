@@ -473,6 +473,141 @@
           }
         ]
       }
+    },
+    "/internal/v1/zoom-auth-url": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Zoom Auth Url",
+        "operationId": "zoom_auth_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZoomAuthUrlResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/zoom-connect": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Zoom Disconnect",
+        "operationId": "zoom_disconnect",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/onboarding/complete": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Complete Onboarding",
+        "operationId": "complete_onboarding",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/schedule": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Schedule List",
+        "operationId": "schedule_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/schedule/{zoom_meeting_id}": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Cancel Meeting",
+        "operationId": "cancel_meeting",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "zoom_meeting_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Zoom Meeting Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1178,6 +1313,28 @@
         "title": "Patient",
         "description": "Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader."
       },
+      "ScheduleResponse": {
+        "properties": {
+          "zoom_connected": {
+            "type": "boolean",
+            "title": "Zoom Connected"
+          },
+          "meetings": {
+            "items": {
+              "$ref": "#/components/schemas/ZoomMeetingResponse"
+            },
+            "type": "array",
+            "title": "Meetings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "zoom_connected",
+          "meetings"
+        ],
+        "title": "ScheduleResponse"
+      },
       "SettingsData": {
         "properties": {
           "doctor_id": {
@@ -1201,6 +1358,25 @@
               }
             ],
             "title": "Biography"
+          },
+          "zoom_connected": {
+            "type": "boolean",
+            "title": "Zoom Connected"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "onboarding_completed": {
+            "type": "boolean",
+            "title": "Onboarding Completed"
           }
         },
         "additionalProperties": false,
@@ -1208,7 +1384,10 @@
         "required": [
           "doctor_id",
           "notes_schema",
-          "biography"
+          "biography",
+          "zoom_connected",
+          "email",
+          "onboarding_completed"
         ],
         "title": "SettingsData"
       },
@@ -1380,6 +1559,86 @@
           "date_of_birth"
         ],
         "title": "VisitAudioUploadRequest"
+      },
+      "ZoomAuthUrlResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "ZoomAuthUrlResponse"
+      },
+      "ZoomMeetingResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "zoom_meeting_id": {
+            "type": "string",
+            "title": "Zoom Meeting Id"
+          },
+          "topic": {
+            "type": "string",
+            "title": "Topic"
+          },
+          "start_time": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Start Time"
+          },
+          "duration": {
+            "type": "integer",
+            "title": "Duration"
+          },
+          "join_url": {
+            "type": "string",
+            "title": "Join Url"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ZoomMeetingStatus"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "zoom_meeting_id",
+          "topic",
+          "start_time",
+          "duration",
+          "join_url",
+          "status",
+          "appointment_id"
+        ],
+        "title": "ZoomMeetingResponse"
+      },
+      "ZoomMeetingStatus": {
+        "type": "string",
+        "enum": [
+          "scheduled",
+          "started",
+          "ended",
+          "cancelled"
+        ],
+        "title": "ZoomMeetingStatus"
       }
     },
     "securitySchemes": {

@@ -1,4 +1,3 @@
-
 from activemodel import BaseModel
 from activemodel.mixins import (
     PydanticJSONMixin,

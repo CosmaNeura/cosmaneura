@@ -1,13 +1,16 @@
+# pyright: reportMissingImports=false
+
 import typing as t
 
 import pytest
-from fastapi.testclient import TestClient
 from clerk_backend_api import User as ClerkUser
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from tests.routes.utils import (
     MockAuthenticateRequest,
     base_server_url,
+    get_clerk_dev_user,
 )
 
 
@@ -31,11 +34,14 @@ def global_session():
     with activemodel_global_session() as session:
         assert session
 
-        from factory.alchemy import SQLAlchemyModelFactory
+        try:
+            from factory.alchemy import SQLAlchemyModelFactory
 
-        # Ensure that all factories use the same session
-        for factory in SQLAlchemyModelFactory.__subclasses__():
-            factory._meta.sqlalchemy_session = session
+            # Ensure that all factories use the same session
+            for factory in SQLAlchemyModelFactory.__subclasses__():
+                factory._meta.sqlalchemy_session = session
+        except ModuleNotFoundError:
+            pass
 
         yield session
 
@@ -65,6 +71,15 @@ def authenticated_client():
     from app.routes.internal import authenticate_clerk_request_middleware
     from app.server import api_app
 
+    from app.models.doctor import Doctor
+
+    _, _, dev_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=dev_user.id)
+    if not doctor.email:
+        assert dev_user.email_addresses
+        doctor.email = dev_user.email_addresses[0].email_address
+        doctor.save()
+
     api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
         MockAuthenticateRequest()
     )
@@ -73,9 +88,9 @@ def authenticated_client():
         client.cookies.clear()
 
         def override_user(user: ClerkUser | None):
-            api_app.dependency_overrides[
-                authenticate_clerk_request_middleware
-            ] = MockAuthenticateRequest(user=user)
+            api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
+                MockAuthenticateRequest(user=user)
+            )
 
         client.override_user = override_user  # type: ignore[attr-defined]
 

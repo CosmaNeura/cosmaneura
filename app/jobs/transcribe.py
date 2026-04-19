@@ -9,6 +9,7 @@ import os
 import subprocess
 import uuid
 from textwrap import dedent
+from typing import Any, cast
 
 import assemblyai as assembly
 import sentry_sdk
@@ -24,6 +25,7 @@ from app.configuration.azure import (
 )
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 
+from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.visit_audio_file import VisitAudioFile
@@ -39,7 +41,7 @@ class TranscriptionResult:
         self.duration = duration
 
 
-def perform(visit_audio_file_id: str):
+def perform(visit_audio_file_id: str | TypeIDType):
     """
     Perform transcription via assembly of visit audio or video file.
     """
@@ -91,14 +93,14 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
     # Get all note schemas for the doctor and issue summary jobs
     note_schemas = DoctorNoteSchema.where(
         (DoctorNoteSchema.doctor_id == transcript.doctor_id)
-        & DoctorNoteSchema.deleted_at.is_(None)
+        & cast(Any, DoctorNoteSchema.deleted_at).is_(None)
     ).all()
 
     if not note_schemas:
         log.warning("no note schemas found for doctor", doctor_id=transcript.doctor_id)
         return
 
-    for schema in note_schemas:
+    for schema in cast(list[DoctorNoteSchema], note_schemas):
         app.jobs.summarize.queue(transcript_id=transcript.id, schema_id=schema.id)
 
 
@@ -135,6 +137,7 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
     filename = visit.azure_file_name
     basename_no_ext = os.path.splitext(filename)[0]
     temp_audio_path = f"/tmp/{uuid.uuid4()}-{basename_no_ext}.wav"
+    temp_download_path = ""
 
     try:
         temp_download_path = download_blob(visit)
@@ -149,7 +152,7 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
         return temp_audio_path
 
     finally:
-        if os.path.exists(temp_download_path):
+        if temp_download_path and os.path.exists(temp_download_path):
             log.info("cleaning up temp download file", path=temp_download_path)
             os.remove(temp_download_path)
 
@@ -176,6 +179,7 @@ def extract_audio_from_video(
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
     log.info("starting audio transcription", file_name=visit_audio_file.azure_file_name)
+    audio_file = ""
 
     try:
         ext = os.path.splitext(visit_audio_file.azure_file_name.lower())[1][1:]
@@ -205,7 +209,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
             )
             raise ValueError(f"Transcription failed: {transcript.error}")
     finally:
-        if os.path.exists(audio_file):
+        if audio_file and os.path.exists(audio_file):
             log.info("cleaning up audio file", path=audio_file)
             os.remove(audio_file)
 

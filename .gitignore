@@ -28,5 +28,11 @@ __pycache__
 
 # plugin installation folder
 infra/.terraform
+infra-staging/.terraform
 # this contains secrets!
 infra/terraform.tfstate*
+infra-staging/terraform.tfstate*
+.superpowers/
+.worktrees/
+
+docs/superporwers

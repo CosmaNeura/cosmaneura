@@ -3,8 +3,10 @@ Summarize all the intake data for a given appointment.
 """
 
 import json
+import os
 from datetime import datetime
 from textwrap import dedent
+from typing import Any, cast
 
 from typeid import TypeID
 
@@ -18,6 +20,35 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
+
+
+def should_use_test_openai_fallback() -> bool:
+    return os.environ.get("PYTHON_ENV") == "test" and not (
+        os.environ.get("AZURE_OPENAI_API_KEY")
+        and os.environ.get("AZURE_OPENAI_ENDPOINT")
+    )
+
+
+def _local_generate_intake_summary(intake: Intake) -> str:
+    cleaned_intake_data = intake.cleaned_external_intake_data
+    assert cleaned_intake_data is not None
+
+    follow_up_lines = [
+        f"- {question.question}: {question.answer}"
+        for question in sorted(
+            intake.intake_questions, key=lambda question: question.order
+        )
+        if question.answer
+    ]
+
+    return dedent(f"""
+    - Reason for Visit: {cleaned_intake_data.reason_for_visit}
+    - Appointment Type: {cleaned_intake_data.appointment_type}
+    - Appointment Category: {cleaned_intake_data.appointment_category or "Not provided"}
+    - Additional Info: {cleaned_intake_data.additional_info}
+
+    {chr(10).join(follow_up_lines)}
+    """).strip()
 
 
 def perform(intake_id: str | TypeID | TypeIDType):
@@ -82,10 +113,11 @@ def generate_prompt(intake: Intake) -> str:
         .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
         .join(Patient, Appointment.patient_id == Patient.id)
         .where((AIVisitNote.doctor_id == doctor.id) & (Patient.id == patient.id))
-        .order_by(Appointment.updated_at.desc())
+        .order_by(cast(Any, Appointment.updated_at).desc())
         .limit(1)
         .first()
     )
+    last_note = cast(AIVisitNote | None, last_note)
 
     follow_up_questions = [
         {"question": q.question, "answer": q.answer}
@@ -107,6 +139,9 @@ def generate_prompt(intake: Intake) -> str:
     # doctor's time to read. An average reader reads about 4 words per second.
     max_words = 250
 
+    cleaned_intake_data = intake.cleaned_external_intake_data
+    assert cleaned_intake_data is not None
+
     return dedent(f"""
     You are a doctor with the following bio:
 
@@ -118,7 +153,7 @@ def generate_prompt(intake: Intake) -> str:
     Your office has collected some information from the patient during intake to help you prepare.
 
     <INTAKE>
-    {json.dumps(intake.cleaned_external_intake_data.dict(), indent=2)}
+    {json.dumps(cast(dict, cleaned_intake_data.dict()), indent=2)}
     </INTAKE>
 
     The patient was asked some follow up questions, here are the questions and answers:
@@ -156,6 +191,9 @@ def generate_prompt(intake: Intake) -> str:
 
 
 def generate_intake_summary(intake: Intake) -> str | None:
+    if should_use_test_openai_fallback():
+        return _local_generate_intake_summary(intake)
+
     prompt = generate_prompt(intake)
 
     response = openai.chat.completions.create(

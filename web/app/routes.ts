@@ -6,6 +6,7 @@ import { index, layout, prefix, route } from "@react-router/dev/routes"
 
 export default [
   index("routes/index.tsx"),
+  route("/onboarding", "routes/onboarding.tsx"),
   layout("layouts/authenticated.tsx", [
     ...prefix("intake", [
       layout("layouts/intake.tsx", [
@@ -19,8 +20,18 @@ export default [
         route(":id", "routes/notes/detail.tsx"),
       ]),
     ]),
+    ...prefix("schedule", [
+      layout("layouts/schedule.tsx", [
+        index("routes/schedule/index.tsx"),
+        route(":zoom_meeting_id", "routes/schedule/detail.tsx"),
+      ]),
+    ]),
     route("/settings", "routes/settings.tsx"),
   ]),
   // public, unauthenticated, intake chat
   route("chat/intake/:id", "routes/chat/intake.tsx"),
+  // public legal / support pages
+  route("privacy-policy", "routes/privacy-policy.tsx"),
+  route("terms-of-service", "routes/terms-of-service.tsx"),
+  route("support", "routes/support.tsx"),
 ] satisfies RouteConfig

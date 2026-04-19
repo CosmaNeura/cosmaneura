@@ -1,7 +1,24 @@
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportArgumentType=false
+
+import os
+
+import pytest
+
 from app.jobs.intake.generate_questions import generate_intake_questions, perform
 
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
+
+_RUN_LIVE_LLM_TESTS = os.getenv("RUN_LIVE_LLM_TESTS") == "true"
+_HAS_AZURE_OPENAI_CREDS = bool(
+    os.getenv("AZURE_OPENAI_API_KEY") and os.getenv("AZURE_OPENAI_ENDPOINT")
+)
+pytestmark = pytest.mark.skipif(
+    not (_RUN_LIVE_LLM_TESTS and _HAS_AZURE_OPENAI_CREDS),
+    reason=(
+        "requires live Azure OpenAI access; set RUN_LIVE_LLM_TESTS=true and Azure OpenAI env vars"
+    ),
+)
 
 
 # should not include PII in questions (idk how to test this)

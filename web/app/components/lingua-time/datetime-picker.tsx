@@ -32,7 +32,7 @@ const DEFAULT_SUGGESTIONS = [
 ]
 
 interface Suggestion {
-  date: Date
+  date: Date | null
   inputString: string
 }
 
@@ -44,7 +44,7 @@ interface DateTimePickerProps
   showTimePicker?: boolean
   suggestions?: string[]
   value: Date
-  onChange: (date?: Date) => void
+  onChange: React.Dispatch<React.SetStateAction<Date | undefined>>
 }
 
 function generateSuggestions(
@@ -174,7 +174,7 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
 
       // if a date has NOT been set, but there's a valid suggestion generated from the input text, let's pick it
       if (!dateTime && suggestion) {
-        setDateTime(suggestion.date)
+        setDateTime(suggestion.date ?? undefined)
         return
       }
 
@@ -228,7 +228,7 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
      * - Should not be used outside the combobox logic
      */
     function handleSelectedSuggestion(sugg: Suggestion) {
-      setDateTime(sugg.date)
+      setDateTime(sugg.date ?? undefined)
       closeDropdown()
 
       // TODO it's unclear if this is necessary
@@ -374,7 +374,9 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
                     {sugg.inputString}
                   </span>
                   <span className="text-muted-foreground shrink-0 text-xs">
-                    {dateTimeFormatFunction(sugg.date)}
+                    {sugg.date
+                      ? dateTimeFormatFunction(sugg.date)
+                      : "Invalid date"}
                   </span>
                 </li>
               ))}

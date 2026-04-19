@@ -16,6 +16,8 @@ from starlette import status
 from app.routes.api import external_api_app
 from app.routes.errors import EarlyResponseException
 from app.routes.utils.openapi import simplify_operation_ids
+from app.routes.webhooks import webhook_api_app
+from app.routes.zoom_auth import zoom_auth_app
 
 from app.models.doctor import Doctor
 
@@ -62,6 +64,8 @@ api_app = FastAPI(
 api_app.include_router(internal_api_app)
 api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
+api_app.include_router(webhook_api_app)
+api_app.include_router(zoom_auth_app)
 
 add_middleware(api_app)
 

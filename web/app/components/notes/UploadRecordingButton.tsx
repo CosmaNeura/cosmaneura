@@ -1,6 +1,6 @@
 import { addDays, subMonths } from "date-fns"
 import { ChangeEventHandler, useState } from "react"
-import { ControllerRenderProps, FieldValues, useForm } from "react-hook-form"
+import { ControllerRenderProps, UseFormReturn, useForm } from "react-hook-form"
 import { z } from "zod"
 
 import { CheckIcon, Upload } from "lucide-react"
@@ -50,6 +50,13 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { useQuery } from "@tanstack/react-query"
 import { patientListOptions } from "client/@tanstack/react-query.gen"
 
+type UploadRecordingFormValues = {
+  appointment_date: Date
+  patient_name: string
+  date_of_birth: Date
+  file: File
+}
+
 // TODO should really be extracted out to a shared component, but it's too married into this page at this point... :/
 function PatientComboboxSearch({
   // required for updating the DOB when a patient item is selected
@@ -58,11 +65,18 @@ function PatientComboboxSearch({
   value,
   ...props
 }: {
-  form: ReturnType<typeof useForm>
-  onChange: ControllerRenderProps<FieldValues, string>["onChange"]
-  value: ControllerRenderProps<FieldValues, string>["value"]
+  form: UseFormReturn<UploadRecordingFormValues>
+  onChange: ControllerRenderProps<
+    UploadRecordingFormValues,
+    "patient_name"
+  >["onChange"]
+  value: ControllerRenderProps<
+    UploadRecordingFormValues,
+    "patient_name"
+  >["value"]
 }) {
   const { data, error } = useQuery({ ...patientListOptions({ client }) })
+  const patients = data ?? []
 
   if (!data) {
     return <div>Loading...</div>
@@ -82,13 +96,20 @@ function PatientComboboxSearch({
 
   // TODO need to fix the typing in the underlying simple combox wrapper
   function onSelectedItemChange(item: ComboboxItemBase | null) {
+    if (!item) {
+      return
+    }
+
     // `new_item` is a special key to used to indicate that a value was typed in, and it wasn't selected from the list
     // when this occurs, we want to set the field value to the inputted text (label)
     if (item.value == "new_item") {
       onChange(item.label)
     } else {
       const selected_patient_id = item.value
-      const patient = data.find((patient) => patient.id === selected_patient_id)
+      const patient = patients.find(
+        (patient) => patient.id === selected_patient_id,
+      )
+      invariant(patient, "patient should exist if selected from combobox")
 
       // update the patient name field with the name of the patient, not the ID
       onChange(patient.name)
@@ -106,19 +127,28 @@ function PatientComboboxSearch({
       // TODO get DOB added to the item rendering
       // TODO(mbianco) renderItem only gets the value + label of the field, we should really pass
       //               a full object so we can do more advanced rendering...
-      renderItem={(item) => (
-        <>
-          <span className="text-foreground text-sm">{item.label}</span>
-          <span className="text-muted-foreground text-xs">
-            {standardDateFormat(item.date_of_birth)}
-          </span>
-          {item.isSelected && (
-            <span className="absolute start-2 top-0 flex h-full items-center justify-center">
-              <CheckIcon className="size-4" />
-            </span>
-          )}
-        </>
-      )}
+      renderItem={(item) =>
+        (() => {
+          const patientItem = item as ComboboxItemBase &
+            Patient & { isSelected?: boolean }
+
+          return (
+            <>
+              <span className="text-foreground text-sm">
+                {patientItem.label}
+              </span>
+              <span className="text-muted-foreground text-xs">
+                {standardDateFormat(patientItem.date_of_birth)}
+              </span>
+              {patientItem.isSelected && (
+                <span className="absolute start-2 top-0 flex h-full items-center justify-center">
+                  <CheckIcon className="size-4" />
+                </span>
+              )}
+            </>
+          )
+        })()
+      }
       {...props}
     />
   )
@@ -151,7 +181,7 @@ function VisitAudioUploadForm({
     }),
   })
 
-  const form = useForm<z.infer<typeof formSchema>>({
+  const form = useForm<UploadRecordingFormValues>({
     resolver: zodResolver(formSchema),
   })
 
@@ -169,6 +199,8 @@ function VisitAudioUploadForm({
       // TODO what is the best pattern for passing dates over the wire?
       body: {
         ...values,
+        appointment_date: values.appointment_date.toISOString(),
+        date_of_birth: values.date_of_birth.toISOString(),
         file_name: stampedFileName,
       },
     })

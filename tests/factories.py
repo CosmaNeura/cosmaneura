@@ -1,10 +1,8 @@
 from copy import deepcopy
-import typing as t
 
-from polyfactory import BaseFactory, Ignore, NeverNone, Use
+from polyfactory import BaseFactory, Ignore, Use
 from polyfactory.decorators import post_generated
 from polyfactory.factories.pydantic_factory import ModelFactory
-from polyfactory.field_meta import FieldMeta
 from typeid import TypeID
 
 from app.commands.intake.create import AppointmentRequest
@@ -16,15 +14,20 @@ from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
-from app.models.intake.intake import Intake, IntakeSchemaQuestion, ExternalIntakeData
+from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
 
 
 class DoctorFactory(ActiveModelFactory[Doctor]):
     # TODO cleanup these prefixes
     # TODO can polyfactory handle this for us?
-    api_key = lambda: str(TypeID(API_KEY_PREFIX))
-    clerk_id = lambda: str(TypeID(CLERK_OBJECT_PREFIX[0:-1]))
+    @classmethod
+    def api_key(cls) -> str:
+        return str(TypeID(API_KEY_PREFIX))
+
+    @classmethod
+    def clerk_id(cls) -> str:
+        return str(TypeID(CLERK_OBJECT_PREFIX[0:-1]))
 
 
 class PatientFactory(ActiveModelFactory[Patient]):
@@ -50,6 +53,7 @@ class FutureAppointmentFactory(AppointmentFactory):
     appointment_date = ModelFactory.__faker__.date_between(
         start_date="+1d", end_date="+90d"
     )
+
 
 _MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE = {
     "type": "Dermatology - NEW Patient Consultation",
@@ -130,6 +134,7 @@ _MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE = {
     ],
 }
 
+
 def _make_intake_json(faker):
     def _builder():
         data = deepcopy(_MY_CATHOLIC_DOCTOR_EXTERNAL_INTAKE)
@@ -195,12 +200,16 @@ class AppointmentRequestFactory(ActiveModelFactory[AppointmentRequest]):
     intake_json = Use(_make_intake_json(BaseFactory.__faker__))
 
     # A date in the future, with or without an attached timezone.
-    date = Use(lambda: BaseFactory.__random__.choice([
-        BaseFactory.__faker__.future_datetime(),
-        BaseFactory.__faker__.future_datetime(
-            tzinfo=BaseFactory.__faker__.pytimezone()
-        ),
-    ]))
+    date = Use(
+        lambda: BaseFactory.__random__.choice(
+            [
+                BaseFactory.__faker__.future_datetime(),
+                BaseFactory.__faker__.future_datetime(
+                    tzinfo=BaseFactory.__faker__.pytimezone()
+                ),
+            ]
+        )
+    )
 
     # TODO this needs to be fixed upstream in polyfactory, these are all slightly different...
     # doctor = None
@@ -236,9 +245,10 @@ class PastAppointmentRequestFactory(AppointmentRequestFactory):
     """
     Same as AppointmentRequestFactory, but always generates a date in the past.
     """
+
     date = BaseFactory.__faker__.date_time_between(
         start_date="-1y",  # up to one year ago
-        end_date="now",    # up until this instant
+        end_date="now",  # up until this instant
     )
 
 
@@ -378,4 +388,6 @@ class DoctorNoteSchemaFactory(ActiveModelFactory[DoctorNoteSchema]):
 
 class DoctorNoteFileFactory(ActiveModelFactory[DoctorNoteFile]):
     # TODO all we are trying to do here is setup a relationship, there's got to be a better way to do this...
-    doctor_id = lambda: DoctorFactory.build().save().id
+    @classmethod
+    def doctor_id(cls) -> TypeIDType:
+        return DoctorFactory.build().save().id

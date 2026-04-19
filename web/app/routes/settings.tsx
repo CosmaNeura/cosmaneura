@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useForm } from "react-hook-form"
-import { MetaFunction } from "react-router"
+import { MetaFunction, useRevalidator } from "react-router"
 import { z } from "zod"
 
 import { ChevronDown, Upload } from "lucide-react"
@@ -24,12 +24,13 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
-import { Separator } from "~/components/ui/separator"
 import {
   generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
   uploadExampleNote,
+  zoomAuthUrl,
+  zoomDisconnect,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
@@ -37,7 +38,11 @@ import { uploadFileToAzure } from "~/lib/azure-upload"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 
-function BiographyInput({ biography }: { biography: string }) {
+const ZOOM_COMING_SOON = true
+
+type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
+
+function BiographyInput({ biography }: { biography: string | null }) {
   const formSchema = z.object({
     biography: z.string().min(1, "Biography is required"),
   })
@@ -155,7 +160,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                   {Object.entries(schema.fields).map(([field, description]) => (
                     <div key={field} className="mb-2">
                       <span className="font-semibold">{field}:</span>{" "}
-                      {description}
+                      {String(description)}
                     </div>
                   ))}
                 </p>
@@ -212,12 +217,29 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
     })
   }
 
-  function noteSchemasToComboBoxItems(noteSchemas: NoteSchema[]) {
-    return noteSchemas.map((schema) => ({
-      // value: schema.note_type,
+  const PREDEFINED_NOTE_TYPES = [
+    "Telehealth SOAP Note",
+    "Dermatology Office Visit",
+    "Annual Wellness Visit",
+    "Psychiatry Follow-up Note",
+    "Urgent Care Visit",
+    "Post-Op Follow-up",
+    "Cardiology Consultation",
+    "Pediatric Well Visit",
+    "Pain Management Note",
+    "Physical Therapy Evaluation",
+  ]
+
+  function noteTypeComboBoxItems(noteSchemas: NoteSchema[]) {
+    const uploadedLabels = new Set(noteSchemas.map((s) => s.note_type))
+    const uploadedItems = noteSchemas.map((schema) => ({
       value: schema.id,
       label: schema.note_type,
     }))
+    const predefinedItems = PREDEFINED_NOTE_TYPES.filter(
+      (label) => !uploadedLabels.has(label),
+    ).map((label) => ({ value: label, label }))
+    return [...uploadedItems, ...predefinedItems]
   }
 
   return (
@@ -272,7 +294,10 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 <FormLabel>Note Type</FormLabel>
                 <FormControl>
                   <SimpleComboBox
-                    items={noteSchemasToComboBoxItems(noteSchemas)}
+                    items={noteTypeComboBoxItems(noteSchemas)}
+                    onSelectedItemChange={(item) =>
+                      item && field.onChange(item.label)
+                    }
                     {...field}
                   />
                 </FormControl>
@@ -303,14 +328,117 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
     </Form>
   )
 }
+
+function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
+  const revalidator = useRevalidator()
+  const [connecting, setConnecting] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+
+  async function onConnect() {
+    setConnecting(true)
+    const { data } = await zoomAuthUrl()
+    if (data?.url) {
+      window.location.href = data.url
+    } else {
+      toast({
+        title: "Failed to start Zoom connection. Please try again.",
+        variant: "destructive",
+      })
+      setConnecting(false)
+    }
+  }
+
+  async function onDisconnect() {
+    setDisconnecting(true)
+    const { error } = await zoomDisconnect()
+    if (error) {
+      toast({
+        title: "Failed to disconnect. Please try again.",
+        variant: "destructive",
+      })
+      setDisconnecting(false)
+      return
+    }
+    toast({ title: "Zoom disconnected" })
+    setDisconnecting(false)
+    revalidator.revalidate()
+  }
+
+  if (ZOOM_COMING_SOON) {
+    return (
+      <section className="prose-headings prose w-1/2 space-y-4">
+        <div className="flex items-center gap-2">
+          <h3 className="!mb-0">Zoom Integration</h3>
+          <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
+            Coming Soon
+          </span>
+        </div>
+        <p className="text-muted-foreground text-sm">
+          Zoom integration is coming soon. You'll be able to connect your
+          account so Cosma can automatically join your meetings and generate
+          visit notes.
+        </p>
+      </section>
+    )
+  }
+
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>Zoom Integration</h3>
+      <p className="text-muted-foreground text-sm">
+        Connect your Zoom account so Cosma can automatically join your meetings
+        and generate visit notes.
+      </p>
+
+      {zoomConnected ? (
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 text-sm">
+            <div className="h-2 w-2 rounded-full bg-green-500" />
+            <span>Connected</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onDisconnect}
+            disabled={disconnecting}
+          >
+            {disconnecting ? (
+              <>
+                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                Disconnecting...
+              </>
+            ) : (
+              "Disconnect"
+            )}
+          </Button>
+        </div>
+      ) : (
+        <Button onClick={onConnect} disabled={connecting}>
+          {connecting ? (
+            <>
+              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+              Connecting...
+            </>
+          ) : (
+            "Connect Zoom"
+          )}
+        </Button>
+      )}
+    </section>
+  )
+}
+
 export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
-  // TODO need idiomatic error handling here
-  const { data } = await settingsData()
-  invariant(data, "data should exist")
+  const { data, error, response } = await settingsData()
+
+  if (!data) {
+    throw new Error(
+      `Settings failed to load (HTTP ${response?.status}): ${JSON.stringify(error)}`,
+    )
+  }
 
   return data
 }
-
 export const meta: MetaFunction = () => {
   return [
     { title: "Settings" },
@@ -336,6 +464,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
+          <ZoomConnect zoomConnected={loaderData.zoom_connected} />
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

@@ -1,13 +1,16 @@
-from datetime import datetime, timedelta
-from typing import Annotated
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from pydantic import BaseModel, computed_field
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
+import app.jobs.sync_zoom_meetings as sync_zoom_meetings
+import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
+from app.services.zoom import get_zoom_integration
 
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
@@ -17,8 +20,10 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
+from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
@@ -64,11 +69,11 @@ def intake_list(request: Request) -> IntakeList:
         .join(Intake)
         # TODO preload the intake object to avoid N+1 queries
         # .options(sa.joinedload(Appointment.intake))
-        .order_by(Appointment.appointment_date.asc())
+        .order_by(cast(Any, Appointment.appointment_date).asc())
         .all()
     )
 
-    return IntakeList(appointments=list(appointment_list))
+    return IntakeList(appointments=cast(list[Appointment], list(appointment_list)))
 
 
 class NotetakingData(BaseModel, extra="forbid"):
@@ -85,11 +90,11 @@ def note_list(request: Request) -> NotetakingData:
     doctor: Doctor = request.state.doctor
     appointment_list = (
         Appointment.where(Appointment.doctor_id == doctor.id)
-        .order_by(Appointment.appointment_date.desc())
+        .order_by(cast(Any, Appointment.appointment_date).desc())
         .all()
     )
 
-    return NotetakingData(appointments=list(appointment_list))
+    return NotetakingData(appointments=cast(list[Appointment], list(appointment_list)))
 
 
 # TODO what about doctors who have an insane patient list?
@@ -101,10 +106,12 @@ def patient_list(request: Request) -> list[Patient]:
 
     # TODO(mbianco) AM types should be fixed and the types should now display properly here...
     patient_list = (
-        Patient.where(Patient.doctor_id == doctor.id).order_by(Patient.name.asc()).all()
+        Patient.where(Patient.doctor_id == doctor.id)
+        .order_by(cast(Any, Patient.name).asc())
+        .all()
     )
 
-    return list(patient_list)
+    return cast(list[Patient], list(patient_list))
 
 
 class NoteDetail(BaseModel, extra="forbid"):
@@ -125,13 +132,19 @@ def note_detail(
 ) -> NoteDetail:
     # TODO error handling for bad IDs
     doctor: Doctor = request.state.doctor
-    appointment = Appointment.where(
-        Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
-    ).one()
+    appointment = cast(
+        Appointment,
+        Appointment.where(
+            Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
+        ).one(),
+    )
 
-    visit_notes = AIVisitNote.where(
-        AIVisitNote.appointment_id == appointment_id,
-    ).all()
+    visit_notes = cast(
+        list[AIVisitNote],
+        AIVisitNote.where(
+            AIVisitNote.appointment_id == appointment_id,
+        ).all(),
+    )
 
     # There should only ever be one transcript per appointment. If this
     # invariant is violated, this endpoint will start to cause issues.
@@ -151,7 +164,7 @@ def note_detail(
         appointment=appointment,
         transcript=transcript,
         # TODO should be able to handle a generator, right?
-        notes=list(visit_notes),
+        notes=visit_notes,
     )
 
     return note_detail
@@ -171,13 +184,16 @@ def intake_detail(
     # TODO error handling for bad IDs
     doctor: Doctor = request.state.doctor
 
-    appointment = Appointment.where(
-        Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
-    ).one()
+    appointment = cast(
+        Appointment,
+        Appointment.where(
+            Appointment.doctor_id == doctor.id, Appointment.id == appointment_id
+        ).one(),
+    )
 
     assert appointment
 
-    intake = appointment.intake
+    intake = cast(Intake, appointment.intake)
 
     intake_detail = IntakeDetail(
         appointment=appointment,
@@ -235,21 +251,31 @@ class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
     biography: str | None
+    zoom_connected: bool
+    email: str | None
+    onboarding_completed: bool
 
 
 @internal_api_app.get("/settings")
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
 
+    zoom_integration = DoctorVideoIntegration.get(
+        doctor_id=doctor.id, provider=VideoProvider.zoom
+    )
+
     notes_schema = DoctorNoteSchema.where(
         (DoctorNoteSchema.doctor_id == doctor.id)
-        & DoctorNoteSchema.deleted_at.is_(None)
+        & cast(Any, DoctorNoteSchema.deleted_at).is_(None)
     ).all()
 
     return SettingsData(
-        notes_schema=list(notes_schema),
+        notes_schema=cast(list[DoctorNoteSchema], list(notes_schema)),
         doctor_id=str(doctor.id),
         biography=doctor.biography,
+        zoom_connected=zoom_integration is not None,
+        email=doctor.email,
+        onboarding_completed=doctor.onboarding_completed_at is not None,
     )
 
 
@@ -262,3 +288,111 @@ def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor: Doctor = request.state.doctor
     doctor.biography = data.biography
     doctor.save()
+
+
+class ZoomAuthUrlResponse(BaseModel, extra="forbid"):
+    url: str
+
+
+@internal_api_app.get("/zoom-auth-url", name="zoom_auth_url")
+def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
+    doctor: Doctor = request.state.doctor
+    base = str(request.base_url).rstrip("/")
+    url = f"{base}/external/v1/zoom-oauth-start?state={doctor.clerk_id}"
+    return ZoomAuthUrlResponse(url=url)
+
+
+@internal_api_app.delete(
+    "/zoom-connect", name="zoom_disconnect", status_code=status.HTTP_204_NO_CONTENT
+)
+def zoom_disconnect(request: Request) -> None:
+    doctor: Doctor = request.state.doctor
+    zoom_service.revoke_token(doctor)
+
+
+@internal_api_app.post(
+    "/onboarding/complete", name="complete_onboarding", status_code=status.HTTP_200_OK
+)
+def complete_onboarding(request: Request) -> None:
+    doctor: Doctor = request.state.doctor
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
+
+
+class ZoomMeetingResponse(BaseModel, extra="forbid"):
+    id: str
+    zoom_meeting_id: str
+    topic: str
+    start_time: datetime
+    duration: int
+    join_url: str
+    status: ZoomMeetingStatus
+    appointment_id: str | None
+
+
+class ScheduleResponse(BaseModel, extra="forbid"):
+    zoom_connected: bool
+    meetings: list[ZoomMeetingResponse]
+
+
+@internal_api_app.get("/schedule", name="schedule_list")
+def schedule_list(request: Request) -> ScheduleResponse:
+    doctor: Doctor = request.state.doctor
+
+    zoom_integration = get_zoom_integration(doctor)
+    if not zoom_integration:
+        return ScheduleResponse(zoom_connected=False, meetings=[])
+
+    sync_zoom_meetings.queue(str(doctor.id))
+
+    now = datetime.now(timezone.utc)
+    past_cutoff = now - timedelta(days=30)
+    future_cutoff = now + timedelta(days=90)
+
+    meetings = (
+        ZoomMeeting.where(
+            cast(Any, ZoomMeeting.doctor_id) == doctor.id,
+            cast(Any, ZoomMeeting.status) != ZoomMeetingStatus.cancelled,
+            cast(Any, ZoomMeeting.start_time) >= past_cutoff,
+            cast(Any, ZoomMeeting.start_time) <= future_cutoff,
+        )
+        .order_by(cast(Any, ZoomMeeting.start_time).asc())
+        .all()
+    )
+
+    return ScheduleResponse(
+        zoom_connected=True,
+        meetings=[
+            ZoomMeetingResponse(
+                id=str(m.id),
+                zoom_meeting_id=m.zoom_meeting_id,
+                topic=m.topic,
+                start_time=m.start_time,
+                duration=m.duration,
+                join_url=m.join_url,
+                status=m.status,
+                appointment_id=str(m.appointment_id) if m.appointment_id else None,
+            )
+            for m in cast(list[ZoomMeeting], list(meetings))
+        ],
+    )
+
+
+@internal_api_app.delete(
+    "/schedule/{zoom_meeting_id}",
+    name="cancel_meeting",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def cancel_meeting(request: Request, zoom_meeting_id: Annotated[str, Path()]) -> None:
+    doctor: Doctor = request.state.doctor
+
+    meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=zoom_meeting_id)
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found"
+        )
+
+    zoom_service.delete_meeting(doctor, zoom_meeting_id)
+
+    meeting.status = ZoomMeetingStatus.cancelled
+    meeting.save()

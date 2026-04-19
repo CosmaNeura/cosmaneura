@@ -1,9 +1,9 @@
 import * as React from "react"
 import { href, useLocation, useNavigate } from "react-router"
 
-import { Command, File, Inbox, Settings } from "lucide-react"
+import { Calendar, File, Inbox, Settings } from "lucide-react"
 
-import { Status } from "@/components/shared/StatusBadge"
+import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
 import {
   Sidebar,
@@ -16,13 +16,16 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { BrandLogo } from "~/components/brand/BrandLogo"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
 import { UserButton } from "@clerk/clerk-react"
+import { motion } from "motion/react"
 
 // logo icon at the top
 const IconSidebarHeader = () => (
@@ -30,14 +33,8 @@ const IconSidebarHeader = () => (
     <SidebarMenu>
       <SidebarMenuItem>
         <SidebarMenuButton size="lg" asChild className="md:h-8 md:p-0">
-          <a href="#">
-            <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-              <Command className="size-4" />
-            </div>
-            <div className="grid flex-1 text-left text-sm leading-tight">
-              <span className="truncate font-semibold">Acme Inc</span>
-              <span className="truncate text-xs">Enterprise</span>
-            </div>
+          <a href="/">
+            <BrandLogo variant="light" size="sm" />
           </a>
         </SidebarMenuButton>
       </SidebarMenuItem>
@@ -55,6 +52,11 @@ const NAVIGATION_ITEMS = [
     title: "Notetaking",
     icon: File,
     url: href("/notes"),
+  },
+  {
+    title: "Schedule",
+    icon: Calendar,
+    url: href("/schedule"),
   },
   {
     title: "Settings",
@@ -100,7 +102,7 @@ export interface SidebarEntry {
   location: string
   subTitle?: string
   date: string
-  status: Status | "none"
+  status: StatusBadgeOptions | "none"
   preview: string
 }
 
@@ -128,7 +130,7 @@ function SelectionList({
             key={entry.id}
             onClick={() => currentUrl !== entry.url && navigate(entry.url)}
             className={cn(
-              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b p-4 text-sm leading-tight",
+              "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground text-sidebar-foreground flex w-[var(--sidebar-width)] flex-col items-start gap-2 border-b border-[var(--brand-navy-mid)] p-4 text-sm leading-tight",
               currentUrl === entry.url &&
                 true &&
                 "bg-sidebar-accent text-sidebar-accent-foreground",
@@ -136,10 +138,10 @@ function SelectionList({
           >
             <div className="flex w-full items-center justify-between gap-2">
               <span className="font-medium">{entry.title}</span>
-              <span className="text-xs text-slate-500">{entry.date}</span>
+              <span className="text-on-navy-muted text-xs">{entry.date}</span>
             </div>
             <div className="flex w-full items-center justify-between gap-2">
-              <span className="text-left text-xs text-slate-500">
+              <span className="text-on-navy-muted text-left text-xs">
                 {entry.preview}
               </span>
               {entry.status !== "none" && <StatusBadge status={entry.status} />}
@@ -160,7 +162,7 @@ function SelectionSidebar({
   isLoading,
   entries,
 }: {
-  header: string
+  header?: string
   isLoading: boolean
   entries: SidebarEntry[]
 }) {
@@ -187,46 +189,56 @@ function SelectionSidebar({
     return matchesSearch
   })
 
+  const { open } = useSidebar()
+
   return (
-    <Sidebar collapsible="none" className="hidden flex-1 border-r md:flex">
-      {/* title with filters */}
-      <SidebarHeader className="gap-3.5 border-b p-4">
-        <div className="flex w-full items-center justify-between">
-          <div className="text-foreground text-base font-medium">{header}</div>
-          <Label className="flex items-center gap-2 text-sm">
-            <span>This Week</span>
-            <Switch
-              className="shadow-none"
-              checked={showThisWeek}
-              onCheckedChange={setShowThisWeek}
-            />
-          </Label>
-        </div>
-        <SidebarInput
-          placeholder="Type to search..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup className="px-0">
-          {entries.length === 0 && (
-            <div className="p-4 text-center text-sm text-slate-500">
-              <p>No Appointments</p>
-              <p className="mt-2">Upload a visit recording to get started.</p>
+    <motion.div
+      animate={{ width: open ? "var(--sidebar-width)" : 0 }}
+      transition={{ ease: [0.25, 0.46, 0.45, 0.94], duration: 0.2 }}
+      className="hidden shrink-0 overflow-hidden md:block"
+    >
+      <Sidebar collapsible="none" className="hidden flex-1 border-r md:flex">
+        {/* title with filters */}
+        <SidebarHeader className="gap-3.5 border-b p-4">
+          <div className="flex w-full items-center justify-between">
+            <div className="text-sidebar-foreground text-base font-medium">
+              {header ?? "Appointments"}
             </div>
-          )}
-          {entries.length > 0 && filteredEntries.length === 0 ? (
-            <div className="p-4 text-center text-sm text-slate-500">
-              <p>No results found.</p>
-              <p className="mt-2">Try adjusting your filters.</p>
-            </div>
-          ) : (
-            <SelectionList isLoading={isLoading} entries={filteredEntries} />
-          )}
-        </SidebarGroup>
-      </SidebarContent>
-    </Sidebar>
+            <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
+              <span>This Week</span>
+              <Switch
+                className="shadow-none"
+                checked={showThisWeek}
+                onCheckedChange={setShowThisWeek}
+              />
+            </Label>
+          </div>
+          <SidebarInput
+            placeholder="Type to search..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup className="px-0">
+            {entries.length === 0 && (
+              <div className="text-on-navy-muted p-4 text-center text-sm">
+                <p>No Appointments</p>
+                <p className="mt-2">Upload a visit recording to get started.</p>
+              </div>
+            )}
+            {entries.length > 0 && filteredEntries.length === 0 ? (
+              <div className="text-on-navy-muted p-4 text-center text-sm">
+                <p>No results found.</p>
+                <p className="mt-2">Try adjusting your filters.</p>
+              </div>
+            ) : (
+              <SelectionList isLoading={isLoading} entries={filteredEntries} />
+            )}
+          </SidebarGroup>
+        </SidebarContent>
+      </Sidebar>
+    </motion.div>
   )
 }
 export function IconNavigation() {

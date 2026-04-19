@@ -16,6 +16,7 @@ dependencies = [
     "azure-identity>=1.19.0",
     "azure-storage-blob>=12.24.0",
     "backoff>=2.2.1",
+    "httpx>=0.28.0",
     "beautifulsoup4>=4.12.3",
     "cachetools>=5.5.1",
     "celery>=5.4.0",
@@ -52,6 +53,7 @@ dependencies = [
     "typeid-python[cli]>=0.3.2",
     "typer>=0.14.0",
     "uvicorn[standard]>=0.32.0",
+    "cryptography>=43.0.3",
 ]
 
 [tool.uv]
@@ -110,6 +112,9 @@ exclude = [
     # don't make playing less fun and force types
     "playground",
     ".copier",
+
+    # git worktrees are separate branches, not part of this branch's analysis
+    ".worktrees",
 ]
 
 [tool.djlint]
@@ -144,9 +149,7 @@ filterwarnings = ["ignore::DeprecationWarning"]
 # by default, pytest seems to hijack many logs and output them to the terminal
 # this is nice if you don't have a custom login like we do
 testpaths = "tests"
-norecursedirs = ["pypi"]
-# TODO would love if we could move this to conftest.py and put in the artifact folder
-debug_file = "tmp/pytestdebug.log"
+norecursedirs = ["pypi", ".worktrees"]
 # TODO right now this option does not enable us to get it directly
 asyncio_default_fixture_loop_scope = "session"
 
