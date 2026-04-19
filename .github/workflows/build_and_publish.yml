@@ -118,11 +118,6 @@ jobs:
     if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
     environment: production
     env:
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-      CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
-      CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
     permissions:
@@ -134,31 +129,25 @@ jobs:
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5
 
-      - name: Debug creds (no values)
-        env:
-          REG_HOST: ${{ env.CONTAINER_REGISTRY_HOST }}
-          REG_USER: ${{ env.CONTAINER_REGISTRY_USERNAME }}
-          REG_PW: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-        run: |
-          printf 'host_len=%s host_sha=%s\n' "${#REG_HOST}" "$(printf '%s' "$REG_HOST" | sha256sum | cut -c1-16)"
-          printf 'user_len=%s user_sha=%s\n' "${#REG_USER}" "$(printf '%s' "$REG_USER" | sha256sum | cut -c1-16)"
-          printf 'pw_len=%s pw_sha=%s\n' "${#REG_PW}" "$(printf '%s' "$REG_PW" | sha256sum | cut -c1-16)"
-
-      # TODO I think we can use the magic azure credentials for this, need to swap out password with those credentials
-      # login before building so previous build image can be pulled for nixpacks cache
+      # NOTE registry/Azure vars resolve at step level so the environment scope
+      # is active during evaluation — job-level env blocks miss environment vars
       - uses: docker/login-action@v3
         with:
-          registry: ${{ env.CONTAINER_REGISTRY_HOST }}
-          username: ${{ env.CONTAINER_REGISTRY_USERNAME }}
+          registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
           password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
       - run: just build
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
       - run: just build_push
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
 
       - uses: azure/login@v2
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to Azure
         run: |
