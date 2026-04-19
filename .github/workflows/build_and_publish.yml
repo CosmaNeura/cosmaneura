@@ -134,6 +134,16 @@ jobs:
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5
 
+      - name: Debug creds (no values)
+        env:
+          REG_HOST: ${{ env.CONTAINER_REGISTRY_HOST }}
+          REG_USER: ${{ env.CONTAINER_REGISTRY_USERNAME }}
+          REG_PW: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+        run: |
+          printf 'host_len=%s host_sha=%s\n' "${#REG_HOST}" "$(printf '%s' "$REG_HOST" | sha256sum | cut -c1-16)"
+          printf 'user_len=%s user_sha=%s\n' "${#REG_USER}" "$(printf '%s' "$REG_USER" | sha256sum | cut -c1-16)"
+          printf 'pw_len=%s pw_sha=%s\n' "${#REG_PW}" "$(printf '%s' "$REG_PW" | sha256sum | cut -c1-16)"
+
       # TODO I think we can use the magic azure credentials for this, need to swap out password with those credentials
       # login before building so previous build image can be pulled for nixpacks cache
       - uses: docker/login-action@v3
