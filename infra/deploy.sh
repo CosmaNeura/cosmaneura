@@ -116,12 +116,12 @@ run_migrations() {
 		[[ -n "$value" ]] && env_args+=("${var}=${value}")
 	done
 
-	# ACR admin creds so the job can pull the image
-	local acr_name="cosmaneuraprodregistry"
-	local acr_server acr_user acr_pw
-	acr_server=$(az acr show --name "$acr_name" --query loginServer -o tsv)
-	acr_user=$(az acr credential show --name "$acr_name" --query username -o tsv)
-	acr_pw=$(az acr credential show --name "$acr_name" --query 'passwords[0].value' -o tsv)
+	# ACR admin creds so the job can pull the image.
+	# These come from the workflow env (the SP running this script does not have
+	# read access to the ACR resource, so az acr show/credential show would fail).
+	local acr_server="${CONTAINER_REGISTRY_HOST:?CONTAINER_REGISTRY_HOST env is required}"
+	local acr_user="${CONTAINER_REGISTRY_USERNAME:?CONTAINER_REGISTRY_USERNAME env is required}"
+	local acr_pw="${CONTAINER_REGISTRY_PASSWORD:?CONTAINER_REGISTRY_PASSWORD env is required}"
 
 	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
 		echo "Updating existing migration job..."
