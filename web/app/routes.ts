@@ -34,4 +34,5 @@ export default [
   route("privacy-policy", "routes/privacy-policy.tsx"),
   route("terms-of-service", "routes/terms-of-service.tsx"),
   route("support", "routes/support.tsx"),
+  route("documentation", "routes/documentation.tsx"),
 ] satisfies RouteConfig
