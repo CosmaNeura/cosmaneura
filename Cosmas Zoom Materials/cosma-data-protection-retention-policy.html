@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cosma — Data Protection & Retention Policy</title>
+<style>
+  @page { size: Letter; margin: 0.7in 0.8in; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; font-size: 10.5pt; line-height: 1.5; }
+  .doc-header { border-bottom: 2pt solid #0B5FCC; padding-bottom: 8pt; margin-bottom: 14pt; }
+  .doc-title { font-size: 20pt; margin: 0; color: #0B5FCC; font-weight: 700; }
+  .doc-subtitle { font-size: 11pt; color: #334155; margin: 2pt 0 0; }
+  .doc-meta { display: flex; gap: 18pt; font-size: 9pt; color: #64748B; margin-top: 6pt; }
+  h2 { font-size: 12pt; margin: 16pt 0 5pt; color: #0B5FCC; border-bottom: 0.5pt solid #CBD5E1; padding-bottom: 2pt; }
+  h3 { font-size: 10.5pt; margin: 10pt 0 3pt; color: #1e293b; }
+  p { margin: 4pt 0 6pt; }
+  ul, ol { margin: 4pt 0 8pt 18pt; padding: 0; }
+  li { margin-bottom: 2pt; }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 9.5pt; }
+  th, td { text-align: left; padding: 5pt 7pt; border: 0.5pt solid #CBD5E1; vertical-align: top; }
+  th { background: #E2E8F0; font-weight: 600; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; background: #F1F5F9; padding: 0 3pt; border-radius: 2pt; }
+  .callout { padding: 7pt 10pt; background: #F2F7FF; border-left: 3pt solid #2D8CFF; font-size: 9.5pt; margin: 6pt 0 10pt; }
+  .footer { font-size: 8.5pt; color: #64748B; text-align: center; margin-top: 20pt; border-top: 0.5pt solid #CBD5E1; padding-top: 6pt; }
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <div class="doc-title">Data Protection &amp; Retention Policy</div>
+  <div class="doc-subtitle">Cosmaneura, Inc. — Cosma application</div>
+  <div class="doc-meta">
+    <div><strong>Version:</strong> 1.0</div>
+    <div><strong>Effective:</strong> 2026-04-20</div>
+    <div><strong>Next review:</strong> 2027-04-20</div>
+    <div><strong>Owner:</strong> CTO / Data Protection Lead</div>
+  </div>
+</div>
+
+<h2>1. Purpose</h2>
+<p>This policy describes what data Cosma collects on behalf of customers, how that data is classified and protected, how long it is retained, and what rights users have over it. It is the operational companion to the public <a>Privacy Policy</a> published at <code>cosmaneura.com</code>.</p>
+
+<h2>2. Data classification</h2>
+<table>
+  <tr><th>Class</th><th>Examples</th><th>Baseline protection</th></tr>
+  <tr><td>Public</td><td>Marketing site content</td><td>Standard TLS</td></tr>
+  <tr><td>Internal</td><td>Application logs without PHI, product analytics</td><td>TLS + access control</td></tr>
+  <tr><td>Confidential</td><td>Customer account data, Zoom OAuth tokens, meeting metadata</td><td>TLS + access control + encryption at rest; OAuth tokens additionally encrypted at application layer (AES-128 / Fernet).</td></tr>
+  <tr><td>Restricted (PHI)</td><td>Meeting recordings, transcripts, clinical notes</td><td>Everything above, plus routing through the Azure Health De-identification API before any third-party large-language-model processing.</td></tr>
+</table>
+
+<h2>3. Categories of data processed</h2>
+<table>
+  <tr><th>Category</th><th>Collected because</th><th>Processor(s)</th></tr>
+  <tr><td>Account identifiers (name, email)</td><td>Authentication &amp; billing</td><td>Clerk, Cosma database</td></tr>
+  <tr><td>Zoom OAuth tokens</td><td>Required for the customer-authorized Zoom integration</td><td>Cosma database (AES-128 encrypted at rest)</td></tr>
+  <tr><td>Meeting metadata (ID, participants, schedule)</td><td>To display and orchestrate the meeting experience</td><td>Cosma database</td></tr>
+  <tr><td>Meeting audio recordings</td><td>To generate transcripts and clinical notes on behalf of the authorized user</td><td>Recall.ai (recording bot), Azure Blob Storage</td></tr>
+  <tr><td>Transcripts</td><td>Speech-to-text output used to produce notes</td><td>AssemblyAI, Cosma database, Azure Blob Storage</td></tr>
+  <tr><td>De-identified text sent to LLMs</td><td>Clinical note generation</td><td>Azure OpenAI (GPT-4.1); input is PHI-redacted by Azure Health De-ID beforehand</td></tr>
+  <tr><td>Product analytics events</td><td>To improve the product</td><td>PostHog</td></tr>
+  <tr><td>Error traces</td><td>Reliability &amp; incident response</td><td>Sentry (PII scrubbing enabled)</td></tr>
+</table>
+
+<h2>4. Protected Health Information (PHI) handling</h2>
+<ul>
+  <li>PHI that could appear in transcripts is routed through the <strong>Azure Health De-identification API</strong> before any call to a large-language-model service.</li>
+  <li>Access to raw (non-de-identified) recordings and transcripts is restricted to the authenticated end user who owns the data and to a minimal set of production operators acting under documented access-control procedures.</li>
+  <li>Cosmaneura enters into a Business Associate Agreement (BAA) with any sub-processor that may handle PHI on the company's behalf, consistent with HIPAA Security Rule requirements.</li>
+</ul>
+
+<h2>5. Retention schedule</h2>
+<table>
+  <tr><th>Data</th><th>Default retention</th><th>Trigger for deletion</th></tr>
+  <tr><td>Account data</td><td>Life of the account</td><td>Account deletion request, or 180 days after account termination.</td></tr>
+  <tr><td>Zoom OAuth tokens</td><td>Until revoked by the user or expired by Zoom</td><td>User-initiated disconnect, OAuth revoke, or account deletion.</td></tr>
+  <tr><td>Meeting metadata</td><td>Life of the account</td><td>Account deletion request, or 180 days after account termination.</td></tr>
+  <tr><td>Audio recordings (raw)</td><td>90 days after the meeting</td><td>Automatic purge job; earlier upon user request.</td></tr>
+  <tr><td>Transcripts</td><td>Life of the account</td><td>User-initiated deletion, or account deletion.</td></tr>
+  <tr><td>Clinical notes</td><td>Life of the account</td><td>User-initiated deletion, or account deletion.</td></tr>
+  <tr><td>Application &amp; access logs</td><td>90 days</td><td>Automatic log rotation.</td></tr>
+  <tr><td>Sentry error traces</td><td>90 days</td><td>Sentry default retention.</td></tr>
+  <tr><td>Backups</td><td>30 days</td><td>Automatic rotation; deletions propagate within this window.</td></tr>
+</table>
+<div class="callout">
+Retention periods may be extended when required by law, by a signed customer contract, or by an active incident investigation. Customers on enterprise plans may negotiate custom retention windows.
+</div>
+
+<h2>6. Data subject rights</h2>
+<p>Upon verified request, users may:</p>
+<ul>
+  <li><strong>Access</strong> — receive a copy of the personal data Cosma holds about them.</li>
+  <li><strong>Correct</strong> — request correction of inaccurate personal data.</li>
+  <li><strong>Delete</strong> — request deletion of their account and associated data; deletion propagates to primary storage immediately and to backups within 30 days.</li>
+  <li><strong>Export / portability</strong> — receive a machine-readable export of their transcripts and notes.</li>
+  <li><strong>Withdraw consent</strong> — disconnect the Zoom integration at any time, which revokes stored OAuth tokens with Zoom.</li>
+</ul>
+<p>Requests are submitted to <code>info@cosmaneura.com</code> and are actioned within 30 days.</p>
+
+<h2>7. Sub-processors &amp; change notification</h2>
+<p>Cosma relies on the third-party processors listed in §3. A current list is maintained on the Cosmaneura website. Customers are notified by email of any material change to the sub-processor list at least 30 days before it takes effect, except where the change is required to address a security risk.</p>
+
+<h2>8. International transfers</h2>
+<p>Cosma's primary infrastructure is hosted in Microsoft Azure (US regions). Some sub-processors may process data outside the United States; in all such cases, the sub-processor commits to standard contractual clauses or equivalent transfer safeguards under applicable law.</p>
+
+<h2>9. Enforcement &amp; review</h2>
+<p>Violations of this policy are investigated by the CTO and may result in disciplinary action up to and including termination. This policy is reviewed at least annually, or sooner if there is a material change in the data processed, the applicable law, or the sub-processor list.</p>
+
+<h2>10. Contact</h2>
+<p>Privacy requests: <code>info@cosmaneura.com</code> &nbsp;·&nbsp; Security: <code>dev@cosmaneura.com</code> &nbsp;·&nbsp; General: <code>info@cosmaneura.com</code></p>
+
+<div class="footer">
+  Cosmaneura, Inc. · Data Protection &amp; Retention Policy · v1.0 · 2026-04-20
+</div>
+
+</body>
+</html>

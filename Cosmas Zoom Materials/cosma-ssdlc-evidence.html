@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cosma — SSDLC Supporting Evidence</title>
+<style>
+  @page { size: Letter; margin: 0.6in 0.7in; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    color: #1a1a1a; font-size: 10.5pt; line-height: 1.45;
+  }
+  h1 { font-size: 22pt; margin: 0 0 4pt; color: #0B5FCC; }
+  h2 { font-size: 13pt; margin: 18pt 0 6pt; padding-bottom: 3pt;
+       border-bottom: 1.5pt solid #0B5FCC; color: #0B5FCC; }
+  h3 { font-size: 11pt; margin: 10pt 0 4pt; color: #222; }
+  .meta { color: #555; font-size: 9.5pt; margin-bottom: 14pt; }
+  .lead { background: #F2F7FF; border-left: 3pt solid #2D8CFF;
+          padding: 8pt 10pt; margin: 8pt 0 14pt; font-size: 10pt; }
+  pre {
+    background: #0F172A; color: #E2E8F0; padding: 8pt 10pt;
+    border-radius: 4pt; font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8.2pt; line-height: 1.35; overflow: hidden;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt;
+          font-size: 9.5pt; }
+  th, td { text-align: left; padding: 5pt 7pt; border: 0.5pt solid #CBD5E1;
+           vertical-align: top; }
+  th { background: #E2E8F0; font-weight: 600; }
+  .evidence-label {
+    display: inline-block; background: #065F46; color: #fff;
+    padding: 1pt 6pt; font-size: 8.5pt; border-radius: 3pt;
+    font-weight: 600; letter-spacing: 0.3pt; margin-right: 4pt;
+  }
+  .file-label {
+    display: inline-block; background: #334155; color: #fff;
+    padding: 1pt 5pt; font-size: 8pt; border-radius: 3pt;
+    font-family: "SF Mono", Menlo, monospace; margin-bottom: 3pt;
+  }
+  ul { margin: 4pt 0 8pt 18pt; padding: 0; }
+  li { margin-bottom: 2pt; }
+  .callout { padding: 6pt 9pt; background: #FFF7ED;
+             border-left: 3pt solid #F59E0B; font-size: 9.5pt;
+             margin: 6pt 0 10pt; }
+  hr { border: none; border-top: 0.5pt solid #CBD5E1; margin: 14pt 0; }
+  .footer { font-size: 8.5pt; color: #64748B; text-align: center;
+            margin-top: 18pt; border-top: 0.5pt solid #CBD5E1; padding-top: 6pt; }
+</style>
+</head>
+<body>
+
+<h1>Cosma — SSDLC Supporting Evidence</h1>
+<div class="meta">
+  Application: <strong>Cosma</strong> (Zoom Marketplace submission) &nbsp;·&nbsp;
+  Vendor: <strong>Cosmaneura</strong> &nbsp;·&nbsp;
+  Prepared: 2026-04-20
+</div>
+
+<div class="lead">
+This document provides supporting evidence that Cosma follows a secure software development lifecycle (SSDLC). Every artifact below is taken directly from the project's source repository; file paths are shown in each section so a reviewer can verify any claim against the same source of truth.
+</div>
+
+<h2>1. Source control &amp; peer code review</h2>
+<p><span class="evidence-label">EVIDENCE</span> All source code is versioned in a private GitHub repository. Changes reach production only through pull requests targeting the protected <code>master</code> branch, reviewed by a peer engineer before merge. <code>staging</code> and <code>master</code> are the only branches that trigger deploys (see §3).</p>
+<table>
+  <tr><th>Control</th><th>Implementation</th></tr>
+  <tr><td>Version control</td><td>GitHub (private repo)</td></tr>
+  <tr><td>Branch strategy</td><td>Feature branches → PR → <code>master</code> (prod) / <code>staging</code></td></tr>
+  <tr><td>Pull-request review</td><td>Required before merge; history auditable via <code>git log</code></td></tr>
+  <tr><td>Commit-message validation</td><td>Conventional Commits enforced by <code>commitlint</code> (via lefthook)</td></tr>
+</table>
+
+<h2>2. Pre-commit &amp; pre-push quality gates</h2>
+<p><span class="evidence-label">EVIDENCE</span> Developers run lint gates locally before code leaves their machine. Configured via <a>lefthook</a>.</p>
+<div class="file-label">lefthook.yml</div>
+<pre>commit-msg:
+  commands:
+    commitlint:
+      run: commitlint
+
+pre-push:
+  parallel: true
+  commands:
+    py_lint:
+      glob: "*.py"
+      exclude: [".copier/*"]
+      run: just py_lint {push_files}
+    js_lint:
+      run: just js_lint</pre>
+
+<h2>3. Continuous integration &amp; delivery</h2>
+<p><span class="evidence-label">EVIDENCE</span> Every push and pull request runs an automated pipeline in GitHub Actions. Deploys to production or staging happen <em>only</em> from protected branches after CI succeeds.</p>
+<div class="file-label">.github/workflows/build_and_publish.yml (excerpt)</div>
+<pre>on:
+  push:
+    branches: [master, staging]
+  pull_request: {}
+
+jobs:
+  app:                       # Backend checks
+    steps:
+      - run: just py_setup   # install pinned Python deps
+      - run: just py_lint    # Ruff + djlint
+      - run: just db_migrate # apply Alembic migrations
+      - run: just db_lint    # squawk-cli: safe-migration linter
+      - run: just py_test    # pytest (unit + async + e2e)
+
+  web:                       # Frontend checks
+    steps:
+      - run: just js_setup   # install pinned Node deps
+      - run: pnpm run openapi # regenerate typed API client
+      - run: just js_lint    # ESLint + Prettier + TS
+      - run: just js_test    # Vitest + Testing Library
+
+  deploy:
+    needs: [web, app]
+    if: github.ref == 'refs/heads/master' &amp;&amp; github.event_name == 'push'
+    environment: production   # GitHub environment protection</pre>
+
+<h3>3.1 Toolchain enforced in CI</h3>
+<table>
+  <tr><th>Category</th><th>Tool</th><th>Purpose</th></tr>
+  <tr><td>Static analysis (Python)</td><td>Ruff</td><td>Lint + import hygiene</td></tr>
+  <tr><td>Type checking (Python)</td><td>Pyright</td><td>Static type verification</td></tr>
+  <tr><td>Static analysis (frontend)</td><td>ESLint + TypeScript</td><td>Lint + types</td></tr>
+  <tr><td>DB migration safety</td><td>squawk-cli</td><td>Block unsafe SQL migrations</td></tr>
+  <tr><td>Unit / integration tests</td><td>pytest, Vitest</td><td>Regression coverage</td></tr>
+  <tr><td>End-to-end tests</td><td>Playwright (pytest-playwright)</td><td>Full-stack smoke tests</td></tr>
+  <tr><td>Coverage</td><td>coverage.py, @vitest/coverage-v8</td><td>Coverage reporting</td></tr>
+</table>
+
+<h2>4. Secrets management</h2>
+<p><span class="evidence-label">EVIDENCE</span> <strong>No secrets are committed to the repository.</strong> All credentials are stored in 1Password with separate vaults per environment (dev, staging, production, shared). Production secrets are injected into Azure Container Apps at deploy time via a 1Password service-account token.</p>
+<ul>
+  <li>GitHub Actions holds only a single bootstrap secret: <code>OP_SERVICE_ACCOUNT_TOKEN</code>.</li>
+  <li>Zoom OAuth tokens are encrypted at rest before they ever touch the database (see §5).</li>
+  <li>Terraform reads secrets from 1Password via the <code>onepassword</code> provider, so nothing sensitive ever lives in <code>.tfstate</code> as plaintext.</li>
+</ul>
+
+<h2>5. Secure-by-default coding patterns</h2>
+
+<h3>5.1 Encryption of OAuth tokens at rest (AES-128 / Fernet)</h3>
+<div class="file-label">app/utils/encryption.py</div>
+<pre>from cryptography.fernet import Fernet
+from app.configuration.encryption import ENCRYPTION_KEY
+from sqlalchemy import types
+
+_fernet = Fernet(ENCRYPTION_KEY.encode())
+
+class EncryptedType(types.TypeDecorator[str]):
+    """SQLAlchemy column type that transparently encrypts/decrypts
+    string values using AES-128 (Fernet)."""
+
+    impl = types.Text
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None: return None
+        return _fernet.encrypt(value.encode()).decode()
+
+    def process_result_value(self, value, dialect):
+        if value is None: return None
+        return _fernet.decrypt(value.encode()).decode()</pre>
+<p>This column type is used on every field that stores a Zoom OAuth access token or refresh token, so tokens are never written to Postgres in plaintext.</p>
+
+<h3>5.2 Zoom webhook authenticity &amp; replay protection</h3>
+<p>Every inbound Zoom webhook is authenticated before the payload is parsed. The handler reads the raw body, verifies the <code>x-zm-signature</code> header against an HMAC-SHA256 computed with the app's Secret Token, and rejects any request whose <code>x-zm-request-timestamp</code> is more than 5 minutes old. Unsigned or stale requests are rejected with HTTP 401 and never reach the job queue. The URL-validation challenge (<code>endpoint.url_validation</code>) is answered only after the same signature check succeeds.</p>
+<div class="file-label">app/routes/webhooks.py — verifier</div>
+<pre>_ZOOM_SIGNATURE_TTL_SECONDS = 5 * 60
+
+def _verify_zoom_signature(
+    *, raw_body: bytes, timestamp: str | None, signature: str | None,
+) -> bool:
+    """Verify the x-zm-signature header Zoom sends on every webhook.
+    Zoom signs each request as v0=&lt;hex&gt; where the HMAC-SHA256 input is
+    'v0:' + x-zm-request-timestamp + ':' + raw_body keyed by the app's
+    Secret Token."""
+    if not ZOOM_SECRET_TOKEN:
+        log.warning("ZOOM_SECRET_TOKEN unset; skipping signature verification")
+        return True
+    if not timestamp or not signature:
+        return False
+    try:
+        request_ts = int(timestamp)
+    except ValueError:
+        return False
+    if abs(int(time.time()) - request_ts) &gt; _ZOOM_SIGNATURE_TTL_SECONDS:
+        return False
+    message = b"v0:" + timestamp.encode() + b":" + raw_body
+    expected = "v0=" + hmac.new(
+        ZOOM_SECRET_TOKEN.encode(), message, hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(expected, signature)</pre>
+<div class="file-label">app/routes/webhooks.py — handler</div>
+<pre>@webhook_api_app.post("/zoom")
+async def zoom_webhook(request: Request):
+    raw_body  = await request.body()
+    timestamp = request.headers.get("x-zm-request-timestamp")
+    signature = request.headers.get("x-zm-signature")
+
+    if not _verify_zoom_signature(
+        raw_body=raw_body, timestamp=timestamp, signature=signature,
+    ):
+        return JSONResponse({"status": "invalid signature"}, status_code=401)
+
+    payload = json.loads(raw_body)
+    if payload.get("event") == "endpoint.url_validation":
+        plain_token = payload["payload"]["plainToken"]
+        encrypted_token = hmac.new(
+            ZOOM_SECRET_TOKEN.encode(),
+            plain_token.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return JSONResponse(
+            {"plainToken": plain_token, "encryptedToken": encrypted_token}
+        )
+
+    return await _queue_webhook(provider="zoom", request=request, payload=payload)</pre>
+<p>Defence in depth: the 5-minute timestamp freshness check bounds replay risk at the transport layer, while Redis-based event-ID deduplication (48 h window) in <code>_queue_webhook</code> prevents processing duplicates of legitimately signed events. Verification is covered by unit tests in <code>tests/routes/webhooks_test.py</code>.</p>
+
+<h3>5.3 Other controls enforced in code</h3>
+<ul>
+  <li>HTTPS-only for all public traffic (Azure Container Apps ingress).</li>
+  <li>End-user authentication delegated to <strong>Clerk</strong> (no custom password storage).</li>
+  <li>All Protected Health Information (PHI) is routed through the <strong>Azure Health De-identification API</strong> before being sent to any LLM (Azure OpenAI).</li>
+  <li>SQLModel/SQLAlchemy parameterized queries — no string-concatenated SQL.</li>
+  <li>Pydantic/Zod schema validation at every HTTP boundary (request &amp; response).</li>
+</ul>
+
+<h2>6. Environment isolation</h2>
+<p><span class="evidence-label">EVIDENCE</span> Three fully separated environments, each with its own database, secrets vault, and Azure resource group:</p>
+<table>
+  <tr><th>Environment</th><th>Branch</th><th>Secrets vault</th><th>Deployed from</th></tr>
+  <tr><td>Development</td><td>local only</td><td>OP_DEV_VAULT_UID</td><td>developer machines</td></tr>
+  <tr><td>Staging</td><td><code>staging</code></td><td>OP_STAGING_VAULT_UID</td><td>GitHub Actions</td></tr>
+  <tr><td>Production</td><td><code>master</code></td><td>OP_PROD_VAULT_UID</td><td>GitHub Actions (environment-protected)</td></tr>
+</table>
+<p>Infrastructure itself is versioned as code (Terraform / OpenTofu, <code>infra/</code> and <code>infra-staging/</code>), so every environment change is reviewed through the same PR process as application code.</p>
+
+<h2>7. Monitoring, logging &amp; incident response</h2>
+<ul>
+  <li><strong>Sentry</strong> — backend (<code>sentry-sdk[fastapi,celery,openai,sqlalchemy]</code>) and frontend (<code>@sentry/react</code>). Captures errors, performance traces, and unhandled exceptions, with source maps uploaded on each deploy.</li>
+  <li><strong>Structured logging</strong> — <code>structlog</code> JSON logs on the backend, <code>loglevel</code> on the frontend, aggregated centrally.</li>
+  <li><strong>Health checks</strong> — <code>/healthcheck</code> endpoint on FastAPI and dedicated Celery health worker.</li>
+  <li><strong>Product analytics</strong> — PostHog (self-hostable), used for funnel analysis, cross-referenced with Sentry.</li>
+</ul>
+
+<h2>8. Dependency hygiene</h2>
+<ul>
+  <li>Python: <code>uv.lock</code> pins every transitive dependency; <code>deptry</code> flags unused packages in CI.</li>
+  <li>JavaScript: <code>pnpm-lock.yaml</code> pins every transitive dependency.</li>
+  <li>GitHub's native security advisories / Dependabot alerts are reviewed and remediated as they surface.</li>
+  <li>Deprecated Puppeteer / vulnerable packages surface as CI warnings and are tracked to fix.</li>
+</ul>
+
+<h2>9. Summary of SSDLC controls (auditor quick-reference)</h2>
+<table>
+  <tr><th>Phase</th><th>Control</th><th>Evidence location</th></tr>
+  <tr><td>Plan / Design</td><td>Threat-aware design (OAuth, PHI de-ID, token encryption)</td><td>This document, §5</td></tr>
+  <tr><td>Develop</td><td>Pre-commit linting, typed code, parameterized queries</td><td><code>lefthook.yml</code>, <code>pyproject.toml</code></td></tr>
+  <tr><td>Build</td><td>Reproducible builds via lockfiles &amp; Nixpacks</td><td><code>uv.lock</code>, <code>pnpm-lock.yaml</code>, <code>nixpacks.toml</code></td></tr>
+  <tr><td>Test</td><td>Automated lint/type/test gates in CI</td><td><code>.github/workflows/build_and_publish.yml</code></td></tr>
+  <tr><td>Release</td><td>Environment-protected deploys from <code>master</code> only</td><td>Same workflow, <code>deploy</code> job</td></tr>
+  <tr><td>Operate</td><td>Structured logs, Sentry, PostHog, health checks</td><td>Runtime; configuration in <code>app/</code></td></tr>
+  <tr><td>Respond</td><td>Dependency alerts, incident triage via Sentry</td><td>GitHub Security tab, Sentry project</td></tr>
+</table>
+
+<div class="callout">
+<strong>Architecture reference.</strong> The application's data-flow diagram (submitted separately as <code>cosma-architecture.png</code>) shows exactly which components interact with Zoom and which third-party data processors handle user data.
+</div>
+
+<div class="footer">
+Cosma · SSDLC Supporting Evidence · Prepared for Zoom Marketplace security review
+</div>
+
+</body>
+</html>

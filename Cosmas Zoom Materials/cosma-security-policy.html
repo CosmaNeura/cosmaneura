@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cosma — Security Policy</title>
+<style>
+  @page { size: Letter; margin: 0.7in 0.8in; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; font-size: 10.5pt; line-height: 1.5; }
+  .doc-header { border-bottom: 2pt solid #0B5FCC; padding-bottom: 8pt; margin-bottom: 14pt; }
+  .doc-title { font-size: 20pt; margin: 0; color: #0B5FCC; font-weight: 700; }
+  .doc-subtitle { font-size: 11pt; color: #334155; margin: 2pt 0 0; }
+  .doc-meta { display: flex; gap: 18pt; font-size: 9pt; color: #64748B; margin-top: 6pt; }
+  h2 { font-size: 12pt; margin: 16pt 0 5pt; color: #0B5FCC; border-bottom: 0.5pt solid #CBD5E1; padding-bottom: 2pt; }
+  h3 { font-size: 10.5pt; margin: 10pt 0 3pt; color: #1e293b; }
+  p { margin: 4pt 0 6pt; }
+  ul, ol { margin: 4pt 0 8pt 18pt; padding: 0; }
+  li { margin-bottom: 2pt; }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 9.5pt; }
+  th, td { text-align: left; padding: 5pt 7pt; border: 0.5pt solid #CBD5E1; vertical-align: top; }
+  th { background: #E2E8F0; font-weight: 600; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; background: #F1F5F9; padding: 0 3pt; border-radius: 2pt; }
+  .callout { padding: 7pt 10pt; background: #F2F7FF; border-left: 3pt solid #2D8CFF; font-size: 9.5pt; margin: 6pt 0 10pt; }
+  .footer { font-size: 8.5pt; color: #64748B; text-align: center; margin-top: 20pt; border-top: 0.5pt solid #CBD5E1; padding-top: 6pt; }
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <div class="doc-title">Security Policy</div>
+  <div class="doc-subtitle">Cosmaneura, Inc. — Cosma application</div>
+  <div class="doc-meta">
+    <div><strong>Version:</strong> 1.0</div>
+    <div><strong>Effective:</strong> 2026-04-20</div>
+    <div><strong>Next review:</strong> 2027-04-20</div>
+    <div><strong>Owner:</strong> CTO / Security Lead</div>
+  </div>
+</div>
+
+<h2>1. Purpose</h2>
+<p>This policy defines the security principles and minimum controls Cosmaneura applies to the Cosma application, its infrastructure, and the data it processes on behalf of customers. It exists to protect the confidentiality, integrity, and availability of customer data — including Protected Health Information (PHI) — and to align the engineering team on a shared baseline of secure practices.</p>
+
+<h2>2. Scope</h2>
+<p>This policy applies to:</p>
+<ul>
+  <li>All production and staging environments of the Cosma application.</li>
+  <li>All source code, configuration, and infrastructure-as-code managed by Cosmaneura.</li>
+  <li>All Cosmaneura personnel (employees and contractors) with access to any of the above.</li>
+  <li>All third-party sub-processors that receive customer data (enumerated in the Data Protection &amp; Retention Policy).</li>
+</ul>
+
+<h2>3. Roles &amp; responsibilities</h2>
+<table>
+  <tr><th>Role</th><th>Responsibilities</th></tr>
+  <tr><td>CTO / Security Lead</td><td>Owns this policy, approves exceptions, leads incident response, signs off on new sub-processors.</td></tr>
+  <tr><td>Engineering team</td><td>Implements controls in code and CI, reviews pull requests, triages Sentry alerts and Dependabot findings.</td></tr>
+  <tr><td>All personnel</td><td>Follow this policy, use 1Password for secrets, enable MFA on all work accounts, report suspected incidents within 24 hours.</td></tr>
+</table>
+
+<h2>4. Security principles</h2>
+<ul>
+  <li><strong>Secure by default.</strong> Every new feature is designed assuming untrusted input and hostile networks; controls (authN, authZ, encryption, validation) are the default path, not an opt-in.</li>
+  <li><strong>Defense in depth.</strong> No single control is relied upon; encryption, access control, monitoring, and code review each catch a different class of failure.</li>
+  <li><strong>Least privilege.</strong> Personnel, services, and tokens receive the minimum permissions required for their function.</li>
+  <li><strong>Privacy by design.</strong> PHI is de-identified via the Azure Health De-identification API before being sent to any third-party large-language-model service.</li>
+</ul>
+
+<h2>5. Minimum controls</h2>
+<table>
+  <tr><th>Area</th><th>Control</th></tr>
+  <tr><td>Authentication (end users)</td><td>Delegated to Clerk; MFA supported.</td></tr>
+  <tr><td>Authentication (personnel)</td><td>SSO with MFA on GitHub, 1Password, Azure, Sentry, and Clerk admin.</td></tr>
+  <tr><td>Secret management</td><td>All secrets stored in 1Password, separated by environment vault (dev / staging / production / shared). No secrets in source.</td></tr>
+  <tr><td>Encryption in transit</td><td>TLS 1.2+ enforced for all ingress and outbound integrations.</td></tr>
+  <tr><td>Encryption at rest</td><td>Azure-managed encryption for PostgreSQL and Azure Blob Storage; application-layer AES-128 (Fernet) on sensitive columns such as Zoom OAuth tokens.</td></tr>
+  <tr><td>Webhook integrity</td><td>HMAC-SHA256 verification of Zoom webhook challenges; Redis-based replay protection (48 h dedup window).</td></tr>
+  <tr><td>Source control</td><td>Private GitHub repository; <code>master</code> protected; every change requires pull-request review before merge.</td></tr>
+  <tr><td>CI/CD gating</td><td>Automated lint (Ruff, ESLint), type checks (Pyright, TypeScript), migration safety (squawk-cli), and tests (pytest, Vitest) must pass before deploy.</td></tr>
+  <tr><td>Monitoring</td><td>Sentry (errors, traces) + structlog (structured JSON logs) + PostHog (product analytics); on-call rotation triages alerts.</td></tr>
+  <tr><td>Vulnerability management</td><td>See separate Vulnerability Management Policy.</td></tr>
+  <tr><td>Incident response</td><td>See separate Incident Response Policy.</td></tr>
+</table>
+
+<h2>6. Acceptable use</h2>
+<p>Personnel must not store customer data outside sanctioned systems (approved production infrastructure and approved analytics tooling). Copying production data to personal devices or to development databases is prohibited. Access to production systems requires MFA and is granted only to personnel with an active operational need.</p>
+
+<h2>7. Policy exceptions</h2>
+<p>Any exception to this policy must be documented, time-bounded, and approved in writing by the CTO. Exceptions are reviewed at each policy review cycle and either renewed or removed.</p>
+
+<h2>8. Review &amp; revision</h2>
+<p>This policy is reviewed at least annually, or sooner when there is a material change to the architecture, the regulatory environment, or the threat model. Material revisions are versioned and recorded in the document header.</p>
+
+<h2>9. Contact</h2>
+<p>Security questions and disclosures: <code>dev@cosmaneura.com</code> &nbsp;·&nbsp; General: <code>info@cosmaneura.com</code></p>
+
+<div class="footer">
+  Cosmaneura, Inc. · Security Policy · v1.0 · 2026-04-20
+</div>
+
+</body>
+</html>

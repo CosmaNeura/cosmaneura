@@ -1,0 +1,99 @@
+---
+config:
+  flowchart:
+    nodeSpacing: 55
+    rankSpacing: 80
+    htmlLabels: true
+  themeVariables:
+    fontSize: 18px
+---
+flowchart TB
+    User(["👤 End User (Zoom account)"])
+
+    subgraph ZOOM["&nbsp;Zoom Platform&nbsp;"]
+        direction TB
+        ZoomOAuth["Zoom OAuth 2.0<br/><sub>authorize · token · revoke</sub>"]
+        ZoomAPI["Zoom REST API v2<br/><sub>/users/me · /users/{id}/meetings<br/>/meetings/{id} · /users/{id}/token (ZAK)</sub>"]
+        ZoomSDK["Zoom Meeting SDK<br/><sub>ZAK-authenticated join</sub>"]
+        ZoomWH["Zoom Webhooks<br/><sub>meeting.started · participant_joined/left<br/>meeting.ended · endpoint.url_validation</sub>"]
+    end
+
+    subgraph COSMA["&nbsp;Cosma Application — Azure Container Apps&nbsp;"]
+        direction TB
+        FE["React 19 SPA<br/><sub>Vite · TS · Tailwind</sub>"]
+        API["FastAPI Backend (Python 3.13)<br/><sub>OAuth handler · HMAC-SHA256 webhook verify<br/>meeting orchestration · REST API</sub>"]
+        Worker["Celery Workers + Beat<br/><sub>transcription · de-identification<br/>note generation · meeting sync</sub>"]
+    end
+
+    subgraph DATA["&nbsp;Data Stores&nbsp;"]
+        direction LR
+        PG[("PostgreSQL 16<br/><sub>users · meetings<br/>Fernet-encrypted OAuth tokens</sub>")]
+        Redis[("Redis 6<br/><sub>queue · scheduler<br/>webhook dedup</sub>")]
+        Blob[("Azure Blob Storage<br/><sub>audio · transcripts<br/>generated artifacts</sub>")]
+    end
+
+    subgraph PARTNERS["&nbsp;Third-Party Services (data processors)&nbsp;"]
+        direction TB
+        Clerk["Clerk<br/><sub>end-user auth</sub>"]
+        Recall["Recall.ai<br/><sub>recording bot →<br/>joins meeting via Zoom SDK</sub>"]
+        Assembly["AssemblyAI<br/><sub>speech-to-text<br/>speaker labels</sub>"]
+        DeID["Azure Health<br/>De-identification API<br/><sub>PHI redaction</sub>"]
+        AzureAI["Azure OpenAI (GPT-4.1)<br/><sub>clinical note generation</sub>"]
+        Obs["Sentry · PostHog · SMTP<br/><sub>errors · analytics · email</sub>"]
+    end
+
+    subgraph INFRA["&nbsp;Platform / Ops&nbsp;"]
+        direction LR
+        GHA["GitHub Actions CI/CD"]
+        TF["Terraform / OpenTofu"]
+        OnePW["1Password secrets"]
+    end
+
+    %% User flows
+    User -- "1. HTTPS" --> FE
+    FE -- "REST / JSON" --> API
+    FE -- "auth" --> Clerk
+
+    %% Zoom flows
+    API -- "2. OAuth code → tokens" --> ZoomOAuth
+    API -- "3. list meetings · issue ZAK" --> ZoomAPI
+    ZoomWH -- "4. signed webhooks" --> API
+
+    %% App internals
+    API -- "enqueue" --> Redis
+    Redis -- "dispatch" --> Worker
+    API --- PG
+    Worker --- PG
+    Worker --- Blob
+
+    %% Recording pipeline
+    Worker -- "5. start/stop bot" --> Recall
+    Recall -- "bot joins via ZAK" --> ZoomSDK
+    Recall -- "recording + transcript" --> Worker
+
+    %% AI pipeline
+    Worker -- "6. transcribe" --> Assembly
+    Worker -- "7. de-identify PHI" --> DeID
+    Worker -- "8. generate notes (de-identified)" --> AzureAI
+
+    %% Observability
+    API -. telemetry .-> Obs
+    FE  -. telemetry .-> Obs
+
+    %% Ops
+    GHA  -- deploy   --> COSMA
+    TF   -- provision --> COSMA
+    TF   -- provision --> DATA
+    OnePW -. secrets .-> COSMA
+
+    classDef zoom fill:#2D8CFF,stroke:#0B5FCC,color:#fff,font-weight:bold;
+    classDef app fill:#1F2937,stroke:#111827,color:#fff,font-weight:bold;
+    classDef data fill:#065F46,stroke:#064E3B,color:#fff,font-weight:bold;
+    classDef partner fill:#7C3AED,stroke:#5B21B6,color:#fff,font-weight:bold;
+    classDef infra fill:#4B5563,stroke:#374151,color:#fff;
+
+    class ZoomOAuth,ZoomAPI,ZoomSDK,ZoomWH zoom;
+    class FE,API,Worker app;
+    class PG,Redis,Blob data;
+    class Clerk,Recall,Assembly,DeID,AzureAI,Obs partner;
+    class TF,OnePW,GHA infra;

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cosma — Incident Response Policy</title>
+<style>
+  @page { size: Letter; margin: 0.7in 0.8in; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1a1a1a; font-size: 10.5pt; line-height: 1.5; }
+  .doc-header { border-bottom: 2pt solid #0B5FCC; padding-bottom: 8pt; margin-bottom: 14pt; }
+  .doc-title { font-size: 20pt; margin: 0; color: #0B5FCC; font-weight: 700; }
+  .doc-subtitle { font-size: 11pt; color: #334155; margin: 2pt 0 0; }
+  .doc-meta { display: flex; gap: 18pt; font-size: 9pt; color: #64748B; margin-top: 6pt; }
+  h2 { font-size: 12pt; margin: 16pt 0 5pt; color: #0B5FCC; border-bottom: 0.5pt solid #CBD5E1; padding-bottom: 2pt; }
+  h3 { font-size: 10.5pt; margin: 10pt 0 3pt; color: #1e293b; }
+  p { margin: 4pt 0 6pt; }
+  ul, ol { margin: 4pt 0 8pt 18pt; padding: 0; }
+  li { margin-bottom: 2pt; }
+  table { width: 100%; border-collapse: collapse; margin: 6pt 0 10pt; font-size: 9.5pt; }
+  th, td { text-align: left; padding: 5pt 7pt; border: 0.5pt solid #CBD5E1; vertical-align: top; }
+  th { background: #E2E8F0; font-weight: 600; }
+  code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 9pt; background: #F1F5F9; padding: 0 3pt; border-radius: 2pt; }
+  .callout { padding: 7pt 10pt; background: #F2F7FF; border-left: 3pt solid #2D8CFF; font-size: 9.5pt; margin: 6pt 0 10pt; }
+  .footer { font-size: 8.5pt; color: #64748B; text-align: center; margin-top: 20pt; border-top: 0.5pt solid #CBD5E1; padding-top: 6pt; }
+</style>
+</head>
+<body>
+
+<div class="doc-header">
+  <div class="doc-title">Incident Management &amp; Response Policy</div>
+  <div class="doc-subtitle">Cosmaneura, Inc. — Cosma application</div>
+  <div class="doc-meta">
+    <div><strong>Version:</strong> 1.0</div>
+    <div><strong>Effective:</strong> 2026-04-20</div>
+    <div><strong>Next review:</strong> 2027-04-20</div>
+    <div><strong>Owner:</strong> CTO / Incident Commander</div>
+  </div>
+</div>
+
+<h2>1. Purpose</h2>
+<p>This policy defines how Cosmaneura detects, responds to, communicates about, and learns from security and availability incidents affecting the Cosma application. Its goals are to minimize customer impact, preserve evidence, meet legal notification obligations, and drive continuous improvement.</p>
+
+<h2>2. Scope &amp; definitions</h2>
+<p>An <strong>incident</strong> is any event that adversely affects, or is likely to adversely affect, the confidentiality, integrity, or availability of Cosma or of customer data. This includes — but is not limited to — credential compromise, unauthorized data access, malware on production systems, significant service degradation, and data loss.</p>
+
+<h2>3. Severity levels</h2>
+<table>
+  <tr><th>Level</th><th>Definition</th><th>Target response</th></tr>
+  <tr><td><strong>P0 — Critical</strong></td><td>Confirmed unauthorized access to customer data, active data exfiltration, or total production outage.</td><td>Acknowledge within 15 minutes; continuous on-call engagement until contained.</td></tr>
+  <tr><td><strong>P1 — High</strong></td><td>Suspected security compromise; major partial outage affecting many customers; loss of a critical integration (Zoom, recording pipeline).</td><td>Acknowledge within 1 hour; active work during business hours with on-call coverage.</td></tr>
+  <tr><td><strong>P2 — Medium</strong></td><td>Contained vulnerability with no evidence of exploitation; degraded performance affecting a subset of users.</td><td>Acknowledge within 1 business day.</td></tr>
+  <tr><td><strong>P3 — Low</strong></td><td>Informational findings; non-user-facing anomalies.</td><td>Acknowledge within 5 business days.</td></tr>
+</table>
+
+<h2>4. Detection sources</h2>
+<ul>
+  <li><strong>Sentry</strong> — real-time error and performance alerting on backend and frontend.</li>
+  <li><strong>Structured application logs</strong> — <code>structlog</code> JSON logs, inspected during triage and postmortem.</li>
+  <li><strong>Health checks</strong> — FastAPI <code>/healthcheck</code> endpoint and Celery health worker.</li>
+  <li><strong>Dependabot / GitHub security advisories</strong> — vulnerability disclosures in third-party dependencies.</li>
+  <li><strong>Provider notifications</strong> — security advisories from Zoom, Azure, Clerk, Recall.ai, AssemblyAI, etc.</li>
+  <li><strong>User or researcher reports</strong> — sent to <code>dev@cosmaneura.com</code>.</li>
+</ul>
+
+<h2>5. Response workflow</h2>
+<ol>
+  <li><strong>Detect &amp; declare.</strong> The first responder classifies severity and, for P0/P1, declares an incident and assumes the Incident Commander role until handed off.</li>
+  <li><strong>Assemble.</strong> The Commander pulls in necessary engineers; a shared timeline document is opened (used later for the postmortem).</li>
+  <li><strong>Contain.</strong> Stop the bleed: rotate credentials, revoke tokens, block IPs, roll back deploys, or scale up capacity as appropriate.</li>
+  <li><strong>Eradicate.</strong> Identify the root cause and remove it from production.</li>
+  <li><strong>Recover.</strong> Restore service to full function and verify via monitoring.</li>
+  <li><strong>Communicate.</strong> Status updates to affected customers per §6.</li>
+  <li><strong>Postmortem.</strong> Within 7 business days the Commander publishes a blameless postmortem covering impact, timeline, root cause, and concrete follow-up actions, each with an owner and a due date.</li>
+</ol>
+
+<h2>6. Customer &amp; regulator notification</h2>
+<ul>
+  <li><strong>Security incidents affecting customer data:</strong> affected customers are notified without undue delay and <strong>within 72 hours</strong> of becoming aware of the incident, consistent with GDPR Article 33 and HIPAA Breach Notification expectations.</li>
+  <li><strong>Zoom Marketplace obligations:</strong> Zoom is notified through the Marketplace security contact process whenever an incident affects the security of the Zoom integration or the data obtained through it.</li>
+  <li><strong>Regulatory reporting:</strong> applicable regulators and business associates are notified as required by the governing law or BAA.</li>
+</ul>
+
+<h2>7. Roles during an incident</h2>
+<table>
+  <tr><th>Role</th><th>Responsibility</th></tr>
+  <tr><td>Incident Commander</td><td>Owns overall response, declares severity, coordinates communications.</td></tr>
+  <tr><td>Technical Lead</td><td>Drives containment, eradication, and recovery.</td></tr>
+  <tr><td>Communications Lead</td><td>Drafts customer, Zoom, and (if applicable) regulator notifications.</td></tr>
+  <tr><td>Scribe</td><td>Maintains the shared timeline document.</td></tr>
+</table>
+<p>In a small-team incident the Commander may hold multiple roles, but the Commander role itself is always explicitly named.</p>
+
+<h2>8. Evidence preservation</h2>
+<p>During P0 and P1 incidents, system logs, Sentry events, and affected database snapshots are preserved for at least 180 days. Access is limited to personnel involved in response and (where applicable) to outside counsel or forensic investigators.</p>
+
+<h2>9. Testing &amp; continuous improvement</h2>
+<p>The response workflow is exercised at least annually through a tabletop exercise. Each postmortem generates tracked follow-up actions, reviewed at the next policy review.</p>
+
+<h2>10. Contact</h2>
+<p>To report a security incident or suspected incident: <code>dev@cosmaneura.com</code>. We will acknowledge reports within one business day; urgent P0/P1 reports should be clearly flagged in the subject line.</p>
+
+<div class="footer">
+  Cosmaneura, Inc. · Incident Management &amp; Response Policy · v1.0 · 2026-04-20
+</div>
+
+</body>
+</html>
