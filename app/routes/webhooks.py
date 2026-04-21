@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -14,6 +15,50 @@ from app.configuration.redis import get_redis
 from app.configuration.zoom import ZOOM_SECRET_TOKEN
 
 webhook_api_app = APIRouter(prefix="/external/v1/webhooks", tags=["webhooks"])
+
+# Signed Zoom webhooks are only valid for ~5 minutes; this bounds replay risk.
+# https://developers.zoom.us/docs/api/webhooks/#validate-your-webhook-endpoint
+_ZOOM_SIGNATURE_TTL_SECONDS = 5 * 60
+
+
+def _verify_zoom_signature(
+    *,
+    raw_body: bytes,
+    timestamp: str | None,
+    signature: str | None,
+) -> bool:
+    """Verify the ``x-zm-signature`` header Zoom sends on every webhook.
+
+    Zoom signs each request as ``v0=<hex>`` where the HMAC-SHA256 input is
+    ``"v0:" + x-zm-request-timestamp + ":" + raw_body`` keyed by the
+    app's Secret Token.
+    """
+    if not ZOOM_SECRET_TOKEN:
+        log.warning(
+            "zoom webhook received but ZOOM_SECRET_TOKEN is unset; "
+            "skipping signature verification"
+        )
+        return True
+
+    if not timestamp or not signature:
+        return False
+
+    try:
+        request_ts = int(timestamp)
+    except ValueError:
+        return False
+
+    if abs(int(time.time()) - request_ts) > _ZOOM_SIGNATURE_TTL_SECONDS:
+        return False
+
+    message = b"v0:" + timestamp.encode() + b":" + raw_body
+    expected = "v0=" + hmac.new(
+        ZOOM_SECRET_TOKEN.encode(),
+        message,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected, signature)
 
 
 class WebhookAck(BaseModel):
@@ -83,7 +128,21 @@ async def _queue_webhook(
 
 @webhook_api_app.post("/zoom")
 async def zoom_webhook(request: Request):
-    payload = await request.json()
+    raw_body = await request.body()
+    timestamp = request.headers.get("x-zm-request-timestamp")
+    signature = request.headers.get("x-zm-signature")
+
+    if not _verify_zoom_signature(
+        raw_body=raw_body, timestamp=timestamp, signature=signature
+    ):
+        log.warning(
+            "zoom webhook signature verification failed",
+            has_timestamp=bool(timestamp),
+            has_signature=bool(signature),
+        )
+        return JSONResponse({"status": "invalid signature"}, status_code=401)
+
+    payload = json.loads(raw_body)
 
     if payload.get("event") == "endpoint.url_validation":
         plain_token = payload["payload"]["plainToken"]
