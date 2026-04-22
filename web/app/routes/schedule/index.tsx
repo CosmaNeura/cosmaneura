@@ -9,7 +9,7 @@ import { Icons } from "~/components/icons"
 import { getClient } from "~/configuration/clerk"
 import { requireEnv } from "~/utils/environment"
 
-const ZOOM_COMING_SOON = true
+const ZOOM_COMING_SOON = false
 
 function ZoomConnectPrompt() {
   const [loading, setLoading] = useState(false)

@@ -38,7 +38,7 @@ import { uploadFileToAzure } from "~/lib/azure-upload"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 
-const ZOOM_COMING_SOON = true
+const ZOOM_COMING_SOON = false
 
 type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
 

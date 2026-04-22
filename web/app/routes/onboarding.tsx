@@ -34,8 +34,9 @@ import { requireEnv } from "~/utils/environment"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { motion } from "motion/react"
+import { SiZoom } from "react-icons/si"
 
-const ZOOM_COMING_SOON = true
+const ZOOM_COMING_SOON = false
 
 type Step = 0 | 1 | 2 | 3 | 4
 
@@ -69,7 +70,7 @@ function WelcomeStep({ onNext }: { onNext: () => void }) {
       <h1 className="text-3xl font-bold">Welcome to Cosma</h1>
       <p className="text-muted-foreground max-w-md text-base">
         Cosma is your AI medical scribe. It listens to your patient visits,
-        generates notes in your style, and handles patient intake — so you can
+        generates notes in your style, and handles patient intake so you can
         focus on care.
       </p>
       <p className="text-muted-foreground max-w-md text-sm">
@@ -221,7 +222,10 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
         </p>
       </div>
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+        <form
+          onSubmit={form.handleSubmit(onSubmit)}
+          className="w-full space-y-4"
+        >
           <ImageDropzone onDropFile={setFile}>
             {!file ? (
               <div className="flex items-center gap-4 font-semibold">
@@ -333,14 +337,19 @@ function ZoomStep({ onComplete }: { onComplete: () => void }) {
           meetings and generate visit notes after each session.
         </p>
       </div>
-      <Button onClick={connectZoom} disabled={loading}>
+      <Button onClick={connectZoom} disabled={loading} size="lg">
         {loading ? (
           <>
             <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
             Connecting...
           </>
         ) : (
-          "Connect Zoom"
+          <>
+            <span className="mr-2 flex h-6 w-6 items-center justify-center rounded-sm border border-white">
+              <SiZoom className="size-4 text-white" />
+            </span>
+            Connect Zoom
+          </>
         )}
       </Button>
     </div>
