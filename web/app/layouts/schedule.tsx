@@ -15,6 +15,24 @@ export async function clientLoader(_args: Route.ClientLoaderArgs) {
   return data
 }
 
+function meetingSidebarStatus(
+  meeting: ZoomMeetingResponse,
+): "completed" | "in-progress" | "not-started" {
+  // ZoomMeeting.status from the backend is the canonical signal once
+  // meeting.ended fires. Before that, fall back to the scheduled time
+  // window so a meeting that ran and ended silently (missed webhook,
+  // early exit) doesn't keep showing as "in-progress" past its end.
+  if (meeting.status === "ended") return "completed"
+
+  const now = Date.now()
+  const startMs = new Date(meeting.start_time).getTime()
+  const endMs = startMs + meeting.duration * 60_000
+
+  if (now >= endMs) return "completed"
+  if (now >= startMs) return "in-progress"
+  return "not-started"
+}
+
 function meetingsToSidebarEntries(meetings: ZoomMeetingResponse[]) {
   return meetings.map((meeting) => ({
     id: meeting.zoom_meeting_id,
@@ -24,10 +42,7 @@ function meetingsToSidebarEntries(meetings: ZoomMeetingResponse[]) {
     title: meeting.topic,
     location: "",
     date: new Date(meeting.start_time).toLocaleDateString(),
-    status:
-      meeting.status === "ended"
-        ? ("completed" as const)
-        : ("in-progress" as const),
+    status: meetingSidebarStatus(meeting),
     preview: `${meeting.duration} min`,
   }))
 }
