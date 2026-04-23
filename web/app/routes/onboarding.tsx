@@ -30,24 +30,26 @@ import {
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { requireEnv } from "~/utils/environment"
+import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { motion } from "motion/react"
 import { SiZoom } from "react-icons/si"
 
-const ZOOM_COMING_SOON = false
-
 type Step = 0 | 1 | 2 | 3 | 4
 
-function getInitialStep(data: {
-  biography: string | null
-  notes_schema: unknown[]
-  zoom_connected: boolean
-}): Step {
+function getInitialStep(
+  data: {
+    biography: string | null
+    notes_schema: unknown[]
+    zoom_connected: boolean
+  },
+  zoomEnabled: boolean,
+): Step {
   if (!data.biography) return 0
   if (data.notes_schema.length === 0) return 2
-  if (!ZOOM_COMING_SOON && !data.zoom_connected) return 3
+  if (zoomEnabled && !data.zoom_connected) return 3
   return 4
 }
 
@@ -59,7 +61,10 @@ export async function clientLoader(_: Route.ClientLoaderArgs) {
     throw redirect(href("/notes"))
   }
 
-  return data
+  const clerk = await getClient()
+  const email = clerk?.user?.primaryEmailAddress?.emailAddress ?? null
+
+  return { ...data, email }
 }
 
 // ─── Step 0: Welcome ────────────────────────────────────────────────────────
@@ -290,7 +295,13 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
 
 // ─── Step 3: Zoom ────────────────────────────────────────────────────────────
 
-function ZoomStep({ onComplete }: { onComplete: () => void }) {
+function ZoomStep({
+  onComplete,
+  zoomEnabled,
+}: {
+  onComplete: () => void
+  zoomEnabled: boolean
+}) {
   const [loading, setLoading] = useState(false)
 
   async function connectZoom() {
@@ -307,7 +318,7 @@ function ZoomStep({ onComplete }: { onComplete: () => void }) {
     setLoading(false)
   }
 
-  if (ZOOM_COMING_SOON) {
+  if (!zoomEnabled) {
     return (
       <div className="flex flex-col items-center gap-6 text-center">
         <div className="space-y-1">
@@ -450,7 +461,8 @@ function OnboardingStepIndicator({ step }: { step: Step }) {
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
-  const initialStep = getInitialStep(loaderData)
+  const zoomEnabled = isZoomEnabled(loaderData.email)
+  const initialStep = getInitialStep(loaderData, zoomEnabled)
   const [step, setStep] = useState<Step>(initialStep)
 
   const advance = () => setStep((s) => (s + 1) as Step)
@@ -468,7 +480,9 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           />
         )}
         {step === 2 && <NotesStep onComplete={advance} />}
-        {step === 3 && <ZoomStep onComplete={advance} />}
+        {step === 3 && (
+          <ZoomStep onComplete={advance} zoomEnabled={zoomEnabled} />
+        )}
         {step === 4 && <AllSetStep />}
       </div>
     </div>

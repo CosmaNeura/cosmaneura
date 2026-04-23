@@ -8,11 +8,14 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
 import { getClient } from "~/configuration/clerk"
 import { requireEnv } from "~/utils/environment"
+import { isZoomEnabled } from "~/utils/zoom-feature"
 
-const ZOOM_COMING_SOON = false
+import { useUser } from "@clerk/clerk-react"
 
 function ZoomConnectPrompt() {
   const [loading, setLoading] = useState(false)
+  const { user } = useUser()
+  const zoomEnabled = isZoomEnabled(user?.primaryEmailAddress?.emailAddress)
 
   async function connectZoom() {
     setLoading(true)
@@ -28,7 +31,7 @@ function ZoomConnectPrompt() {
     setLoading(false)
   }
 
-  if (ZOOM_COMING_SOON) {
+  if (!zoomEnabled) {
     return (
       <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
         <div className="text-center">

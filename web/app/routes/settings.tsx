@@ -34,11 +34,11 @@ import {
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
+import { isZoomEnabled } from "~/utils/zoom-feature"
 
+import { useUser } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
-
-const ZOOM_COMING_SOON = false
 
 type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
 
@@ -333,6 +333,8 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
   const revalidator = useRevalidator()
   const [connecting, setConnecting] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
+  const { user } = useUser()
+  const zoomEnabled = isZoomEnabled(user?.primaryEmailAddress?.emailAddress)
 
   async function onConnect() {
     setConnecting(true)
@@ -364,7 +366,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
     revalidator.revalidate()
   }
 
-  if (ZOOM_COMING_SOON) {
+  if (!zoomEnabled) {
     return (
       <section className="prose-headings prose w-1/2 space-y-4">
         <div className="flex items-center gap-2">
