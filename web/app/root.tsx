@@ -20,6 +20,9 @@ import "./app.css"
 import PageNotFound from "./components/shared/PageNotFound"
 
 export const links: LinksFunction = () => [
+  { rel: "icon", href: "/cosmas.ico", sizes: "any" },
+  { rel: "icon", href: "/cosmas-icon-64.png", type: "image/png", sizes: "64x64" },
+  { rel: "apple-touch-icon", href: "/cosmas-icon-256.png" },
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
   {
     rel: "preconnect",
