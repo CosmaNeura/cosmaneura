@@ -23,6 +23,20 @@ def handle_meeting_started(payload: dict[str, Any]):
 
     log.info("meeting.started received", host_id=host_id, meeting_id=meeting_id)
 
+    redis = get_redis()
+    # Atomic idempotency guard. Zoom occasionally fires meeting.started twice
+    # for the same session (personal-meeting-room quirks, waiting-room
+    # reactivation) which would otherwise create a duplicate bot. SET NX
+    # succeeds only when the lock does not exist; handle_meeting_ended
+    # releases it so a legitimate end+restart past the TTL still works.
+    lock_key = f"recall:meeting:{meeting_id}:starting_lock"
+    if not redis.set(lock_key, "1", nx=True, ex=60):
+        log.info(
+            "meeting.started duplicate within active lock window, skipping",
+            meeting_id=meeting_id,
+        )
+        return
+
     doctor = cast(
         Doctor | None,
         Doctor.where(
@@ -49,11 +63,12 @@ def handle_meeting_started(payload: dict[str, Any]):
         )
         return
 
-    redis = get_redis()
     # Clear any orphaned state from a previous session with this meeting_id.
     # Personal meeting rooms reuse the same ID, so meeting.ended may not have
     # fired (or may have been missed) before the next meeting.started arrives.
-    _clear_meeting_keys(redis, meeting_id)
+    # Preserve the lock we just acquired — it gates duplicate meeting.started
+    # for the rest of this session.
+    _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
     log.info("cleared stale meeting keys", meeting_id=meeting_id)
 
     zak_token = zoom_service.get_zak_token(doctor)
@@ -220,6 +235,10 @@ def _ensure_appointment(
 
 
 def handle_participant_left(payload: dict[str, Any]):
+    """Decrement the patient counter only. The bot lifecycle is driven by
+    meeting.ended, never by participant_left — third-party note-takers or a
+    patient who rejoins should not pull the bot out of the call.
+    """
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
     participant = obj.get("participant", {})
@@ -235,67 +254,67 @@ def handle_participant_left(payload: dict[str, Any]):
     count_key = f"recall:meeting:{meeting_id}:patient_count"
     count = cast(int, redis.decr(count_key))
 
-    if count > 0:
-        log.info(
-            "patient left but others still present, still recording",
-            meeting_id=meeting_id,
-            count=count,
-        )
-        return
-
-    redis.delete(count_key)
-
     if count < 0:
-        # Out-of-order events: participant_left arrived without a prior participant_joined.
-        # Don't call stop_recording — there is no active recording to stop.
+        # Out-of-order events: participant_left arrived without a prior
+        # participant_joined. Reset to 0 so future increments stay sane.
         log.warning(
-            "patient_count went negative, out-of-order events, skipping stop",
+            "patient_count went negative, resetting to 0",
             meeting_id=meeting_id,
             count=count,
         )
+        redis.set(count_key, 0)
         return
 
-    recall.stop_recording(bot_id)
     log.info(
-        "last patient left, stopped recording", meeting_id=meeting_id, bot_id=bot_id
+        "patient left, recording continues until meeting ends",
+        meeting_id=meeting_id,
+        count=count,
+        patient_name=participant.get("user_name"),
     )
 
 
-def _clear_meeting_keys(redis, meeting_id: str) -> None:
-    """Delete all per-meeting Redis state. Called on meeting.ended so keys don't
-    linger for the full 24h TTL — especially important for personal meeting rooms
-    that reuse the same meeting_id across sessions."""
-    for suffix in ("bot_id", "doctor_id", "host_id", "doctor_name", "patient_count"):
+def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> None:
+    """Delete all per-meeting Redis state. Called on meeting.ended so keys
+    don't linger for the full 24h TTL — especially important for personal
+    meeting rooms that reuse the same meeting_id across sessions.
+
+    preserve_lock keeps the starting_lock in place when we are mid-session
+    (e.g. cleaning orphan state during handle_meeting_started) so duplicate
+    meeting.started webhooks for the same session still get deduped.
+    """
+    suffixes = ["bot_id", "doctor_id", "host_id", "doctor_name", "patient_count"]
+    if not preserve_lock:
+        suffixes.append("starting_lock")
+    for suffix in suffixes:
         redis.delete(f"recall:meeting:{meeting_id}:{suffix}")
 
 
 def handle_meeting_ended(payload: dict[str, Any]):
+    """meeting.ended is the canonical wind-down signal for the bot.
+    Stop the recording whenever a bot exists for this meeting, regardless of
+    the patient counter — participant_left no longer stops recording, so the
+    counter is no longer authoritative.
+    """
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
 
     redis = get_redis()
-    count_key = f"recall:meeting:{meeting_id}:patient_count"
-    count_str = _rget(redis, count_key)
-    count = int(count_str) if count_str else 0
-
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
 
     _clear_meeting_keys(redis, meeting_id)
 
-    if count <= 0:
-        log.info("meeting ended, no active recording to stop", meeting_id=meeting_id)
-        return
-
-    if not bot_id:
-        return
-
-    log.info(
-        "meeting ended with active recording, stopping",
-        meeting_id=meeting_id,
-        bot_id=bot_id,
-        count=count,
-    )
-    recall.stop_recording(bot_id)
+    if bot_id:
+        log.info(
+            "meeting ended, stopping recording",
+            meeting_id=meeting_id,
+            bot_id=bot_id,
+        )
+        recall.stop_recording(bot_id)
+    else:
+        log.info(
+            "meeting ended, no bot tracked for this meeting",
+            meeting_id=meeting_id,
+        )
 
     zoom_mtg = cast(
         ZoomMeeting | None,
