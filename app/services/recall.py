@@ -1,7 +1,14 @@
+import time
+
 import httpx
 
 from app import log
 from app.configuration.recall import RECALL_API_BASE, RECALL_API_KEY
+
+# Bot status codes that mean the bot is present in the call and able to
+# accept a start_recording command. See Recall.ai docs for the full list.
+_BOT_READY_STATUSES = {"in_call_not_recording", "in_call_recording"}
+_BOT_TERMINAL_STATUSES = {"call_ended", "fatal", "done"}
 
 
 def create_bot(
@@ -43,7 +50,91 @@ def create_bot(
     return data
 
 
-def start_recording(bot_id: str) -> dict:
+def get_bot(bot_id: str) -> dict:
+    with httpx.Client() as client:
+        response = client.get(
+            f"{RECALL_API_BASE}/bot/{bot_id}/",
+            headers={"Authorization": f"Token {RECALL_API_KEY}"},
+        )
+        response.raise_for_status()
+        return response.json()
+
+
+def _current_bot_status(bot: dict) -> str | None:
+    changes = bot.get("status_changes") or []
+    if not changes:
+        return None
+    return changes[-1].get("code")
+
+
+def _wait_until_bot_ready(
+    bot_id: str,
+    timeout_seconds: float = 45.0,
+    poll_interval: float = 2.0,
+) -> str | None:
+    """Poll Recall until the bot is actually in the call (or has terminated).
+    Returns the final observed status, or None on timeout."""
+    deadline = time.monotonic() + timeout_seconds
+    last_status: str | None = None
+    while time.monotonic() < deadline:
+        try:
+            bot = get_bot(bot_id)
+        except httpx.HTTPError as exc:
+            log.warning(
+                "recall get_bot transient error while waiting for ready",
+                bot_id=bot_id,
+                error=str(exc),
+            )
+            time.sleep(poll_interval)
+            continue
+
+        status = _current_bot_status(bot)
+        if status != last_status:
+            log.info("recall bot status", bot_id=bot_id, status=status)
+            last_status = status
+
+        if status in _BOT_READY_STATUSES:
+            return status
+        if status in _BOT_TERMINAL_STATUSES:
+            log.warning(
+                "recall bot reached terminal state before becoming ready",
+                bot_id=bot_id,
+                status=status,
+            )
+            return status
+        time.sleep(poll_interval)
+
+    log.warning(
+        "recall bot did not become ready before timeout",
+        bot_id=bot_id,
+        last_status=last_status,
+        timeout_seconds=timeout_seconds,
+    )
+    return last_status
+
+
+def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
+    """Tell the bot to start recording. When wait_for_ready is True (the
+    default, used by the live patient-joined flow) we first poll Recall
+    until the bot is in_call_not_recording — otherwise a start_recording
+    command issued while the bot is still joining is silently dropped
+    and the meeting yields an empty transcript."""
+    if wait_for_ready:
+        status = _wait_until_bot_ready(bot_id)
+        if status not in _BOT_READY_STATUSES:
+            log.warning(
+                "recall start_recording aborted: bot never reached ready state",
+                bot_id=bot_id,
+                status=status,
+            )
+            return {}
+        if status == "in_call_recording":
+            log.info(
+                "recall bot already recording, skipping start_recording",
+                bot_id=bot_id,
+            )
+            return {}
+
     with httpx.Client() as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/{bot_id}/start_recording/",
@@ -52,12 +143,17 @@ def start_recording(bot_id: str) -> dict:
         if not response.is_success:
             log.error(
                 "recall start_recording error",
+                bot_id=bot_id,
                 status=response.status_code,
                 body=response.text,
             )
         response.raise_for_status()
         data = response.json()
-    log.info("recall recording started", bot_id=bot_id, recording_id=data.get("id"))
+    log.info(
+        "recall recording started",
+        bot_id=bot_id,
+        recording_id=data.get("id"),
+    )
     return data
 
 
