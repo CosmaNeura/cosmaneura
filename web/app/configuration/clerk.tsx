@@ -63,9 +63,16 @@ export async function getClient() {
     await clerk.load()
   }
 
-  // protect users from hitting the internal API if they aren't authenticated
+  // protect users from hitting the internal API if they aren't authenticated.
+  // We bypass clerk.redirectToSignIn() because clerk-js is loaded before the
+  // ClerkProvider mounts, so its signInUrl config is not applied and the call
+  // would otherwise bounce to the hosted account portal instead of the
+  // embedded /sign-in route.
   if (!clerk.user) {
-    await clerk.redirectToSignIn()
+    const redirectUrl = encodeURIComponent(
+      window.location.pathname + window.location.search,
+    )
+    window.location.replace(`/sign-in?redirect_url=${redirectUrl}`)
     return
   }
 
