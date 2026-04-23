@@ -37,12 +37,17 @@ def zoom_oauth_start(state: str) -> RedirectResponse:
 
     `state` is the doctor's clerk_id, passed from the frontend.
     """
+    # prompt=consent forces Zoom to re-render the consent screen even if the
+    # user previously authorized this app. Without it, revoking the token does
+    # not trigger a consent step on the next Connect because Zoom still sees
+    # the app as installed on the user's account.
     url = (
         f"{ZOOM_AUTHORIZE_URL}"
         f"?response_type=code"
         f"&client_id={ZOOM_CLIENT_ID}"
         f"&redirect_uri={ZOOM_REDIRECT_URI}"
         f"&state={state}"
+        f"&prompt=consent"
     )
     return RedirectResponse(url=url, status_code=status.HTTP_302_FOUND)
 
