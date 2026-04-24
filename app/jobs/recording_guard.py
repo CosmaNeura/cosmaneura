@@ -57,3 +57,11 @@ def perform(meeting_id: str) -> None:
 
 
 stop_recording_if_absent = celery_app.task(perform)
+
+
+def queue(meeting_id: str, countdown: int = 90):
+    """Schedule the grace-period stop task. Returns the Celery AsyncResult
+    so the caller can persist task_id for later revocation."""
+    return stop_recording_if_absent.apply_async(
+        args=(meeting_id,), countdown=countdown,
+    )

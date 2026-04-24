@@ -1400,7 +1400,7 @@ In `app/services/zoom_webhooks.py`, import and add:
 
 ```python
 # top of file with other imports
-from app.jobs.recording_guard import stop_recording_if_absent
+from app.jobs import recording_guard
 
 GRACE_PERIOD_SECONDS = 90
 ```
@@ -1419,9 +1419,7 @@ Then in the `role == "doctor"` branch of `handle_participant_left`, replace with
         )
 
         if recording_active:
-            task = stop_recording_if_absent.apply_async(
-                args=[meeting_id], countdown=GRACE_PERIOD_SECONDS,
-            )
+            task = recording_guard.queue(meeting_id, countdown=GRACE_PERIOD_SECONDS)
             redis.set(
                 f"recall:meeting:{meeting_id}:grace_task_id", task.id,
                 ex=timedelta(hours=24),
