@@ -258,19 +258,40 @@ def handle_participant_joined(payload: dict[str, Any]):
                 )
         return
 
-    # role == "other" — just stash for now; appointment-start logic in next tasks
+    # role == "other"
     ttl = timedelta(hours=24)
     redis.rpush(f"recall:meeting:{meeting_id}:participants_order", participant_id)
     redis.expire(f"recall:meeting:{meeting_id}:participants_order", int(ttl.total_seconds()))
     redis.hset(f"recall:meeting:{meeting_id}:participants_names", participant_id, user_name)
     redis.expire(f"recall:meeting:{meeting_id}:participants_names", int(ttl.total_seconds()))
-    redis.incr(f"recall:meeting:{meeting_id}:patient_count")
+    new_count = cast(int, redis.incr(f"recall:meeting:{meeting_id}:patient_count"))
     redis.expire(f"recall:meeting:{meeting_id}:patient_count", int(ttl.total_seconds()))
+
+    doctor_present = bool(redis.get(f"recall:meeting:{meeting_id}:doctor_present"))
+    recording_active = bool(redis.get(f"recall:meeting:{meeting_id}:recording_active"))
+
     log.info(
         "participant joined: other",
         role="other", meeting_id=meeting_id,
         participant_id=participant_id, user_name=user_name,
+        doctor_present=doctor_present, recording_active=recording_active,
+        patient_count=new_count,
     )
+
+    if not doctor_present:
+        log.info(
+            "non-doctor joined before doctor, holding",
+            meeting_id=meeting_id, user_name=user_name,
+        )
+        return
+
+    if not recording_active:
+        _start_appointment_session(meeting_id, participant_id, user_name)
+    else:
+        log.info(
+            "additional participant in active session",
+            meeting_id=meeting_id, user_name=user_name, patient_count=new_count,
+        )
 
 
 def _ensure_appointment(
