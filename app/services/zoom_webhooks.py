@@ -51,14 +51,15 @@ def handle_meeting_started(payload: dict[str, Any]):
     )
     if not doctor:
         log.info(
-            "no doctor found for zoom host_id, skipping bot creation", host_id=host_id
+            "no doctor found for zoom host_id, skipping session registration",
+            host_id=host_id,
         )
         return
 
     integration = zoom_service.get_zoom_integration(doctor)
     if not integration:
         log.info(
-            "doctor has no zoom integration, skipping bot creation",
+            "doctor has no zoom integration, skipping session registration",
             doctor_id=str(doctor.id),
         )
         return
@@ -71,23 +72,14 @@ def handle_meeting_started(payload: dict[str, Any]):
     _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
     log.info("cleared stale meeting keys", meeting_id=meeting_id)
 
-    zak_token = zoom_service.get_zak_token(doctor)
-    meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
-    bot_data = recall.create_bot(
-        meeting_url=meeting_url, zak_token=zak_token, manual_recording=True
-    )
-    bot_id = bot_data["id"]
-
-    doctor_name = zoom_service.get_user_display_name(doctor)
-
     ttl = timedelta(hours=24)
-    redis.set(f"recall:meeting:{meeting_id}:bot_id", bot_id, ex=ttl)
     redis.set(f"recall:meeting:{meeting_id}:doctor_id", str(doctor.id), ex=ttl)
     redis.set(f"recall:meeting:{meeting_id}:host_id", host_id, ex=ttl)
-    redis.set(f"recall:meeting:{meeting_id}:doctor_name", doctor_name, ex=ttl)
-    redis.set(f"recall:bot:{bot_id}:doctor_id", str(doctor.id), ex=ttl)
+
     log.info(
-        "recall bot created, doctor identified", bot_id=bot_id, doctor_name=doctor_name
+        "meeting session started, awaiting doctor",
+        meeting_id=meeting_id,
+        doctor_id=str(doctor.id),
     )
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=str(meeting_id))
@@ -282,7 +274,11 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
     (e.g. cleaning orphan state during handle_meeting_started) so duplicate
     meeting.started webhooks for the same session still get deduped.
     """
-    suffixes = ["bot_id", "doctor_id", "host_id", "doctor_name", "patient_count"]
+    suffixes = [
+        "bot_id", "doctor_id", "host_id", "doctor_present", "recording_active",
+        "participants_order", "participants_names", "patient_count",
+        "grace_task_id",
+    ]
     if not preserve_lock:
         suffixes.append("starting_lock")
     for suffix in suffixes:
