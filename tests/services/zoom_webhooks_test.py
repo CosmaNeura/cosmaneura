@@ -253,3 +253,81 @@ def test_additional_participant_during_active_session_no_new_bot(
     assert mock_recall["start_recording"] == [BOT_ID]  # one start
     assert int(clean_redis.get(_key("patient_count"))) == 2
     assert clean_redis.get(_key("recording_active")) == b"1"
+
+
+def test_last_patient_leaves_closes_appointment_and_leaves_bot(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    # Now recording is active
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload("patient-a", "Juan")
+    )
+
+    assert mock_recall["stop_recording"] == [BOT_ID]
+    assert mock_recall["leave_call"] == [BOT_ID]
+    assert clean_redis.get(_key("recording_active")) is None
+    assert clean_redis.get(_key("bot_id")) is None
+    assert clean_redis.llen(_key("participants_order")) == 0
+
+
+def test_sequential_patients_produce_two_bots(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    # Patient A cycle
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload("patient-a", "Juan")
+    )
+
+    # Patient B enters — should create a brand-new bot
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-b", "Sofia")
+    )
+
+    assert len(mock_recall["create_bot"]) == 2
+    assert mock_recall["start_recording"] == [BOT_ID, BOT_ID]
+    assert mock_recall["stop_recording"] == [BOT_ID]
+    assert mock_recall["leave_call"] == [BOT_ID]
+
+
+def test_accompanying_family_leaves_keeps_recording(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("family-b", "Maria")
+    )
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload("family-b", "Maria")
+    )
+
+    # family left but patient still there: keep recording
+    assert mock_recall["stop_recording"] == []
+    assert mock_recall["leave_call"] == []
+    assert clean_redis.get(_key("recording_active")) == b"1"

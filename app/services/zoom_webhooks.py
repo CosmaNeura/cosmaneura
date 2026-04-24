@@ -103,15 +103,6 @@ def _rhget(redis, key: str, field: str) -> str | None:
     return val.decode() if isinstance(val, bytes) else cast(str | None, val)
 
 
-def _is_doctor_or_bot(participant: dict, meeting_id: str) -> bool:
-    user_name = participant.get("user_name", "")
-    if user_name == BOT_NAME:
-        return True
-    redis = get_redis()
-    doctor_name = _rget(redis, f"recall:meeting:{meeting_id}:doctor_name")
-    return bool(doctor_name) and user_name == doctor_name
-
-
 def _role_for(participant: dict, host_id: str | None) -> str:
     if participant.get("user_name") == BOT_NAME:
         return "bot"
@@ -332,42 +323,80 @@ def _ensure_appointment(
 
 
 def handle_participant_left(payload: dict[str, Any]):
-    """Decrement the patient counter only. The bot lifecycle is driven by
-    meeting.ended, never by participant_left — third-party note-takers or a
-    patient who rejoins should not pull the bot out of the call.
+    """Decrement the patient counter. Stop recording and destroy the bot
+    when the last non-doctor leaves while the doctor is still present —
+    this closes the current appointment and lets the next non-doctor
+    arrival open a fresh appointment/recording.
+
+    Doctor leaving schedules a grace-period stop task (Task 8).
     """
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
     participant = obj.get("participant", {})
-
-    if _is_doctor_or_bot(participant, meeting_id):
-        return
+    participant_id = participant.get("id") or ""
+    user_name = participant.get("user_name") or ""
 
     redis = get_redis()
-    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
-    if not bot_id:
+    host_id = _rget(redis, f"recall:meeting:{meeting_id}:host_id")
+    role = _role_for(participant, host_id)
+
+    if role == "bot":
+        log.info(
+            "participant left: bot",
+            role="bot", meeting_id=meeting_id,
+            participant_id=participant_id, user_name=user_name,
+        )
         return
 
-    count_key = f"recall:meeting:{meeting_id}:patient_count"
-    count = cast(int, redis.decr(count_key))
+    if role == "doctor":
+        redis.delete(f"recall:meeting:{meeting_id}:doctor_present")
+        recording_active = bool(redis.get(f"recall:meeting:{meeting_id}:recording_active"))
+        log.info(
+            "participant left: doctor",
+            role="doctor", meeting_id=meeting_id,
+            participant_id=participant_id, user_name=user_name,
+            doctor_present=False, recording_active=recording_active,
+        )
+        # Grace scheduling lands in Task 8
+        return
 
-    if count < 0:
-        # Out-of-order events: participant_left arrived without a prior
-        # participant_joined. Reset to 0 so future increments stay sane.
+    # role == "other"
+    redis.lrem(f"recall:meeting:{meeting_id}:participants_order", 0, participant_id)
+    redis.hdel(f"recall:meeting:{meeting_id}:participants_names", participant_id)
+    new_count = cast(int, redis.decr(f"recall:meeting:{meeting_id}:patient_count"))
+
+    if new_count < 0:
         log.warning(
             "patient_count went negative, resetting to 0",
-            meeting_id=meeting_id,
-            count=count,
+            meeting_id=meeting_id, count=new_count,
         )
-        redis.set(count_key, 0)
+        redis.set(f"recall:meeting:{meeting_id}:patient_count", 0)
         return
 
+    doctor_present = bool(redis.get(f"recall:meeting:{meeting_id}:doctor_present"))
+    recording_active = bool(redis.get(f"recall:meeting:{meeting_id}:recording_active"))
+
     log.info(
-        "patient left, recording continues until meeting ends",
-        meeting_id=meeting_id,
-        count=count,
-        patient_name=participant.get("user_name"),
+        "participant left: other",
+        role="other", meeting_id=meeting_id,
+        participant_id=participant_id, user_name=user_name,
+        doctor_present=doctor_present, recording_active=recording_active,
+        patient_count=new_count,
     )
+
+    if new_count == 0 and doctor_present and recording_active:
+        bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+        if bot_id:
+            recall.stop_recording(bot_id)
+            recall.leave_call(bot_id)
+        redis.delete(f"recall:meeting:{meeting_id}:recording_active")
+        redis.delete(f"recall:meeting:{meeting_id}:bot_id")
+        redis.delete(f"recall:meeting:{meeting_id}:participants_order")
+        redis.delete(f"recall:meeting:{meeting_id}:participants_names")
+        log.info(
+            "appointment session closed",
+            meeting_id=meeting_id, bot_id=bot_id,
+        )
 
 
 def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> None:
