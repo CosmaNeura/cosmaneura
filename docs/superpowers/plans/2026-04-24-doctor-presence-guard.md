@@ -684,6 +684,8 @@ doctor and a non-doctor are present."
 
 ---
 
+> **Structlog note (applies to every log.info in this plan):** `event` is structlog's reserved kwarg for the message string. Do NOT pass `event="joined"` or `event="left"` as a kwarg alongside a positional message — it raises `TypeError: got multiple values for argument 'event'`. Instead, encode the action into the message: `log.info("participant joined: doctor", role="doctor", ...)`. The example code blocks in Tasks 4–11 were written before this constraint was caught; treat the `event=` kwarg in those examples as if it read e.g. `"participant joined: {role}"` as the message. See commit `72dc215` for the reference implementation.
+
 ## Task 4: Replace name-based doctor match with `participant.id` match
 
 **Files:**
