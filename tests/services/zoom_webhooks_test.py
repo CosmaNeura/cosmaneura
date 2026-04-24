@@ -415,3 +415,33 @@ def test_doctor_returns_within_grace_revokes_task(
     assert clean_redis.get(_key("recording_active")) == b"1"
     # Only one bot should have been created across the whole flow
     assert len(mock_recall["create_bot"]) == 1
+
+
+def test_grace_period_expires_stops_and_leaves(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, sync_celery,
+):
+    """With sync_celery, apply_async(countdown=...) runs immediately
+    but our task still checks doctor_present. We bypass the countdown
+    by calling `perform` directly, matching the spec's claim that the
+    task is safe regardless of when it runs."""
+    from app.jobs import recording_guard
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload(HOST_ID, "Test Doctor")
+    )
+
+    # Simulate the grace task firing after 90s with doctor still absent
+    recording_guard.perform(MEETING_ID)
+
+    assert mock_recall["stop_recording"] == [BOT_ID]
+    assert mock_recall["leave_call"] == [BOT_ID]
+    assert clean_redis.get(_key("recording_active")) is None
+    assert clean_redis.get(_key("bot_id")) is None
