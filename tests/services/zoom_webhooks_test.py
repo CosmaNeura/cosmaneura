@@ -331,3 +331,42 @@ def test_accompanying_family_leaves_keeps_recording(
     assert mock_recall["stop_recording"] == []
     assert mock_recall["leave_call"] == []
     assert clean_redis.get(_key("recording_active")) == b"1"
+
+
+def test_doctor_leaves_during_recording_schedules_grace(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+):
+    scheduled = {}
+
+    class FakeAsyncResult:
+        id = "celery-task-42"
+
+    def fake_apply_async(args, countdown):
+        scheduled["args"] = args
+        scheduled["countdown"] = countdown
+        return FakeAsyncResult()
+
+    from app.jobs import recording_guard
+    monkeypatch.setattr(
+        recording_guard.stop_recording_if_absent, "apply_async", fake_apply_async
+    )
+
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert scheduled["args"] == (MEETING_ID,)
+    assert scheduled["countdown"] == 90
+    assert clean_redis.get(_key("grace_task_id")).decode() == "celery-task-42"
+    # Recording is still active — grace hasn't expired
+    assert clean_redis.get(_key("recording_active")) == b"1"

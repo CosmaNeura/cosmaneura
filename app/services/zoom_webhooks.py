@@ -3,6 +3,7 @@ from typing import Any, cast
 
 from app import log
 from app.configuration.redis import get_redis
+from app.jobs import recording_guard
 from app.services import recall
 from app.services import zoom as zoom_service
 
@@ -14,6 +15,7 @@ from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import select
 
 BOT_NAME = "Cosma"
+GRACE_PERIOD_SECONDS = 90
 
 
 def handle_meeting_started(payload: dict[str, Any]):
@@ -357,7 +359,18 @@ def handle_participant_left(payload: dict[str, Any]):
             participant_id=participant_id, user_name=user_name,
             doctor_present=False, recording_active=recording_active,
         )
-        # Grace scheduling lands in Task 8
+
+        if recording_active:
+            task = recording_guard.queue(meeting_id, countdown=GRACE_PERIOD_SECONDS)
+            redis.set(
+                f"recall:meeting:{meeting_id}:grace_task_id", task.id,
+                ex=timedelta(hours=24),
+            )
+            log.info(
+                "doctor left, grace period armed",
+                meeting_id=meeting_id, grace_task_id=task.id,
+                countdown_s=GRACE_PERIOD_SECONDS,
+            )
         return
 
     # role == "other"
