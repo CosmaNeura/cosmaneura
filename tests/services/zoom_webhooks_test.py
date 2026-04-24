@@ -370,3 +370,48 @@ def test_doctor_leaves_during_recording_schedules_grace(
     assert clean_redis.get(_key("grace_task_id")).decode() == "celery-task-42"
     # Recording is still active — grace hasn't expired
     assert clean_redis.get(_key("recording_active")) == b"1"
+
+
+def test_doctor_returns_within_grace_revokes_task(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+):
+    revoked = []
+
+    class FakeAsyncResult:
+        id = "celery-task-99"
+
+    from app.jobs import recording_guard
+    monkeypatch.setattr(
+        recording_guard.stop_recording_if_absent, "apply_async",
+        lambda args, countdown: FakeAsyncResult(),
+    )
+
+    from app.celery import celery_app
+    monkeypatch.setattr(
+        celery_app.control, "revoke",
+        lambda task_id, terminate=False: revoked.append(task_id),
+    )
+
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload(HOST_ID, "Test Doctor")
+    )
+    # Doctor returns
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert revoked == ["celery-task-99"]
+    assert clean_redis.get(_key("grace_task_id")) is None
+    assert clean_redis.get(_key("doctor_present")) == b"1"
+    assert clean_redis.get(_key("recording_active")) == b"1"
+    # Only one bot should have been created across the whole flow
+    assert len(mock_recall["create_bot"]) == 1

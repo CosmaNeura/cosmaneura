@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import Any, cast
 
 from app import log
+from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.jobs import recording_guard
 from app.services import recall
@@ -229,6 +230,17 @@ def handle_participant_joined(payload: dict[str, Any]):
     if role == "doctor":
         ttl = timedelta(hours=24)
         redis.set(f"recall:meeting:{meeting_id}:doctor_present", "1", ex=ttl)
+
+        # Revoke any pending grace task — doctor returned in time
+        grace_task_id = _rget(redis, f"recall:meeting:{meeting_id}:grace_task_id")
+        if grace_task_id:
+            celery_app.control.revoke(grace_task_id)
+            redis.delete(f"recall:meeting:{meeting_id}:grace_task_id")
+            log.info(
+                "doctor returned within grace, task revoked",
+                meeting_id=meeting_id, grace_task_id=grace_task_id,
+            )
+
         log.info(
             "participant joined: doctor",
             role="doctor", meeting_id=meeting_id,
