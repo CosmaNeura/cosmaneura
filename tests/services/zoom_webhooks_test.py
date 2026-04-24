@@ -418,13 +418,21 @@ def test_doctor_returns_within_grace_revokes_task(
 
 
 def test_grace_period_expires_stops_and_leaves(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, sync_celery,
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
 ):
-    """With sync_celery, apply_async(countdown=...) runs immediately
-    but our task still checks doctor_present. We bypass the countdown
-    by calling `perform` directly, matching the spec's claim that the
-    task is safe regardless of when it runs."""
+    """Stub apply_async so handle_participant_left only SCHEDULES
+    the grace task. Then call recording_guard.perform directly — this
+    is the sole driver of the assertions below, matching the 90s-later
+    production scenario."""
+    class FakeAsyncResult:
+        id = "celery-task-grace"
+
     from app.jobs import recording_guard
+    monkeypatch.setattr(
+        recording_guard.stop_recording_if_absent, "apply_async",
+        lambda args, countdown: FakeAsyncResult(),
+    )
+
     from app.services import zoom_webhooks
 
     zoom_webhooks.handle_meeting_started(_started_payload())
@@ -438,6 +446,11 @@ def test_grace_period_expires_stops_and_leaves(
         _participant_left_payload(HOST_ID, "Test Doctor")
     )
 
+    # Sanity: the webhook only scheduled — nothing has been stopped yet.
+    assert mock_recall["stop_recording"] == []
+    assert mock_recall["leave_call"] == []
+    assert clean_redis.get(_key("recording_active")) == b"1"
+
     # Simulate the grace task firing after 90s with doctor still absent
     recording_guard.perform(MEETING_ID)
 
@@ -445,3 +458,4 @@ def test_grace_period_expires_stops_and_leaves(
     assert mock_recall["leave_call"] == [BOT_ID]
     assert clean_redis.get(_key("recording_active")) is None
     assert clean_redis.get(_key("bot_id")) is None
+    assert clean_redis.get(_key("grace_task_id")) is None
