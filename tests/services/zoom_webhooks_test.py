@@ -172,3 +172,41 @@ def test_doctor_identified_marks_present(
     assert clean_redis.get(_key("doctor_present")) == b"1"
     # no non-doctors, so no bot created
     assert mock_recall["create_bot"] == []
+
+
+def test_patient_joins_first_then_doctor_starts_session(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-1", "Flor Guerrero")
+    )
+    # No bot yet (doctor absent)
+    assert mock_recall["create_bot"] == []
+
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert len(mock_recall["create_bot"]) == 1
+    assert mock_recall["create_bot"][0]["metadata"]["meeting_id"] == MEETING_ID
+    assert mock_recall["start_recording"] == [BOT_ID]
+    assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
+    assert clean_redis.get(_key("recording_active")) == b"1"
+
+
+def test_doctor_joins_first_no_patients_no_bot(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert mock_recall["create_bot"] == []
+    assert clean_redis.get(_key("doctor_present")) == b"1"
+    assert clean_redis.get(_key("bot_id")) is None

@@ -110,6 +110,100 @@ def _role_for(participant: dict, host_id: str | None) -> str:
     return "other"
 
 
+def _start_appointment_session(meeting_id: str, participant_id: str, user_name: str):
+    """Idempotent via recording_active. Creates bot, waits for ready,
+    starts recording, resolves or creates the appointment/patient."""
+    redis = get_redis()
+    if redis.get(f"recall:meeting:{meeting_id}:recording_active"):
+        return
+
+    doctor_id = _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+    if not doctor_id:
+        log.warning(
+            "cannot start appointment: no doctor_id in redis",
+            meeting_id=meeting_id,
+        )
+        return
+
+    doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
+    if not doctor:
+        log.warning(
+            "cannot start appointment: doctor not found",
+            doctor_id=doctor_id, meeting_id=meeting_id,
+        )
+        return
+
+    zak_token = zoom_service.get_zak_token(doctor)
+    meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
+    bot_data = recall.create_bot(
+        meeting_url=meeting_url,
+        zak_token=zak_token,
+        manual_recording=True,
+        metadata={"doctor_id": doctor_id, "meeting_id": str(meeting_id)},
+    )
+    bot_id = bot_data["id"]
+    ttl = timedelta(hours=24)
+    redis.set(f"recall:meeting:{meeting_id}:bot_id", bot_id, ex=ttl)
+    redis.set(f"recall:bot:{bot_id}:doctor_id", doctor_id, ex=ttl)
+
+    recording_data = recall.start_recording(bot_id)
+    recording_id = recording_data.get("id")
+    if not recording_id:
+        log.warning(
+            "bot never reached ready state, aborting appointment",
+            bot_id=bot_id, meeting_id=meeting_id,
+        )
+        recall.leave_call(bot_id)
+        redis.delete(f"recall:meeting:{meeting_id}:bot_id")
+        return
+
+    redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
+
+    now = datetime.utcnow()
+    appointment = cast(
+        Appointment | None,
+        Appointment.where(
+            (Appointment.doctor_id == doctor_id)
+            & (Appointment.appointment_date >= now - timedelta(hours=4))
+            & (Appointment.appointment_date <= now + timedelta(hours=1))
+        )
+        .order_by(cast(Any, Appointment.appointment_date).desc())
+        .first(),
+    )
+    if not appointment:
+        appointment = _ensure_appointment(
+            doctor_id=doctor_id,
+            patient_name=user_name or "Unknown",
+            now=now,
+        )
+
+    redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id, ex=ttl)
+    redis.set(
+        f"recall:recording:{recording_id}:appointment_id",
+        str(appointment.id), ex=ttl,
+    )
+    redis.set(
+        f"recall:recording:{recording_id}:patient_id",
+        str(appointment.patient_id), ex=ttl,
+    )
+    redis.set(f"recall:bot:{bot_id}:appointment_id", str(appointment.id), ex=ttl)
+    redis.set(f"recall:bot:{bot_id}:patient_id", str(appointment.patient_id), ex=ttl)
+
+    log.info(
+        "appointment session started",
+        meeting_id=meeting_id, bot_id=bot_id,
+        appointment_id=str(appointment.id),
+        patient_name=user_name,
+    )
+
+    if doctor_id:
+        zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
+        if zoom_mtg:
+            zoom_mtg.appointment_id = appointment.id
+            zoom_mtg.status = ZoomMeetingStatus.started
+            zoom_mtg.save()
+
+
 def handle_participant_joined(payload: dict[str, Any]):
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
@@ -138,7 +232,31 @@ def handle_participant_joined(payload: dict[str, Any]):
             participant_id=participant_id, user_name=user_name,
             doctor_present=True,
         )
-        # Additional doctor-specific logic (grace revocation, session start) in next tasks
+
+        # If non-doctors are already waiting, start the session now
+        waiting = cast(int, redis.llen(f"recall:meeting:{meeting_id}:participants_order"))
+        recording_active = redis.get(f"recall:meeting:{meeting_id}:recording_active")
+        if waiting and not recording_active:
+            first_id_raw = redis.lindex(
+                f"recall:meeting:{meeting_id}:participants_order", 0
+            )
+            first_id = (
+                first_id_raw.decode()
+                if isinstance(first_id_raw, bytes)
+                else cast(str | None, first_id_raw)
+            )
+            if first_id:
+                first_name_raw = redis.hget(
+                    f"recall:meeting:{meeting_id}:participants_names", first_id,
+                )
+                first_name = (
+                    first_name_raw.decode()
+                    if isinstance(first_name_raw, bytes)
+                    else cast(str | None, first_name_raw)
+                )
+                _start_appointment_session(
+                    meeting_id, first_id, first_name or "Unknown",
+                )
         return
 
     # role == "other" — just stash for now; appointment-start logic in next tasks
