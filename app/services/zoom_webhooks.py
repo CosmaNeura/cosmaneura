@@ -387,8 +387,24 @@ def handle_participant_left(payload: dict[str, Any]):
     if new_count == 0 and doctor_present and recording_active:
         bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
         if bot_id:
-            recall.stop_recording(bot_id)
-            recall.leave_call(bot_id)
+            # Clear Redis unconditionally after the Recall calls — even on
+            # transient 5xx, meeting.ended will eventually clean up the bot.
+            # Leaving recording_active set here would make the next patient
+            # silently no-op and run on a stale bot.
+            try:
+                recall.stop_recording(bot_id)
+            except Exception:
+                log.exception(
+                    "stop_recording failed during session close",
+                    bot_id=bot_id, meeting_id=meeting_id,
+                )
+            try:
+                recall.leave_call(bot_id)
+            except Exception:
+                log.exception(
+                    "leave_call failed during session close",
+                    bot_id=bot_id, meeting_id=meeting_id,
+                )
         redis.delete(f"recall:meeting:{meeting_id}:recording_active")
         redis.delete(f"recall:meeting:{meeting_id}:bot_id")
         redis.delete(f"recall:meeting:{meeting_id}:participants_order")
