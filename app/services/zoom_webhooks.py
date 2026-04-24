@@ -93,6 +93,16 @@ def _rget(redis, key: str) -> str | None:
     return val.decode() if isinstance(val, bytes) else val
 
 
+def _rlindex(redis, key: str, idx: int) -> str | None:
+    val = redis.lindex(key, idx)
+    return val.decode() if isinstance(val, bytes) else cast(str | None, val)
+
+
+def _rhget(redis, key: str, field: str) -> str | None:
+    val = redis.hget(key, field)
+    return val.decode() if isinstance(val, bytes) else cast(str | None, val)
+
+
 def _is_doctor_or_bot(participant: dict, meeting_id: str) -> bool:
     user_name = participant.get("user_name", "")
     if user_name == BOT_NAME:
@@ -155,6 +165,7 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         )
         recall.leave_call(bot_id)
         redis.delete(f"recall:meeting:{meeting_id}:bot_id")
+        redis.delete(f"recall:bot:{bot_id}:doctor_id")
         return
 
     redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
@@ -196,12 +207,11 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         patient_name=user_name,
     )
 
-    if doctor_id:
-        zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
-        if zoom_mtg:
-            zoom_mtg.appointment_id = appointment.id
-            zoom_mtg.status = ZoomMeetingStatus.started
-            zoom_mtg.save()
+    zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
+    if zoom_mtg:
+        zoom_mtg.appointment_id = appointment.id
+        zoom_mtg.status = ZoomMeetingStatus.started
+        zoom_mtg.save()
 
 
 def handle_participant_joined(payload: dict[str, Any]):
@@ -234,25 +244,14 @@ def handle_participant_joined(payload: dict[str, Any]):
         )
 
         # If non-doctors are already waiting, start the session now
-        waiting = cast(int, redis.llen(f"recall:meeting:{meeting_id}:participants_order"))
         recording_active = redis.get(f"recall:meeting:{meeting_id}:recording_active")
-        if waiting and not recording_active:
-            first_id_raw = redis.lindex(
-                f"recall:meeting:{meeting_id}:participants_order", 0
-            )
-            first_id = (
-                first_id_raw.decode()
-                if isinstance(first_id_raw, bytes)
-                else cast(str | None, first_id_raw)
+        if not recording_active:
+            first_id = _rlindex(
+                redis, f"recall:meeting:{meeting_id}:participants_order", 0,
             )
             if first_id:
-                first_name_raw = redis.hget(
-                    f"recall:meeting:{meeting_id}:participants_names", first_id,
-                )
-                first_name = (
-                    first_name_raw.decode()
-                    if isinstance(first_name_raw, bytes)
-                    else cast(str | None, first_name_raw)
+                first_name = _rhget(
+                    redis, f"recall:meeting:{meeting_id}:participants_names", first_id,
                 )
                 _start_appointment_session(
                     meeting_id, first_id, first_name or "Unknown",
