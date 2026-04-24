@@ -16,6 +16,7 @@ def create_bot(
     zak_token: str,
     bot_name: str = "Cosma",
     manual_recording: bool = False,
+    metadata: dict | None = None,
 ) -> dict:
     payload = {
         "meeting_url": meeting_url,
@@ -26,6 +27,8 @@ def create_bot(
     }
     if manual_recording:
         payload["recording_config"] = None
+    if metadata is not None:
+        payload["metadata"] = metadata
 
     with httpx.Client() as client:
         response = client.post(
@@ -233,3 +236,30 @@ def download_transcript_data(download_url: str) -> list[dict]:
         response = client.get(download_url)
         response.raise_for_status()
     return response.json()
+
+
+def leave_call(bot_id: str) -> None:
+    """Tell the bot to leave the meeting. Triggers the Recall `done`
+    terminal status and stops billing for this bot. Safe to call on a
+    bot that already left."""
+    with httpx.Client() as client:
+        response = client.post(
+            f"{RECALL_API_BASE}/bot/{bot_id}/leave_call/",
+            headers={"Authorization": f"Token {RECALL_API_KEY}"},
+        )
+    if response.status_code == httpx.codes.BAD_REQUEST:
+        log.info(
+            "recall leave_call skipped, bot already done",
+            bot_id=bot_id,
+            body=response.text,
+        )
+        return
+    if not response.is_success:
+        log.error(
+            "recall leave_call error",
+            bot_id=bot_id,
+            status=response.status_code,
+            body=response.text,
+        )
+    response.raise_for_status()
+    log.info("recall bot instructed to leave call", bot_id=bot_id)
