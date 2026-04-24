@@ -230,6 +230,7 @@ def test_doctor_present_then_patient_joins_starts_session(
     assert len(mock_recall["create_bot"]) == 1
     assert mock_recall["start_recording"] == [BOT_ID]
     assert clean_redis.get(_key("recording_active")) == b"1"
+    assert int(clean_redis.get(_key("patient_count"))) == 1
 
 
 def test_additional_participant_during_active_session_no_new_bot(
@@ -251,3 +252,4 @@ def test_additional_participant_during_active_session_no_new_bot(
     assert len(mock_recall["create_bot"]) == 1  # still just one bot
     assert mock_recall["start_recording"] == [BOT_ID]  # one start
     assert int(clean_redis.get(_key("patient_count"))) == 2
+    assert clean_redis.get(_key("recording_active")) == b"1"
