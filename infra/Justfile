@@ -110,6 +110,11 @@ azure_containers:
 azure_logs container=AZURE_CONTAINER:
 	az containerapp logs show --follow -n {{container}} -g {{AZURE_RESOURCE_GROUP}}
 
+# Audit the timeline of events for a single Zoom meeting id.
+# usage: just azure_logs_for_meeting 83027877199
+azure_logs_for_meeting meeting_id:
+	az monitor log-analytics query -w '2a7d954b-373c-4de6-884f-c050ecc1d863' --analytics-query "union * | where TimeGenerated > ago(24h) | where ContainerAppName_s in ('cosmaneura-prod-app', 'cosmaneura-prod-worker') | where Log_meeting_id_s == '{{meeting_id}}' | project TimeGenerated, Log_event_s, Log_role_s, Log_user_name_s, Log_doctor_present_b, Log_recording_active_b, Log_patient_count_d, Log_bot_id_g, Log_appointment_id_s | order by TimeGenerated asc" -o table
+
 # TODO needs to actually be customized per user
 # https://portal.azure.com/#@johncosmaneura.onmicrosoft.com/resource/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-prod/providers/Microsoft.OperationalInsights/workspaces/cosmaneura-prod-logs/logs
 azure_logs_for_user:
