@@ -3,15 +3,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.configuration.redis import get_redis
-from app.models.doctor import Doctor
+
 from app.models.doctor_video_integration import (
     DoctorVideoIntegration,
     VideoProvider,
 )
-from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
 from tests.factories import DoctorFactory
-
 
 MEETING_ID = "99911112222"
 HOST_ID = "zoom-host-abc"
