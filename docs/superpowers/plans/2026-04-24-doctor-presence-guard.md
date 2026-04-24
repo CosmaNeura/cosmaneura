@@ -21,8 +21,8 @@
 
 **Create:**
 - `app/jobs/recording_guard.py` — new Celery task `stop_recording_if_absent`
-- `tests/services/test_zoom_webhooks.py` — scenario tests for the new behavior
-- `tests/services/test_recall.py` — unit tests for the new `leave_call` + `create_bot` metadata
+- `tests/services/zoom_webhooks_test.py` — scenario tests for the new behavior
+- `tests/services/recall_test.py` — unit tests for the new `leave_call` + `create_bot` metadata
 
 **Unchanged but relevant for reference:**
 - `app/services/recall_webhooks.py` — `recall:recording:{recording_id}:*` keys and `recall:bot:{bot_id}:*` fallback continue to work; no change needed
@@ -35,11 +35,11 @@
 
 **Files:**
 - Modify: `app/services/recall.py`
-- Test: `tests/services/test_recall.py` (create)
+- Test: `tests/services/recall_test.py` (create)
 
 - [ ] **Step 1: Write failing test for `leave_call` happy path**
 
-Create `tests/services/test_recall.py`:
+Create `tests/services/recall_test.py`:
 
 ```python
 import httpx
@@ -98,7 +98,7 @@ def test_leave_call_tolerates_already_done_bot(monkeypatch):
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-just py_test tests/services/test_recall.py
+uv run pytest tests/services/recall_test.py -v
 ```
 
 Expected: FAIL with `AttributeError: module 'app.services.recall' has no attribute 'leave_call'`.
@@ -137,7 +137,7 @@ def leave_call(bot_id: str) -> None:
 
 - [ ] **Step 4: Write failing test for `metadata` param on `create_bot`**
 
-Add to `tests/services/test_recall.py`:
+Add to `tests/services/recall_test.py`:
 
 ```python
 def test_create_bot_forwards_metadata(monkeypatch):
@@ -175,7 +175,7 @@ def test_create_bot_forwards_metadata(monkeypatch):
 - [ ] **Step 5: Run test to verify it fails**
 
 ```bash
-just py_test tests/services/test_recall.py::test_create_bot_forwards_metadata
+uv run pytest tests/services/recall_test.py -v::test_create_bot_forwards_metadata
 ```
 
 Expected: FAIL with `TypeError: create_bot() got an unexpected keyword argument 'metadata'`.
@@ -209,7 +209,7 @@ def create_bot(
 - [ ] **Step 7: Run all tests to verify both pass**
 
 ```bash
-just py_test tests/services/test_recall.py
+uv run pytest tests/services/recall_test.py -v
 ```
 
 Expected: 3 passed.
@@ -217,7 +217,7 @@ Expected: 3 passed.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add app/services/recall.py tests/services/test_recall.py
+git add app/services/recall.py tests/services/recall_test.py
 git commit -m "feat(recall): add leave_call helper and metadata param for create_bot
 
 Needed for the per-patient bot lifecycle so we can tag bots with
@@ -231,11 +231,11 @@ ends within an ongoing PMR session."
 
 **Files:**
 - Create: `app/jobs/recording_guard.py`
-- Test: `tests/services/test_recording_guard.py` (create)
+- Test: `tests/services/recording_guard_test.py` (create)
 
 - [ ] **Step 1: Write failing test — task aborts when doctor present**
 
-Create `tests/services/test_recording_guard.py`:
+Create `tests/services/recording_guard_test.py`:
 
 ```python
 import pytest
@@ -330,7 +330,7 @@ def test_grace_task_noop_when_no_bot(monkeypatch, clean_redis):
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-just py_test tests/services/test_recording_guard.py
+uv run pytest tests/services/recording_guard_test.py -v
 ```
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'app.jobs.recording_guard'`.
@@ -402,7 +402,7 @@ stop_recording_if_absent = celery_app.task(perform)
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_recording_guard.py
+uv run pytest tests/services/recording_guard_test.py -v
 ```
 
 Expected: 3 passed.
@@ -410,7 +410,7 @@ Expected: 3 passed.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/jobs/recording_guard.py tests/services/test_recording_guard.py
+git add app/jobs/recording_guard.py tests/services/recording_guard_test.py
 git commit -m "feat(recall): add stop_recording_if_absent celery task
 
 Powers the 90s doctor-absence grace period. The task verifies
@@ -423,11 +423,11 @@ not a correctness bug."
 ## Task 3: Scaffold test file for zoom_webhooks and add meeting.started test
 
 **Files:**
-- Create: `tests/services/test_zoom_webhooks.py`
+- Create: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write scaffolding + first test — meeting.started no longer creates bot**
 
-Create `tests/services/test_zoom_webhooks.py`:
+Create `tests/services/zoom_webhooks_test.py`:
 
 ```python
 from datetime import datetime, timedelta, timezone
@@ -577,7 +577,7 @@ def test_meeting_started_does_not_create_bot(
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_meeting_started_does_not_create_bot
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_meeting_started_does_not_create_bot
 ```
 
 Expected: FAIL — current handler calls `recall.create_bot` and stores `bot_id`.
@@ -666,7 +666,7 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_meeting_started_does_not_create_bot
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_meeting_started_does_not_create_bot
 ```
 
 Expected: PASS.
@@ -674,7 +674,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "refactor(zoom): defer bot creation out of meeting.started
 
 meeting.started now only registers meeting context in Redis.
@@ -688,11 +688,11 @@ doctor and a non-doctor are present."
 
 **Files:**
 - Modify: `app/services/zoom_webhooks.py`
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write failing test — participant matching by id**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_doctor_identified_by_participant_id_not_name(
@@ -732,7 +732,7 @@ def test_doctor_identified_marks_present(
 - [ ] **Step 2: Run tests to verify they fail**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_doctor_identified_by_participant_id_not_name tests/services/test_zoom_webhooks.py::test_doctor_identified_marks_present
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_doctor_identified_by_participant_id_not_name tests/services/zoom_webhooks_test.py::test_doctor_identified_marks_present
 ```
 
 Expected: FAIL — handler still uses name-based match.
@@ -799,7 +799,7 @@ def handle_participant_joined(payload: dict[str, Any]):
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py
+uv run pytest tests/services/zoom_webhooks_test.py -v
 ```
 
 Expected: all three tests in this file pass.
@@ -807,7 +807,7 @@ Expected: all three tests in this file pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "refactor(zoom): identify doctor by participant.id, not display name
 
 Prevents a guest who sets user_name to the doctor's display name
@@ -821,11 +821,11 @@ id (DoctorVideoIntegration.provider_user_id) is the source of truth."
 
 **Files:**
 - Modify: `app/services/zoom_webhooks.py`
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write failing test — doctor joins with patient already waiting, bot is created**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_patient_joins_first_then_doctor_starts_session(
@@ -869,7 +869,7 @@ def test_doctor_joins_first_no_patients_no_bot(
 - [ ] **Step 2: Run tests to verify failure**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_patient_joins_first_then_doctor_starts_session
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_patient_joins_first_then_doctor_starts_session
 ```
 
 Expected: FAIL — `create_bot` not called yet when doctor joins.
@@ -1003,7 +1003,7 @@ Then in the doctor branch of `handle_participant_joined` (added in Task 4), befo
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py
+uv run pytest tests/services/zoom_webhooks_test.py -v
 ```
 
 Expected: all tests in file pass.
@@ -1011,7 +1011,7 @@ Expected: all tests in file pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "feat(zoom): start appointment session when doctor + non-doctor coexist
 
 When the doctor joins and at least one non-doctor is already waiting,
@@ -1025,11 +1025,11 @@ create/link the appointment. No-op when either side is missing."
 
 **Files:**
 - Modify: `app/services/zoom_webhooks.py`
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write failing test — doctor present, patient joins → bot created**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_doctor_present_then_patient_joins_starts_session(
@@ -1076,7 +1076,7 @@ def test_additional_participant_during_active_session_no_new_bot(
 - [ ] **Step 2: Run tests to verify failure**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_doctor_present_then_patient_joins_starts_session
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_doctor_present_then_patient_joins_starts_session
 ```
 
 Expected: FAIL — the "other" branch in `handle_participant_joined` still doesn't trigger session start.
@@ -1125,7 +1125,7 @@ In `app/services/zoom_webhooks.py`, modify the `role == "other"` branch to:
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py
+uv run pytest tests/services/zoom_webhooks_test.py -v
 ```
 
 Expected: all tests pass.
@@ -1133,7 +1133,7 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "feat(zoom): start appointment when non-doctor joins with doctor present
 
 Non-doctors that join an active session just increment the counter
@@ -1147,11 +1147,11 @@ session trigger a new appointment + bot + recording."
 
 **Files:**
 - Modify: `app/services/zoom_webhooks.py`
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write failing test — last patient leaves, appointment closes, bot leaves**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_last_patient_leaves_closes_appointment_and_leaves_bot(
@@ -1236,7 +1236,7 @@ def test_accompanying_family_leaves_keeps_recording(
 - [ ] **Step 2: Run tests to verify failure**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_last_patient_leaves_closes_appointment_and_leaves_bot
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_last_patient_leaves_closes_appointment_and_leaves_bot
 ```
 
 Expected: FAIL — `handle_participant_left` still uses the old logic.
@@ -1319,7 +1319,7 @@ def handle_participant_left(payload: dict[str, Any]):
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py
+uv run pytest tests/services/zoom_webhooks_test.py -v
 ```
 
 Expected: the three new tests pass; all previous tests still pass.
@@ -1327,7 +1327,7 @@ Expected: the three new tests pass; all previous tests still pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "feat(zoom): close appointment session when patient_count drops to 0
 
 In a PMR left open all day, each patient leaving the call ends
@@ -1341,11 +1341,11 @@ to arrive triggers a fresh bot/recording/appointment."
 
 **Files:**
 - Modify: `app/services/zoom_webhooks.py`
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write failing test — doctor leaves, grace task scheduled**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_doctor_leaves_during_recording_schedules_grace(
@@ -1389,7 +1389,7 @@ def test_doctor_leaves_during_recording_schedules_grace(
 - [ ] **Step 2: Run test to verify failure**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_doctor_leaves_during_recording_schedules_grace
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_doctor_leaves_during_recording_schedules_grace
 ```
 
 Expected: FAIL — doctor-leaves branch doesn't schedule anything.
@@ -1437,7 +1437,7 @@ Then in the `role == "doctor"` branch of `handle_participant_left`, replace with
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py
+uv run pytest tests/services/zoom_webhooks_test.py -v
 ```
 
 Expected: all pass.
@@ -1445,7 +1445,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "feat(zoom): schedule grace-period stop task when doctor leaves recording
 
 If the doctor leaves during an active recording, we wait 90s before
@@ -1458,11 +1458,11 @@ stopping the bot. This tolerates brief network disconnects."
 
 **Files:**
 - Modify: `app/services/zoom_webhooks.py`
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write failing test — doctor returns, task revoked, recording continues**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_doctor_returns_within_grace_revokes_task(
@@ -1513,7 +1513,7 @@ def test_doctor_returns_within_grace_revokes_task(
 - [ ] **Step 2: Run test to verify failure**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_doctor_returns_within_grace_revokes_task
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_doctor_returns_within_grace_revokes_task
 ```
 
 Expected: FAIL — doctor-joins branch does not revoke the task.
@@ -1566,7 +1566,7 @@ from app.celery import celery_app
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py
+uv run pytest tests/services/zoom_webhooks_test.py -v
 ```
 
 Expected: all pass.
@@ -1574,7 +1574,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "feat(zoom): revoke grace task when doctor returns within window
 
 When the doctor rejoins before the 90s timeout fires, cancel the
@@ -1586,13 +1586,13 @@ pending stop_recording task so the recording stays uninterrupted."
 ## Task 10: Grace expiration — task stops and destroys bot
 
 **Files:**
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 (Implementation is already done by Task 2; this task verifies the end-to-end flow using `sync_celery`.)
 
 - [ ] **Step 1: Write failing test — grace expires, stop_recording + leave_call fire**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_grace_period_expires_stops_and_leaves(
@@ -1628,7 +1628,7 @@ def test_grace_period_expires_stops_and_leaves(
 - [ ] **Step 2: Run test to verify it passes**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_grace_period_expires_stops_and_leaves
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_grace_period_expires_stops_and_leaves
 ```
 
 Expected: PASS (the logic is already wired through Tasks 2, 7, 8).
@@ -1636,7 +1636,7 @@ Expected: PASS (the logic is already wired through Tasks 2, 7, 8).
 - [ ] **Step 3: Commit**
 
 ```bash
-git add tests/services/test_zoom_webhooks.py
+git add tests/services/zoom_webhooks_test.py
 git commit -m "test(zoom): verify grace expiration path stops and leaves bot"
 ```
 
@@ -1646,11 +1646,11 @@ git commit -m "test(zoom): verify grace expiration path stops and leaves bot"
 
 **Files:**
 - Modify: `app/services/zoom_webhooks.py`
-- Test: `tests/services/test_zoom_webhooks.py`
+- Test: `tests/services/zoom_webhooks_test.py`
 
 - [ ] **Step 1: Write failing tests — meeting.ended scenarios**
 
-Add to `tests/services/test_zoom_webhooks.py`:
+Add to `tests/services/zoom_webhooks_test.py`:
 
 ```python
 def test_meeting_ended_with_no_bot_logs_no_recording(
@@ -1734,7 +1734,7 @@ def test_meeting_ended_revokes_pending_grace_task(
 - [ ] **Step 2: Run tests to verify failure**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py::test_meeting_ended_with_no_bot_logs_no_recording tests/services/test_zoom_webhooks.py::test_meeting_ended_revokes_pending_grace_task
+uv run pytest tests/services/zoom_webhooks_test.py -v::test_meeting_ended_with_no_bot_logs_no_recording tests/services/zoom_webhooks_test.py::test_meeting_ended_revokes_pending_grace_task
 ```
 
 Expected: FAIL — meeting-ended handler doesn't revoke grace task or call `leave_call`.
@@ -1788,7 +1788,7 @@ def handle_meeting_ended(payload: dict[str, Any]):
 - [ ] **Step 4: Run tests**
 
 ```bash
-just py_test tests/services/test_zoom_webhooks.py
+uv run pytest tests/services/zoom_webhooks_test.py -v
 ```
 
 Expected: all pass.
@@ -1796,7 +1796,7 @@ Expected: all pass.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add app/services/zoom_webhooks.py tests/services/test_zoom_webhooks.py
+git add app/services/zoom_webhooks.py tests/services/zoom_webhooks_test.py
 git commit -m "feat(zoom): meeting.ended revokes grace + calls leave_call
 
 Ends the meeting cleanly: revoke any pending doctor-absence task,
