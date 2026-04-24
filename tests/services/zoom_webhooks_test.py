@@ -459,3 +459,81 @@ def test_grace_period_expires_stops_and_leaves(
     assert clean_redis.get(_key("recording_active")) is None
     assert clean_redis.get(_key("bot_id")) is None
     assert clean_redis.get(_key("grace_task_id")) is None
+
+
+def test_meeting_ended_with_no_bot_logs_no_recording(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    # Doctor never joins
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
+
+    assert mock_recall["create_bot"] == []
+    assert mock_recall["stop_recording"] == []
+    assert mock_recall["leave_call"] == []
+    # All keys cleared
+    for suffix in ["doctor_id", "host_id", "participants_order", "participants_names"]:
+        assert clean_redis.get(_key(suffix)) is None
+
+
+def test_meeting_ended_with_active_recording_stops_and_leaves(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
+
+    assert mock_recall["stop_recording"] == [BOT_ID]
+    assert mock_recall["leave_call"] == [BOT_ID]
+    # All keys cleared
+    assert clean_redis.get(_key("bot_id")) is None
+    assert clean_redis.get(_key("recording_active")) is None
+
+
+def test_meeting_ended_revokes_pending_grace_task(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+):
+    revoked = []
+
+    class FakeAsyncResult:
+        id = "celery-task-77"
+
+    from app.jobs import recording_guard
+    monkeypatch.setattr(
+        recording_guard.stop_recording_if_absent, "apply_async",
+        lambda args, countdown: FakeAsyncResult(),
+    )
+
+    from app.celery import celery_app
+    monkeypatch.setattr(
+        celery_app.control, "revoke",
+        lambda task_id, terminate=False: revoked.append(task_id),
+    )
+
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
+
+    assert "celery-task-77" in revoked

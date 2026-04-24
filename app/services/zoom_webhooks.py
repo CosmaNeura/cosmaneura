@@ -461,31 +461,46 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
 
 
 def handle_meeting_ended(payload: dict[str, Any]):
-    """meeting.ended is the canonical wind-down signal for the bot.
-    Stop the recording whenever a bot exists for this meeting, regardless of
-    the patient counter — participant_left no longer stops recording, so the
-    counter is no longer authoritative.
-    """
+    """meeting.ended is the canonical wind-down. Revoke any pending grace
+    task, stop+leave the bot if one exists, and clear all per-meeting
+    state. When no bot exists, the meeting ended without ever recording —
+    the expected outcome when the doctor never joined."""
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
 
     redis = get_redis()
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+    grace_task_id = _rget(redis, f"recall:meeting:{meeting_id}:grace_task_id")
 
-    _clear_meeting_keys(redis, meeting_id)
+    if grace_task_id:
+        celery_app.control.revoke(grace_task_id)
 
     if bot_id:
         log.info(
-            "meeting ended, stopping recording",
-            meeting_id=meeting_id,
-            bot_id=bot_id,
+            "meeting ended with active recording",
+            meeting_id=meeting_id, bot_id=bot_id,
         )
-        recall.stop_recording(bot_id)
+        try:
+            recall.stop_recording(bot_id)
+        except Exception:
+            log.exception(
+                "stop_recording failed during meeting.ended",
+                bot_id=bot_id, meeting_id=meeting_id,
+            )
+        try:
+            recall.leave_call(bot_id)
+        except Exception:
+            log.exception(
+                "leave_call failed during meeting.ended",
+                bot_id=bot_id, meeting_id=meeting_id,
+            )
     else:
         log.info(
-            "meeting ended, no bot tracked for this meeting",
+            "meeting ended without recording",
             meeting_id=meeting_id,
         )
+
+    _clear_meeting_keys(redis, meeting_id)
 
     zoom_mtg = cast(
         ZoomMeeting | None,
@@ -497,7 +512,8 @@ def handle_meeting_ended(payload: dict[str, Any]):
         zoom_mtg.status = ZoomMeetingStatus.ended
         zoom_mtg.save()
         log.info(
-            "zoom meeting status updated to ended", zoom_meeting_id=str(meeting_id)
+            "zoom meeting status updated to ended",
+            zoom_meeting_id=str(meeting_id),
         )
 
 
