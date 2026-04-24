@@ -138,3 +138,37 @@ def test_meeting_started_does_not_create_bot(
     assert clean_redis.get(_key("bot_id")) is None
     assert clean_redis.get(_key("doctor_id")) is not None
     assert clean_redis.get(_key("host_id")).decode() == HOST_ID
+
+
+def test_doctor_identified_by_participant_id_not_name(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    """A guest whose user_name matches the doctor's display name but
+    whose participant.id is different must NOT be treated as doctor."""
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    # Impersonator: same display name, different id
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("guest-spoof-id", "Test Doctor")
+    )
+
+    assert clean_redis.get(_key("doctor_present")) is None
+    # They got added to the waiting-room hash, no bot yet
+    assert clean_redis.get(_key("host_id")).decode() == HOST_ID
+
+
+def test_doctor_identified_marks_present(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert clean_redis.get(_key("doctor_present")) == b"1"
+    # no non-doctors, so no bot created
+    assert mock_recall["create_bot"] == []

@@ -102,91 +102,58 @@ def _is_doctor_or_bot(participant: dict, meeting_id: str) -> bool:
     return bool(doctor_name) and user_name == doctor_name
 
 
+def _role_for(participant: dict, host_id: str | None) -> str:
+    if participant.get("user_name") == BOT_NAME:
+        return "bot"
+    if host_id and participant.get("id") == host_id:
+        return "doctor"
+    return "other"
+
+
 def handle_participant_joined(payload: dict[str, Any]):
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
     participant = obj.get("participant", {})
-
-    if _is_doctor_or_bot(participant, meeting_id):
-        return
+    participant_id = participant.get("id") or ""
+    user_name = participant.get("user_name") or ""
 
     redis = get_redis()
-    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
-    doctor_id = _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+    host_id = _rget(redis, f"recall:meeting:{meeting_id}:host_id")
+    role = _role_for(participant, host_id)
 
-    if not bot_id:
-        log.warning(
-            "no bot found for meeting, cannot start recording", meeting_id=meeting_id
-        )
-        return
-
-    count_key = f"recall:meeting:{meeting_id}:patient_count"
-    count = cast(int, redis.incr(count_key))
-    redis.expire(count_key, int(timedelta(hours=24).total_seconds()))
-
-    if count != 1:
+    if role == "bot":
         log.info(
-            "additional patient joined, already recording",
-            meeting_id=meeting_id,
-            count=count,
+            "participant joined: bot",
+            role="bot", meeting_id=meeting_id,
+            participant_id=participant_id, user_name=user_name,
         )
         return
 
-    now = datetime.utcnow()
-    appointment = cast(
-        Appointment | None,
-        Appointment.where(
-            (Appointment.doctor_id == doctor_id)
-            & (Appointment.appointment_date >= now - timedelta(hours=4))
-            & (Appointment.appointment_date <= now + timedelta(hours=1))
+    if role == "doctor":
+        ttl = timedelta(hours=24)
+        redis.set(f"recall:meeting:{meeting_id}:doctor_present", "1", ex=ttl)
+        log.info(
+            "participant joined: doctor",
+            role="doctor", meeting_id=meeting_id,
+            participant_id=participant_id, user_name=user_name,
+            doctor_present=True,
         )
-        .order_by(cast(Any, Appointment.appointment_date).desc())
-        .first(),
-    )
-
-    recording_data = recall.start_recording(bot_id)
-    recording_id = recording_data.get("id")
-
-    log.info(
-        "patient joined, started recording",
-        meeting_id=meeting_id,
-        bot_id=bot_id,
-        recording_id=recording_id,
-        patient_name=participant.get("user_name"),
-    )
-
-    if not recording_id:
+        # Additional doctor-specific logic (grace revocation, session start) in next tasks
         return
 
-    if not appointment:
-        assert doctor_id, "doctor_id must be set to create appointment"
-        appointment = _ensure_appointment(
-            doctor_id=doctor_id,
-            patient_name=participant.get("user_name") or "Unknown",
-            now=now,
-        )
-
+    # role == "other" — just stash for now; appointment-start logic in next tasks
     ttl = timedelta(hours=24)
-    redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id or "", ex=ttl)
-    redis.set(
-        f"recall:recording:{recording_id}:appointment_id", str(appointment.id), ex=ttl
+    redis.rpush(f"recall:meeting:{meeting_id}:participants_order", participant_id)
+    redis.expire(f"recall:meeting:{meeting_id}:participants_order", int(ttl.total_seconds()))
+    redis.hset(f"recall:meeting:{meeting_id}:participants_names", participant_id, user_name)
+    redis.expire(f"recall:meeting:{meeting_id}:participants_names", int(ttl.total_seconds()))
+    redis.incr(f"recall:meeting:{meeting_id}:patient_count")
+    redis.expire(f"recall:meeting:{meeting_id}:patient_count", int(ttl.total_seconds()))
+    log.info(
+        "participant joined: other",
+        role="other", meeting_id=meeting_id,
+        participant_id=participant_id, user_name=user_name,
     )
-    redis.set(
-        f"recall:recording:{recording_id}:patient_id",
-        str(appointment.patient_id),
-        ex=ttl,
-    )
-    # also key by bot_id since recording_id from start_recording != real recording_id in webhooks
-    redis.set(f"recall:bot:{bot_id}:appointment_id", str(appointment.id), ex=ttl)
-    redis.set(f"recall:bot:{bot_id}:patient_id", str(appointment.patient_id), ex=ttl)
-
-    # Link ZoomMeeting to Appointment if a pre-synced record exists
-    if doctor_id:
-        zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
-        if zoom_mtg:
-            zoom_mtg.appointment_id = appointment.id
-            zoom_mtg.status = ZoomMeetingStatus.started
-            zoom_mtg.save()
 
 
 def _ensure_appointment(
