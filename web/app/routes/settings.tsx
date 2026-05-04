@@ -377,7 +377,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
         </div>
         <p className="text-muted-foreground text-sm">
           Zoom integration is coming soon. You'll be able to connect your
-          account so Cosma can automatically join your meetings and generate
+          account so Cosmas can automatically join your meetings and generate
           visit notes.
         </p>
       </section>
@@ -388,7 +388,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
     <section className="prose-headings prose w-1/2 space-y-4">
       <h3>Zoom Integration</h3>
       <p className="text-muted-foreground text-sm">
-        Connect your Zoom account so Cosma can automatically join your meetings
+        Connect your Zoom account so Cosmas can automatically join your meetings
         and generate visit notes.
       </p>
 
@@ -415,16 +415,57 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
           </Button>
         </div>
       ) : (
-        <Button onClick={onConnect} disabled={connecting}>
-          {connecting ? (
-            <>
-              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-              Connecting...
-            </>
-          ) : (
-            "Connect Zoom"
-          )}
-        </Button>
+        <>
+          <div className="text-muted-foreground bg-muted/40 rounded-md border p-3 text-xs leading-relaxed">
+            <p className="mb-2">
+              By connecting Zoom, you authorize Cosmas to join your scheduled
+              Zoom meetings on your behalf to record audio, generate
+              transcripts, and produce clinical notes. Audio and transcripts are
+              processed by our subprocessors (Recall.ai for meeting capture, and
+              Azure/OpenAI for transcription and note generation).
+            </p>
+            <p className="mb-2">
+              <strong>
+                Patient consent is your responsibility as the provider.
+              </strong>{" "}
+              The Cosmas AI Note-Taker bot will appear as a participant and
+              announce that the meeting is being recorded; you must still obtain
+              and document patient consent according to HIPAA and your state's
+              requirements before the visit.
+            </p>
+            <p>
+              See our{" "}
+              <a
+                href="/privacy-policy"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                Privacy Policy
+              </a>{" "}
+              and{" "}
+              <a
+                href="/terms-of-service"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+              >
+                Terms of Service
+              </a>
+              . You can disconnect Zoom at any time from this page.
+            </p>
+          </div>
+          <Button onClick={onConnect} disabled={connecting}>
+            {connecting ? (
+              <>
+                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                Connecting...
+              </>
+            ) : (
+              "Connect Zoom"
+            )}
+          </Button>
+        </>
       )}
     </section>
   )

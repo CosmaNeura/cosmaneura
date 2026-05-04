@@ -48,15 +48,54 @@ function ZoomConnectPrompt() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
-      <div className="text-center">
+    <div className="flex h-[calc(100vh-5rem)] items-center justify-center px-6">
+      <div className="max-w-xl text-center">
         <h2 className="mb-2 text-xl font-semibold">
           Connect your Zoom account
         </h2>
-        <p className="text-muted-foreground mb-6 text-sm">
+        <p className="text-muted-foreground mb-4 text-sm">
           Connect Zoom to view your meeting schedule and access AI notes after
           each session.
         </p>
+        <div className="text-muted-foreground bg-muted/40 mb-6 rounded-md border p-3 text-left text-xs leading-relaxed">
+          <p className="mb-2">
+            By connecting Zoom, you authorize Cosmas to join your scheduled Zoom
+            meetings on your behalf to record audio, generate transcripts, and
+            produce clinical notes. Audio and transcripts are processed by our
+            subprocessors (Recall.ai for meeting capture, and Azure/OpenAI for
+            transcription and note generation).
+          </p>
+          <p className="mb-2">
+            <strong>
+              Patient consent is your responsibility as the provider.
+            </strong>{" "}
+            The Cosmas AI Note-Taker bot will appear as a participant and
+            announce that the meeting is being recorded; you must still obtain
+            and document patient consent according to HIPAA and your state's
+            requirements before the visit.
+          </p>
+          <p>
+            See our{" "}
+            <a
+              href="/privacy-policy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              Privacy Policy
+            </a>{" "}
+            and{" "}
+            <a
+              href="/terms-of-service"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline"
+            >
+              Terms of Service
+            </a>
+            . You can disconnect Zoom at any time from Settings.
+          </p>
+        </div>
         <Button onClick={connectZoom} disabled={loading}>
           {loading ? (
             <>

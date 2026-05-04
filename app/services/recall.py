@@ -10,11 +10,16 @@ from app.configuration.recall import RECALL_API_BASE, RECALL_API_KEY
 _BOT_READY_STATUSES = {"in_call_not_recording", "in_call_recording"}
 _BOT_TERMINAL_STATUSES = {"call_ended", "fatal", "done"}
 
+# Display name the bot uses inside Zoom. Kept as a module constant so
+# zoom_webhooks can match participants against the same string when
+# classifying join/leave events. Must match the bot_name passed to Recall.
+BOT_NAME = "Cosmas AI Note-Taker"
+
 
 def create_bot(
     meeting_url: str,
-    zak_token: str,
-    bot_name: str = "Cosma",
+    zak_url: str,
+    bot_name: str = BOT_NAME,
     manual_recording: bool = False,
     metadata: dict | None = None,
 ) -> dict:
@@ -22,7 +27,16 @@ def create_bot(
         "meeting_url": meeting_url,
         "bot_name": bot_name,
         "zoom": {
-            "zak_token": zak_token,
+            # Recall fetches the ZAK just-in-time from this URL when the bot
+            # joins; we don't pre-fetch one because ZAKs expire in ~2h and
+            # a stale ZAK silently fails the join. Endpoint contract: GET,
+            # plain-text body containing the raw ZAK string.
+            "zak_url": zak_url,
+            # Surfaces Zoom's native recording-consent prompt to the host
+            # when the bot joins, satisfying the Marketplace UI-notices
+            # requirements (Active Apps Notifier + recording disclosure).
+            "require_recording_permission": True,
+            "request_recording_permission_on_host_join": True,
         },
     }
     if manual_recording:

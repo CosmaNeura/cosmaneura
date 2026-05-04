@@ -1,12 +1,16 @@
+import secrets
 from datetime import datetime, timedelta
 from typing import Any, cast
 
 from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
+from app.configuration.server import API_BASE_URL
 from app.jobs import recording_guard
+from app.routes.recall_callbacks import zak_token_redis_key
 from app.services import recall
 from app.services import zoom as zoom_service
+from app.services.recall import BOT_NAME
 
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
@@ -15,8 +19,10 @@ from app.models.patient import Patient
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import select
 
-BOT_NAME = "Cosma"
 GRACE_PERIOD_SECONDS = 90
+# ZAKs minted by Zoom expire in ~2 hours, so the URL token used to fetch one
+# need not outlive that. A 2h window also bounds replay risk.
+_ZAK_URL_TOKEN_TTL_SECONDS = 2 * 60 * 60
 
 
 def handle_meeting_started(payload: dict[str, Any]):
@@ -137,11 +143,18 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         )
         return
 
-    zak_token = zoom_service.get_zak_token(doctor)
+    # Recall fetches the ZAK just-in-time from our /external/v1/recall/zak/{token}
+    # endpoint when the bot joins. The token in the URL is the only auth Recall
+    # sends, so it must be unguessable and short-lived; we map it to the doctor
+    # in Redis with the same TTL as the ZAK itself.
+    url_token = secrets.token_urlsafe(32)
+    redis.set(zak_token_redis_key(url_token), doctor_id, ex=_ZAK_URL_TOKEN_TTL_SECONDS)
+    zak_url = f"{API_BASE_URL}/external/v1/recall/zak/{url_token}"
+
     meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
     bot_data = recall.create_bot(
         meeting_url=meeting_url,
-        zak_token=zak_token,
+        zak_url=zak_url,
         manual_recording=True,
         metadata={"doctor_id": doctor_id, "meeting_id": str(meeting_id)},
     )

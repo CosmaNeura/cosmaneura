@@ -50,7 +50,7 @@ def test_leave_call_tolerates_already_done_bot(monkeypatch):
     recall.leave_call("bot-abc-123")
 
 
-def test_create_bot_forwards_metadata(monkeypatch):
+def test_create_bot_forwards_metadata_and_zak_url(monkeypatch):
     captured = {}
 
     class FakeResponse:
@@ -72,11 +72,20 @@ def test_create_bot_forwards_metadata(monkeypatch):
 
     recall.create_bot(
         meeting_url="https://zoom.us/j/123",
-        zak_token="zak",
+        zak_url="https://app.cosmaneura.com/external/v1/recall/zak/abc",
         metadata={"doctor_id": "doctor_x", "meeting_id": "m1"},
     )
 
-    assert captured["payload"]["metadata"] == {
+    payload = captured["payload"]
+    assert payload["metadata"] == {
         "doctor_id": "doctor_x",
         "meeting_id": "m1",
     }
+    assert payload["bot_name"] == "Cosmas AI Note-Taker"
+    zoom_cfg = payload["zoom"]
+    assert zoom_cfg["zak_url"] == (
+        "https://app.cosmaneura.com/external/v1/recall/zak/abc"
+    )
+    assert zoom_cfg["require_recording_permission"] is True
+    assert zoom_cfg["request_recording_permission_on_host_join"] is True
+    assert "zak_token" not in zoom_cfg

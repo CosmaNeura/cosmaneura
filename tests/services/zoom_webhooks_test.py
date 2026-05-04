@@ -55,9 +55,20 @@ def mock_recall(monkeypatch):
 
     from app.services import recall
 
-    def fake_create_bot(meeting_url, zak_token, bot_name="Cosma", manual_recording=False, metadata=None):
+    def fake_create_bot(
+        meeting_url,
+        zak_url,
+        bot_name="Cosmas AI Note-Taker",
+        manual_recording=False,
+        metadata=None,
+    ):
         calls["create_bot"].append(
-            {"meeting_url": meeting_url, "metadata": metadata, "manual_recording": manual_recording}
+            {
+                "meeting_url": meeting_url,
+                "zak_url": zak_url,
+                "metadata": metadata,
+                "manual_recording": manual_recording,
+            }
         )
         return {"id": BOT_ID}
 
