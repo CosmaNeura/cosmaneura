@@ -52,7 +52,10 @@ variable "python_public_vars" {
     # upload container names
     "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
     # zoom oauth redirects
-    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT"
+    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT",
+    # public origin of this backend, used to build the zak_url that Recall
+    # bots fetch on join
+    "API_BASE_URL"
   ]
 }
 
