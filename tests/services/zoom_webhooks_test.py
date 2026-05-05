@@ -512,6 +512,30 @@ def test_grace_period_expires_stops_and_leaves(
     assert clean_redis.get(_key("grace_task_id")) is None
 
 
+def test_stale_meeting_ended_within_lock_window_is_skipped(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    """Regression: Zoom occasionally redelivers meeting.ended from a prior
+    PMR session within seconds of a fresh meeting.started. If we let it
+    through, host_id is wiped and the doctor arriving moments later is
+    misclassified as 'other' — no bot ever spawns. The starting_lock set
+    by meeting.started is the signal we use to ignore those stale ends.
+    """
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    # Lock is still active (60s TTL) → simulates a stale ended arriving
+    # ~3s after a fresh started, which is what we observed in prod.
+    zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
+
+    # State must survive — host_id intact so the doctor is recognized.
+    assert clean_redis.get(_key("host_id")) is not None
+    assert clean_redis.get(_key("doctor_id")) is not None
+    assert clean_redis.get(_key("starting_lock")) is not None
+    assert mock_recall["stop_recording"] == []
+    assert mock_recall["leave_call"] == []
+
+
 def test_meeting_ended_with_no_bot_logs_no_recording(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
 ):
@@ -522,6 +546,9 @@ def test_meeting_ended_with_no_bot_logs_no_recording(
     zoom_webhooks.handle_participant_joined(
         _participant_joined_payload("patient-a", "Juan")
     )
+    # Simulate the lock having expired so the legitimate end gets through
+    # (the lock is a 60s TTL guard against stale redeliveries).
+    clean_redis.delete(_key("starting_lock"))
     zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
 
     assert mock_recall["create_bot"] == []
@@ -544,6 +571,7 @@ def test_meeting_ended_with_active_recording_stops_and_leaves(
     zoom_webhooks.handle_participant_joined(
         _participant_joined_payload("patient-a", "Juan")
     )
+    clean_redis.delete(_key("starting_lock"))
     zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
 
     assert mock_recall["stop_recording"] == [BOT_ID]
@@ -585,6 +613,7 @@ def test_meeting_ended_revokes_pending_grace_task(
     zoom_webhooks.handle_participant_left(
         _participant_left_payload(HOST_ID, "Test Doctor")
     )
+    clean_redis.delete(_key("starting_lock"))
     zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
 
     assert "celery-task-77" in revoked

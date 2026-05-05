@@ -487,11 +487,26 @@ def handle_meeting_ended(payload: dict[str, Any]):
     """meeting.ended is the canonical wind-down. Revoke any pending grace
     task, stop+leave the bot if one exists, and clear all per-meeting
     state. When no bot exists, the meeting ended without ever recording —
-    the expected outcome when the doctor never joined."""
+    the expected outcome when the doctor never joined.
+
+    Stale-event guard: Zoom occasionally redelivers a meeting.ended from a
+    prior PMR session shortly after a fresh meeting.started for the same
+    meeting_id. If we're still inside the starting_lock window of an
+    active session, this ended is almost certainly stale — clearing state
+    here wipes host_id, which makes _role_for misclassify the doctor as
+    "other" once they join, so the bot is never created. Skip.
+    """
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
 
     redis = get_redis()
+    if redis.get(f"recall:meeting:{meeting_id}:starting_lock"):
+        log.info(
+            "meeting.ended skipped: still inside starting lock window (likely stale)",
+            meeting_id=meeting_id,
+        )
+        return
+
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
     grace_task_id = _rget(redis, f"recall:meeting:{meeting_id}:grace_task_id")
 
