@@ -114,22 +114,32 @@ def _started_payload() -> dict:
     }
 
 
-def _participant_joined_payload(participant_id: str, user_name: str) -> dict:
+def _participant_joined_payload(
+    participant_id: str,
+    user_name: str,
+    *,
+    user_id: str | None = None,
+) -> dict:
+    participant: dict = {"id": participant_id, "user_name": user_name}
+    if user_id is not None:
+        participant["user_id"] = user_id
     return {
         "payload": {
             "object": {
                 "id": MEETING_ID,
-                "participant": {
-                    "id": participant_id,
-                    "user_name": user_name,
-                },
+                "participant": participant,
             }
         }
     }
 
 
-def _participant_left_payload(participant_id: str, user_name: str) -> dict:
-    return _participant_joined_payload(participant_id, user_name)
+def _participant_left_payload(
+    participant_id: str,
+    user_name: str,
+    *,
+    user_id: str | None = None,
+) -> dict:
+    return _participant_joined_payload(participant_id, user_name, user_id=user_id)
 
 
 def _meeting_ended_payload() -> dict:
@@ -205,6 +215,36 @@ def test_patient_joins_first_then_doctor_starts_session(
     assert mock_recall["create_bot"][0]["metadata"]["meeting_id"] == MEETING_ID
     assert mock_recall["start_recording"] == [BOT_ID]
     assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
+    assert clean_redis.get(_key("recording_active")) == b"1"
+
+
+def test_guest_patient_with_empty_id_still_starts_session(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    """Regression: Zoom omits `participant.id` for guests (only signed-in
+    Zoom users get one). If we keyed off id alone, the guest got pushed to
+    the participants queue as an empty string, and when the doctor joined
+    the `if first_id:` truthy check skipped session start — so no bot ever
+    appeared. The fix is to fall back to `user_id`, which Zoom always sets.
+    """
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    # Guest patient: empty id, only user_id (the actual Zoom payload shape
+    # for unauthenticated joiners).
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("", "John's Fathom Notetaker", user_id="16778240")
+    )
+    assert mock_recall["create_bot"] == []  # doctor not yet present
+
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert len(mock_recall["create_bot"]) == 1, (
+        "doctor arriving with a guest already waiting must spawn a bot"
+    )
     assert clean_redis.get(_key("recording_active")) == b"1"
 
 

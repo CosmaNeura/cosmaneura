@@ -225,7 +225,12 @@ def handle_participant_joined(payload: dict[str, Any]):
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
     participant = obj.get("participant", {})
-    participant_id = participant.get("id") or ""
+    # Zoom only populates `participant.id` for signed-in account users; for
+    # guests it arrives empty. We fall back to `user_id`, the meeting-scoped
+    # identifier Zoom always sets, so the participants queue can index every
+    # join — otherwise guest joins push empty strings and the doctor-arrives
+    # branch never finds a first_id, so _start_appointment_session never runs.
+    participant_id = participant.get("id") or participant.get("user_id") or ""
     user_name = participant.get("user_name") or ""
 
     redis = get_redis()
@@ -360,7 +365,12 @@ def handle_participant_left(payload: dict[str, Any]):
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
     participant = obj.get("participant", {})
-    participant_id = participant.get("id") or ""
+    # Zoom only populates `participant.id` for signed-in account users; for
+    # guests it arrives empty. We fall back to `user_id`, the meeting-scoped
+    # identifier Zoom always sets, so the participants queue can index every
+    # join — otherwise guest joins push empty strings and the doctor-arrives
+    # branch never finds a first_id, so _start_appointment_session never runs.
+    participant_id = participant.get("id") or participant.get("user_id") or ""
     user_name = participant.get("user_name") or ""
 
     redis = get_redis()
