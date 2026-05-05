@@ -7,8 +7,28 @@ from app.configuration.recall import RECALL_API_BASE, RECALL_API_KEY
 
 # Bot status codes that mean the bot is present in the call and able to
 # accept a start_recording command. See Recall.ai docs for the full list.
-_BOT_READY_STATUSES = {"in_call_not_recording", "in_call_recording"}
-_BOT_TERMINAL_STATUSES = {"call_ended", "fatal", "done"}
+#
+# `recording_permission_allowed` is the status the bot transitions through
+# once the host approves the native Zoom recording-consent prompt that the
+# Meeting SDK fires when `require_recording_permission` is set. With
+# `manual_recording=True`, the bot stays in this state until we explicitly
+# call start_recording — so we treat it as "ready" alongside the older
+# `in_call_not_recording`. Without this, the wait loop times out even
+# though the host has already approved, and the appointment is aborted.
+_BOT_READY_STATUSES = {
+    "in_call_not_recording",
+    "in_call_recording",
+    "recording_permission_allowed",
+}
+# `recording_permission_denied` is terminal-ish: the host rejected the
+# prompt, so no recording can ever happen on this bot. Treat it like the
+# other terminal states so we bail out quickly instead of waiting 45s.
+_BOT_TERMINAL_STATUSES = {
+    "call_ended",
+    "fatal",
+    "done",
+    "recording_permission_denied",
+}
 
 # Display name the bot uses inside Zoom. Kept as a module constant so
 # zoom_webhooks can match participants against the same string when
