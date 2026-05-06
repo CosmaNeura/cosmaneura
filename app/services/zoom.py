@@ -19,6 +19,17 @@ ZOOM_OAUTH_REVOKE_URL = "https://zoom.us/oauth/revoke"
 _TOKEN_EXPIRY_BUFFER = timedelta(minutes=5)
 
 
+class ZoomIntegrationInvalid(Exception):
+    """Raised when the doctor's Zoom OAuth grant is no longer valid.
+
+    Indicates that Zoom returned ``invalid_grant`` on a refresh — almost
+    always because the user revoked the app from marketplace.zoom.us, or
+    the refresh_token was rotated by a parallel refresh. The integration
+    row has been removed; callers should treat the doctor as not connected
+    and skip Zoom-dependent work cleanly instead of bubbling a 500.
+    """
+
+
 def get_zoom_integration(doctor: Doctor) -> DoctorVideoIntegration | None:
     return DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
 
@@ -55,6 +66,22 @@ def _get_doctor_token(
                 "refresh_token": integration.refresh_token,
             },
         )
+
+    if response.status_code == 400:
+        try:
+            error_code = response.json().get("error")
+        except ValueError:
+            error_code = None
+        if error_code == "invalid_grant":
+            log.warning(
+                "zoom refresh returned invalid_grant; removing integration",
+                doctor_id=str(integration.doctor_id),
+            )
+            integration.delete()
+            raise ZoomIntegrationInvalid(
+                f"doctor {integration.doctor_id} revoked Zoom OAuth"
+            )
+
     response.raise_for_status()
     data = response.json()
 

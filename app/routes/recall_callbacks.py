@@ -59,6 +59,13 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    zak = zoom_service.get_zak_token(doctor)
+    try:
+        zak = zoom_service.get_zak_token(doctor)
+    except zoom_service.ZoomIntegrationInvalid:
+        log.warning(
+            "recall zak callback: doctor revoked Zoom OAuth",
+            doctor_id=doctor_id,
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     log.info("recall zak callback: token issued", doctor_id=doctor_id)
     return PlainTextResponse(content=zak)

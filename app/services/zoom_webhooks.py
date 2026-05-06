@@ -151,7 +151,14 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     redis.set(zak_token_redis_key(url_token), doctor_id, ex=_ZAK_URL_TOKEN_TTL_SECONDS)
     zak_url = f"{API_BASE_URL}/external/v1/recall/zak/{url_token}"
 
-    meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
+    try:
+        meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
+    except zoom_service.ZoomIntegrationInvalid:
+        log.warning(
+            "cannot start appointment: doctor revoked Zoom OAuth",
+            doctor_id=doctor_id, meeting_id=meeting_id,
+        )
+        return
     bot_data = recall.create_bot(
         meeting_url=meeting_url,
         zak_url=zak_url,
