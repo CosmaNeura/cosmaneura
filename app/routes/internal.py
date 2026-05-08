@@ -10,7 +10,8 @@ import app.jobs.extract
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
-from app.services.zoom import get_zoom_integration
+from app.configuration.redis import get_redis
+from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
@@ -252,6 +253,11 @@ class SettingsData(BaseModel, extra="forbid"):
     notes_schema: list[DoctorNoteSchema]
     biography: str | None
     zoom_connected: bool
+    # True until acked when Zoom returned invalid_grant on the doctor's
+    # refresh token (uninstall from marketplace.zoom.us, or admin revoke).
+    # The frontend uses this to fire a one-time toast; the persistent
+    # banner uses zoom_connected alone.
+    zoom_revoked: bool
     email: str | None
     onboarding_completed: bool
 
@@ -263,6 +269,7 @@ def settings_data(request: Request) -> SettingsData:
     zoom_integration = DoctorVideoIntegration.get(
         doctor_id=doctor.id, provider=VideoProvider.zoom
     )
+    zoom_revoked = bool(get_redis().get(zoom_revoked_redis_key(str(doctor.id))))
 
     notes_schema = DoctorNoteSchema.where(
         (DoctorNoteSchema.doctor_id == doctor.id)
@@ -274,6 +281,7 @@ def settings_data(request: Request) -> SettingsData:
         doctor_id=str(doctor.id),
         biography=doctor.biography,
         zoom_connected=zoom_integration is not None,
+        zoom_revoked=zoom_revoked,
         email=doctor.email,
         onboarding_completed=doctor.onboarding_completed_at is not None,
     )
@@ -308,6 +316,18 @@ def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
 def zoom_disconnect(request: Request) -> None:
     doctor: Doctor = request.state.doctor
     zoom_service.revoke_token(doctor)
+    # An intentional disconnect should not surface as an unexpected revoke
+    # toast next time the doctor opens the app.
+    get_redis().delete(zoom_revoked_redis_key(str(doctor.id)))
+
+
+@internal_api_app.post(
+    "/zoom-revoked-ack", name="zoom_revoked_ack", status_code=status.HTTP_204_NO_CONTENT
+)
+def zoom_revoked_ack(request: Request) -> None:
+    """Frontend calls this after showing the one-time disconnect toast."""
+    doctor: Doctor = request.state.doctor
+    get_redis().delete(zoom_revoked_redis_key(str(doctor.id)))
 
 
 @internal_api_app.post(

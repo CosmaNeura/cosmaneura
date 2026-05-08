@@ -3,6 +3,7 @@ import { Outlet, href, redirect } from "react-router"
 import type { Route } from "./+types/authenticated"
 
 import AdminBar from "~/components/AdminBar"
+import { ZoomConnectionAlert } from "~/components/ZoomConnectionAlert"
 import { settingsData } from "~/configuration/client"
 
 // Guard: any authenticated route redirects to /onboarding until the doctor completes it.
@@ -25,6 +26,7 @@ export default function AuthenticatedLayout() {
     // it makes the inner area of the sidebar scrollable.
     <div className="flex h-screen flex-col">
       <AdminBar />
+      <ZoomConnectionAlert />
       <Outlet />
     </div>
   )

@@ -608,6 +608,21 @@
           }
         }
       }
+    },
+    "/internal/v1/zoom-revoked-ack": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Zoom Revoked Ack",
+        "description": "Frontend calls this after showing the one-time disconnect toast.",
+        "operationId": "zoom_revoked_ack",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1377,6 +1392,10 @@
           "onboarding_completed": {
             "type": "boolean",
             "title": "Onboarding Completed"
+          },
+          "zoom_revoked": {
+            "type": "boolean",
+            "title": "Zoom Revoked"
           }
         },
         "additionalProperties": false,
@@ -1387,7 +1406,8 @@
           "biography",
           "zoom_connected",
           "email",
-          "onboarding_completed"
+          "onboarding_completed",
+          "zoom_revoked"
         ],
         "title": "SettingsData"
       },

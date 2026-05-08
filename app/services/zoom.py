@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from app import log
+from app.configuration.redis import get_redis
 from app.configuration.zoom import (
     ZOOM_CLIENT_ID,
     ZOOM_CLIENT_SECRET,
@@ -17,6 +18,14 @@ from app.models.doctor_video_integration import DoctorVideoIntegration, VideoPro
 ZOOM_API_BASE = "https://api.zoom.us/v2"
 ZOOM_OAUTH_REVOKE_URL = "https://zoom.us/oauth/revoke"
 _TOKEN_EXPIRY_BUFFER = timedelta(minutes=5)
+# Surfaces an unexpected disconnect to the doctor on next app load. 7 days
+# is enough for the doctor to come back from a weekend off and still see
+# the alert; if they never come back, the flag self-cleans.
+_REVOKED_FLAG_TTL = timedelta(days=7)
+
+
+def zoom_revoked_redis_key(doctor_id: str) -> str:
+    return f"doctor:{doctor_id}:zoom_revoked"
 
 
 class ZoomIntegrationInvalid(Exception):
@@ -77,9 +86,13 @@ def _get_doctor_token(
                 "zoom refresh returned invalid_grant; removing integration",
                 doctor_id=str(integration.doctor_id),
             )
+            doctor_id = str(integration.doctor_id)
             integration.delete()
+            get_redis().set(
+                zoom_revoked_redis_key(doctor_id), "1", ex=_REVOKED_FLAG_TTL
+            )
             raise ZoomIntegrationInvalid(
-                f"doctor {integration.doctor_id} revoked Zoom OAuth"
+                f"doctor {doctor_id} revoked Zoom OAuth"
             )
 
     response.raise_for_status()
