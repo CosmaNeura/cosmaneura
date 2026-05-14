@@ -23,3 +23,41 @@ async def test_healthcheck_has_no_store_cache_headers(aclient):
     assert "private" in cache_control
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Expires"] == "0"
+
+
+from types import SimpleNamespace
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "path,should_have_headers",
+    [
+        ("/assets/index-abc123.js", False),
+        ("/assets/styles-xyz.css", False),
+        ("/internal/v1/schedule", True),
+        ("/healthcheck", True),
+        ("/", True),
+    ],
+)
+async def test_no_store_dispatch_exempts_assets(path, should_have_headers):
+    """The middleware skips header-setting only for /assets/* paths."""
+    from app.routes.middleware import _no_store_dispatch
+
+    # Stub Request — we only read .url.path
+    request = SimpleNamespace(url=SimpleNamespace(path=path))
+
+    # Stub call_next that returns a fake response with a mutable headers dict
+    async def fake_call_next(_):
+        return SimpleNamespace(headers={})
+
+    response = await _no_store_dispatch(request, fake_call_next)
+
+    if should_have_headers:
+        assert "no-store" in response.headers["Cache-Control"]
+        assert response.headers["Pragma"] == "no-cache"
+        assert response.headers["Expires"] == "0"
+    else:
+        assert "Cache-Control" not in response.headers
+        assert "Pragma" not in response.headers
+        assert "Expires" not in response.headers

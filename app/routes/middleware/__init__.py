@@ -33,8 +33,13 @@ async def _no_store_dispatch(
 
     Required by Zoom Marketplace review: sensitive fields like join_url
     and zoom_meeting_id must never be cached by browsers or proxies.
+
+    Static assets under /assets/* are exempt — they're Vite-hashed and
+    safe to cache.
     """
     response = await call_next(request)
+    if request.url.path.startswith("/assets/"):
+        return response
     response.headers["Cache-Control"] = (
         "no-store, no-cache, must-revalidate, max-age=0, private"
     )
