@@ -15,7 +15,11 @@ async def test_healthcheck_has_no_store_cache_headers(aclient):
     response = await aclient.get(api_app.url_path_for("healthcheck"))
 
     assert response.status_code == status.HTTP_200_OK
-    assert "no-store" in response.headers["Cache-Control"]
-    assert "no-cache" in response.headers["Cache-Control"]
+    cache_control = response.headers["Cache-Control"]
+    assert "no-store" in cache_control
+    assert "no-cache" in cache_control
+    assert "must-revalidate" in cache_control
+    assert "max-age=0" in cache_control
+    assert "private" in cache_control
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Expires"] == "0"

@@ -1,8 +1,10 @@
+from collections.abc import Awaitable, Callable
 from decouple import config
 from fastapi import FastAPI, Request
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import Response
 from structlog_config import fastapi_access_logger
 
 from app import log
@@ -23,7 +25,10 @@ This is a very important configuration option:
 COOKIE_DOMAIN = config("COOKIE_DOMAIN", default=None, cast=lambda v: v or None)
 
 
-async def _no_store_dispatch(request: Request, call_next):
+async def _no_store_dispatch(
+    request: Request,
+    call_next: Callable[[Request], Awaitable[Response]],
+) -> Response:
     """Defeat HTTP caching on every API response.
 
     Required by Zoom Marketplace review: sensitive fields like join_url
@@ -134,6 +139,9 @@ def add_middleware(app: FastAPI):
     # middleware list, so the last-registered becomes the outermost wrapper.
     # That means our headers are the final word on the response, and no other
     # middleware can overwrite them.
+    #
+    # Using app.middleware("http")(fn) rather than app.add_middleware(Class) because
+    # the dispatch logic is a plain async function, not a BaseHTTPMiddleware subclass.
     app.middleware("http")(_no_store_dispatch)
 
     return app
