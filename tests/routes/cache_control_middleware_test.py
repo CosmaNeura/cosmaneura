@@ -87,7 +87,9 @@ async def test_404_response_has_no_store_headers(aclient):
     when the token is not found in Redis, reliably bypassing the SPA catch-all.
     """
     response = await aclient.get(
-        "/external/v1/recall/zak/this-token-does-not-exist-in-redis"
+        api_app.url_path_for(
+            "recall_zak_callback", token="this-token-does-not-exist-in-redis"
+        )
     )
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
