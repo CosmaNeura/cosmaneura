@@ -6,9 +6,11 @@ API response carries headers that forbid browser/proxy caching.
 """
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from fastapi import status
+from fastapi.testclient import TestClient
 
 from app.server import api_app
 
@@ -61,3 +63,34 @@ async def test_no_store_dispatch_exempts_assets(path, should_have_headers):
         assert "Cache-Control" not in response.headers
         assert "Pragma" not in response.headers
         assert "Expires" not in response.headers
+
+
+def test_authenticated_schedule_list_has_no_store_headers(
+    authenticated_client: TestClient,
+):
+    """The sensitive endpoint that triggered the Zoom review must carry the headers."""
+    # No need to seed a doctor — even a 200 response with empty meetings is enough
+    # to verify headers. authenticated_client already wires the auth override.
+    with patch("app.routes.internal.sync_zoom_meetings"):
+        response = authenticated_client.get(api_app.url_path_for("schedule_list"))
+
+    assert response.status_code == status.HTTP_200_OK
+    assert "no-store" in response.headers["Cache-Control"]
+    assert response.headers["Pragma"] == "no-cache"
+    assert response.headers["Expires"] == "0"
+
+
+async def test_404_response_has_no_store_headers(aclient):
+    """Even error responses must carry the cache-defeating headers.
+
+    Uses an unknown Recall ZAK token — a GET route that explicitly raises 404
+    when the token is not found in Redis, reliably bypassing the SPA catch-all.
+    """
+    response = await aclient.get(
+        "/external/v1/recall/zak/this-token-does-not-exist-in-redis"
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert "no-store" in response.headers["Cache-Control"]
+    assert response.headers["Pragma"] == "no-cache"
+    assert response.headers["Expires"] == "0"
