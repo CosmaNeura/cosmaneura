@@ -5,6 +5,9 @@ The Zoom Marketplace review flagged that responses with sensitive data
 API response carries headers that forbid browser/proxy caching.
 """
 
+from types import SimpleNamespace
+
+import pytest
 from fastapi import status
 
 from app.server import api_app
@@ -23,11 +26,6 @@ async def test_healthcheck_has_no_store_cache_headers(aclient):
     assert "private" in cache_control
     assert response.headers["Pragma"] == "no-cache"
     assert response.headers["Expires"] == "0"
-
-
-from types import SimpleNamespace
-
-import pytest
 
 
 @pytest.mark.parametrize(
@@ -51,7 +49,9 @@ async def test_no_store_dispatch_exempts_assets(path, should_have_headers):
     async def fake_call_next(_):
         return SimpleNamespace(headers={})
 
-    response = await _no_store_dispatch(request, fake_call_next)
+    # Stubs intentionally don't match the strict Request/Response types — the
+    # middleware only touches .url.path and .headers, which the stubs provide.
+    response = await _no_store_dispatch(request, fake_call_next)  # type: ignore[arg-type]
 
     if should_have_headers:
         assert "no-store" in response.headers["Cache-Control"]
