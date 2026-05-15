@@ -4,12 +4,12 @@ import { AlertCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { zoomAuthUrl, zoomRevokedAck } from "~/configuration/client"
-import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 import { toast } from "~/hooks/use-toast"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { useUser } from "@clerk/clerk-react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
 async function startConnect(onError: () => void) {
   const { data } = await zoomAuthUrl()
@@ -91,4 +91,3 @@ export function ZoomConnectionAlert() {
     </div>
   )
 }
-
