@@ -6,5 +6,5 @@ api: python main.py
 # in a more complex application, you'll want to run a separate scheduler instead of running the scheduler inline
 worker: celery -A app.celery.celery_app worker --beat --scheduler redbeat.RedBeatScheduler
 scheduler: celery -A app.celery.celery_app beat --scheduler redbeat.RedBeatScheduler
-job_monitor: celery -A app.celery flower --basic-auth=:$FLOWER_PASSWORD --port=$FLOWER_PORT --persistent=True --db="$REDIS_URL"
+job_monitor: celery -A app.celery flower --basic-auth=:$FLOWER_PASSWORD --port=$FLOWER_PORT --persistent=True --db=/tmp/flower.db
 console: bash -l
