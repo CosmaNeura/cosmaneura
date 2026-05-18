@@ -30,10 +30,33 @@ def perform() -> None:
             log.warning("no email addresses found for clerk user", doctor=doctor)
             continue
 
-        if len(clerk_user.email_addresses) > 1:
-            log.info("multiple email addresses found for clerk user", doctor=doctor)
+        primary_id = clerk_user.primary_email_address_id
+        primary = next(
+            (e for e in clerk_user.email_addresses if e.id == primary_id),
+            None,
+        )
+        if primary is None:
+            log.warning(
+                "primary email not in email_addresses for clerk user",
+                doctor=doctor,
+                primary_email_address_id=primary_id,
+            )
+            continue
 
-        doctor_email = clerk_user.email_addresses[0].email_address
+        doctor_email = primary.email_address
+
+        if doctor.email == doctor_email:
+            continue
+
+        existing = Doctor.get(email=doctor_email)
+        if existing is not None and existing.id != doctor.id:
+            log.warning(
+                "email collision in clerk sync, skipping doctor",
+                doctor=doctor,
+                conflicting_doctor_id=existing.id,
+                email=doctor_email,
+            )
+            continue
 
         doctor.email = doctor_email
         doctor.save()
