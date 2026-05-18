@@ -519,6 +519,26 @@
         ]
       }
     },
+    "/internal/v1/zoom-revoked-ack": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Zoom Revoked Ack",
+        "description": "Frontend calls this after showing the one-time disconnect toast.",
+        "operationId": "zoom_revoked_ack",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/onboarding/complete": {
       "post": {
         "tags": [
@@ -605,21 +625,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/internal/v1/zoom-revoked-ack": {
-      "post": {
-        "tags": [
-          "private"
-        ],
-        "summary": "Zoom Revoked Ack",
-        "description": "Frontend calls this after showing the one-time disconnect toast.",
-        "operationId": "zoom_revoked_ack",
-        "responses": {
-          "204": {
-            "description": "Successful Response"
           }
         }
       }
@@ -1378,6 +1383,10 @@
             "type": "boolean",
             "title": "Zoom Connected"
           },
+          "zoom_revoked": {
+            "type": "boolean",
+            "title": "Zoom Revoked"
+          },
           "email": {
             "anyOf": [
               {
@@ -1392,10 +1401,6 @@
           "onboarding_completed": {
             "type": "boolean",
             "title": "Onboarding Completed"
-          },
-          "zoom_revoked": {
-            "type": "boolean",
-            "title": "Zoom Revoked"
           }
         },
         "additionalProperties": false,
@@ -1405,9 +1410,9 @@
           "notes_schema",
           "biography",
           "zoom_connected",
+          "zoom_revoked",
           "email",
-          "onboarding_completed",
-          "zoom_revoked"
+          "onboarding_completed"
         ],
         "title": "SettingsData"
       },
