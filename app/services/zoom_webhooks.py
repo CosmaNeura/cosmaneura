@@ -6,12 +6,13 @@ from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.configuration.server import API_BASE_URL
-from app.jobs import recording_guard
+from app.jobs import merge_window
 from app.routes.recall_callbacks import zak_token_redis_key
 from app.services import recall
 from app.services import zoom as zoom_service
 from app.services.recall import BOT_NAME
 
+from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
@@ -19,7 +20,10 @@ from app.models.patient import Patient
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy import select
 
-GRACE_PERIOD_SECONDS = 90
+# Two recording segments tied to the same appointment within this window
+# merge into a single note (summarize.py concatenates transcripts). After
+# the window, the bot disconnects and a fresh visit opens a new bot.
+MERGE_WINDOW_SECONDS = 600
 # ZAKs minted by Zoom expire in ~2 hours, so the URL token used to fetch one
 # need not outlive that. A 2h window also bounds replay risk.
 _ZAK_URL_TOKEN_TTL_SECONDS = 2 * 60 * 60
@@ -185,6 +189,13 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
 
     now = datetime.utcnow()
+    # Phase 1 band-aid for Mode A scenario #9: a previous visit on the
+    # same meeting_id can leave an appointment in the ±4h window that
+    # already has transcripts. Binding to it again would pile new
+    # transcripts onto a stale appointment and confuse summarize.
+    # Filtering by `transcript IS NULL` keeps brand-new appointments
+    # (calendar-pre-created, no transcript yet) eligible. Phase 2
+    # replaces this whole time-window matcher with calendar binding.
     appointment = cast(
         Appointment | None,
         Appointment.where(
@@ -192,6 +203,11 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
             & (Appointment.appointment_date >= now - timedelta(hours=4))
             & (Appointment.appointment_date <= now + timedelta(hours=1))
         )
+        .outerjoin(
+            AIVisitTranscript,
+            cast(Any, AIVisitTranscript.appointment_id) == Appointment.id,
+        )
+        .where(cast(Any, AIVisitTranscript.id).is_(None))
         .order_by(cast(Any, Appointment.appointment_date).desc())
         .first(),
     )
@@ -256,16 +272,6 @@ def handle_participant_joined(payload: dict[str, Any]):
         ttl = timedelta(hours=24)
         redis.set(f"recall:meeting:{meeting_id}:doctor_present", "1", ex=ttl)
 
-        # Revoke any pending grace task — doctor returned in time
-        grace_task_id = _rget(redis, f"recall:meeting:{meeting_id}:grace_task_id")
-        if grace_task_id:
-            celery_app.control.revoke(grace_task_id)
-            redis.delete(f"recall:meeting:{meeting_id}:grace_task_id")
-            log.info(
-                "doctor returned within grace, task revoked",
-                meeting_id=meeting_id, grace_task_id=grace_task_id,
-            )
-
         log.info(
             "participant joined: doctor",
             role="doctor", meeting_id=meeting_id,
@@ -273,19 +279,27 @@ def handle_participant_joined(payload: dict[str, Any]):
             doctor_present=True,
         )
 
-        # If non-doctors are already waiting, start the session now
+        # If recording is already running, nothing to do.
         recording_active = redis.get(f"recall:meeting:{meeting_id}:recording_active")
-        if not recording_active:
-            first_id = _rlindex(
-                redis, f"recall:meeting:{meeting_id}:participants_order", 0,
-            )
-            if first_id:
-                first_name = _rhget(
-                    redis, f"recall:meeting:{meeting_id}:participants_names", first_id,
-                )
-                _start_appointment_session(
-                    meeting_id, first_id, first_name or "Unknown",
-                )
+        if recording_active:
+            return
+
+        first_id = _rlindex(
+            redis, f"recall:meeting:{meeting_id}:participants_order", 0,
+        )
+        if not first_id:
+            # Doctor returned to an empty room; keep any merge_window armed.
+            return
+
+        _resume_or_start_recording(
+            meeting_id=meeting_id,
+            participant_id=first_id,
+            user_name=_rhget(
+                redis,
+                f"recall:meeting:{meeting_id}:participants_names",
+                first_id,
+            ) or "Unknown",
+        )
         return
 
     # role == "other"
@@ -316,12 +330,49 @@ def handle_participant_joined(payload: dict[str, Any]):
         return
 
     if not recording_active:
-        _start_appointment_session(meeting_id, participant_id, user_name)
+        _resume_or_start_recording(meeting_id, participant_id, user_name)
     else:
         log.info(
             "additional participant in active session",
             meeting_id=meeting_id, user_name=user_name, patient_count=new_count,
         )
+
+
+def _revoke_merge_window_task(redis, meeting_id: str) -> None:
+    task_id = _rget(redis, f"recall:meeting:{meeting_id}:merge_task_id")
+    if not task_id:
+        return
+    celery_app.control.revoke(task_id)
+    redis.delete(f"recall:meeting:{meeting_id}:merge_task_id")
+    redis.delete(f"recall:meeting:{meeting_id}:paused_at")
+    log.info(
+        "merge window task revoked",
+        meeting_id=meeting_id, task_id=task_id,
+    )
+
+
+def _resume_or_start_recording(
+    meeting_id: str, participant_id: str, user_name: str,
+) -> None:
+    """If a paused bot exists for this meeting, resume on it via
+    start_recording. Otherwise create a brand-new bot and open an
+    appointment. The bot_id key surviving past a participant_left is
+    the signal that the previous session is still inside its merge
+    window — resume there so segments concatenate into one note."""
+    redis = get_redis()
+    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+    if not bot_id:
+        _start_appointment_session(meeting_id, participant_id, user_name)
+        return
+
+    _revoke_merge_window_task(redis, meeting_id)
+    recall.start_recording(bot_id)
+    ttl = timedelta(hours=24)
+    redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
+    log.info(
+        "recording resumed on existing bot within merge window",
+        meeting_id=meeting_id, bot_id=bot_id, participant_id=participant_id,
+    )
 
 
 def _ensure_appointment(
@@ -403,16 +454,7 @@ def handle_participant_left(payload: dict[str, Any]):
         )
 
         if recording_active:
-            task = recording_guard.queue(meeting_id, countdown=GRACE_PERIOD_SECONDS)
-            redis.set(
-                f"recall:meeting:{meeting_id}:grace_task_id", task.id,
-                ex=timedelta(hours=24),
-            )
-            log.info(
-                "doctor left, grace period armed",
-                meeting_id=meeting_id, grace_task_id=task.id,
-                countdown_s=GRACE_PERIOD_SECONDS,
-            )
+            _pause_and_arm_merge_window(redis, meeting_id, reason="doctor_left")
         return
 
     # role == "other"
@@ -440,34 +482,46 @@ def handle_participant_left(payload: dict[str, Any]):
     )
 
     if new_count == 0 and doctor_present and recording_active:
-        bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
-        if bot_id:
-            # Clear Redis unconditionally after the Recall calls — even on
-            # transient 5xx, meeting.ended will eventually clean up the bot.
-            # Leaving recording_active set here would make the next patient
-            # silently no-op and run on a stale bot.
-            try:
-                recall.stop_recording(bot_id)
-            except Exception:
-                log.exception(
-                    "stop_recording failed during session close",
-                    bot_id=bot_id, meeting_id=meeting_id,
-                )
-            try:
-                recall.leave_call(bot_id)
-            except Exception:
-                log.exception(
-                    "leave_call failed during session close",
-                    bot_id=bot_id, meeting_id=meeting_id,
-                )
-        redis.delete(f"recall:meeting:{meeting_id}:recording_active")
-        redis.delete(f"recall:meeting:{meeting_id}:bot_id")
-        redis.delete(f"recall:meeting:{meeting_id}:participants_order")
-        redis.delete(f"recall:meeting:{meeting_id}:participants_names")
-        log.info(
-            "appointment session closed",
-            meeting_id=meeting_id, bot_id=bot_id,
+        # Mirror the doctor-leaves behavior: pause and arm the merge
+        # window so a follow-up patient inside 10 min lands on the same
+        # bot and concatenates into one note (Mode A back-to-back).
+        _pause_and_arm_merge_window(
+            redis, meeting_id, reason="last_patient_left",
         )
+
+
+def _pause_and_arm_merge_window(redis, meeting_id: str, reason: str) -> None:
+    """Pause the active recording: stop the bot (it stays connected) and
+    arm the merge_window task. If a non-doctor or the doctor returns
+    within the window, we resume on the same bot. If the window expires,
+    merge_window.perform issues leave_call and clears state."""
+    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+    if bot_id:
+        try:
+            recall.stop_recording(bot_id)
+        except Exception:
+            log.exception(
+                "stop_recording failed during pause",
+                bot_id=bot_id, meeting_id=meeting_id, reason=reason,
+            )
+
+    redis.delete(f"recall:meeting:{meeting_id}:recording_active")
+
+    ttl = timedelta(hours=24)
+    redis.set(
+        f"recall:meeting:{meeting_id}:paused_at",
+        datetime.utcnow().isoformat(),
+        ex=ttl,
+    )
+    task = merge_window.queue(meeting_id, countdown=MERGE_WINDOW_SECONDS)
+    redis.set(
+        f"recall:meeting:{meeting_id}:merge_task_id", task.id, ex=ttl,
+    )
+    log.info(
+        "recording paused, merge window armed",
+        meeting_id=meeting_id, bot_id=bot_id, reason=reason,
+        merge_task_id=task.id, countdown_s=MERGE_WINDOW_SECONDS,
+    )
 
 
 def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> None:
@@ -482,7 +536,7 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
     suffixes = [
         "bot_id", "doctor_id", "host_id", "doctor_present", "recording_active",
         "participants_order", "participants_names", "patient_count",
-        "grace_task_id",
+        "merge_task_id", "paused_at",
     ]
     if not preserve_lock:
         suffixes.append("starting_lock")
@@ -515,10 +569,10 @@ def handle_meeting_ended(payload: dict[str, Any]):
         return
 
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
-    grace_task_id = _rget(redis, f"recall:meeting:{meeting_id}:grace_task_id")
+    merge_task_id = _rget(redis, f"recall:meeting:{meeting_id}:merge_task_id")
 
-    if grace_task_id:
-        celery_app.control.revoke(grace_task_id)
+    if merge_task_id:
+        celery_app.control.revoke(merge_task_id)
 
     if bot_id:
         log.info(

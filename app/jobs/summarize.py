@@ -13,7 +13,7 @@ from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_example import DoctorNoteExample
@@ -24,21 +24,40 @@ from app.models.intake.intake import Intake
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     log.info("starting summarization", transcript_id=transcript_id, schema_id=schema_id)
 
-    transcript = AIVisitTranscript.get(id=transcript_id)
-    assert transcript
+    trigger = AIVisitTranscript.get(id=transcript_id)
+    assert trigger
 
     schema = DoctorNoteSchema.get(id=schema_id)
     assert schema
 
+    # Load every transcript tied to this appointment so back-to-back
+    # segments (Mode A) collapse into one note. Ordering by created_at
+    # preserves the clinical timeline; segment markers tell the LLM
+    # where one recording ended and the next began.
+    all_transcripts = cast(
+        list[AIVisitTranscript],
+        list(
+            AIVisitTranscript.where(
+                AIVisitTranscript.appointment_id == trigger.appointment_id
+            )
+            .order_by(cast(Any, AIVisitTranscript.created_at).asc())
+            .all()
+        ),
+    )
+    latest = all_transcripts[-1]
+
+    # Idempotency: when a note already exists and is linked to the
+    # current latest transcript, the merged content hasn't changed, so
+    # there's nothing to regenerate. Celery retries and duplicate
+    # webhook deliveries hit this guard.
     existing_note = AIVisitNote.get(
-        (AIVisitNote.ai_transcript_id == transcript.id)
+        (AIVisitNote.appointment_id == trigger.appointment_id)
         & (AIVisitNote.doctor_note_schema_id == schema.id)
     )
-
-    if existing_note:
+    if existing_note and existing_note.ai_transcript_id == latest.id:
         log.info(
-            "note already exists, skipping summarization",
-            transcript_id=transcript_id,
+            "note already reflects latest transcript, skipping summarization",
+            appointment_id=str(trigger.appointment_id),
             schema_id=schema_id,
         )
         return
@@ -55,17 +74,23 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
 
     # TODO Validate the example note matches the schema.
 
-    log.info("generating clinical note")
+    merged = _merge_transcripts(all_transcripts)
+
+    log.info(
+        "generating clinical note",
+        segment_count=len(all_transcripts),
+        merged_duration=merged.duration,
+    )
     note = generate_clinical_note(
-        transcript=transcript,
+        transcript=merged,
         example_note=example,
         note_schema=schema,
     )
 
     log.info("augmenting clinical note")
-    note = augment_clinical_note(original=note, transcript=transcript)
+    note = augment_clinical_note(original=note, transcript=merged)
 
-    appointment = Appointment.one(transcript.appointment_id)
+    appointment = Appointment.one(trigger.appointment_id)
 
     # CC == cheif complaint.
     appointment_name = note.get("CC", "General Appointment")
@@ -81,14 +106,55 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     # TODO can we add an appointment summary here? Maybe a separate openai call?
     appointment.save()
 
+    # Replace any stale note for this (appointment, schema). We hard-delete
+    # because AIVisitNote has no soft-deletion mixin and the previous note
+    # was generated from a now-incomplete subset of segments.
+    if existing_note:
+        existing_note.delete()
+
     log.info("saving visit note")
     AIVisitNote(
-        doctor_id=transcript.doctor_id,
-        appointment_id=transcript.appointment_id,
-        ai_transcript_id=transcript.id,
+        doctor_id=trigger.doctor_id,
+        appointment_id=trigger.appointment_id,
+        ai_transcript_id=latest.id,
         doctor_note_schema_id=schema.id,
         note=note,
     ).save()
+
+
+def _merge_transcripts(
+    transcripts: list[AIVisitTranscript],
+) -> AIVisitTranscript:
+    """Combine N transcript rows into a single in-memory AIVisitTranscript
+    that the LLM helpers can consume unchanged. Segment markers tell the
+    model where one recording ended and the next began so it can reason
+    about gaps. Durations sum so the 'time spent in patient care' line
+    that augment_clinical_note appends covers the whole visit."""
+    first = transcripts[0]
+    merged_entries: list[TranscriptEntry] = []
+    total_duration = 0
+    for i, t in enumerate(transcripts):
+        if i > 0:
+            merged_entries.append(
+                TranscriptEntry(
+                    speaker="system",
+                    content=f"[Segment {i + 1} starts]",
+                    startTime=0,
+                    endTime=0,
+                )
+            )
+        merged_entries.extend(t.transcript_data)
+        total_duration += t.duration or 0
+
+    # Construct without saving — this row exists only to feed the LLM
+    # helpers; persisted state lives in the underlying transcripts.
+    return AIVisitTranscript(
+        doctor_id=first.doctor_id,
+        appointment_id=first.appointment_id,
+        patient_id=first.patient_id,
+        duration=total_duration,
+        transcript_data=merged_entries,
+    )
 
 
 perform_celery = celery_app.task(perform)

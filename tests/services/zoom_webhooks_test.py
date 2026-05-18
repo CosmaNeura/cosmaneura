@@ -26,7 +26,7 @@ def clean_redis():
     suffixes = [
         "bot_id", "doctor_id", "host_id", "doctor_present", "recording_active",
         "participants_order", "participants_names", "patient_count",
-        "starting_lock", "grace_task_id",
+        "starting_lock", "merge_task_id", "paused_at",
     ]
     for s in suffixes:
         redis.delete(_key(s))
@@ -306,9 +306,22 @@ def test_additional_participant_during_active_session_no_new_bot(
     assert clean_redis.get(_key("recording_active")) == b"1"
 
 
-def test_last_patient_leaves_closes_appointment_and_leaves_bot(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+def test_last_patient_leaves_pauses_and_schedules_merge_window(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
 ):
+    """When the last non-doctor leaves while the doctor is still present,
+    the recording is paused (stop_recording) and a merge_window task is
+    scheduled. The bot is kept connected so the next patient can resume
+    on the same bot inside the merge window."""
+    class FakeAsyncResult:
+        id = "celery-task-mw"
+
+    from app.jobs import merge_window
+    monkeypatch.setattr(
+        merge_window.expire, "apply_async",
+        lambda args, countdown: FakeAsyncResult(),
+    )
+
     from app.services import zoom_webhooks
 
     zoom_webhooks.handle_meeting_started(_started_payload())
@@ -324,15 +337,37 @@ def test_last_patient_leaves_closes_appointment_and_leaves_bot(
     )
 
     assert mock_recall["stop_recording"] == [BOT_ID]
-    assert mock_recall["leave_call"] == [BOT_ID]
+    assert mock_recall["leave_call"] == []
     assert clean_redis.get(_key("recording_active")) is None
-    assert clean_redis.get(_key("bot_id")) is None
+    # bot is preserved for potential resume within the merge window
+    assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
+    assert clean_redis.get(_key("merge_task_id")).decode() == "celery-task-mw"
     assert clean_redis.llen(_key("participants_order")) == 0
 
 
-def test_sequential_patients_produce_two_bots(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+def test_sequential_patients_within_merge_window_share_bot(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
 ):
+    """Back-to-back patients (Mode A) within the 10-min merge window must
+    reuse the same bot via start_recording; we do NOT create a new bot or
+    leave_call between them. The merge_window task scheduled when the last
+    patient left is revoked when the next patient arrives."""
+    revoked = []
+
+    class FakeAsyncResult:
+        id = "celery-task-mw"
+
+    from app.jobs import merge_window
+    monkeypatch.setattr(
+        merge_window.expire, "apply_async",
+        lambda args, countdown: FakeAsyncResult(),
+    )
+    from app.celery import celery_app
+    monkeypatch.setattr(
+        celery_app.control, "revoke",
+        lambda task_id, terminate=False: revoked.append(task_id),
+    )
+
     from app.services import zoom_webhooks
 
     zoom_webhooks.handle_meeting_started(_started_payload())
@@ -348,15 +383,19 @@ def test_sequential_patients_produce_two_bots(
         _participant_left_payload("patient-a", "Juan")
     )
 
-    # Patient B enters — should create a brand-new bot
+    # Patient B enters within the merge window — same bot resumes
     zoom_webhooks.handle_participant_joined(
         _participant_joined_payload("patient-b", "Sofia")
     )
 
-    assert len(mock_recall["create_bot"]) == 2
+    assert len(mock_recall["create_bot"]) == 1
     assert mock_recall["start_recording"] == [BOT_ID, BOT_ID]
     assert mock_recall["stop_recording"] == [BOT_ID]
-    assert mock_recall["leave_call"] == [BOT_ID]
+    assert mock_recall["leave_call"] == []
+    assert "celery-task-mw" in revoked
+    assert clean_redis.get(_key("merge_task_id")) is None
+    assert clean_redis.get(_key("recording_active")) == b"1"
+    assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
 
 
 def test_accompanying_family_leaves_keeps_recording(
@@ -384,9 +423,12 @@ def test_accompanying_family_leaves_keeps_recording(
     assert clean_redis.get(_key("recording_active")) == b"1"
 
 
-def test_doctor_leaves_during_recording_schedules_grace(
+def test_doctor_leaves_pauses_recording_and_schedules_merge_window(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
 ):
+    """Doctor leaving while recording pauses the bot (stop_recording) and
+    arms a 10-min merge_window task. bot_id is preserved so doctor can
+    resume on the same bot if they return within the window."""
     scheduled = {}
 
     class FakeAsyncResult:
@@ -397,10 +439,8 @@ def test_doctor_leaves_during_recording_schedules_grace(
         scheduled["countdown"] = countdown
         return FakeAsyncResult()
 
-    from app.jobs import recording_guard
-    monkeypatch.setattr(
-        recording_guard.stop_recording_if_absent, "apply_async", fake_apply_async
-    )
+    from app.jobs import merge_window
+    monkeypatch.setattr(merge_window.expire, "apply_async", fake_apply_async)
 
     from app.services import zoom_webhooks
 
@@ -417,23 +457,31 @@ def test_doctor_leaves_during_recording_schedules_grace(
     )
 
     assert scheduled["args"] == (MEETING_ID,)
-    assert scheduled["countdown"] == 90
-    assert clean_redis.get(_key("grace_task_id")).decode() == "celery-task-42"
-    # Recording is still active — grace hasn't expired
-    assert clean_redis.get(_key("recording_active")) == b"1"
+    assert scheduled["countdown"] == 600
+    assert clean_redis.get(_key("merge_task_id")).decode() == "celery-task-42"
+    # Recording is paused, not active
+    assert clean_redis.get(_key("recording_active")) is None
+    # stop_recording fired but leave_call did not — bot stays connected
+    assert mock_recall["stop_recording"] == [BOT_ID]
+    assert mock_recall["leave_call"] == []
+    assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
+    assert clean_redis.get(_key("paused_at")) is not None
 
 
-def test_doctor_returns_within_grace_revokes_task(
+def test_doctor_returns_within_merge_window_resumes_same_bot(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
 ):
+    """Doctor leaves with a patient still in the room, then returns within
+    the merge window. The pending merge_window task is revoked and
+    start_recording is issued on the SAME bot (no new create_bot)."""
     revoked = []
 
     class FakeAsyncResult:
         id = "celery-task-99"
 
-    from app.jobs import recording_guard
+    from app.jobs import merge_window
     monkeypatch.setattr(
-        recording_guard.stop_recording_if_absent, "apply_async",
+        merge_window.expire, "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
 
@@ -455,32 +503,90 @@ def test_doctor_returns_within_grace_revokes_task(
     zoom_webhooks.handle_participant_left(
         _participant_left_payload(HOST_ID, "Test Doctor")
     )
-    # Doctor returns
+    # Doctor returns; patient is still present so we resume
     zoom_webhooks.handle_participant_joined(
         _participant_joined_payload(HOST_ID, "Test Doctor")
     )
 
-    assert revoked == ["celery-task-99"]
-    assert clean_redis.get(_key("grace_task_id")) is None
+    assert "celery-task-99" in revoked
+    assert clean_redis.get(_key("merge_task_id")) is None
     assert clean_redis.get(_key("doctor_present")) == b"1"
     assert clean_redis.get(_key("recording_active")) == b"1"
-    # Only one bot should have been created across the whole flow
+    # Only one create_bot across the whole flow; two start_recording calls
+    # (initial + resume) on the same bot.
     assert len(mock_recall["create_bot"]) == 1
+    assert mock_recall["start_recording"] == [BOT_ID, BOT_ID]
+    assert mock_recall["leave_call"] == []
 
 
-def test_grace_period_expires_stops_and_leaves(
+def test_doctor_returns_to_empty_room_stays_paused(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
 ):
-    """Stub apply_async so handle_participant_left only SCHEDULES
-    the grace task. Then call recording_guard.perform directly — this
-    is the sole driver of the assertions below, matching the 90s-later
-    production scenario."""
-    class FakeAsyncResult:
-        id = "celery-task-grace"
+    """Doctor leaves while a patient is present (pause #1), then the patient
+    leaves too (pause #2 — but recording is already paused). Doctor comes
+    back to an empty room: there's no non-doctor to resume against, so we
+    DO NOT call start_recording. The merge_window task remains armed."""
+    revoked = []
 
-    from app.jobs import recording_guard
+    class FakeAsyncResult:
+        id = "celery-task-empty"
+
+    from app.jobs import merge_window
     monkeypatch.setattr(
-        recording_guard.stop_recording_if_absent, "apply_async",
+        merge_window.expire, "apply_async",
+        lambda args, countdown: FakeAsyncResult(),
+    )
+    from app.celery import celery_app
+    monkeypatch.setattr(
+        celery_app.control, "revoke",
+        lambda task_id, terminate=False: revoked.append(task_id),
+    )
+
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan")
+    )
+    # Doctor leaves first → pause
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload(HOST_ID, "Test Doctor")
+    )
+    # Patient leaves too; still paused
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload("patient-a", "Juan")
+    )
+    # Doctor returns alone
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    # No resume because no patient is in the room
+    assert mock_recall["start_recording"] == [BOT_ID]  # only the original
+    assert clean_redis.get(_key("recording_active")) is None
+    # merge_task still armed — doctor showing up alone doesn't end the visit
+    assert revoked == []
+    assert clean_redis.get(_key("merge_task_id")) is not None
+    assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
+
+
+def test_merge_window_expires_leaves_bot_and_clears_state(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+):
+    """Stub apply_async so handle_participant_left only SCHEDULES the
+    merge_window task. Then call merge_window.perform directly to simulate
+    the task firing 10 min later with no resume in between. The bot is
+    already paused (stop_recording fired on doctor-left), so this only
+    needs to call leave_call and clear keys."""
+    class FakeAsyncResult:
+        id = "celery-task-mw-expires"
+
+    from app.jobs import merge_window
+    monkeypatch.setattr(
+        merge_window.expire, "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
 
@@ -497,19 +603,37 @@ def test_grace_period_expires_stops_and_leaves(
         _participant_left_payload(HOST_ID, "Test Doctor")
     )
 
-    # Sanity: the webhook only scheduled — nothing has been stopped yet.
-    assert mock_recall["stop_recording"] == []
-    assert mock_recall["leave_call"] == []
-    assert clean_redis.get(_key("recording_active")) == b"1"
-
-    # Simulate the grace task firing after 90s with doctor still absent
-    recording_guard.perform(MEETING_ID)
-
+    # Pause-state sanity: stop_recording fired but leave_call did not.
     assert mock_recall["stop_recording"] == [BOT_ID]
-    assert mock_recall["leave_call"] == [BOT_ID]
+    assert mock_recall["leave_call"] == []
     assert clean_redis.get(_key("recording_active")) is None
+    assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
+
+    # Simulate the merge_window task firing after 10 min with no resume
+    merge_window.perform(MEETING_ID)
+
+    assert mock_recall["stop_recording"] == [BOT_ID]  # not called again
+    assert mock_recall["leave_call"] == [BOT_ID]
     assert clean_redis.get(_key("bot_id")) is None
-    assert clean_redis.get(_key("grace_task_id")) is None
+    assert clean_redis.get(_key("merge_task_id")) is None
+
+
+def test_merge_window_perform_noop_when_recording_resumed(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+):
+    """If recording resumed before the task fires (recording_active=1),
+    merge_window.perform must be a no-op — the bot stays connected."""
+    from app.jobs import merge_window
+
+    clean_redis.set(_key("bot_id"), BOT_ID)
+    clean_redis.set(_key("recording_active"), "1")
+    clean_redis.set(_key("merge_task_id"), "celery-task-stale")
+
+    merge_window.perform(MEETING_ID)
+
+    assert mock_recall["leave_call"] == []
+    assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
+    assert clean_redis.get(_key("recording_active")) == b"1"
 
 
 def test_stale_meeting_ended_within_lock_window_is_skipped(
@@ -581,7 +705,7 @@ def test_meeting_ended_with_active_recording_stops_and_leaves(
     assert clean_redis.get(_key("recording_active")) is None
 
 
-def test_meeting_ended_revokes_pending_grace_task(
+def test_meeting_ended_revokes_pending_merge_window_task(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
 ):
     revoked = []
@@ -589,9 +713,9 @@ def test_meeting_ended_revokes_pending_grace_task(
     class FakeAsyncResult:
         id = "celery-task-77"
 
-    from app.jobs import recording_guard
+    from app.jobs import merge_window
     monkeypatch.setattr(
-        recording_guard.stop_recording_if_absent, "apply_async",
+        merge_window.expire, "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
 
@@ -617,3 +741,105 @@ def test_meeting_ended_revokes_pending_grace_task(
     zoom_webhooks.handle_meeting_ended(_meeting_ended_payload())
 
     assert "celery-task-77" in revoked
+
+
+def test_matcher_skips_appointment_that_already_has_a_transcript(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    """Phase 1 band-aid for Mode A scenario #9 (back-to-back patients
+    across the merge window): an existing appointment that already has
+    a transcript must NOT be matched again. A fresh appointment is
+    created from the patient's display name instead."""
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from app.services import zoom_webhooks
+
+    from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+    from app.models.appointment import Appointment
+    from app.models.patient import Patient
+
+    # Stale appointment from earlier in the day, already transcribed.
+    old_patient = Patient.find_or_create_by(
+        doctor_id=doctor_with_zoom.id,
+        name="Stale Patient",
+        date_of_birth=_dt(1990, 1, 1),
+    )
+    old_appt = Appointment.find_or_create_by(
+        doctor_id=doctor_with_zoom.id,
+        patient_id=old_patient.id,
+        appointment_date=_dt.utcnow() - _td(minutes=30),
+        created_by_system="recall",
+    )
+    AIVisitTranscript(
+        doctor_id=doctor_with_zoom.id,
+        appointment_id=old_appt.id,
+        patient_id=old_patient.id,
+        duration=120,
+        transcript_data=[
+            TranscriptEntry(
+                speaker="doctor", content="prior visit",
+                startTime=0, endTime=0,
+            )
+        ],
+    ).save()
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-b", "Sofia Lopez")
+    )
+
+    # A bot is created for the new patient
+    assert len(mock_recall["create_bot"]) == 1
+    # The recording is linked to a DIFFERENT appointment than the stale one
+    new_appointment_id = (
+        clean_redis.get(f"recall:bot:{BOT_ID}:appointment_id").decode()
+    )
+    assert new_appointment_id != str(old_appt.id)
+    # And the new appointment's patient should be the one who actually joined
+    new_appt = Appointment.one(new_appointment_id)
+    assert new_appt.patient_id != old_patient.id
+    new_patient = Patient.one(new_appt.patient_id)
+    assert new_patient.name == "Sofia Lopez"
+
+
+def test_matcher_still_binds_when_appointment_has_no_transcript(
+    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+):
+    """An existing appointment WITHOUT any transcript is still a valid
+    match — that's the calendar-pre-creates-appointment case."""
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+
+    from app.services import zoom_webhooks
+
+    from app.models.appointment import Appointment
+    from app.models.patient import Patient
+
+    patient = Patient.find_or_create_by(
+        doctor_id=doctor_with_zoom.id,
+        name="Calendar Patient",
+        date_of_birth=_dt(1990, 1, 1),
+    )
+    pre_existing = Appointment.find_or_create_by(
+        doctor_id=doctor_with_zoom.id,
+        patient_id=patient.id,
+        appointment_date=_dt.utcnow() - _td(minutes=5),
+        created_by_system="recall",
+    )
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-c", "Sofia Lopez")
+    )
+
+    bound_appointment_id = (
+        clean_redis.get(f"recall:bot:{BOT_ID}:appointment_id").decode()
+    )
+    assert bound_appointment_id == str(pre_existing.id)
