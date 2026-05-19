@@ -21,7 +21,7 @@ def test_leave_call_posts_to_bot_endpoint(monkeypatch):
             captured["headers"] = headers
             return FakeResponse()
 
-    monkeypatch.setattr(httpx, "Client", lambda: FakeClient())
+    monkeypatch.setattr(httpx, "Client", lambda **_: FakeClient())
 
     recall.leave_call("bot-abc-123")
 
@@ -44,7 +44,7 @@ def test_leave_call_tolerates_already_done_bot(monkeypatch):
         def post(self, url, headers=None):
             return FakeResponse()
 
-    monkeypatch.setattr(httpx, "Client", lambda: FakeClient())
+    monkeypatch.setattr(httpx, "Client", lambda **_: FakeClient())
 
     # Should NOT raise — 400 means bot already terminated
     recall.leave_call("bot-abc-123")
@@ -68,7 +68,7 @@ def test_create_bot_forwards_metadata_and_zak_url(monkeypatch):
             captured["payload"] = json
             return FakeResponse()
 
-    monkeypatch.setattr(httpx, "Client", lambda: FakeClient())
+    monkeypatch.setattr(httpx, "Client", lambda **_: FakeClient())
 
     recall.create_bot(
         meeting_url="https://zoom.us/j/123",

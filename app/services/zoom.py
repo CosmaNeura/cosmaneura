@@ -17,6 +17,9 @@ from app.models.doctor_video_integration import DoctorVideoIntegration, VideoPro
 
 ZOOM_API_BASE = "https://api.zoom.us/v2"
 ZOOM_OAUTH_REVOKE_URL = "https://zoom.us/oauth/revoke"
+
+# Defensive timeout for outbound Zoom API calls. See note in recall.py.
+_HTTPX_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _TOKEN_EXPIRY_BUFFER = timedelta(minutes=5)
 # Surfaces an unexpected disconnect to the doctor on next app load. 7 days
 # is enough for the doctor to come back from a weekend off and still see
@@ -66,7 +69,7 @@ def _get_doctor_token(
     if not force and expires_at > now + _TOKEN_EXPIRY_BUFFER:
         return integration.access_token
 
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             ZOOM_OAUTH_TOKEN_URL,
             headers={"Authorization": _basic_auth_header()},
@@ -117,7 +120,7 @@ def _zoom_request(
     """Make an authenticated Zoom API request, retrying once on 401 with a fresh token."""
     token = _get_doctor_token(integration)
 
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.request(
             method,
             f"{ZOOM_API_BASE}{path}",
@@ -128,7 +131,7 @@ def _zoom_request(
     if response.status_code == httpx.codes.UNAUTHORIZED:
         log.info("zoom token rejected, refreshing", path=path)
         token = _get_doctor_token(integration, force=True)
-        with httpx.Client() as client:
+        with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
             response = client.request(
                 method,
                 f"{ZOOM_API_BASE}{path}",
@@ -158,7 +161,7 @@ def revoke_token(doctor: Doctor) -> None:
     integration = get_zoom_integration(doctor)
     assert integration, f"doctor {doctor.id} has no zoom integration"
 
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             ZOOM_OAUTH_REVOKE_URL,
             headers={"Authorization": _basic_auth_header()},

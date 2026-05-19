@@ -5,6 +5,16 @@ import httpx
 from app import log
 from app.configuration.recall import RECALL_API_BASE, RECALL_API_KEY
 
+# Defensive timeout for every outbound Recall API call. Today (2026-05-19)
+# the worker hung because some external HTTP request never returned, which
+# blocked all four celery prefork slots and silently backed up the queue.
+# Explicit timeouts mean a hang surfaces as an exception (Sentry) instead
+# of a worker that looks alive but can't process anything.
+_HTTPX_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+# Transcript downloads can be larger blobs; allow more read time without
+# loosening the per-API-call envelope above.
+_HTTPX_DOWNLOAD_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+
 # Bot status codes that mean the bot is present in the call and able to
 # accept a start_recording command. See Recall.ai docs for the full list.
 #
@@ -64,7 +74,7 @@ def create_bot(
     if metadata is not None:
         payload["metadata"] = metadata
 
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/",
             json=payload,
@@ -88,7 +98,7 @@ def create_bot(
 
 
 def get_bot(bot_id: str) -> dict:
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.get(
             f"{RECALL_API_BASE}/bot/{bot_id}/",
             headers={"Authorization": f"Token {RECALL_API_KEY}"},
@@ -172,7 +182,7 @@ def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
             )
             return {}
 
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/{bot_id}/start_recording/",
             headers={"Authorization": f"Token {RECALL_API_KEY}"},
@@ -195,7 +205,7 @@ def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
 
 
 def stop_recording(bot_id: str) -> None:
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/{bot_id}/stop_recording/",
             headers={"Authorization": f"Token {RECALL_API_KEY}"},
@@ -222,7 +232,7 @@ def stop_recording(bot_id: str) -> None:
 
 def create_async_transcript(recording_id: str, language_code: str = "auto") -> dict:
     payload = {"provider": {"recallai_async": {"language_code": language_code}}}
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/recording/{recording_id}/create_transcript/",
             json=payload,
@@ -249,7 +259,7 @@ def create_async_transcript(recording_id: str, language_code: str = "auto") -> d
 
 def get_transcript(transcript_id: str) -> dict:
     """GET /transcript/{id}/ — returns metadata including data.download_url."""
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.get(
             f"{RECALL_API_BASE}/transcript/{transcript_id}/",
             headers={"Authorization": f"Token {RECALL_API_KEY}"},
@@ -266,7 +276,7 @@ def get_transcript(transcript_id: str) -> dict:
 
 def download_transcript_data(download_url: str) -> list[dict]:
     """Fetch the pre-signed transcript download URL (no auth required)."""
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_DOWNLOAD_TIMEOUT) as client:
         response = client.get(download_url)
         response.raise_for_status()
     return response.json()
@@ -276,7 +286,7 @@ def leave_call(bot_id: str) -> None:
     """Tell the bot to leave the meeting. Triggers the Recall `done`
     terminal status and stops billing for this bot. Safe to call on a
     bot that already left."""
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/{bot_id}/leave_call/",
             headers={"Authorization": f"Token {RECALL_API_KEY}"},
