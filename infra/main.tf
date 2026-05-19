@@ -638,6 +638,23 @@ resource "azurerm_container_app" "worker" {
   template {
     # without this, if the container fails, it will not be restarted even if tf config is updated
     min_replicas = 1
+    # Worker has no HTTP ingress so KEDA has no implicit scaler to evaluate.
+    # Pinning max == min sidesteps autoscaling, but Container Apps still
+    # creates a ScaledObject under the hood — and Azure's KEDA upgrade on
+    # 2026-05-19 made it strict about requiring at least one rule. Without
+    # this stub, KEDA fails its periodic check (~every 30s) and after a
+    # couple of failures deletes the ScaledObject, which Container Apps
+    # interprets as "stop the container", causing a ~60s crash loop.
+    max_replicas = 1
+
+    custom_scale_rule {
+      name             = "celery-cpu"
+      custom_rule_type = "cpu"
+      metadata = {
+        type  = "Utilization"
+        value = "80"
+      }
+    }
 
     container {
       name = "${local.base_name}-app-worker"
