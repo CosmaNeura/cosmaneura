@@ -196,6 +196,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.jobs.heartbeat.perform",
         "schedule": 60.0,
     },
+    # Synthetic check exercises the meeting.started handler against
+    # production redis + db so config drift (rotated secrets, broken
+    # DSNs, network policy changes) gets caught within 15 minutes
+    # instead of when the next real user reports their bot didn't join.
+    "synthetic_zoom_check": {
+        "task": "app.jobs.synthetic_zoom_check.perform",
+        "schedule": crontab(minute="*/15"),
+    },
 }
 
 # Import crontab at the top of the file
