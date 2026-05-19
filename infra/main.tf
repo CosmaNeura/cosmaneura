@@ -659,20 +659,34 @@ resource "azurerm_container_app" "worker" {
     container {
       name = "${local.base_name}-app-worker"
 
-      # there's a custom http server that runs `/` as a healthcheck url and pings celery
+      # celery_healthcheck (registered in app/celery.py) exposes GET / on
+      # port 9000 which calls inspect.ping() and returns 503 if the celery
+      # worker is unresponsive. TCP probes only verify uvicorn holds the
+      # port, which stays true even when celery itself has died — Azure
+      # would see "healthy" and never restart. HTTP probes actually
+      # validate celery is alive.
       readiness_probe {
         port      = 9000
-        transport = "TCP"
+        path      = "/"
+        transport = "HTTP"
       }
 
       startup_probe {
         port      = 9000
-        transport = "TCP"
+        path      = "/"
+        transport = "HTTP"
+        # Celery imports `app.models`, runs migrations, and starts a
+        # FastAPI/uvicorn thread before / responds 200. Locally this can
+        # take 15-25s on a cold start; allow 60s of probe time before
+        # Azure considers startup failed.
+        failure_count_threshold = 30
+        interval_seconds        = 2
       }
 
       liveness_probe {
         port      = 9000
-        transport = "TCP"
+        path      = "/"
+        transport = "HTTP"
       }
 
 
