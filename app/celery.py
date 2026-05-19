@@ -187,6 +187,15 @@ celery_app.conf.beat_schedule = {
         "task": "app.jobs.sync_clerk.perform",
         "schedule": crontab(minute="0", hour="0"),
     },
+    # Heartbeat proves the worker is alive end-to-end (beat → broker →
+    # worker → task execution). Sentry's CeleryIntegration with
+    # monitor_beat_tasks=True turns this into a cron monitor that pages
+    # us if the heartbeat doesn't fire on schedule — the signal we
+    # didn't have during the 2026-05-19 worker hang.
+    "heartbeat": {
+        "task": "app.jobs.heartbeat.perform",
+        "schedule": 60.0,
+    },
 }
 
 # Import crontab at the top of the file
