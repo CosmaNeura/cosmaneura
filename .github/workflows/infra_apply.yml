@@ -1,0 +1,86 @@
+name: Terraform Apply
+
+# Runs `tofu apply` against production whenever a merge to master changes
+# infrastructure code. The matching infra_plan.yml shows reviewers
+# exactly what this workflow will do BEFORE they approve the merge.
+#
+# Manual fallback: workflow_dispatch lets someone re-run apply without
+# pushing a new commit (useful for retrying after a transient Azure API
+# failure, or for the first apply after this workflow lands).
+#
+# DO NOT REMOVE THE CONCURRENCY GROUP. Two parallel applies racing on
+# the same state file can corrupt it.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra_apply.yml'
+      - 'Procfile'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+# Serialize applies. cancel-in-progress: false means a queued apply
+# waits for the current one to finish instead of being killed — losing
+# half-applied state mid-flight is worse than waiting a few minutes.
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: production
+    env:
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_wrapper: false
+
+      - name: tofu init
+        working-directory: infra
+        run: tofu init -input=false
+
+      - name: tofu plan (sanity check before apply)
+        working-directory: infra
+        # Re-running plan immediately before apply catches state drift
+        # that happened between the PR's plan run and the merge. If a
+        # human applied something out-of-band, this shows it in the
+        # apply log.
+        run: tofu plan -no-color -input=false -out=tfplan.bin
+
+      - name: tofu apply
+        working-directory: infra
+        run: tofu apply -input=false -auto-approve tfplan.bin
+
+      - name: Summarize apply
+        if: always()
+        working-directory: infra
+        run: |
+          {
+            echo "## Terraform Apply"
+            echo ''
+            echo "Job status: ${{ job.status }}"
+            echo "Commit: ${{ github.sha }}"
+            echo "Triggered by: ${{ github.event_name }} on ${{ github.ref }}"
+          } >> $GITHUB_STEP_SUMMARY

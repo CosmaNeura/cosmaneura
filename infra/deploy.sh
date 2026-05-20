@@ -20,7 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCE_GROUP="cosmaneura-prod"
 ENVIRONMENT_NAME="cosmaneura-prod-app-environment"
 MIGRATION_JOB="cosmaneura-prod-migrate"
-CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-app-jmon"
+CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-scheduler cosmaneura-prod-app-jmon"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
@@ -204,9 +204,18 @@ initiate_deployment() {
 	local git_sha=$2
 	local image="${PRODUCTION_IMAGE}:${git_sha}"
 
+	# Tolerate containers that don't exist yet so this script can be a
+	# superset of what terraform has provisioned. Example: a brand-new
+	# container app added to main.tf hasn't been applied yet, but
+	# CONTAINERS already lists it for future deploys. Failing the whole
+	# script over a not-yet-created resource is worse than skipping it.
+	if ! az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" &>/dev/null; then
+		echo "Skipping $container_name — does not exist (probably awaiting first terraform apply)."
+		return 0
+	fi
+
 	echo "Initiating deployment for $container_name with image $image..."
 	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" -i "$image" --revision-suffix "$REVISION_STRING"
-	# --set-environment-variables "REVISION=$REVISION_STRING"
 
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment initiation failed for $container_name."
@@ -222,6 +231,13 @@ check_deployment() {
 	local container_name=$1
 	local git_sha=$2
 	local expected_image="${PRODUCTION_IMAGE}:${git_sha}"
+
+	# Mirror the skip logic from initiate_deployment so the post-deploy
+	# check doesn't fail on a container we deliberately skipped.
+	if ! az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" &>/dev/null; then
+		echo "Skipping deployment check for $container_name — does not exist."
+		return 0
+	fi
 
 	# Initialize backoff variables
 	local attempts=0
