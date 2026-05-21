@@ -62,6 +62,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Provides the same toolchain the app jobs use: mise (which reads
+      # .tool-versions and installs `just`, `direnv`, etc.), 1Password
+      # CLI, direnv-load-and-mask. Required because main.tf's
+      # data "external" "secrets" shells out to `just direnv_export`.
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 5
+
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}

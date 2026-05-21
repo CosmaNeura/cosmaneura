@@ -47,6 +47,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # main.tf data sources shell out to `just direnv_export`; the
+      # common-setup action installs mise + just + direnv + 1Password CLI.
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 5
+
       - uses: azure/login@v2
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
