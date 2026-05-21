@@ -7,7 +7,7 @@ resource "azurerm_ai_services" "openai_service" {
   resource_group_name = azurerm_resource_group.main.name
 
   # this seems to be the "primary" region for OpenAI, it has the most recent models
-  location            = "eastus2"
+  location = "eastus2"
 
   sku_name = "S0" # Example SKU, adjust based on actual requirements
 }

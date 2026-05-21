@@ -625,6 +625,96 @@ resource "azurerm_container_app" "app" {
   tags = var.tags
 }
 
+# Celery beat runs in its own container so a hung scheduler can't bring
+# down task execution and a worker crash doesn't pause the daily schedule.
+# REQUIRES: deploy a build that has --beat removed from Procfile's worker
+# entry BEFORE applying this — otherwise both this scheduler and the old
+# worker fight for the redbeat lock and one of them dies every ~25 minutes.
+resource "azurerm_container_app" "scheduler" {
+  resource_group_name = azurerm_resource_group.main.name
+
+  name                         = "${azurerm_resource_group.main.name}-scheduler"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+
+  revision_mode = "Single"
+
+  template {
+    # min == max == 1 is required: running two celery beat processes would
+    # double-fire every scheduled task. RedBeat's lock prevents that in
+    # practice but the safety net should be at the infra level, not relying
+    # on Redis-level coordination.
+    min_replicas = 1
+    max_replicas = 1
+
+    custom_scale_rule {
+      name             = "scheduler-cpu"
+      custom_rule_type = "cpu"
+      metadata = {
+        type  = "Utilization"
+        value = "80"
+      }
+    }
+
+    container {
+      name = "${local.base_name}-app-scheduler"
+
+      # `celery beat` does not open any port; HTTP probes would always fail.
+      # TCP on a closed port is also useless. Skip probes entirely and rely
+      # on container exit code: if beat raises uncaught, the process exits
+      # and Container Apps restarts it.
+
+      image = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
+
+      args = [data.external.procfile.result["scheduler"]]
+
+      dynamic "env" {
+        for_each = var.python_public_vars
+
+        content {
+          name  = env.key
+          value = data.external.secrets.result[env.key]
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.python_secret_vars
+
+        content {
+          name        = env.key
+          secret_name = replace(lower(env.key), "_", "-")
+        }
+      }
+
+      # Beat is lightweight: it polls Redis every few seconds and enqueues
+      # the occasional task. Half a CPU and 512Mi is generous.
+      cpu    = 0.25
+      memory = "0.5Gi"
+    }
+  }
+
+  dynamic "secret" {
+    for_each = var.python_secret_vars
+
+    content {
+      name  = replace(lower(secret.key), "_", "-")
+      value = data.external.secrets.result[secret.key]
+    }
+  }
+
+  registry {
+    server               = azurerm_container_registry.main.login_server
+    username             = azurerm_container_registry.main.admin_username
+    password_secret_name = "registry-secret"
+  }
+
+  secret {
+    name  = "registry-secret"
+    value = azurerm_container_registry.main.admin_password
+  }
+
+  tags = var.tags
+}
+
 resource "azurerm_container_app" "worker" {
   resource_group_name = azurerm_resource_group.main.name
   # NOTE location is determined automatically by the resource group
@@ -638,24 +728,55 @@ resource "azurerm_container_app" "worker" {
   template {
     # without this, if the container fails, it will not be restarted even if tf config is updated
     min_replicas = 1
+    # Worker has no HTTP ingress so KEDA has no implicit scaler to evaluate.
+    # Pinning max == min sidesteps autoscaling, but Container Apps still
+    # creates a ScaledObject under the hood — and Azure's KEDA upgrade on
+    # 2026-05-19 made it strict about requiring at least one rule. Without
+    # this stub, KEDA fails its periodic check (~every 30s) and after a
+    # couple of failures deletes the ScaledObject, which Container Apps
+    # interprets as "stop the container", causing a ~60s crash loop.
+    max_replicas = 1
+
+    custom_scale_rule {
+      name             = "celery-cpu"
+      custom_rule_type = "cpu"
+      metadata = {
+        type  = "Utilization"
+        value = "80"
+      }
+    }
 
     container {
       name = "${local.base_name}-app-worker"
 
-      # there's a custom http server that runs `/` as a healthcheck url and pings celery
+      # celery_healthcheck (registered in app/celery.py) exposes GET / on
+      # port 9000 which calls inspect.ping() and returns 503 if the celery
+      # worker is unresponsive. TCP probes only verify uvicorn holds the
+      # port, which stays true even when celery itself has died — Azure
+      # would see "healthy" and never restart. HTTP probes actually
+      # validate celery is alive.
       readiness_probe {
         port      = 9000
-        transport = "TCP"
+        path      = "/"
+        transport = "HTTP"
       }
 
       startup_probe {
         port      = 9000
-        transport = "TCP"
+        path      = "/"
+        transport = "HTTP"
+        # Celery imports `app.models`, runs migrations, and starts a
+        # FastAPI/uvicorn thread before / responds 200. Locally this can
+        # take 15-25s on a cold start; allow 60s of probe time before
+        # Azure considers startup failed.
+        failure_count_threshold = 30
+        interval_seconds        = 2
       }
 
       liveness_probe {
         port      = 9000
-        transport = "TCP"
+        path      = "/"
+        transport = "HTTP"
       }
 
 

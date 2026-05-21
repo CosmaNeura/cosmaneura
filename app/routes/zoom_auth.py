@@ -23,6 +23,10 @@ from app.models.doctor_video_integration import DoctorVideoIntegration, VideoPro
 ZOOM_AUTHORIZE_URL = "https://zoom.us/oauth/authorize"
 ZOOM_API_ME_URL = "https://api.zoom.us/v2/users/me"
 
+# Defensive timeout for outbound Zoom OAuth calls. See note in
+# app/services/recall.py.
+_HTTPX_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
+
 zoom_auth_app = APIRouter(prefix="/external/v1", tags=["zoom-oauth"])
 
 
@@ -94,7 +98,7 @@ def zoom_oauth_callback(
 
 
 def _exchange_code_for_tokens(code: str) -> dict:
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             ZOOM_OAUTH_TOKEN_URL,
             headers={"Authorization": _basic_auth_header()},
@@ -109,7 +113,7 @@ def _exchange_code_for_tokens(code: str) -> dict:
 
 
 def _get_zoom_user_id(access_token: str) -> str:
-    with httpx.Client() as client:
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.get(
             ZOOM_API_ME_URL,
             headers={"Authorization": f"Bearer {access_token}"},

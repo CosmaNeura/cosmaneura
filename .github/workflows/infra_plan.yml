@@ -1,0 +1,173 @@
+name: Terraform Plan
+
+# Runs on every PR that touches infrastructure code and posts the plan as
+# a sticky comment so reviewers can see exactly what will change before
+# they approve the merge.
+#
+# No infrastructure is modified by this workflow — it only runs `tofu
+# init`, `tofu fmt -check`, `tofu validate`, and `tofu plan`. The
+# matching infra_apply.yml runs `tofu apply` after merge.
+
+on:
+  pull_request:
+    paths:
+      - 'infra/**'
+      - '.github/workflows/infra_*.yml'
+      - 'Procfile'
+
+# Federated OIDC token issued by GitHub → Azure AD. id-token: write is
+# required to mint the token. pull-requests: write is required so we
+# can post the plan as a PR comment.
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+# A single PR can push multiple commits in quick succession. Cancel the
+# previous in-flight plan run when a new one starts so reviewers always
+# see the latest output.
+concurrency:
+  group: terraform-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # No `environment: production` here on purpose. The production
+    # environment is locked to the master branch, and PRs by definition
+    # run from non-master branches — using the environment would reject
+    # every PR run before any step gets to start.
+    #
+    # This is safe because `tofu plan` is read-only. The corresponding
+    # `tofu apply` step in infra_apply.yml DOES gate on the production
+    # environment, which is where the actual write protection belongs.
+    #
+    # Azure OIDC still works without the environment, but the subject
+    # claim changes from `repo:OWNER/REPO:environment:production` to
+    # `repo:OWNER/REPO:pull_request` — see infra/README.md for the
+    # federated credential the Azure AD App Registration needs.
+    env:
+      # Required by infra/main.tf data sources that pull production
+      # secrets out of 1Password.
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      # Tell terraform-provider-azurerm and the azurerm backend to use
+      # the OIDC token we just minted via azure/login.
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Provides the same toolchain the app jobs use: mise (which reads
+      # .tool-versions and installs `just`, `direnv`, etc.), 1Password
+      # CLI, direnv-load-and-mask. Required because main.tf's
+      # data "external" "secrets" shells out to `just direnv_export`.
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 5
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          # tofu_wrapper turns plan/apply stdout into a step output but
+          # also swallows exit codes — turn it off so a failed plan
+          # actually fails the workflow.
+          tofu_wrapper: false
+
+      - name: tofu init
+        working-directory: infra
+        run: tofu init -input=false
+
+      - name: tofu fmt -check
+        working-directory: infra
+        # -check returns non-zero on drift, -diff prints the offending
+        # lines so contributors can copy-paste the fix.
+        run: tofu fmt -check -diff -recursive
+
+      - name: tofu validate
+        working-directory: infra
+        run: tofu validate
+
+      - name: tofu plan
+        id: plan
+        working-directory: infra
+        # detailed-exitcode: 0 = no diff, 1 = error, 2 = diff present.
+        # We only want to fail on 1 (errors) so a diff stays a passing
+        # check with a visible comment.
+        run: |
+          set +e
+          tofu plan -no-color -input=false -detailed-exitcode -out=tfplan.bin 2>&1 | tee plan.txt
+          plan_exit=${PIPESTATUS[0]}
+          set -e
+          echo "exitcode=${plan_exit}" >> $GITHUB_OUTPUT
+          # Mirror plan to step summary so reviewers can read it without
+          # leaving the Actions tab.
+          {
+            echo "## Terraform Plan"
+            echo ''
+            echo '```'
+            head -c 60000 plan.txt
+            if [ $(wc -c < plan.txt) -gt 60000 ]; then
+              echo ''
+              echo '...[truncated, see full plan in step log]'
+            fi
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+          # Fail the step only on hard errors (exit 1). Exit 2 means
+          # "diff present" which is the normal case.
+          if [ "$plan_exit" -eq 1 ]; then
+            exit 1
+          fi
+
+      - name: Post plan as PR comment
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        with:
+          script: |
+            const fs = require('fs');
+            const exitcode = '${{ steps.plan.outputs.exitcode }}';
+            const planRaw = fs.readFileSync('infra/plan.txt', 'utf8');
+            // GitHub comment hard limit is 65536 chars; leave headroom.
+            const MAX = 60000;
+            const truncated = planRaw.length > MAX
+              ? planRaw.slice(0, MAX) + '\n\n...[truncated, see workflow logs for full plan]'
+              : planRaw;
+
+            const status = exitcode === '0'
+              ? '✅ No infrastructure changes detected.'
+              : '⚠️  Infrastructure changes pending — review the diff below before merging.';
+
+            // Sticky comment: update existing instead of posting a new one
+            // on every push.
+            const marker = '<!-- terraform-plan-comment -->';
+            const body = `${marker}\n## Terraform Plan\n\n${status}\n\n<details><summary>tofu plan output</summary>\n\n\`\`\`\n${truncated}\n\`\`\`\n\n</details>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.startsWith(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
