@@ -97,8 +97,8 @@ jobs:
         # check with a visible comment.
         run: |
           set +e
-          tofu plan -no-color -input=false -detailed-exitcode -out=tfplan.bin > plan.txt 2>&1
-          plan_exit=$?
+          tofu plan -no-color -input=false -detailed-exitcode -out=tfplan.bin 2>&1 | tee plan.txt
+          plan_exit=${PIPESTATUS[0]}
           set -e
           echo "exitcode=${plan_exit}" >> $GITHUB_OUTPUT
           # Mirror plan to step summary so reviewers can read it without
