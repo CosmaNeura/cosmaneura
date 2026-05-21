@@ -60,9 +60,25 @@ when the existing `build_and_publish.yml` workflow shipped:
 
 - Required reviewers (optional): adds a manual approval gate before
   `tofu apply` runs. Recommended for high-stakes changes.
-- Federated credentials: the Azure AD App registration must trust the
-  GitHub `production` environment subject claim
-  `repo:CosmaNeura/cosmaneura:environment:production`.
+- Branch policy: `master` only (already configured). This is what
+  causes PR-triggered runs to skip the `apply` job — by design.
+
+**Federated credentials** on the Azure AD App Registration: needs TWO
+entries so both workflows can authenticate to Azure via OIDC.
+
+| Workflow | Used by | Subject claim |
+| --- | --- | --- |
+| `infra_apply.yml` (master pushes, deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
+| `infra_plan.yml` (PR runs, read-only) | `pull_request` event | `repo:CosmaNeura/cosmaneura:pull_request` |
+
+The first credential already exists (the `build_and_publish` deploy
+job uses it). Add the second one if `infra_plan.yml` runs fail with
+an AADSTS70021 / "no matching federated identity record" error.
+
+To add the credential: Azure Portal → Microsoft Entra ID → App
+Registrations → (your app) → Certificates & secrets → Federated
+credentials → Add. Scenario: GitHub Actions deploying Azure
+resources. Entity type: Pull request.
 
 ## Deploy ordering nuance
 

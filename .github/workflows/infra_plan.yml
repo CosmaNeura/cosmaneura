@@ -35,7 +35,19 @@ jobs:
     name: Terraform Plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: production
+    # No `environment: production` here on purpose. The production
+    # environment is locked to the master branch, and PRs by definition
+    # run from non-master branches — using the environment would reject
+    # every PR run before any step gets to start.
+    #
+    # This is safe because `tofu plan` is read-only. The corresponding
+    # `tofu apply` step in infra_apply.yml DOES gate on the production
+    # environment, which is where the actual write protection belongs.
+    #
+    # Azure OIDC still works without the environment, but the subject
+    # claim changes from `repo:OWNER/REPO:environment:production` to
+    # `repo:OWNER/REPO:pull_request` — see infra/README.md for the
+    # federated credential the Azure AD App Registration needs.
     env:
       # Required by infra/main.tf data sources that pull production
       # secrets out of 1Password.
