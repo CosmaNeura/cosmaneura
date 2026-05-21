@@ -50,6 +50,14 @@ terraform {
       source  = "hashicorp/external"
       version = ">=2.3.4"
     }
+
+    # used for the job-monitor (flower) password that used to come from
+    # an onepassword_item resource — see note above the random_password
+    # block on why we no longer sync the password to 1Password from TF.
+    random = {
+      source  = "hashicorp/random"
+      version = ">=3.6.0"
+    }
   }
 
   # NOTE this must be hidden initially to bootstrap the account!
@@ -228,38 +236,15 @@ resource "azurerm_storage_container" "test_example_notes" {
   container_access_type = "private"
 }
 
-# https://github.com/1Password/terraform-provider-onepassword/issues/17
-# https://registry.terraform.io/providers/1Password/onepassword/latest/docs
-resource "onepassword_item" "upload_blob_storage" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "Azure ${local.environment} Storage File Uploads"
-  category = "login"
-
-  url      = azurerm_storage_account.uploads.primary_blob_endpoint
-  password = azurerm_storage_account.uploads.primary_access_key
-
-  section {
-    label = "main"
-
-    field {
-      label = "account-name"
-      value = azurerm_storage_account.uploads.name
-    }
-
-    field {
-      label = "uploads-container-name"
-      value = azurerm_storage_container.uploads.name
-    }
-
-    field {
-      label = "example-notes-container-name"
-      value = azurerm_storage_container.example_notes.name
-    }
-  }
-
-  tags = var.onepassword_tags
-}
+# NOTE: onepassword_item.upload_blob_storage and other onepassword_item.*
+# resources were removed on 2026-05-21 because the CI service account
+# lacks write access to OP_PROD_VAULT (every `tofu apply` from CI failed
+# trying to create them — see PR 42 incident). The actual 1Password
+# entries continue to exist; they were created manually outside TF and
+# are read at runtime via the `data "external" "secrets"` direnv chain.
+# When the SA gets vault-write permission, these can move back into TF
+# (`terraform import` against the existing item IDs, not create-from-
+# scratch which would duplicate them).
 
 ####################
 # Container Registry
@@ -288,18 +273,9 @@ resource "azurerm_container_registry" "main" {
   # data_endpoint_enabled = true
 }
 
-resource "onepassword_item" "azure_container_registry" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "Azure ${local.environment} Container Registry"
-  category = "login"
-
-  url      = azurerm_container_registry.main.login_server
-  username = azurerm_container_registry.main.admin_username
-  password = azurerm_container_registry.main.admin_password
-
-  tags = var.onepassword_tags
-}
+# onepassword_item.azure_container_registry removed 2026-05-21 — see
+# note above onepassword_item.upload_blob_storage at the top of the
+# Storage Accounts section.
 
 ####################
 # Redis
@@ -330,29 +306,7 @@ resource "azurerm_redis_cache" "main" {
   tags = var.tags
 }
 
-resource "onepassword_item" "production_redis" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "Azure ${local.environment} Redis Database"
-  category = "database"
-
-  hostname = azurerm_redis_cache.main.hostname
-  port     = azurerm_redis_cache.main.ssl_port
-  password = azurerm_redis_cache.main.primary_access_key
-
-  section {
-    # TODO how can i select the main section?
-    # https://1password-devs.slack.com/archives/C03NJV34SSC/p1734371096188749?thread_ts=1734112677.747919&cid=C03NJV34SSC
-    label = "main"
-
-    field {
-      label = "python-connection-string"
-      value = local.redis_connection_string
-    }
-  }
-
-  tags = var.onepassword_tags
-}
+# onepassword_item.production_redis removed 2026-05-21 — see note above.
 
 ####################
 # PostgreSQL
@@ -424,30 +378,7 @@ locals {
 
 # add postgres connection string to 1password
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs
-resource "onepassword_item" "production_postgres" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "Azure ${local.environment} Postgres Database"
-  category = "database"
-
-  hostname = azurerm_postgresql_flexible_server.main.fqdn
-  port     = 5432
-  username = azurerm_postgresql_flexible_server.main.administrator_login
-  password = azurerm_postgresql_flexible_server.main.administrator_password
-
-  section {
-    # TODO how can i select the main section?
-    # https://1password-devs.slack.com/archives/C03NJV34SSC/p1734371096188749?thread_ts=1734112677.747919&cid=C03NJV34SSC
-    label = "main"
-
-    field {
-      label = "python-connection-string"
-      value = local.postgresql_connection_string
-    }
-  }
-
-  tags = var.onepassword_tags
-}
+# onepassword_item.production_postgres removed 2026-05-21 — see note above.
 
 ####################
 # Public DB Access
@@ -755,10 +686,18 @@ resource "azurerm_container_app" "worker" {
       # port, which stays true even when celery itself has died — Azure
       # would see "healthy" and never restart. HTTP probes actually
       # validate celery is alive.
+      #
+      # Probe timeout default is 1s — too tight for inspect.ping() which
+      # itself defaults to a 1s broker-round-trip timeout. We hit a
+      # race during the 2026-05-21 deploy where every probe timed out
+      # at exactly 1s. 10s gives inspect.ping room to respond plus
+      # buffer for transient broker latency.
       readiness_probe {
-        port      = 9000
-        path      = "/"
-        transport = "HTTP"
+        port             = 9000
+        path             = "/"
+        transport        = "HTTP"
+        timeout          = 10
+        interval_seconds = 10
       }
 
       startup_probe {
@@ -771,12 +710,15 @@ resource "azurerm_container_app" "worker" {
         # Azure considers startup failed.
         failure_count_threshold = 30
         interval_seconds        = 2
+        timeout                 = 10
       }
 
       liveness_probe {
-        port      = 9000
-        path      = "/"
-        transport = "HTTP"
+        port             = 9000
+        path             = "/"
+        transport        = "HTTP"
+        timeout          = 10
+        interval_seconds = 10
       }
 
 
@@ -844,39 +786,20 @@ resource "azurerm_container_app" "worker" {
 # https://github.com/microsoft/azure-container-apps/issues/938
 
 
-# create a new password and sync it to 1p for the job monitoring dashboard
-
-resource "onepassword_item" "job_monitor_login" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "${local.environment} Job Monitor Flower Login"
-  category = "login"
-
-  # TODO can't do this because of a circular dependency
-  # url = azurerm_container_app.job-monitor.ingress[0].fqdn
-  url = "cosmaneura-prod-app-jmon.lemonsmoke-1009414c.northcentralus.azurecontainerapps.io"
-
-  password_recipe {
-    length  = 30
-    symbols = false
-  }
-
-  tags = var.onepassword_tags
+# Flower (job-monitor) dashboard password. Used to be synced to 1Password
+# via an onepassword_item with a password_recipe, but the CI service
+# account lacks write access to OP_PROD_VAULT — every `tofu apply` from
+# CI failed trying to create that item (see PR 42 / 2026-05-21 incident).
+#
+# `random_password` keeps the value stable across applies (it lives in
+# TF state) and avoids the OP roundtrip. If/when the SA gets vault
+# write permission, this can move back to onepassword_item.
+resource "random_password" "job_monitor_flower" {
+  length  = 30
+  special = false
 }
 
-resource "onepassword_item" "session_secret" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "${local.environment} Session Secret"
-  category = "password"
-
-  password_recipe {
-    length  = 30
-    symbols = false
-  }
-
-  tags = var.onepassword_tags
-}
+# onepassword_item.session_secret removed 2026-05-21 — see note above.
 
 resource "azurerm_container_app" "job-monitor" {
   resource_group_name = azurerm_resource_group.main.name
@@ -945,7 +868,7 @@ resource "azurerm_container_app" "job-monitor" {
 
       env {
         name  = "FLOWER_PASSWORD"
-        value = onepassword_item.job_monitor_login.password
+        value = random_password.job_monitor_flower.result
       }
 
       dynamic "env" {
@@ -1010,54 +933,7 @@ resource "azurerm_container_app" "job-monitor" {
 ####################
 
 # https://registry.terraform.io/providers/1Password/onepassword/latest/docs/resources/item
-resource "onepassword_item" "squarespace_domain" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title      = "Azure ${local.environment} Hosting Metadata"
-  category   = "secure_note"
-  note_value = <<-EOT
-    ## DNS Settings
-
-    You must login to SquareSpace and ensure the domain values included here are properly set.
-
-    https://account.squarespace.com/domains/managed/cosmaneura.com/dns/dns-settings
-
-    ### app.cosmaneura.com & chat.cosmaneura.com
-
-    - CNAME. fqdn of the target container app.
-    - asuid.app. Hash based on TF output.
-
-    ### Clerk
-
-    - Add CNAME for `clerk.cosmaneura.com` -> `frontend-api.clerk.services`
-    - Add CNAME for `accounts.cosmaneura.com` -> `accounts.clerk.services`
-    - Add CNAME for `clk._domainkey.cosmaneura.com` -> `dkim1.au47c8ot0r4y.clerk.services`
-    - Add CNAME for `clk2._domainkey.cosmaneura.com` -> `dkim2.au47c8ot0r4y.clerk.services`
-    - Add CNAME for `clkmail.cosmaneura.com` -> `mail.au47c8ot0r4y.clerk.services`
-  EOT
-
-  section {
-    label = "DNS"
-
-    field {
-      label = "App Validation Domain"
-      value = "asuid.${azurerm_container_app_custom_domain.main.name}"
-    }
-
-    field {
-      label = "App Validation Key"
-      value = azurerm_container_app.app.custom_domain_verification_id
-    }
-
-    field {
-      label = "App Domain CNAME"
-      value = azurerm_container_app.app.ingress[0].fqdn
-    }
-  }
-
-  tags = var.onepassword_tags
-}
-
+# onepassword_item.squarespace_domain removed 2026-05-21 — see note above.
 ####################
 # Health Services Access
 ####################
@@ -1141,32 +1017,4 @@ resource "azurerm_role_assignment" "github_container_app_3_operator" {
 # https://github.com/humanitec-architecture/reference-architecture-azure/blob/3de02801290cb8d49f5dfaa4565583e3945c7f2c/modules/github/azure.tf#L16
 # https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure#adding-the-federated-credentials-to-azure
 
-resource "onepassword_item" "azure_github_actions" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "Azure ${local.environment} GitHub Actions Credentials"
-  category = "login"
-
-  section {
-    # TODO how can i select the main section?
-    # https://1password-devs.slack.com/archives/C03NJV34SSC/p1734371096188749?thread_ts=1734112677.747919&cid=C03NJV34SSC
-    label = "main"
-
-    field {
-      label = "client-id"
-      value = azurerm_user_assigned_identity.ghactions.client_id
-    }
-
-    field {
-      label = "tenant-id"
-      value = azurerm_user_assigned_identity.ghactions.tenant_id
-    }
-
-    field {
-      label = "subscription-id"
-      value = local.azure_subscription_id
-    }
-  }
-
-  tags = var.onepassword_tags
-}
+# onepassword_item.azure_github_actions removed 2026-05-21 — see note above.
