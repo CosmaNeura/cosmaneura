@@ -64,15 +64,6 @@ resource "azurerm_cognitive_deployment" "openai_o1" {
   }
 }
 
-# https://registry.terraform.io/providers/1Password/onepassword/latest/docs
-resource "onepassword_item" "azure_openai_service" {
-  vault = data.external.secrets.result["OP_PROD_VAULT_UID"]
-
-  title    = "Azure ${local.environment} Open AI Service"
-  category = "login"
-
-  url      = azurerm_ai_services.openai_service.endpoint
-  password = azurerm_ai_services.openai_service.primary_access_key
-
-  tags = var.onepassword_tags
-}
+# onepassword_item.azure_openai_service removed 2026-05-21 — see note in
+# main.tf (Storage Accounts section) on why onepassword_item.* resources
+# can't currently be managed from CI.
