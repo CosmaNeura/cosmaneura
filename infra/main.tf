@@ -553,6 +553,17 @@ resource "azurerm_container_app" "app" {
     value = azurerm_container_registry.main.admin_password
   }
 
+  # build_and_publish.yml deploys SHA-pinned images via
+  # `az containerapp update --set-image SHA`; without this block tofu
+  # apply reverts the live image back to ":latest", which silently rolls
+  # the running revision to whatever ":latest" points to. Image lifecycle
+  # is owned by the deploy pipeline, not Terraform.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+    ]
+  }
+
   tags = var.tags
 }
 
@@ -641,6 +652,17 @@ resource "azurerm_container_app" "scheduler" {
   secret {
     name  = "registry-secret"
     value = azurerm_container_registry.main.admin_password
+  }
+
+  # build_and_publish.yml deploys SHA-pinned images via
+  # `az containerapp update --set-image SHA`; without this block tofu
+  # apply reverts the live image back to ":latest", which silently rolls
+  # the running revision to whatever ":latest" points to. Image lifecycle
+  # is owned by the deploy pipeline, not Terraform.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+    ]
   }
 
   tags = var.tags
@@ -777,6 +799,17 @@ resource "azurerm_container_app" "worker" {
   secret {
     name  = "registry-secret"
     value = azurerm_container_registry.main.admin_password
+  }
+
+  # build_and_publish.yml deploys SHA-pinned images via
+  # `az containerapp update --set-image SHA`; without this block tofu
+  # apply reverts the live image back to ":latest", which silently rolls
+  # the running revision to whatever ":latest" points to. Image lifecycle
+  # is owned by the deploy pipeline, not Terraform.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+    ]
   }
 
   tags = var.tags
@@ -918,6 +951,17 @@ resource "azurerm_container_app" "job-monitor" {
   secret {
     name  = "registry-secret"
     value = azurerm_container_registry.main.admin_password
+  }
+
+  # build_and_publish.yml deploys SHA-pinned images via
+  # `az containerapp update --set-image SHA`; without this block tofu
+  # apply reverts the live image back to ":latest", which silently rolls
+  # the running revision to whatever ":latest" points to. Image lifecycle
+  # is owned by the deploy pipeline, not Terraform.
+  lifecycle {
+    ignore_changes = [
+      template[0].container[0].image,
+    ]
   }
 
   tags = var.tags
