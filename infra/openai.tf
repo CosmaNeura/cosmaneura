@@ -10,6 +10,13 @@ resource "azurerm_ai_services" "openai_service" {
   location = "eastus2"
 
   sku_name = "S0" # Example SKU, adjust based on actual requirements
+
+  # Required by the AzureOpenAI SDK — without a custom subdomain the regional
+  # cognitive endpoint works for curl but the SDK's URL construction
+  # (`{endpoint}/openai/deployments/{deployment}/...`) needs a per-resource
+  # subdomain. Set manually 2026-05-26 to unblock prod transcription; bringing
+  # it into TF state via `tofu import` keeps the value pinned across recreates.
+  custom_subdomain_name = "${local.base_name_alphanumeric}openai"
 }
 
 resource "azurerm_cognitive_deployment" "openai_4_1" {
