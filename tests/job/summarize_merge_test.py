@@ -11,9 +11,9 @@ import pytest
 from flexmock import flexmock
 
 from app.jobs import summarize
+
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
-from app.models.doctor_note_schema import DoctorNoteSchema
 
 from tests.factories import (
     AppointmentFactory,
