@@ -6,7 +6,7 @@ runs:
   steps:
     # NOTE cannot run checkout in this local action, must be run by the parent action
     # mise can rarely get stuck installing. It normally takes < 10s to install, so this should never be more than a minute
-    - uses: jdx/mise-action@v2
+    - uses: jdx/mise-action@v4
       with:
         version: 2025.3.6
     # TODO document: https://github.com/actions/runner-images/issues/4849, https://github.com/actions/runner-images/issues/264
@@ -19,7 +19,7 @@ runs:
           poppler-utils ffmpeg
     # without any additional options, this simply installs the latest version of the cli
     # keep this non-blocking: CI can continue with direct GitHub secrets if OP auth is unavailable
-    - uses: 1password/load-secrets-action@v2
+    - uses: 1password/load-secrets-action@v4
       continue-on-error: true
     - uses: iloveitaly/github-action-direnv-load-and-mask@master
       with:
@@ -34,7 +34,7 @@ runs:
           VIRTUAL_ENV,
           PATH
     # cache node_modules
-    - uses: actions/cache@v4
+    - uses: actions/cache@v5
       with:
         path: web/node_modules
         key: ${{ runner.os }}-node-modules-${{ hashFiles('web/pnpm-lock.yaml') }}
