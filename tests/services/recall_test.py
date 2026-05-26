@@ -36,7 +36,10 @@ def test_leave_call_tolerates_already_done_bot(monkeypatch):
         @property
         def is_success(self): return False
         def raise_for_status(self):
-            raise httpx.HTTPStatusError("", request=None, response=self)
+            req = httpx.Request("POST", "http://test/")
+            raise httpx.HTTPStatusError(
+                "", request=req, response=httpx.Response(400, request=req)
+            )
 
     class FakeClient:
         def __enter__(self): return self
