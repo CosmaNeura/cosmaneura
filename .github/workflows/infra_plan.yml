@@ -14,6 +14,9 @@ on:
       - 'infra/**'
       - '.github/workflows/infra_*.yml'
       - 'Procfile'
+  # Manual trigger from the Actions UI / gh CLI. Useful for verifying
+  # state vs. config after an out-of-band change to Azure resources.
+  workflow_dispatch:
 
 # Federated OIDC token issued by GitHub → Azure AD. id-token: write is
 # required to mint the token. pull-requests: write is required so we
