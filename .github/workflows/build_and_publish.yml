@@ -59,13 +59,9 @@ jobs:
       - run: just up --fast
       - run: just py_setup
       - run: just py_lint
-        # TODO temporarily disable, it's hard to get typing right...
-        continue-on-error: true
 
       - run: just db_migrate
       - run: just db_lint
-        # TODO temporarily disable, need to whitelist existing errors...
-        continue-on-error: true
 
       - name: Log service routing (diagnostics)
         run: |
@@ -77,7 +73,6 @@ jobs:
 
       - id: py_test
         run: just py_test
-        continue-on-error: true
 
       # NOTE one important problem with `detached` is if something fails, the github environment does seem to get wiped
       # for instance GITHUB_ENV, seems to be cleared out.
@@ -86,12 +81,10 @@ jobs:
         with: { detached: true }
 
       - name: Upload test artifacts
-        # `continue-on-error: true` on py_test causes `failure()` to evaluate
-        # to false even when tests actually failed — so artifacts never
-        # uploaded and we debugged blind. `steps.py_test.outcome` is the raw
-        # result *before* continue-on-error masks it, so this fires the
-        # moment any test fails.
-        if: ${{ steps.py_test.outcome == 'failure' }}
+        # `failure()` here catches the Backend job's overall failure (now
+        # that py_test no longer has continue-on-error). Artifacts upload
+        # whenever any earlier step fails, including py_lint or py_test.
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
           # playwright traces, screenshots, logs, etc
