@@ -1,5 +1,4 @@
 import typing as t
-from typing import cast
 
 from pydantic import computed_field
 
@@ -54,11 +53,12 @@ class DoctorNoteSchema(
     @computed_field
     @property
     def example_count(self) -> int:
-        # TODO joinedload is probably not the right approach here
-        # TODO(mbianco) this took a long time to understand, document this upstream
+        # Imported lazily because DoctorNoteExample imports DoctorNoteSchema.
+        from .doctor_note_example import DoctorNoteExample
+
         return (
-            self.where(DoctorNoteSchema.id == self.id, self.__class__.examples)
-            # generates a LEFT JOIN against examples table
-            # .options(joinedload(self.__class__.examples))
-            .count()
-        ) or cast(int, 0)
+            DoctorNoteExample.where(
+                DoctorNoteExample.doctor_note_schema_id == self.id
+            ).count()
+            or 0
+        )
