@@ -437,7 +437,7 @@ def test_no_duplicates_on_failure():
     )
     assert (
         DoctorNoteExample.where(
-            DoctorNoteSchema.doctor_id == doctor_note_file.doctor_id
+            DoctorNoteExample.doctor_id == doctor_note_file.doctor_id
         ).count()
         == 0
     )
