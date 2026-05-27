@@ -155,14 +155,23 @@ def home_url():
 def report_localias_status():
     """
     For integration tests, we require localalias to be running in the background since we use https.
+
+    In CI the `iloveitaly/github-action-localias` action starts the daemon
+    with `sudo -E localias start`, so the daemon process is root but
+    `HOME` is preserved as the runner's home. The pidfile is written under
+    `$HOME/.local/state/localias/daemon.pid` (resolved via XDG) and the
+    enclosing directory ends up as `0o750 root:root`, unreadable to the
+    runner user. We need both:
+      * `sudo`, so the file is readable
+      * `-E`, so HOME is preserved and localias looks in the right place
+        (without -E sudo resets HOME to /root and reports "daemon is not
+        running" even though the daemon is up).
     """
     import subprocess
 
     command = ["localias", "status"]
-
-    # on GitHub Actions we need to run localalias with sudo, but local CI-mode runs should stay non-interactive
     if os.getenv("GITHUB_ACTIONS") == "true":
-        command.insert(0, "sudo")
+        command = ["sudo", "-E", *command]
 
     result = subprocess.run(command, capture_output=True, text=True)
     log.debug("localias Status", output=result.stdout)

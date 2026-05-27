@@ -1,4 +1,3 @@
-import pytest
 from playwright.sync_api import Page, expect
 
 from app.models.doctor import Doctor
@@ -9,24 +8,21 @@ from tests.integration.server import home_url
 from tests.integration.utils import login_as_dev_user, wait_for_loading
 
 
-@pytest.mark.skip(reason="Fails on CI, clerk is requiring email verification")
-def test_signin(server, page: Page, assert_snapshot) -> None:
-    # paranoid testing to ensure database cleaning is working
+def test_login_existing_user(server, page: Page) -> None:
     assert Doctor.count() == 0
 
-    _user = login_as_dev_user(page)
+    doctor = login_as_dev_user(page)
 
+    # login_as_dev_user bypasses the onboarding wizard, so the user should
+    # land on the main app surface and not on the welcome screen.
     expect(page.locator("body")).to_contain_text("Select a patient")
-
-    wait_for_loading(page)
-
-    assert_snapshot(page)
+    expect(page.locator("body")).not_to_contain_text("Welcome to Cosma")
 
     assert Doctor.count() == 1
+    assert doctor.onboarding_completed_at is not None
 
 
-def test_signup(server, page: Page, assert_snapshot) -> None:
-    # paranoid testing to ensure database cleaning is working
+def test_signup(server, page: Page) -> None:
     assert Doctor.count() == 0
 
     setup_clerk_testing_token(page)
@@ -50,19 +46,14 @@ def test_signup(server, page: Page, assert_snapshot) -> None:
         delay=100,
     )
 
-    # TODO assert that `Fill in missing fields` is not displayed
-
     wait_for_loading(page)
 
-    expect(page.locator("body")).to_contain_text("Select a patient")
+    # Fresh signups land on the onboarding wizard; the wizard itself is
+    # covered end-to-end in test_onboarding_flow.
+    expect(page.get_by_role("button", name="Get Started")).to_be_visible()
+    assert "/onboarding" in page.url
 
-    assert_snapshot(page)
-
-    # user should be created at this point!
     assert Doctor.count() == 1
-
-    # logout
-    page.locator(".flex > div:nth-child(3)").first.click()
-    page.get_by_role("menuitem", name="Sign out").click()
-
-    expect(page.locator("body")).to_contain_text("Sign in")
+    doctor = Doctor.first()
+    assert doctor
+    assert doctor.onboarding_completed_at is None

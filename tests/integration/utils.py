@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from playwright.sync_api import Page
 
 from app.models.doctor import Doctor
@@ -97,10 +99,20 @@ def wait_for_loading(page: Page, timeout: int = 30000, extreme: bool = False):
 
 
 def login_as_dev_user(page: Page):
-    username, password, user = get_clerk_dev_user()
+    """
+    Log in as the Clerk dev user and return the resulting Doctor.
 
-    # paranoid: should not create a doctor record in the DB
-    assert Doctor.count() == 0
+    The Clerk webhook creates a fresh Doctor on first login with
+    `onboarding_completed_at = None`, which causes the authenticated layout
+    to redirect to /onboarding — breaking every test that expects to land on
+    the main app surface (sidebar, /notes, /settings). This helper marks the
+    doctor as onboarded and reloads so subsequent navigation goes to /notes.
+
+    The onboarding wizard itself has dedicated coverage in
+    `test_onboarding_flow`; tests that just need an authed user with the
+    full app available should keep using this helper.
+    """
+    username, password, _user = get_clerk_dev_user()
 
     # paranoid testing to ensure database cleaning is working
     assert Doctor.count() == 0
@@ -120,4 +132,16 @@ def login_as_dev_user(page: Page):
     # only a single doctor should be created!
     assert Doctor.count() == 1
 
-    return Doctor.first()
+    doctor = Doctor.first()
+    assert doctor
+
+    # Bypass the onboarding wizard for tests that focus on post-onboarding
+    # surface area. `page.goto(home_url())` is required after the DB write
+    # so the layout's loader re-fetches settings and stops redirecting to
+    # /onboarding.
+    doctor.onboarding_completed_at = datetime.now(timezone.utc)
+    doctor.save()
+    page.goto(home_url())
+    wait_for_loading(page)
+
+    return doctor
