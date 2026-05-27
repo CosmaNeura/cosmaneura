@@ -880,9 +880,18 @@ resource "azurerm_container_app" "job-monitor" {
         transport = "TCP"
       }
 
+      # Default startup probe gives 3 × 10s = 30s for flower to bind. flower
+      # has to import app (sentry + alembic + celery), connect to the redis
+      # broker, then start tornado on FLOWER_PORT — that's 30-60s on a cold
+      # boot. With the defaults the container is restarted before flower
+      # ever opens port 80, and Azure escalates to Persistent Failure /
+      # exit 137. Same pattern (and timings) as the worker startup_probe.
       startup_probe {
-        port      = 80
-        transport = "TCP"
+        port                    = 80
+        transport               = "TCP"
+        failure_count_threshold = 30
+        interval_seconds        = 2
+        timeout                 = 10
       }
 
       liveness_probe {
@@ -923,11 +932,8 @@ resource "azurerm_container_app" "job-monitor" {
       }
 
       # yes, memory is defined as a string and CPU is defined as a float
-      # Azure container apps require fixed CPU/memory ratios — 1Gi needs 0.5 CPU.
-      # 0.5Gi was OOM-killing flower during startup (exit 137 after sentry +
-      # alembic + celery imports).
-      cpu    = 0.5
-      memory = "1Gi"
+      cpu    = 0.25
+      memory = "0.5Gi"
     }
   }
 
