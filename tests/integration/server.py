@@ -155,16 +155,20 @@ def home_url():
 def report_localias_status():
     """
     For integration tests, we require localalias to be running in the background since we use https.
+
+    Both locally and in CI the daemon runs as the invoking user (the
+    `iloveitaly/github-action-localias` action starts it as the runner
+    user, not root). Running `sudo localias status` checks root's
+    localias state directory — which is empty — and falsely reports the
+    daemon as not running. Without sudo the check sees the same state
+    the runner-user daemon writes to. Confirmed in CI logs:
+    `Checking for self-signed cert: /home/runner/.local/state/localias/...`
     """
     import subprocess
 
-    command = ["localias", "status"]
-
-    # on GitHub Actions we need to run localalias with sudo, but local CI-mode runs should stay non-interactive
-    if os.getenv("GITHUB_ACTIONS") == "true":
-        command.insert(0, "sudo")
-
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(
+        ["localias", "status"], capture_output=True, text=True
+    )
     log.debug("localias Status", output=result.stdout)
 
     if "daemon running" not in result.stdout:
