@@ -5,13 +5,19 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
+from activemodel.session_manager import get_engine
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.patient import Patient
+from sqlalchemy import event
 
-from tests.factories import DoctorNoteExampleFactory, DoctorNoteSchemaFactory
+from tests.factories import (
+    DoctorNoteExampleFactory,
+    DoctorNoteSchemaFactory,
+    SimpleCompleteIntakeFactory,
+)
 from tests.routes.utils import get_clerk_dev_user, get_clerk_seed_user
 
 
@@ -21,6 +27,54 @@ def test_notes_list(authenticated_client: TestClient):
     assert response.status_code == status.HTTP_200_OK
 
     _result = response.json
+
+
+def test_notes_list_no_n_plus_one(authenticated_client: TestClient):
+    """Regression test: /notes must not issue one SELECT per appointment
+    against `intake` or `patient`.
+
+    Appointment exposes `intake_status` and `patient_name` as
+    @computed_field properties; Pydantic serializes them for every row
+    in the response. Without `selectinload(Appointment.intake)` and
+    `selectinload(Appointment.patient)` on the query, each row triggers
+    its own SELECT — turning a doctor with 100 appointments into ~200
+    extra queries. This test asserts the query count for those two
+    tables stays bounded at 1 each regardless of N.
+    """
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+
+    # Seed several appointments with both intake and patient.
+    # SimpleCompleteIntakeFactory creates appointment + patient + intake
+    # tied to the same doctor (see its post_build).
+    for _ in range(5):
+        SimpleCompleteIntakeFactory.build(doctor_id=doctor.id).save()
+
+    captured: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        captured.append(statement)
+
+    engine = get_engine()
+    event.listen(engine, "before_cursor_execute", _record)
+    try:
+        response = authenticated_client.get(api_app.url_path_for("note_list"))
+    finally:
+        event.remove(engine, "before_cursor_execute", _record)
+
+    assert response.status_code == status.HTTP_200_OK
+
+    intake_queries = [q for q in captured if "FROM intake" in q]
+    patient_queries = [q for q in captured if "FROM patient" in q]
+
+    assert len(intake_queries) <= 1, (
+        f"N+1 against `intake` table: expected <=1 SELECT, got {len(intake_queries)}. "
+        f"Statements: {intake_queries}"
+    )
+    assert len(patient_queries) <= 1, (
+        f"N+1 against `patient` table: expected <=1 SELECT, got {len(patient_queries)}. "
+        f"Statements: {patient_queries}"
+    )
 
 
 def test_note_detail(authenticated_client: TestClient):
