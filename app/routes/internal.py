@@ -25,6 +25,7 @@ from app.models.doctor_video_integration import DoctorVideoIntegration, VideoPro
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+from sqlalchemy.orm import selectinload
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
@@ -66,10 +67,15 @@ def intake_list(request: Request) -> IntakeList:
     # get a list of appointments which have an intake object associated with them
     appointment_list = (
         Appointment.where(Appointment.doctor_id == doctor.id)
-        # outer join = left join, which will drop appointments without intake
+        # inner join filters out appointments without intake
         .join(Intake)
-        # TODO preload the intake object to avoid N+1 queries
-        # .options(sa.joinedload(Appointment.intake))
+        # eager-load intake + patient: Appointment serializes intake_status
+        # (touches self.intake) and patient_name (touches self.patient) as
+        # computed fields, which lazy-fires one SELECT per row without this.
+        .options(
+            selectinload(cast(Any, Appointment.intake)),
+            selectinload(cast(Any, Appointment.patient)),
+        )
         .order_by(cast(Any, Appointment.appointment_date).asc())
         .all()
     )
@@ -91,6 +97,13 @@ def note_list(request: Request) -> NotetakingData:
     doctor: Doctor = request.state.doctor
     appointment_list = (
         Appointment.where(Appointment.doctor_id == doctor.id)
+        # eager-load intake + patient: Appointment serializes intake_status
+        # (touches self.intake) and patient_name (touches self.patient) as
+        # computed fields, which lazy-fires one SELECT per row without this.
+        .options(
+            selectinload(cast(Any, Appointment.intake)),
+            selectinload(cast(Any, Appointment.patient)),
+        )
         .order_by(cast(Any, Appointment.appointment_date).desc())
         .all()
     )
