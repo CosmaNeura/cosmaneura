@@ -156,19 +156,24 @@ def report_localias_status():
     """
     For integration tests, we require localalias to be running in the background since we use https.
 
-    Both locally and in CI the daemon runs as the invoking user (the
-    `iloveitaly/github-action-localias` action starts it as the runner
-    user, not root). Running `sudo localias status` checks root's
-    localias state directory — which is empty — and falsely reports the
-    daemon as not running. Without sudo the check sees the same state
-    the runner-user daemon writes to. Confirmed in CI logs:
-    `Checking for self-signed cert: /home/runner/.local/state/localias/...`
+    In CI the `iloveitaly/github-action-localias` action starts the daemon
+    with `sudo -E localias start`, so the daemon process is root but
+    `HOME` is preserved as the runner's home. The pidfile is written under
+    `$HOME/.local/state/localias/daemon.pid` (resolved via XDG) and the
+    enclosing directory ends up as `0o750 root:root`, unreadable to the
+    runner user. We need both:
+      * `sudo`, so the file is readable
+      * `-E`, so HOME is preserved and localias looks in the right place
+        (without -E sudo resets HOME to /root and reports "daemon is not
+        running" even though the daemon is up).
     """
     import subprocess
 
-    result = subprocess.run(
-        ["localias", "status"], capture_output=True, text=True
-    )
+    command = ["localias", "status"]
+    if os.getenv("GITHUB_ACTIONS") == "true":
+        command = ["sudo", "-E", *command]
+
+    result = subprocess.run(command, capture_output=True, text=True)
     log.debug("localias Status", output=result.stdout)
 
     if "daemon running" not in result.stdout:
