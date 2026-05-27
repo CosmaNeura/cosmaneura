@@ -246,27 +246,57 @@ check_deployment() {
 	echo "Checking deployment status for $container_name..."
 
 	while [[ $attempts -lt $max_attempts ]]; do
-		# Check provisioning state
-		provisioning_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.provisioningState" -o tsv)
-		current_image=$(az containerapp revision list -n "$container_name" -g "$RESOURCE_GROUP" --query "[0].properties.template.containers[0].image" -o tsv)
-		running_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.runningStatus" -o tsv)
+		# Always inspect the latest revision specifically, not `revision list[0]`.
+		# `revision list` returns active revisions in unspecified order; when a
+		# previous deploy left a failed-but-still-active revision behind, [0]
+		# can resolve to the OLD revision and the script never sees that the
+		# revision we just pushed is failing — burning the entire retry budget.
+		# `latestRevisionName` is the most recently created revision, which is
+		# the one our `az containerapp update -i` just produced.
+		local latest_rev_name revision_json current_image health_state running_state provisioning_state
+		latest_rev_name=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.latestRevisionName" -o tsv)
 
-		# should never be empty, error if so
-		if [[ -z "$provisioning_state" ]] || [[ -z "$current_image" ]] || [[ -z "$running_state" ]]; then
-			echo "Error: Failed to get complete status information for $container_name"
-			echo "Provisioning state: $provisioning_state"
-			echo "Current image: $current_image"
-			echo "Running state: $running_state"
+		if [[ -z "$latest_rev_name" ]]; then
+			echo "  $container_name: could not read latestRevisionName (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+
+		revision_json=$(az containerapp revision show -n "$container_name" -g "$RESOURCE_GROUP" \
+			--revision "$latest_rev_name" \
+			--query "{image:properties.template.containers[0].image,health:properties.healthState,running:properties.runningState,provisioning:properties.provisioningState}" -o json 2>/dev/null)
+
+		current_image=$(echo "$revision_json" | jq -r '.image // empty')
+		health_state=$(echo "$revision_json" | jq -r '.health // empty')
+		running_state=$(echo "$revision_json" | jq -r '.running // empty')
+		provisioning_state=$(echo "$revision_json" | jq -r '.provisioning // empty')
+
+		# Image mismatch means Azure hasn't yet picked up our update — keep polling.
+		if [[ "$current_image" != "$expected_image" ]]; then
+			echo "  $container_name: latest revision still $current_image, waiting for $expected_image (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+
+		# Fail fast: once Azure has marked the revision as Failed, no amount of
+		# polling will revive it. Surface the error now instead of burning the
+		# full 5-minute retry budget.
+		if [[ "$provisioning_state" == "Failed" || "$running_state" == "Failed" ]]; then
+			echo "$container_name: revision $latest_rev_name failed (provisioning=$provisioning_state, running=$running_state, health=$health_state)"
 			return 1
 		fi
 
-		# Validate all conditions
-		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && "$running_state" == "Running" ]]; then
+		# Healthy is the actual signal we care about — it means probes pass.
+		# runningState varies by container (Running for jmon/app, RunningAtMaxScale
+		# for worker/scheduler), so we don't pin a specific value here.
+		if [[ "$health_state" == "Healthy" && "$provisioning_state" == "Provisioned" ]]; then
 			echo "$container_name deployment is successful."
 			return 0
 		fi
 
-		echo "Retrying deployment status for $container_name in 5 seconds... (Attempt $((attempts + 1))/$max_attempts)"
+		echo "  $container_name: provisioning=$provisioning_state running=$running_state health=$health_state (attempt $((attempts + 1))/$max_attempts)"
 
 		sleep 5
 		((attempts++))
