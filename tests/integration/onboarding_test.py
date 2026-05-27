@@ -3,6 +3,7 @@
 from playwright.sync_api import Page, expect
 
 from app import root
+
 from app.models.doctor import Doctor
 
 from tests.constants import CLERK_DEV_USER_PASSWORD
