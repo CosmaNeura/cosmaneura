@@ -29,7 +29,14 @@ class AuthenticateClerkRequest:
         # self.sdk.sdk_configuration contains most of the core configuration
         self.sdk = Clerk(bearer_auth=clerk_secret_key)
 
-    async def __call__(
+    # NOTE: declared `def`, not `async def`. The Clerk SDK's
+    # `authenticate_request` is synchronous, and on JWKS cache miss it
+    # blocks for the duration of an HTTPS round-trip to
+    # api.clerk.com/v1/jwks (~100-300ms). If this method were async,
+    # that sync call would block the event loop and serialize every
+    # concurrent request on the worker. FastAPI runs sync dependencies
+    # in a threadpool automatically, so the event loop stays free.
+    def __call__(
         self,
         request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(HTTPBearer()),
