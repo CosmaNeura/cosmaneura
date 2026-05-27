@@ -923,8 +923,11 @@ resource "azurerm_container_app" "job-monitor" {
       }
 
       # yes, memory is defined as a string and CPU is defined as a float
-      cpu    = 0.25
-      memory = "0.5Gi"
+      # Azure container apps require fixed CPU/memory ratios — 1Gi needs 0.5 CPU.
+      # 0.5Gi was OOM-killing flower during startup (exit 137 after sentry +
+      # alembic + celery imports).
+      cpu    = 0.5
+      memory = "1Gi"
     }
   }
 
