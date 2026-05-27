@@ -9,12 +9,10 @@ runs:
     - uses: jdx/mise-action@v4
       with:
         version: 2025.3.6
-    # Inlined apt install + cache to avoid `iloveitaly/actions-use-apt-tools`
-    # pulling in actions/cache@v4 (Node 20). Bump the `-v1` suffix to bust.
-    - uses: actions/cache@v5
-      with:
-        path: /var/cache/apt/archives
-        key: ${{ runner.os }}-apt-zsh-libnss3-tools-poppler-utils-ffmpeg-v1
+    # Inlined apt install to avoid `iloveitaly/actions-use-apt-tools` (Node 20
+    # via actions/cache@v4). Caching /var/cache/apt/archives is skipped: the
+    # dir's root-owned `partial/` subdir made cache@v5 emit a tar-exit-2
+    # warning at save-time, and the savings (~5s/job) didn't justify the noise.
     - shell: bash
       run: |
         sudo apt-get update -qq
