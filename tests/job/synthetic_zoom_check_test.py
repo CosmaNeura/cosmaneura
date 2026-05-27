@@ -14,7 +14,9 @@ def test_synthetic_check_completes_without_raising(global_session):
     perform()
 
 
-def test_synthetic_check_uses_sentinel_ids_that_will_never_match_a_doctor(global_session):
+def test_synthetic_check_uses_sentinel_ids_that_will_never_match_a_doctor(
+    global_session,
+):
     """Synthetic IDs must not be valid Zoom host_ids — otherwise a real
     DoctorVideoIntegration row could coincidentally collide and the
     check would stamp live state into redis."""

@@ -57,6 +57,4 @@ def perform() -> None:
     log.info("synthetic zoom check completed")
 
 
-perform_celery = celery_app.task(name="app.jobs.synthetic_zoom_check.perform")(
-    perform
-)
+perform_celery = celery_app.task(name="app.jobs.synthetic_zoom_check.perform")(perform)

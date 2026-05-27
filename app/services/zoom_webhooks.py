@@ -143,7 +143,8 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     if not doctor:
         log.warning(
             "cannot start appointment: doctor not found",
-            doctor_id=doctor_id, meeting_id=meeting_id,
+            doctor_id=doctor_id,
+            meeting_id=meeting_id,
         )
         return
 
@@ -160,7 +161,8 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     except zoom_service.ZoomIntegrationInvalid:
         log.warning(
             "cannot start appointment: doctor revoked Zoom OAuth",
-            doctor_id=doctor_id, meeting_id=meeting_id,
+            doctor_id=doctor_id,
+            meeting_id=meeting_id,
         )
         return
     bot_data = recall.create_bot(
@@ -179,7 +181,8 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     if not recording_id:
         log.warning(
             "bot never reached ready state, aborting appointment",
-            bot_id=bot_id, meeting_id=meeting_id,
+            bot_id=bot_id,
+            meeting_id=meeting_id,
         )
         recall.leave_call(bot_id)
         redis.delete(f"recall:meeting:{meeting_id}:bot_id")
@@ -221,18 +224,21 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id, ex=ttl)
     redis.set(
         f"recall:recording:{recording_id}:appointment_id",
-        str(appointment.id), ex=ttl,
+        str(appointment.id),
+        ex=ttl,
     )
     redis.set(
         f"recall:recording:{recording_id}:patient_id",
-        str(appointment.patient_id), ex=ttl,
+        str(appointment.patient_id),
+        ex=ttl,
     )
     redis.set(f"recall:bot:{bot_id}:appointment_id", str(appointment.id), ex=ttl)
     redis.set(f"recall:bot:{bot_id}:patient_id", str(appointment.patient_id), ex=ttl)
 
     log.info(
         "appointment session started",
-        meeting_id=meeting_id, bot_id=bot_id,
+        meeting_id=meeting_id,
+        bot_id=bot_id,
         appointment_id=str(appointment.id),
         patient_name=user_name,
     )
@@ -263,8 +269,10 @@ def handle_participant_joined(payload: dict[str, Any]):
     if role == "bot":
         log.info(
             "participant joined: bot",
-            role="bot", meeting_id=meeting_id,
-            participant_id=participant_id, user_name=user_name,
+            role="bot",
+            meeting_id=meeting_id,
+            participant_id=participant_id,
+            user_name=user_name,
         )
         return
 
@@ -274,8 +282,10 @@ def handle_participant_joined(payload: dict[str, Any]):
 
         log.info(
             "participant joined: doctor",
-            role="doctor", meeting_id=meeting_id,
-            participant_id=participant_id, user_name=user_name,
+            role="doctor",
+            meeting_id=meeting_id,
+            participant_id=participant_id,
+            user_name=user_name,
             doctor_present=True,
         )
 
@@ -285,7 +295,9 @@ def handle_participant_joined(payload: dict[str, Any]):
             return
 
         first_id = _rlindex(
-            redis, f"recall:meeting:{meeting_id}:participants_order", 0,
+            redis,
+            f"recall:meeting:{meeting_id}:participants_order",
+            0,
         )
         if not first_id:
             # Doctor returned to an empty room; keep any merge_window armed.
@@ -298,16 +310,23 @@ def handle_participant_joined(payload: dict[str, Any]):
                 redis,
                 f"recall:meeting:{meeting_id}:participants_names",
                 first_id,
-            ) or "Unknown",
+            )
+            or "Unknown",
         )
         return
 
     # role == "other"
     ttl = timedelta(hours=24)
     redis.rpush(f"recall:meeting:{meeting_id}:participants_order", participant_id)
-    redis.expire(f"recall:meeting:{meeting_id}:participants_order", int(ttl.total_seconds()))
-    redis.hset(f"recall:meeting:{meeting_id}:participants_names", participant_id, user_name)
-    redis.expire(f"recall:meeting:{meeting_id}:participants_names", int(ttl.total_seconds()))
+    redis.expire(
+        f"recall:meeting:{meeting_id}:participants_order", int(ttl.total_seconds())
+    )
+    redis.hset(
+        f"recall:meeting:{meeting_id}:participants_names", participant_id, user_name
+    )
+    redis.expire(
+        f"recall:meeting:{meeting_id}:participants_names", int(ttl.total_seconds())
+    )
     new_count = cast(int, redis.incr(f"recall:meeting:{meeting_id}:patient_count"))
     redis.expire(f"recall:meeting:{meeting_id}:patient_count", int(ttl.total_seconds()))
 
@@ -316,16 +335,20 @@ def handle_participant_joined(payload: dict[str, Any]):
 
     log.info(
         "participant joined: other",
-        role="other", meeting_id=meeting_id,
-        participant_id=participant_id, user_name=user_name,
-        doctor_present=doctor_present, recording_active=recording_active,
+        role="other",
+        meeting_id=meeting_id,
+        participant_id=participant_id,
+        user_name=user_name,
+        doctor_present=doctor_present,
+        recording_active=recording_active,
         patient_count=new_count,
     )
 
     if not doctor_present:
         log.info(
             "non-doctor joined before doctor, holding",
-            meeting_id=meeting_id, user_name=user_name,
+            meeting_id=meeting_id,
+            user_name=user_name,
         )
         return
 
@@ -334,7 +357,9 @@ def handle_participant_joined(payload: dict[str, Any]):
     else:
         log.info(
             "additional participant in active session",
-            meeting_id=meeting_id, user_name=user_name, patient_count=new_count,
+            meeting_id=meeting_id,
+            user_name=user_name,
+            patient_count=new_count,
         )
 
 
@@ -347,12 +372,15 @@ def _revoke_merge_window_task(redis, meeting_id: str) -> None:
     redis.delete(f"recall:meeting:{meeting_id}:paused_at")
     log.info(
         "merge window task revoked",
-        meeting_id=meeting_id, task_id=task_id,
+        meeting_id=meeting_id,
+        task_id=task_id,
     )
 
 
 def _resume_or_start_recording(
-    meeting_id: str, participant_id: str, user_name: str,
+    meeting_id: str,
+    participant_id: str,
+    user_name: str,
 ) -> None:
     """If a paused bot exists for this meeting, resume on it via
     start_recording. Otherwise create a brand-new bot and open an
@@ -371,7 +399,9 @@ def _resume_or_start_recording(
     redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
     log.info(
         "recording resumed on existing bot within merge window",
-        meeting_id=meeting_id, bot_id=bot_id, participant_id=participant_id,
+        meeting_id=meeting_id,
+        bot_id=bot_id,
+        participant_id=participant_id,
     )
 
 
@@ -438,19 +468,26 @@ def handle_participant_left(payload: dict[str, Any]):
     if role == "bot":
         log.info(
             "participant left: bot",
-            role="bot", meeting_id=meeting_id,
-            participant_id=participant_id, user_name=user_name,
+            role="bot",
+            meeting_id=meeting_id,
+            participant_id=participant_id,
+            user_name=user_name,
         )
         return
 
     if role == "doctor":
         redis.delete(f"recall:meeting:{meeting_id}:doctor_present")
-        recording_active = bool(redis.get(f"recall:meeting:{meeting_id}:recording_active"))
+        recording_active = bool(
+            redis.get(f"recall:meeting:{meeting_id}:recording_active")
+        )
         log.info(
             "participant left: doctor",
-            role="doctor", meeting_id=meeting_id,
-            participant_id=participant_id, user_name=user_name,
-            doctor_present=False, recording_active=recording_active,
+            role="doctor",
+            meeting_id=meeting_id,
+            participant_id=participant_id,
+            user_name=user_name,
+            doctor_present=False,
+            recording_active=recording_active,
         )
 
         if recording_active:
@@ -465,7 +502,8 @@ def handle_participant_left(payload: dict[str, Any]):
     if new_count < 0:
         log.warning(
             "patient_count went negative, resetting to 0",
-            meeting_id=meeting_id, count=new_count,
+            meeting_id=meeting_id,
+            count=new_count,
         )
         redis.set(f"recall:meeting:{meeting_id}:patient_count", 0)
         return
@@ -475,9 +513,12 @@ def handle_participant_left(payload: dict[str, Any]):
 
     log.info(
         "participant left: other",
-        role="other", meeting_id=meeting_id,
-        participant_id=participant_id, user_name=user_name,
-        doctor_present=doctor_present, recording_active=recording_active,
+        role="other",
+        meeting_id=meeting_id,
+        participant_id=participant_id,
+        user_name=user_name,
+        doctor_present=doctor_present,
+        recording_active=recording_active,
         patient_count=new_count,
     )
 
@@ -486,7 +527,9 @@ def handle_participant_left(payload: dict[str, Any]):
         # window so a follow-up patient inside 10 min lands on the same
         # bot and concatenates into one note (Mode A back-to-back).
         _pause_and_arm_merge_window(
-            redis, meeting_id, reason="last_patient_left",
+            redis,
+            meeting_id,
+            reason="last_patient_left",
         )
 
 
@@ -502,7 +545,9 @@ def _pause_and_arm_merge_window(redis, meeting_id: str, reason: str) -> None:
         except Exception:
             log.exception(
                 "stop_recording failed during pause",
-                bot_id=bot_id, meeting_id=meeting_id, reason=reason,
+                bot_id=bot_id,
+                meeting_id=meeting_id,
+                reason=reason,
             )
 
     redis.delete(f"recall:meeting:{meeting_id}:recording_active")
@@ -515,12 +560,17 @@ def _pause_and_arm_merge_window(redis, meeting_id: str, reason: str) -> None:
     )
     task = merge_window.queue(meeting_id, countdown=MERGE_WINDOW_SECONDS)
     redis.set(
-        f"recall:meeting:{meeting_id}:merge_task_id", task.id, ex=ttl,
+        f"recall:meeting:{meeting_id}:merge_task_id",
+        task.id,
+        ex=ttl,
     )
     log.info(
         "recording paused, merge window armed",
-        meeting_id=meeting_id, bot_id=bot_id, reason=reason,
-        merge_task_id=task.id, countdown_s=MERGE_WINDOW_SECONDS,
+        meeting_id=meeting_id,
+        bot_id=bot_id,
+        reason=reason,
+        merge_task_id=task.id,
+        countdown_s=MERGE_WINDOW_SECONDS,
     )
 
 
@@ -534,9 +584,16 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
     meeting.started webhooks for the same session still get deduped.
     """
     suffixes = [
-        "bot_id", "doctor_id", "host_id", "doctor_present", "recording_active",
-        "participants_order", "participants_names", "patient_count",
-        "merge_task_id", "paused_at",
+        "bot_id",
+        "doctor_id",
+        "host_id",
+        "doctor_present",
+        "recording_active",
+        "participants_order",
+        "participants_names",
+        "patient_count",
+        "merge_task_id",
+        "paused_at",
     ]
     if not preserve_lock:
         suffixes.append("starting_lock")
@@ -577,21 +634,24 @@ def handle_meeting_ended(payload: dict[str, Any]):
     if bot_id:
         log.info(
             "meeting ended with active recording",
-            meeting_id=meeting_id, bot_id=bot_id,
+            meeting_id=meeting_id,
+            bot_id=bot_id,
         )
         try:
             recall.stop_recording(bot_id)
         except Exception:
             log.exception(
                 "stop_recording failed during meeting.ended",
-                bot_id=bot_id, meeting_id=meeting_id,
+                bot_id=bot_id,
+                meeting_id=meeting_id,
             )
         try:
             recall.leave_call(bot_id)
         except Exception:
             log.exception(
                 "leave_call failed during meeting.ended",
-                bot_id=bot_id, meeting_id=meeting_id,
+                bot_id=bot_id,
+                meeting_id=meeting_id,
             )
     else:
         log.info(

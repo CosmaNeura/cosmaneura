@@ -24,9 +24,17 @@ def _key(suffix: str) -> str:
 def clean_redis():
     redis = get_redis()
     suffixes = [
-        "bot_id", "doctor_id", "host_id", "doctor_present", "recording_active",
-        "participants_order", "participants_names", "patient_count",
-        "starting_lock", "merge_task_id", "paused_at",
+        "bot_id",
+        "doctor_id",
+        "host_id",
+        "doctor_present",
+        "recording_active",
+        "participants_order",
+        "participants_names",
+        "patient_count",
+        "starting_lock",
+        "merge_task_id",
+        "paused_at",
     ]
     for s in suffixes:
         redis.delete(_key(s))
@@ -51,7 +59,12 @@ def doctor_with_zoom():
 
 @pytest.fixture
 def mock_recall(monkeypatch):
-    calls = {"create_bot": [], "start_recording": [], "stop_recording": [], "leave_call": []}
+    calls = {
+        "create_bot": [],
+        "start_recording": [],
+        "stop_recording": [],
+        "leave_call": [],
+    }
 
     from app.services import recall
 
@@ -95,11 +108,14 @@ def mock_zoom(monkeypatch):
 
     monkeypatch.setattr(zoom_service, "get_zak_token", lambda doctor: "zak-fake")
     monkeypatch.setattr(
-        zoom_service, "get_meeting_join_url",
+        zoom_service,
+        "get_meeting_join_url",
         lambda doctor, meeting_id: f"https://zoom.us/j/{meeting_id}",
     )
     monkeypatch.setattr(
-        zoom_service, "get_user_display_name", lambda doctor: "Test Doctor",
+        zoom_service,
+        "get_user_display_name",
+        lambda doctor: "Test Doctor",
     )
 
 
@@ -148,8 +164,12 @@ def _meeting_ended_payload() -> dict:
 
 # --------- Scenario 1: meeting.started ---------
 
+
 def test_meeting_started_does_not_create_bot(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -162,7 +182,10 @@ def test_meeting_started_does_not_create_bot(
 
 
 def test_doctor_identified_by_participant_id_not_name(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     """A guest whose user_name matches the doctor's display name but
     whose participant.id is different must NOT be treated as doctor."""
@@ -181,7 +204,10 @@ def test_doctor_identified_by_participant_id_not_name(
 
 
 def test_doctor_identified_marks_present(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -196,7 +222,10 @@ def test_doctor_identified_marks_present(
 
 
 def test_patient_joins_first_then_doctor_starts_session(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -219,7 +248,10 @@ def test_patient_joins_first_then_doctor_starts_session(
 
 
 def test_guest_patient_with_empty_id_still_starts_session(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     """Regression: Zoom omits `participant.id` for guests (only signed-in
     Zoom users get one). If we keyed off id alone, the guest got pushed to
@@ -249,7 +281,10 @@ def test_guest_patient_with_empty_id_still_starts_session(
 
 
 def test_doctor_joins_first_no_patients_no_bot(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -264,7 +299,10 @@ def test_doctor_joins_first_no_patients_no_bot(
 
 
 def test_doctor_present_then_patient_joins_starts_session(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -285,7 +323,10 @@ def test_doctor_present_then_patient_joins_starts_session(
 
 
 def test_additional_participant_during_active_session_no_new_bot(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -307,18 +348,25 @@ def test_additional_participant_during_active_session_no_new_bot(
 
 
 def test_last_patient_leaves_pauses_and_schedules_merge_window(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     """When the last non-doctor leaves while the doctor is still present,
     the recording is paused (stop_recording) and a merge_window task is
     scheduled. The bot is kept connected so the next patient can resume
     on the same bot inside the merge window."""
+
     class FakeAsyncResult:
         id = "celery-task-mw"
 
     from app.jobs import merge_window
+
     monkeypatch.setattr(
-        merge_window.expire, "apply_async",
+        merge_window.expire,
+        "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
 
@@ -346,7 +394,11 @@ def test_last_patient_leaves_pauses_and_schedules_merge_window(
 
 
 def test_sequential_patients_within_merge_window_share_bot(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     """Back-to-back patients (Mode A) within the 10-min merge window must
     reuse the same bot via start_recording; we do NOT create a new bot or
@@ -358,13 +410,17 @@ def test_sequential_patients_within_merge_window_share_bot(
         id = "celery-task-mw"
 
     from app.jobs import merge_window
+
     monkeypatch.setattr(
-        merge_window.expire, "apply_async",
+        merge_window.expire,
+        "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
     from app.celery import celery_app
+
     monkeypatch.setattr(
-        celery_app.control, "revoke",
+        celery_app.control,
+        "revoke",
         lambda task_id, terminate=False: revoked.append(task_id),
     )
 
@@ -399,7 +455,10 @@ def test_sequential_patients_within_merge_window_share_bot(
 
 
 def test_accompanying_family_leaves_keeps_recording(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -424,7 +483,11 @@ def test_accompanying_family_leaves_keeps_recording(
 
 
 def test_doctor_leaves_pauses_recording_and_schedules_merge_window(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     """Doctor leaving while recording pauses the bot (stop_recording) and
     arms a 10-min merge_window task. bot_id is preserved so doctor can
@@ -440,6 +503,7 @@ def test_doctor_leaves_pauses_recording_and_schedules_merge_window(
         return FakeAsyncResult()
 
     from app.jobs import merge_window
+
     monkeypatch.setattr(merge_window.expire, "apply_async", fake_apply_async)
 
     from app.services import zoom_webhooks
@@ -469,7 +533,11 @@ def test_doctor_leaves_pauses_recording_and_schedules_merge_window(
 
 
 def test_doctor_returns_within_merge_window_resumes_same_bot(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     """Doctor leaves with a patient still in the room, then returns within
     the merge window. The pending merge_window task is revoked and
@@ -480,14 +548,18 @@ def test_doctor_returns_within_merge_window_resumes_same_bot(
         id = "celery-task-99"
 
     from app.jobs import merge_window
+
     monkeypatch.setattr(
-        merge_window.expire, "apply_async",
+        merge_window.expire,
+        "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
 
     from app.celery import celery_app
+
     monkeypatch.setattr(
-        celery_app.control, "revoke",
+        celery_app.control,
+        "revoke",
         lambda task_id, terminate=False: revoked.append(task_id),
     )
 
@@ -520,7 +592,11 @@ def test_doctor_returns_within_merge_window_resumes_same_bot(
 
 
 def test_doctor_returns_to_empty_room_stays_paused(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     """Doctor leaves while a patient is present (pause #1), then the patient
     leaves too (pause #2 — but recording is already paused). Doctor comes
@@ -532,13 +608,17 @@ def test_doctor_returns_to_empty_room_stays_paused(
         id = "celery-task-empty"
 
     from app.jobs import merge_window
+
     monkeypatch.setattr(
-        merge_window.expire, "apply_async",
+        merge_window.expire,
+        "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
     from app.celery import celery_app
+
     monkeypatch.setattr(
-        celery_app.control, "revoke",
+        celery_app.control,
+        "revoke",
         lambda task_id, terminate=False: revoked.append(task_id),
     )
 
@@ -574,19 +654,26 @@ def test_doctor_returns_to_empty_room_stays_paused(
 
 
 def test_merge_window_expires_leaves_bot_and_clears_state(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     """Stub apply_async so handle_participant_left only SCHEDULES the
     merge_window task. Then call merge_window.perform directly to simulate
     the task firing 10 min later with no resume in between. The bot is
     already paused (stop_recording fired on doctor-left), so this only
     needs to call leave_call and clear keys."""
+
     class FakeAsyncResult:
         id = "celery-task-mw-expires"
 
     from app.jobs import merge_window
+
     monkeypatch.setattr(
-        merge_window.expire, "apply_async",
+        merge_window.expire,
+        "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
 
@@ -619,7 +706,11 @@ def test_merge_window_expires_leaves_bot_and_clears_state(
 
 
 def test_merge_window_perform_noop_when_recording_resumed(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     """If recording resumed before the task fires (recording_active=1),
     merge_window.perform must be a no-op — the bot stays connected."""
@@ -637,7 +728,10 @@ def test_merge_window_perform_noop_when_recording_resumed(
 
 
 def test_stale_meeting_ended_within_lock_window_is_skipped(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     """Regression: Zoom occasionally redelivers meeting.ended from a prior
     PMR session within seconds of a fresh meeting.started. If we let it
@@ -661,7 +755,10 @@ def test_stale_meeting_ended_within_lock_window_is_skipped(
 
 
 def test_meeting_ended_with_no_bot_logs_no_recording(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -684,7 +781,10 @@ def test_meeting_ended_with_no_bot_logs_no_recording(
 
 
 def test_meeting_ended_with_active_recording_stops_and_leaves(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     from app.services import zoom_webhooks
 
@@ -706,7 +806,11 @@ def test_meeting_ended_with_active_recording_stops_and_leaves(
 
 
 def test_meeting_ended_revokes_pending_merge_window_task(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
 ):
     revoked = []
 
@@ -714,14 +818,18 @@ def test_meeting_ended_revokes_pending_merge_window_task(
         id = "celery-task-77"
 
     from app.jobs import merge_window
+
     monkeypatch.setattr(
-        merge_window.expire, "apply_async",
+        merge_window.expire,
+        "apply_async",
         lambda args, countdown: FakeAsyncResult(),
     )
 
     from app.celery import celery_app
+
     monkeypatch.setattr(
-        celery_app.control, "revoke",
+        celery_app.control,
+        "revoke",
         lambda task_id, terminate=False: revoked.append(task_id),
     )
 
@@ -744,7 +852,10 @@ def test_meeting_ended_revokes_pending_merge_window_task(
 
 
 def test_matcher_skips_appointment_that_already_has_a_transcript(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     """Phase 1 band-aid for Mode A scenario #9 (back-to-back patients
     across the merge window): an existing appointment that already has
@@ -778,8 +889,10 @@ def test_matcher_skips_appointment_that_already_has_a_transcript(
         duration=120,
         transcript_data=[
             TranscriptEntry(
-                speaker="doctor", content="prior visit",
-                startTime=0, endTime=0,
+                speaker="doctor",
+                content="prior visit",
+                startTime=0,
+                endTime=0,
             )
         ],
     ).save()
@@ -795,9 +908,7 @@ def test_matcher_skips_appointment_that_already_has_a_transcript(
     # A bot is created for the new patient
     assert len(mock_recall["create_bot"]) == 1
     # The recording is linked to a DIFFERENT appointment than the stale one
-    new_appointment_id = (
-        clean_redis.get(f"recall:bot:{BOT_ID}:appointment_id").decode()
-    )
+    new_appointment_id = clean_redis.get(f"recall:bot:{BOT_ID}:appointment_id").decode()
     assert new_appointment_id != str(old_appt.id)
     # And the new appointment's patient should be the one who actually joined
     new_appt = Appointment.one(new_appointment_id)
@@ -807,7 +918,10 @@ def test_matcher_skips_appointment_that_already_has_a_transcript(
 
 
 def test_matcher_still_binds_when_appointment_has_no_transcript(
-    clean_redis, doctor_with_zoom, mock_recall, mock_zoom,
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
 ):
     """An existing appointment WITHOUT any transcript is still a valid
     match — that's the calendar-pre-creates-appointment case."""
@@ -839,7 +953,7 @@ def test_matcher_still_binds_when_appointment_has_no_transcript(
         _participant_joined_payload("patient-c", "Sofia Lopez")
     )
 
-    bound_appointment_id = (
-        clean_redis.get(f"recall:bot:{BOT_ID}:appointment_id").decode()
-    )
+    bound_appointment_id = clean_redis.get(
+        f"recall:bot:{BOT_ID}:appointment_id"
+    ).decode()
     assert bound_appointment_id == str(pre_existing.id)

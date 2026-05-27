@@ -54,9 +54,7 @@ def test_returns_plain_text_zak_for_valid_token(
     doctor_with_zoom,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        zoom_service, "get_zak_token", lambda doctor: "fresh-zak-value"
-    )
+    monkeypatch.setattr(zoom_service, "get_zak_token", lambda doctor: "fresh-zak-value")
 
     token = "test-token-abc"
     fresh_redis.set(zak_token_redis_key(token), str(doctor_with_zoom.id))

@@ -16,7 +16,9 @@ def _fetch_clerk_email(clerk_id: str) -> str | None:
         if clerk_user and clerk_user.email_addresses:
             return clerk_user.email_addresses[0].email_address
     except Exception:
-        log.warning("failed to fetch email from clerk", clerk_id=clerk_id, exc_info=True)
+        log.warning(
+            "failed to fetch email from clerk", clerk_id=clerk_id, exc_info=True
+        )
     return None
 
 

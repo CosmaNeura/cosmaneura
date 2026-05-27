@@ -37,6 +37,7 @@ def configure_database():
     # calling run_migrations() here would cause a recursive alembic invocation.
     try:
         from alembic import context as _alembic_ctx
+
         _in_alembic = _alembic_ctx.config is not None
     except AttributeError:
         _in_alembic = False
