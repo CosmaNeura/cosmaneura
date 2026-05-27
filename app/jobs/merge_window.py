@@ -56,8 +56,12 @@ def perform(meeting_id: str) -> None:
         )
 
     for suffix in (
-        "bot_id", "merge_task_id", "paused_at",
-        "participants_order", "participants_names", "patient_count",
+        "bot_id",
+        "merge_task_id",
+        "paused_at",
+        "participants_order",
+        "participants_names",
+        "patient_count",
     ):
         redis.delete(f"{key_prefix}:{suffix}")
 

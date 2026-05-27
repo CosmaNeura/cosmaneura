@@ -94,9 +94,7 @@ def _get_doctor_token(
             get_redis().set(
                 zoom_revoked_redis_key(doctor_id), "1", ex=_REVOKED_FLAG_TTL
             )
-            raise ZoomIntegrationInvalid(
-                f"doctor {doctor_id} revoked Zoom OAuth"
-            )
+            raise ZoomIntegrationInvalid(f"doctor {doctor_id} revoked Zoom OAuth")
 
     response.raise_for_status()
     data = response.json()

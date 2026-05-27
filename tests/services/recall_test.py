@@ -9,13 +9,21 @@ def test_leave_call_posts_to_bot_endpoint(monkeypatch):
     class FakeResponse:
         status_code = 200
         text = '{"ok": true}'
+
         @property
-        def is_success(self): return True
-        def raise_for_status(self): return None
+        def is_success(self):
+            return True
+
+        def raise_for_status(self):
+            return None
 
     class FakeClient:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, headers=None):
             captured["url"] = url
             captured["headers"] = headers
@@ -33,8 +41,11 @@ def test_leave_call_tolerates_already_done_bot(monkeypatch):
     class FakeResponse:
         status_code = 400
         text = "bot already done"
+
         @property
-        def is_success(self): return False
+        def is_success(self):
+            return False
+
         def raise_for_status(self):
             req = httpx.Request("POST", "http://test/")
             raise httpx.HTTPStatusError(
@@ -42,8 +53,12 @@ def test_leave_call_tolerates_already_done_bot(monkeypatch):
             )
 
     class FakeClient:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, headers=None):
             return FakeResponse()
 
@@ -59,14 +74,24 @@ def test_create_bot_forwards_metadata_and_zak_url(monkeypatch):
     class FakeResponse:
         status_code = 200
         text = '{"id": "bot-xyz"}'
+
         @property
-        def is_success(self): return True
-        def raise_for_status(self): return None
-        def json(self): return {"id": "bot-xyz"}
+        def is_success(self):
+            return True
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "bot-xyz"}
 
     class FakeClient:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
         def post(self, url, json=None, headers=None):
             captured["payload"] = json
             return FakeResponse()

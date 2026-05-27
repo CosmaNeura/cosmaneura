@@ -52,11 +52,14 @@ def _verify_zoom_signature(
         return False
 
     message = b"v0:" + timestamp.encode() + b":" + raw_body
-    expected = "v0=" + hmac.new(
-        ZOOM_SECRET_TOKEN.encode(),
-        message,
-        hashlib.sha256,
-    ).hexdigest()
+    expected = (
+        "v0="
+        + hmac.new(
+            ZOOM_SECRET_TOKEN.encode(),
+            message,
+            hashlib.sha256,
+        ).hexdigest()
+    )
 
     return hmac.compare_digest(expected, signature)
 

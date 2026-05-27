@@ -49,7 +49,10 @@ def test_sync_creates_zoom_meetings(global_session):
     ):
         perform(str(doctor.id))
 
-    meetings = cast(list[ZoomMeeting], list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()))
+    meetings = cast(
+        list[ZoomMeeting],
+        list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()),
+    )
     assert len(meetings) == 2
     topics = {m.topic for m in meetings}
     assert topics == {"Patient Follow-up", "New Patient Intake"}
@@ -75,7 +78,10 @@ def test_sync_upserts_existing_meetings(global_session):
     ):
         perform(str(doctor.id))
 
-    meetings = cast(list[ZoomMeeting], list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()))
+    meetings = cast(
+        list[ZoomMeeting],
+        list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()),
+    )
     assert len(meetings) == 2  # not duplicated
 
     updated = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id="123456789")

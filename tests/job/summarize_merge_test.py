@@ -24,8 +24,13 @@ from tests.factories import (
 
 
 def _make_transcript(
-    doctor_id, appointment_id, patient_id, *,
-    entries: list[tuple[str, str]], duration: int, created_at: datetime | None = None,
+    doctor_id,
+    appointment_id,
+    patient_id,
+    *,
+    entries: list[tuple[str, str]],
+    duration: int,
+    created_at: datetime | None = None,
 ) -> AIVisitTranscript:
     data = [
         TranscriptEntry(speaker=spk, content=txt, startTime=0, endTime=0)
@@ -50,7 +55,8 @@ def appointment_with_schema():
     doctor = DoctorFactory.build().save()
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     appointment = AppointmentFactory.build(
-        doctor_id=doctor.id, patient_id=patient.id,
+        doctor_id=doctor.id,
+        patient_id=patient.id,
     ).save()
     schema = DoctorNoteSchemaFactory.build(
         doctor_id=doctor.id,
@@ -66,11 +72,13 @@ def stub_llm():
     captured: dict = {"generate": [], "action_items": []}
 
     def fake_generate(transcript, example_note, note_schema):
-        captured["generate"].append({
-            "transcript_id": str(transcript.id) if transcript.id else None,
-            "transcript_data": [e.model_dump() for e in transcript.transcript_data],
-            "duration": transcript.duration,
-        })
+        captured["generate"].append(
+            {
+                "transcript_id": str(transcript.id) if transcript.id else None,
+                "transcript_data": [e.model_dump() for e in transcript.transcript_data],
+                "duration": transcript.duration,
+            }
+        )
         return {"CC": "stub complaint", "Plan": "stub plan"}
 
     def fake_action_items(transcript):
@@ -79,19 +87,27 @@ def stub_llm():
         )
         return "- stub action item"
 
-    flexmock(summarize).should_receive("generate_clinical_note").replace_with(fake_generate)
-    flexmock(summarize).should_receive("extract_action_items").replace_with(fake_action_items)
+    flexmock(summarize).should_receive("generate_clinical_note").replace_with(
+        fake_generate
+    )
+    flexmock(summarize).should_receive("extract_action_items").replace_with(
+        fake_action_items
+    )
     # augment_clinical_note still runs (no LLM, just appends duration text).
     return captured
 
 
 def test_summarize_with_single_transcript_creates_note(
-    appointment_with_schema, stub_llm,
+    appointment_with_schema,
+    stub_llm,
 ):
     doctor, patient, appointment, schema = appointment_with_schema
     transcript = _make_transcript(
-        doctor.id, appointment.id, patient.id,
-        entries=[("doctor", "hello"), ("patient", "hi")], duration=120,
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "hello"), ("patient", "hi")],
+        duration=120,
     )
 
     summarize.perform(transcript.id, schema.id)
@@ -112,18 +128,25 @@ def test_summarize_with_single_transcript_creates_note(
 
 
 def test_summarize_merges_multiple_transcripts_with_segment_markers(
-    appointment_with_schema, stub_llm,
+    appointment_with_schema,
+    stub_llm,
 ):
     doctor, patient, appointment, schema = appointment_with_schema
     base = datetime.now(timezone.utc) - timedelta(minutes=20)
     t1 = _make_transcript(
-        doctor.id, appointment.id, patient.id,
-        entries=[("doctor", "first half"), ("patient", "ok")], duration=60,
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "first half"), ("patient", "ok")],
+        duration=60,
         created_at=base,
     )
     t2 = _make_transcript(
-        doctor.id, appointment.id, patient.id,
-        entries=[("doctor", "second half"), ("patient", "alright")], duration=45,
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "second half"), ("patient", "alright")],
+        duration=45,
         created_at=base + timedelta(minutes=5),
     )
 
@@ -157,7 +180,8 @@ def test_summarize_merges_multiple_transcripts_with_segment_markers(
 
 
 def test_summarize_replaces_existing_note_when_new_segment_lands(
-    appointment_with_schema, stub_llm,
+    appointment_with_schema,
+    stub_llm,
 ):
     """When a second transcript arrives for an appointment that already
     has a note, the note is regenerated and the prior one is removed —
@@ -165,8 +189,12 @@ def test_summarize_replaces_existing_note_when_new_segment_lands(
     doctor, patient, appointment, schema = appointment_with_schema
     base = datetime.now(timezone.utc) - timedelta(minutes=20)
     t1 = _make_transcript(
-        doctor.id, appointment.id, patient.id,
-        entries=[("doctor", "first")], duration=30, created_at=base,
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "first")],
+        duration=30,
+        created_at=base,
     )
 
     summarize.perform(t1.id, schema.id)
@@ -177,8 +205,11 @@ def test_summarize_replaces_existing_note_when_new_segment_lands(
     assert note_after_first.ai_transcript_id == t1.id
 
     t2 = _make_transcript(
-        doctor.id, appointment.id, patient.id,
-        entries=[("doctor", "second")], duration=40,
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "second")],
+        duration=40,
         created_at=base + timedelta(minutes=5),
     )
     summarize.perform(t2.id, schema.id)
@@ -197,7 +228,8 @@ def test_summarize_replaces_existing_note_when_new_segment_lands(
 
 
 def test_summarize_skips_when_note_already_reflects_trigger(
-    appointment_with_schema, stub_llm,
+    appointment_with_schema,
+    stub_llm,
 ):
     """Re-running summarize against the same trigger transcript must not
     re-generate. This is the idempotency guard for celery retries and
@@ -205,8 +237,11 @@ def test_summarize_skips_when_note_already_reflects_trigger(
     the latest transcript is the 'up to date' signal."""
     doctor, patient, appointment, schema = appointment_with_schema
     t1 = _make_transcript(
-        doctor.id, appointment.id, patient.id,
-        entries=[("doctor", "only")], duration=30,
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "only")],
+        duration=30,
     )
 
     summarize.perform(t1.id, schema.id)
