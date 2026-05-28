@@ -350,3 +350,98 @@ def test_note_uses_patient_pronouns_from_transcript():
     )
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
+
+
+# Issue #33 item: the Subjective section should be sourced only from
+# what the patient said (lines beginning with "Patient:"), not from
+# the doctor's interpretation. This test seeds a transcript where the
+# doctor offers a specific diagnostic interpretation ("costochondritis")
+# that the patient never says, and asserts that label does not appear
+# in Subjective.
+def test_subjective_excludes_doctor_interpretation():
+    patient = Patient.where(Patient.name == "Ocie Dosie").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+    assert schema is not None
+
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
+
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=120,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=3000,
+                speaker="Doctor",
+                content="What brings you in today?",
+            ),
+            TranscriptEntry(
+                startTime=3000,
+                endTime=10000,
+                speaker="Patient",
+                content="I've been having a sharp pain when I breathe in. It's right here on the left side of my chest, has been for about a week.",
+            ),
+            TranscriptEntry(
+                startTime=10000,
+                endTime=15000,
+                speaker="Doctor",
+                content="Any redness or swelling at the site? Does pressing on the spot make it worse?",
+            ),
+            TranscriptEntry(
+                startTime=15000,
+                endTime=21000,
+                speaker="Patient",
+                content="Yeah, pressing on it makes it a lot worse. No redness or swelling that I can see.",
+            ),
+            TranscriptEntry(
+                startTime=21000,
+                endTime=28000,
+                speaker="Doctor",
+                content="Sounds like classic costochondritis -- pain that worsens with palpation and with deep inspiration. That's an inflammation of the cartilage where the ribs meet the sternum.",
+            ),
+            TranscriptEntry(
+                startTime=28000,
+                endTime=32000,
+                speaker="Patient",
+                content="Okay. Anything I should be doing differently in the meantime?",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "The 'Subjective' section of this clinical note should describe "
+        "the patient's own reported symptoms (sharp pain when breathing in, "
+        "pain on the left side of the chest, pain worse when pressing on "
+        "the spot). The 'Subjective' section must NOT contain the word "
+        "'costochondritis' or describe the condition by name -- that is "
+        "the doctor's diagnostic interpretation and belongs in the "
+        "'Assessment' section. It is acceptable, and expected, for "
+        "'costochondritis' to appear elsewhere in the note (e.g. Assessment)."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
