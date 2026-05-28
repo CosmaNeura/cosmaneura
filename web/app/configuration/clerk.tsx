@@ -41,6 +41,32 @@ type ClerkClient = {
   redirectToSignIn: () => Promise<void>
 }
 
+// Test-only auth bypass. Playwright integration tests inject
+// `window.__TEST_AUTH__ = { userId }` via add_init_script; we return a
+// stub Clerk client whose getToken yields a sentinel `test:<userId>`
+// bearer that the backend honors only when PYTHON_ENV=test. Gated by
+// VITE_ENABLE_TEST_AUTH which is unset in production builds, so this
+// branch is dead code there.
+const TEST_AUTH_ENABLED = import.meta.env.VITE_ENABLE_TEST_AUTH === "true"
+
+type TestAuth = { userId: string }
+
+function readTestAuth(): TestAuth | null {
+  if (!TEST_AUTH_ENABLED) return null
+  const w = window as Window & { __TEST_AUTH__?: TestAuth }
+  return w.__TEST_AUTH__ ?? null
+}
+
+function makeTestClerkClient(userId: string): ClerkClient {
+  return {
+    loaded: true,
+    load: async () => {},
+    user: { id: userId },
+    session: { getToken: async () => `test:${userId}` },
+    redirectToSignIn: async () => {},
+  }
+}
+
 // Cache the in-flight bootstrap promise so concurrent callers (multiple
 // clientLoaders + every API request's auth fn) share one resolution. The
 // `if (!clerk.loaded)` check inside is a sequential guard — without memoizing
@@ -51,6 +77,10 @@ type ClerkClient = {
 let clerkClientPromise: Promise<ClerkClient | undefined> | null = null
 
 export function getClient(): Promise<ClerkClient | undefined> {
+  const testAuth = readTestAuth()
+  if (testAuth) {
+    return Promise.resolve(makeTestClerkClient(testAuth.userId))
+  }
   if (!clerkClientPromise) {
     clerkClientPromise = resolveClient()
   }

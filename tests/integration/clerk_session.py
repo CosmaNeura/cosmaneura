@@ -5,88 +5,45 @@
 redirect chain to settle). That redirect chain is flaky in CI — multiple
 distinct failure modes were observed across runs on PR #57.
 
-This module sidesteps the UI entirely:
+This module sidesteps the UI and the Clerk API entirely:
 
-1. The backend SDK mints a one-time `sign_in_token` for the dev user.
-2. Clerk returns a redemption URL with the token embedded.
-3. We append `redirect_url=<home_url()>` so Clerk redirects the browser
-   to our app after consuming the ticket. The redirect carries the
-   `__clerk_db_jwt` handshake param that Clerk dev needs to bridge
-   sessions cross-origin — without it, the frontend SDK on our domain
-   doesn't see the user as signed in.
+1. We inject `window.__TEST_AUTH__ = { userId }` via Playwright's
+   add_init_script BEFORE navigating to the app.
+2. The frontend's getClient() reads that, returns a stub Clerk client
+   whose getToken yields a sentinel `test:<userId>` bearer.
+3. The backend's `AuthenticateClerkRequest` honors that bearer only when
+   PYTHON_ENV=test (and the id has the required prefix); prod and
+   staging fall through to real Clerk verification.
 
-Prerequisite: the Clerk dev instance must list our test host in its
-"Allowed redirect URLs" (e.g. `https://api-test.cosma.localhost/*` or
-`https://*.cosma.localhost/*`). Without that config, Clerk falls back
-to its hosted "Welcome" page and the session never reaches our app.
+This trades a small amount of test-only code in production paths for
+deterministic auth in CI. The branches are env-gated at both layers:
+backend by `is_testing()`, frontend by `VITE_ENABLE_TEST_AUTH`.
 
 `test_onboarding_flow` still uses the UI flow because that test's whole
 purpose is to verify the wizard end-to-end.
 """
 
-from urllib.parse import quote
-
-from clerk_backend_api import Clerk
 from playwright.sync_api import Page
 
-from tests.constants import CLERK_DEV_USER_EMAIL
 from tests.integration.server import home_url
-from tests.routes.utils import _get_or_create_clerk_user
 
-# Use a module-level Clerk client so tests can monkeypatch `_clerk` if
-# they want to stub. Lazy-initialize on first call so an unset
-# CLERK_PRIVATE_KEY at import time doesn't blow up the test collector.
-_clerk_client: Clerk | None = None
-
-
-def _clerk() -> Clerk:
-    global _clerk_client
-    if _clerk_client is None:
-        from app.configuration.clerk import CLERK_PRIVATE_KEY
-
-        if not CLERK_PRIVATE_KEY:
-            raise RuntimeError(
-                "CLERK_PRIVATE_KEY is required to mint a sign-in token "
-                "for the dev user. Make sure your test env exports it."
-            )
-        _clerk_client = Clerk(bearer_auth=CLERK_PRIVATE_KEY)
-    return _clerk_client
+# Stable id for the dev user across the test suite. The leading
+# `user_test_` prefix is required by the backend bypass to ensure prod
+# Clerk ids (`user_2xx…`) can never be impersonated through this path.
+DEV_USER_TEST_CLERK_ID = "user_test_dev"
 
 
 def create_dev_user_session(page: Page) -> str:
-    """Establish a Clerk session for the dev user on the given page.
+    """Install the test-auth bypass on the page and navigate to home.
 
-    Returns the Clerk user id. After this returns, the page has the
-    cookies the React app needs to consider the user logged in;
-    subsequent authenticated navigations will succeed.
+    Returns the Clerk user id used. After this returns, the React app
+    is mounted as an authenticated user; the first authed backend
+    request will trigger `inject_doctor_record` and create the Doctor
+    row.
     """
-    user = _get_or_create_clerk_user(CLERK_DEV_USER_EMAIL)
-    assert user is not None, (
-        f"failed to get or create Clerk user for {CLERK_DEV_USER_EMAIL}"
+    page.add_init_script(
+        "window.__TEST_AUTH__ = { userId: %r };" % DEV_USER_TEST_CLERK_ID
     )
-    assert user.id is not None, f"Clerk user for {CLERK_DEV_USER_EMAIL} has no id"
-    user_id: str = user.id
-
-    try:
-        token = _clerk().sign_in_tokens.create(request={"user_id": user_id})
-    except Exception as e:
-        raise RuntimeError(
-            f"clerk.sign_in_tokens.create failed for user_id={user_id}: {e}"
-        ) from e
-
-    assert token is not None, "sign_in_tokens.create returned None"
-    assert token.url, "sign_in_tokens.create returned a token without a redemption url"
-
-    target = home_url()
-    separator = "&" if "?" in token.url else "?"
-    ticket_url = f"{token.url}{separator}redirect_url={quote(target, safe='')}"
-
-    page.goto(ticket_url)
-    # Clerk consumes the ticket, sets session cookies on its domain, and
-    # 302s to `target` with the __clerk_db_jwt handshake param appended.
-    # Wait until the browser lands on our app's host — if this times out
-    # the redirect URL isn't allowlisted in Clerk's dashboard.
-    page.wait_for_url(lambda url: url.startswith(target), timeout=10_000)
+    page.goto(home_url())
     page.wait_for_load_state("networkidle")
-
-    return user_id
+    return DEV_USER_TEST_CLERK_ID

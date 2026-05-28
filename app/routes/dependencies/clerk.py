@@ -6,10 +6,21 @@ import httpx
 from clerk_backend_api import Clerk
 from clerk_backend_api.jwks_helpers.authenticaterequest import (
     AuthenticateRequestOptions,
+    AuthStatus,
     RequestState,
 )
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from app import log
+from app.environments import is_testing
+
+# Bearer tokens with this prefix are accepted by AuthenticateClerkRequest
+# only when PYTHON_ENV=test. The Clerk id encoded after the prefix must
+# itself start with "user_test_" so prod traffic (where is_testing() is
+# False) can never be impersonated even if a header leaked.
+_TEST_BEARER_PREFIX = "test:"
+_TEST_CLERK_ID_PREFIX = "user_test_"
 
 
 class AuthenticateClerkRequest:
@@ -45,6 +56,24 @@ class AuthenticateClerkRequest:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="Not Authenticated"
             )
+
+        # Test-only bypass. The frontend's auth fn returns a bearer
+        # of the form "test:user_test_<id>" when running under the
+        # Playwright integration tests. We honor it ONLY in PYTHON_ENV=test;
+        # prod and staging fall through to real Clerk verification.
+        token = credentials.credentials
+        if (
+            is_testing()
+            and token.startswith(_TEST_BEARER_PREFIX)
+            and token[len(_TEST_BEARER_PREFIX) :].startswith(_TEST_CLERK_ID_PREFIX)
+        ):
+            test_clerk_id = token[len(_TEST_BEARER_PREFIX) :]
+            log.warning("auth bypass active (PYTHON_ENV=test)", clerk_id=test_clerk_id)
+            bypass_state = RequestState(
+                status=AuthStatus.SIGNED_IN, payload={"sub": test_clerk_id}
+            )
+            request.state.auth_state = bypass_state
+            return bypass_state
 
         # Convert FastAPI request headers to httpx format
         httpx_request = httpx.Request(
