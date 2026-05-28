@@ -136,6 +136,7 @@ py_js-build:
 		VITE_POSTHOG_KEY="${VITE_POSTHOG_KEY:-test-posthog-key}" \
 		VITE_POSTHOG_HOST="${VITE_POSTHOG_HOST:-https://app.posthog.com}" \
 		VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-https://examplePublicKey@o0.ingest.sentry.io/0}" \
+		VITE_ENABLE_TEST_AUTH="true" \
 		just js_build
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"

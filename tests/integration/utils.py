@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
+from time import monotonic, sleep
 
 from playwright.sync_api import Page
 
 from app.models.doctor import Doctor
 
-from tests.integration.clerk import setup_clerk_testing_token
+from tests.integration.clerk_session import create_dev_user_session
 from tests.integration.server import home_url
-from tests.routes.utils import get_clerk_dev_user
 
 # TODO scroll to bottom?
 # page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -98,39 +98,30 @@ def wait_for_loading(page: Page, timeout: int = 30000, extreme: bool = False):
     page.wait_for_timeout(100)
 
 
-def login_as_dev_user(page: Page):
+def login_as_dev_user(page: Page) -> Doctor:
+    """Log in as the Clerk dev user and return the resulting Doctor.
+
+    Uses the programmatic Clerk session helper to skip the hosted UI
+    entirely — see tests/integration/clerk_session.py for the rationale.
+    The Doctor row is created the same way as in production: the first
+    authenticated request after navigation triggers `inject_doctor_record`.
     """
-    Log in as the Clerk dev user and return the resulting Doctor.
-
-    The Clerk webhook creates a fresh Doctor on first login with
-    `onboarding_completed_at = None`, which causes the authenticated layout
-    to redirect to /onboarding — breaking every test that expects to land on
-    the main app surface (sidebar, /notes, /settings). This helper marks the
-    doctor as onboarded and reloads so subsequent navigation goes to /notes.
-
-    The onboarding wizard itself has dedicated coverage in
-    `test_onboarding_flow`; tests that just need an authed user with the
-    full app available should keep using this helper.
-    """
-    username, password, _user = get_clerk_dev_user()
-
-    # paranoid testing to ensure database cleaning is working
+    # Paranoid testing to ensure database cleaning is working.
     assert Doctor.count() == 0
 
-    setup_clerk_testing_token(page)
+    create_dev_user_session(page)
 
-    page.goto(home_url())
+    # First authed request after redirect should upsert the Doctor.
+    # Short poll closes any tiny race between the redirect landing and
+    # the React app's first /api call.
+    deadline = monotonic() + 5
+    while Doctor.count() == 0 and monotonic() < deadline:
+        sleep(0.1)
 
-    page.get_by_label("Email address").fill(username)
-    page.get_by_role("button", name="Continue", exact=True).click()
-
-    page.get_by_label("Password", exact=True).fill(password)
-    page.get_by_role("button", name="Continue").click()
-
-    wait_for_loading(page)
-
-    # only a single doctor should be created!
-    assert Doctor.count() == 1
+    assert Doctor.count() == 1, (
+        f"expected exactly 1 Doctor after programmatic Clerk session; "
+        f"got {Doctor.count()}"
+    )
 
     doctor = Doctor.first()
     assert doctor
