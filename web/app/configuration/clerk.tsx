@@ -23,26 +23,41 @@ This whole situation isn't great. Here's what is happening:
 - This method is assumed to be called in a clientLoader.
 */
 
-// this will check to make sure the user is logged in and redirect them if they are not
-export async function getClient() {
-  type ClerkUser = {
-    id: string
-    username?: string | null
-    primaryEmailAddress?: {
-      emailAddress?: string | null
-    } | null
-  }
+type ClerkUser = {
+  id: string
+  username?: string | null
+  primaryEmailAddress?: {
+    emailAddress?: string | null
+  } | null
+}
 
-  type ClerkClient = {
-    loaded: boolean
-    load: () => Promise<void>
-    user?: ClerkUser
-    session?: {
-      getToken: () => Promise<string | null>
-    }
-    redirectToSignIn: () => Promise<void>
+type ClerkClient = {
+  loaded: boolean
+  load: () => Promise<void>
+  user?: ClerkUser
+  session?: {
+    getToken: () => Promise<string | null>
   }
+  redirectToSignIn: () => Promise<void>
+}
 
+// Cache the in-flight bootstrap promise so concurrent callers (multiple
+// clientLoaders + every API request's auth fn) share one resolution. The
+// `if (!clerk.loaded)` check inside is a sequential guard — without memoizing
+// at the outer call, parallel callers all observe `loaded === false` and
+// each fire their own `clerk.load()`, producing 5x /v1/environment + 5x
+// /v1/client per page load (Sentry N+1) and occasionally leaving the SDK in
+// a state that hangs React Router hydration ("Loading application…").
+let clerkClientPromise: Promise<ClerkClient | undefined> | null = null
+
+export function getClient(): Promise<ClerkClient | undefined> {
+  if (!clerkClientPromise) {
+    clerkClientPromise = resolveClient()
+  }
+  return clerkClientPromise
+}
+
+async function resolveClient(): Promise<ClerkClient | undefined> {
   const clerkWindow = window as Window & {
     Clerk?: ClerkClient
   }

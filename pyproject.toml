@@ -145,7 +145,12 @@ tests = ["tests"]
 # Not sure entirely why, but without tee-sys, the builtin fd-based log capture breaks on CI (but not locally)
 addopts = "--capture=tee-sys"
 # avoid depreciation warnings causing spammy logs
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    # Clerk SDK emits this at every authenticate_request() call; suppressing
+    # avoids polluting CI annotations via pytest-github-actions-annotate-failures.
+    "ignore:authenticate_request method is applicable in the context of Backend APIs only.:UserWarning",
+]
 # by default, pytest seems to hijack many logs and output them to the terminal
 # this is nice if you don't have a custom login like we do
 testpaths = "tests"

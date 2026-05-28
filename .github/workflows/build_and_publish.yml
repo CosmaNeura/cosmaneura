@@ -50,7 +50,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # fetch-depth: 0 so `db_lint` can diff new migrations against origin/master
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5
       - uses: iloveitaly/github-action-localias@master

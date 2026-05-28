@@ -23,25 +23,50 @@ db_reset:
 	psql $DATABASE_URL -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 	psql $TEST_DATABASE_URL -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
 
+[script]
 db_lint:
+	set -euo pipefail
 	uv run alembic check
 
+	# Only squawk-lint migrations newly added in this branch so historical
+	# migrations don't pollute CI annotations forever. Requires git history
+	# back to the merge-base with origin/master (workflow uses fetch-depth: 0).
 	# TODO there's also a more advanced github integration, but seems a bit cleaner:
 	# https://squawkhq.com/docs/github_app
-
 	# TODO remove rule exclusion when https://github.com/sbdchd/squawk/issues/392 is fixed
-	# TODO should submit upstream for the jq transformations so others can copy, add to docs
-	squawk_report=$(mktemp) && \
-		LOG_LEVEL=error uv run alembic upgrade head --sql | \
-			uv run squawk --reporter=json --exclude=prefer-text-field > "$squawk_report" || true && \
-		if [ -n "${CI:-}" ]; then \
-			jq -r '.[] | "::\(if .level == "Error" then "error" else "warning" end) file=\(.file),line=\(.line),col=\(.column),title=\(.rule_name)::\(.messages[0].Note)"' "$squawk_report"; \
-		else \
-			jq -r '.[] | "\(.file):\(.line):\(.column): \(.level) [\(.rule_name)] \(.messages[0].Note)"' "$squawk_report"; \
-		fi && \
-		error_count=$(jq '[.[] | select(.level == "Error")] | length' "$squawk_report") && \
-		rm -f "$squawk_report" && \
-		[ "$error_count" -eq 0 ]
+	if ! git rev-parse --verify origin/master >/dev/null 2>&1; then
+		echo "origin/master not available locally — skipping squawk"
+		exit 0
+	fi
+	base=$(git merge-base origin/master HEAD 2>/dev/null || true)
+	if [ -z "$base" ]; then
+		echo "No common ancestor with origin/master — skipping squawk"
+		exit 0
+	fi
+	new_migrations=$(git diff --name-only --diff-filter=A "$base" HEAD -- 'migrations/versions/*.py' | sort)
+	if [ -z "$new_migrations" ]; then
+		echo "No new migrations vs origin/master — skipping squawk"
+		exit 0
+	fi
+	oldest=$(echo "$new_migrations" | head -1)
+	prev_rev=$(grep -E "^down_revision" "$oldest" | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/" | head -1)
+	if [ -z "$prev_rev" ]; then
+		echo "Could not determine previous revision from $oldest" >&2
+		exit 1
+	fi
+	echo "Linting $(echo "$new_migrations" | wc -l | tr -d ' ') new migration(s) from $prev_rev to head"
+
+	squawk_report=$(mktemp)
+	LOG_LEVEL=error uv run alembic upgrade "${prev_rev}:head" --sql | \
+		uv run squawk --reporter=json --exclude=prefer-text-field > "$squawk_report" || true
+	if [ -n "${CI:-}" ]; then
+		jq -r '.[] | "::\(if .level == "Error" then "error" else "warning" end) file=\(.file),line=\(.line),col=\(.column),title=\(.rule_name)::\(.messages[0].Note)"' "$squawk_report"
+	else
+		jq -r '.[] | "\(.file):\(.line):\(.column): \(.level) [\(.rule_name)] \(.messages[0].Note)"' "$squawk_report"
+	fi
+	error_count=$(jq '[.[] | select(.level == "Error")] | length' "$squawk_report")
+	rm -f "$squawk_report"
+	[ "$error_count" -eq 0 ]
 
 # open the database in the default macos GUI
 [macos]
