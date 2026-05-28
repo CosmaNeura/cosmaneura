@@ -343,10 +343,12 @@ def test_note_uses_patient_pronouns_from_transcript():
     criteria = (
         "This clinical note must use 'she' or 'her' pronouns at least once to "
         "refer to the patient (matching the pronouns used in the transcript "
-        "by the doctor). The note must NOT refer to the patient as 'they' or "
-        "'them', and must NOT avoid pronouns entirely by always saying 'the "
-        "patient' -- a natural clinical note about this transcript should "
-        "use she/her at least once."
+        "by the doctor). The note must NOT refer to the patient herself as "
+        "'they' or 'them' (using 'they' to refer to symptoms, conditions, or "
+        "other plurals such as headaches is fine -- only patient-individual "
+        "references count). The note must NOT avoid pronouns entirely by "
+        "always saying 'the patient' -- a natural clinical note about this "
+        "transcript should use she/her at least once."
     )
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
