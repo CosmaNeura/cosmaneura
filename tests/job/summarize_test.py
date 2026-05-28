@@ -9,7 +9,7 @@ import pytest
 from app.jobs.summarize import generate_clinical_note, perform
 
 from app.models.ai_visit_note import AIVisitNote
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -253,3 +253,197 @@ def test_summarize_is_idempotent():
     assert appt is not None
     assert appt.appointment_name is not None
     assert eval_llm(appt.appointment_name, "Should mention issues with breathing")
+
+
+# Issue #33 item: notes should use the patient's actual pronouns
+# instead of defaulting to "they/them". The patient's pronouns are
+# inferred from the transcript itself (the doctor or patient uses them
+# explicitly). This test seeds a transcript where "she/her" is used
+# consistently and asserts the generated note matches.
+def test_note_uses_patient_pronouns_from_transcript():
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+    assert schema is not None
+
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
+
+    # In-memory transcript — no .save() needed because
+    # generate_clinical_note only reads transcript_data + doctor_id.
+    # The doctor and patient both use "she/her" repeatedly; name is
+    # never used in pronoun-bearing sentences so the LLM has only the
+    # transcript's explicit pronoun signal to go on.
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=120,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=4000,
+                speaker="Doctor",
+                content="How is she feeling about the new medication?",
+            ),
+            TranscriptEntry(
+                startTime=4000,
+                endTime=12000,
+                speaker="Patient",
+                content="I've been doing better since I started it. I feel less anxious overall.",
+            ),
+            TranscriptEntry(
+                startTime=12000,
+                endTime=16000,
+                speaker="Doctor",
+                content="And the headaches she was getting?",
+            ),
+            TranscriptEntry(
+                startTime=16000,
+                endTime=22000,
+                speaker="Patient",
+                content="They're mostly gone. I get one maybe once a week now instead of every day.",
+            ),
+            TranscriptEntry(
+                startTime=22000,
+                endTime=26000,
+                speaker="Doctor",
+                content="Has she had any side effects from it?",
+            ),
+            TranscriptEntry(
+                startTime=26000,
+                endTime=32000,
+                speaker="Patient",
+                content="A little dry mouth at first but that went away after the first week.",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "This clinical note must use 'she' or 'her' pronouns at least once to "
+        "refer to the patient (matching the pronouns used in the transcript "
+        "by the doctor). The note must NOT refer to the patient herself as "
+        "'they' or 'them' (using 'they' to refer to symptoms, conditions, or "
+        "other plurals such as headaches is fine -- only patient-individual "
+        "references count). The note must NOT avoid pronouns entirely by "
+        "always saying 'the patient' -- a natural clinical note about this "
+        "transcript should use she/her at least once."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
+
+
+# Issue #33 item: the Subjective section should be sourced only from
+# what the patient said (lines beginning with "Patient:"), not from
+# the doctor's interpretation. This test seeds a transcript where the
+# doctor offers a specific diagnostic interpretation ("costochondritis")
+# that the patient never says, and asserts that label does not appear
+# in Subjective.
+def test_subjective_excludes_doctor_interpretation():
+    patient = Patient.where(Patient.name == "Ocie Dosie").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+    assert schema is not None
+
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
+
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=120,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=3000,
+                speaker="Doctor",
+                content="What brings you in today?",
+            ),
+            TranscriptEntry(
+                startTime=3000,
+                endTime=10000,
+                speaker="Patient",
+                content="I've been having a sharp pain when I breathe in. It's right here on the left side of my chest, has been for about a week.",
+            ),
+            TranscriptEntry(
+                startTime=10000,
+                endTime=15000,
+                speaker="Doctor",
+                content="Any redness or swelling at the site? Does pressing on the spot make it worse?",
+            ),
+            TranscriptEntry(
+                startTime=15000,
+                endTime=21000,
+                speaker="Patient",
+                content="Yeah, pressing on it makes it a lot worse. No redness or swelling that I can see.",
+            ),
+            TranscriptEntry(
+                startTime=21000,
+                endTime=28000,
+                speaker="Doctor",
+                content="Sounds like classic costochondritis -- pain that worsens with palpation and with deep inspiration. That's an inflammation of the cartilage where the ribs meet the sternum.",
+            ),
+            TranscriptEntry(
+                startTime=28000,
+                endTime=32000,
+                speaker="Patient",
+                content="Okay. Anything I should be doing differently in the meantime?",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "The 'Subjective' section of this clinical note should describe "
+        "the patient's own reported symptoms (sharp pain when breathing in, "
+        "pain on the left side of the chest, pain worse when pressing on "
+        "the spot). The 'Subjective' section must NOT contain the word "
+        "'costochondritis' or describe the condition by name -- that is "
+        "the doctor's diagnostic interpretation and belongs in the "
+        "'Assessment' section. It is acceptable, and expected, for "
+        "'costochondritis' to appear elsewhere in the note (e.g. Assessment)."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
