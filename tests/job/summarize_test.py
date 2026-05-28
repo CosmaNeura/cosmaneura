@@ -9,7 +9,7 @@ import pytest
 from app.jobs.summarize import generate_clinical_note, perform
 
 from app.models.ai_visit_note import AIVisitNote
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -253,3 +253,100 @@ def test_summarize_is_idempotent():
     assert appt is not None
     assert appt.appointment_name is not None
     assert eval_llm(appt.appointment_name, "Should mention issues with breathing")
+
+
+# Issue #33 item: notes should use the patient's actual pronouns
+# instead of defaulting to "they/them". The patient's pronouns are
+# inferred from the transcript itself (the doctor or patient uses them
+# explicitly). This test seeds a transcript where "she/her" is used
+# consistently and asserts the generated note matches.
+def test_note_uses_patient_pronouns_from_transcript():
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+    assert schema is not None
+
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
+
+    # In-memory transcript — no .save() needed because
+    # generate_clinical_note only reads transcript_data + doctor_id.
+    # The doctor and patient both use "she/her" repeatedly; name is
+    # never used in pronoun-bearing sentences so the LLM has only the
+    # transcript's explicit pronoun signal to go on.
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=120,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=4000,
+                speaker="Doctor",
+                content="How is she feeling about the new medication?",
+            ),
+            TranscriptEntry(
+                startTime=4000,
+                endTime=12000,
+                speaker="Patient",
+                content="I've been doing better since I started it. I feel less anxious overall.",
+            ),
+            TranscriptEntry(
+                startTime=12000,
+                endTime=16000,
+                speaker="Doctor",
+                content="And the headaches she was getting?",
+            ),
+            TranscriptEntry(
+                startTime=16000,
+                endTime=22000,
+                speaker="Patient",
+                content="They're mostly gone. I get one maybe once a week now instead of every day.",
+            ),
+            TranscriptEntry(
+                startTime=22000,
+                endTime=26000,
+                speaker="Doctor",
+                content="Has she had any side effects from it?",
+            ),
+            TranscriptEntry(
+                startTime=26000,
+                endTime=32000,
+                speaker="Patient",
+                content="A little dry mouth at first but that went away after the first week.",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "This clinical note must use 'she' or 'her' pronouns at least once to "
+        "refer to the patient (matching the pronouns used in the transcript "
+        "by the doctor). The note must NOT refer to the patient as 'they' or "
+        "'them', and must NOT avoid pronouns entirely by always saying 'the "
+        "patient' -- a natural clinical note about this transcript should "
+        "use she/her at least once."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
