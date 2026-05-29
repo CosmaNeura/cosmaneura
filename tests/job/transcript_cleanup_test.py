@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from app.jobs.transcript_cleanup import CLEANUP_AGE_DAYS, perform
+
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.patient import Patient

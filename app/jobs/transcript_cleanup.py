@@ -7,23 +7,27 @@ because changing it requires reasoning about the de-identified
 dataset's coverage."""
 
 from datetime import datetime, timedelta, timezone
+from typing import Any, cast
 
 from app import log
 from app.celery import celery_app
 from app.jobs.anonymize import queue as queue_deletion
-from app.models.ai_visit_transcript import AIVisitTranscript
 
+from app.models.ai_visit_transcript import AIVisitTranscript
 
 CLEANUP_AGE_DAYS = 14
 
 
 def perform() -> None:
     cutoff = datetime.now(timezone.utc) - timedelta(days=CLEANUP_AGE_DAYS)
-    candidates = list(
-        AIVisitTranscript.where(
-            (AIVisitTranscript.created_at < cutoff)
-            & (AIVisitTranscript.deleted_at == None)  # noqa: E711
-        ).all()
+    candidates = cast(
+        list[AIVisitTranscript],
+        list(
+            AIVisitTranscript.where(
+                (cast(Any, AIVisitTranscript.created_at) < cutoff)
+                & (AIVisitTranscript.deleted_at == None)  # noqa: E711
+            ).all()
+        ),
     )
 
     log.info(

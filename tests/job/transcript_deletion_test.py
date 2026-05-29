@@ -1,9 +1,10 @@
-# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportReturnType=false
+# pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportReturnType=false, reportOptionalOperand=false, reportCallIssue=false
 
 from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.jobs.anonymize import perform
+
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.ai_visit_transcript_non_phi import AIVisitTranscriptNonPHI
 from app.models.appointment import Appointment
@@ -74,9 +75,7 @@ def test_perform_is_idempotent_when_already_deleted():
         patient_id=patient.id,
         duration=60,
         transcript_data=[
-            TranscriptEntry(
-                speaker="Patient", content="hi", startTime=0, endTime=1000
-            ),
+            TranscriptEntry(speaker="Patient", content="hi", startTime=0, endTime=1000),
         ],
         deleted_at=datetime.now(timezone.utc),
     ).save()

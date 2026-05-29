@@ -7,7 +7,6 @@ from azure.health.deidentification.models import (
 )
 from azure.identity import ClientSecretCredential
 
-from activemodel.types import TypeIDType
 from app import log
 from app.celery import celery_app
 from app.configuration.azure import (
@@ -16,6 +15,8 @@ from app.configuration.azure import (
     AZURE_DEID_ENDPOINT,
     AZURE_DEID_TENANT_ID,
 )
+
+from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.ai_visit_transcript_non_phi import AIVisitTranscriptNonPHI
 
