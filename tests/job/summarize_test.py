@@ -549,3 +549,112 @@ def test_plan_bullets_sort_patient_before_doctor():
     )
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
+
+
+# Issue #33 item: the Medications section should distinguish current
+# medications (what the patient is already taking) from newly-prescribed
+# medications (what the doctor adds at this visit). Seeds a transcript
+# where the patient lists two current meds at intake and the doctor
+# prescribes a third in response to new heartburn complaints; asserts
+# the Medications section tags omeprazole inline as newly prescribed.
+def test_medications_section_distinguishes_current_from_prescribed():
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+    assert schema is not None
+
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
+
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=150,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=4000,
+                speaker="Doctor",
+                content="Before we get started, can you remind me what medications you're currently taking?",
+            ),
+            TranscriptEntry(
+                startTime=4000,
+                endTime=14000,
+                speaker="Patient",
+                content="Sure, I take lisinopril 10mg once a day in the morning, and atorvastatin 20mg at bedtime. That's it.",
+            ),
+            TranscriptEntry(
+                startTime=14000,
+                endTime=20000,
+                speaker="Doctor",
+                content="Great. And what brings you in today?",
+            ),
+            TranscriptEntry(
+                startTime=20000,
+                endTime=32000,
+                speaker="Patient",
+                content="I've been getting a lot of heartburn lately, especially at night. It's been going on for about a month now, maybe two or three times a week.",
+            ),
+            TranscriptEntry(
+                startTime=32000,
+                endTime=40000,
+                speaker="Doctor",
+                content="Any difficulty swallowing, weight loss, or blood in the stool?",
+            ),
+            TranscriptEntry(
+                startTime=40000,
+                endTime=46000,
+                speaker="Patient",
+                content="No, none of those. Just the heartburn.",
+            ),
+            TranscriptEntry(
+                startTime=46000,
+                endTime=58000,
+                speaker="Doctor",
+                content="Let's start you on omeprazole, 20mg once daily about thirty minutes before breakfast, for the next two months. We'll see if that takes care of it.",
+            ),
+            TranscriptEntry(
+                startTime=58000,
+                endTime=62000,
+                speaker="Patient",
+                content="Sounds good, thank you.",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "The 'Medications' section of this clinical note must (a) list "
+        "lisinopril and atorvastatin as the patient's current medications, "
+        "and (b) list omeprazole AND clearly tag it as newly prescribed at "
+        "this visit. Acceptable inline labels for omeprazole include "
+        "'(new this visit)', '(NEW)', '(prescribed today)', "
+        "'(initiated today)', '(started today)', or any similar phrase that "
+        "tells the reader this med was added at this visit. If the "
+        "Medications section omits omeprazole, or includes omeprazole but "
+        "does NOT distinguish it from the current medications via an inline "
+        "label, the test fails."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
