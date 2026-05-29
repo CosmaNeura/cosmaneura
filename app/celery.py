@@ -204,6 +204,14 @@ celery_app.conf.beat_schedule = {
         "task": "app.jobs.synthetic_zoom_check.perform",
         "schedule": crontab(minute="*/15"),
     },
+    # Daily sweep that finds AIVisitTranscripts older than 14 days
+    # with no soft-delete marker and queues per-transcript
+    # de-identification + tombstoning (issue #29). 03:00 UTC sits
+    # outside US clinic hours.
+    "transcript_cleanup": {
+        "task": "app.jobs.transcript_cleanup.perform",
+        "schedule": crontab(minute="0", hour="3"),
+    },
 }
 
 # Import crontab at the top of the file
