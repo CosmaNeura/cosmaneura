@@ -237,6 +237,7 @@ def build_structured_prompt(
           - E.g. if the patient discusses diabetes and hypertension, and 3 steps in the plan relate to diabetes and 2 steps relate to hypertension, the plan should list the 3 diabetes steps, THEN the 2 hyptertension steps.
           - Sort based on importance of the condition. If hypertension is the patient's main concern, it should be listed first.
           - Be consistent with the order of conditions across fields. I.e. if anxiety is covered first in the plan, it should also be covered first in the assessment, subjective, and objective sections.
+          - In the Plan section specifically, within each condition's bullets, list patient-actionable items (e.g. medications to take, lifestyle changes, symptoms to monitor, follow-ups the patient must initiate) before doctor-actionable items (e.g. labs to order, referrals to send, follow-up calls the doctor must place). This makes it easier for the patient to scan their own to-dos.
           - Do not create subsections within the fields for the conditions. Prefer "flat" lists of items unless absolutely necessary.
         4. Use clear, concise, and professional medical language.
         5. Avoid including any irrelevant personal details or small talk from the transcript.
