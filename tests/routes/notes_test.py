@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -142,49 +142,13 @@ def test_note_detail_deleted_transcript(authenticated_client: TestClient):
         assert entry["speaker"]
         assert entry["content"]
 
-    # Simulate deletion of the transcript.
+    # Simulate the post-deletion-job state: transcript_data cleared
+    # and deleted_at set. The /internal/notes endpoint should reflect
+    # both fields as-is; it no longer mutates the transcript on read.
+    # (The read-time clear-when-old hack was removed in issue #29 once
+    # the daily TranscriptDeletionJob took over.)
     transcript.deleted_at = datetime.now()
-    transcript.save()
-
-    response = authenticated_client.get(
-        api_app.url_path_for("note_detail", appointment_id=appointment.id)
-    )
-
-    assert response.status_code == status.HTTP_200_OK
-
-    result = response.json()
-    transcript_json = result["transcript"]
-    assert transcript_json["id"] == str(transcript.id)
-    assert transcript_json["deleted_at"] is not None
-    assert len(transcript_json["transcript_data"]) == 0
-
-
-def test_note_detail_old_transcript(authenticated_client: TestClient):
-    "Old transcripts should be treated as deleted even if not marked as such."
-
-    # Use data from seeds.
-    _, _, seed_user = get_clerk_seed_user()
-    authenticated_client.override_user(seed_user)  # type: ignore[attr-defined]
-
-    transcript = AIVisitTranscript.sample()
-    assert not transcript.deleted_at
-    appointment = Appointment.one(transcript.appointment_id)
-
-    response = authenticated_client.get(
-        api_app.url_path_for("note_detail", appointment_id=appointment.id)
-    )
-
-    assert response.status_code == status.HTTP_200_OK
-
-    result = response.json()
-    transcript_json = result["transcript"]
-    assert transcript_json
-    assert transcript_json["id"] == str(transcript.id)
-    assert transcript_json["deleted_at"] is None
-    assert len(transcript_json["transcript_data"]) > 0
-
-    # Simulate old transcript.
-    transcript.created_at = datetime.now() - timedelta(days=15)
+    transcript.transcript_data = []
     transcript.save()
 
     response = authenticated_client.get(
