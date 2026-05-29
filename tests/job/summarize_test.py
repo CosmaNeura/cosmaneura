@@ -774,3 +774,130 @@ def test_plan_bullets_include_reason():
     )
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
+
+
+# Issue #33 item: when the schema includes a Review of Systems field,
+# ROS must contain the doctor's system-by-system findings from
+# targeted questions, NOT a paraphrase of Subjective. Constructs an
+# in-memory DoctorNoteSchema (not saved) with a Review of Systems
+# field, seeds a transcript where the patient describes a cough +
+# fever and the doctor performs a multi-system ROS survey, and
+# asserts the two sections do not duplicate.
+def test_review_of_systems_distinct_from_subjective():
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+
+    # In-memory schema with a Review of Systems field. Not saved --
+    # generate_clinical_note only reads .fields and (via doctor_id)
+    # the doctor's biography.
+    schema = DoctorNoteSchema(
+        doctor_id=appt.doctor_id,
+        note_type="Inline schema with ROS",
+        fields={
+            "CC": "Summarize the main reason for the patient's visit in one sentence.",
+            "Subjective": "Document the patient's own description of their symptoms, concerns, and any relevant personal or family medical history.",
+            "Review of Systems": "System-by-system findings from the doctor's targeted questions during the visit (positives and pertinent negatives). Should NOT repeat the patient's initial narrative from Subjective.",
+            "Assessment": "List the primary diagnosis and any secondary diagnoses, along with the rationale for each.",
+            "Plan": "Outline the proposed management plan, including treatments, medications, follow-up, and referrals.",
+        },
+    )
+
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=180,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=4000,
+                speaker="Doctor",
+                content="What brings you in today?",
+            ),
+            TranscriptEntry(
+                startTime=4000,
+                endTime=18000,
+                speaker="Patient",
+                content="I've had a dry cough for about three days now, and a low-grade fever -- I'd say around 100 degrees on and off. I just haven't been feeling like myself.",
+            ),
+            TranscriptEntry(
+                startTime=18000,
+                endTime=24000,
+                speaker="Doctor",
+                content="Any chest pain or shortness of breath?",
+            ),
+            TranscriptEntry(
+                startTime=24000,
+                endTime=32000,
+                speaker="Patient",
+                content="No chest pain. A little short of breath when I climb stairs, but nothing at rest.",
+            ),
+            TranscriptEntry(
+                startTime=32000,
+                endTime=38000,
+                speaker="Doctor",
+                content="Sore throat, runny nose, headache?",
+            ),
+            TranscriptEntry(
+                startTime=38000,
+                endTime=46000,
+                speaker="Patient",
+                content="My throat's a little scratchy, yes. No runny nose. No headache.",
+            ),
+            TranscriptEntry(
+                startTime=46000,
+                endTime=52000,
+                speaker="Doctor",
+                content="Any nausea, vomiting, or diarrhea?",
+            ),
+            TranscriptEntry(
+                startTime=52000,
+                endTime=58000,
+                speaker="Patient",
+                content="No, none of that. Appetite's a bit off but I'm keeping food down.",
+            ),
+            TranscriptEntry(
+                startTime=58000,
+                endTime=64000,
+                speaker="Doctor",
+                content="Any joint pain, rash, or new fatigue beyond what you mentioned?",
+            ),
+            TranscriptEntry(
+                startTime=64000,
+                endTime=72000,
+                speaker="Patient",
+                content="No joint pain, no rash. I'm tired but I figure that's the fever.",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=None,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "This clinical note's 'Review of Systems' section must contain "
+        "the doctor's system-by-system findings from the targeted "
+        "questions asked during the visit -- pertinent positives and "
+        "negatives organised by body system (e.g. 'HEENT: mild sore "
+        "throat, no headache', 'Respiratory: mild dyspnea on exertion', "
+        "'GI: denies nausea, vomiting, diarrhea', 'Cardiovascular: no "
+        "chest pain', 'Musculoskeletal: no joint pain', 'Skin: no rash'). "
+        "The Review of Systems MUST NOT be a paraphrase or restatement "
+        "of the Subjective section. The Subjective section should "
+        "describe the patient's initial narrative (3-day dry cough, "
+        "low-grade fever, general malaise). If the Review of Systems "
+        "reads as a narrative summary of the patient's chief complaint "
+        "rather than organised system-by-system findings from the "
+        "doctor's survey, the test fails."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
