@@ -658,3 +658,119 @@ def test_medications_section_distinguishes_current_from_prescribed():
     )
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
+
+
+# Issue #33 item: every Plan bullet must include a stated reason -- the
+# "why" of the action -- using "for X" or "to X" phrasing. Seeds a
+# lumbar-strain transcript with four distinct actions (ibuprofen, heat
+# application, lifting restriction, MRI order), each of which should
+# pick up an explicit reason.
+def test_plan_bullets_include_reason():
+    patient = Patient.where(Patient.name == "Ghengis Khan").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).first()
+    assert appt is not None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+    assert schema is not None
+
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
+
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=120,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=4000,
+                speaker="Doctor",
+                content="What's been bothering you?",
+            ),
+            TranscriptEntry(
+                startTime=4000,
+                endTime=14000,
+                speaker="Patient",
+                content="I've had really bad lower back pain for about two weeks now. It started after I helped a friend move some furniture.",
+            ),
+            TranscriptEntry(
+                startTime=14000,
+                endTime=22000,
+                speaker="Doctor",
+                content="Any numbness, tingling, or weakness in the legs? Any change in bowel or bladder function?",
+            ),
+            TranscriptEntry(
+                startTime=22000,
+                endTime=28000,
+                speaker="Patient",
+                content="No, none of that. Just the pain in my lower back, kind of a deep ache.",
+            ),
+            TranscriptEntry(
+                startTime=28000,
+                endTime=40000,
+                speaker="Doctor",
+                content="Okay, that sounds most consistent with a lumbar strain from the lifting. Let me give you a few things. Take ibuprofen 600mg three times a day with food.",
+            ),
+            TranscriptEntry(
+                startTime=40000,
+                endTime=50000,
+                speaker="Doctor",
+                content="Apply a heating pad to the area for about 20 minutes, two or three times a day.",
+            ),
+            TranscriptEntry(
+                startTime=50000,
+                endTime=58000,
+                speaker="Doctor",
+                content="And no heavy lifting at all for the next two weeks. I really mean it.",
+            ),
+            TranscriptEntry(
+                startTime=58000,
+                endTime=70000,
+                speaker="Doctor",
+                content="I'm also going to order a lumbar MRI just to be safe -- given how long the pain has been going on, I want to make sure there isn't a disc issue we're missing.",
+            ),
+            TranscriptEntry(
+                startTime=70000,
+                endTime=74000,
+                speaker="Patient",
+                content="Okay, that all makes sense.",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "Every bullet in the 'Plan' section of this clinical note must "
+        "include an explicit reason for the action -- a 'for X' or 'to X' "
+        "clause explaining the purpose. Acceptable: 'Order MRI to rule out "
+        "disc pathology', 'Take ibuprofen 600mg three times a day for pain "
+        "control', 'Avoid heavy lifting to prevent re-injury'. UNACCEPTABLE: "
+        "bullets that state only the action with no reason, e.g. 'Order MRI', "
+        "'Take ibuprofen 600mg three times a day', or 'Apply heating pad for "
+        "20 minutes'. If ANY Plan bullet lacks a stated reason -- including "
+        "common-sense actions like 'follow up in 2 weeks' which must say "
+        "what the follow-up is FOR -- the test fails. Reasons must be "
+        "clinically grounded (related to the patient's complaint or the "
+        "standard indication for the action), not invented."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
