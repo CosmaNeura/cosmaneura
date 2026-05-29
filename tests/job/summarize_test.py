@@ -447,3 +447,105 @@ def test_subjective_excludes_doctor_interpretation():
     )
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
+
+
+# Issue #33 item: in the Plan section, within each condition's bullets,
+# the patient-actionable items (medications to take, lifestyle changes,
+# self-monitoring) should appear before the doctor-actionable items
+# (labs to order, referrals to send). Seeds a transcript with one
+# condition (diabetes management) and a clear mix of both kinds of
+# todos, asserts the ordering via eval_n_of_m.
+def test_plan_bullets_sort_patient_before_doctor():
+    patient = Patient.where(Patient.name == "Ocie Dosie").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt is not None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+    assert schema is not None
+
+    example_note = (
+        DoctorNoteExample.select()
+        .where(DoctorNoteExample.doctor_note_schema_id == schema.id)
+        .order_by(DoctorNoteExample.updated_at.desc())
+        .limit(1)
+        .one()
+    )
+
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=180,
+        transcript_data=[
+            TranscriptEntry(
+                startTime=0,
+                endTime=5000,
+                speaker="Doctor",
+                content="How have your blood sugars been running since our last visit?",
+            ),
+            TranscriptEntry(
+                startTime=5000,
+                endTime=15000,
+                speaker="Patient",
+                content="They've been creeping up. Mornings have been around 170 and after dinner sometimes hits the 230s. I've been pretty consistent with the metformin but I think dinner is what's tripping me up.",
+            ),
+            TranscriptEntry(
+                startTime=15000,
+                endTime=25000,
+                speaker="Doctor",
+                content="Okay, that's higher than where we want to be. I'm going to add a second medication -- empagliflozin, 10mg once daily in the morning. Start that tomorrow.",
+            ),
+            TranscriptEntry(
+                startTime=25000,
+                endTime=33000,
+                speaker="Doctor",
+                content="I also want you to check your blood sugar twice a day, once fasting and once two hours after dinner, and keep a log so we can review it next time.",
+            ),
+            TranscriptEntry(
+                startTime=33000,
+                endTime=42000,
+                speaker="Doctor",
+                content="And try to avoid late-evening meals -- ideally finish dinner by seven so your body has time to bring the numbers down before bed.",
+            ),
+            TranscriptEntry(
+                startTime=42000,
+                endTime=50000,
+                speaker="Doctor",
+                content="On my end I'll order an HbA1c lab so we have a current number, and I'll send a referral over to nutrition counseling so they can help with meal planning.",
+            ),
+            TranscriptEntry(
+                startTime=50000,
+                endTime=55000,
+                speaker="Patient",
+                content="Sounds good, I'll start the new medication tomorrow.",
+            ),
+        ],
+    )
+
+    def create_clinical_note() -> str:
+        return json.dumps(
+            generate_clinical_note(
+                transcript=transcript,
+                example_note=example_note,
+                note_schema=schema,
+            )
+        )
+
+    criteria = (
+        "In the 'Plan' section of this clinical note, the patient-actionable "
+        "bullets -- items the patient must do themselves (taking the new "
+        "medication empagliflozin daily, checking blood sugar twice a day, "
+        "avoiding late-evening meals) -- must appear BEFORE the "
+        "doctor-actionable bullets -- items the doctor will do (ordering the "
+        "HbA1c lab, sending the nutrition referral). The bullets do not need "
+        "to be labelled as patient or doctor; the test is about their reading "
+        "order in the Plan section. If a doctor-actionable bullet appears "
+        "above any patient-actionable bullet, the test fails."
+    )
+
+    eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
