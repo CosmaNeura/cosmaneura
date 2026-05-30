@@ -100,7 +100,29 @@ def pytest_sessionstart(session):
     # local test databases can drift when running pytest directly outside the full CI workflow
     run_migrations()
     # clear out any previous cruft in this DB, which is why...
-    database_reset_truncate()
+    # NOTE: models may be registered in SQLModel metadata before their alembic migration
+    # has been applied (e.g. a model file lands in Task N, migration in Task N+1).
+    # Truncating a not-yet-created table raises ProgrammingError; we skip those tables
+    # gracefully here so that no-DB tests can still run in the interim.
+    from sqlmodel import SQLModel
+    from sqlalchemy.exc import ProgrammingError
+    from activemodel.session_manager import get_engine
+
+    exception_tables = ["alembic_version"]
+    with get_engine().connect() as connection:
+        for table in reversed(SQLModel.metadata.sorted_tables):
+            if table.name in exception_tables:
+                continue
+            transaction = connection.begin()
+            try:
+                connection.execute(table.delete())
+                transaction.commit()
+            except ProgrammingError:
+                transaction.rollback()
+                log.warning(
+                    "skipping truncation: table not yet created (migration pending?)",
+                    table=table.name,
+                )
     # we reseed the database with a base set of records
     seed_test_data()
 
