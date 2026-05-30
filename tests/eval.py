@@ -2,10 +2,18 @@ import json
 from textwrap import dedent
 from typing import Callable
 
+from decouple import config
+
 from app import log
 from app.configuration.openai import openai
 
-OPENAI_MODEL = "gpt-4.1-mini-2025-04-14"
+# The judge model used to grade live-LLM eval output. Defaults to the model the
+# evals were written against; override via OPENAI_EVAL_MODEL when that model
+# isn't deployed on the target Azure OpenAI resource (e.g. staging only has the
+# note-generation model gpt-4.1-2025-04-14, so the default 404s there).
+OPENAI_MODEL = config(
+    "OPENAI_EVAL_MODEL", default="gpt-4.1-mini-2025-04-14", cast=str
+)
 
 
 def eval_n_of_m(call_llm: Callable[[], str], criteria: str, n: int, m: int) -> bool:
