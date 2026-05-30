@@ -76,6 +76,33 @@
         }
       }
     },
+    "/internal/v1/admin/usage": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Usage Dashboard",
+        "description": "Five platform-usage queries the boss runs by hand, lifted to a\nsingle authenticated endpoint. Admin-only via require_admin on the\nrouter. Issue #34.",
+        "operationId": "usage_dashboard",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
@@ -903,6 +930,35 @@
         "title": "Appointment",
         "description": "Represents an appointment with a patient from accuity"
       },
+      "DailyVolumeRow": {
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date",
+            "title": "Day"
+          },
+          "appointment_count": {
+            "type": "integer",
+            "title": "Appointment Count"
+          },
+          "note_count": {
+            "type": "integer",
+            "title": "Note Count"
+          },
+          "doctor_count": {
+            "type": "integer",
+            "title": "Doctor Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "day",
+          "appointment_count",
+          "note_count",
+          "doctor_count"
+        ],
+        "title": "DailyVolumeRow"
+      },
       "DoctorNoteSchema": {
         "properties": {
           "id": {
@@ -972,6 +1028,44 @@
         ],
         "title": "DoctorNoteSchema",
         "description": "A description of the fields required for a specific note type and instructions on what information goes in each field"
+      },
+      "DoctorUsageRow": {
+        "properties": {
+          "appointment_count": {
+            "type": "integer",
+            "title": "Appointment Count"
+          },
+          "doctor_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doctor Email"
+          },
+          "last_note_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Note At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "appointment_count",
+          "doctor_email",
+          "last_note_at"
+        ],
+        "title": "DoctorUsageRow"
       },
       "ExternalIntakeData": {
         "properties": {
@@ -1333,6 +1427,110 @@
         "title": "Patient",
         "description": "Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader."
       },
+      "PendingUploadRow": {
+        "properties": {
+          "audio_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audio At"
+          },
+          "transcript_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript At"
+          },
+          "note_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note At"
+          },
+          "appointment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "audio_at",
+          "transcript_at",
+          "note_at",
+          "appointment_name"
+        ],
+        "title": "PendingUploadRow"
+      },
+      "RecentAppointmentRow": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "doctor_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doctor Email"
+          },
+          "appointment_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "created_at",
+          "doctor_email",
+          "appointment_name"
+        ],
+        "title": "RecentAppointmentRow"
+      },
       "ScheduleResponse": {
         "properties": {
           "zoom_connected": {
@@ -1416,6 +1614,67 @@
         ],
         "title": "SettingsData"
       },
+      "TimeToNoteRow": {
+        "properties": {
+          "doctor_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doctor Email"
+          },
+          "avg_time_to_note_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Time To Note Seconds"
+          },
+          "max_time_to_note_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Time To Note Seconds"
+          },
+          "min_time_to_note_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Time To Note Seconds"
+          },
+          "sample_count": {
+            "type": "integer",
+            "title": "Sample Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "doctor_email",
+          "avg_time_to_note_seconds",
+          "max_time_to_note_seconds",
+          "min_time_to_note_seconds",
+          "sample_count"
+        ],
+        "title": "TimeToNoteRow"
+      },
       "TranscriptEntry": {
         "properties": {
           "speaker": {
@@ -1464,6 +1723,54 @@
           "biography"
         ],
         "title": "UpdateSettingsData"
+      },
+      "UsageResponse": {
+        "properties": {
+          "recent_appointments": {
+            "items": {
+              "$ref": "#/components/schemas/RecentAppointmentRow"
+            },
+            "type": "array",
+            "title": "Recent Appointments"
+          },
+          "doctor_usage": {
+            "items": {
+              "$ref": "#/components/schemas/DoctorUsageRow"
+            },
+            "type": "array",
+            "title": "Doctor Usage"
+          },
+          "daily_volume": {
+            "items": {
+              "$ref": "#/components/schemas/DailyVolumeRow"
+            },
+            "type": "array",
+            "title": "Daily Volume"
+          },
+          "pending_uploads": {
+            "items": {
+              "$ref": "#/components/schemas/PendingUploadRow"
+            },
+            "type": "array",
+            "title": "Pending Uploads"
+          },
+          "time_to_note": {
+            "items": {
+              "$ref": "#/components/schemas/TimeToNoteRow"
+            },
+            "type": "array",
+            "title": "Time To Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recent_appointments",
+          "doctor_usage",
+          "daily_volume",
+          "pending_uploads",
+          "time_to_note"
+        ],
+        "title": "UsageResponse"
       },
       "UserListResponse": {
         "properties": {
