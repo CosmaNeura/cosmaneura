@@ -4,6 +4,7 @@ import { AlertCircle } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { zoomAuthUrl, zoomRevokedAck } from "~/configuration/client"
+import { SETTINGS_STALE_TIME } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
@@ -26,6 +27,9 @@ export function ZoomConnectionAlert() {
   const queryClient = useQueryClient()
   const { data } = useQuery({
     ...settingsDataOptions(),
+    // Match the authenticated-layout loader's staleTime so this reads the
+    // prefetched settings from cache instead of firing a second request.
+    staleTime: SETTINGS_STALE_TIME,
     enabled: zoomEnabled,
   })
   const ackedRef = useRef(false)
