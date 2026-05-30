@@ -13,6 +13,14 @@ from starlette import status
 from typeid import TypeID
 
 from app import log
+from app.services import usage as usage_service
+from app.services.usage import (
+    DailyVolumeRow,
+    DoctorUsageRow,
+    PendingUploadRow,
+    RecentAppointmentRow,
+    TimeToNoteRow,
+)
 
 from app.models.doctor import Doctor, DoctorRole
 
@@ -76,3 +84,25 @@ def login_as_user(request: Request, user_id: Annotated[str, Path()]):
 
     request.session[SESSION_KEY_LOGIN_AS_USER] = login_as_user.clerk_id  # type: ignore
     return
+
+
+class UsageResponse(BasePydanticModel):
+    recent_appointments: list[RecentAppointmentRow]
+    doctor_usage: list[DoctorUsageRow]
+    daily_volume: list[DailyVolumeRow]
+    pending_uploads: list[PendingUploadRow]
+    time_to_note: list[TimeToNoteRow]
+
+
+@admin_api_app.get("/usage")
+def usage_dashboard() -> UsageResponse:
+    """Five platform-usage queries the boss runs by hand, lifted to a
+    single authenticated endpoint. Admin-only via require_admin on the
+    router. Issue #34."""
+    return UsageResponse(
+        recent_appointments=usage_service.recent_appointments(),
+        doctor_usage=usage_service.doctor_usage(),
+        daily_volume=usage_service.daily_volume(),
+        pending_uploads=usage_service.pending_uploads(),
+        time_to_note=usage_service.time_to_note(),
+    )
