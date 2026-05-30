@@ -43,6 +43,7 @@ def test_persists_and_reads_back():
     assert loaded.require_plan_reason is False
     assert loaded.custom_instructions == "Always use metric units."
     assert loaded.subjective_source == SubjectiveSource.patient_only
+    assert type(loaded.subjective_source) is SubjectiveSource
 
 
 def test_one_to_one_per_schema():

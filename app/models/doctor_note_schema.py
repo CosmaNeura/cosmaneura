@@ -17,6 +17,7 @@ from .doctor import Doctor
 
 if t.TYPE_CHECKING:
     from .doctor_note_example import DoctorNoteExample
+    from .note_type_customization import NoteTypeCustomization
 
 
 class DoctorNoteSchema(
@@ -42,6 +43,10 @@ class DoctorNoteSchema(
     "key is field name, value is instruction"
 
     examples: list["DoctorNoteExample"] = Relationship(
+        back_populates="doctor_note_schema"
+    )
+
+    customization: t.Optional["NoteTypeCustomization"] = Relationship(
         back_populates="doctor_note_schema"
     )
 

@@ -38,7 +38,7 @@ class NoteTypeCustomization(
     """
 
     doctor_note_schema_id: TypeIDType = DoctorNoteSchema.foreign_key(unique=True)
-    doctor_note_schema: DoctorNoteSchema = Relationship()
+    doctor_note_schema: DoctorNoteSchema = Relationship(back_populates="customization")
 
     subjective_source: SubjectiveSource = Field(default=SubjectiveSource.patient_only)
     pronoun_style: PronounStyle = Field(default=PronounStyle.infer_from_transcript)
@@ -55,6 +55,8 @@ def default_customization() -> NoteTypeCustomization:
     """A transient (unsaved) record carrying the platform defaults.
 
     Used by callers that need the effective config when no row exists.
-    Reading only the preset fields is safe without a schema id.
+    Reading only the preset fields is safe without a schema id. Do NOT
+    call .save() on it — doctor_note_schema_id is unset and the NOT NULL
+    constraint would raise an IntegrityError.
     """
     return NoteTypeCustomization()
