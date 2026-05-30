@@ -85,15 +85,20 @@ record.save()
 (Match the codebase's actual fetch/save idiom — `find_or_initialize_by` exists and
 is used in `extract.py`; prefer it if available.)
 
-## Consider surfacing in `/settings`
+## Surfacing in `/settings` (decided: inline)
 
-The existing `GET /internal/v1/settings` already returns `notes_schema:
-list[DoctorNoteSchema]`. Optionally include each schema's effective customization
-inline there so the settings page can render everything in one round-trip (avoids an
-N+1 of one customization GET per note-type). Decision for the implementation plan:
-either (a) add `customization: NoteTypeCustomizationData` to each item in the
-settings payload, or (b) keep the dedicated GET and have the UI batch. Leaning (a)
-for fewer requests, consistent with the SP-adjacent N+1 cleanup already done.
+**Decision (2026-05-30):** inline each schema's effective customization in
+`GET /internal/v1/settings`, which already returns `notes_schema:
+list[DoctorNoteSchema]`. The settings page renders everything in one round-trip and
+avoids an N+1 of one customization GET per note-type (consistent with the settings
+N+1 cleanup in PR #68).
+
+Concretely: the settings payload's per-schema item gains a
+`customization: NoteTypeCustomizationData` field carrying the effective config
+(defaults when no row exists). The dedicated `GET .../customization` above is then
+optional — keep it only if a standalone fetch proves useful; the `PUT` remains the
+write path. The UI reads customization from the settings payload and writes via
+`PUT`, then invalidates the settings query.
 
 ## Testing
 
