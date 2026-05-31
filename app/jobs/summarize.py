@@ -177,9 +177,7 @@ def queue(*args, **kwargs):
 
 def _pronoun_instruction(style: PronounStyle) -> str:
     if style == PronounStyle.infer_from_transcript:
-        return (
-            'Pronouns: When the transcript reveals the patient\'s pronouns -- via self-identification, the doctor\'s use of "she/her" or "he/him" when referring to the patient, or other unambiguous context -- the note MUST use those pronouns when referring to the patient. Do not default to "the patient" everywhere when pronouns are clear from the transcript. Use "they/them" ONLY when no pronoun usage is evident anywhere in the transcript. This overrides any clinical convention of defaulting to "the patient" -- mix in the patient\'s actual pronouns when they are known, even if the example note\'s style differs on this point.'
-        )
+        return 'Pronouns: When the transcript reveals the patient\'s pronouns -- via self-identification, the doctor\'s use of "she/her" or "he/him" when referring to the patient, or other unambiguous context -- the note MUST use those pronouns when referring to the patient. Do not default to "the patient" everywhere when pronouns are clear from the transcript. Use "they/them" ONLY when no pronoun usage is evident anywhere in the transcript. This overrides any clinical convention of defaulting to "the patient" -- mix in the patient\'s actual pronouns when they are known, even if the example note\'s style differs on this point.'
     return (
         'Pronouns: refer to the patient as "the patient"; do not infer pronouns from '
         "the transcript."
@@ -188,9 +186,7 @@ def _pronoun_instruction(style: PronounStyle) -> str:
 
 def _subjective_instruction(source: SubjectiveSource) -> str:
     if source == SubjectiveSource.patient_only:
-        return (
-            'Subjective section: source ONLY from lines spoken by the patient (lines beginning with "Patient:" in the transcript above). The doctor\'s interpretations, diagnostic impressions, follow-up questions, and clinical observations belong in the Assessment or Objective sections, never in Subjective. Phrasings like "the patient reports X" or "the patient denies Y" are acceptable as long as X and Y themselves came from a Patient: line.'
-        )
+        return 'Subjective section: source ONLY from lines spoken by the patient (lines beginning with "Patient:" in the transcript above). The doctor\'s interpretations, diagnostic impressions, follow-up questions, and clinical observations belong in the Assessment or Objective sections, never in Subjective. Phrasings like "the patient reports X" or "the patient denies Y" are acceptable as long as X and Y themselves came from a Patient: line.'
     return (
         "Subjective section: capture the patient's narrative. You may incorporate "
         "history elicited by the doctor's questions, framed as the patient's report "
@@ -219,12 +215,10 @@ def _ordered_instructions(c: NoteTypeCustomization) -> list[str]:
             "  - In the Plan section specifically, within each condition's bullets, list patient-actionable items (e.g. medications to take, lifestyle changes, symptoms to monitor, follow-ups the patient must initiate) before doctor-actionable items (e.g. labs to order, referrals to send, follow-up calls the doctor must place). This makes it easier for the patient to scan their own to-dos."
         )
     grouping_lines.append(
-        "  - Do not create subsections within the fields for the conditions. Prefer \"flat\" lists of items unless absolutely necessary."
+        '  - Do not create subsections within the fields for the conditions. Prefer "flat" lists of items unless absolutely necessary.'
     )
     out.append("\n".join(grouping_lines))
-    out.append(
-        "Use clear, concise, and professional medical language."
-    )
+    out.append("Use clear, concise, and professional medical language.")
     out.append(
         "Avoid including any irrelevant personal details or small talk from the transcript."
     )
@@ -257,14 +251,14 @@ def _ordered_instructions(c: NoteTypeCustomization) -> list[str]:
     out.append(
         "Respond only in JSON format with the schema above. JSON property values should be valid markdown. If you include a markdown list, each item in the list should be followed by a newline character."
     )
-    out.append(
-        "Take a deep breath and think step by step."
-    )
+    out.append("Take a deep breath and think step by step.")
     return out
 
 
 def _instruction_block(c: NoteTypeCustomization) -> str:
-    return "\n".join(f"{i + 1}. {text}" for i, text in enumerate(_ordered_instructions(c)))
+    return "\n".join(
+        f"{i + 1}. {text}" for i, text in enumerate(_ordered_instructions(c))
+    )
 
 
 # Build a structured prompt for creating a clinical note based on a transcript.
@@ -344,7 +338,9 @@ def build_structured_prompt(
 {indented_block}
     """)
     if c.custom_instructions:
-        prompt += "\n\nAdditional provider instructions:\n" + c.custom_instructions.strip()
+        prompt += (
+            "\n\nAdditional provider instructions:\n" + c.custom_instructions.strip()
+        )
     return prompt
 
 
@@ -404,7 +400,9 @@ def generate_clinical_note(
     note_schema: DoctorNoteSchema,
     customization: NoteTypeCustomization | None = None,
 ) -> dict[str, str]:
-    prompt = build_structured_prompt(transcript, example_note, note_schema, customization)
+    prompt = build_structured_prompt(
+        transcript, example_note, note_schema, customization
+    )
 
     log.debug("prompting 4o with", prompt=prompt)
 
