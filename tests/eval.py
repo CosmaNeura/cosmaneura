@@ -11,9 +11,7 @@ from app.configuration.openai import openai
 # evals were written against; override via OPENAI_EVAL_MODEL when that model
 # isn't deployed on the target Azure OpenAI resource (e.g. staging only has the
 # note-generation model gpt-4.1-2025-04-14, so the default 404s there).
-OPENAI_MODEL = config(
-    "OPENAI_EVAL_MODEL", default="gpt-4.1-mini-2025-04-14", cast=str
-)
+OPENAI_MODEL = config("OPENAI_EVAL_MODEL", default="gpt-4.1-mini-2025-04-14", cast=str)
 
 
 def eval_n_of_m(call_llm: Callable[[], str], criteria: str, n: int, m: int) -> bool:
