@@ -1,5 +1,4 @@
 import pytest
-from sqlalchemy.exc import IntegrityError
 
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.note_type_customization import (
@@ -9,6 +8,8 @@ from app.models.note_type_customization import (
     SubjectiveSource,
     default_customization,
 )
+from sqlalchemy.exc import IntegrityError
+
 from tests.factories import DoctorFactory
 
 
@@ -65,5 +66,6 @@ def test_rows_are_isolated_across_note_types():
 
     a = NoteTypeCustomization.get(doctor_note_schema_id=schema_a.id)
     b = NoteTypeCustomization.get(doctor_note_schema_id=schema_b.id)
+    assert a is not None and b is not None
     assert a.require_plan_reason is False
     assert b.require_plan_reason is True

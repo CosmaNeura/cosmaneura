@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from app.jobs import summarize
 from app.jobs.summarize import _instruction_block, build_structured_prompt
+
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.note_type_customization import (
@@ -11,7 +12,8 @@ from app.models.note_type_customization import (
     SubjectiveSource,
     default_customization,
 )
-from tests.factories import DoctorFactory
+
+from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
 # Verbatim copy of the numbered instruction block from origin/master
 # (lines 1–16, each indented 8 spaces, typos and double-spaces preserved).
@@ -49,6 +51,28 @@ ROS = "Review of Systems (ROS) section"
 PLAN_ORDER = "patient-actionable items"
 
 
+def _transcript(doctor) -> AIVisitTranscript:
+    """In-memory transcript with real (saved) appointment/patient ids — the
+    AIVisitTranscript FK fields are non-optional, so passing None trips the
+    type checker. Only doctor_id + transcript_data are read by the code under
+    test; the row itself is never saved."""
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    appointment = AppointmentFactory.build(
+        doctor_id=doctor.id, patient_id=patient.id
+    ).save()
+    return AIVisitTranscript(
+        doctor_id=doctor.id,
+        appointment_id=appointment.id,
+        patient_id=patient.id,
+        duration=60,
+        transcript_data=[
+            TranscriptEntry(
+                speaker="Patient", content="My back hurts.", startTime=0, endTime=1
+            )
+        ],
+    )
+
+
 def test_default_block_preserves_all_hash33_behaviors():
     block = _instruction_block(default_customization())
     for phrase in (PRONOUN, SUBJECTIVE, NEW_MEDS, PLAN_REASON, ROS, PLAN_ORDER):
@@ -73,23 +97,31 @@ def test_flag_new_medications_off_removes_meds_instruction():
 
 
 def test_plan_ordering_as_discussed_drops_patient_first_subbullet():
-    block = _instruction_block(NoteTypeCustomization(plan_ordering=PlanOrdering.as_discussed))
+    block = _instruction_block(
+        NoteTypeCustomization(plan_ordering=PlanOrdering.as_discussed)
+    )
     assert PLAN_ORDER not in block
 
 
 def test_ros_off_removes_ros_instruction():
-    block = _instruction_block(NoteTypeCustomization(ros_distinct_from_subjective=False))
+    block = _instruction_block(
+        NoteTypeCustomization(ros_distinct_from_subjective=False)
+    )
     assert ROS not in block
 
 
 def test_pronoun_neutral_changes_instruction():
-    block = _instruction_block(NoteTypeCustomization(pronoun_style=PronounStyle.neutral))
+    block = _instruction_block(
+        NoteTypeCustomization(pronoun_style=PronounStyle.neutral)
+    )
     assert PRONOUN not in block
     assert "do not infer pronouns" in block
 
 
 def test_subjective_patient_and_doctor_relaxes_restriction():
-    block = _instruction_block(NoteTypeCustomization(subjective_source=SubjectiveSource.patient_and_doctor))
+    block = _instruction_block(
+        NoteTypeCustomization(subjective_source=SubjectiveSource.patient_and_doctor)
+    )
     assert SUBJECTIVE not in block
 
 
@@ -98,15 +130,7 @@ def test_custom_instructions_appended_to_full_prompt():
     schema = DoctorNoteSchema(
         doctor_id=doctor.id, note_type="SOAP", fields={"Subjective": "patient story"}
     ).save()
-    transcript = AIVisitTranscript(
-        doctor_id=doctor.id,
-        appointment_id=None,
-        patient_id=None,
-        duration=60,
-        transcript_data=[
-            TranscriptEntry(speaker="Patient", content="My back hurts.", startTime=0, endTime=1)
-        ],
-    )
+    transcript = _transcript(doctor)
     c = NoteTypeCustomization(custom_instructions="Always use metric units.")
     with patch.object(summarize, "extract_action_items", return_value="none"):
         prompt = build_structured_prompt(transcript, None, schema, c)
@@ -119,15 +143,7 @@ def test_generate_clinical_note_forwards_customization():
     schema = DoctorNoteSchema(
         doctor_id=doctor.id, note_type="SOAP", fields={"Subjective": "patient story"}
     ).save()
-    transcript = AIVisitTranscript(
-        doctor_id=doctor.id,
-        appointment_id=None,
-        patient_id=None,
-        duration=60,
-        transcript_data=[
-            TranscriptEntry(speaker="Patient", content="My back hurts.", startTime=0, endTime=1)
-        ],
-    )
+    transcript = _transcript(doctor)
     c = NoteTypeCustomization(require_plan_reason=False)
 
     captured = {}
@@ -136,13 +152,18 @@ def test_generate_clinical_note_forwards_customization():
         captured["customization"] = customization
         return "PROMPT"
 
-    with patch.object(summarize, "build_structured_prompt", side_effect=fake_build), \
-         patch.object(summarize.openai.chat.completions, "create") as create:
+    with (
+        patch.object(summarize, "build_structured_prompt", side_effect=fake_build),
+        patch.object(summarize.openai.chat.completions, "create") as create,
+    ):
         create.return_value.choices = [
             type("M", (), {"message": type("X", (), {"content": "{}"})()})()
         ]
         summarize.generate_clinical_note(
-            transcript=transcript, example_note=None, note_schema=schema, customization=c
+            transcript=transcript,
+            example_note=None,
+            note_schema=schema,
+            customization=c,
         )
 
     assert captured["customization"] is c
@@ -153,15 +174,7 @@ def test_default_prompt_block_byte_identical_to_master():
     schema = DoctorNoteSchema(
         doctor_id=doctor.id, note_type="SOAP", fields={"Subjective": "x"}
     ).save()
-    transcript = AIVisitTranscript(
-        doctor_id=doctor.id,
-        appointment_id=None,
-        patient_id=None,
-        duration=60,
-        transcript_data=[
-            TranscriptEntry(speaker="Patient", content="hi", startTime=0, endTime=1)
-        ],
-    )
+    transcript = _transcript(doctor)
     with patch.object(summarize, "extract_action_items", return_value="none"):
         prompt = build_structured_prompt(transcript, None, schema, None)
     assert ORIGINAL_DEFAULT_BLOCK in prompt
