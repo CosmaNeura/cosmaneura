@@ -82,6 +82,8 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
 
     merged = _merge_transcripts(all_transcripts)
 
+    customization = NoteTypeCustomization.get(doctor_note_schema_id=schema.id)
+
     log.info(
         "generating clinical note",
         segment_count=len(all_transcripts),
@@ -91,6 +93,7 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         transcript=merged,
         example_note=example,
         note_schema=schema,
+        customization=customization,  # None -> platform defaults
     )
 
     log.info("augmenting clinical note")
@@ -396,8 +399,9 @@ def generate_clinical_note(
     transcript: AIVisitTranscript,
     example_note: DoctorNoteExample | None,
     note_schema: DoctorNoteSchema,
+    customization: NoteTypeCustomization | None = None,
 ) -> dict[str, str]:
-    prompt = build_structured_prompt(transcript, example_note, note_schema)
+    prompt = build_structured_prompt(transcript, example_note, note_schema, customization)
 
     log.debug("prompting 4o with", prompt=prompt)
 

@@ -85,3 +85,37 @@ def test_custom_instructions_appended_to_full_prompt():
         prompt = build_structured_prompt(transcript, None, schema, c)
     assert "Always use metric units." in prompt
     assert "Additional provider instructions:" in prompt
+
+
+def test_generate_clinical_note_forwards_customization():
+    doctor = DoctorFactory.build().save()
+    schema = DoctorNoteSchema(
+        doctor_id=doctor.id, note_type="SOAP", fields={"Subjective": "patient story"}
+    ).save()
+    transcript = AIVisitTranscript(
+        doctor_id=doctor.id,
+        appointment_id=None,
+        patient_id=None,
+        duration=60,
+        transcript_data=[
+            TranscriptEntry(speaker="Patient", content="My back hurts.", startTime=0, endTime=1)
+        ],
+    )
+    c = NoteTypeCustomization(require_plan_reason=False)
+
+    captured = {}
+
+    def fake_build(t, e, s, customization=None):
+        captured["customization"] = customization
+        return "PROMPT"
+
+    with patch.object(summarize, "build_structured_prompt", side_effect=fake_build), \
+         patch.object(summarize.openai.chat.completions, "create") as create:
+        create.return_value.choices = [
+            type("M", (), {"message": type("X", (), {"content": "{}"})()})()
+        ]
+        summarize.generate_clinical_note(
+            transcript=transcript, example_note=None, note_schema=schema, customization=c
+        )
+
+    assert captured["customization"] is c
