@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, Field, computed_field
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -345,6 +345,44 @@ def settings_data(request: Request) -> SettingsData:
         onboarding_completed=doctor.onboarding_completed_at is not None,
         note_customizations=note_customizations,
     )
+
+
+class UpdateNoteTypeCustomization(BaseModel, extra="forbid"):
+    subjective_source: SubjectiveSource = SubjectiveSource.patient_only
+    pronoun_style: PronounStyle = PronounStyle.infer_from_transcript
+    plan_ordering: PlanOrdering = PlanOrdering.patient_then_doctor
+    flag_new_medications: bool = True
+    require_plan_reason: bool = True
+    ros_distinct_from_subjective: bool = True
+    custom_instructions: str | None = Field(default=None, max_length=4000)
+
+
+@internal_api_app.put(
+    "/note-schemas/{schema_id}/customization", name="update_note_customization"
+)
+def update_note_customization(
+    request: Request,
+    schema_id: Annotated[TypeIDType, Path()],
+    data: UpdateNoteTypeCustomization,
+) -> NoteTypeCustomizationData:
+    doctor: Doctor = request.state.doctor
+
+    schema = DoctorNoteSchema.get(id=schema_id)
+    if schema is None or schema.doctor_id != doctor.id or schema.deleted_at is not None:
+        # 404 not 403 — don't leak existence of other doctors' schemas
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    row = NoteTypeCustomization.find_or_initialize_by(doctor_note_schema_id=schema.id)
+    row.subjective_source = data.subjective_source
+    row.pronoun_style = data.pronoun_style
+    row.plan_ordering = data.plan_ordering
+    row.flag_new_medications = data.flag_new_medications
+    row.require_plan_reason = data.require_plan_reason
+    row.ros_distinct_from_subjective = data.ros_distinct_from_subjective
+    row.custom_instructions = data.custom_instructions
+    row.save()
+
+    return _customization_data(schema.id, row)
 
 
 class UpdateSettingsData(BaseModel, extra="forbid"):
