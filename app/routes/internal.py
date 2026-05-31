@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
-from pydantic import BaseModel, computed_field
+from pydantic import BaseModel, Field, computed_field
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -23,6 +23,13 @@ from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.intake.intake import Intake
+from app.models.note_type_customization import (
+    NoteTypeCustomization,
+    PlanOrdering,
+    PronounStyle,
+    SubjectiveSource,
+    default_customization,
+)
 from app.models.patient import Patient
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy.orm import selectinload
@@ -251,6 +258,33 @@ def upload_example_note(request: Request, file_name: str, note_type: str) -> Non
     app.jobs.extract.queue(doctor_note_file.id)
 
 
+class NoteTypeCustomizationData(BaseModel, extra="forbid"):
+    doctor_note_schema_id: str
+    subjective_source: SubjectiveSource
+    pronoun_style: PronounStyle
+    plan_ordering: PlanOrdering
+    flag_new_medications: bool
+    require_plan_reason: bool
+    ros_distinct_from_subjective: bool
+    custom_instructions: str | None
+
+
+def _customization_data(
+    schema_id: TypeIDType, row: NoteTypeCustomization | None
+) -> NoteTypeCustomizationData:
+    c = row or default_customization()
+    return NoteTypeCustomizationData(
+        doctor_note_schema_id=str(schema_id),
+        subjective_source=c.subjective_source,
+        pronoun_style=c.pronoun_style,
+        plan_ordering=c.plan_ordering,
+        flag_new_medications=c.flag_new_medications,
+        require_plan_reason=c.require_plan_reason,
+        ros_distinct_from_subjective=c.ros_distinct_from_subjective,
+        custom_instructions=c.custom_instructions,
+    )
+
+
 class SettingsData(BaseModel, extra="forbid"):
     doctor_id: str
     notes_schema: list[DoctorNoteSchema]
@@ -263,6 +297,7 @@ class SettingsData(BaseModel, extra="forbid"):
     zoom_revoked: bool
     email: str | None
     onboarding_completed: bool
+    note_customizations: list[NoteTypeCustomizationData]
 
 
 @internal_api_app.get("/settings")
@@ -274,20 +309,80 @@ def settings_data(request: Request) -> SettingsData:
     )
     zoom_revoked = bool(get_redis().get(zoom_revoked_redis_key(str(doctor.id))))
 
-    notes_schema = DoctorNoteSchema.where(
-        (DoctorNoteSchema.doctor_id == doctor.id)
-        & cast(Any, DoctorNoteSchema.deleted_at).is_(None)
-    ).all()
+    notes_schema = cast(
+        list[DoctorNoteSchema],
+        list(
+            DoctorNoteSchema.where(
+                (DoctorNoteSchema.doctor_id == doctor.id)
+                & cast(Any, DoctorNoteSchema.deleted_at).is_(None)
+            ).all()
+        ),
+    )
+
+    schema_ids = [s.id for s in notes_schema]
+    customization_rows = (
+        NoteTypeCustomization.where(
+            cast(Any, NoteTypeCustomization.doctor_note_schema_id).in_(schema_ids)
+        ).all()
+        if schema_ids
+        else []
+    )
+    by_schema = {
+        r.doctor_note_schema_id: r
+        for r in cast(list[NoteTypeCustomization], customization_rows)
+    }
+    note_customizations = [
+        _customization_data(s.id, by_schema.get(s.id)) for s in notes_schema
+    ]
 
     return SettingsData(
-        notes_schema=cast(list[DoctorNoteSchema], list(notes_schema)),
+        notes_schema=notes_schema,
         doctor_id=str(doctor.id),
         biography=doctor.biography,
         zoom_connected=zoom_integration is not None,
         zoom_revoked=zoom_revoked,
         email=doctor.email,
         onboarding_completed=doctor.onboarding_completed_at is not None,
+        note_customizations=note_customizations,
     )
+
+
+class UpdateNoteTypeCustomization(BaseModel, extra="forbid"):
+    subjective_source: SubjectiveSource = SubjectiveSource.patient_only
+    pronoun_style: PronounStyle = PronounStyle.infer_from_transcript
+    plan_ordering: PlanOrdering = PlanOrdering.patient_then_doctor
+    flag_new_medications: bool = True
+    require_plan_reason: bool = True
+    ros_distinct_from_subjective: bool = True
+    custom_instructions: str | None = Field(default=None, max_length=4000)
+
+
+@internal_api_app.put(
+    "/note-schemas/{schema_id}/customization", name="update_note_customization"
+)
+def update_note_customization(
+    request: Request,
+    schema_id: Annotated[TypeIDType, Path()],
+    data: UpdateNoteTypeCustomization,
+) -> NoteTypeCustomizationData:
+    doctor: Doctor = request.state.doctor
+
+    schema = DoctorNoteSchema.get(id=schema_id)
+    if schema is None or schema.doctor_id != doctor.id or schema.deleted_at is not None:
+        # 404 not 403 — don't leak existence of other doctors' schemas
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    row = NoteTypeCustomization.find_or_initialize_by(doctor_note_schema_id=schema.id)
+    row.subjective_source = data.subjective_source
+    row.pronoun_style = data.pronoun_style
+    row.plan_ordering = data.plan_ordering
+    row.flag_new_medications = data.flag_new_medications
+    row.require_plan_reason = data.require_plan_reason
+    row.ros_distinct_from_subjective = data.ros_distinct_from_subjective
+    row.custom_instructions = data.custom_instructions
+    row.save()
+
+    return _customization_data(schema.id, row)
 
 
 class UpdateSettingsData(BaseModel, extra="forbid"):
