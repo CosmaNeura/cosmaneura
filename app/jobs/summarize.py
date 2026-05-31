@@ -4,6 +4,7 @@ Summarize a patient visit into a clinical note with the specified schema.
 
 import json
 import math
+import textwrap
 from textwrap import dedent
 from typing import Any, cast
 
@@ -298,10 +299,12 @@ def build_structured_prompt(
         </bio>
         """)
 
-    # _instruction_block renders at column 0; the surrounding dedent() is
-    # already a no-op because interpolated transcript/schema text injects
-    # column-0 lines, so this matches the prompt the model received before
-    # this block was extracted. Do not "fix" dedent without re-checking output.
+    # _instruction_block returns lines at column 0. We indent the whole block to
+    # 8 spaces here so that every rendered instruction line carries exactly 8
+    # leading spaces, reproducing origin/master's rendered output byte-for-byte
+    # (dedent() is a no-op there because interpolated transcript/schema text
+    # injects column-0 lines that zero the common prefix).
+    indented_block = textwrap.indent(_instruction_block(c), "        ")
     prompt = dedent(f"""
         {maybe_doctor_bio}
 
@@ -338,7 +341,7 @@ def build_structured_prompt(
 
         When creating the clinical note:
 
-        {_instruction_block(c)}
+{indented_block}
     """)
     if c.custom_instructions:
         prompt += "\n\nAdditional provider instructions:\n" + c.custom_instructions.strip()

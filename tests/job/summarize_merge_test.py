@@ -71,7 +71,7 @@ def stub_llm():
     return the recorder so tests can introspect what was passed in."""
     captured: dict = {"generate": [], "action_items": []}
 
-    def fake_generate(transcript, example_note, note_schema):
+    def fake_generate(transcript, example_note, note_schema, customization=None):
         captured["generate"].append(
             {
                 "transcript_id": str(transcript.id) if transcript.id else None,
