@@ -230,8 +230,8 @@ def _ordered_instructions(c: NoteTypeCustomization) -> list[str]:
     out.append(
         "Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information."
     )
-    out.append(_pronoun_instruction(c.pronoun_style))       # 8 (or alt)
-    out.append(_subjective_instruction(c.subjective_source))  # 9 (or alt)
+    out.append(_pronoun_instruction(c.pronoun_style))
+    out.append(_subjective_instruction(c.subjective_source))
     if c.flag_new_medications:
         out.append(
             'Medications section: when this section exists in the schema, list both medications the patient is already taking (from "Patient:" lines) AND medications the doctor is prescribing or initiating during this visit. Tag newly-prescribed items inline with "(new this visit)" so they can be distinguished from the patient\'s existing medication list at a glance. Do not put newly-prescribed meds only in the Plan section -- the Medications section should reflect the post-visit medication list as a whole, with new additions flagged.'
@@ -295,6 +295,10 @@ def build_structured_prompt(
         </bio>
         """)
 
+    # _instruction_block renders at column 0; the surrounding dedent() is
+    # already a no-op because interpolated transcript/schema text injects
+    # column-0 lines, so this matches the prompt the model received before
+    # this block was extracted. Do not "fix" dedent without re-checking output.
     prompt = dedent(f"""
         {maybe_doctor_bio}
 

@@ -31,7 +31,7 @@ def test_default_block_preserves_all_hash33_behaviors():
     assert "Take a deep breath and think step by step." in block
     # renumbered sequentially: default has exactly 16 instructions
     assert "\n16. " in block
-    assert "17. " not in block
+    assert "\n17. " not in block
 
 
 def test_require_plan_reason_off_removes_only_that_instruction():
