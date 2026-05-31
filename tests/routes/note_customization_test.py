@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import status
 from fastapi.testclient import TestClient
 
@@ -103,6 +105,20 @@ def test_put_other_doctors_schema_returns_404(authenticated_client: TestClient):
     schema = DoctorNoteSchema(
         doctor_id=other.id, note_type="SP2 OTHER", fields={"CC": "x"}
     ).save()
+    url = api_app.url_path_for("update_note_customization", schema_id=str(schema.id))
+    resp = authenticated_client.put(url, json=_FULL_BODY)
+    assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_put_soft_deleted_schema_returns_404(authenticated_client: TestClient):
+    doctor = _authed_doctor()
+    schema = DoctorNoteSchema(
+        doctor_id=doctor.id, note_type="SP2 SOFT-DEL", fields={"CC": "x"}
+    ).save()
+    schema.deleted_at = datetime.now()
+    schema.save()
+    assert schema.deleted_at is not None
+
     url = api_app.url_path_for("update_note_customization", schema_id=str(schema.id))
     resp = authenticated_client.put(url, json=_FULL_BODY)
     assert resp.status_code == status.HTTP_404_NOT_FOUND
