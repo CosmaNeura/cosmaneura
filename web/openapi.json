@@ -501,6 +501,63 @@
         ]
       }
     },
+    "/internal/v1/note-schemas/{schema_id}/customization": {
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Update Note Customization",
+        "operationId": "update_note_customization",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "schema_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Schema Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNoteTypeCustomization"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoteTypeCustomizationData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/zoom-auth-url": {
       "get": {
         "tags": [
@@ -1355,6 +1412,59 @@
         ],
         "title": "NoteDetail"
       },
+      "NoteTypeCustomizationData": {
+        "properties": {
+          "doctor_note_schema_id": {
+            "type": "string",
+            "title": "Doctor Note Schema Id"
+          },
+          "subjective_source": {
+            "$ref": "#/components/schemas/SubjectiveSource"
+          },
+          "pronoun_style": {
+            "$ref": "#/components/schemas/PronounStyle"
+          },
+          "plan_ordering": {
+            "$ref": "#/components/schemas/PlanOrdering"
+          },
+          "flag_new_medications": {
+            "type": "boolean",
+            "title": "Flag New Medications"
+          },
+          "require_plan_reason": {
+            "type": "boolean",
+            "title": "Require Plan Reason"
+          },
+          "ros_distinct_from_subjective": {
+            "type": "boolean",
+            "title": "Ros Distinct From Subjective"
+          },
+          "custom_instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Instructions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doctor_note_schema_id",
+          "subjective_source",
+          "pronoun_style",
+          "plan_ordering",
+          "flag_new_medications",
+          "require_plan_reason",
+          "ros_distinct_from_subjective",
+          "custom_instructions"
+        ],
+        "title": "NoteTypeCustomizationData"
+      },
       "NotetakingData": {
         "properties": {
           "appointments": {
@@ -1486,6 +1596,22 @@
         ],
         "title": "PendingUploadRow"
       },
+      "PlanOrdering": {
+        "type": "string",
+        "enum": [
+          "patient_then_doctor",
+          "as_discussed"
+        ],
+        "title": "PlanOrdering"
+      },
+      "PronounStyle": {
+        "type": "string",
+        "enum": [
+          "infer_from_transcript",
+          "neutral"
+        ],
+        "title": "PronounStyle"
+      },
       "RecentAppointmentRow": {
         "properties": {
           "created_at": {
@@ -1599,6 +1725,13 @@
           "onboarding_completed": {
             "type": "boolean",
             "title": "Onboarding Completed"
+          },
+          "note_customizations": {
+            "items": {
+              "$ref": "#/components/schemas/NoteTypeCustomizationData"
+            },
+            "type": "array",
+            "title": "Note Customizations"
           }
         },
         "additionalProperties": false,
@@ -1610,9 +1743,18 @@
           "zoom_connected",
           "zoom_revoked",
           "email",
-          "onboarding_completed"
+          "onboarding_completed",
+          "note_customizations"
         ],
         "title": "SettingsData"
+      },
+      "SubjectiveSource": {
+        "type": "string",
+        "enum": [
+          "patient_only",
+          "patient_and_doctor"
+        ],
+        "title": "SubjectiveSource"
       },
       "TimeToNoteRow": {
         "properties": {
@@ -1702,6 +1844,52 @@
           "endTime"
         ],
         "title": "TranscriptEntry"
+      },
+      "UpdateNoteTypeCustomization": {
+        "properties": {
+          "subjective_source": {
+            "$ref": "#/components/schemas/SubjectiveSource",
+            "default": "patient_only"
+          },
+          "pronoun_style": {
+            "$ref": "#/components/schemas/PronounStyle",
+            "default": "infer_from_transcript"
+          },
+          "plan_ordering": {
+            "$ref": "#/components/schemas/PlanOrdering",
+            "default": "patient_then_doctor"
+          },
+          "flag_new_medications": {
+            "type": "boolean",
+            "title": "Flag New Medications",
+            "default": true
+          },
+          "require_plan_reason": {
+            "type": "boolean",
+            "title": "Require Plan Reason",
+            "default": true
+          },
+          "ros_distinct_from_subjective": {
+            "type": "boolean",
+            "title": "Ros Distinct From Subjective",
+            "default": true
+          },
+          "custom_instructions": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Instructions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateNoteTypeCustomization"
       },
       "UpdateSettingsData": {
         "properties": {
