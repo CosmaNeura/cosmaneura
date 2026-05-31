@@ -28,6 +28,7 @@ from app.models.note_type_customization import (
     PlanOrdering,
     PronounStyle,
     SubjectiveSource,
+    default_customization,
 )
 from app.models.patient import Patient
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
@@ -269,9 +270,9 @@ class NoteTypeCustomizationData(BaseModel, extra="forbid"):
 
 
 def _customization_data(
-    schema_id: object, row: NoteTypeCustomization | None
+    schema_id: TypeIDType, row: NoteTypeCustomization | None
 ) -> NoteTypeCustomizationData:
-    c = row or NoteTypeCustomization()  # None -> transient defaults
+    c = row or default_customization()
     return NoteTypeCustomizationData(
         doctor_note_schema_id=str(schema_id),
         subjective_source=c.subjective_source,

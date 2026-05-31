@@ -33,3 +33,32 @@ def test_settings_includes_default_customization_when_no_row(
     assert entry["subjective_source"] == "patient_only"
     assert entry["require_plan_reason"] is True
     assert entry["custom_instructions"] is None
+
+
+def test_settings_reflects_saved_customization(authenticated_client: TestClient):
+    from app.models.note_type_customization import (
+        NoteTypeCustomization,
+        SubjectiveSource,
+    )
+
+    doctor = _authed_doctor()
+    schema = DoctorNoteSchema(
+        doctor_id=doctor.id, note_type="SP2 SAVED", fields={"CC": "x"}
+    ).save()
+    NoteTypeCustomization(
+        doctor_note_schema_id=schema.id,
+        subjective_source=SubjectiveSource.patient_and_doctor,
+        require_plan_reason=False,
+        custom_instructions="Use metric units.",
+    ).save()
+
+    resp = authenticated_client.get(api_app.url_path_for("settings_data"))
+    assert resp.status_code == 200
+    entry = next(
+        c
+        for c in resp.json()["note_customizations"]
+        if c["doctor_note_schema_id"] == str(schema.id)
+    )
+    assert entry["subjective_source"] == "patient_and_doctor"
+    assert entry["require_plan_reason"] is False
+    assert entry["custom_instructions"] == "Use metric units."
