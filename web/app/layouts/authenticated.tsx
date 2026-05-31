@@ -4,7 +4,10 @@ import type { Route } from "./+types/authenticated"
 
 import AdminBar from "~/components/AdminBar"
 import { ZoomConnectionAlert } from "~/components/ZoomConnectionAlert"
-import { SETTINGS_STALE_TIME, queryClient } from "~/configuration/tanstack-query"
+import {
+  SETTINGS_STALE_TIME,
+  queryClient,
+} from "~/configuration/tanstack-query"
 
 import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
