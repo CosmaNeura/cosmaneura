@@ -4,13 +4,24 @@ import { Route } from "./+types/notes"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { noteList } from "~/configuration/client"
+import {
+  NOTES_STALE_TIME,
+  queryClient,
+} from "~/configuration/tanstack-query"
 import { appointmentsToSidebarEntries } from "~/lib/appointment"
 
 import { invariant } from "@epic-web/invariant"
+import { noteListOptions } from "client/@tanstack/react-query.gen"
 
+// Prefetch through the shared query cache (not a raw noteList() call) so any
+// component that later mounts and uses useQuery({...noteListOptions()})
+// reads the same cached list instead of issuing a second /internal/v1/notes
+// request. Same dedup approach as the authenticated layout uses for settings.
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  const { data } = await noteList()
+  const data = await queryClient.ensureQueryData({
+    ...noteListOptions(),
+    staleTime: NOTES_STALE_TIME,
+  })
   invariant(data, "data failed to load")
   return data
 }
