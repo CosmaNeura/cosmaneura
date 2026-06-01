@@ -7,11 +7,14 @@ from decouple import config
 from app import log
 from app.configuration.openai import openai
 
-# The judge model used to grade live-LLM eval output. Defaults to the model the
-# evals were written against; override via OPENAI_EVAL_MODEL when that model
-# isn't deployed on the target Azure OpenAI resource (e.g. staging only has the
-# note-generation model gpt-4.1-2025-04-14, so the default 404s there).
-OPENAI_MODEL = config("OPENAI_EVAL_MODEL", default="gpt-4.1-mini-2025-04-14", cast=str)
+# The judge model used to grade live-LLM eval output. Defaults to the
+# note-generation model (DEFAULT_MULTI_MODAL_MODEL in app/configuration/openai.py)
+# because that's the deployment guaranteed to exist on every Azure OpenAI
+# resource the app targets -- staging in particular has only this one model
+# deployed today, so picking a different default 404s every eval at the judge
+# step. Override via OPENAI_EVAL_MODEL when you have a cheaper judge model
+# (e.g. gpt-4.1-mini-2025-04-14) available on your local resource.
+OPENAI_MODEL = config("OPENAI_EVAL_MODEL", default="gpt-4.1-2025-04-14", cast=str)
 
 
 def eval_n_of_m(call_llm: Callable[[], str], criteria: str, n: int, m: int) -> bool:
