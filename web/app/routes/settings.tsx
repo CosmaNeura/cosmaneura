@@ -11,6 +11,7 @@ import type { Route } from "./+types/settings"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
@@ -169,6 +170,41 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
           )}
         </div>
       ))}{" "}
+    </section>
+  )
+}
+
+function NoteCustomization({
+  noteSchemas,
+  customizations,
+}: {
+  noteSchemas: Route.ComponentProps["loaderData"]["notes_schema"]
+  customizations: Route.ComponentProps["loaderData"]["note_customizations"]
+}) {
+  if (noteSchemas.length === 0) return null
+
+  const bySchema = new Map(
+    customizations.map((c) => [c.doctor_note_schema_id, c]),
+  )
+
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>AI Output Customization</h3>
+      <p className="text-sm">
+        Tune how Cosmas writes each of your note types. Changes affect only the
+        note type you edit.
+      </p>
+      {noteSchemas.map((schema) => {
+        const customization = bySchema.get(schema.id)
+        if (!customization) return null
+        return (
+          <NoteCustomizationForm
+            key={schema.id}
+            schema={schema}
+            customization={customization}
+          />
+        )
+      })}
     </section>
   )
 }
@@ -507,6 +543,10 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
+          <NoteCustomization
+            noteSchemas={loaderData.notes_schema}
+            customizations={loaderData.note_customizations}
+          />
           <ZoomConnect zoomConnected={loaderData.zoom_connected} />
         </InnerScrollableContent>
       </SidebarInset>
