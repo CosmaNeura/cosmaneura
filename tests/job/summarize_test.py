@@ -1,4 +1,16 @@
 # pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportReturnType=false
+"""Live-LLM evals for note generation.
+
+These are a TEST mechanism only: they never run in production and never change
+note output. They are gated by RUN_LIVE_LLM_TESTS=true + Azure OpenAI creds and
+skip in CI. The judge model is configurable via OPENAI_EVAL_MODEL (see
+tests/eval.py) so a deployed model can stand in for gpt-4.1-mini on staging.
+
+Per-config evals build a NoteTypeCustomization and pass it through
+generate_clinical_note(..., customization=...) to verify the model honors the
+provider's settings. Each note type's config is independent — see
+tests/job/summarize_customization_isolation_test.py.
+"""
 
 import json
 import os
@@ -13,6 +25,7 @@ from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_schema import DoctorNoteSchema
+from app.models.note_type_customization import NoteTypeCustomization, SubjectiveSource
 from app.models.patient import Patient
 
 from tests.eval import eval_llm, eval_n_of_m
@@ -901,3 +914,81 @@ def test_review_of_systems_distinct_from_subjective():
     )
 
     eval_n_of_m(call_llm=create_clinical_note, criteria=criteria, n=1, m=2)
+
+
+# ---------------------------------------------------------------------------
+# Per-config evals — verify NoteTypeCustomization is honoured by the LLM
+# ---------------------------------------------------------------------------
+
+
+def _soap_schema_and_transcript() -> tuple[DoctorNoteSchema, AIVisitTranscript]:
+    """Return the seeded Test SOAP Note schema and transcript for Samwise Gamgee."""
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    assert patient is not None
+
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+    assert appt.appointment_name is None
+
+    schema = DoctorNoteSchema.where(
+        (DoctorNoteSchema.doctor_id == appt.doctor_id)
+        & (DoctorNoteSchema.note_type == "Test SOAP Note")
+    ).one()
+
+    transcript = (
+        AIVisitTranscript.select()
+        .where(AIVisitTranscript.appointment_id == appt.id)
+        .limit(1)
+        .one()
+    )
+
+    return schema, transcript
+
+
+def test_require_plan_reason_default_keeps_reasons():
+    schema, transcript = _soap_schema_and_transcript()
+    customization = NoteTypeCustomization(
+        doctor_note_schema_id=schema.id, require_plan_reason=True
+    )
+
+    def create():
+        note = generate_clinical_note(
+            transcript=transcript,
+            example_note=None,
+            note_schema=schema,
+            customization=customization,
+        )
+        return json.dumps(note)
+
+    eval_n_of_m(
+        call_llm=create,
+        criteria=(
+            "Every bullet in the Plan section states a reason or purpose for the "
+            "action (e.g. a 'to ...' or 'for ...' clause), not just the bare action."
+        ),
+        n=1,
+        m=2,
+    )
+
+
+def test_subjective_source_patient_and_doctor_produces_coherent_note():
+    schema, transcript = _soap_schema_and_transcript()
+    customization = NoteTypeCustomization(
+        doctor_note_schema_id=schema.id,
+        subjective_source=SubjectiveSource.patient_and_doctor,
+    )
+
+    def create():
+        note = generate_clinical_note(
+            transcript=transcript,
+            example_note=None,
+            note_schema=schema,
+            customization=customization,
+        )
+        return json.dumps(note)
+
+    eval_n_of_m(
+        call_llm=create,
+        criteria="The note is a coherent clinical note with a populated Subjective section.",
+        n=1,
+        m=2,
+    )
