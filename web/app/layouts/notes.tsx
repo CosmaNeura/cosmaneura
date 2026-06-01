@@ -4,10 +4,7 @@ import { Route } from "./+types/notes"
 
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import {
-  NOTES_STALE_TIME,
-  queryClient,
-} from "~/configuration/tanstack-query"
+import { NOTES_STALE_TIME, queryClient } from "~/configuration/tanstack-query"
 import { appointmentsToSidebarEntries } from "~/lib/appointment"
 
 import { invariant } from "@epic-web/invariant"
