@@ -22,6 +22,7 @@ from app.models.doctor import Doctor
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
+from app.models.engagement_role import EngagementRole
 from app.models.intake.intake import Intake
 from app.models.note_type_customization import (
     NoteTypeCustomization,
@@ -139,6 +140,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     appointment: Appointment
     transcript: AIVisitTranscript | None
     notes: list[AIVisitNote] | None
+    engagement_role: EngagementRole | None = None
 
     @computed_field
     @property
@@ -171,11 +173,15 @@ def note_detail(
     # invariant is violated, this endpoint will start to cause issues.
     transcript = AIVisitTranscript.get(appointment_id=appointment_id)
 
+    # Engagement engine v2: the patient's enacted communication role, if scored.
+    engagement_role = EngagementRole.get(appointment_id=appointment_id)
+
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
         # TODO should be able to handle a generator, right?
         notes=visit_notes,
+        engagement_role=engagement_role,
     )
 
     return note_detail
