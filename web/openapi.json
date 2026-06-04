@@ -1240,6 +1240,74 @@
             "title": "Distribution",
             "description": "role_key -> probability across all roles."
           },
+          "preferred_role_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Role Key"
+          },
+          "preferred_role_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Role Name"
+          },
+          "preferred_confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Confidence"
+          },
+          "gap_direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Direction",
+            "description": "suppressed | over_enacted | concordant."
+          },
+          "gap_decision_control": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Decision Control",
+            "description": "enacted minus preferred on the decision-control axis."
+          },
+          "gap_magnitude_band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Magnitude Band"
+          },
           "baseline_source": {
             "type": "string",
             "title": "Baseline Source",
