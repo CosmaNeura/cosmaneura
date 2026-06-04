@@ -7,15 +7,23 @@ wiring in one place so the Celery job stays small and testable.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, cast
 
 from app.engagement.azure_client import AzureOpenAILLMClient
+from app.engagement.cosmas_engagement.calibration.baseline import (
+    RoleBaseline,
+    default_baseline,
+)
 from app.engagement.cosmas_engagement.engine import EngagementEngine
 from app.engagement.cosmas_engagement.llm_client import LLMClient
 from app.engagement.cosmas_engagement.schemas import ScoreRequest, ScoreResult
 
 # Minimum patient words below which scoring is not worthwhile (returns None).
 MIN_PATIENT_WORDS = 5
+
+# R3 recalibration: minimum scored encounters for a doctor before we trust a
+# per-practice baseline. Below this, we score on the neutral (absolute) scale.
+MIN_BASELINE_SAMPLES = 30
 
 
 def _entry_field(entry: Any, field: str) -> str:
@@ -40,27 +48,68 @@ def reconstruct_patient_text(transcript_data: Iterable[Any]) -> str:
     return "\n".join(lines)
 
 
+def build_doctor_baseline(
+    doctor_id: Any, *, min_samples: int = MIN_BASELINE_SAMPLES
+) -> RoleBaseline:
+    """Build a per-practice (per-doctor) recalibration baseline (R3).
+
+    Standardizes the enacted read against this doctor's own population of prior
+    scored encounters, countering range restriction (a single practice's patients
+    bunch into a narrow band). Falls back to the neutral baseline until enough
+    encounters have accrued, so early scores degrade gracefully to absolute scoring.
+    """
+    # Imported lazily to avoid a model import at module load.
+    from app.models.engagement_role import EngagementRole
+
+    rows = cast(
+        list[EngagementRole],
+        list(
+            EngagementRole.where(
+                EngagementRole.doctor_id == doctor_id,
+                EngagementRole.deleted_at == None,  # noqa: E711 (SQL IS NULL)
+            ).all()
+        ),
+    )
+    if len(rows) < min_samples:
+        return default_baseline()
+
+    return RoleBaseline.from_samples(
+        {
+            "decision_control": [r.decision_control for r in rows],
+            "information_engagement": [r.information_engagement for r in rows],
+        },
+        source=f"doctor:{doctor_id} (n={len(rows)})",
+    )
+
+
 def score_patient_text(
     patient_text: str,
     *,
     patient_ref: str | None = None,
     client: Optional[LLMClient] = None,
+    enacted_baseline: Optional[RoleBaseline] = None,
 ) -> ScoreResult | None:
     """Score reconstructed patient text into a communication role.
 
     Returns None when there is too little patient speech to be meaningful.
     ``client`` defaults to the Azure OpenAI adapter; tests inject the offline
-    heuristic client instead.
+    heuristic client instead. ``enacted_baseline`` recalibrates the enacted read
+    against the practice population (R3); defaults to neutral.
     """
     if len(patient_text.split()) < MIN_PATIENT_WORDS:
         return None
-    engine = EngagementEngine(client=client or AzureOpenAILLMClient())
-    # v1 staging: visit transcript only -> the enacted read, neutral baseline.
+    engine = EngagementEngine(
+        client=client or AzureOpenAILLMClient(),
+        enacted_baseline=enacted_baseline,
+    )
+    # Visit transcript only -> the enacted read.
     return engine.score(ScoreRequest(visit_text=patient_text, patient_ref=patient_ref))
 
 
 __all__ = [
     "MIN_PATIENT_WORDS",
+    "MIN_BASELINE_SAMPLES",
     "reconstruct_patient_text",
+    "build_doctor_baseline",
     "score_patient_text",
 ]
