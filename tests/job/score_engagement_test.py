@@ -3,7 +3,11 @@
 from unittest.mock import patch
 
 from app.engagement.cosmas_engagement.llm_client import HeuristicLLMClient
-from app.engagement.service import reconstruct_patient_text, score_patient_text
+from app.engagement.service import (
+    build_doctor_baseline,
+    reconstruct_patient_text,
+    score_patient_text,
+)
 from app.jobs.score_engagement import perform
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -86,3 +90,23 @@ def test_perform_persists_role_and_is_idempotent(global_session):
         EngagementRole.where(EngagementRole.ai_transcript_id == transcript.id).count()
         == 1
     )
+
+
+def test_build_doctor_baseline_neutral_until_enough_data(global_session):
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    doctor_id = Appointment.where(Appointment.patient_id == patient.id).one().doctor_id
+
+    # Below threshold -> neutral (absolute) scoring, regardless of how many rows exist.
+    assert (
+        build_doctor_baseline(doctor_id, min_samples=10_000).source == "neutral_default"
+    )
+
+    # Accrue a few scored encounters for this doctor, then a per-practice baseline
+    # is built and standardization kicks in.
+    with patch("app.engagement.service.AzureOpenAILLMClient", HeuristicLLMClient):
+        for _ in range(3):
+            perform(_make_transcript().id)
+
+    fitted = build_doctor_baseline(doctor_id, min_samples=1)
+    assert fitted.source.startswith(f"doctor:{doctor_id}")
+    assert "decision_control" in fitted.axis_mean

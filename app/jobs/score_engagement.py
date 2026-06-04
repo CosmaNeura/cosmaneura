@@ -8,7 +8,11 @@ diagnosis or personality assessment. One EngagementRole row per transcript.
 
 from app import log
 from app.celery import celery_app
-from app.engagement.service import reconstruct_patient_text, score_patient_text
+from app.engagement.service import (
+    build_doctor_baseline,
+    reconstruct_patient_text,
+    score_patient_text,
+)
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript
@@ -28,7 +32,12 @@ def perform(transcript_id: str | TypeIDType):
         return
 
     patient_text = reconstruct_patient_text(transcript.transcript_data)
-    result = score_patient_text(patient_text, patient_ref=str(transcript.id))
+    # R3: recalibrate the enacted read against this doctor's own population once
+    # enough encounters have accrued (neutral until then).
+    baseline = build_doctor_baseline(transcript.doctor_id)
+    result = score_patient_text(
+        patient_text, patient_ref=str(transcript.id), enacted_baseline=baseline
+    )
     if result is None:
         log.info(
             "too little patient speech to score, skipping",
