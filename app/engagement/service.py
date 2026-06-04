@@ -48,6 +48,20 @@ def reconstruct_patient_text(transcript_data: Iterable[Any]) -> str:
     return "\n".join(lines)
 
 
+def reconstruct_intake_text(intake_questions: Iterable[Any]) -> str:
+    """Join the patient's intake ANSWERS -- their pre-visit, first-person words.
+
+    The engine reads this as the *preferred* communication role (least contaminated
+    by the encounter). Questions are AI-generated, so only answers are kept.
+    """
+    lines: list[str] = []
+    for q in intake_questions or []:
+        answer = _entry_field(q, "answer").strip()
+        if answer:
+            lines.append(answer)
+    return "\n".join(lines)
+
+
 def build_doctor_baseline(
     doctor_id: Any, *, min_samples: int = MIN_BASELINE_SAMPLES
 ) -> RoleBaseline:
@@ -85,6 +99,7 @@ def build_doctor_baseline(
 def score_patient_text(
     patient_text: str,
     *,
+    intake_text: str | None = None,
     patient_ref: str | None = None,
     client: Optional[LLMClient] = None,
     enacted_baseline: Optional[RoleBaseline] = None,
@@ -94,7 +109,9 @@ def score_patient_text(
     Returns None when there is too little patient speech to be meaningful.
     ``client`` defaults to the Azure OpenAI adapter; tests inject the offline
     heuristic client instead. ``enacted_baseline`` recalibrates the enacted read
-    against the practice population (R3); defaults to neutral.
+    against the practice population (R3); defaults to neutral. When ``intake_text``
+    is present the engine also produces the *preferred* read and the
+    preference-enactment gap.
     """
     if len(patient_text.split()) < MIN_PATIENT_WORDS:
         return None
@@ -102,14 +119,21 @@ def score_patient_text(
         client=client or AzureOpenAILLMClient(),
         enacted_baseline=enacted_baseline,
     )
-    # Visit transcript only -> the enacted read.
-    return engine.score(ScoreRequest(visit_text=patient_text, patient_ref=patient_ref))
+    intake = intake_text if (intake_text and intake_text.strip()) else None
+    return engine.score(
+        ScoreRequest(
+            visit_text=patient_text,
+            intake_text=intake,
+            patient_ref=patient_ref,
+        )
+    )
 
 
 __all__ = [
     "MIN_PATIENT_WORDS",
     "MIN_BASELINE_SAMPLES",
     "reconstruct_patient_text",
+    "reconstruct_intake_text",
     "build_doctor_baseline",
     "score_patient_text",
 ]
