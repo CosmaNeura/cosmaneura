@@ -13,6 +13,7 @@ from app.jobs.score_engagement import perform
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.engagement_role import EngagementRole
+from app.models.intake.intake import Intake
 from app.models.patient import Patient
 
 SELF_DIRECTED_TURNS = [
@@ -110,3 +111,54 @@ def test_build_doctor_baseline_neutral_until_enough_data(global_session):
     fitted = build_doctor_baseline(doctor_id, min_samples=1)
     assert fitted.source.startswith(f"doctor:{doctor_id}")
     assert "decision_control" in fitted.axis_mean
+
+
+def test_gap_persisted_when_intake_present(global_session):
+    patient = Patient.where(Patient.name == "Samwise Gamgee").one()
+    appt = Appointment.where(Appointment.patient_id == patient.id).one()
+
+    # Ensure an intake with the patient's own words exists (the preferred read).
+    intake = Intake.get(appointment_id=appt.id)
+    questions = [
+        {
+            "order": 1,
+            "question": "What brings you in and what are you hoping for?",
+            "required_details": "",
+            "answer": "I want all the options and the evidence; I'll decide myself.",
+        }
+    ]
+    if intake is None:
+        intake = Intake(
+            doctor_id=appt.doctor_id,
+            appointment_id=appt.id,
+            external_intake_data={},
+            intake_questions=questions,
+        ).save()
+    else:
+        intake.intake_questions = questions
+        intake.save()
+
+    # A visit transcript where the patient defers -> a gap vs the intake.
+    transcript = AIVisitTranscript(
+        doctor_id=appt.doctor_id,
+        appointment_id=appt.id,
+        patient_id=patient.id,
+        duration=120,
+        transcript_data=[
+            TranscriptEntry(
+                speaker="Patient",
+                content="Whatever you think is best, doctor. Just tell me what to do.",
+                startTime=0,
+                endTime=1000,
+            )
+        ],
+    ).save()
+
+    with patch("app.engagement.service.AzureOpenAILLMClient", HeuristicLLMClient):
+        perform(transcript.id)
+
+    role = EngagementRole.get(ai_transcript_id=transcript.id)
+    assert role is not None
+    assert role.preferred_role_key is not None
+    assert role.preferred_confidence is not None
+    assert role.gap_direction in {"suppressed", "over_enacted", "concordant"}

@@ -10,6 +10,7 @@ from app import log
 from app.celery import celery_app
 from app.engagement.service import (
     build_doctor_baseline,
+    reconstruct_intake_text,
     reconstruct_patient_text,
     score_patient_text,
 )
@@ -17,6 +18,7 @@ from app.engagement.service import (
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.engagement_role import ConfidenceBand, EngagementRole
+from app.models.intake.intake import Intake
 
 
 def perform(transcript_id: str | TypeIDType):
@@ -32,11 +34,20 @@ def perform(transcript_id: str | TypeIDType):
         return
 
     patient_text = reconstruct_patient_text(transcript.transcript_data)
+
+    # Preferred read: the patient's own intake free-text, if any. When present the
+    # engine also returns the preference-enactment gap.
+    intake = Intake.get(appointment_id=transcript.appointment_id)
+    intake_text = reconstruct_intake_text(intake.intake_questions) if intake else None
+
     # R3: recalibrate the enacted read against this doctor's own population once
     # enough encounters have accrued (neutral until then).
     baseline = build_doctor_baseline(transcript.doctor_id)
     result = score_patient_text(
-        patient_text, patient_ref=str(transcript.id), enacted_baseline=baseline
+        patient_text,
+        intake_text=intake_text,
+        patient_ref=str(transcript.id),
+        enacted_baseline=baseline,
     )
     if result is None:
         log.info(
@@ -49,6 +60,9 @@ def perform(transcript_id: str | TypeIDType):
     role = result.role
     ind = role.indicators
     distribution = {item.role_key: item.probability for item in role.distribution}
+
+    preferred = result.preferred_role
+    gap = result.gap
 
     log.info(
         "saving engagement role",
@@ -74,6 +88,12 @@ def perform(transcript_id: str | TypeIDType):
         information_engagement_confidence=ind.information_engagement.confidence,
         concern_flag=role.concern_flag,
         distribution=distribution,
+        preferred_role_key=preferred.role_key if preferred else None,
+        preferred_role_name=preferred.role_name if preferred else None,
+        preferred_confidence=preferred.confidence if preferred else None,
+        gap_direction=gap.direction if gap else None,
+        gap_decision_control=gap.decision_control_gap if gap else None,
+        gap_magnitude_band=gap.magnitude_band.value if gap else None,
         baseline_source=role.baseline_source,
         model=result.model,
         engine_version=result.engine_version,

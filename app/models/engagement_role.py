@@ -63,6 +63,18 @@ class EngagementRole(
     distribution: dict[str, float] = Field(sa_type=JSONB)
     "role_key -> probability across all roles."
 
+    # Preferred read (from the intake free-text), when intake text is available.
+    preferred_role_key: str | None = Field(default=None)
+    preferred_role_name: str | None = Field(default=None)
+    preferred_confidence: float | None = Field(default=None)
+
+    # Preference-enactment gap, when BOTH intake and visit text are present.
+    gap_direction: str | None = Field(default=None)
+    "suppressed | over_enacted | concordant."
+    gap_decision_control: float | None = Field(default=None)
+    "enacted minus preferred on the decision-control axis."
+    gap_magnitude_band: str | None = Field(default=None)
+
     # Provenance / audit
     baseline_source: str = Field(default="neutral_default")
     model: str
