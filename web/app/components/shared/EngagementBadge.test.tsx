@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react"
 import { describe, expect, it } from "vitest"
 
 import { EngagementBadge } from "./EngagementBadge"
+import { render, screen } from "@testing-library/react"
 
 describe("EngagementBadge", () => {
   it("renders the role name", () => {
@@ -23,7 +23,9 @@ describe("EngagementBadge", () => {
 
   it("exposes a description for the role (accessible tooltip text)", () => {
     render(<EngagementBadge roleKey="directed" roleName="Directed" />)
-    expect(screen.getByTitle(/clinician.*decide|decide.*for|lead and decide/i)).toBeInTheDocument()
+    expect(
+      screen.getByTitle(/clinician.*decide|decide.*for|lead and decide/i),
+    ).toBeInTheDocument()
   })
 
   it("falls back gracefully for an unknown role key", () => {
