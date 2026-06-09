@@ -44,7 +44,7 @@ ENCOUNTERS = [
     ("Riley",  "collaborative", "Collaborative", "collaborative", 55, 60, 15, 0.62),
     ("Sam",    "self_directed", "Self-Directed", "active",        82, 78, 25, 0.71),
     ("Quinn",  "self_directed", "Self-Directed", "active",        76, 70, 18, 0.66),
-    ("Parker", "directed",      "Directed",      "passive",       22, 30, 55, 0.49),
+    ("Parker", "directed",      "Directed",      "passive",       22, 30, 62, 0.49),
 ]
 
 DIALOGUE = {
