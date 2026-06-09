@@ -17,7 +17,6 @@ os.environ["PYTHON_ENV"] = "development"  # SAFETY: no auto-migration
 
 import activemodel
 from activemodel.session_manager import get_session
-from sqlalchemy import text
 
 from app.configuration.database import database_url
 from app.engagement.cosmas_engagement.version import (
