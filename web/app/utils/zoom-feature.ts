@@ -23,6 +23,8 @@ function isStagingDeployment(): boolean {
 
 export function isZoomEnabled(email: string | null | undefined): boolean {
   if (!email) return false
-  const allowlist = isStagingDeployment() ? STAGING_ZOOM_EMAILS : PROD_ZOOM_EMAILS
+  const allowlist = isStagingDeployment()
+    ? STAGING_ZOOM_EMAILS
+    : PROD_ZOOM_EMAILS
   return allowlist.has(email.toLowerCase())
 }
