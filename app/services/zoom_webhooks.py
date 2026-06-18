@@ -6,7 +6,7 @@ from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.configuration.server import API_BASE_URL
-from app.environments import is_staging
+from app.environments import is_production, is_staging
 from app.jobs import merge_window
 from app.routes.recall_callbacks import zak_token_redis_key
 from app.services import recall
@@ -29,15 +29,25 @@ MERGE_WINDOW_SECONDS = 600
 # need not outlive that. A 2h window also bounds replay risk.
 _ZAK_URL_TOKEN_TTL_SECONDS = 2 * 60 * 60
 
-# Staging and production are separate Zoom apps, but a doctor can connect the
-# SAME Zoom account in both. When they do, a single real meeting fires webhooks
-# to both environments and each dispatches its own Recall bot -- two bots join
-# and announce recording. To prevent that, the dedicated internal test account
-# runs Zoom ONLY in staging:
-#   - staging:    only the test account dispatches a bot
-#   - production: everyone EXCEPT the test account dispatches a bot
+# Zoom bot dispatch is gated by an explicit per-environment allowlist. Staging
+# and production are separate Zoom apps, but the same account can be connected
+# in both; gating keeps the staging test account out of production (and vice
+# versa) so one real meeting never gets two bots.
+#   - staging:    only the dedicated internal test account
+#   - production: only the specific beta accounts below
+#   - dev/test:   no gating (real bots aren't dispatched there anyway)
+# The frontend mirrors these allowlists in web/app/utils/zoom-feature.ts.
 # See _start_appointment_session.
-ZOOM_TEST_ACCOUNTS = frozenset({"zoom-reviewer@cosmaneura.com"})
+STAGING_ZOOM_EMAILS = frozenset({"zoom-reviewer@cosmaneura.com"})
+PROD_ZOOM_EMAILS = frozenset(
+    {
+        "dev@cosmaneura.com",
+        "greg@mycatholicdoctor.com",
+        "kathleen@mycatholicdoctor.com",
+        "john@cosmaneura.com",
+        "ortegaoscar14@gmail.com",
+    }
+)
 
 
 def handle_meeting_started(payload: dict[str, Any]):
@@ -159,16 +169,20 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         )
         return
 
-    is_test_account = (doctor.email or "").lower() in ZOOM_TEST_ACCOUNTS
-    # staging: only the test account; everywhere else: everyone but the test account
-    bot_allowed = is_test_account if is_staging() else not is_test_account
+    email = (doctor.email or "").lower()
+    if is_staging():
+        bot_allowed = email in STAGING_ZOOM_EMAILS
+    elif is_production():
+        bot_allowed = email in PROD_ZOOM_EMAILS
+    else:
+        # dev/test: no email gating (real bots aren't dispatched there)
+        bot_allowed = True
     if not bot_allowed:
         log.info(
-            "zoom bot dispatch blocked",
+            "zoom bot dispatch blocked (email not in environment allowlist)",
             doctor_id=doctor_id,
             email=doctor.email,
             meeting_id=meeting_id,
-            staging=is_staging(),
         )
         return
 
