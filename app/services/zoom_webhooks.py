@@ -32,10 +32,12 @@ _ZAK_URL_TOKEN_TTL_SECONDS = 2 * 60 * 60
 # Staging and production are separate Zoom apps, but a doctor can connect the
 # SAME Zoom account in both. When they do, a single real meeting fires webhooks
 # to both environments and each dispatches its own Recall bot -- two bots join
-# and announce recording. To prevent that, staging only dispatches bots for a
-# dedicated internal test account; everyone else is a no-op in staging.
-# Production is unaffected. See _start_appointment_session.
-STAGING_ZOOM_BOT_ALLOWLIST = frozenset({"zoom-reviewer@cosmaneura.com"})
+# and announce recording. To prevent that, the dedicated internal test account
+# runs Zoom ONLY in staging:
+#   - staging:    only the test account dispatches a bot
+#   - production: everyone EXCEPT the test account dispatches a bot
+# See _start_appointment_session.
+ZOOM_TEST_ACCOUNTS = frozenset({"zoom-reviewer@cosmaneura.com"})
 
 
 def handle_meeting_started(payload: dict[str, Any]):
@@ -157,12 +159,16 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         )
         return
 
-    if is_staging() and (doctor.email or "").lower() not in STAGING_ZOOM_BOT_ALLOWLIST:
+    is_test_account = (doctor.email or "").lower() in ZOOM_TEST_ACCOUNTS
+    # staging: only the test account; everywhere else: everyone but the test account
+    bot_allowed = is_test_account if is_staging() else not is_test_account
+    if not bot_allowed:
         log.info(
-            "zoom bot dispatch blocked in staging (email not in allowlist)",
+            "zoom bot dispatch blocked",
             doctor_id=doctor_id,
             email=doctor.email,
             meeting_id=meeting_id,
+            staging=is_staging(),
         )
         return
 

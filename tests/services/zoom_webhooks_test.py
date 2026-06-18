@@ -1023,3 +1023,28 @@ def test_staging_allows_bot_for_allowlisted_doctor(
     )
 
     assert len(mock_recall["create_bot"]) == 1
+
+
+def test_prod_blocks_bot_for_test_account(
+    clean_redis,
+    mock_recall,
+    mock_zoom,
+):
+    """Outside staging the dedicated test account (zoom-reviewer@) must NOT get
+    a bot -- it is connected only in staging, and letting it bot in production
+    too would put two bots in one real meeting. (Default test env is treated as
+    non-staging.)"""
+    from app.services import zoom_webhooks
+
+    _doctor_with_zoom_email("zoom-reviewer@cosmaneura.com")
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-1", "Flor Guerrero")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert mock_recall["create_bot"] == []
+    assert clean_redis.get(_key("bot_id")) is None

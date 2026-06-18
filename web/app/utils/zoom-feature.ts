@@ -1,19 +1,22 @@
-import { isStaging } from "~/utils/environment"
+// Staging exercises Zoom only through a dedicated internal test account, and
+// that same account must NOT run in production: if it were connected in both
+// (separate Zoom apps), one real meeting would get two bots. So the rule is
+// opposite per environment:
+//   staging     -> only the test account is enabled
+//   production  -> everyone EXCEPT the test account is enabled
+// import.meta.env.MODE is unreliable (always "production" in deployed builds, so
+// isStaging() is never true), so staging is detected from VITE_PYTHON_URL. The
+// server mirrors this in app/services/zoom_webhooks.py.
+const ZOOM_TEST_ACCOUNTS = new Set(["zoom-reviewer@cosmaneura.com"])
 
-const ZOOM_BETA_EMAILS = new Set([
-  "dev@cosmaneura.com",
-  "zoom-reviewer@cosmaneura.com",
-])
-
-// In staging the Zoom feature is restricted to a single dedicated test account.
-// A doctor's real Zoom account may be connected in both staging and production
-// (separate Zoom apps), which would send two bots to the same real meeting, so
-// staging only ever exercises Zoom through this internal account. The server
-// enforces the same allowlist in app/services/zoom_webhooks.py.
-const STAGING_ZOOM_EMAILS = new Set(["zoom-reviewer@cosmaneura.com"])
+function isStagingDeployment(): boolean {
+  return (import.meta.env.VITE_PYTHON_URL ?? "").includes(
+    "staging-app.cosmaneura.com",
+  )
+}
 
 export function isZoomEnabled(email: string | null | undefined): boolean {
   if (!email) return false
-  const allowlist = isStaging() ? STAGING_ZOOM_EMAILS : ZOOM_BETA_EMAILS
-  return allowlist.has(email.toLowerCase())
+  const isTestAccount = ZOOM_TEST_ACCOUNTS.has(email.toLowerCase())
+  return isStagingDeployment() ? isTestAccount : !isTestAccount
 }
