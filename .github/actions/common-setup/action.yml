@@ -13,10 +13,16 @@ runs:
     # via actions/cache@v4). Caching /var/cache/apt/archives is skipped: the
     # dir's root-owned `partial/` subdir made cache@v5 emit a tar-exit-2
     # warning at save-time, and the savings (~5s/job) didn't justify the noise.
+    # Harden apt against the Azure Ubuntu mirror intermittently stalling mid-
+    # download: a ~3min hang fetching ffmpeg's deps has blown the 5min
+    # common-setup timeout. Cap each connection at 30s and retry up to 3 times
+    # so a stalled fetch aborts and retries instead of hanging to the timeout.
     - shell: bash
+      env:
+        APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
       run: |
-        sudo apt-get update -qq
-        sudo apt-get install -y --no-install-recommends \
+        sudo apt-get $APT_OPTS update -qq
+        sudo apt-get $APT_OPTS install -y --no-install-recommends \
           zsh libnss3-tools poppler-utils ffmpeg
     # without any additional options, this simply installs the latest version of the cli
     # keep this non-blocking: CI can continue with direct GitHub secrets if OP auth is unavailable
