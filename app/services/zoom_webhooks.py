@@ -6,6 +6,7 @@ from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.configuration.server import API_BASE_URL
+from app.environments import is_staging
 from app.jobs import merge_window
 from app.routes.recall_callbacks import zak_token_redis_key
 from app.services import recall
@@ -27,6 +28,14 @@ MERGE_WINDOW_SECONDS = 600
 # ZAKs minted by Zoom expire in ~2 hours, so the URL token used to fetch one
 # need not outlive that. A 2h window also bounds replay risk.
 _ZAK_URL_TOKEN_TTL_SECONDS = 2 * 60 * 60
+
+# Staging and production are separate Zoom apps, but a doctor can connect the
+# SAME Zoom account in both. When they do, a single real meeting fires webhooks
+# to both environments and each dispatches its own Recall bot -- two bots join
+# and announce recording. To prevent that, staging only dispatches bots for a
+# dedicated internal test account; everyone else is a no-op in staging.
+# Production is unaffected. See _start_appointment_session.
+STAGING_ZOOM_BOT_ALLOWLIST = frozenset({"zoom-reviewer@cosmaneura.com"})
 
 
 def handle_meeting_started(payload: dict[str, Any]):
@@ -144,6 +153,15 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         log.warning(
             "cannot start appointment: doctor not found",
             doctor_id=doctor_id,
+            meeting_id=meeting_id,
+        )
+        return
+
+    if is_staging() and (doctor.email or "").lower() not in STAGING_ZOOM_BOT_ALLOWLIST:
+        log.info(
+            "zoom bot dispatch blocked in staging (email not in allowlist)",
+            doctor_id=doctor_id,
+            email=doctor.email,
             meeting_id=meeting_id,
         )
         return
