@@ -1,6 +1,14 @@
 name: 'Common Setup'
 description: "Internal action for common setup across jobs"
 # NOTE timeout-minutes *cannot* bet set within a action and must be set at the root level
+inputs:
+  apt-packages:
+    description: >
+      Space-separated apt packages to install. Deploy jobs override this to just
+      "zsh" (the only host dependency for `just`); ffmpeg & friends are app
+      runtime deps that live inside the Docker image, not on the deploy host, so
+      pulling their ~69MB/91-package tree there only risks the apt-mirror stall.
+    default: "zsh libnss3-tools poppler-utils ffmpeg"
 runs:
   using: 'composite'
   steps:
@@ -20,10 +28,10 @@ runs:
     - shell: bash
       env:
         APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+        APT_PACKAGES: ${{ inputs.apt-packages }}
       run: |
         sudo apt-get $APT_OPTS update -qq
-        sudo apt-get $APT_OPTS install -y --no-install-recommends \
-          zsh libnss3-tools poppler-utils ffmpeg
+        sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
     # without any additional options, this simply installs the latest version of the cli
     # keep this non-blocking: CI can continue with direct GitHub secrets if OP auth is unavailable
     - uses: 1password/load-secrets-action@v4
