@@ -987,6 +987,15 @@
         "title": "Appointment",
         "description": "Represents an appointment with a patient from accuity"
       },
+      "ConfidenceBand": {
+        "type": "string",
+        "enum": [
+          "Low",
+          "Moderate",
+          "High"
+        ],
+        "title": "ConfidenceBand"
+      },
       "DailyVolumeRow": {
         "properties": {
           "day": {
@@ -1123,6 +1132,228 @@
           "last_note_at"
         ],
         "title": "DoctorUsageRow"
+      },
+      "EngagementRole": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id",
+            "description": "TypeID with prefix: engagement_role"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Deleted At"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "ai_transcript_id": {
+            "type": "string",
+            "title": "Ai Transcript Id"
+          },
+          "role_key": {
+            "type": "string",
+            "title": "Role Key"
+          },
+          "role_name": {
+            "type": "string",
+            "title": "Role Name"
+          },
+          "cps_role": {
+            "type": "string",
+            "title": "Cps Role",
+            "description": "Control Preferences Scale lineage: active | collaborative | passive."
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "confidence_band": {
+            "$ref": "#/components/schemas/ConfidenceBand"
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel",
+            "description": "Which read produced this: enacted (visit) or preferred (intake).",
+            "default": "enacted"
+          },
+          "decision_control": {
+            "type": "number",
+            "title": "Decision Control"
+          },
+          "information_engagement": {
+            "type": "number",
+            "title": "Information Engagement"
+          },
+          "expressed_concern": {
+            "type": "number",
+            "title": "Expressed Concern"
+          },
+          "decision_control_confidence": {
+            "type": "number",
+            "title": "Decision Control Confidence"
+          },
+          "information_engagement_confidence": {
+            "type": "number",
+            "title": "Information Engagement Confidence"
+          },
+          "concern_flag": {
+            "type": "boolean",
+            "title": "Concern Flag",
+            "default": false
+          },
+          "distribution": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Distribution",
+            "description": "role_key -> probability across all roles."
+          },
+          "preferred_role_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Role Key"
+          },
+          "preferred_role_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Role Name"
+          },
+          "preferred_confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Confidence"
+          },
+          "gap_direction": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Direction",
+            "description": "suppressed | over_enacted | concordant."
+          },
+          "gap_decision_control": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Decision Control",
+            "description": "enacted minus preferred on the decision-control axis."
+          },
+          "gap_magnitude_band": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gap Magnitude Band"
+          },
+          "baseline_source": {
+            "type": "string",
+            "title": "Baseline Source",
+            "default": "neutral_default"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "engine_version": {
+            "type": "string",
+            "title": "Engine Version"
+          },
+          "framework_version": {
+            "type": "string",
+            "title": "Framework Version"
+          },
+          "rubric_version": {
+            "type": "string",
+            "title": "Rubric Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "appointment_id",
+          "doctor_id",
+          "ai_transcript_id",
+          "role_key",
+          "role_name",
+          "cps_role",
+          "confidence",
+          "confidence_band",
+          "decision_control",
+          "information_engagement",
+          "expressed_concern",
+          "decision_control_confidence",
+          "information_engagement_confidence",
+          "distribution",
+          "model",
+          "engine_version",
+          "framework_version",
+          "rubric_version"
+        ],
+        "title": "EngagementRole",
+        "description": "A communication-role estimate for one visit transcript (engagement engine v2).\n\nReads the patient's *enacted* communication style from the visit transcript and\nmaps it to a Control Preferences Scale role (Self-Directed / Collaborative /\nDirected). This is a decision-support communication aid, NOT a diagnosis or a\npersonality assessment. One row per scored transcript."
       },
       "ExternalIntakeData": {
         "properties": {
@@ -1396,6 +1627,16 @@
               }
             ],
             "title": "Notes"
+          },
+          "engagement_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EngagementRole"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "patient": {
             "$ref": "#/components/schemas/Patient",

@@ -537,7 +537,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
       <AppSidebar isLoading={false} entries={false} />
 
       <SidebarInset>
-        <header className="bg-background sticky top-0 flex shrink-0 items-center gap-2 border-b p-4">
+        <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
           <h1 className="text-lg font-semibold">Settings</h1>
         </header>
         <InnerScrollableContent>

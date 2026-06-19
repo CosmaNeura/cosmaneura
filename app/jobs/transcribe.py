@@ -15,6 +15,7 @@ import assemblyai as assembly
 import sentry_sdk
 from azure.storage.blob import BlobServiceClient
 
+import app.jobs.score_engagement
 import app.jobs.summarize
 from app import log
 from app.celery import celery_app
@@ -77,6 +78,10 @@ def perform(visit_audio_file_id: str | TypeIDType):
     )
 
     queue_schema_transcription(transcript)
+
+    # Engagement engine v2 (staging): score the patient's enacted communication
+    # role from this transcript. Independent of note schemas, so enqueue once here.
+    app.jobs.score_engagement.queue(transcript_id=transcript.id)
 
 
 perform_celery = celery_app.task(perform)

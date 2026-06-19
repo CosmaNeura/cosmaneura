@@ -957,3 +957,134 @@ def test_matcher_still_binds_when_appointment_has_no_transcript(
         f"recall:bot:{BOT_ID}:appointment_id"
     ).decode()
     assert bound_appointment_id == str(pre_existing.id)
+
+
+# --------- Scenario: staging Zoom bot dispatch allowlist ---------
+
+
+def _doctor_with_zoom_email(email: str):
+    doctor = DoctorFactory.build(email=email).save()
+    DoctorVideoIntegration(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+        provider_user_id=HOST_ID,
+        access_token="tok",
+        refresh_token="rtok",
+        token_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    ).save()
+    return doctor
+
+
+def test_staging_blocks_bot_for_non_allowlisted_doctor(
+    clean_redis,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    """In staging, a doctor whose email is not in the staging allowlist must
+    never get a Recall bot. This prevents a second bot joining a real meeting
+    when the same Zoom account is also connected in production."""
+    from app.services import zoom_webhooks
+
+    _doctor_with_zoom_email("real.doctor@example.com")
+    monkeypatch.setattr(zoom_webhooks, "is_staging", lambda: True, raising=False)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-1", "Flor Guerrero")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert mock_recall["create_bot"] == []
+    assert clean_redis.get(_key("bot_id")) is None
+
+
+def test_staging_allows_bot_for_allowlisted_doctor(
+    clean_redis,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    """The dedicated staging test account (zoom-reviewer@) is allowlisted, so
+    it still gets a bot in staging."""
+    from app.services import zoom_webhooks
+
+    _doctor_with_zoom_email("zoom-reviewer@cosmaneura.com")
+    monkeypatch.setattr(zoom_webhooks, "is_staging", lambda: True, raising=False)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-1", "Flor Guerrero")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert len(mock_recall["create_bot"]) == 1
+
+
+def _run_meeting_flow(zoom_webhooks):
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-1", "Flor Guerrero")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+
+def test_prod_allows_allowlisted_doctor(
+    clean_redis,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    """In production, an email on the prod allowlist gets a bot."""
+    from app.services import zoom_webhooks
+
+    _doctor_with_zoom_email("greg@mycatholicdoctor.com")
+    monkeypatch.setattr(zoom_webhooks, "is_production", lambda: True, raising=False)
+
+    _run_meeting_flow(zoom_webhooks)
+
+    assert len(mock_recall["create_bot"]) == 1
+
+
+def test_prod_blocks_non_allowlisted_doctor(
+    clean_redis,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    """In production, an email NOT on the prod allowlist never gets a bot."""
+    from app.services import zoom_webhooks
+
+    _doctor_with_zoom_email("random.doctor@clinic.com")
+    monkeypatch.setattr(zoom_webhooks, "is_production", lambda: True, raising=False)
+
+    _run_meeting_flow(zoom_webhooks)
+
+    assert mock_recall["create_bot"] == []
+    assert clean_redis.get(_key("bot_id")) is None
+
+
+def test_prod_blocks_staging_test_account(
+    clean_redis,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    """The staging test account (zoom-reviewer@) must NOT get a bot in
+    production -- it is connected only in staging, and letting it bot in prod
+    too would put two bots in one real meeting."""
+    from app.services import zoom_webhooks
+
+    _doctor_with_zoom_email("zoom-reviewer@cosmaneura.com")
+    monkeypatch.setattr(zoom_webhooks, "is_production", lambda: True, raising=False)
+
+    _run_meeting_flow(zoom_webhooks)
+
+    assert mock_recall["create_bot"] == []
+    assert clean_redis.get(_key("bot_id")) is None

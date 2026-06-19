@@ -35,7 +35,7 @@ export function InnerScrollableContent({
   children: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-4 overflow-y-auto p-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-4">
       {isLoading ? (
         <SkeletonMessage />
       ) : (

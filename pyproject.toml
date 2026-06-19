@@ -103,6 +103,8 @@ exclude = [
     ".venv",
     # exclude our local package clones
     "pypi",
+    # vendored engagement engine (third-party scorer); our wiring around it is typed
+    "app/engagement/cosmas_engagement",
     # sometimes python code can be bundled in node repos
     "web/node_modules",
     # migrations are autogen'd

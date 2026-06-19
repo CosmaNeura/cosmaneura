@@ -7,9 +7,12 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
+import { EngagementBadge } from "~/components/shared/EngagementBadge"
+import type { EngagementRoleKey } from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { noteDetail } from "~/configuration/client"
+import type { EngagementRole } from "~/configuration/client"
 import { standardDateFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
@@ -70,10 +73,12 @@ function NoteHeader({
   status,
   title,
   dataFields,
+  engagementRole,
 }: {
   status: Status
   title: string
   dataFields: Record<string, string>
+  engagementRole?: EngagementRole | null
 }) {
   return (
     <div className="mb-6 flex items-start justify-between">
@@ -82,6 +87,14 @@ function NoteHeader({
           <h1 className="text-2xl font-semibold">{title}</h1>
           <StatusBadge status={status} />
         </div>
+        {engagementRole ? (
+          <div className="mt-2">
+            <EngagementBadge
+              roleKey={engagementRole.role_key as EngagementRoleKey}
+              roleName={engagementRole.role_name}
+            />
+          </div>
+        ) : null}
         <div className="mt-1 space-y-1">
           {Object.entries(dataFields).map(([key, value]) => (
             <p className="text-sm" key={key}>
@@ -106,6 +119,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
         <NoteHeader
           title={loaderData.patient.name}
           status={hasNotes ? "completed" : "not-started"}
+          engagementRole={loaderData.engagement_role}
           dataFields={{
             "Appointment Date": standardDateFormat(
               loaderData.appointment.appointment_date,
