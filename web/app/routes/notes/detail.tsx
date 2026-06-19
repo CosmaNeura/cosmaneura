@@ -14,7 +14,9 @@ import { StatusBadge } from "~/components/shared/StatusBadge"
 import { noteDetail } from "~/configuration/client"
 import type { EngagementRole } from "~/configuration/client"
 import { standardDateFormat } from "~/lib/date"
+import { isEngagementEnabled } from "~/utils/engagement-feature"
 
+import { useUser } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 
 type Status = Parameters<typeof StatusBadge>[0]["status"]
@@ -112,6 +114,13 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
   const { transcript, notes } = loaderData
   const hasNotes = notes && notes.length > 0
 
+  // The engagement "personality" badge is gated to the same beta cohort as
+  // Zoom, so in production only allowlisted doctors see it.
+  const { user } = useUser()
+  const engagementEnabled = isEngagementEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
+
   return (
     <SidebarInset>
       <Header title={loaderData.patient.name} />
@@ -119,7 +128,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
         <NoteHeader
           title={loaderData.patient.name}
           status={hasNotes ? "completed" : "not-started"}
-          engagementRole={loaderData.engagement_role}
+          engagementRole={engagementEnabled ? loaderData.engagement_role : null}
           dataFields={{
             "Appointment Date": standardDateFormat(
               loaderData.appointment.appointment_date,
