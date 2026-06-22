@@ -15,7 +15,9 @@ def _entry(speaker: str, content: str, start: int = 0, end: int = 1) -> Transcri
     )
 
 
-def _patch_identification(monkeypatch: pytest.MonkeyPatch, doctor_synthetic: str | None):
+def _patch_identification(
+    monkeypatch: pytest.MonkeyPatch, doctor_synthetic: str | None
+):
     # identify_* returns free-text reasoning (ignored); extract_* returns the
     # synthetic A/B label the relabeling keys on. Patch both so no LLM is hit.
     monkeypatch.setattr(transcribe, "identify_doctor_from_transcript", lambda _s: "ok")

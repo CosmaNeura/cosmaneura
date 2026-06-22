@@ -225,7 +225,7 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
     structured_transcript = label_speakers(
         [
             TranscriptEntry(
-                speaker=utterance.speaker,
+                speaker=utterance.speaker or "Unknown",
                 content=utterance.text,
                 startTime=utterance.start,
                 endTime=utterance.end,
