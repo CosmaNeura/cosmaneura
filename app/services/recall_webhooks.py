@@ -71,6 +71,17 @@ def handle_transcript_done(payload: dict[str, Any]):
     log.info("recall transcript downloaded", bot_id=bot_id, segments=len(raw_entries))
 
     entries = _map_transcript_entries(raw_entries)
+
+    # Recall labels speakers with the Zoom participant name; relabel to
+    # Doctor/Patient (same normalization as the audio-upload path) so note
+    # generation and engagement scoring can find the patient's turns. Best-effort:
+    # if identification fails, keep the raw labels so note generation still runs
+    # (engagement scoring will simply skip, as it did before this fix).
+    try:
+        entries = transcribe_job.label_speakers(entries)
+    except Exception as e:
+        log.warning("speaker labeling failed, keeping raw labels", error=e)
+
     duration = _compute_duration_seconds(entries)
 
     transcript = AIVisitTranscript.find_or_create_by(

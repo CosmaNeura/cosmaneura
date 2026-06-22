@@ -218,47 +218,76 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
             log.info("cleaning up audio file", path=audio_file)
             os.remove(audio_file)
 
-    log.info("identifying speakers", audio_file=audio_file)
-    sample = "\n".join([f"{u.speaker}: {u.text}" for u in transcript.utterances[:10]])
-    classification = identify_doctor_from_transcript(sample)
-    doctor_label = extract_doctor_classification(classification)
-    if doctor_label is None:
-        log.error(
-            "speaker identifiation failed",
-            audio_file=audio_file,
-            classification=classification,
-        )
-        raise ValueError("Could not extract doctor classification from reasoning.")
-
+    # AssemblyAI labels speakers "A"/"B"; map those onto Doctor/Patient. Shared
+    # with the Zoom/Recall path (recall_webhooks.py), which arrives with Zoom
+    # participant names instead — label_speakers normalizes both.
     log.info("structuring transcript data")
-    structured_transcript = []
-
-    # Utterance(
-    #   text='Okay, Go now.',
-    #   start=1360,
-    #   end=2792,
-    #   confidence=0.98156,
-    #   speaker='A',
-    #   channel=None,
-    #   words=[
-    #     UtteranceWord(text='Okay,', start=1360, end=1840, confidence=0.94812, speaker='A', channel=None),
-    #     UtteranceWord(text='Go', start=1880, end=2120, confidence=0.99861, speaker='A', channel=None),
-    for utterance in transcript.utterances:
-        label = utterance.speaker
-        label = "Doctor" if doctor_label == utterance.speaker else "Patient"
-        entry = TranscriptEntry(
-            speaker=label,
-            content=utterance.text,
-            startTime=utterance.start,
-            endTime=utterance.end,
-        )
-        structured_transcript.append(entry)
+    structured_transcript = label_speakers(
+        [
+            TranscriptEntry(
+                speaker=utterance.speaker,
+                content=utterance.text,
+                startTime=utterance.start,
+                endTime=utterance.end,
+            )
+            for utterance in transcript.utterances
+        ]
+    )
 
     log.info("transcription complete", duration=transcript.audio_duration)
     return TranscriptionResult(
         transcript=structured_transcript,
         duration=transcript.audio_duration or 0,
     )
+
+
+def label_speakers(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
+    """Relabel each entry's ``speaker`` to ``"Doctor"`` or ``"Patient"``.
+
+    The raw speaker labels differ by source: AssemblyAI (audio upload) uses
+    ``"A"``/``"B"``, while Recall (Zoom bot) uses the participant display name.
+    Downstream consumers -- note generation and, critically,
+    ``reconstruct_patient_text`` for engagement scoring -- only recognize the
+    literal ``"Patient"`` label, so both paths must normalize here.
+
+    The doctor-identification prompt is hardcoded to two speakers ``A`` and
+    ``B``, so we map the distinct raw labels onto A/B for the LLM, then map its
+    answer back to the raw label. The round-trip is fully reversible, so the
+    final Doctor/Patient assignment is independent of the A/B mapping direction
+    (the audio-upload path, already A/B, is unaffected).
+    """
+    if not entries:
+        return entries
+
+    # Distinct raw labels in order of first appearance; a visit has two speakers.
+    raw_labels: list[str] = []
+    for entry in entries:
+        if entry.speaker not in raw_labels:
+            raw_labels.append(entry.speaker)
+
+    synthetic_by_raw = {raw: chr(ord("A") + i) for i, raw in enumerate(raw_labels)}
+    raw_by_synthetic = {syn: raw for raw, syn in synthetic_by_raw.items()}
+
+    log.info("identifying speakers", raw_labels=raw_labels)
+    sample = "\n".join(
+        f"{synthetic_by_raw[e.speaker]}: {e.content}" for e in entries[:10]
+    )
+    classification = identify_doctor_from_transcript(sample)
+    doctor_synthetic = extract_doctor_classification(classification)
+    if doctor_synthetic is None:
+        log.error("speaker identification failed", classification=classification)
+        raise ValueError("Could not extract doctor classification from reasoning.")
+
+    doctor_raw = raw_by_synthetic.get(doctor_synthetic)
+    return [
+        TranscriptEntry(
+            speaker="Doctor" if entry.speaker == doctor_raw else "Patient",
+            content=entry.content,
+            startTime=entry.startTime,
+            endTime=entry.endTime,
+        )
+        for entry in entries
+    ]
 
 
 def identify_doctor_from_transcript(transcript: str) -> str | None:
