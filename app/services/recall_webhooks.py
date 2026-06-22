@@ -1,5 +1,6 @@
 from typing import Any
 
+import app.jobs.score_engagement  # noqa: E402 — job import intentional
 import app.jobs.transcribe as transcribe_job  # noqa: E402 — job import intentional
 from app import log
 from app.configuration.redis import get_redis
@@ -86,6 +87,13 @@ def handle_transcript_done(payload: dict[str, Any]):
         entries=len(entries),
     )
     transcribe_job.queue_schema_transcription(transcript)
+
+    # Engagement engine v2: score the patient's enacted communication role from
+    # this transcript, mirroring the audio-upload path in transcribe.py. Without
+    # this, Zoom/Recall-recorded visits never get an EngagementRole and the
+    # personality badge never shows for them. Idempotent (one role per
+    # transcript) and skips when there's too little patient speech.
+    app.jobs.score_engagement.queue(transcript_id=transcript.id)
 
 
 def _map_transcript_entries(raw_data: list[dict]) -> list[TranscriptEntry]:
