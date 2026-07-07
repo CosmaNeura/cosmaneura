@@ -45,6 +45,17 @@ _BOT_TERMINAL_STATUSES = {
 # classifying join/leave events. Must match the bot_name passed to Recall.
 BOT_NAME = "Cosmas AI Note-Taker"
 
+# In-call disclosure posted to the Zoom chat when the bot starts recording.
+# This is a *reinforcement* of the notice patients already see — Zoom's own
+# native recording-consent prompt is the primary disclosure/gate. Kept as a
+# module constant so the copy can be reviewed/edited in one place.
+CONSENT_CHAT_MESSAGE = (
+    "Hi — I'm the Cosmas AI Note-Taker. This visit is being recorded to help "
+    "your clinician write up the notes from your appointment. Your clinician "
+    "reviews and approves everything before it's saved, and your information "
+    "is protected under HIPAA."
+)
+
 
 def create_bot(
     meeting_url: str,
@@ -202,6 +213,34 @@ def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
         recording_id=data.get("id"),
     )
     return data
+
+
+def send_chat_message(bot_id: str, message: str, to: str = "everyone") -> None:
+    """Post a chat message into the meeting as the bot. Used to surface the
+    in-call recording disclosure to all participants when recording starts.
+
+    This is best-effort: callers should treat a failure here as non-fatal.
+    The real disclosure/consent gate is Zoom's native recording-consent
+    prompt (see require_recording_permission in create_bot), so a dropped
+    chat message must never abort the recording."""
+    with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
+        response = client.post(
+            f"{RECALL_API_BASE}/bot/{bot_id}/send_chat_message/",
+            json={"to": to, "message": message},
+            headers={
+                "Authorization": f"Token {RECALL_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+        if not response.is_success:
+            log.error(
+                "recall send_chat_message error",
+                bot_id=bot_id,
+                status=response.status_code,
+                body=response.text,
+            )
+        response.raise_for_status()
+    log.info("recall chat message sent", bot_id=bot_id, to=to)
 
 
 def stop_recording(bot_id: str) -> None:

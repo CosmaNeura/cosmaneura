@@ -46,6 +46,11 @@ PROD_ZOOM_EMAILS = frozenset(
         "kathleen@mycatholicdoctor.com",
         "john@cosmaneura.com",
         "ortegaoscar14@gmail.com",
+        # Pilot cohort
+        "sweeman@fiathealth.org",
+        "christa.thornberry@mycatholicdoctor.com",
+        "maura.buete@mycatholicdoctor.com",
+        "sherin.george@mycatholicdoctor.com",
     }
 )
 
@@ -228,6 +233,19 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         return
 
     redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
+
+    # Reinforce the recording disclosure with an in-call chat notice. Best-effort
+    # only: Zoom's native recording-consent prompt is the primary gate, so a
+    # failure here must never abort a recording that already started.
+    try:
+        recall.send_chat_message(bot_id, recall.CONSENT_CHAT_MESSAGE)
+    except Exception as exc:
+        log.warning(
+            "failed to post recording disclosure to zoom chat",
+            bot_id=bot_id,
+            meeting_id=meeting_id,
+            error=str(exc),
+        )
 
     now = datetime.utcnow()
     # Phase 1 band-aid for Mode A scenario #9: a previous visit on the

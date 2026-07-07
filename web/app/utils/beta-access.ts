@@ -15,6 +15,11 @@ const PROD_BETA_EMAILS = new Set([
   "kathleen@mycatholicdoctor.com",
   "john@cosmaneura.com",
   "ortegaoscar14@gmail.com",
+  // Pilot cohort
+  "sweeman@fiathealth.org",
+  "christa.thornberry@mycatholicdoctor.com",
+  "maura.buete@mycatholicdoctor.com",
+  "sherin.george@mycatholicdoctor.com",
 ])
 
 function isStagingDeployment(): boolean {
