@@ -31,11 +31,25 @@ Verified against the codebase (corrections to initial assumptions in **bold**):
   Health De-identification and **tombstoned after 14 days** (daily
   `transcript_cleanup` beat job).
 
-## 2. Finding that changes Feature 1: the Sovereign chatbot is not in this repo
+## 2. Finding that changes Feature 1: Sovereign has no retrieval layer to reuse
 
-The string "sovereign" appears nowhere in the working tree **or the full git
-history**, and there is no retrieval/RAG/embedding infrastructure anywhere
-(no vector store, no embeddings, no langchain/llama-index). What does exist:
+The Sovereign chatbot lives in a **separate repo**
+(`CosmaNeura/cosmaneura-sovereign`), not this monorepo. It is a Phase-0
+standalone FastAPI service: an orchestrator that routes chat requests to three
+agents (referral, concierge, engagement) with Magisterium AI doctrinal
+arbitration, running on **Anthropic Claude** (BAA/ZDR path) — not Azure
+OpenAI — and shipping in mock mode.
+
+Crucially, **it contains no patient-context retrieval over Cosmas session
+history**. Its "patient context" is caller-supplied: `ChatRequest.history`
+(chat turns passed in per request, `app/schemas.py:37`) and
+`request.metadata["health_history"]` (a free-form string the caller must
+provide, `app/agents/engagement_agent.py:63`). There is no database, no
+connection to Cosmas data, and no retrieval/embedding infrastructure in either
+repo. In other words: Sovereign's engagement agent is *designed to be handed*
+a patient history by some upstream system that doesn't exist yet.
+
+That upstream system is exactly what PR 5 builds. In this monorepo:
 
 - The **public intake chatbot** (`app/routes/chat.py`,
   `app/commands/intake/chat.py`, `web/app/components/chat/intake/*`) — a
@@ -49,13 +63,21 @@ history**, and there is no retrieval/RAG/embedding infrastructure anywhere
   role: Self-Directed / Collaborative / Directed, confidence, indicators) plus
   `CpsSelfReport` ground truth.
 
-**Plan assumption (needs confirmation):** the Sovereign chatbot lives in
-another repo or hasn't been started here. Since there is no retrieval layer to
-reuse, we invert the reuse direction: build the patient-context assembly as a
-new shared service in this repo (PR 5), designed so the Sovereign chatbot
-consumes it later. This also satisfies the "shared service extracted as its
-own refactor PR first" requirement — two intake jobs already duplicate the
-"last note for this patient" query and will be refactored onto it.
+**Design consequence (confirmed against both repos):** since there is no
+retrieval layer to reuse, we invert the reuse direction. The patient-context
+assembly is built as a shared service in this repo (PR 5) — where the data and
+the PHI controls live — and Session Prep consumes it directly. When Sovereign's
+provider persona goes live, Cosmas exposes the same `assemble_patient_context()`
+output over an internal authenticated endpoint to populate Sovereign's
+`health_history` input; that integration is future work, but the service
+boundary is drawn for it now. This also satisfies the "shared service
+extracted as its own refactor PR first" requirement — two intake jobs already
+duplicate the "last note for this patient" query and will be refactored onto
+it.
+
+Session Prep's LLM calls stay on this repo's existing clinical path (Azure
+OpenAI, Celery); Sovereign's Anthropic/Magisterium stack is its own concern
+and is not pulled in here.
 
 **Data reality:** because raw transcripts are deleted after 14 days (PHI
 policy), "full session history" in practice means: all persisted
@@ -245,9 +267,9 @@ independently reviewable/revertable.
 
 ## 5. Open questions (blocking none of PRs 1–5)
 
-1. **Sovereign chatbot location** — confirm it's in another repo/branch. If it
-   does exist somewhere with a real retrieval layer, PR 5/6 should be reviewed
-   against it before merge.
+1. ~~Sovereign chatbot location~~ — resolved: `CosmaNeura/cosmaneura-sovereign`,
+   reviewed 2026-07-22; no retrieval layer exists there (see §2), so PR 5 is
+   the shared layer and Sovereign consumes it later.
 2. **Pilot user's email** for the staging (and eventually prod) allowlists.
 3. **Public intake chat terminology** (patient-facing "your doctor") —
    recommend including (PR 3); confirm.
