@@ -1,5 +1,6 @@
 import { SidebarInset } from "@/components/ui/sidebar"
 import { Header } from "~/components/notes/Header"
+import { useTerminology } from "~/utils/terminology"
 
 export const meta = () => {
   return [
@@ -12,12 +13,13 @@ export const meta = () => {
 }
 
 export function EmptySelectionState() {
+  const t = useTerminology()
   return (
     <div className="flex h-[calc(100vh-5rem)] items-center justify-center">
       <div className="text-muted-foreground text-center">
-        <h2 className="mb-2 text-xl font-semibold">Select a patient</h2>
+        <h2 className="mb-2 text-xl font-semibold">Select a {t.patient}</h2>
         <p className="text-sm">
-          Choose a patient from the list to view their intake details
+          Choose a {t.patient} from the list to view their intake details
         </p>
       </div>
     </div>
