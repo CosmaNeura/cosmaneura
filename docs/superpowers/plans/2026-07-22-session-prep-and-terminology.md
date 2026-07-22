@@ -1,7 +1,18 @@
 # Session Prep + Provider Terminology — Implementation Plan
 
 Date: 2026-07-22
-Status: awaiting approval (no feature code written yet)
+Status: implemented — all PRs open for review (2026-07-22)
+
+PR index (review order within each track):
+- Terminology: #87 backend setting → #91 label catalog + settings UI →
+  #93 UI string sweep; #92 LLM prompt wording (also stacked on #87).
+- Session Prep: #88 patient-context service → #89 backend model/job/API →
+  #90 frontend card.
+- Cross-track notes: #87 and #89 both add an alembic migration off the same
+  head — whichever merges second needs a one-line down_revision bump. The
+  staging beta-allowlist change ships identically in #90 and #91 (merges
+  cleanly in either order). The public intake chat page is excluded from #93
+  pending the patient-facing wording decision (open question 3).
 Target: staging first, gated to the behavioral-health pilot user
 
 ## 1. Stack verification
