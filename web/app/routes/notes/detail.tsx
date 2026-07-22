@@ -5,6 +5,7 @@ import { Route } from "./+types/detail"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { SessionPrepCard } from "~/components/SessionPrepCard"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
 import { EngagementBadge } from "~/components/shared/EngagementBadge"
@@ -15,6 +16,7 @@ import { noteDetail } from "~/configuration/client"
 import type { EngagementRole } from "~/configuration/client"
 import { standardDateFormat } from "~/lib/date"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
+import { isSessionPrepEnabled } from "~/utils/session-prep-feature"
 
 import { useUser } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
@@ -120,6 +122,9 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
   const engagementEnabled = isEngagementEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
+  const sessionPrepEnabled = isSessionPrepEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
 
   return (
     <SidebarInset>
@@ -138,6 +143,13 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
             // Location: "Denver, CO",
           }}
         />
+
+        {sessionPrepEnabled && (
+          <SessionPrepCard
+            patientId={loaderData.patient.id}
+            appointmentId={loaderData.appointment.id}
+          />
+        )}
 
         {hasNotes ? (
           notes.map((note, index) => (

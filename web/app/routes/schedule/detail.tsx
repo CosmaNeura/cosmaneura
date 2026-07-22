@@ -7,10 +7,14 @@ import { Route } from "./+types/detail"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { SessionPrepCard } from "~/components/SessionPrepCard"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { cancelMeeting } from "~/configuration/client"
 import type { ZoomMeetingResponse } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+import { isSessionPrepEnabled } from "~/utils/session-prep-feature"
+
+import { useUser } from "@clerk/clerk-react"
 
 function formatDateTime(isoString: string): string {
   return new Date(isoString).toLocaleString(undefined, {
@@ -31,6 +35,13 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
   const isActive =
     meeting.status === "scheduled" || meeting.status === "started"
   const isEnded = meeting.status === "ended"
+
+  // Session prep only renders when the meeting is linked to an appointment
+  // (set async via webhook) — without one there is no patient to prep for.
+  const { user } = useUser()
+  const sessionPrepEnabled = isSessionPrepEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
 
   async function handleCancel() {
     setCancelling(true)
@@ -105,6 +116,10 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
             </p>
           )}
         </div>
+      )}
+
+      {!isEnded && sessionPrepEnabled && meeting.appointment_id && (
+        <SessionPrepCard appointmentId={meeting.appointment_id} />
       )}
 
       {!isEnded && (
