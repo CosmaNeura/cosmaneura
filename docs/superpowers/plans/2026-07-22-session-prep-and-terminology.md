@@ -219,6 +219,24 @@ independently reviewable/revertable.
   core requirement), JSON mode (`response_format={"type":"json_object"}`),
   `temperature=0, top_p=0.1`, `DEFAULT_MULTI_MODAL_MODEL`. Uses the
   terminology terms if PR 1 has landed (soft dependency; defaults otherwise).
+- Content shape informed by a scan of pre-session-brief features in
+  behavioral-health EHRs (SimplePractice Note Taker, Sessions Health AI
+  Assist, Ensora) and MBC/risk-documentation practice:
+  - `alerts: list[str]` — optional, rendered first and visually distinct:
+    safety/risk mentions (e.g. SI documented in a prior note) and medication
+    changes pulled from prior notes. Competitors call this "clinical alerts";
+    risk continuity is the one thing a brief must never bury. Derived at
+    generation time from existing note content — no new data model.
+  - `open_threads` maps to the last note's plan/action items (the platform
+    already generates per-visit action items — "actions for the patient" ≈
+    homework), so continuity comes from data we already persist.
+  - Computed (not LLM) fields: days since last session; count of visits in
+    context window.
+- Roadmap note (out of scope, recorded for later): measurement-based care
+  scores (PHQ-9/GAD-7) trended across sessions are the industry-standard
+  prep signal (APA-endorsed MBC). Cosmas doesn't collect them yet; if intake
+  later adds standardized instruments, `assemble_patient_context()` is where
+  the trend line plugs in.
 - Endpoints on `internal_api_app`:
   - `POST /internal/v1/session-prep` `{patient_id, appointment_id?}` →
     creates a pending row, queues the job, returns the row (generate on
@@ -270,10 +288,16 @@ independently reviewable/revertable.
 1. ~~Sovereign chatbot location~~ — resolved: `CosmaNeura/cosmaneura-sovereign`,
    reviewed 2026-07-22; no retrieval layer exists there (see §2), so PR 5 is
    the shared layer and Sovereign consumes it later.
-2. **Pilot user's email** for the staging (and eventually prod) allowlists.
-3. **Public intake chat terminology** (patient-facing "your doctor") —
-   recommend including (PR 3); confirm.
-4. **Note-lookback window** for `latest_note_for_patient` /
-   `assemble_patient_context` (recommend 18 months; resolves an existing TODO).
+2. ~~Pilot user's email~~ — resolved: pilot cohort for both features is
+   `john@cosmaneura.com`, `dev@cosmaneura.com`, `greg@mycatholicdoctor.com`,
+   `kathleen@mycatholicdoctor.com` (internal + external close-hold users);
+   added to the staging allowlists in PRs 2/6.
+3. **Public intake chat terminology** — pending. Restated: the public,
+   unauthenticated intake page patients see says "Your doctor is requesting
+   information about your health". Should it follow the owning provider's
+   terminology setting (e.g. "Your therapist is requesting…")? Requires
+   exposing the provider's terminology on the public chat API response.
+   Recommend yes.
+4. ~~Note-lookback window~~ — resolved: 18 months, approved 2026-07-22.
 5. **Schedule view without a linked patient** — v1 hides the prep card;
    alternative is a patient picker. Confirm v1 behavior.
