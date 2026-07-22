@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from fastapi import status
 from fastapi.testclient import TestClient
 
@@ -6,7 +8,7 @@ from app.server import api_app
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 
-from tests.factories import DoctorFactory, PatientFactory
+from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 from tests.routes.utils import get_clerk_dev_user
 
 
@@ -28,9 +30,11 @@ def test_generate_then_fetch_latest(authenticated_client: TestClient, sync_celer
         json={"patient_id": str(patient.id)},
     )
     assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["patient_id"] == str(patient.id)
 
     resp = authenticated_client.get(
-        api_app.url_path_for("session_prep_latest", patient_id=str(patient.id))
+        api_app.url_path_for("session_prep_latest"),
+        params={"patient_id": str(patient.id)},
     )
     assert resp.status_code == status.HTTP_200_OK
     body = resp.json()
@@ -39,12 +43,50 @@ def test_generate_then_fetch_latest(authenticated_client: TestClient, sync_celer
     assert body["alerts"] == []
 
 
+def test_generate_from_appointment_resolves_patient(
+    authenticated_client: TestClient, sync_celery
+):
+    doctor = _authed_doctor()
+    patient = _patient_for(doctor)
+    appointment = AppointmentFactory.build(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_date=datetime.now() + timedelta(days=1),
+    ).save()
+
+    resp = authenticated_client.post(
+        api_app.url_path_for("generate_session_prep"),
+        json={"appointment_id": str(appointment.id)},
+    )
+    assert resp.status_code == status.HTTP_200_OK
+    body = resp.json()
+    assert body["patient_id"] == str(patient.id)
+    assert body["appointment_id"] == str(appointment.id)
+
+    resp = authenticated_client.get(
+        api_app.url_path_for("session_prep_latest"),
+        params={"appointment_id": str(appointment.id)},
+    )
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.json()["status"] == "completed"
+
+
+def test_generate_requires_a_target(authenticated_client: TestClient):
+    _authed_doctor()
+
+    resp = authenticated_client.post(
+        api_app.url_path_for("generate_session_prep"), json={}
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
 def test_latest_404_when_never_generated(authenticated_client: TestClient):
     doctor = _authed_doctor()
     patient = _patient_for(doctor)
 
     resp = authenticated_client.get(
-        api_app.url_path_for("session_prep_latest", patient_id=str(patient.id))
+        api_app.url_path_for("session_prep_latest"),
+        params={"patient_id": str(patient.id)},
     )
     assert resp.status_code == status.HTTP_404_NOT_FOUND
 
@@ -61,6 +103,7 @@ def test_other_doctors_patient_is_404(authenticated_client: TestClient):
     assert resp.status_code == status.HTTP_404_NOT_FOUND
 
     resp = authenticated_client.get(
-        api_app.url_path_for("session_prep_latest", patient_id=str(other_patient.id))
+        api_app.url_path_for("session_prep_latest"),
+        params={"patient_id": str(other_patient.id)},
     )
     assert resp.status_code == status.HTTP_404_NOT_FOUND

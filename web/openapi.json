@@ -720,15 +720,20 @@
         ],
         "summary": "Generate Session Prep",
         "operationId": "generate_session_prep",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/GenerateSessionPrep"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -751,15 +756,8 @@
               }
             }
           }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/internal/v1/session-prep/{patient_id}": {
+        }
+      },
       "get": {
         "tags": [
           "private"
@@ -774,10 +772,17 @@
         "parameters": [
           {
             "name": "patient_id",
-            "in": "path",
-            "required": true,
+            "in": "query",
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Patient Id"
             }
           },
@@ -1501,7 +1506,14 @@
       "GenerateSessionPrep": {
         "properties": {
           "patient_id": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Patient Id"
           },
           "appointment_id": {
@@ -1518,9 +1530,6 @@
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "patient_id"
-        ],
         "title": "GenerateSessionPrep"
       },
       "HTTPValidationError": {
@@ -2060,6 +2069,21 @@
             "type": "string",
             "title": "Id"
           },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          },
           "status": {
             "$ref": "#/components/schemas/SessionPrepStatus"
           },
@@ -2127,6 +2151,8 @@
         "type": "object",
         "required": [
           "id",
+          "patient_id",
+          "appointment_id",
           "status",
           "talking_points",
           "open_threads",
