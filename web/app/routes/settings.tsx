@@ -12,6 +12,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
+import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
@@ -35,6 +36,7 @@ import {
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
+import { isTerminologyEnabled } from "~/utils/terminology-feature"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { useUser } from "@clerk/clerk-react"
@@ -529,6 +531,11 @@ export const meta: MetaFunction = () => {
 }
 
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
+  const { user } = useUser()
+  const terminologyEnabled = isTerminologyEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
+
   return (
     <SidebarProvider
       // eliminate the message sidebar
@@ -542,6 +549,12 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         </header>
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
+          {terminologyEnabled && (
+            <TerminologySettings
+              terminology={loaderData.terminology}
+              biography={loaderData.biography}
+            />
+          )}
           <NoteUpload noteSchemas={loaderData.notes_schema} />
           <NoteCustomization
             noteSchemas={loaderData.notes_schema}

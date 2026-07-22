@@ -20,10 +20,11 @@ describe("isEngagementEnabled", () => {
     expect(isEngagementEnabled("random@clinic.com")).toBe(false)
   })
 
-  it("enables only the test account in staging", () => {
+  it("enables the test account and pilot cohort in staging", () => {
     vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
     expect(isEngagementEnabled("zoom-reviewer@cosmaneura.com")).toBe(true)
-    expect(isEngagementEnabled("greg@mycatholicdoctor.com")).toBe(false)
+    expect(isEngagementEnabled("greg@mycatholicdoctor.com")).toBe(true)
+    expect(isEngagementEnabled("sweeman@fiathealth.org")).toBe(false)
   })
 
   it("returns false for null or empty email", () => {
