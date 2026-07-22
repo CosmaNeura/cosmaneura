@@ -526,12 +526,16 @@ def cancel_meeting(request: Request, zoom_meeting_id: Annotated[str, Path()]) ->
 
 
 class GenerateSessionPrep(BaseModel, extra="forbid"):
-    patient_id: str
+    # at least one required; the schedule view only knows the appointment,
+    # the notes view knows both
+    patient_id: str | None = None
     appointment_id: str | None = None
 
 
 class SessionPrepData(BaseModel, extra="forbid"):
     id: str
+    patient_id: str
+    appointment_id: str | None
     status: SessionPrepStatus
     talking_points: list[str]
     open_threads: list[str]
@@ -545,6 +549,8 @@ class SessionPrepData(BaseModel, extra="forbid"):
 def _session_prep_data(row: SessionPrep) -> SessionPrepData:
     return SessionPrepData(
         id=str(row.id),
+        patient_id=str(row.patient_id),
+        appointment_id=str(row.appointment_id) if row.appointment_id else None,
         status=row.status,
         talking_points=row.talking_points,
         open_threads=row.open_threads,
@@ -556,17 +562,38 @@ def _session_prep_data(row: SessionPrep) -> SessionPrepData:
     )
 
 
-def _session_prep_patient_or_404(doctor: Doctor, patient_id: str) -> Patient:
+def _session_prep_scope_or_404(
+    doctor: Doctor, patient_id: str | None, appointment_id: str | None
+) -> tuple[Patient, Appointment | None]:
+    "resolve + authorize the patient/appointment a session prep request targets"
+
     if not session_prep_enabled_for(doctor.email):
         # 404 not 403 — don't advertise the gated feature's existence
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    patient = Patient.get(id=patient_id, doctor_id=doctor.id)
-    if patient is None:
-        # 404 not 403 — don't leak existence of other doctors' patients
+    if patient_id is None and appointment_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="patient_id or appointment_id is required",
+        )
+
+    appointment = None
+    if appointment_id is not None:
+        appointment = Appointment.get(id=appointment_id, doctor_id=doctor.id)
+        if appointment is None:
+            # 404 not 403 — don't leak existence of other doctors' records
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    resolved_patient_id = (
+        patient_id if patient_id is not None else appointment.patient_id
+    )  # type: ignore[union-attr]
+    patient = Patient.get(id=resolved_patient_id, doctor_id=doctor.id)
+    if patient is None or (
+        appointment is not None and appointment.patient_id != patient.id
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    return patient
+    return patient, appointment
 
 
 @internal_api_app.post("/session-prep", name="generate_session_prep")
@@ -574,19 +601,14 @@ def generate_session_prep(
     request: Request, data: GenerateSessionPrep
 ) -> SessionPrepData:
     doctor: Doctor = request.state.doctor
-    patient = _session_prep_patient_or_404(doctor, data.patient_id)
-
-    appointment_id = None
-    if data.appointment_id is not None:
-        appointment = Appointment.get(id=data.appointment_id, doctor_id=doctor.id)
-        if appointment is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-        appointment_id = appointment.id
+    patient, appointment = _session_prep_scope_or_404(
+        doctor, data.patient_id, data.appointment_id
+    )
 
     row = SessionPrep(
         doctor_id=doctor.id,
         patient_id=patient.id,
-        appointment_id=appointment_id,
+        appointment_id=appointment.id if appointment else None,
     ).save()
 
     session_prep_job.queue(row.id)
@@ -594,20 +616,22 @@ def generate_session_prep(
     return _session_prep_data(row)
 
 
-@internal_api_app.get("/session-prep/{patient_id}", name="session_prep_latest")
+@internal_api_app.get("/session-prep", name="session_prep_latest")
 def session_prep_latest(
     request: Request,
-    patient_id: Annotated[str, Path()],
+    patient_id: str | None = None,
     appointment_id: str | None = None,
 ) -> SessionPrepData:
     doctor: Doctor = request.state.doctor
-    patient = _session_prep_patient_or_404(doctor, patient_id)
+    patient, appointment = _session_prep_scope_or_404(
+        doctor, patient_id, appointment_id
+    )
 
     conditions = (SessionPrep.doctor_id == doctor.id) & (
         SessionPrep.patient_id == patient.id
     )
-    if appointment_id is not None:
-        conditions = conditions & (SessionPrep.appointment_id == appointment_id)
+    if appointment is not None:
+        conditions = conditions & (SessionPrep.appointment_id == appointment.id)
 
     row = cast(
         SessionPrep | None,
