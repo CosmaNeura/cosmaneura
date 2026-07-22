@@ -712,6 +712,115 @@
           }
         }
       }
+    },
+    "/internal/v1/session-prep": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Session Prep",
+        "operationId": "generate_session_prep",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateSessionPrep"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPrepData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/session-prep/{patient_id}": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Session Prep Latest",
+        "operationId": "session_prep_latest",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          },
+          {
+            "name": "appointment_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionPrepData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1389,6 +1498,31 @@
         ],
         "title": "ExternalIntakeData"
       },
+      "GenerateSessionPrep": {
+        "properties": {
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "appointment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patient_id"
+        ],
+        "title": "GenerateSessionPrep"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1919,6 +2053,99 @@
           "meetings"
         ],
         "title": "ScheduleResponse"
+      },
+      "SessionPrepData": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionPrepStatus"
+          },
+          "talking_points": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Talking Points"
+          },
+          "open_threads": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Open Threads"
+          },
+          "alerts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Alerts"
+          },
+          "personality_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personality Note"
+          },
+          "days_since_last_session": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Since Last Session"
+          },
+          "visits_in_context": {
+            "type": "integer",
+            "title": "Visits In Context"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "talking_points",
+          "open_threads",
+          "alerts",
+          "personality_note",
+          "days_since_last_session",
+          "visits_in_context",
+          "created_at"
+        ],
+        "title": "SessionPrepData"
+      },
+      "SessionPrepStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "completed",
+          "failed"
+        ],
+        "title": "SessionPrepStatus"
       },
       "SettingsData": {
         "properties": {

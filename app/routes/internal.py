@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field, computed_field
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
+import app.jobs.session_prep as session_prep_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.services.session_prep_gate import session_prep_enabled_for
 from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 
 from activemodel.session_manager import aglobal_session
@@ -32,6 +34,7 @@ from app.models.note_type_customization import (
     default_customization,
 )
 from app.models.patient import Patient
+from app.models.session_prep import SessionPrep, SessionPrepStatus
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy.orm import selectinload
 
@@ -520,3 +523,104 @@ def cancel_meeting(request: Request, zoom_meeting_id: Annotated[str, Path()]) ->
 
     meeting.status = ZoomMeetingStatus.cancelled
     meeting.save()
+
+
+class GenerateSessionPrep(BaseModel, extra="forbid"):
+    patient_id: str
+    appointment_id: str | None = None
+
+
+class SessionPrepData(BaseModel, extra="forbid"):
+    id: str
+    status: SessionPrepStatus
+    talking_points: list[str]
+    open_threads: list[str]
+    alerts: list[str]
+    personality_note: str | None
+    days_since_last_session: int | None
+    visits_in_context: int
+    created_at: datetime | None
+
+
+def _session_prep_data(row: SessionPrep) -> SessionPrepData:
+    return SessionPrepData(
+        id=str(row.id),
+        status=row.status,
+        talking_points=row.talking_points,
+        open_threads=row.open_threads,
+        alerts=row.alerts,
+        personality_note=row.personality_note,
+        days_since_last_session=row.days_since_last_session,
+        visits_in_context=row.visits_in_context,
+        created_at=row.created_at,
+    )
+
+
+def _session_prep_patient_or_404(doctor: Doctor, patient_id: str) -> Patient:
+    if not session_prep_enabled_for(doctor.email):
+        # 404 not 403 — don't advertise the gated feature's existence
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    patient = Patient.get(id=patient_id, doctor_id=doctor.id)
+    if patient is None:
+        # 404 not 403 — don't leak existence of other doctors' patients
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return patient
+
+
+@internal_api_app.post("/session-prep", name="generate_session_prep")
+def generate_session_prep(
+    request: Request, data: GenerateSessionPrep
+) -> SessionPrepData:
+    doctor: Doctor = request.state.doctor
+    patient = _session_prep_patient_or_404(doctor, data.patient_id)
+
+    appointment_id = None
+    if data.appointment_id is not None:
+        appointment = Appointment.get(id=data.appointment_id, doctor_id=doctor.id)
+        if appointment is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        appointment_id = appointment.id
+
+    row = SessionPrep(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_id=appointment_id,
+    ).save()
+
+    session_prep_job.queue(row.id)
+
+    return _session_prep_data(row)
+
+
+@internal_api_app.get("/session-prep/{patient_id}", name="session_prep_latest")
+def session_prep_latest(
+    request: Request,
+    patient_id: Annotated[str, Path()],
+    appointment_id: str | None = None,
+) -> SessionPrepData:
+    doctor: Doctor = request.state.doctor
+    patient = _session_prep_patient_or_404(doctor, patient_id)
+
+    conditions = (SessionPrep.doctor_id == doctor.id) & (
+        SessionPrep.patient_id == patient.id
+    )
+    if appointment_id is not None:
+        conditions = conditions & (SessionPrep.appointment_id == appointment_id)
+
+    row = cast(
+        SessionPrep | None,
+        (
+            SessionPrep.select()
+            .where(conditions)
+            .order_by(cast(Any, SessionPrep.created_at).desc())
+            .limit(1)
+            .first()
+        ),
+    )
+
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return _session_prep_data(row)
