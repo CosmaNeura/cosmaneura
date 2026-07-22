@@ -28,6 +28,18 @@ class DoctorRole(str, Enum):
     admin = "admin"
 
 
+class Terminology(str, Enum):
+    """
+    Role-label pair used everywhere the app names the provider/patient
+    relationship (UI, generated notes, intake language). Add new pairs here
+    and to the frontend label catalog; never scatter per-surface overrides.
+    """
+
+    doctor_patient = "doctor_patient"
+    therapist_client = "therapist_client"
+    counselor_client = "counselor_client"
+
+
 # usr vs user is intentionally used to differentiate from the clerk model, which also uses a prefix ID
 class Doctor(
     BaseModel, TimestampsMixin, SoftDeletionMixin, TypeIDMixin("doctor"), table=True
@@ -58,6 +70,9 @@ class Doctor(
 
     biography: str | None
     "what type of doctor is this, what specialist, what they focus on, etc. Used for the intake process."
+
+    terminology: Terminology = Field(default=Terminology.doctor_patient)
+    "which provider/patient role labels this doctor sees and generates content with"
 
     onboarding_completed_at: datetime | None = Field(
         default=None,
