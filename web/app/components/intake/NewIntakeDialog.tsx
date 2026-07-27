@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { ReactNode, useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { href, useNavigate, useRevalidator } from "react-router"
 import { z } from "zod"
@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Icons } from "~/components/icons"
+import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
   FormControl,
@@ -25,7 +26,12 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
-import { createManualIntake } from "~/configuration/client"
+import type { ComboboxItemBase } from "~/components/vendor/Combobox/types"
+import {
+  Patient,
+  createManualIntake,
+  patientList,
+} from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 
 import { zodResolver } from "@hookform/resolvers/zod"
@@ -43,24 +49,93 @@ const formSchema = z.object({
     ),
 })
 
+export interface NewIntakeDefaults {
+  patientName?: string
+  dateOfBirth?: string
+  email?: string
+  /** ISO timestamp; converted to the browser's local time for the input */
+  appointmentDate?: string
+}
+
+/** format an ISO timestamp for an <input type="datetime-local"> in local time */
+function toDatetimeLocal(iso: string | undefined): string {
+  if (!iso) return ""
+
+  const date = new Date(iso)
+  if (isNaN(date.getTime())) return ""
+
+  const pad = (part: number) => String(part).padStart(2, "0")
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  )
+}
+
 /**
  * One-click intake: create a patient/appointment/intake directly (no external
  * scheduling sync required) and email the chat link to the patient.
+ *
+ * Fields can be pre-populated two ways: `defaultValues` from the calling page
+ * (e.g. the schedule page passes the meeting's start time), and the
+ * returning-patient picker, which fills name/DOB/email from the practice's own
+ * patient records.
  */
-export function NewIntakeDialog() {
+export function NewIntakeDialog({
+  trigger,
+  defaultValues,
+}: {
+  trigger?: ReactNode
+  defaultValues?: NewIntakeDefaults
+}) {
   const [open, setOpen] = useState(false)
   const navigate = useNavigate()
   const revalidator = useRevalidator()
 
+  const [patients, setPatients] = useState<Patient[]>([])
+  const [selectedPatientId, setSelectedPatientId] = useState<string | null>(
+    null,
+  )
+
   const form = useForm({
     resolver: zodResolver(formSchema),
     defaultValues: {
-      patient_name: "",
-      date_of_birth: "",
-      email: "",
-      appointment_date: "",
+      patient_name: defaultValues?.patientName ?? "",
+      date_of_birth: defaultValues?.dateOfBirth ?? "",
+      email: defaultValues?.email ?? "",
+      appointment_date: toDatetimeLocal(defaultValues?.appointmentDate),
     },
   })
+
+  // load the returning-patient list only once the dialog is actually opened
+  useEffect(() => {
+    if (!open || patients.length > 0) return
+
+    let cancelled = false
+
+    patientList().then(({ data }) => {
+      if (!cancelled && data) {
+        setPatients(data)
+      }
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [open, patients.length])
+
+  function applyPatient(item: ComboboxItemBase | null) {
+    const patient = patients.find((entry) => String(entry.id) === item?.value)
+    if (!patient) return
+
+    setSelectedPatientId(String(patient.id))
+    form.setValue("patient_name", patient.name, { shouldDirty: true })
+    if (patient.date_of_birth) {
+      form.setValue("date_of_birth", patient.date_of_birth.slice(0, 10), {
+        shouldDirty: true,
+      })
+    }
+    form.setValue("email", patient.email ?? "", { shouldDirty: true })
+  }
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     const { data, error } = await createManualIntake({
@@ -92,17 +167,29 @@ export function NewIntakeDialog() {
 
     setOpen(false)
     form.reset()
+    setSelectedPatientId(null)
     revalidator.revalidate()
     navigate(href("/intake/:id", { id: String(data.appointment_id) }))
   }
 
+  const patientItems: ComboboxItemBase[] = patients
+    .filter((patient) => patient.id)
+    .map((patient) => ({
+      value: String(patient.id),
+      label: patient.date_of_birth
+        ? `${patient.name} · DOB ${patient.date_of_birth.slice(0, 10)}`
+        : patient.name,
+    }))
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm" variant="secondary" aria-label="New intake">
-          <Plus className="mr-1 h-4 w-4" />
-          New
-        </Button>
+        {trigger ?? (
+          <Button size="sm" variant="secondary" aria-label="New intake">
+            <Plus className="mr-1 h-4 w-4" />
+            New
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
@@ -112,6 +199,19 @@ export function NewIntakeDialog() {
             the chat link — no scheduling system required.
           </DialogDescription>
         </DialogHeader>
+
+        {patientItems.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-sm font-medium">Returning patient (optional)</p>
+            <SimpleComboBox
+              items={patientItems}
+              value={selectedPatientId}
+              onSelectedItemChange={applyPatient}
+              placeholder="Search your patients to fill their details..."
+            />
+          </div>
+        )}
+
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField

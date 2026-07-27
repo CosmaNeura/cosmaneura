@@ -7,6 +7,7 @@ import { Route } from "./+types/detail"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { NewIntakeDialog } from "~/components/intake/NewIntakeDialog"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { cancelMeeting } from "~/configuration/client"
 import type { ZoomMeetingResponse } from "~/configuration/client"
@@ -72,6 +73,13 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
               Join Meeting
             </a>
           </Button>
+        )}
+
+        {isScheduled && (
+          <NewIntakeDialog
+            trigger={<Button variant="outline">Send Intake</Button>}
+            defaultValues={{ appointmentDate: meeting.start_time }}
+          />
         )}
 
         {isScheduled && (
