@@ -1,14 +1,22 @@
+import { useState } from "react"
 import Markdown from "react-markdown"
+import { useRevalidator } from "react-router"
 import type { MetaFunction } from "react-router"
+
+import { Send } from "lucide-react"
 
 import { Route } from "./+types/detail"
 
+import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { Icons } from "~/components/icons"
 import { CopyButton } from "~/components/shared/CopyButton"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
-import { Intake, intakeDetail } from "~/configuration/client"
+import { Input } from "~/components/ui/input"
+import { Intake, intakeDetail, sendIntakeLink } from "~/configuration/client"
+import { toast } from "~/hooks/use-toast"
 import { standardDateTimeFormat } from "~/lib/date"
 
 import { invariant } from "@epic-web/invariant"
@@ -80,20 +88,93 @@ function IntakeHeader({
   )
 }
 
-function EmptyState({ intake }: { intake: Intake }) {
+function SendLinkForm({
+  appointmentId,
+  patientEmail,
+}: {
+  appointmentId: string
+  patientEmail: string | null | undefined
+}) {
+  const [email, setEmail] = useState(patientEmail ?? "")
+  const [isSending, setIsSending] = useState(false)
+  const revalidator = useRevalidator()
+
+  async function send() {
+    setIsSending(true)
+
+    try {
+      const { data, error } = await sendIntakeLink({
+        path: { appointment_id: appointmentId },
+        body: { email },
+      })
+
+      if (error || !data) {
+        toast({
+          title: "Could Not Send Intake Link",
+          description: "Check the email address and try again.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      toast({
+        title: "Intake Link Sent",
+        description: `The intake link was emailed to ${data.email_sent_to}.`,
+      })
+
+      // the email is saved to the patient record, refresh so it stays pre-filled
+      revalidator.revalidate()
+    } finally {
+      setIsSending(false)
+    }
+  }
+
   return (
-    <div className="mb-4">
-      <div className="text-muted-foreground">
-        Your patient has not yet completed their intake they have been sent. If
-        you'd like to resend their intake URL, you can find it below.
-        <br />
-        <br />
-        <div className="flex items-center gap-2">
-          <a target="_blank" href={intake.public_url} className="text-blue-500">
-            {intake.public_url}
-          </a>
-          <CopyButton text={intake.public_url} />
-        </div>
+    <div className="flex max-w-md items-center gap-2">
+      <Input
+        type="email"
+        placeholder="patient@example.com"
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+      />
+      <Button onClick={send} disabled={isSending || !email}>
+        {isSending ? (
+          <>
+            <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+            Sending...
+          </>
+        ) : (
+          <>
+            <Send className="mr-2 h-4 w-4" />
+            Email Link
+          </>
+        )}
+      </Button>
+    </div>
+  )
+}
+
+function EmptyState({
+  intake,
+  appointmentId,
+  patientEmail,
+}: {
+  intake: Intake
+  appointmentId: string
+  patientEmail: string | null | undefined
+}) {
+  return (
+    <div className="text-muted-foreground mb-4 space-y-4">
+      <p>
+        Your patient has not completed their intake yet. Email them the link
+        below, or copy it and send it another way.
+      </p>
+      <SendLinkForm appointmentId={appointmentId} patientEmail={patientEmail} />
+      <div className="flex items-center gap-2">
+        <a target="_blank" href={intake.public_url} className="text-blue-500">
+          {intake.public_url}
+        </a>
+        <CopyButton text={intake.public_url} />
       </div>
     </div>
   )
@@ -102,6 +183,9 @@ function EmptyState({ intake }: { intake: Intake }) {
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
   const { intake } = loaderData
   const hasSummary = !!intake.summary
+
+  const appointmentId = loaderData.appointment.id
+  invariant(appointmentId, "appointment.id is required")
 
   return (
     <SidebarInset>
@@ -122,7 +206,13 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
           </div>
         )}
 
-        {!hasSummary && <EmptyState intake={intake} />}
+        {!hasSummary && (
+          <EmptyState
+            intake={intake}
+            appointmentId={appointmentId}
+            patientEmail={loaderData.patient.email}
+          />
+        )}
       </InnerScrollableContent>
     </SidebarInset>
   )

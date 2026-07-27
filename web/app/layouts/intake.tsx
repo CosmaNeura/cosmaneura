@@ -5,6 +5,7 @@ import { Route } from "./+types/intake"
 import { AppSidebar, SidebarEntry } from "@/components/app-sidebar"
 import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import { NewIntakeDialog } from "~/components/intake/NewIntakeDialog"
 import { Appointment, IntakeStatus, intakeList } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
 
@@ -59,6 +60,7 @@ export default function Layout({ loaderData }: Route.ComponentProps) {
       <AppSidebar
         isLoading={!appointments}
         header={"Patient Intake"}
+        headerAction={<NewIntakeDialog />}
         entries={appointmentsToSidebarEntries(appointments)}
       />
       <Outlet />

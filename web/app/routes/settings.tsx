@@ -1,9 +1,9 @@
 import { useState } from "react"
-import { useForm } from "react-hook-form"
+import { useFieldArray, useForm } from "react-hook-form"
 import { MetaFunction, useRevalidator } from "react-router"
 import { z } from "zod"
 
-import { ChevronDown, Upload } from "lucide-react"
+import { ChevronDown, Plus, Upload, X } from "lucide-react"
 import pluralize from "pluralize"
 
 import type { Route } from "./+types/settings"
@@ -25,9 +25,11 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
+import { Input } from "~/components/ui/input"
 import {
   generateSignedExampleNoteUploadUrl,
   settingsData,
+  updateIntakeQuestions,
   updateSettingsData,
   uploadExampleNote,
   zoomAuthUrl,
@@ -107,6 +109,128 @@ function BiographyInput({ biography }: { biography: string | null }) {
               "Save Biography"
             )}
           </Button>
+        </form>
+      </Form>
+    </section>
+  )
+}
+
+// must match MAX_INTAKE_QUESTIONS on the backend
+const MAX_INTAKE_QUESTIONS = 5
+
+function IntakeQuestionsInput({ questions }: { questions: string[] }) {
+  const formSchema = z.object({
+    questions: z
+      .array(
+        z.object({
+          value: z
+            .string()
+            .min(1, "Question cannot be empty")
+            .max(500, "Questions must be 500 characters or fewer"),
+        }),
+      )
+      .max(MAX_INTAKE_QUESTIONS),
+  })
+
+  const form = useForm({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      questions: questions.map((value) => ({ value })),
+    },
+  })
+
+  const { fields, append, remove } = useFieldArray({
+    control: form.control,
+    name: "questions",
+  })
+
+  async function onSubmit(values: z.infer<typeof formSchema>) {
+    const { error } = await updateIntakeQuestions({
+      body: {
+        questions: values.questions.map((question) => question.value),
+      },
+    })
+
+    if (error) {
+      toast({
+        title: "Could Not Save Questions",
+        description:
+          "Make sure each question is unique and try again. If the problem persists, contact support.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    toast({
+      title: "Intake Questions Updated",
+      description:
+        values.questions.length > 0
+          ? "New intakes will ask your questions exactly as written."
+          : "New intakes will use AI-generated questions.",
+    })
+  }
+
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>Intake Questions</h3>
+      <p className="text-muted-foreground text-sm">
+        Set the exact questions (up to {MAX_INTAKE_QUESTIONS}) your patients are
+        asked during intake. Leave this empty to let the AI pick questions for
+        each appointment. Changes apply to newly created intakes.
+      </p>
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          {fields.map((arrayField, index) => (
+            <FormField
+              key={arrayField.id}
+              control={form.control}
+              name={`questions.${index}.value`}
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Question {index + 1}</FormLabel>
+                  <div className="flex items-center gap-2">
+                    <FormControl>
+                      <Input
+                        placeholder="e.g. What is the main concern you'd like to discuss?"
+                        {...field}
+                      />
+                    </FormControl>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Remove question ${index + 1}`}
+                      onClick={() => remove(index)}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          ))}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={fields.length >= MAX_INTAKE_QUESTIONS}
+              onClick={() => append({ value: "" })}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add Question
+            </Button>
+            <Button type="submit">
+              {form.formState.isSubmitting ? (
+                <>
+                  <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Questions"
+              )}
+            </Button>
+          </div>
         </form>
       </Form>
     </section>
@@ -542,6 +666,9 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         </header>
         <InnerScrollableContent>
           <BiographyInput biography={loaderData.biography} />
+          <IntakeQuestionsInput
+            questions={loaderData.custom_intake_questions}
+          />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
           <NoteCustomization
             noteSchemas={loaderData.notes_schema}

@@ -159,10 +159,12 @@ function SelectionList({
 
 function SelectionSidebar({
   header,
+  headerAction,
   isLoading,
   entries,
 }: {
   header?: string
+  headerAction?: React.ReactNode
   isLoading: boolean
   entries: SidebarEntry[]
 }) {
@@ -201,8 +203,11 @@ function SelectionSidebar({
         {/* title with filters */}
         <SidebarHeader className="gap-3.5 border-b p-4">
           <div className="flex w-full items-center justify-between">
-            <div className="text-sidebar-foreground text-base font-medium">
-              {header ?? "Appointments"}
+            <div className="flex items-center gap-2">
+              <div className="text-sidebar-foreground text-base font-medium">
+                {header ?? "Appointments"}
+              </div>
+              {headerAction}
             </div>
             <Label className="text-on-navy-muted flex items-center gap-2 text-sm">
               <span>This Week</span>
@@ -266,11 +271,13 @@ export function AppSidebar({
   isLoading,
   entries,
   header,
+  headerAction,
   ...props
 }: {
   isLoading: boolean
   entries: SidebarEntry[] | false
   header?: string
+  headerAction?: React.ReactNode
 }) {
   const showSidebar = entries !== false
 
@@ -283,6 +290,7 @@ export function AppSidebar({
       {showSidebar && (
         <SelectionSidebar
           header={header}
+          headerAction={headerAction}
           isLoading={isLoading}
           entries={entries}
         />
