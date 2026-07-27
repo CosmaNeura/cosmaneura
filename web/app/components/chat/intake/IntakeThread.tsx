@@ -1,12 +1,13 @@
 import type { FC } from "react"
 
+import { Loader2Icon, SendHorizontalIcon } from "lucide-react"
+
 import { MarkdownText } from "~/components/assistant-ui/markdown-text"
 import {
-  Composer,
-  ComposerAction,
   EditComposer,
   ThreadScrollToBottom,
 } from "~/components/assistant-ui/thread"
+import { TooltipIconButton } from "~/components/assistant-ui/tooltip-icon-button"
 
 import { IntakeThreadWelcome } from "./IntakeThreadWelcome"
 import { ComposerPrimitive, ThreadPrimitive } from "@assistant-ui/react"
@@ -32,6 +33,40 @@ export const IntakeAssistantMessage: FC = () => {
   )
 }
 
+/**
+ * Unlike the shared ComposerAction, this never shows a cancel button: the
+ * external store runtime has no cancel support, and an intake answer that is
+ * already submitted cannot be taken back anyway. While the answer is being
+ * submitted, show a disabled spinner instead.
+ */
+export const IntakeComposerAction: FC = () => {
+  return (
+    <>
+      <ThreadPrimitive.If running={false}>
+        <ComposerPrimitive.Send asChild>
+          <TooltipIconButton
+            tooltip="Send"
+            variant="default"
+            className="my-2.5 size-8 p-2 transition-opacity ease-in"
+          >
+            <SendHorizontalIcon />
+          </TooltipIconButton>
+        </ComposerPrimitive.Send>
+      </ThreadPrimitive.If>
+      <ThreadPrimitive.If running>
+        <TooltipIconButton
+          tooltip="Sending..."
+          variant="default"
+          disabled
+          className="my-2.5 size-8 p-2 transition-opacity ease-in"
+        >
+          <Loader2Icon className="animate-spin" />
+        </TooltipIconButton>
+      </ThreadPrimitive.If>
+    </>
+  )
+}
+
 export const IntakeComposer: FC = () => {
   return (
     <ComposerPrimitive.Root className="focus-within:border-ring/20 flex w-full flex-wrap items-end rounded-lg border bg-inherit px-2.5 shadow-sm transition-colors ease-in">
@@ -44,7 +79,7 @@ Use as many lines and add as many details as you'd like!"
         submitOnEnter={false}
         className="placeholder:text-muted-foreground max-h-200 flex-grow resize-none border-none bg-transparent px-2 py-4 text-sm outline-none focus:ring-0 disabled:cursor-not-allowed"
       />
-      <ComposerAction />
+      <IntakeComposerAction />
     </ComposerPrimitive.Root>
   )
 }

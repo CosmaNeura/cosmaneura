@@ -108,9 +108,6 @@ export default function IntakeChat({ loaderData }: Route.ComponentProps) {
   }
 
   // TODO transform API shape to what assistant-ui expects https://www.assistant-ui.com/docs/runtimes/custom/external-store and https://discord.com/channels/1251324227668283443/1251324228171726889/1354153714029563935
-  // TODO mark as complete depending on the response
-  // TODO handle errors from chat API
-  // TODO make sure UI disables while loading
   // TODO test slow connection
   // TODO integration tests
 

@@ -22,9 +22,14 @@ const convertMessage = (message: IntakeMessage): ThreadMessageLike => {
 
 // TODO need to manually sync with the backend, should really use a
 interface IntakeResponse {
-  question: string
-  status: string
+  question: string | null
+  status: "processing" | "completed" | "in_progress"
 }
+
+const SUBMISSION_ERROR_MESSAGE =
+  "Sorry, something went wrong and your answer wasn't saved. " +
+  "Please check your connection and send your answer again. " +
+  "You can copy the text from your message above."
 
 const getNextQuestion = async (
   apiEndpoint: string,
@@ -44,8 +49,7 @@ const getNextQuestion = async (
     throw new Error("Failed to fetch response from backend")
   }
 
-  const intakeResponse = response.json()
-  return intakeResponse
+  return await response.json()
 }
 
 export function IntakeRuntimeProvider({
@@ -62,6 +66,10 @@ export function IntakeRuntimeProvider({
   const [isRunning, setIsRunning] = useState(false)
   const [messages, setMessages] = useState<IntakeMessage[]>(initialMessages)
 
+  const appendMessage = (message: IntakeMessage) => {
+    setMessages((currentConversation) => [...currentConversation, message])
+  }
+
   const onNew = async (message: AppendMessage) => {
     if (message.content[0]?.type !== "text") {
       throw new Error("Only text messages are supported")
@@ -69,33 +77,33 @@ export function IntakeRuntimeProvider({
 
     const latestMessageInput = message.content[0].text
 
-    setMessages((currentConversation) => [
-      ...currentConversation,
-      { role: "user", content: latestMessageInput },
-    ])
+    appendMessage({ role: "user", content: latestMessageInput })
 
     // waiting for backend response
     setIsRunning(true)
 
-    const questionResponse = await getNextQuestion(api, latestMessageInput)
+    try {
+      const questionResponse = await getNextQuestion(api, latestMessageInput)
 
-    if (questionResponse.status === "completed") {
-      setIsFinished(true)
-      return
+      if (questionResponse.status === "completed") {
+        setIsFinished(true)
+        return
+      }
+
+      if (!questionResponse.question) {
+        throw new Error("Backend did not return a question")
+      }
+
+      appendMessage({ role: "assistant", content: questionResponse.question })
+    } catch (error) {
+      // the answer was not persisted, so the backend will re-ask the same
+      // question when the patient sends again
+      console.error("failed to submit intake answer", error)
+      appendMessage({ role: "assistant", content: SUBMISSION_ERROR_MESSAGE })
+    } finally {
+      // without this, a failed request leaves the composer disabled forever
+      setIsRunning(false)
     }
-
-    const assistantMessage: IntakeMessage = {
-      role: "assistant",
-      content: questionResponse.question,
-    }
-
-    setMessages((currentConversation) => [
-      ...currentConversation,
-      assistantMessage,
-    ])
-
-    // finished consuming backend response
-    setIsRunning(false)
   }
 
   const runtime = useExternalStoreRuntime({
