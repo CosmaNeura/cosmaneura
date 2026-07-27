@@ -40,7 +40,7 @@ def process_intake(intake_id: str = Path(title="Intake ID")) -> Intake | JSONRes
         raise EarlyResponseException(
             data=ChatResponse(
                 question=None,
-                status="in_progress",
+                status="processing",
             ),
         )
 
@@ -64,6 +64,11 @@ class ChatInput(PydanticBaseModel):
 class ChatResponse(PydanticBaseModel):
     question: str | None
     status: Literal["processing", "completed", "in_progress"]
+    """
+    - processing: intake questions are still being generated, no question available yet
+    - in_progress: intake is active, `question` is the next question to answer
+    - completed: all questions answered or the appointment has expired
+    """
 
 
 @chat_api_app.get("/intake/{intake_id}/question")
@@ -85,5 +90,5 @@ def get_next_question(
 
     return ChatResponse(
         question=chat and chat.question,
-        status="completed" if not chat else "processing",
+        status="completed" if not chat else "in_progress",
     )

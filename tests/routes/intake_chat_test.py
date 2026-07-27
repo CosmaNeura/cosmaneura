@@ -5,6 +5,8 @@ from typeid import TypeID
 
 import app.commands.intake.chat
 
+from app.models.intake.intake import IntakeSchemaQuestion
+
 from tests.factories import (
     EXAMPLE_INTAKE_QUESTIONS,
     AppointmentFactory,
@@ -80,7 +82,7 @@ def test_intake_processing(client: TestClient):
     )
 
     assert_status(response)
-    assert response.json()["status"] == "in_progress"
+    assert response.json()["status"] == "processing"
 
 
 def test_last_question(client: TestClient):
@@ -123,6 +125,53 @@ def test_next_question():
     assert answered_questions[0].answer == fake_response
 
 
+def test_duplicate_questions_complete_gracefully(client: TestClient, sync_celery):
+    """
+    Rows created before write-time normalization may contain duplicate
+    questions. The public chat must not 500 and must still be completable:
+    each duplicate is asked (and answered) once.
+    """
+    intake = SimpleIncompleteIntakeFactory.build().save()
+
+    intake.intake_questions = [
+        IntakeSchemaQuestion(
+            order=1, question="Do you smoke?", required_details="details"
+        ),
+        IntakeSchemaQuestion(
+            order=1, question="Do you smoke?", required_details="details"
+        ),
+    ]
+    intake.flag_modified("intake_questions")
+    intake.save()
+
+    response = client.get(
+        api_app.url_path_for("get_last_question", intake_id=intake.id)
+    )
+    assert_status(response)
+    assert response.json() == {"question": "Do you smoke?", "status": "in_progress"}
+
+    # the first answer fills the first duplicate, the second copy is re-asked
+    response = client.post(
+        api_app.url_path_for("get_next_question", intake_id=intake.id),
+        json={"answer": "No"},
+    )
+    assert_status(response)
+    assert response.json() == {"question": "Do you smoke?", "status": "in_progress"}
+
+    # answering the second copy completes the intake
+    response = client.post(
+        api_app.url_path_for("get_next_question", intake_id=intake.id),
+        json={"answer": "Still no"},
+    )
+    assert_status(response)
+    assert response.json() == {"question": None, "status": "completed"}
+
+    intake.refresh()
+    assert intake.is_complete()
+    assert [q.answer for q in intake.intake_questions] == ["No", "Still no"]
+    assert intake.summary
+
+
 def test_terminal_question(client: TestClient, sync_celery):
     "can we properly exhaust the questions and kick off the intake summary?"
 
@@ -157,7 +206,7 @@ def test_terminal_question(client: TestClient, sync_celery):
         next_question = response["question"]
 
         if next_question:
-            assert response["status"] == "processing"
+            assert response["status"] == "in_progress"
             assert intake.summary is None
         else:
             assert response["status"] == "completed"

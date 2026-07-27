@@ -119,7 +119,7 @@ def perform(intake_id: str | TypeID | TypeIDType):
         )
         return
 
-    questions = generate_intake_questions(intake, doctor)
+    questions = normalize_questions(generate_intake_questions(intake, doctor))
     assert questions
 
     intake.intake_questions = questions
@@ -140,6 +140,37 @@ def days_since(past_dt: datetime) -> int:
     past_date = past_dt.date()
     today = datetime.today().date()
     return (today - past_date).days
+
+
+def normalize_questions(
+    questions: list[IntakeSchemaQuestion],
+) -> list[IntakeSchemaQuestion]:
+    """
+    The model occasionally ignores the prompt and returns duplicate question
+    text or duplicate order values. The chat flow matches answers by question
+    text and sorts by order, so both must be unique before they are persisted:
+    drop duplicate questions and reassign sequential order values.
+    """
+    deduped: list[IntakeSchemaQuestion] = []
+    seen_question_texts: set[str] = set()
+
+    # sorted() is stable, so ties on order keep the model's original ordering
+    for question in sorted(questions, key=lambda q: q.order):
+        normalized_text = question.question.strip().casefold()
+
+        if normalized_text in seen_question_texts:
+            log.warning(
+                "dropping duplicate intake question", question=question.question
+            )
+            continue
+
+        seen_question_texts.add(normalized_text)
+        deduped.append(question)
+
+    for order, question in enumerate(deduped):
+        question.order = order
+
+    return deduped
 
 
 def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
