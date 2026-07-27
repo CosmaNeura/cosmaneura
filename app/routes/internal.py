@@ -406,6 +406,7 @@ class SettingsData(BaseModel, extra="forbid"):
     onboarding_completed: bool
     note_customizations: list[NoteTypeCustomizationData]
     custom_intake_questions: list[str]
+    population_insights: str | None
 
 
 @internal_api_app.get("/settings")
@@ -453,6 +454,7 @@ def settings_data(request: Request) -> SettingsData:
         onboarding_completed=doctor.onboarding_completed_at is not None,
         note_customizations=note_customizations,
         custom_intake_questions=doctor.custom_intake_questions or [],
+        population_insights=doctor.population_insights,
     )
 
 
@@ -523,6 +525,31 @@ class UpdateIntakeQuestions(BaseModel, extra="forbid"):
             raise ValueError("Questions must be unique")
 
         return cleaned
+
+
+class UpdatePopulationInsights(BaseModel, extra="forbid"):
+    insights: str | None = Field(default=None, max_length=4000)
+    """
+    aggregate description of the practice's patient population; must never
+    contain information about an identifiable patient
+    """
+
+
+@internal_api_app.put(
+    "/settings/population-insights", name="update_population_insights"
+)
+def update_population_insights(
+    request: Request, data: UpdatePopulationInsights
+) -> str | None:
+    """
+    Set the aggregate population description used to shape AI-generated intake
+    question tone and phrasing. Null/empty clears it.
+    """
+    doctor: Doctor = request.state.doctor
+    doctor.population_insights = (data.insights or "").strip() or None
+    doctor.save()
+
+    return doctor.population_insights
 
 
 @internal_api_app.put("/settings/intake-questions", name="update_intake_questions")

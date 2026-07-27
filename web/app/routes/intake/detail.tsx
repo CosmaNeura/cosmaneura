@@ -12,10 +12,19 @@ import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
 import { CopyButton } from "~/components/shared/CopyButton"
+import {
+  EngagementBadge,
+  EngagementRoleKey,
+} from "~/components/shared/EngagementBadge"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { Input } from "~/components/ui/input"
-import { Intake, intakeDetail, sendIntakeLink } from "~/configuration/client"
+import {
+  Intake,
+  PreferredCommunicationRole,
+  intakeDetail,
+  sendIntakeLink,
+} from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { standardDateTimeFormat } from "~/lib/date"
 
@@ -85,6 +94,42 @@ function IntakeHeader({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * First-party read: the patient's preferred communication role, scored from
+ * their own answers in this intake (engagement engine v2). A communication
+ * aid, never an assessment — and always attributed to its source.
+ */
+function CommunicationPreferenceCard({
+  preferred,
+}: {
+  preferred: PreferredCommunicationRole
+}) {
+  return (
+    <section className="mt-8 rounded-lg border p-4">
+      <div className="flex items-center gap-2">
+        <h2 className="font-semibold">Communication Preference</h2>
+        <EngagementBadge
+          roleKey={preferred.role_key as EngagementRoleKey}
+          roleName={preferred.role_name}
+        />
+      </div>
+      <p className="text-muted-foreground mt-1 text-sm">
+        Estimated from the patient's own answers in this intake — a
+        communication aid to tailor how you talk with them, not a personality
+        assessment or clinical judgement.
+      </p>
+      {preferred.summary && <p className="mt-2 text-sm">{preferred.summary}</p>}
+      {preferred.provider_guidance.length > 0 && (
+        <ul className="text-muted-foreground mt-2 list-disc pl-5 text-sm">
+          {preferred.provider_guidance.map((tip) => (
+            <li key={tip}>{tip}</li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }
 
@@ -229,6 +274,12 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
           <div className="prose-headings prose max-w-full">
             <Markdown>{intake.summary}</Markdown>
           </div>
+        )}
+
+        {hasSummary && intake.preferred_communication_role && (
+          <CommunicationPreferenceCard
+            preferred={intake.preferred_communication_role}
+          />
         )}
 
         {hasSummary && intake.patient_context && (

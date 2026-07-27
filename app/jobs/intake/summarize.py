@@ -13,13 +13,15 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.engagement.cosmas_engagement.llm_client import HeuristicLLMClient
+from app.engagement.service import reconstruct_intake_text, score_intake_preferred_role
 from app.services import patient_history
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
-from app.models.intake.intake import Intake
+from app.models.intake.intake import Intake, PreferredCommunicationRole
 from app.models.patient import Patient
 
 MAX_NOTE_PROMPT_CHARS = 4_000
@@ -64,7 +66,11 @@ def perform(intake_id: str | TypeID | TypeIDType):
 
     intake = Intake.one(id=intake_id)
 
-    if intake.summary and intake.patient_context:
+    if (
+        intake.summary
+        and intake.patient_context
+        and intake.preferred_communication_role
+    ):
         log.info(
             "intake summary already exists, skipping generation", intake_id=intake_id
         )
@@ -103,6 +109,20 @@ def perform(intake_id: str | TypeID | TypeIDType):
             intake.save()
 
             log.info("generated patient context", intake_id=intake_id)
+
+    # None is a valid outcome here too (answers too short to score)
+    if not intake.preferred_communication_role:
+        preferred_role = generate_preferred_communication_role(intake)
+
+        if preferred_role:
+            intake.preferred_communication_role = preferred_role
+            intake.save()
+
+            log.info(
+                "scored preferred communication role",
+                intake_id=intake_id,
+                role=preferred_role.role_key,
+            )
 
 
 perform_celery = celery_app.task(perform)
@@ -308,6 +328,51 @@ def patient_context_prompt(
 
     7. No more than 200 words.
     """)
+
+
+def generate_preferred_communication_role(
+    intake: Intake,
+) -> PreferredCommunicationRole | None:
+    """
+    Score the patient's *preferred* communication role from their own intake
+    answers (engagement engine v2, preferred_only view). First-party data only.
+
+    Best-effort: a scoring failure must never block the summary the provider is
+    waiting on, so errors are logged and swallowed.
+    """
+    intake_text = reconstruct_intake_text(intake.intake_questions)
+
+    client = HeuristicLLMClient() if should_use_test_openai_fallback() else None
+
+    try:
+        result = score_intake_preferred_role(
+            intake_text, patient_ref=str(intake.id), client=client
+        )
+    except Exception as e:
+        log.error(
+            "failed to score preferred communication role",
+            intake_id=intake.id,
+            error=str(e),
+        )
+        return None
+
+    if result is None or result.preferred_role is None:
+        return None
+
+    preferred = result.preferred_role
+
+    return PreferredCommunicationRole(
+        role_key=preferred.role_key,
+        role_name=preferred.role_name,
+        cps_role=preferred.cps_role,
+        summary=preferred.summary,
+        confidence=preferred.confidence,
+        confidence_band=preferred.confidence_band.value,
+        provider_guidance=preferred.provider_guidance,
+        model=result.model,
+        engine_version=result.engine_version,
+        rubric_version=result.rubric_version,
+    )
 
 
 def generate_patient_context(intake: Intake) -> str | None:

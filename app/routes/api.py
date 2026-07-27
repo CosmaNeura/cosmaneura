@@ -6,6 +6,7 @@ and is authenticated via a clerk token, and is meant to be consumed by an extern
 import sentry_sdk
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
+from pydantic import BaseModel, Field
 from starlette_context import context
 from typeid import TypeID
 from typeid.errors import TypeIDException
@@ -69,3 +70,34 @@ def external_api_ping():
 @external_api_app.post("/intake")
 def create_intake(request: Request, data: AppointmentRequest) -> AppointmentResponse:
     return app.commands.intake.create.perform(data)
+
+
+class PopulationInsightsRequest(BaseModel, extra="forbid"):
+    insights: str | None = Field(default=None, max_length=4000)
+    """
+    AGGREGATE description of the practice's patient population (communication
+    styles, health literacy, common concerns), e.g. synthesized by an external
+    analytics/marketing agent. Must describe the population in aggregate and
+    must NEVER contain information about an identifiable patient — it shapes
+    the tone of AI-generated intake questions for all patients, and is stored
+    at the practice level so it cannot be linked to any individual.
+    """
+
+
+class PopulationInsightsResponse(BaseModel, extra="forbid"):
+    insights: str | None
+
+
+@external_api_app.put("/population-insights")
+def external_update_population_insights(
+    request: Request, data: PopulationInsightsRequest
+) -> PopulationInsightsResponse:
+    """
+    Push the practice's aggregate population description from an external
+    synthesis system. Null/empty clears it.
+    """
+    doctor: Doctor = request.state.api_user
+    doctor.population_insights = (data.insights or "").strip() or None
+    doctor.save()
+
+    return PopulationInsightsResponse(insights=doctor.population_insights)

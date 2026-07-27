@@ -30,6 +30,7 @@ import {
   generateSignedExampleNoteUploadUrl,
   settingsData,
   updateIntakeQuestions,
+  updatePopulationInsights,
   updateSettingsData,
   uploadExampleNote,
   zoomAuthUrl,
@@ -231,6 +232,90 @@ function IntakeQuestionsInput({ questions }: { questions: string[] }) {
               )}
             </Button>
           </div>
+        </form>
+      </Form>
+    </section>
+  )
+}
+
+function PopulationInsightsInput({
+  populationInsights,
+}: {
+  populationInsights: string | null
+}) {
+  const formSchema = z.object({
+    insights: z.string().max(4000, "Keep it under 4000 characters"),
+  })
+
+  const form = useForm({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+      insights: populationInsights || "",
+    },
+  })
+
+  async function onSubmit(values: z.infer<typeof formSchema>) {
+    const { error } = await updatePopulationInsights({
+      body: { insights: values.insights || null },
+    })
+
+    if (error) {
+      toast({
+        title: "Could Not Save Population Insights",
+        description: "Please try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    toast({
+      title: "Population Insights Updated",
+      description: values.insights
+        ? "Newly generated intake questions will be phrased with your patient population in mind."
+        : "Generated intake questions will no longer use population context.",
+    })
+  }
+
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>Patient Population Insights</h3>
+      <p className="text-muted-foreground text-sm">
+        Describe your patient population <em>in aggregate</em> — typical
+        communication styles, reading level, common concerns. The AI uses this
+        only to shape the tone and phrasing of generated intake questions.
+        Aggregate only: never include information about an identifiable patient.
+        External systems can also keep this up to date via the API.
+      </p>
+      <Form {...form}>
+        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+          <FormField
+            control={form.control}
+            name="insights"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Population Description</FormLabel>
+                <FormControl>
+                  <textarea
+                    className="w-full rounded-md border p-2"
+                    rows={4}
+                    placeholder="e.g. Mostly adults 40-65 managing chronic conditions; prefer plain language and short, concrete questions."
+                    {...field}
+                  />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <Button type="submit">
+            {form.formState.isSubmitting ? (
+              <>
+                <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+                Saving...
+              </>
+            ) : (
+              "Save Population Insights"
+            )}
+          </Button>
         </form>
       </Form>
     </section>
@@ -668,6 +753,9 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
           <BiographyInput biography={loaderData.biography} />
           <IntakeQuestionsInput
             questions={loaderData.custom_intake_questions}
+          />
+          <PopulationInsightsInput
+            populationInsights={loaderData.population_insights}
           />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
           <NoteCustomization

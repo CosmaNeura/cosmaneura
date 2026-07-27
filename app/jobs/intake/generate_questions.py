@@ -318,6 +318,17 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
         </CLINICAL_NOTE>
         """)
 
+    # aggregate practice-level context only — deliberately never per-patient data
+    population_section = ""
+    if doctor.population_insights:
+        population_section = dedent(f"""
+        Here is an AGGREGATE description of your practice's patient population in general. It is NOT information about this specific patient:
+
+        <POPULATION>
+        {doctor.population_insights}
+        </POPULATION>
+        """)
+
     # We collect a bunch of information that we don't use in order to force
     # the model to think step by step in the context of a JSON-formatted response.
     # JSON mode limits a model's reasoning capabilities otherwise.
@@ -339,6 +350,8 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
 
     {last_visit_section}
 
+    {population_section}
+
     Here are your instructions:
     1. Examine the INTAKE information and determine:
       - What is the patient's chief complaint?
@@ -357,6 +370,7 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
       - Do NOT ask questions that request the same information in different ways, e.g. "What is your pain level?" and "How much does it hurt?"
       - Do NOT ask administrative questions like "What is your name?" or "What is your date of birth?"
       - Questions may NOT include PII like the patient's name, address, DOB, phone number, email address, or any PII about you, the doctor.
+      - If a POPULATION section is present, use it ONLY to shape the tone, phrasing, and reading level of your questions so they suit your typical patients. Do NOT assume any POPULATION attribute is true of this specific patient, do NOT ask questions premised on POPULATION attributes, and do NOT mention the POPULATION description to the patient.
     6. Respond only in JSON format with the following SCHEMA:
 
     interface Question {{

@@ -96,6 +96,31 @@ def build_doctor_baseline(
     )
 
 
+def score_intake_preferred_role(
+    intake_text: str,
+    *,
+    patient_ref: str | None = None,
+    client: Optional[LLMClient] = None,
+) -> ScoreResult | None:
+    """Pre-visit *preferred* read from the patient's own intake answers.
+
+    First-party only: the input is text the patient typed into this practice's
+    intake chat — no external sources. Returns None when there is too little
+    text to be meaningful. The enacted read and gap are produced later, by the
+    post-visit transcript scoring.
+    """
+    if len(intake_text.split()) < MIN_PATIENT_WORDS:
+        return None
+    engine = EngagementEngine(client=client or AzureOpenAILLMClient())
+    return engine.score(
+        ScoreRequest(
+            intake_text=intake_text,
+            visit_text=None,
+            patient_ref=patient_ref,
+        )
+    )
+
+
 def score_patient_text(
     patient_text: str,
     *,
@@ -135,5 +160,6 @@ __all__ = [
     "reconstruct_patient_text",
     "reconstruct_intake_text",
     "build_doctor_baseline",
+    "score_intake_preferred_role",
     "score_patient_text",
 ]

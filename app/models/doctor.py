@@ -69,6 +69,19 @@ class Doctor(
     questions are generated per-intake by the LLM.
     """
 
+    population_insights: str | None = Field(default=None, nullable=True)
+    """
+    AGGREGATE-ONLY description of this practice's patient population
+    (communication styles, health literacy, common concerns), maintained by the
+    provider or pushed by an external synthesis agent via the API. Used to shape
+    the tone and phrasing of AI-generated intake questions.
+
+    Contract: this must describe the population in aggregate and must NEVER
+    contain information about an identifiable patient — it is deliberately
+    stored at the doctor level so it is structurally incapable of per-patient
+    linkage.
+    """
+
     onboarding_completed_at: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore

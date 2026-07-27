@@ -661,6 +661,61 @@
         }
       }
     },
+    "/internal/v1/settings/population-insights": {
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Update Population Insights",
+        "description": "Set the aggregate population description used to shape AI-generated intake\nquestion tone and phrasing. Null/empty clears it.",
+        "operationId": "update_population_insights",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePopulationInsights"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Update Population Insights Internal V1 Settings Population Insights Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/settings/intake-questions": {
       "put": {
         "tags": [
@@ -1726,6 +1781,17 @@
             "title": "Patient Context",
             "description": "Provider-facing \"expanded profile\" assembled by AI exclusively from records\nthis practice already holds: the patient's prior visit notes and answers\nthey gave in previous intakes. Every item is source-attributed and\nself-reported items are marked unconfirmed; the UI must present it with a\n\"verify before use\" caveat. Never shown to the patient. Null when the\npatient has no prior history."
           },
+          "preferred_communication_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PreferredCommunicationRole"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The patient's preferred communication role, scored from their own intake\nanswers when the intake completes. Null when the answers are too short to\nscore meaningfully."
+          },
           "public_url": {
             "type": "string",
             "maxLength": 2083,
@@ -2098,6 +2164,73 @@
         ],
         "title": "PlanOrdering"
       },
+      "PreferredCommunicationRole": {
+        "properties": {
+          "role_key": {
+            "type": "string",
+            "title": "Role Key"
+          },
+          "role_name": {
+            "type": "string",
+            "title": "Role Name"
+          },
+          "cps_role": {
+            "type": "string",
+            "title": "Cps Role"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence"
+          },
+          "confidence_band": {
+            "type": "string",
+            "title": "Confidence Band"
+          },
+          "provider_guidance": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Provider Guidance"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "intake_answers"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "engine_version": {
+            "type": "string",
+            "title": "Engine Version"
+          },
+          "rubric_version": {
+            "type": "string",
+            "title": "Rubric Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role_key",
+          "role_name",
+          "cps_role",
+          "summary",
+          "confidence",
+          "confidence_band",
+          "provider_guidance",
+          "model",
+          "engine_version",
+          "rubric_version"
+        ],
+        "title": "PreferredCommunicationRole",
+        "description": "Pre-visit *preferred* communication-role read (engagement engine v2),\nderived exclusively from the patient's own answers in this intake —\nfirst-party data, no external sources. A decision-support communication\naid, not a personality assessment."
+      },
       "PronounStyle": {
         "type": "string",
         "enum": [
@@ -2266,6 +2399,17 @@
             },
             "type": "array",
             "title": "Custom Intake Questions"
+          },
+          "population_insights": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Population Insights"
           }
         },
         "additionalProperties": false,
@@ -2279,7 +2423,8 @@
           "email",
           "onboarding_completed",
           "note_customizations",
-          "custom_intake_questions"
+          "custom_intake_questions",
+          "population_insights"
         ],
         "title": "SettingsData"
       },
@@ -2443,6 +2588,25 @@
         "additionalProperties": false,
         "type": "object",
         "title": "UpdateNoteTypeCustomization"
+      },
+      "UpdatePopulationInsights": {
+        "properties": {
+          "insights": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insights"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdatePopulationInsights"
       },
       "UpdateSettingsData": {
         "properties": {
