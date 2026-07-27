@@ -1714,6 +1714,18 @@
             "title": "Summary",
             "description": "AI generated summary of all intake information"
           },
+          "patient_context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patient Context",
+            "description": "Provider-facing \"expanded profile\" assembled by AI exclusively from records\nthis practice already holds: the patient's prior visit notes and answers\nthey gave in previous intakes. Every item is source-attributed and\nself-reported items are marked unconfirmed; the UI must present it with a\n\"verify before use\" caveat. Never shown to the patient. Null when the\npatient has no prior history."
+          },
           "public_url": {
             "type": "string",
             "maxLength": 2083,

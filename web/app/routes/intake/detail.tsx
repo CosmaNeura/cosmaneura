@@ -3,7 +3,7 @@ import Markdown from "react-markdown"
 import { useRevalidator } from "react-router"
 import type { MetaFunction } from "react-router"
 
-import { Send } from "lucide-react"
+import { Send, TriangleAlert } from "lucide-react"
 
 import { Route } from "./+types/detail"
 
@@ -85,6 +85,31 @@ function IntakeHeader({
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * AI-assembled profile from records the practice already holds (prior visit
+ * notes + previous intake answers). Deliberately presented as needing
+ * verification: items can be stale or patient-reported and unconfirmed.
+ */
+function PatientContextCard({ patientContext }: { patientContext: string }) {
+  return (
+    <section className="mt-8 rounded-lg border border-amber-400 bg-amber-50 p-4">
+      <div className="flex items-center gap-2">
+        <TriangleAlert className="h-4 w-4 text-amber-600" />
+        <h2 className="font-semibold">Patient Context — Verify Before Use</h2>
+      </div>
+      <p className="text-muted-foreground mt-1 text-sm">
+        Assembled by AI from this patient's prior visit notes and self-reported
+        intake answers already in your records. Each item is labeled with its
+        source and age. Items marked "unconfirmed" are patient-reported and have
+        not been clinically verified — validate anything you rely on.
+      </p>
+      <div className="prose-headings prose mt-3 max-w-full text-sm">
+        <Markdown>{patientContext}</Markdown>
+      </div>
+    </section>
   )
 }
 
@@ -204,6 +229,10 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
           <div className="prose-headings prose max-w-full">
             <Markdown>{intake.summary}</Markdown>
           </div>
+        )}
+
+        {hasSummary && intake.patient_context && (
+          <PatientContextCard patientContext={intake.patient_context} />
         )}
 
         {!hasSummary && (

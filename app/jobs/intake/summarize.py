@@ -13,6 +13,7 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services import patient_history
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -20,6 +21,9 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
+
+MAX_NOTE_PROMPT_CHARS = 4_000
+"cap each prior note's contribution to the context prompt to bound token usage"
 
 
 def should_use_test_openai_fallback() -> bool:
@@ -53,13 +57,14 @@ def _local_generate_intake_summary(intake: Intake) -> str:
 
 def perform(intake_id: str | TypeID | TypeIDType):
     """
-    Generate intake questions for a patient of a doctor.
+    Generate the intake summary and the provider-facing patient context for a
+    completed intake.
     """
     log.info("generating intake summary", intake_id=intake_id)
 
     intake = Intake.one(id=intake_id)
 
-    if intake.summary:
+    if intake.summary and intake.patient_context:
         log.info(
             "intake summary already exists, skipping generation", intake_id=intake_id
         )
@@ -79,13 +84,25 @@ def perform(intake_id: str | TypeID | TypeIDType):
         )
         raise ValueError("intake questions not answered")
 
-    summary = generate_intake_summary(intake)
-    assert summary
+    if not intake.summary:
+        summary = generate_intake_summary(intake)
+        assert summary
 
-    intake.summary = summary
-    intake.save()
+        intake.summary = summary
+        intake.save()
 
-    log.info("generated intake summary", intake_id=intake_id)
+        log.info("generated intake summary", intake_id=intake_id)
+
+    # None is a valid outcome (patients with no prior history), so this runs on
+    # every invocation for such patients instead of being latched like summary
+    if not intake.patient_context:
+        context = generate_patient_context(intake)
+
+        if context:
+            intake.patient_context = context
+            intake.save()
+
+            log.info("generated patient context", intake_id=intake_id)
 
 
 perform_celery = celery_app.task(perform)
@@ -210,3 +227,118 @@ def generate_intake_summary(intake: Intake) -> str | None:
         return None
 
     return summary.strip()
+
+
+def _local_generate_patient_context(history: patient_history.PatientHistory) -> str:
+    "deterministic offline stand-in for the LLM, mirroring its attribution format"
+    lines = []
+
+    for prior_note in history.prior_notes:
+        note_digest = "; ".join(
+            f"{section}: {content}"
+            for section, content in list(prior_note.note.items())[:3]
+        )
+        lines.append(f"- {note_digest} (visit note, {prior_note.days_ago} days ago)")
+
+    for entry in history.prior_intake_answers:
+        lines.append(
+            f"- {entry.question} {entry.answer} "
+            f"(patient-reported intake answer, {entry.days_ago} days ago) — unconfirmed"
+        )
+
+    return "\n".join(lines)
+
+
+def patient_context_prompt(
+    intake: Intake, history: patient_history.PatientHistory
+) -> str:
+    doctor = Doctor.one(id=intake.doctor_id)
+
+    note_sections = [
+        dedent(f"""
+        <VISIT_NOTE days_ago="{prior_note.days_ago}">
+        {json.dumps(prior_note.note, indent=2)[:MAX_NOTE_PROMPT_CHARS]}
+        </VISIT_NOTE>""")
+        for prior_note in history.prior_notes
+    ]
+
+    answer_sections = [
+        dedent(f"""
+        <PATIENT_REPORTED days_ago="{entry.days_ago}">
+        Q: {entry.question}
+        A: {entry.answer}
+        </PATIENT_REPORTED>""")
+        for entry in history.prior_intake_answers
+    ]
+
+    cleaned_intake_data = intake.cleaned_external_intake_data
+    current_reason = (
+        cleaned_intake_data.reason_for_visit if cleaned_intake_data else "Not provided"
+    )
+
+    return dedent(f"""
+    You are a doctor with the following bio:
+
+    <BIO>
+    {doctor.biography}
+    </BIO>
+
+    A patient is coming in for an appointment with you. Their current reason for the visit: {current_reason}
+
+    Below is this patient's history from YOUR OWN practice records. VISIT_NOTE entries are clinical notes from the patient's prior visits with you. PATIENT_REPORTED entries are answers the patient typed into previous intake forms — they are self-reported and have NOT been clinically verified.
+
+    <HISTORY>
+    {chr(10).join(note_sections)}
+    {chr(10).join(answer_sections)}
+    </HISTORY>
+
+    # Here are your instructions:
+
+    1. Assemble a short "patient context" profile to help you prepare for the visit: ongoing conditions, medications, allergies, prior treatments and their outcomes, patterns across visits, and anything relevant to the current reason for the visit.
+
+    2. Attribute EVERY item to its source and age, e.g. "(visit note, 42 days ago)" or "(patient-reported intake answer, 90 days ago)".
+
+    3. Items supported only by PATIENT_REPORTED entries are unconfirmed. Append "— unconfirmed" to each of those items.
+
+    4. Do NOT invent, infer, or extrapolate facts that are not explicitly in the HISTORY.
+
+    5. Do NOT include administrative details (addresses, insurance, phone numbers, emails).
+
+    6. Use markdown bullets. No headings, no intro, no conclusion.
+
+    7. No more than 200 words.
+    """)
+
+
+def generate_patient_context(intake: Intake) -> str | None:
+    """
+    Provider-facing "expanded profile", synthesized exclusively from records the
+    practice already holds (prior visit notes and previous intake answers) —
+    never from external sources. Every item is source-attributed and
+    self-reported items are marked unconfirmed, so the provider can judge what
+    needs validation. Returns None when the patient has no prior history.
+    """
+    history = patient_history.collect(intake)
+
+    if history.is_empty():
+        return None
+
+    if should_use_test_openai_fallback():
+        return _local_generate_patient_context(history)
+
+    prompt = patient_context_prompt(intake, history)
+
+    response = openai.chat.completions.create(
+        model=DEFAULT_MULTI_MODAL_MODEL,
+        messages=[{"role": "system", "content": prompt}],
+        temperature=0,
+        top_p=0.1,
+    )
+
+    context = response.choices[0].message.content
+
+    if not context or len(context.strip()) < 20:
+        log.error("openai failed to generate patient context", intake_id=intake.id)
+        return None
+
+    return context.strip()

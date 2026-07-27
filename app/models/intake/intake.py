@@ -84,6 +84,16 @@ class Intake(
     summary: str | None = Field(nullable=True, default=None)
     "AI generated summary of all intake information"
 
+    patient_context: str | None = Field(nullable=True, default=None)
+    """
+    Provider-facing "expanded profile" assembled by AI exclusively from records
+    this practice already holds: the patient's prior visit notes and answers
+    they gave in previous intakes. Every item is source-attributed and
+    self-reported items are marked unconfirmed; the UI must present it with a
+    "verify before use" caveat. Never shown to the patient. Null when the
+    patient has no prior history.
+    """
+
     def unanswered_questions(self) -> list[IntakeSchemaQuestion]:
         return [q for q in self.intake_questions if not q.answer]
 
