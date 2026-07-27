@@ -19,6 +19,9 @@ from app.models.patient import Patient
 
 
 class DoctorFactory(ActiveModelFactory[Doctor]):
+    # deterministic default: no provider-pinned intake questions unless a test sets them
+    custom_intake_questions = None
+
     # TODO cleanup these prefixes
     # TODO can polyfactory handle this for us?
     @classmethod
@@ -31,7 +34,8 @@ class DoctorFactory(ActiveModelFactory[Doctor]):
 
 
 class PatientFactory(ActiveModelFactory[Patient]):
-    pass
+    # deterministic default: patients have no email unless a test sets one
+    email = None
 
 
 class AppointmentFactory(ActiveModelFactory[Appointment]):

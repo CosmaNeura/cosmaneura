@@ -1,3 +1,4 @@
+from app.constants import MAX_INTAKE_QUESTIONS
 from app.jobs.intake.generate_questions import normalize_questions
 
 from app.models.intake.intake import IntakeSchemaQuestion
@@ -57,3 +58,18 @@ def test_reassigns_duplicate_orders():
         "Question B",
     ]
     assert [q.order for q in normalized] == [0, 1, 2]
+
+
+def test_caps_question_count():
+    questions = [
+        build_question(order, f"Question {order}?")
+        for order in range(MAX_INTAKE_QUESTIONS + 3)
+    ]
+
+    normalized = normalize_questions(questions)
+
+    # the earliest questions win
+    assert len(normalized) == MAX_INTAKE_QUESTIONS
+    assert [q.question for q in normalized] == [
+        f"Question {order}?" for order in range(MAX_INTAKE_QUESTIONS)
+    ]

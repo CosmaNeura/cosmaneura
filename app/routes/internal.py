@@ -1,9 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, EmailStr, Field, computed_field, field_validator
 
+import app.commands.intake.manual_create
+import app.commands.intake.send_link
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
@@ -11,6 +13,7 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.constants import MAX_INTAKE_QUESTIONS
 from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 
 from activemodel.session_manager import aglobal_session
@@ -221,6 +224,104 @@ def intake_detail(
     return intake_detail
 
 
+class CreateIntakeRequest(BaseModel, extra="forbid"):
+    patient_name: str = Field(min_length=1, max_length=200)
+    date_of_birth: date
+    email: EmailStr
+    appointment_date: datetime
+    send_email: bool = True
+    "queue the intake link email immediately after creating the intake"
+
+    @field_validator("appointment_date")
+    @classmethod
+    def appointment_in_future(cls, value: datetime) -> datetime:
+        if value.astimezone(timezone.utc) < datetime.now(timezone.utc):
+            raise ValueError("Appointment date must be in the future")
+
+        return value
+
+
+class CreateIntakeResponse(BaseModel, extra="forbid"):
+    appointment_id: TypeIDType
+    intake_id: TypeIDType
+    intake_url: str
+    email_sent_to: str | None
+
+
+@internal_api_app.post("/intake", name="create_manual_intake")
+def create_manual_intake(
+    request: Request, data: CreateIntakeRequest
+) -> CreateIntakeResponse:
+    """
+    Create an intake directly from the UI — independent of the external
+    scheduling sync — and (by default) email the chat link to the patient.
+    """
+    doctor: Doctor = request.state.doctor
+
+    intake = app.commands.intake.manual_create.perform(
+        doctor=doctor,
+        patient_name=data.patient_name,
+        date_of_birth=data.date_of_birth,
+        patient_email=data.email,
+        appointment_date=data.appointment_date,
+    )
+
+    email_sent_to = None
+    if data.send_email:
+        # the email was just stored on the patient by manual_create
+        email_sent_to = app.commands.intake.send_link.perform(intake)
+
+    return CreateIntakeResponse(
+        appointment_id=intake.appointment_id,
+        intake_id=intake.id,
+        intake_url=str(intake.public_url),
+        email_sent_to=email_sent_to,
+    )
+
+
+class SendIntakeLinkRequest(BaseModel, extra="forbid"):
+    email: EmailStr | None = None
+    "when provided, saved to the patient record and used; otherwise the stored patient email is used"
+
+
+class SendIntakeLinkResponse(BaseModel, extra="forbid"):
+    email_sent_to: str
+
+
+@internal_api_app.post("/intake/{appointment_id}/send", name="send_intake_link")
+def send_intake_link(
+    request: Request,
+    appointment_id: Annotated[TypeIDType, Path()],
+    data: SendIntakeLinkRequest,
+) -> SendIntakeLinkResponse:
+    "email (or re-email) the intake chat link to the patient for an existing appointment"
+    doctor: Doctor = request.state.doctor
+
+    appointment = Appointment.get(id=appointment_id)
+    # 404 not 403 — don't leak existence of other doctors' appointments
+    if appointment is None or appointment.doctor_id != doctor.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    intake = cast(Intake | None, appointment.intake)
+    if intake is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    if appointment.is_expired():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The appointment is in the past, so its intake link has expired",
+        )
+
+    try:
+        email_sent_to = app.commands.intake.send_link.perform(intake, data.email)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+
+    return SendIntakeLinkResponse(email_sent_to=email_sent_to)
+
+
 # unique endpoints are used to generate the signed URLs, this is mostly an arbitrary choice. It probably adds an extra
 # added level of security and ability to evolve the upload flow in the future without modifying the frontend.
 @internal_api_app.post("/visit-audio-file/get-signed-url", response_model=str)
@@ -304,6 +405,7 @@ class SettingsData(BaseModel, extra="forbid"):
     email: str | None
     onboarding_completed: bool
     note_customizations: list[NoteTypeCustomizationData]
+    custom_intake_questions: list[str]
 
 
 @internal_api_app.get("/settings")
@@ -350,6 +452,7 @@ def settings_data(request: Request) -> SettingsData:
         email=doctor.email,
         onboarding_completed=doctor.onboarding_completed_at is not None,
         note_customizations=note_customizations,
+        custom_intake_questions=doctor.custom_intake_questions or [],
     )
 
 
@@ -400,6 +503,40 @@ def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor: Doctor = request.state.doctor
     doctor.biography = data.biography
     doctor.save()
+
+
+class UpdateIntakeQuestions(BaseModel, extra="forbid"):
+    questions: list[str] = Field(max_length=MAX_INTAKE_QUESTIONS)
+
+    @field_validator("questions")
+    @classmethod
+    def clean_questions(cls, questions: list[str]) -> list[str]:
+        cleaned = [question.strip() for question in questions]
+
+        if any(not question for question in cleaned):
+            raise ValueError("Questions cannot be empty")
+
+        if any(len(question) > 500 for question in cleaned):
+            raise ValueError("Questions must be 500 characters or fewer")
+
+        if len({question.casefold() for question in cleaned}) != len(cleaned):
+            raise ValueError("Questions must be unique")
+
+        return cleaned
+
+
+@internal_api_app.put("/settings/intake-questions", name="update_intake_questions")
+def update_intake_questions(request: Request, data: UpdateIntakeQuestions) -> list[str]:
+    """
+    Set the exact questions the intake chat asks this doctor's patients
+    (max MAX_INTAKE_QUESTIONS). An empty list reverts to AI-generated questions.
+    Only affects intakes created after the change.
+    """
+    doctor: Doctor = request.state.doctor
+    doctor.custom_intake_questions = data.questions or None
+    doctor.save()
+
+    return doctor.custom_intake_questions or []
 
 
 class ZoomAuthUrlResponse(BaseModel, extra="forbid"):

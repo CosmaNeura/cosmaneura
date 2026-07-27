@@ -13,6 +13,7 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.constants import MAX_INTAKE_QUESTIONS
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -119,7 +120,16 @@ def perform(intake_id: str | TypeID | TypeIDType):
         )
         return
 
-    questions = normalize_questions(generate_intake_questions(intake, doctor))
+    if provider_questions := questions_from_provider(doctor):
+        log.info(
+            "using provider-defined intake questions",
+            intake_id=intake_id,
+            count=len(provider_questions),
+        )
+        questions = normalize_questions(provider_questions)
+    else:
+        questions = normalize_questions(generate_intake_questions(intake, doctor))
+
     assert questions
 
     intake.intake_questions = questions
@@ -142,6 +152,23 @@ def days_since(past_dt: datetime) -> int:
     return (today - past_date).days
 
 
+def questions_from_provider(doctor: Doctor) -> list[IntakeSchemaQuestion] | None:
+    """
+    Providers can pin the exact questions the intake chat asks (Settings >
+    Intake Questions). When set, they are used verbatim instead of asking the
+    LLM to generate questions.
+    """
+    provider_questions = doctor.custom_intake_questions or []
+
+    if not provider_questions:
+        return None
+
+    return [
+        IntakeSchemaQuestion(order=order, question=question, required_details="")
+        for order, question in enumerate(provider_questions)
+    ]
+
+
 def normalize_questions(
     questions: list[IntakeSchemaQuestion],
 ) -> list[IntakeSchemaQuestion]:
@@ -150,6 +177,8 @@ def normalize_questions(
     text or duplicate order values. The chat flow matches answers by question
     text and sorts by order, so both must be unique before they are persisted:
     drop duplicate questions and reassign sequential order values.
+
+    Also enforces the MAX_INTAKE_QUESTIONS cap, keeping the earliest questions.
     """
     deduped: list[IntakeSchemaQuestion] = []
     seen_question_texts: set[str] = set()
@@ -166,6 +195,14 @@ def normalize_questions(
 
         seen_question_texts.add(normalized_text)
         deduped.append(question)
+
+    if len(deduped) > MAX_INTAKE_QUESTIONS:
+        log.warning(
+            "dropping excess intake questions",
+            limit=MAX_INTAKE_QUESTIONS,
+            dropped=len(deduped) - MAX_INTAKE_QUESTIONS,
+        )
+        deduped = deduped[:MAX_INTAKE_QUESTIONS]
 
     for order, question in enumerate(deduped):
         question.order = order
@@ -215,6 +252,16 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
 
 
 def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
+    # manually-created intakes (provider "click to send") have no external
+    # system payload, so there is nothing to clean or extract
+    if not intake.external_intake_data:
+        return ExternalIntakeData(
+            reason_for_visit="Not provided",
+            appointment_type="Not provided",
+            additional_info="Not provided",
+            appointment_category=None,
+        )
+
     if should_use_test_openai_fallback():
         return _local_extract_intake_data(intake)
 
@@ -302,7 +349,7 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
     3. Review your bio and think about why this patient, with this chief complaint, would come to see you.
     4. Think about what additional information you need to help the patient with their chief complaint.
     5. Generate questions to get the information you need from the patient.
-      - Generate at least 3 questions, not more than 10, and not 5.
+      - Generate at least 3 questions and not more than {MAX_INTAKE_QUESTIONS}.
       - Ask as few questions as possible to get the information you need.
       - Questions will be collected as free-form text, but you may ask multiple-choice questions.
       - Order often matters. Specify the order that the questions should be asked in.

@@ -25,3 +25,6 @@ class Patient(BaseModel, TimestampsMixin, TypeIDMixin("patient"), table=True):
 
     name: str
     date_of_birth: datetime
+
+    email: str | None = None
+    "used to send the patient their intake chat link; optional since API-created patients may not include one"

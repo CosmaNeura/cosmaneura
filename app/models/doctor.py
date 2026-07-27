@@ -14,6 +14,7 @@ import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import SoftDeletionMixin, TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Column, Field
 
 # NOTE we use usr_ for our prefix to avoid confusion
@@ -58,6 +59,15 @@ class Doctor(
 
     biography: str | None
     "what type of doctor is this, what specialist, what they focus on, etc. Used for the intake process."
+
+    custom_intake_questions: list[str] | None = Field(
+        default=None, nullable=True, sa_type=JSONB
+    )
+    """
+    provider-defined intake chat questions (max MAX_INTAKE_QUESTIONS). When set,
+    these exact questions are asked instead of AI-generated ones; when null/empty,
+    questions are generated per-intake by the LLM.
+    """
 
     onboarding_completed_at: datetime | None = Field(
         default=None,

@@ -127,6 +127,51 @@
             "HTTPBearer": []
           }
         ]
+      },
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Manual Intake",
+        "description": "Create an intake directly from the UI — independent of the external\nscheduling sync — and (by default) email the chat link to the patient.",
+        "operationId": "create_manual_intake",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIntakeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateIntakeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/internal/v1/notes": {
@@ -264,6 +309,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/IntakeDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/intake/{appointment_id}/send": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Send Intake Link",
+        "description": "email (or re-email) the intake chat link to the patient for an existing appointment",
+        "operationId": "send_intake_link",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendIntakeLinkRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendIntakeLinkResponse"
                 }
               }
             }
@@ -556,6 +659,57 @@
             }
           }
         }
+      }
+    },
+    "/internal/v1/settings/intake-questions": {
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Update Intake Questions",
+        "description": "Set the exact questions the intake chat asks this doctor's patients\n(max MAX_INTAKE_QUESTIONS). An empty list reverts to AI-generated questions.\nOnly affects intakes created after the change.",
+        "operationId": "update_intake_questions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateIntakeQuestions"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response Update Intake Questions Internal V1 Settings Intake Questions Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/internal/v1/zoom-auth-url": {
@@ -995,6 +1149,81 @@
           "High"
         ],
         "title": "ConfidenceBand"
+      },
+      "CreateIntakeRequest": {
+        "properties": {
+          "patient_name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Patient Name"
+          },
+          "date_of_birth": {
+            "type": "string",
+            "format": "date",
+            "title": "Date Of Birth"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "title": "Email"
+          },
+          "appointment_date": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Appointment Date"
+          },
+          "send_email": {
+            "type": "boolean",
+            "title": "Send Email",
+            "default": true
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "patient_name",
+          "date_of_birth",
+          "email",
+          "appointment_date"
+        ],
+        "title": "CreateIntakeRequest"
+      },
+      "CreateIntakeResponse": {
+        "properties": {
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "intake_id": {
+            "type": "string",
+            "title": "Intake Id"
+          },
+          "intake_url": {
+            "type": "string",
+            "title": "Intake Url"
+          },
+          "email_sent_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email Sent To"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment_id",
+          "intake_id",
+          "intake_url",
+          "email_sent_to"
+        ],
+        "title": "CreateIntakeResponse"
       },
       "DailyVolumeRow": {
         "properties": {
@@ -1766,6 +1995,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Date Of Birth"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email",
+            "description": "used to send the patient their intake chat link; optional since API-created patients may not include one"
           }
         },
         "type": "object",
@@ -1920,6 +2161,39 @@
         ],
         "title": "ScheduleResponse"
       },
+      "SendIntakeLinkRequest": {
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "email"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SendIntakeLinkRequest"
+      },
+      "SendIntakeLinkResponse": {
+        "properties": {
+          "email_sent_to": {
+            "type": "string",
+            "title": "Email Sent To"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email_sent_to"
+        ],
+        "title": "SendIntakeLinkResponse"
+      },
       "SettingsData": {
         "properties": {
           "doctor_id": {
@@ -1973,6 +2247,13 @@
             },
             "type": "array",
             "title": "Note Customizations"
+          },
+          "custom_intake_questions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Custom Intake Questions"
           }
         },
         "additionalProperties": false,
@@ -1985,7 +2266,8 @@
           "zoom_revoked",
           "email",
           "onboarding_completed",
-          "note_customizations"
+          "note_customizations",
+          "custom_intake_questions"
         ],
         "title": "SettingsData"
       },
@@ -2085,6 +2367,24 @@
           "endTime"
         ],
         "title": "TranscriptEntry"
+      },
+      "UpdateIntakeQuestions": {
+        "properties": {
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Questions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "questions"
+        ],
+        "title": "UpdateIntakeQuestions"
       },
       "UpdateNoteTypeCustomization": {
         "properties": {
