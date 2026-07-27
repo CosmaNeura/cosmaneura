@@ -20,6 +20,7 @@ import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -51,6 +52,12 @@ const formSchema = z.object({
 
 export interface NewIntakeDefaults {
   patientName?: string
+  /**
+   * true when patientName was inferred (e.g. parsed from a meeting title)
+   * rather than read from a record; the dialog labels it as needing
+   * verification until the provider edits or confirms it
+   */
+  patientNameIsGuess?: boolean
   dateOfBirth?: string
   email?: string
   /** ISO timestamp; converted to the browser's local time for the input */
@@ -223,6 +230,13 @@ export function NewIntakeDialog({
                   <FormControl>
                     <Input placeholder="Jane Doe" {...field} />
                   </FormControl>
+                  {defaultValues?.patientNameIsGuess &&
+                    !form.formState.dirtyFields.patient_name && (
+                      <FormDescription>
+                        Guessed from the meeting title — please verify before
+                        sending.
+                      </FormDescription>
+                    )}
                   <FormMessage />
                 </FormItem>
               )}

@@ -12,6 +12,7 @@ import { InnerScrollableContent } from "~/components/shared/InnerScrollableConte
 import { cancelMeeting } from "~/configuration/client"
 import type { ZoomMeetingResponse } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+import { guessPatientNameFromTopic } from "~/lib/patient-name-from-topic"
 
 function formatDateTime(isoString: string): string {
   return new Date(isoString).toLocaleString(undefined, {
@@ -32,6 +33,8 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
   const isActive =
     meeting.status === "scheduled" || meeting.status === "started"
   const isEnded = meeting.status === "ended"
+
+  const guessedPatientName = guessPatientNameFromTopic(meeting.topic)
 
   async function handleCancel() {
     setCancelling(true)
@@ -78,7 +81,11 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
         {isScheduled && (
           <NewIntakeDialog
             trigger={<Button variant="outline">Send Intake</Button>}
-            defaultValues={{ appointmentDate: meeting.start_time }}
+            defaultValues={{
+              appointmentDate: meeting.start_time,
+              patientName: guessedPatientName ?? "",
+              patientNameIsGuess: guessedPatientName !== null,
+            }}
           />
         )}
 
