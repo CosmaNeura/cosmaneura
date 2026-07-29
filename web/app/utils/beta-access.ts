@@ -7,7 +7,14 @@
 // `react-router build` with no --mode, so MODE is always "production" and
 // isStaging() would never be true. The server mirrors the production list in
 // app/services/zoom_webhooks.py.
-const STAGING_BETA_EMAILS = new Set(["zoom-reviewer@cosmaneura.com"])
+const STAGING_BETA_EMAILS = new Set([
+  "zoom-reviewer@cosmaneura.com",
+  // Session Prep / terminology / reference-toolkit pilot cohort
+  "john@cosmaneura.com",
+  "dev@cosmaneura.com",
+  "greg@mycatholicdoctor.com",
+  "kathleen@mycatholicdoctor.com",
+])
 
 const PROD_BETA_EMAILS = new Set([
   "dev@cosmaneura.com",

@@ -12,6 +12,11 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.services.reference_links import (
+    PROVIDER_RESOURCE_DIRECTORY,
+    ResourceLink,
+    resource_links_for,
+)
 from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
 from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 
@@ -312,6 +317,7 @@ class SettingsData(BaseModel, extra="forbid"):
     email: str | None
     onboarding_completed: bool
     note_customizations: list[NoteTypeCustomizationData]
+    has_natmed_subscription: bool
 
 
 @internal_api_app.get("/settings")
@@ -358,6 +364,7 @@ def settings_data(request: Request) -> SettingsData:
         email=doctor.email,
         onboarding_completed=doctor.onboarding_completed_at is not None,
         note_customizations=note_customizations,
+        has_natmed_subscription=doctor.has_natmed_subscription,
     )
 
 
@@ -401,12 +408,16 @@ def update_note_customization(
 
 class UpdateSettingsData(BaseModel, extra="forbid"):
     biography: str | None
+    # optional so existing clients that only send biography keep working
+    has_natmed_subscription: bool | None = None
 
 
 @internal_api_app.post("/settings")
 def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor: Doctor = request.state.doctor
     doctor.biography = data.biography
+    if data.has_natmed_subscription is not None:
+        doctor.has_natmed_subscription = data.has_natmed_subscription
     doctor.save()
 
 
@@ -706,3 +717,57 @@ def medication_extract(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     extract_medications_job.queue(transcript_id=transcript.id)
+
+
+class MedicationResources(BaseModel, extra="forbid"):
+    medication: MedicationData
+    links: list[ResourceLink]
+
+
+class PatientResourcePanel(BaseModel, extra="forbid"):
+    has_natmed_subscription: bool
+    directory: list[ResourceLink]
+    medications: list[MedicationResources]
+
+
+@internal_api_app.get(
+    "/patients/{patient_id}/reference-resources", name="patient_reference_resources"
+)
+def patient_reference_resources(
+    request: Request, patient_id: Annotated[str, Path()]
+) -> PatientResourcePanel:
+    "reference deep links for a patient's confirmed medications, plus the resource directory"
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    confirmed = cast(
+        list[PatientMedication],
+        list(
+            PatientMedication.where(
+                (PatientMedication.doctor_id == doctor.id)
+                & (PatientMedication.patient_id == patient.id)
+                & (PatientMedication.confirmed == True)  # noqa: E712
+                & cast(Any, PatientMedication.deleted_at).is_(None)
+            )
+            .order_by(cast(Any, PatientMedication.created_at).desc())
+            .all()
+        ),
+    )
+
+    medications = [
+        MedicationResources(
+            medication=_medication_data(row),
+            links=resource_links_for(
+                row.normalized_name or row.name,
+                row.kind,
+                has_natmed_subscription=doctor.has_natmed_subscription,
+            ),
+        )
+        for row in confirmed
+    ]
+
+    return PatientResourcePanel(
+        has_natmed_subscription=doctor.has_natmed_subscription,
+        directory=PROVIDER_RESOURCE_DIRECTORY,
+        medications=medications,
+    )

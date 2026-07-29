@@ -35,6 +35,7 @@ import {
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
+import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { useUser } from "@clerk/clerk-react"
@@ -528,7 +529,55 @@ export const meta: MetaFunction = () => {
   ]
 }
 
+function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
+  const [enabled, setEnabled] = useState(hasSubscription)
+  const [saving, setSaving] = useState(false)
+  const revalidator = useRevalidator()
+
+  async function toggle(next: boolean) {
+    setEnabled(next)
+    setSaving(true)
+    const { error } = await updateSettingsData({
+      body: { biography: null, has_natmed_subscription: next },
+    })
+    setSaving(false)
+    if (error) {
+      setEnabled(!next)
+      toast({ title: "Could not update", variant: "destructive" })
+      return
+    }
+    toast({ title: "Saved" })
+    revalidator.revalidate()
+  }
+
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>NatMed Pro connection</h3>
+      <p className="text-muted-foreground text-sm">
+        If you have a NatMed Pro (Natural Medicines) subscription, turn this on
+        to add its interaction checker and nutrient-depletion lookups as
+        one-click links next to each patient&apos;s medications. Cosmas links
+        you into your own NatMed session — it never copies or stores their
+        content.
+      </p>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={saving}
+          onChange={(e) => toggle(e.target.checked)}
+        />
+        I have a NatMed Pro subscription
+      </label>
+    </section>
+  )
+}
+
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
+  const { user } = useUser()
+  const referenceToolkitEnabled = isReferenceToolkitEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
   return (
     <SidebarProvider
       // eliminate the message sidebar
@@ -548,6 +597,11 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
             customizations={loaderData.note_customizations}
           />
           <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+          {referenceToolkitEnabled && (
+            <NatMedConnection
+              hasSubscription={loaderData.has_natmed_subscription}
+            />
+          )}
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

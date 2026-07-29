@@ -59,6 +59,9 @@ class Doctor(
     biography: str | None
     "what type of doctor is this, what specialist, what they focus on, etc. Used for the intake process."
 
+    has_natmed_subscription: bool = Field(default=False)
+    "provider records they have a NatMed Pro subscription; enables NatMed deep links in the resource panel"
+
     onboarding_completed_at: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore

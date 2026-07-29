@@ -969,6 +969,54 @@
           }
         }
       }
+    },
+    "/internal/v1/patients/{patient_id}/reference-resources": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Patient Reference Resources",
+        "description": "reference deep links for a patient's confirmed medications, plus the resource directory",
+        "operationId": "patient_reference_resources",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatientResourcePanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1988,6 +2036,27 @@
         ],
         "title": "MedicationKind"
       },
+      "MedicationResources": {
+        "properties": {
+          "medication": {
+            "$ref": "#/components/schemas/MedicationData"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceLink"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "medication",
+          "links"
+        ],
+        "title": "MedicationResources"
+      },
       "MedicationSource": {
         "type": "string",
         "enum": [
@@ -2184,6 +2253,36 @@
         "title": "Patient",
         "description": "Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader."
       },
+      "PatientResourcePanel": {
+        "properties": {
+          "has_natmed_subscription": {
+            "type": "boolean",
+            "title": "Has Natmed Subscription"
+          },
+          "directory": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceLink"
+            },
+            "type": "array",
+            "title": "Directory"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationResources"
+            },
+            "type": "array",
+            "title": "Medications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "has_natmed_subscription",
+          "directory",
+          "medications"
+        ],
+        "title": "PatientResourcePanel"
+      },
       "PendingUploadRow": {
         "properties": {
           "audio_at": {
@@ -2304,6 +2403,35 @@
         ],
         "title": "RecentAppointmentRow"
       },
+      "ResourceLink": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "requires_subscription": {
+            "type": "boolean",
+            "title": "Requires Subscription",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "url",
+          "source"
+        ],
+        "title": "ResourceLink"
+      },
       "ScheduleResponse": {
         "properties": {
           "zoom_connected": {
@@ -2379,6 +2507,10 @@
             },
             "type": "array",
             "title": "Note Customizations"
+          },
+          "has_natmed_subscription": {
+            "type": "boolean",
+            "title": "Has Natmed Subscription"
           }
         },
         "additionalProperties": false,
@@ -2391,7 +2523,8 @@
           "zoom_revoked",
           "email",
           "onboarding_completed",
-          "note_customizations"
+          "note_customizations",
+          "has_natmed_subscription"
         ],
         "title": "SettingsData"
       },
@@ -2613,6 +2746,17 @@
               }
             ],
             "title": "Biography"
+          },
+          "has_natmed_subscription": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Natmed Subscription"
           }
         },
         "additionalProperties": false,

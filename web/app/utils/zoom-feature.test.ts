@@ -26,10 +26,16 @@ describe("isZoomEnabled", () => {
       expect(isZoomEnabled("zoom-reviewer@cosmaneura.com")).toBe(true)
     })
 
-    it("disables everyone else, including prod-allowlisted users", () => {
+    it("enables the pilot cohort on staging", () => {
       vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
-      expect(isZoomEnabled("dev@cosmaneura.com")).toBe(false)
-      expect(isZoomEnabled("greg@mycatholicdoctor.com")).toBe(false)
+      expect(isZoomEnabled("john@cosmaneura.com")).toBe(true)
+      expect(isZoomEnabled("kathleen@mycatholicdoctor.com")).toBe(true)
+    })
+
+    it("disables non-cohort users on staging", () => {
+      vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
+      expect(isZoomEnabled("sweeman@fiathealth.org")).toBe(false)
+      expect(isZoomEnabled("stranger@example.com")).toBe(false)
     })
   })
 
