@@ -712,6 +712,263 @@
           }
         }
       }
+    },
+    "/internal/v1/patients/{patient_id}/medications": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication List",
+        "operationId": "medication_list",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MedicationData"
+                  },
+                  "title": "Response Medication List Internal V1 Patients  Patient Id  Medications Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Create",
+        "operationId": "medication_create",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMedication"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MedicationData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/medications/{medication_id}": {
+      "patch": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Update",
+        "operationId": "medication_update",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMedication"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MedicationData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Delete",
+        "operationId": "medication_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/patients/{patient_id}/medications/extract": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Extract",
+        "description": "re-run extraction on demand for a patient's appointment transcript",
+        "operationId": "medication_extract",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractMedications"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -995,6 +1252,42 @@
           "High"
         ],
         "title": "ConfidenceBand"
+      },
+      "CreateMedication": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MedicationKind",
+            "default": "unknown"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MedicationStatus",
+            "default": "active"
+          },
+          "dosage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateMedication"
       },
       "DailyVolumeRow": {
         "properties": {
@@ -1389,6 +1682,20 @@
         ],
         "title": "ExternalIntakeData"
       },
+      "ExtractMedications": {
+        "properties": {
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment_id"
+        ],
+        "title": "ExtractMedications"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1598,6 +1905,105 @@
           "complete"
         ],
         "title": "IntakeStatus"
+      },
+      "MedicationData": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "normalized_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Name"
+          },
+          "rxnorm_cui": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rxnorm Cui"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MedicationKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MedicationStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MedicationSource"
+          },
+          "dosage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "normalized_name",
+          "rxnorm_cui",
+          "kind",
+          "status",
+          "source",
+          "dosage",
+          "confirmed"
+        ],
+        "title": "MedicationData"
+      },
+      "MedicationKind": {
+        "type": "string",
+        "enum": [
+          "prescription",
+          "otc",
+          "supplement",
+          "unknown"
+        ],
+        "title": "MedicationKind"
+      },
+      "MedicationSource": {
+        "type": "string",
+        "enum": [
+          "transcript",
+          "intake",
+          "manual"
+        ],
+        "title": "MedicationSource"
+      },
+      "MedicationStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "stopped"
+        ],
+        "title": "MedicationStatus"
       },
       "NoteDetail": {
         "properties": {
@@ -2085,6 +2491,69 @@
           "endTime"
         ],
         "title": "TranscriptEntry"
+      },
+      "UpdateMedication": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MedicationKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MedicationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dosage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage"
+          },
+          "confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateMedication"
       },
       "UpdateNoteTypeCustomization": {
         "properties": {
