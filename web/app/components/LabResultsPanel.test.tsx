@@ -6,11 +6,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 const labPanelList = vi.fn()
 const labPanelCreate = vi.fn()
 const labPanelDelete = vi.fn()
+const labEvaluations = vi.fn()
 
 vi.mock("~/configuration/client", () => ({
   labPanelList: (...a: unknown[]) => labPanelList(...a),
   labPanelCreate: (...a: unknown[]) => labPanelCreate(...a),
   labPanelDelete: (...a: unknown[]) => labPanelDelete(...a),
+  labEvaluations: (...a: unknown[]) => labEvaluations(...a),
 }))
 vi.mock("~/hooks/use-toast", () => ({ toast: vi.fn() }))
 
@@ -35,6 +37,7 @@ beforeEach(() => {
   labPanelList.mockReset().mockResolvedValue({ data: [] })
   labPanelCreate.mockReset().mockResolvedValue({ error: undefined })
   labPanelDelete.mockReset().mockResolvedValue({ error: undefined })
+  labEvaluations.mockReset().mockResolvedValue({ data: { entries: [] } })
 })
 
 describe("LabResultsPanel", () => {
@@ -48,6 +51,38 @@ describe("LabResultsPanel", () => {
     )
     expect(screen.getByText(/28.5/)).toBeInTheDocument()
     expect(screen.getByText(/2026-07-01/)).toBeInTheDocument()
+  })
+
+  it("shows dual-range interpretation with classification", async () => {
+    labPanelList.mockResolvedValue({ data: [PANEL] })
+    labEvaluations.mockResolvedValue({
+      data: {
+        entries: [
+          {
+            biomarker: "vitamin_d_25oh",
+            display_name: "Vitamin D, 25-OH",
+            value: 35,
+            unit: "ng/mL",
+            collected_on: "2026-07-01",
+            classification: "within_standard",
+            standard_low: 30,
+            standard_high: 100,
+            optimal_low: 40,
+            optimal_high: 60,
+            source_url: null,
+          },
+        ],
+      },
+    })
+
+    render(<LabResultsPanel patientId="patient_1" />)
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/In standard range, outside optimal/),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByText(/optimal 40–60/)).toBeInTheDocument()
   })
 
   it("shows an empty state when there are no labs", async () => {

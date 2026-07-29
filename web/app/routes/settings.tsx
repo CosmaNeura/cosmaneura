@@ -11,6 +11,7 @@ import type { Route } from "./+types/settings"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
@@ -602,6 +603,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
               hasSubscription={loaderData.has_natmed_subscription}
             />
           )}
+          {referenceToolkitEnabled && <LabRangeSettings />}
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>
