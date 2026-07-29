@@ -38,6 +38,7 @@ TERMS: dict[Terminology, Terms] = {
     Terminology.doctor_patient: Terms(provider="doctor", patient="patient"),
     Terminology.therapist_client: Terms(provider="therapist", patient="client"),
     Terminology.counselor_client: Terms(provider="counselor", patient="client"),
+    Terminology.nutritionist_client: Terms(provider="nutritionist", patient="client"),
 }
 
 DEFAULT_TERMS = TERMS[Terminology.doctor_patient]

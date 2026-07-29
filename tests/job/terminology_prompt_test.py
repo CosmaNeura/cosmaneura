@@ -69,6 +69,13 @@ def test_terminology_terms_resolution():
     assert terminology_terms(None).patient == "patient"
 
 
+def test_nutritionist_terms():
+    terms = TERMS[Terminology.nutritionist_client]
+    assert terms.provider == "nutritionist"
+    assert terms.patient == "client"
+    assert terms.provider_title == "Nutritionist"
+
+
 def test_therapist_instruction_block_uses_client_terms():
     block = _instruction_block(default_customization(), THERAPIST)
 
