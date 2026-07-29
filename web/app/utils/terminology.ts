@@ -55,6 +55,15 @@ export const TERMINOLOGY_SETS: Record<Terminology, LabelSet> = {
     patientPossessive: "client's",
     displayName: "Counselor / Client",
   },
+  nutritionist_client: {
+    provider: "nutritionist",
+    providerTitle: "Nutritionist",
+    patient: "client",
+    patientTitle: "Client",
+    patientPlural: "clients",
+    patientPossessive: "client's",
+    displayName: "Nutritionist / Client",
+  },
 }
 
 export const DEFAULT_TERMINOLOGY: Terminology = "doctor_patient"

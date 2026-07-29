@@ -29,6 +29,14 @@ describe("getTerminology", () => {
     expect(labels.patient).toBe("client")
   })
 
+  it("returns the nutritionist/client label set", () => {
+    const labels = getTerminology("nutritionist_client")
+    expect(labels.provider).toBe("nutritionist")
+    expect(labels.providerTitle).toBe("Nutritionist")
+    expect(labels.patient).toBe("client")
+    expect(labels.displayName).toBe("Nutritionist / Client")
+  })
+
   it("every label set defines every variant", () => {
     for (const labels of Object.values(TERMINOLOGY_SETS)) {
       expect(labels.provider).toBeTruthy()
