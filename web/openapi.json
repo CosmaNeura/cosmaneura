@@ -1017,6 +1017,54 @@
           }
         }
       }
+    },
+    "/internal/v1/patients/{patient_id}/medications/drug-reference": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Drug Reference",
+        "description": "cached openFDA label sections for the patient's confirmed drugs (not supplements)",
+        "operationId": "medication_drug_reference",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrugReferencePanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1473,6 +1521,52 @@
           "last_note_at"
         ],
         "title": "DoctorUsageRow"
+      },
+      "DrugReferencePanel": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationDrugReference"
+            },
+            "type": "array",
+            "title": "Medications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "medications"
+        ],
+        "title": "DrugReferencePanel"
+      },
+      "DrugReferenceSection": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "text"
+        ],
+        "title": "DrugReferenceSection"
       },
       "EngagementRole": {
         "properties": {
@@ -2025,6 +2119,38 @@
           "confirmed"
         ],
         "title": "MedicationData"
+      },
+      "MedicationDrugReference": {
+        "properties": {
+          "medication_id": {
+            "type": "string",
+            "title": "Medication Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/DrugReferenceSection"
+            },
+            "type": "array",
+            "title": "Sections"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "medication_id",
+          "name",
+          "status",
+          "sections"
+        ],
+        "title": "MedicationDrugReference"
       },
       "MedicationKind": {
         "type": "string",

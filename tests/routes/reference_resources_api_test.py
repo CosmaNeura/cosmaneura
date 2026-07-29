@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 from app.server import api_app
 
 from app.models.doctor import Doctor
-from app.models.patient import Patient
 from app.models.patient_medication import (
     MedicationKind,
     MedicationSource,

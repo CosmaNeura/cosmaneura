@@ -8,6 +8,7 @@ const medicationUpdate = vi.fn()
 const medicationDelete = vi.fn()
 const medicationCreate = vi.fn()
 const patientReferenceResources = vi.fn()
+const medicationDrugReference = vi.fn()
 
 vi.mock("~/configuration/client", () => ({
   medicationList: (...a: unknown[]) => medicationList(...a),
@@ -16,6 +17,7 @@ vi.mock("~/configuration/client", () => ({
   medicationCreate: (...a: unknown[]) => medicationCreate(...a),
   patientReferenceResources: (...a: unknown[]) =>
     patientReferenceResources(...a),
+  medicationDrugReference: (...a: unknown[]) => medicationDrugReference(...a),
 }))
 vi.mock("~/hooks/use-toast", () => ({ toast: vi.fn() }))
 
@@ -37,7 +39,7 @@ const UNCONFIRMED = {
   confirmed: false,
 }
 
-function stubList(meds: unknown[], hasNatmed = false) {
+function stubList(meds: unknown[], hasNatmed = false, drugRef: unknown[] = []) {
   medicationList.mockResolvedValue({ data: meds })
   patientReferenceResources.mockResolvedValue({
     data: {
@@ -58,6 +60,9 @@ function stubList(meds: unknown[], hasNatmed = false) {
         })),
     },
   })
+  medicationDrugReference.mockResolvedValue({
+    data: { source: "openFDA (U.S. FDA, public domain)", medications: drugRef },
+  })
 }
 
 beforeEach(() => {
@@ -66,6 +71,7 @@ beforeEach(() => {
   medicationDelete.mockReset().mockResolvedValue({ error: undefined })
   medicationCreate.mockReset().mockResolvedValue({ error: undefined })
   patientReferenceResources.mockReset()
+  medicationDrugReference.mockReset()
 })
 
 describe("MedicationPanel", () => {
@@ -81,6 +87,48 @@ describe("MedicationPanel", () => {
     expect(screen.getByText(/metformin/)).toBeInTheDocument()
     // confirmed row surfaces its reference deep link
     expect(screen.getByText(/openFDA drug label/)).toBeInTheDocument()
+  })
+
+  it("renders openFDA label sections for a ready drug", async () => {
+    stubList([CONFIRMED], false, [
+      {
+        medication_id: "patient_medication_1",
+        name: "metformin",
+        status: "ready",
+        sections: [
+          {
+            key: "adverse_reactions",
+            label: "Adverse reactions",
+            text: "Nausea and vitamin B12 depletion.",
+          },
+        ],
+      },
+    ])
+
+    render(<MedicationPanel patientId="patient_1" />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/FDA label info/)).toBeInTheDocument(),
+    )
+    expect(screen.getByText("Adverse reactions")).toBeInTheDocument()
+    expect(screen.getByText(/vitamin B12 depletion/)).toBeInTheDocument()
+  })
+
+  it("shows a pending state while FDA info is fetched", async () => {
+    stubList([CONFIRMED], false, [
+      {
+        medication_id: "patient_medication_1",
+        name: "metformin",
+        status: "pending",
+        sections: [],
+      },
+    ])
+
+    render(<MedicationPanel patientId="patient_1" />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/Fetching FDA label info/)).toBeInTheDocument(),
+    )
   })
 
   it("confirms an extracted medication", async () => {

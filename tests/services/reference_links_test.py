@@ -1,8 +1,9 @@
-from app.models.patient_medication import MedicationKind
 from app.services.reference_links import (
     PROVIDER_RESOURCE_DIRECTORY,
     resource_links_for,
 )
+
+from app.models.patient_medication import MedicationKind
 
 
 def test_supplement_gets_ods_link_no_natmed_when_unsubscribed():
