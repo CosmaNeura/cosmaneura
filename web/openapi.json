@@ -2006,7 +2006,8 @@
         "enum": [
           "doctor_patient",
           "therapist_client",
-          "counselor_client"
+          "counselor_client",
+          "nutritionist_client"
         ],
         "title": "Terminology",
         "description": "Role-label pair used everywhere the app names the provider/patient\nrelationship (UI, generated notes, intake language). Add new pairs here\nand to the frontend label catalog; never scatter per-surface overrides."

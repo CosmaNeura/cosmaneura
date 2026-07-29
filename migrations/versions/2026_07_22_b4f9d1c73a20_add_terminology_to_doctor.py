@@ -20,10 +20,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    sa.Enum('doctor_patient', 'therapist_client', 'counselor_client', name='terminology').create(op.get_bind())
-    op.add_column('doctor', sa.Column('terminology', postgresql.ENUM('doctor_patient', 'therapist_client', 'counselor_client', name='terminology', create_type=False), nullable=False, server_default='doctor_patient'))
+    sa.Enum('doctor_patient', 'therapist_client', 'counselor_client', 'nutritionist_client', name='terminology').create(op.get_bind())
+    op.add_column('doctor', sa.Column('terminology', postgresql.ENUM('doctor_patient', 'therapist_client', 'counselor_client', 'nutritionist_client', name='terminology', create_type=False), nullable=False, server_default='doctor_patient'))
 
 
 def downgrade() -> None:
     op.drop_column('doctor', 'terminology')
-    sa.Enum('doctor_patient', 'therapist_client', 'counselor_client', name='terminology').drop(op.get_bind())
+    sa.Enum('doctor_patient', 'therapist_client', 'counselor_client', 'nutritionist_client', name='terminology').drop(op.get_bind())

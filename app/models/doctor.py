@@ -38,6 +38,7 @@ class Terminology(str, Enum):
     doctor_patient = "doctor_patient"
     therapist_client = "therapist_client"
     counselor_client = "counselor_client"
+    nutritionist_client = "nutritionist_client"
 
 
 # usr vs user is intentionally used to differentiate from the clerk model, which also uses a prefix ID

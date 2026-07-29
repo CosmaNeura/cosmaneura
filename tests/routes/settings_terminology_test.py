@@ -55,6 +55,19 @@ def test_update_without_terminology_preserves_existing(
     assert doctor.biography == "updated bio only"
 
 
+def test_update_accepts_nutritionist_client(authenticated_client: TestClient):
+    doctor = _authed_doctor()
+
+    resp = authenticated_client.post(
+        api_app.url_path_for("update_settings_data"),
+        json={"biography": None, "terminology": "nutritionist_client"},
+    )
+    assert resp.status_code == status.HTTP_200_OK
+
+    doctor = Doctor.one(id=doctor.id)
+    assert doctor.terminology == Terminology.nutritionist_client
+
+
 def test_update_rejects_unknown_terminology(authenticated_client: TestClient):
     _authed_doctor()
 
