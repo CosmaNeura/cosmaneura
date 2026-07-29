@@ -7,12 +7,14 @@ from pydantic import BaseModel, Field, computed_field
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
+import app.jobs.extract_labs as extract_labs_job
 import app.jobs.extract_medications as extract_medications_job
 import app.jobs.fetch_drug_reference as fetch_drug_reference_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.services.biomarkers import default_unit, normalize_biomarker
 from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
 from app.services.nutrient_depletion import depletions_for
 from app.services.reference_links import (
@@ -35,6 +37,8 @@ from app.models.doctor_video_integration import DoctorVideoIntegration, VideoPro
 from app.models.drug_reference import DrugReference
 from app.models.engagement_role import EngagementRole
 from app.models.intake.intake import Intake
+from app.models.lab_panel import LabPanel, LabPanelSource, LabPanelStatus
+from app.models.lab_result import LabResult
 from app.models.note_type_customization import (
     NoteTypeCustomization,
     PlanOrdering,
@@ -927,3 +931,189 @@ def medication_nutrient_depletions(
     return NutrientDepletionPanel(
         disclaimer=DEPLETION_DISCLAIMER, medications=medications
     )
+
+
+class LabResultData(BaseModel, extra="forbid"):
+    id: str
+    biomarker: str
+    raw_name: str
+    value: float
+    unit: str | None
+
+
+class LabPanelData(BaseModel, extra="forbid"):
+    id: str
+    source: LabPanelSource
+    status: LabPanelStatus
+    collected_on: str | None
+    created_at: datetime | None
+    results: list[LabResultData]
+
+
+def _lab_result_data(row: LabResult) -> LabResultData:
+    return LabResultData(
+        id=str(row.id),
+        biomarker=row.biomarker,
+        raw_name=row.raw_name,
+        value=row.value,
+        unit=row.unit,
+    )
+
+
+def _lab_panel_data(panel: LabPanel, results: list[LabResult]) -> LabPanelData:
+    return LabPanelData(
+        id=str(panel.id),
+        source=panel.source,
+        status=panel.status,
+        collected_on=panel.collected_on.isoformat() if panel.collected_on else None,
+        created_at=panel.created_at,
+        results=[_lab_result_data(r) for r in results],
+    )
+
+
+@internal_api_app.get("/patients/{patient_id}/lab-panels", name="lab_panel_list")
+def lab_panel_list(
+    request: Request, patient_id: Annotated[str, Path()]
+) -> list[LabPanelData]:
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    panels = cast(
+        list[LabPanel],
+        list(
+            LabPanel.where(
+                (LabPanel.doctor_id == doctor.id)
+                & (LabPanel.patient_id == patient.id)
+                & cast(Any, LabPanel.deleted_at).is_(None)
+            )
+            .order_by(cast(Any, LabPanel.created_at).desc())
+            .all()
+        ),
+    )
+
+    out: list[LabPanelData] = []
+    for panel in panels:
+        results = cast(
+            list[LabResult],
+            list(LabResult.where(LabResult.lab_panel_id == panel.id).all()),
+        )
+        out.append(_lab_panel_data(panel, results))
+    return out
+
+
+class ManualLabResult(BaseModel, extra="forbid"):
+    name: str = Field(min_length=1, max_length=200)
+    value: float
+    unit: str | None = Field(default=None, max_length=40)
+
+
+class CreateLabPanel(BaseModel, extra="forbid"):
+    collected_on: str | None = None
+    results: list[ManualLabResult] = Field(min_length=1)
+
+
+@internal_api_app.post("/patients/{patient_id}/lab-panels", name="lab_panel_create")
+def lab_panel_create(
+    request: Request, patient_id: Annotated[str, Path()], data: CreateLabPanel
+) -> LabPanelData:
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    collected = None
+    if data.collected_on:
+        try:
+            collected = datetime.fromisoformat(data.collected_on).date()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="collected_on must be an ISO date",
+            )
+
+    panel = LabPanel(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        source=LabPanelSource.manual,
+        status=LabPanelStatus.completed,
+        collected_on=collected,
+    ).save()
+
+    results: list[LabResult] = []
+    for item in data.results:
+        key = normalize_biomarker(item.name)
+        results.append(
+            LabResult(
+                lab_panel_id=panel.id,
+                doctor_id=doctor.id,
+                patient_id=patient.id,
+                biomarker=key or item.name.strip().lower(),
+                raw_name=item.name.strip(),
+                value=item.value,
+                unit=item.unit or (default_unit(key) if key else None),
+            ).save()
+        )
+
+    return _lab_panel_data(panel, results)
+
+
+@internal_api_app.post("/lab-panels/get-signed-url", response_model=str)
+def generate_signed_lab_upload_url():
+    return app.commands.uploads.sas.perform(UploadType.LAB)
+
+
+class LabUploadComplete(BaseModel, extra="forbid"):
+    file_name: str
+    collected_on: str | None = None
+
+
+@internal_api_app.post(
+    "/patients/{patient_id}/lab-panels/upload-complete",
+    name="lab_panel_upload_complete",
+)
+def lab_panel_upload_complete(
+    request: Request, patient_id: Annotated[str, Path()], data: LabUploadComplete
+) -> LabPanelData:
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    collected = None
+    if data.collected_on:
+        try:
+            collected = datetime.fromisoformat(data.collected_on).date()
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="collected_on must be an ISO date",
+            )
+
+    panel = LabPanel(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        source=LabPanelSource.upload,
+        status=LabPanelStatus.pending,
+        azure_file_name=data.file_name,
+        collected_on=collected,
+    ).save()
+
+    extract_labs_job.queue(panel.id)
+
+    return _lab_panel_data(panel, [])
+
+
+@internal_api_app.delete(
+    "/lab-panels/{lab_panel_id}",
+    name="lab_panel_delete",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def lab_panel_delete(request: Request, lab_panel_id: Annotated[str, Path()]) -> None:
+    doctor: Doctor = request.state.doctor
+    if not reference_toolkit_enabled_for(doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    panel = LabPanel.get(id=lab_panel_id, doctor_id=doctor.id)
+    if panel is None or panel.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    # soft delete (the mixin's soft_delete() is an unimplemented stub): set the
+    # tombstone and save. Leaves child LabResult rows intact; the list query
+    # filters on deleted_at.
+    panel.deleted_at = datetime.now(timezone.utc)
+    panel.save()
