@@ -27,6 +27,7 @@ def _create_note(
         doctor_id=doctor.id,
         appointment_id=appointment.id,
         patient_id=patient.id,
+        duration=60,
         transcript_data=[],
     ).save()
     schema = DoctorNoteSchema.get(doctor_id=doctor.id, note_type="Test SOAP")
