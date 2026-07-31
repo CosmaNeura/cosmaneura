@@ -404,7 +404,8 @@ def generate_clinical_note(
         transcript, example_note, note_schema, customization
     )
 
-    log.debug("prompting 4o with", prompt=prompt)
+    # NB: never log the prompt itself — it contains the transcript (PHI)
+    log.debug("prompting clinical note model", prompt_chars=len(prompt))
 
     # Note: we can't currently use structured-outputs with the chat endpoint
     # because our schema is determined at runtime. Doctors all seem to have a
@@ -424,7 +425,8 @@ def generate_clinical_note(
 
     # TODO if content schema doesn't match note_schema, we need to retry.
 
-    log.debug("response", content=content)
+    # NB: never log the response itself — it is the clinical note (PHI)
+    log.debug("clinical note response received", content_chars=len(content))
 
     return json.loads(content)
 
