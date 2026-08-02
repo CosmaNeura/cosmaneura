@@ -544,6 +544,9 @@ def cancel_meeting(request: Request, zoom_meeting_id: Annotated[str, Path()]) ->
 class MedicationData(BaseModel, extra="forbid"):
     id: str
     name: str
+    # display_name is what a provider should be shown; normalized_name is the
+    # lowercased match key and is not meant for display
+    display_name: str | None
     normalized_name: str | None
     rxnorm_cui: str | None
     kind: MedicationKind
@@ -557,6 +560,7 @@ def _medication_data(row: PatientMedication) -> MedicationData:
     return MedicationData(
         id=str(row.id),
         name=row.name,
+        display_name=row.display_name,
         normalized_name=row.normalized_name,
         rxnorm_cui=row.rxnorm_cui,
         kind=row.kind,
@@ -629,6 +633,9 @@ def medication_create(
         doctor_id=doctor.id,
         patient_id=patient.id,
         name=data.name.strip(),
+        # manual entry never consults RxNorm, so the provider's own wording is
+        # the most authoritative name we have
+        display_name=data.name.strip(),
         normalized_name=data.name.strip().lower(),
         kind=data.kind,
         status=data.status,
@@ -661,8 +668,9 @@ def medication_update(
 
     if data.name is not None:
         row.name = data.name.strip()
+        row.display_name = data.name.strip()
         row.normalized_name = data.name.strip().lower()
-        # name changed by hand; drop the stale RxNorm mapping
+        # name changed by hand; drop the stale RxNorm mapping and its canonical
         row.rxnorm_cui = None
     if data.kind is not None:
         row.kind = data.kind
