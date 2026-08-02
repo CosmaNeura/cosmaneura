@@ -43,6 +43,18 @@ class DrugLabelSection:
         self.text = text
 
 
+def dailymed_search_url(name: str) -> str:
+    """Human-readable full label on DailyMed (NLM, public domain).
+
+    openFDA is an API with no provider-facing page, so a truncated section
+    needs somewhere to send the reader for the complete text.
+    """
+    return (
+        "https://dailymed.nlm.nih.gov/dailymed/search.cfm"
+        f"?labeltype=all&query={quote(name)}"
+    )
+
+
 def _search_query(name: str) -> str:
     # match brand OR generic name; both are nested arrays under openfda
     phrase = quote(f'"{name}"')
@@ -81,11 +93,16 @@ def fetch_label_sections(name: str) -> list[dict] | None:
     sections: list[dict] = []
     seen_texts: set[str] = set()
 
+    full_label_url = dailymed_search_url(query)
+
     for field, display in _SECTIONS.items():
         value = label.get(field)
         if not value or not isinstance(value, list):
             continue
-        text = str(value[0]).strip()
+        # openFDA returns each section as an array of blocks. Keep all of them:
+        # taking only the first silently drops the rest of an adverse-reactions
+        # or boxed-warning section, which a clinician has no way to notice.
+        text = "\n\n".join(str(block).strip() for block in value if str(block).strip())
         if not text:
             continue
         # "warnings" and "warnings_and_cautions" carry different labels but
@@ -94,11 +111,17 @@ def fetch_label_sections(name: str) -> list[dict] | None:
         if dedup_key in seen_texts:
             continue
         seen_texts.add(dedup_key)
+        # Real labels routinely exceed the cap. Truncate for a scannable panel,
+        # but say so and link out — safety text that looks complete when it is
+        # not is worse than text that is obviously partial.
+        truncated = len(text) > _MAX_SECTION_CHARS
         sections.append(
             {
                 "key": field,
                 "label": display,
                 "text": text[:_MAX_SECTION_CHARS],
+                "truncated": truncated,
+                "source_url": full_label_url,
             }
         )
 

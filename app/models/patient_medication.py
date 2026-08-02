@@ -60,8 +60,11 @@ class PatientMedication(
     name: str
     "verbatim name as spoken/entered, e.g. 'metformin 500mg' or 'fish oil'"
 
+    display_name: str | None = Field(default=None)
+    "the most authoritative name available, shown to the provider: RxNorm's canonical name when it recognizes the drug, otherwise the name as entered. Never used for matching — see normalized_name"
+
     normalized_name: str | None = Field(default=None)
-    "cleaned drug/ingredient name for lookups, e.g. 'metformin'"
+    "lowercased match key for lookups and de-duplication, e.g. 'metformin'. Always derived from display_name, so the same substance keys identically whether or not RxNorm matched it. Never shown to a provider"
 
     rxnorm_cui: str | None = Field(default=None)
     "RxNorm concept id once normalized (NLM, public domain); null for supplements without one"

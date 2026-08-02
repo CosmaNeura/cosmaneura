@@ -5,11 +5,18 @@ Per-environment email allowlist for the provider reference toolkit
 Same pattern as app/services/zoom_webhooks.py: staging and production each have
 an explicit cohort, dev/test are ungated. The frontend mirrors this list in
 web/app/utils/reference-toolkit-feature.ts — keep them in sync.
+
+This list is deliberately NOT the shared beta allowlist in
+web/app/utils/beta-access.ts. That one already carries a production cohort for
+Zoom and the engagement badge; borrowing it here would show the toolkit UI to
+production users while this module still refuses every request.
 """
 
 from app.environments import is_production, is_staging
 
-# Pilot cohort, staging first (includes the nutritionist pilot user).
+# Pilot cohort, staging first. John is the staging tester for now; the
+# nutritionist pilot user is deliberately NOT here yet and is added only once
+# the feature has been validated in staging.
 STAGING_REFERENCE_TOOLKIT_EMAILS = frozenset(
     {
         "john@cosmaneura.com",

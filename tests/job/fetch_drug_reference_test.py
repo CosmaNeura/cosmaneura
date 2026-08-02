@@ -57,7 +57,9 @@ def test_skips_when_fresh(monkeypatch):
     perform("aspirin")
 
     assert calls["n"] == 0  # fresh cache → no refetch
-    assert DrugReference.get(normalized_name="aspirin").sections[0]["text"] == "old"
+    cached = DrugReference.get(normalized_name="aspirin")
+    assert cached is not None
+    assert cached.sections[0]["text"] == "old"
 
 
 def test_refetches_when_stale(monkeypatch):
@@ -76,6 +78,7 @@ def test_refetches_when_stale(monkeypatch):
     perform("ibuprofen")
 
     row = DrugReference.get(normalized_name="ibuprofen")
+    assert row is not None
     assert row.found is True
     assert row.sections[0]["text"] == "fresh"
 

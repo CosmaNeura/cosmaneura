@@ -64,6 +64,39 @@ def test_truncates_long_sections(monkeypatch):
     assert len(sections[0]["text"]) == openfda._MAX_SECTION_CHARS
 
 
+def test_flags_truncation_and_links_to_the_full_label(monkeypatch):
+    "partial safety text must never look complete to a clinician"
+    payload = _label(adverse_reactions=["x" * 10_000])
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(200, payload))
+
+    sections = fetch_label_sections("bigdrug")
+    assert sections is not None
+    assert sections[0]["truncated"] is True
+    assert "dailymed.nlm.nih.gov" in sections[0]["source_url"]
+
+
+def test_does_not_flag_truncation_when_the_section_fits(monkeypatch):
+    payload = _label(adverse_reactions=["Nausea."])
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(200, payload))
+
+    sections = fetch_label_sections("smalldrug")
+    assert sections is not None
+    assert sections[0]["truncated"] is False
+
+
+def test_keeps_every_block_of_a_multi_block_section(monkeypatch):
+    "openFDA splits sections into arrays; dropping all but the first loses safety text"
+    payload = _label(
+        adverse_reactions=["First reported reaction.", "Second reported reaction."]
+    )
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeResponse(200, payload))
+
+    sections = fetch_label_sections("multidrug")
+    assert sections is not None
+    assert "First reported reaction." in sections[0]["text"]
+    assert "Second reported reaction." in sections[0]["text"]
+
+
 def test_no_results_returns_none(monkeypatch):
     monkeypatch.setattr(
         httpx, "get", lambda *a, **k: _FakeResponse(200, {"results": []})
