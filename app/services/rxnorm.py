@@ -9,12 +9,28 @@ in January 2024, so interactions/depletions come from other sources (see the
 provider reference toolkit plan), not from RxNav.
 """
 
+import os
+
 import httpx
 
 from app import log
 
 RXNAV_BASE = "https://rxnav.nlm.nih.gov/REST"
 _TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+
+# Deterministic stand-ins for the tests, mirroring the offline fallback pattern
+# in app/jobs/extract_medications.py. Without this the suite calls RxNav for
+# real, so a passing test depends on a third-party service being reachable and
+# on whatever canonical spelling NLM publishes that day.
+_TEST_CANONICALS: dict[str, tuple[str, str]] = {
+    "metformin": ("6809", "metformin"),
+    "lisinopril": ("29046", "lisinopril"),
+    "ibuprofen": ("5640", "ibuprofen"),
+}
+
+
+def should_use_test_fallback() -> bool:
+    return os.environ.get("PYTHON_ENV") == "test"
 
 
 def normalize_drug_name(name: str) -> tuple[str | None, str | None]:
@@ -27,6 +43,12 @@ def normalize_drug_name(name: str) -> tuple[str | None, str | None]:
     query = name.strip()
     if not query:
         return None, None
+
+    if should_use_test_fallback():
+        # Supplements are absent on purpose: RxNorm is a drug vocabulary and
+        # genuinely does not carry most of them, which is the path a
+        # nutrition-led practice takes most often.
+        return _TEST_CANONICALS.get(query.lower(), (None, None))
 
     try:
         response = httpx.get(

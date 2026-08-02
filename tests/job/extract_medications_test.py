@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import cast
 
 from app.jobs.extract_medications import perform
 
@@ -44,8 +45,9 @@ def test_extracts_unconfirmed_rows_from_transcript():
 
     perform(transcript.id)
 
-    rows = list(
-        PatientMedication.where(PatientMedication.patient_id == patient.id).all()
+    rows = cast(
+        list[PatientMedication],
+        list(PatientMedication.where(PatientMedication.patient_id == patient.id).all()),
     )
     names = {r.normalized_name for r in rows}
     assert "metformin" in names
