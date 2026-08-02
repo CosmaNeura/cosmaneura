@@ -210,6 +210,22 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
                             <p className="text-muted-foreground text-xs whitespace-pre-line">
                               {s.text}
                             </p>
+                            {s.truncated && (
+                              <p className="text-xs italic">
+                                Shortened for display — this is not the complete
+                                section.{" "}
+                                {s.source_url && (
+                                  <a
+                                    className="underline"
+                                    href={s.source_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Read the full label on DailyMed
+                                  </a>
+                                )}
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>

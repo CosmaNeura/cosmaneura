@@ -787,6 +787,11 @@ class DrugReferenceSection(BaseModel, extra="forbid"):
     key: str
     label: str
     text: str
+    # True when `text` is a prefix of the real section. Surfaced so a clinician
+    # is never shown partial safety text that looks complete.
+    truncated: bool = False
+    # DailyMed page carrying the full label, for when it is.
+    source_url: str | None = None
 
 
 class MedicationDrugReference(BaseModel, extra="forbid"):
