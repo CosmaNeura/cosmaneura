@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import cast
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -127,7 +128,10 @@ def test_extract_endpoint_queues_job(authenticated_client: TestClient, sync_cele
     )
     assert resp.status_code == status.HTTP_200_OK
 
-    rows = PatientMedication.where(PatientMedication.patient_id == patient.id).all()
+    rows = cast(
+        list[PatientMedication],
+        list(PatientMedication.where(PatientMedication.patient_id == patient.id).all()),
+    )
     names = {r.normalized_name for r in rows}
     assert "lisinopril" in names
     assert "ibuprofen" in names

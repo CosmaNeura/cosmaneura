@@ -111,6 +111,11 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
   const depletionsByMedId = new Map(
     (depletions?.medications ?? []).map((m) => [m.medication_id, m.depletions]),
   )
+  // a medication can be listed with an empty depletions array, so count the
+  // depletions themselves rather than the entries
+  const hasAnyDepletion = (depletions?.medications ?? []).some(
+    (m) => m.depletions.length > 0,
+  )
 
   if (loading) {
     return (
@@ -260,6 +265,22 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
                             <p className="text-muted-foreground text-xs whitespace-pre-line">
                               {s.text}
                             </p>
+                            {s.truncated && (
+                              <p className="text-xs italic">
+                                Shortened for display — this is not the complete
+                                section.{" "}
+                                {s.source_url && (
+                                  <a
+                                    className="underline"
+                                    href={s.source_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Read the full label on DailyMed
+                                  </a>
+                                )}
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -276,6 +297,18 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
       {confirmed.length === 0 && unconfirmed.length === 0 && (
         <p className="text-muted-foreground text-sm">
           No medications recorded yet.
+        </p>
+      )}
+
+      {/* The depletion reference is a small curated seed, not a complete
+          database. The server ships this caveat with the data; show it
+          wherever a depletion is shown. */}
+      {depletions?.disclaimer && hasAnyDepletion && (
+        <p
+          className="text-muted-foreground mt-3 text-xs"
+          data-testid="depletion-disclaimer"
+        >
+          {depletions.disclaimer}
         </p>
       )}
 
