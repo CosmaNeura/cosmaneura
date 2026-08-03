@@ -2809,6 +2809,9 @@
           "has_natmed_subscription": {
             "type": "boolean",
             "title": "Has Natmed Subscription"
+          },
+          "terminology": {
+            "$ref": "#/components/schemas/Terminology"
           }
         },
         "additionalProperties": false,
@@ -2822,7 +2825,8 @@
           "email",
           "onboarding_completed",
           "note_customizations",
-          "has_natmed_subscription"
+          "has_natmed_subscription",
+          "terminology"
         ],
         "title": "SettingsData"
       },
@@ -2833,6 +2837,17 @@
           "patient_and_doctor"
         ],
         "title": "SubjectiveSource"
+      },
+      "Terminology": {
+        "type": "string",
+        "enum": [
+          "doctor_patient",
+          "therapist_client",
+          "counselor_client",
+          "nutritionist_client"
+        ],
+        "title": "Terminology",
+        "description": "Role-label pair used everywhere the app names the provider/patient\nrelationship (UI, generated notes, intake language). Add new pairs here\nand to the frontend label catalog; never scatter per-surface overrides."
       },
       "TimeToNoteRow": {
         "properties": {
@@ -3055,6 +3070,16 @@
               }
             ],
             "title": "Has Natmed Subscription"
+          },
+          "terminology": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Terminology"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
