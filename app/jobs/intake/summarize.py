@@ -4,18 +4,17 @@ Summarize all the intake data for a given appointment.
 
 import json
 import os
-from datetime import datetime
 from textwrap import dedent
-from typing import Any, cast
+from typing import cast
 
 from typeid import TypeID
 
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.patient_context import days_since, latest_note_for_patient
 
 from activemodel.types import TypeIDType
-from app.models.ai_visit_note import AIVisitNote
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
@@ -96,28 +95,12 @@ def queue(*args, **kwargs):
     perform_celery.delay(*args, **kwargs)
 
 
-def days_since(past_dt: datetime) -> int:
-    past_date = past_dt.date()
-    today = datetime.today().date()
-    return (today - past_date).days
-
-
 def generate_prompt(intake: Intake) -> str:
     doctor = Doctor.one(id=intake.doctor_id)
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
-    # TODO This should be time-limited, e.g. don't pull a note from 5 years ago.
-    last_note = (
-        AIVisitNote.select()
-        .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
-        .join(Patient, Appointment.patient_id == Patient.id)
-        .where((AIVisitNote.doctor_id == doctor.id) & (Patient.id == patient.id))
-        .order_by(cast(Any, Appointment.updated_at).desc())
-        .limit(1)
-        .first()
-    )
-    last_note = cast(AIVisitNote | None, last_note)
+    last_note = latest_note_for_patient(doctor.id, patient.id)
 
     follow_up_questions = [
         {"question": q.question, "answer": q.answer}

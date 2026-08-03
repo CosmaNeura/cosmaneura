@@ -40,7 +40,7 @@ from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
@@ -337,6 +337,7 @@ class SettingsData(BaseModel, extra="forbid"):
     onboarding_completed: bool
     note_customizations: list[NoteTypeCustomizationData]
     has_natmed_subscription: bool
+    terminology: Terminology
 
 
 @internal_api_app.get("/settings")
@@ -384,6 +385,7 @@ def settings_data(request: Request) -> SettingsData:
         onboarding_completed=doctor.onboarding_completed_at is not None,
         note_customizations=note_customizations,
         has_natmed_subscription=doctor.has_natmed_subscription,
+        terminology=doctor.terminology,
     )
 
 
@@ -429,6 +431,8 @@ class UpdateSettingsData(BaseModel, extra="forbid"):
     biography: str | None
     # optional so existing clients that only send biography keep working
     has_natmed_subscription: bool | None = None
+    # optional so clients that only update the biography keep working
+    terminology: Terminology | None = None
 
 
 @internal_api_app.post("/settings")
@@ -437,6 +441,8 @@ def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor.biography = data.biography
     if data.has_natmed_subscription is not None:
         doctor.has_natmed_subscription = data.has_natmed_subscription
+    if data.terminology is not None:
+        doctor.terminology = data.terminology
     doctor.save()
 
 
