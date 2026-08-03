@@ -20,7 +20,7 @@ from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
@@ -312,6 +312,7 @@ class SettingsData(BaseModel, extra="forbid"):
     email: str | None
     onboarding_completed: bool
     note_customizations: list[NoteTypeCustomizationData]
+    terminology: Terminology
 
 
 @internal_api_app.get("/settings")
@@ -358,6 +359,7 @@ def settings_data(request: Request) -> SettingsData:
         email=doctor.email,
         onboarding_completed=doctor.onboarding_completed_at is not None,
         note_customizations=note_customizations,
+        terminology=doctor.terminology,
     )
 
 
@@ -401,12 +403,16 @@ def update_note_customization(
 
 class UpdateSettingsData(BaseModel, extra="forbid"):
     biography: str | None
+    # optional so clients that only update the biography keep working
+    terminology: Terminology | None = None
 
 
 @internal_api_app.post("/settings")
 def update_settings_data(request: Request, data: UpdateSettingsData) -> None:
     doctor: Doctor = request.state.doctor
     doctor.biography = data.biography
+    if data.terminology is not None:
+        doctor.terminology = data.terminology
     doctor.save()
 
 

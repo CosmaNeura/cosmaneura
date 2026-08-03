@@ -4,7 +4,6 @@ Generate intake questions for a patient of a doctor.
 
 import json
 import os
-from datetime import datetime
 from textwrap import dedent
 from typing import Any, cast
 
@@ -13,9 +12,9 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.patient_context import days_since, latest_note_for_patient
 
 from activemodel.types import TypeIDType
-from app.models.ai_visit_note import AIVisitNote
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
@@ -136,12 +135,6 @@ def queue(*args, **kwargs):
     perform_celery.delay(*args, **kwargs)
 
 
-def days_since(past_dt: datetime) -> int:
-    past_date = past_dt.date()
-    today = datetime.today().date()
-    return (today - past_date).days
-
-
 def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
     return dedent(f"""
         You are a doctor that is about to see a patient. Here is your bio:
@@ -217,17 +210,7 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
         else {}
     )
 
-    # TODO This should be time-limited, e.g. don't pull a note from 5 years ago.
-    last_note = (
-        AIVisitNote.select()
-        .join(Appointment, AIVisitNote.appointment_id == Appointment.id)
-        .join(Patient, Appointment.patient_id == Patient.id)
-        .where((AIVisitNote.doctor_id == doctor.id) & (Patient.id == patient.id))
-        .order_by(cast(Any, Appointment.updated_at).desc())
-        .limit(1)
-        .first()
-    )
-    last_note = cast(AIVisitNote | None, last_note)
+    last_note = latest_note_for_patient(doctor.id, patient.id)
 
     last_visit_section = ""
     if last_note is not None:
