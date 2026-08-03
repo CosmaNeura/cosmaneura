@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 from app.server import api_app
 
 from app.models.doctor import Doctor
-from app.models.patient import Patient
 from app.models.patient_medication import (
     MedicationKind,
     MedicationSource,
@@ -49,9 +48,7 @@ def test_panel_only_includes_confirmed_medications(authenticated_client: TestCli
     ).save()
 
     resp = authenticated_client.get(
-        api_app.url_path_for(
-            "patient_reference_resources", patient_id=str(patient.id)
-        )
+        api_app.url_path_for("patient_reference_resources", patient_id=str(patient.id))
     )
     assert resp.status_code == status.HTTP_200_OK
     body = resp.json()
@@ -70,14 +67,10 @@ def test_natmed_links_follow_subscription_flag(authenticated_client: TestClient)
 
     # default: no subscription → no NatMed links
     resp = authenticated_client.get(
-        api_app.url_path_for(
-            "patient_reference_resources", patient_id=str(patient.id)
-        )
+        api_app.url_path_for("patient_reference_resources", patient_id=str(patient.id))
     )
     sources = {
-        link["source"]
-        for med in resp.json()["medications"]
-        for link in med["links"]
+        link["source"] for med in resp.json()["medications"] for link in med["links"]
     }
     assert "TRC Healthcare" not in sources
 
@@ -89,15 +82,11 @@ def test_natmed_links_follow_subscription_flag(authenticated_client: TestClient)
     assert resp.status_code == status.HTTP_200_OK
 
     resp = authenticated_client.get(
-        api_app.url_path_for(
-            "patient_reference_resources", patient_id=str(patient.id)
-        )
+        api_app.url_path_for("patient_reference_resources", patient_id=str(patient.id))
     )
     body = resp.json()
     assert body["has_natmed_subscription"] is True
-    sources = {
-        link["source"] for med in body["medications"] for link in med["links"]
-    }
+    sources = {link["source"] for med in body["medications"] for link in med["links"]}
     assert "TRC Healthcare" in sources
 
 
