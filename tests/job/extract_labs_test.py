@@ -1,3 +1,5 @@
+from typing import cast
+
 import app.jobs.extract_labs as job
 from app.jobs.extract_labs import perform, persist_results
 
@@ -33,7 +35,9 @@ def test_persist_normalizes_and_writes_rows():
     )
     assert count == 2
 
-    rows = list(LabResult.where(LabResult.lab_panel_id == panel.id).all())
+    rows = cast(
+        list[LabResult], list(LabResult.where(LabResult.lab_panel_id == panel.id).all())
+    )
     by_key = {r.biomarker: r for r in rows}
     assert by_key["vitamin_d_25oh"].value == 32.0
     assert by_key["vitamin_d_25oh"].raw_name == "Vitamin D"
@@ -47,7 +51,7 @@ def test_unrecognized_biomarker_kept_as_slug():
     panel = _pending_upload_panel(doctor, patient)
 
     persist_results(panel, [{"name": "Exotic Marker", "value": 1.0, "unit": "x"}])
-    row = LabResult.where(LabResult.lab_panel_id == panel.id).one()
+    row = cast(LabResult, LabResult.where(LabResult.lab_panel_id == panel.id).one())
     assert row.biomarker == "exotic marker"
     assert row.raw_name == "Exotic Marker"
 

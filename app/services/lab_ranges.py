@@ -40,6 +40,14 @@ DEFAULT_RANGES: dict[str, RangeSpec] = {
     "free_t3": RangeSpec("pg/mL", 2.3, 4.2, 3.0, 4.2),
     "free_t4": RangeSpec("ng/dL", 0.8, 1.8, 1.0, 1.8),
     "hba1c": RangeSpec("%", None, 5.7, None, 5.4),
+    # ⚠️ NEEDS CLINICAL REVIEW — the only entry whose optimal window is not
+    # contained by the standard one (optimal_high 2.4 > standard_high 2.2).
+    # classify() tests the standard range first, so a magnesium of 2.3 returns
+    # OUTSIDE_STANDARD even though it sits inside the optimal window: the
+    # 2.2–2.4 band is unreachable and can never classify as OPTIMAL. The
+    # functional target above the standard ceiling may well be intended, but
+    # either this bound or classify()'s precedence has to change. Left as-is
+    # pending a clinician's call rather than guessing at a number.
     "magnesium": RangeSpec("mg/dL", 1.7, 2.2, 2.0, 2.4),
     "potassium": RangeSpec("mmol/L", 3.5, 5.1, 4.0, 4.5),
     "crp_hs": RangeSpec("mg/L", None, 3.0, None, 1.0),

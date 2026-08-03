@@ -101,8 +101,6 @@ def test_provider_override_changes_classification(authenticated_client: TestClie
 
 
 def test_range_list_and_reset(authenticated_client: TestClient):
-    doctor = _authed_doctor()
-
     resp = authenticated_client.get(api_app.url_path_for("lab_range_list"))
     assert resp.status_code == status.HTTP_200_OK
     body = resp.json()
@@ -142,3 +140,62 @@ def test_upsert_unknown_biomarker_is_404(authenticated_client: TestClient):
         json={"standard_low": 1},
     )
     assert resp.status_code == status.HTTP_404_NOT_FOUND
+
+
+def test_rejects_transposed_bounds(authenticated_client: TestClient):
+    """A low above its high makes every value read as out of range.
+
+    classify() flags a value that is below `low` OR above `high`, so inverted
+    bounds satisfy both tests for every value: every lab that provider views
+    would be marked abnormal, with nothing anywhere to explain why.
+    """
+
+    resp = authenticated_client.put(
+        api_app.url_path_for("lab_range_upsert", biomarker="vitamin_d_25oh"),
+        json={
+            "unit": "ng/mL",
+            "standard_low": 100,
+            "standard_high": 30,
+            "optimal_low": 40,
+            "optimal_high": 60,
+        },
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_rejects_transposed_optimal_bounds(authenticated_client: TestClient):
+    resp = authenticated_client.put(
+        api_app.url_path_for("lab_range_upsert", biomarker="vitamin_d_25oh"),
+        json={
+            "unit": "ng/mL",
+            "standard_low": 30,
+            "standard_high": 100,
+            "optimal_low": 60,
+            "optimal_high": 40,
+        },
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_rejects_negative_bounds(authenticated_client: TestClient):
+    resp = authenticated_client.put(
+        api_app.url_path_for("lab_range_upsert", biomarker="vitamin_d_25oh"),
+        json={"unit": "ng/mL", "standard_low": -5, "standard_high": 100},
+    )
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_allows_one_sided_bounds(authenticated_client: TestClient):
+    "an unbounded side is legitimate — 'lower is better, target under 5.4'"
+
+    resp = authenticated_client.put(
+        api_app.url_path_for("lab_range_upsert", biomarker="hba1c"),
+        json={
+            "unit": "%",
+            "standard_low": None,
+            "standard_high": 5.7,
+            "optimal_low": None,
+            "optimal_high": 5.4,
+        },
+    )
+    assert resp.status_code == status.HTTP_200_OK

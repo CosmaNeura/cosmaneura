@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -1284,6 +1284,36 @@ class UpdateLabRange(BaseModel, extra="forbid"):
     optimal_low: float | None = None
     optimal_high: float | None = None
     source_url: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _bounds_must_be_coherent(self):
+        """Reject range sets that would silently mislabel every result.
+
+        classify() treats a value as out of range when it is below `low` OR
+        above `high`. If a provider transposes two numbers so that low > high,
+        both tests pass for every value and *every* lab that provider views is
+        flagged abnormal — with no error anywhere to explain it.
+        """
+
+        for label, low, high in (
+            ("standard", self.standard_low, self.standard_high),
+            ("optimal", self.optimal_low, self.optimal_high),
+        ):
+            if low is not None and high is not None and low > high:
+                raise ValueError(
+                    f"{label}_low must be less than or equal to {label}_high"
+                )
+
+        for name, value in (
+            ("standard_low", self.standard_low),
+            ("standard_high", self.standard_high),
+            ("optimal_low", self.optimal_low),
+            ("optimal_high", self.optimal_high),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"{name} cannot be negative")
+
+        return self
 
 
 @internal_api_app.put("/lab-ranges/{biomarker}", name="lab_range_upsert")
