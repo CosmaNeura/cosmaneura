@@ -2039,6 +2039,22 @@
           "text": {
             "type": "string",
             "title": "Text"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
           }
         },
         "additionalProperties": false,
@@ -2937,6 +2953,17 @@
             "type": "string",
             "title": "Name"
           },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "normalized_name": {
             "anyOf": [
               {
@@ -2989,6 +3016,7 @@
         "required": [
           "id",
           "name",
+          "display_name",
           "normalized_name",
           "rxnorm_cui",
           "kind",

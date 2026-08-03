@@ -178,6 +178,22 @@ describe("MedicationPanel", () => {
     expect(screen.getByText(/well established/)).toBeInTheDocument()
     const source = screen.getByRole("link", { name: /source/ })
     expect(source).toHaveAttribute("href", "https://doi.org/10.1136/bmj.c2181")
+    // the seed is partial by design; the server ships a caveat saying so and
+    // it has to reach the provider, not just the response body
+    expect(screen.getByTestId("depletion-disclaimer")).toHaveTextContent(
+      "For clinician review.",
+    )
+  })
+
+  it("hides the depletion disclaimer when no depletion is shown", async () => {
+    stubList([CONFIRMED], false, [], [])
+
+    render(<MedicationPanel patientId="patient_1" />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("confirmed-medication")).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId("depletion-disclaimer")).not.toBeInTheDocument()
   })
 
   it("confirms an extracted medication", async () => {

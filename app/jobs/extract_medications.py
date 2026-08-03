@@ -143,12 +143,22 @@ def perform(transcript_id: str | TypeID | TypeIDType):
 
         rxnorm_cui, canonical = normalize_drug_name(name)
 
+        # RxNorm is a *drug* vocabulary: it recognizes prescriptions well and
+        # supplements poorly, so for a nutrition-led practice the no-match path
+        # is the common one. Display the best name we have, but always match on
+        # a lowercased key derived from it — otherwise the same substance keys
+        # as 'vitamin D' or 'vitamin d' depending on whether RxNav answered,
+        # which silently splits a patient's list and misses downstream lookups.
+        display_name = canonical or name
+        normalized_name = display_name.strip().lower()
+
         PatientMedication(
             doctor_id=transcript.doctor_id,
             patient_id=transcript.patient_id,
             appointment_id=transcript.appointment_id,
             name=name,
-            normalized_name=canonical or name.lower(),
+            display_name=display_name,
+            normalized_name=normalized_name,
             rxnorm_cui=rxnorm_cui,
             kind=MedicationKind(kind),
             status=MedicationStatus(
