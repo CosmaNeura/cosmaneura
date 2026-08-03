@@ -4,6 +4,7 @@ from typing import cast
 from fastapi import status
 from fastapi.testclient import TestClient
 
+import app.jobs.extract_medications as extract_medications_job
 from app.server import api_app
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -101,7 +102,16 @@ def test_other_doctors_patient_is_404(authenticated_client: TestClient):
     assert resp.status_code == status.HTTP_404_NOT_FOUND
 
 
-def test_extract_endpoint_queues_job(authenticated_client: TestClient, sync_celery):
+def test_extract_endpoint_queues_job(
+    authenticated_client: TestClient, sync_celery, monkeypatch
+):
+    # The offline extraction stand-in fires only when PYTHON_ENV=test AND the
+    # Azure OpenAI credentials are absent. CI has them, so this test was calling
+    # the live gpt-4.1 deployment and failing whenever it hit a 429 — the point
+    # here is that the endpoint queues the job, not that the model responds.
+    monkeypatch.setattr(
+        extract_medications_job, "should_use_test_openai_fallback", lambda: True
+    )
     doctor = _authed_doctor()
     patient = _patient_for(doctor)
     appointment = AppointmentFactory.build(
