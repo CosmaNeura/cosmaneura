@@ -93,8 +93,13 @@ def test_perform_marks_failed_on_download_error(monkeypatch):
     assert panel.status == LabPanelStatus.failed
 
 
-def test_perform_offline_completes_empty():
-    # offline test env: no Azure/model, panel resolves to completed-empty
+def test_perform_offline_completes_empty(monkeypatch):
+    # The offline short-circuit fires only when PYTHON_ENV=test AND the Azure
+    # OpenAI credentials are absent. CI has them configured, so relying on the
+    # ambient environment made this pass locally and fail in CI. Force the
+    # branch under test, same as test_perform_marks_failed_on_download_error
+    # forces the opposite one.
+    monkeypatch.setattr(job, "should_use_test_openai_fallback", lambda: True)
     doctor = DoctorFactory.build().save()
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     panel = _pending_upload_panel(doctor, patient)

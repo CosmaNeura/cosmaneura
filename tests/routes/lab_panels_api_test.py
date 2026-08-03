@@ -1,6 +1,7 @@
 from fastapi import status
 from fastapi.testclient import TestClient
 
+import app.jobs.extract_labs as extract_labs_job
 from app.server import api_app
 
 from app.models.doctor import Doctor
@@ -57,8 +58,13 @@ def test_create_rejects_bad_date(authenticated_client: TestClient):
 
 
 def test_upload_complete_creates_pending_panel_and_extracts(
-    authenticated_client: TestClient, sync_celery
+    authenticated_client: TestClient, sync_celery, monkeypatch
 ):
+    # see extract_labs_test: the offline short-circuit depends on Azure
+    # credentials being absent, which is not true in CI
+    monkeypatch.setattr(
+        extract_labs_job, "should_use_test_openai_fallback", lambda: True
+    )
     doctor = _authed_doctor()
     patient = PatientFactory.build(doctor_id=doctor.id).save()
 
