@@ -1,3 +1,5 @@
+from typing import cast
+
 import app.jobs.extract_labs as job
 from app.jobs.extract_labs import perform, persist_results
 
@@ -33,7 +35,9 @@ def test_persist_normalizes_and_writes_rows():
     )
     assert count == 2
 
-    rows = list(LabResult.where(LabResult.lab_panel_id == panel.id).all())
+    rows = cast(
+        list[LabResult], list(LabResult.where(LabResult.lab_panel_id == panel.id).all())
+    )
     by_key = {r.biomarker: r for r in rows}
     assert by_key["vitamin_d_25oh"].value == 32.0
     assert by_key["vitamin_d_25oh"].raw_name == "Vitamin D"
@@ -47,7 +51,7 @@ def test_unrecognized_biomarker_kept_as_slug():
     panel = _pending_upload_panel(doctor, patient)
 
     persist_results(panel, [{"name": "Exotic Marker", "value": 1.0, "unit": "x"}])
-    row = LabResult.where(LabResult.lab_panel_id == panel.id).one()
+    row = cast(LabResult, LabResult.where(LabResult.lab_panel_id == panel.id).one())
     assert row.biomarker == "exotic marker"
     assert row.raw_name == "Exotic Marker"
 
@@ -89,8 +93,13 @@ def test_perform_marks_failed_on_download_error(monkeypatch):
     assert panel.status == LabPanelStatus.failed
 
 
-def test_perform_offline_completes_empty():
-    # offline test env: no Azure/model, panel resolves to completed-empty
+def test_perform_offline_completes_empty(monkeypatch):
+    # The offline short-circuit fires only when PYTHON_ENV=test AND the Azure
+    # OpenAI credentials are absent. CI has them configured, so relying on the
+    # ambient environment made this pass locally and fail in CI. Force the
+    # branch under test, same as test_perform_marks_failed_on_download_error
+    # forces the opposite one.
+    monkeypatch.setattr(job, "should_use_test_openai_fallback", lambda: True)
     doctor = DoctorFactory.build().save()
     patient = PatientFactory.build(doctor_id=doctor.id).save()
     panel = _pending_upload_panel(doctor, patient)
