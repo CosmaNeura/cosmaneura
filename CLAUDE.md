@@ -80,7 +80,9 @@ just js_generate-openapi
 - **`internal_api_app`** es la app cuyo spec OpenAPI alimenta el frontend.
 - Worker y scheduler corren en **contenedores separados** a propósito.
 - Env se gestiona **exclusivamente vía direnv** (`.envrc` + `.env.*`), no en el Justfile.
-- Auto-deploy vía GitHub Actions: push a `main` y `staging` despliegan al build exitoso.
+- **Auto-deploy vía GitHub Actions: `master` despliega a PRODUCCIÓN** y `staging` a staging,
+  al build exitoso (`.github/workflows/build_and_publish.yml`). `master` es también la rama
+  default, así que **mergear un PR despliega a producción** — no existe rama `main`.
 - Aliases de paths frontend: `~/*` y `@/*` → `web/app/*`.
 
 ## Config
