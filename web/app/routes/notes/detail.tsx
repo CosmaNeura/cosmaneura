@@ -5,6 +5,7 @@ import { Route } from "./+types/detail"
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
+import { LabResultsPanel } from "~/components/LabResultsPanel"
 import { MedicationPanel } from "~/components/MedicationPanel"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
 import VisitTranscriptViewer from "~/components/VisitTranscriptViewer"
@@ -160,6 +161,9 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
 
         {referenceToolkitEnabled && (
           <MedicationPanel patientId={loaderData.patient.id} />
+        )}
+        {referenceToolkitEnabled && (
+          <LabResultsPanel patientId={loaderData.patient.id} />
         )}
 
         <VisitTranscriptViewer transcript={transcript} />
