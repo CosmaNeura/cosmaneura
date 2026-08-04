@@ -9,6 +9,7 @@ const medicationDelete = vi.fn()
 const medicationCreate = vi.fn()
 const patientReferenceResources = vi.fn()
 const medicationDrugReference = vi.fn()
+const medicationNutrientDepletions = vi.fn()
 
 vi.mock("~/configuration/client", () => ({
   medicationList: (...a: unknown[]) => medicationList(...a),
@@ -18,6 +19,8 @@ vi.mock("~/configuration/client", () => ({
   patientReferenceResources: (...a: unknown[]) =>
     patientReferenceResources(...a),
   medicationDrugReference: (...a: unknown[]) => medicationDrugReference(...a),
+  medicationNutrientDepletions: (...a: unknown[]) =>
+    medicationNutrientDepletions(...a),
 }))
 vi.mock("~/hooks/use-toast", () => ({ toast: vi.fn() }))
 
@@ -39,7 +42,12 @@ const UNCONFIRMED = {
   confirmed: false,
 }
 
-function stubList(meds: unknown[], hasNatmed = false, drugRef: unknown[] = []) {
+function stubList(
+  meds: unknown[],
+  hasNatmed = false,
+  drugRef: unknown[] = [],
+  depletions: unknown[] = [],
+) {
   medicationList.mockResolvedValue({ data: meds })
   patientReferenceResources.mockResolvedValue({
     data: {
@@ -63,6 +71,9 @@ function stubList(meds: unknown[], hasNatmed = false, drugRef: unknown[] = []) {
   medicationDrugReference.mockResolvedValue({
     data: { source: "openFDA (U.S. FDA, public domain)", medications: drugRef },
   })
+  medicationNutrientDepletions.mockResolvedValue({
+    data: { disclaimer: "For clinician review.", medications: depletions },
+  })
 }
 
 beforeEach(() => {
@@ -72,6 +83,7 @@ beforeEach(() => {
   medicationCreate.mockReset().mockResolvedValue({ error: undefined })
   patientReferenceResources.mockReset()
   medicationDrugReference.mockReset()
+  medicationNutrientDepletions.mockReset()
 })
 
 describe("MedicationPanel", () => {
@@ -129,6 +141,59 @@ describe("MedicationPanel", () => {
     await waitFor(() =>
       expect(screen.getByText(/Fetching FDA label info/)).toBeInTheDocument(),
     )
+  })
+
+  it("renders nutrient depletions with evidence tier and citation", async () => {
+    stubList(
+      [CONFIRMED],
+      false,
+      [],
+      [
+        {
+          medication_id: "patient_medication_1",
+          name: "metformin",
+          depletions: [
+            {
+              nutrient: "Vitamin B12",
+              evidence: "well_established",
+              mechanism: "Metformin lowers serum B12.",
+              citation: {
+                reference: "de Jager J, et al. BMJ. 2010;340:c2181.",
+                url: "https://doi.org/10.1136/bmj.c2181",
+              },
+            },
+          ],
+        },
+      ],
+    )
+
+    render(<MedicationPanel patientId="patient_1" />)
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Possible nutrient depletions/),
+      ).toBeInTheDocument(),
+    )
+    expect(screen.getByText("Vitamin B12")).toBeInTheDocument()
+    expect(screen.getByText(/well established/)).toBeInTheDocument()
+    const source = screen.getByRole("link", { name: /source/ })
+    expect(source).toHaveAttribute("href", "https://doi.org/10.1136/bmj.c2181")
+    // the seed is partial by design; the server ships a caveat saying so and
+    // it has to reach the provider, not just the response body
+    expect(screen.getByTestId("depletion-disclaimer")).toHaveTextContent(
+      "For clinician review.",
+    )
+  })
+
+  it("hides the depletion disclaimer when no depletion is shown", async () => {
+    stubList([CONFIRMED], false, [], [])
+
+    render(<MedicationPanel patientId="patient_1" />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId("confirmed-medication")).toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId("depletion-disclaimer")).not.toBeInTheDocument()
   })
 
   it("confirms an extracted medication", async () => {

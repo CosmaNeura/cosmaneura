@@ -6,15 +6,23 @@ import {
   medicationDelete,
   medicationDrugReference,
   medicationList,
+  medicationNutrientDepletions,
   medicationUpdate,
   patientReferenceResources,
 } from "~/configuration/client"
 import type {
   DrugReferencePanel,
   MedicationData,
+  NutrientDepletionPanel,
   PatientResourcePanel,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+
+const EVIDENCE_LABELS: Record<string, string> = {
+  well_established: "well established",
+  moderate: "moderate evidence",
+  limited: "limited evidence",
+}
 
 const KIND_LABELS: Record<MedicationData["kind"], string> = {
   prescription: "Rx",
@@ -33,18 +41,23 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
   const [drugReference, setDrugReference] = useState<DrugReferencePanel | null>(
     null,
   )
+  const [depletions, setDepletions] = useState<NutrientDepletionPanel | null>(
+    null,
+  )
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState("")
 
   async function refresh() {
-    const [meds, res, ref] = await Promise.all([
+    const [meds, res, ref, dep] = await Promise.all([
       medicationList({ path: { patient_id: patientId } }),
       patientReferenceResources({ path: { patient_id: patientId } }),
       medicationDrugReference({ path: { patient_id: patientId } }),
+      medicationNutrientDepletions({ path: { patient_id: patientId } }),
     ])
     if (meds.data) setMedications(meds.data)
     if (res.data) setResources(res.data)
     if (ref.data) setDrugReference(ref.data)
+    if (dep.data) setDepletions(dep.data)
     setLoading(false)
   }
 
@@ -94,6 +107,14 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
   )
   const drugRefByMedId = new Map(
     (drugReference?.medications ?? []).map((m) => [m.medication_id, m]),
+  )
+  const depletionsByMedId = new Map(
+    (depletions?.medications ?? []).map((m) => [m.medication_id, m.depletions]),
+  )
+  // a medication can be listed with an empty depletions array, so count the
+  // depletions themselves rather than the entries
+  const hasAnyDepletion = (depletions?.medications ?? []).some(
+    (m) => m.depletions.length > 0,
   )
 
   if (loading) {
@@ -188,6 +209,40 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
                 </div>
               )}
               {(() => {
+                const deps = depletionsByMedId.get(m.id) ?? []
+                if (deps.length === 0) return null
+                return (
+                  <div className="border-warning/40 bg-warning/5 mt-1 ml-16 rounded-md border p-2">
+                    <div className="text-xs font-medium">
+                      Possible nutrient depletions
+                    </div>
+                    <ul className="mt-1 space-y-1">
+                      {deps.map((d) => (
+                        <li key={d.nutrient} className="text-xs">
+                          <span className="font-medium">{d.nutrient}</span>
+                          <span className="text-muted-foreground">
+                            {" "}
+                            — {EVIDENCE_LABELS[d.evidence] ?? d.evidence}
+                          </span>
+                          <div className="text-muted-foreground">
+                            {d.mechanism}{" "}
+                            <a
+                              href={d.citation.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline"
+                              title={d.citation.reference}
+                            >
+                              source ↗
+                            </a>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )
+              })()}
+              {(() => {
                 const ref = drugRefByMedId.get(m.id)
                 if (!ref) return null
                 if (ref.status === "pending") {
@@ -242,6 +297,18 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
       {confirmed.length === 0 && unconfirmed.length === 0 && (
         <p className="text-muted-foreground text-sm">
           No medications recorded yet.
+        </p>
+      )}
+
+      {/* The depletion reference is a small curated seed, not a complete
+          database. The server ships this caveat with the data; show it
+          wherever a depletion is shown. */}
+      {depletions?.disclaimer && hasAnyDepletion && (
+        <p
+          className="text-muted-foreground mt-3 text-xs"
+          data-testid="depletion-disclaimer"
+        >
+          {depletions.disclaimer}
         </p>
       )}
 

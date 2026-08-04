@@ -13,6 +13,8 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
+from app.services.nutrient_depletion import depletions_for
 from app.services.reference_links import (
     PROVIDER_RESOURCE_DIRECTORY,
     ResourceLink,
@@ -866,4 +868,81 @@ def medication_drug_reference(
 
     return DrugReferencePanel(
         source="openFDA (U.S. FDA, public domain)", medications=entries
+    )
+
+
+class NutrientDepletionCitation(BaseModel, extra="forbid"):
+    reference: str
+    url: str
+
+
+class NutrientDepletionEntry(BaseModel, extra="forbid"):
+    nutrient: str
+    evidence: str
+    mechanism: str
+    citation: NutrientDepletionCitation
+
+
+class MedicationDepletions(BaseModel, extra="forbid"):
+    medication_id: str
+    name: str
+    depletions: list[NutrientDepletionEntry]
+
+
+class NutrientDepletionPanel(BaseModel, extra="forbid"):
+    disclaimer: str
+    medications: list[MedicationDepletions]
+
+
+@internal_api_app.get(
+    "/patients/{patient_id}/medications/nutrient-depletions",
+    name="medication_nutrient_depletions",
+)
+def medication_nutrient_depletions(
+    request: Request, patient_id: Annotated[str, Path()]
+) -> NutrientDepletionPanel:
+    "curated, citation-backed nutrient depletions for the patient's confirmed drugs"
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    confirmed_drugs = cast(
+        list[PatientMedication],
+        list(
+            PatientMedication.where(
+                (PatientMedication.doctor_id == doctor.id)
+                & (PatientMedication.patient_id == patient.id)
+                & (PatientMedication.confirmed == True)  # noqa: E712
+                & (PatientMedication.kind != MedicationKind.supplement)
+                & cast(Any, PatientMedication.deleted_at).is_(None)
+            )
+            .order_by(cast(Any, PatientMedication.created_at).desc())
+            .all()
+        ),
+    )
+
+    medications: list[MedicationDepletions] = []
+    for med in confirmed_drugs:
+        found = depletions_for(med.normalized_name or med.name)
+        if not found:
+            continue
+        medications.append(
+            MedicationDepletions(
+                medication_id=str(med.id),
+                name=med.name,
+                depletions=[
+                    NutrientDepletionEntry(
+                        nutrient=d.nutrient,
+                        evidence=d.evidence,
+                        mechanism=d.mechanism,
+                        citation=NutrientDepletionCitation(
+                            reference=d.citation.reference, url=d.citation.url
+                        ),
+                    )
+                    for d in found
+                ],
+            )
+        )
+
+    return NutrientDepletionPanel(
+        disclaimer=DEPLETION_DISCLAIMER, medications=medications
     )

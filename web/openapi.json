@@ -1065,6 +1065,54 @@
           }
         }
       }
+    },
+    "/internal/v1/patients/{patient_id}/medications/nutrient-depletions": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Nutrient Depletions",
+        "description": "curated, citation-backed nutrient depletions for the patient's confirmed drugs",
+        "operationId": "medication_nutrient_depletions",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NutrientDepletionPanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2148,6 +2196,33 @@
         ],
         "title": "MedicationData"
       },
+      "MedicationDepletions": {
+        "properties": {
+          "medication_id": {
+            "type": "string",
+            "title": "Medication Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "depletions": {
+            "items": {
+              "$ref": "#/components/schemas/NutrientDepletionEntry"
+            },
+            "type": "array",
+            "title": "Depletions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "medication_id",
+          "name",
+          "depletions"
+        ],
+        "title": "MedicationDepletions"
+      },
       "MedicationDrugReference": {
         "properties": {
           "medication_id": {
@@ -2351,6 +2426,75 @@
           "appointments"
         ],
         "title": "NotetakingData"
+      },
+      "NutrientDepletionCitation": {
+        "properties": {
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "url"
+        ],
+        "title": "NutrientDepletionCitation"
+      },
+      "NutrientDepletionEntry": {
+        "properties": {
+          "nutrient": {
+            "type": "string",
+            "title": "Nutrient"
+          },
+          "evidence": {
+            "type": "string",
+            "title": "Evidence"
+          },
+          "mechanism": {
+            "type": "string",
+            "title": "Mechanism"
+          },
+          "citation": {
+            "$ref": "#/components/schemas/NutrientDepletionCitation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "nutrient",
+          "evidence",
+          "mechanism",
+          "citation"
+        ],
+        "title": "NutrientDepletionEntry"
+      },
+      "NutrientDepletionPanel": {
+        "properties": {
+          "disclaimer": {
+            "type": "string",
+            "title": "Disclaimer"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationDepletions"
+            },
+            "type": "array",
+            "title": "Medications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "disclaimer",
+          "medications"
+        ],
+        "title": "NutrientDepletionPanel"
       },
       "Patient": {
         "properties": {
