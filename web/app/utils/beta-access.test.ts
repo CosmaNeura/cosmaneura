@@ -26,13 +26,15 @@ describe("isBetaUserEnabled", () => {
       expect(isBetaUserEnabled("zoom-reviewer@cosmaneura.com")).toBe(true)
     })
 
-    it("enables the pilot cohort on staging", () => {
+    it("enables the session-prep/terminology pilot cohort", () => {
       vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
       expect(isBetaUserEnabled("john@cosmaneura.com")).toBe(true)
+      expect(isBetaUserEnabled("dev@cosmaneura.com")).toBe(true)
+      expect(isBetaUserEnabled("greg@mycatholicdoctor.com")).toBe(true)
       expect(isBetaUserEnabled("kathleen@mycatholicdoctor.com")).toBe(true)
     })
 
-    it("disables non-cohort users on staging", () => {
+    it("disables everyone else, including other prod-allowlisted users", () => {
       vi.stubEnv("VITE_PYTHON_URL", STAGING_URL)
       expect(isBetaUserEnabled("sweeman@fiathealth.org")).toBe(false)
       expect(isBetaUserEnabled("stranger@example.com")).toBe(false)
