@@ -29,18 +29,12 @@ from app.configuration.azure import (
     AZURE_UPLOADS_CONTAINER_NAME,
 )
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.environments import should_use_test_openai_fallback
 from app.services.biomarkers import default_unit, normalize_biomarker
 
 from activemodel.types import TypeIDType
 from app.models.lab_panel import LabPanel, LabPanelStatus
 from app.models.lab_result import LabResult
-
-
-def should_use_test_openai_fallback() -> bool:
-    return os.environ.get("PYTHON_ENV") == "test" and not (
-        os.environ.get("AZURE_OPENAI_API_KEY")
-        and os.environ.get("AZURE_OPENAI_ENDPOINT")
-    )
 
 
 def _get_img_uri(img: PIL.Image.Image) -> str:

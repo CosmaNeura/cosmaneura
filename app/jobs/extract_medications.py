@@ -11,7 +11,6 @@ Transcript content is PHI: logs carry IDs and counts only.
 """
 
 import json
-import os
 from textwrap import dedent
 
 from typeid import TypeID
@@ -19,6 +18,7 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.environments import should_use_test_openai_fallback
 from app.services.rxnorm import normalize_drug_name
 
 from activemodel.types import TypeIDType
@@ -31,13 +31,6 @@ from app.models.patient_medication import (
 )
 
 _VALID_KINDS = {k.value for k in MedicationKind}
-
-
-def should_use_test_openai_fallback() -> bool:
-    return os.environ.get("PYTHON_ENV") == "test" and not (
-        os.environ.get("AZURE_OPENAI_API_KEY")
-        and os.environ.get("AZURE_OPENAI_ENDPOINT")
-    )
 
 
 def _local_extract(transcript_text: str) -> list[dict]:

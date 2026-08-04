@@ -20,6 +20,14 @@ const CLASSIFICATION: Record<string, { label: string; className: string }> = {
     label: "Outside standard range",
     className: "bg-destructive/10 text-destructive",
   },
+  // Both facts are true and neither is dropped: the value clears the functional
+  // target while sitting outside the standard reference interval. Styled as a
+  // caution rather than a red flag, since the provider's own optimal window
+  // says the value is where they want it.
+  outside_standard_within_optimal: {
+    label: "Outside standard, within optimal",
+    className: "bg-warning/10 text-warning",
+  },
   no_range: {
     label: "No reference range",
     className: "bg-muted text-muted-foreground",
