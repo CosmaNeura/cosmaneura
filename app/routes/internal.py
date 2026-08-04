@@ -8,6 +8,7 @@ import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
 import app.jobs.extract_medications as extract_medications_job
+import app.jobs.fetch_drug_reference as fetch_drug_reference_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
@@ -29,6 +30,7 @@ from app.models.doctor import Doctor, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
+from app.models.drug_reference import DrugReference
 from app.models.engagement_role import EngagementRole
 from app.models.intake.intake import Intake
 from app.models.note_type_customization import (
@@ -784,4 +786,84 @@ def patient_reference_resources(
         has_natmed_subscription=doctor.has_natmed_subscription,
         directory=PROVIDER_RESOURCE_DIRECTORY,
         medications=medications,
+    )
+
+
+class DrugReferenceSection(BaseModel, extra="forbid"):
+    key: str
+    label: str
+    text: str
+    # True when `text` is a prefix of the real section. Surfaced so a clinician
+    # is never shown partial safety text that looks complete.
+    truncated: bool = False
+    # DailyMed page carrying the full label, for when it is.
+    source_url: str | None = None
+
+
+class MedicationDrugReference(BaseModel, extra="forbid"):
+    medication_id: str
+    name: str
+    status: str  # "ready" | "pending" | "none"
+    sections: list[DrugReferenceSection]
+
+
+class DrugReferencePanel(BaseModel, extra="forbid"):
+    source: str
+    medications: list[MedicationDrugReference]
+
+
+@internal_api_app.get(
+    "/patients/{patient_id}/medications/drug-reference",
+    name="medication_drug_reference",
+)
+def medication_drug_reference(
+    request: Request, patient_id: Annotated[str, Path()]
+) -> DrugReferencePanel:
+    "cached openFDA label sections for the patient's confirmed drugs (not supplements)"
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    confirmed_drugs = cast(
+        list[PatientMedication],
+        list(
+            PatientMedication.where(
+                (PatientMedication.doctor_id == doctor.id)
+                & (PatientMedication.patient_id == patient.id)
+                & (PatientMedication.confirmed == True)  # noqa: E712
+                & (PatientMedication.kind != MedicationKind.supplement)
+                & cast(Any, PatientMedication.deleted_at).is_(None)
+            )
+            .order_by(cast(Any, PatientMedication.created_at).desc())
+            .all()
+        ),
+    )
+
+    entries: list[MedicationDrugReference] = []
+    for med in confirmed_drugs:
+        key = (med.normalized_name or med.name).strip().lower()
+        cached = DrugReference.get(normalized_name=key)
+
+        if cached is None:
+            # first time we've seen this drug — fetch in the background
+            fetch_drug_reference_job.queue(key)
+            status_str = "pending"
+            sections = []
+        elif cached.found:
+            status_str = "ready"
+            sections = [DrugReferenceSection(**s) for s in cached.sections]
+        else:
+            status_str = "none"
+            sections = []
+
+        entries.append(
+            MedicationDrugReference(
+                medication_id=str(med.id),
+                name=med.name,
+                status=status_str,
+                sections=sections,
+            )
+        )
+
+    return DrugReferencePanel(
+        source="openFDA (U.S. FDA, public domain)", medications=entries
     )

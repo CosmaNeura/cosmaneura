@@ -4,11 +4,13 @@ import { Button } from "@/components/ui/button"
 import {
   medicationCreate,
   medicationDelete,
+  medicationDrugReference,
   medicationList,
   medicationUpdate,
   patientReferenceResources,
 } from "~/configuration/client"
 import type {
+  DrugReferencePanel,
   MedicationData,
   PatientResourcePanel,
 } from "~/configuration/client"
@@ -28,16 +30,21 @@ const KIND_LABELS: Record<MedicationData["kind"], string> = {
 export function MedicationPanel({ patientId }: { patientId: string }) {
   const [medications, setMedications] = useState<MedicationData[]>([])
   const [resources, setResources] = useState<PatientResourcePanel | null>(null)
+  const [drugReference, setDrugReference] = useState<DrugReferencePanel | null>(
+    null,
+  )
   const [loading, setLoading] = useState(true)
   const [newName, setNewName] = useState("")
 
   async function refresh() {
-    const [meds, res] = await Promise.all([
+    const [meds, res, ref] = await Promise.all([
       medicationList({ path: { patient_id: patientId } }),
       patientReferenceResources({ path: { patient_id: patientId } }),
+      medicationDrugReference({ path: { patient_id: patientId } }),
     ])
     if (meds.data) setMedications(meds.data)
     if (res.data) setResources(res.data)
+    if (ref.data) setDrugReference(ref.data)
     setLoading(false)
   }
 
@@ -84,6 +91,9 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
 
   const linksByMedId = new Map(
     (resources?.medications ?? []).map((m) => [m.medication.id, m.links]),
+  )
+  const drugRefByMedId = new Map(
+    (drugReference?.medications ?? []).map((m) => [m.medication_id, m]),
   )
 
   if (loading) {
@@ -177,6 +187,53 @@ export function MedicationPanel({ patientId }: { patientId: string }) {
                   ))}
                 </div>
               )}
+              {(() => {
+                const ref = drugRefByMedId.get(m.id)
+                if (!ref) return null
+                if (ref.status === "pending") {
+                  return (
+                    <p className="text-muted-foreground mt-1 ml-16 text-xs italic">
+                      Fetching FDA label info…
+                    </p>
+                  )
+                }
+                if (ref.status === "ready" && ref.sections.length > 0) {
+                  return (
+                    <details className="mt-1 ml-16">
+                      <summary className="text-muted-foreground cursor-pointer text-xs">
+                        FDA label info ({ref.sections.length})
+                      </summary>
+                      <div className="mt-1 space-y-2">
+                        {ref.sections.map((s) => (
+                          <div key={s.key}>
+                            <div className="text-xs font-medium">{s.label}</div>
+                            <p className="text-muted-foreground text-xs whitespace-pre-line">
+                              {s.text}
+                            </p>
+                            {s.truncated && (
+                              <p className="text-xs italic">
+                                Shortened for display — this is not the complete
+                                section.{" "}
+                                {s.source_url && (
+                                  <a
+                                    className="underline"
+                                    href={s.source_url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                  >
+                                    Read the full label on DailyMed
+                                  </a>
+                                )}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )
+                }
+                return null
+              })()}
             </li>
           )
         })}
