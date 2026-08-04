@@ -8,11 +8,13 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
 import { getClient } from "~/configuration/clerk"
 import { requireEnv } from "~/utils/environment"
+import { useTerminology } from "~/utils/terminology"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { useUser } from "@clerk/clerk-react"
 
 function ZoomConnectPrompt() {
+  const t = useTerminology()
   const [loading, setLoading] = useState(false)
   const { user } = useUser()
   const zoomEnabled = isZoomEnabled(user?.primaryEmailAddress?.emailAddress)
@@ -67,11 +69,11 @@ function ZoomConnectPrompt() {
           </p>
           <p className="mb-2">
             <strong>
-              Patient consent is your responsibility as the provider.
+              {t.patientTitle} consent is your responsibility as the provider.
             </strong>{" "}
             The Cosmas AI Note-Taker bot will appear as a participant and
             announce that the meeting is being recorded; you must still obtain
-            and document patient consent according to HIPAA and your state's
+            and document {t.patient} consent according to HIPAA and your state's
             requirements before the visit.
           </p>
           <p>
