@@ -10,6 +10,7 @@ import { InnerScrollableContent } from "~/components/shared/InnerScrollableConte
 import { StatusBadge } from "~/components/shared/StatusBadge"
 import { Intake, intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
+import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
 
@@ -40,12 +41,13 @@ export const meta: MetaFunction = () => {
 }
 
 function Header({ title }: { title?: string }) {
+  const t = useTerminology()
   return (
     <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-2 h-4" />
       <h1 className="text-lg font-semibold">
-        {title ? title : "Select a patient"}
+        {title ? title : `Select a ${t.patient}`}
       </h1>
     </header>
   )
@@ -81,11 +83,12 @@ function IntakeHeader({
 }
 
 function EmptyState({ intake }: { intake: Intake }) {
+  const t = useTerminology()
   return (
     <div className="mb-4">
       <div className="text-muted-foreground">
-        Your patient has not yet completed their intake they have been sent. If
-        you'd like to resend their intake URL, you can find it below.
+        Your {t.patient} has not yet completed their intake they have been sent.
+        If you'd like to resend their intake URL, you can find it below.
         <br />
         <br />
         <div className="flex items-center gap-2">
