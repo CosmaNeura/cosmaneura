@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { NoteCustomizationForm } from "./NoteCustomizationForm"
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 // Mock the client module the form calls
@@ -10,6 +11,23 @@ vi.mock("~/configuration/client", () => ({
 }))
 // Toast is a side effect; stub it
 vi.mock("~/hooks/use-toast", () => ({ toast: vi.fn() }))
+// useTerminology reads the settings query; give it an empty cache to fall
+// back to the default doctor/patient label set
+vi.mock("client/@tanstack/react-query.gen", () => ({
+  settingsDataOptions: () => ({
+    queryKey: ["settingsData"],
+    queryFn: () => new Promise(() => {}),
+  }),
+}))
+
+function renderWithQueryClient(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>,
+  )
+}
 
 const SCHEMA = { id: "doctor_note_schema_abc", note_type: "SOAP" }
 const CUSTOMIZATION = {
@@ -27,7 +45,7 @@ describe("NoteCustomizationForm", () => {
   beforeEach(() => updateNoteCustomization.mockClear())
 
   it("renders the note type and the current custom instructions", () => {
-    render(
+    renderWithQueryClient(
       <NoteCustomizationForm schema={SCHEMA} customization={CUSTOMIZATION} />,
     )
     expect(screen.getByText("SOAP")).toBeInTheDocument()
@@ -35,7 +53,7 @@ describe("NoteCustomizationForm", () => {
   })
 
   it("submits the schema id in the path and the form values in the body", async () => {
-    render(
+    renderWithQueryClient(
       <NoteCustomizationForm schema={SCHEMA} customization={CUSTOMIZATION} />,
     )
     fireEvent.click(screen.getByRole("button", { name: /save/i }))

@@ -38,6 +38,7 @@ import {
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
+import { useTerminology } from "~/utils/terminology"
 import { isTerminologyEnabled } from "~/utils/terminology-feature"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
@@ -214,6 +215,7 @@ function NoteCustomization({
 }
 
 function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
+  const t = useTerminology()
   const formSchema = z.object({
     //   image: z
     //     .instanceof(File),
@@ -291,9 +293,9 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
             <p className="text-muted-foreground text-left text-sm">
               Upload high quality examples of the different types of notes that
               you use. These examples will be used to generate future notes for
-              your patients, so make sure they are a great representation of the
-              structure and quality of note that you want to see from your
-              personalized AI!
+              your {t.patientPlural}, so make sure they are a great
+              representation of the structure and quality of note that you want
+              to see from your personalized AI!
             </p>
             <p className="text-muted-foreground text-left text-sm">
               For example: if you use the telehealth SOAP note, pick a
@@ -320,7 +322,8 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
               <div className="flex flex-col gap-1 font-semibold">
                 <p>{file.name}</p>
                 <p className="text-muted-foreground text-xs">
-                  Press the upload button below to add the example patient note
+                  Press the upload button below to add the example {t.patient}{" "}
+                  note
                 </p>
               </div>
             )}
@@ -370,6 +373,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
 }
 
 function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
+  const t = useTerminology()
   const revalidator = useRevalidator()
   const [connecting, setConnecting] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
@@ -466,7 +470,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
             </p>
             <p className="mb-2">
               <strong>
-                Patient consent is your responsibility as the provider.
+                {t.patientTitle} consent is your responsibility as the provider.
               </strong>{" "}
               The Cosmas AI Note-Taker bot will appear as a participant and
               announce that the meeting is being recorded; you must still obtain
