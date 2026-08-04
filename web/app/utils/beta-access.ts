@@ -9,7 +9,7 @@
 // app/services/zoom_webhooks.py.
 const STAGING_BETA_EMAILS = new Set([
   "zoom-reviewer@cosmaneura.com",
-  // Session Prep / terminology / reference-toolkit pilot cohort
+  // Session Prep / terminology pilot cohort (internal + external close-hold)
   "john@cosmaneura.com",
   "dev@cosmaneura.com",
   "greg@mycatholicdoctor.com",
