@@ -2,12 +2,36 @@ import { useEffect, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
+  labEvaluations,
   labPanelCreate,
   labPanelDelete,
   labPanelList,
 } from "~/configuration/client"
-import type { LabPanelData } from "~/configuration/client"
+import type { LabEvaluationEntry, LabPanelData } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+
+const CLASSIFICATION: Record<string, { label: string; className: string }> = {
+  optimal: { label: "Optimal", className: "bg-success/10 text-success" },
+  within_standard: {
+    label: "In standard range, outside optimal",
+    className: "bg-warning/10 text-warning",
+  },
+  outside_standard: {
+    label: "Outside standard range",
+    className: "bg-destructive/10 text-destructive",
+  },
+  no_range: {
+    label: "No reference range",
+    className: "bg-muted text-muted-foreground",
+  },
+}
+
+function rangeText(low: number | null, high: number | null): string {
+  if (low !== null && high !== null) return `${low}–${high}`
+  if (high !== null) return `< ${high}`
+  if (low !== null) return `> ${low}`
+  return "—"
+}
 
 interface PendingRow {
   name: string
@@ -21,14 +45,19 @@ const EMPTY_ROW: PendingRow = { name: "", value: "", unit: "" }
 // interpretation (standard vs functional-optimal) is layered on separately.
 export function LabResultsPanel({ patientId }: { patientId: string }) {
   const [panels, setPanels] = useState<LabPanelData[]>([])
+  const [evaluations, setEvaluations] = useState<LabEvaluationEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [adding, setAdding] = useState(false)
   const [collectedOn, setCollectedOn] = useState("")
   const [rows, setRows] = useState<PendingRow[]>([{ ...EMPTY_ROW }])
 
   async function refresh() {
-    const { data } = await labPanelList({ path: { patient_id: patientId } })
-    if (data) setPanels(data)
+    const [list, evals] = await Promise.all([
+      labPanelList({ path: { patient_id: patientId } }),
+      labEvaluations({ path: { patient_id: patientId } }),
+    ])
+    if (list.data) setPanels(list.data)
+    if (evals.data) setEvaluations(evals.data.entries)
     setLoading(false)
   }
 
@@ -106,6 +135,53 @@ export function LabResultsPanel({ patientId }: { patientId: string }) {
 
       {panels.length === 0 && !adding && (
         <p className="text-muted-foreground text-sm">No labs recorded yet.</p>
+      )}
+
+      {evaluations.length > 0 && (
+        <div className="mb-4" data-testid="lab-interpretation">
+          <h3 className="text-muted-foreground mb-1 text-xs font-medium uppercase">
+            Interpretation (latest per marker)
+          </h3>
+          <ul className="space-y-1">
+            {evaluations.map((e) => {
+              const meta =
+                CLASSIFICATION[e.classification] ?? CLASSIFICATION.no_range
+              return (
+                <li key={e.biomarker} className="text-sm">
+                  <span className="font-medium">{e.display_name}</span>{" "}
+                  <span>
+                    {e.value}
+                    {e.unit ? ` ${e.unit}` : ""}
+                  </span>{" "}
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-xs ${meta.className}`}
+                  >
+                    {meta.label}
+                  </span>
+                  {e.classification !== "no_range" && (
+                    <span className="text-muted-foreground ml-2 text-xs">
+                      standard {rangeText(e.standard_low, e.standard_high)} ·
+                      optimal {rangeText(e.optimal_low, e.optimal_high)}
+                      {e.source_url && (
+                        <>
+                          {" "}
+                          <a
+                            href={e.source_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline"
+                          >
+                            source ↗
+                          </a>
+                        </>
+                      )}
+                    </span>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       )}
 
       <ul className="space-y-3">

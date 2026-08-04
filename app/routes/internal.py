@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -14,7 +14,17 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
-from app.services.biomarkers import default_unit, normalize_biomarker
+from app.services import lab_ranges as lab_ranges_service
+from app.services.biomarkers import (
+    BY_KEY as BIOMARKERS_BY_KEY,
+)
+from app.services.biomarkers import (
+    default_unit,
+    normalize_biomarker,
+)
+from app.services.biomarkers import (
+    display_name as biomarker_display_name,
+)
 from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
 from app.services.nutrient_depletion import depletions_for
 from app.services.reference_links import (
@@ -38,6 +48,7 @@ from app.models.drug_reference import DrugReference
 from app.models.engagement_role import EngagementRole
 from app.models.intake.intake import Intake
 from app.models.lab_panel import LabPanel, LabPanelSource, LabPanelStatus
+from app.models.lab_range_set import LabRangeSet
 from app.models.lab_result import LabResult
 from app.models.note_type_customization import (
     NoteTypeCustomization,
@@ -1136,3 +1147,214 @@ def lab_panel_delete(request: Request, lab_panel_id: Annotated[str, Path()]) -> 
     # filters on deleted_at.
     panel.deleted_at = datetime.now(timezone.utc)
     panel.save()
+
+
+def _effective_range(
+    doctor_id, biomarker: str
+) -> tuple[lab_ranges_service.RangeSpec | None, LabRangeSet | None]:
+    "provider override if present, else platform default"
+    override = LabRangeSet.get(doctor_id=doctor_id, biomarker=biomarker)
+    if override is not None:
+        spec = lab_ranges_service.RangeSpec(
+            unit=override.unit or (default_unit(biomarker) or ""),
+            standard_low=override.standard_low,
+            standard_high=override.standard_high,
+            optimal_low=override.optimal_low,
+            optimal_high=override.optimal_high,
+        )
+        return spec, override
+    return lab_ranges_service.default_range(biomarker), None
+
+
+class LabEvaluationEntry(BaseModel, extra="forbid"):
+    biomarker: str
+    display_name: str
+    value: float
+    unit: str | None
+    collected_on: str | None
+    classification: str
+    standard_low: float | None
+    standard_high: float | None
+    optimal_low: float | None
+    optimal_high: float | None
+    source_url: str | None
+
+
+class LabEvaluationPanel(BaseModel, extra="forbid"):
+    entries: list[LabEvaluationEntry]
+
+
+@internal_api_app.get("/patients/{patient_id}/lab-evaluations", name="lab_evaluations")
+def lab_evaluations(
+    request: Request, patient_id: Annotated[str, Path()]
+) -> LabEvaluationPanel:
+    "latest value per biomarker, classified against the effective dual range"
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    # most recent result per biomarker: walk panels newest-first (by specimen
+    # date when known, else by row creation), keep the first seen per marker
+    panels = cast(
+        list[LabPanel],
+        list(
+            LabPanel.where(
+                (LabPanel.doctor_id == doctor.id)
+                & (LabPanel.patient_id == patient.id)
+                & cast(Any, LabPanel.deleted_at).is_(None)
+            )
+            .order_by(
+                cast(Any, LabPanel.collected_on).desc().nullslast(),
+                cast(Any, LabPanel.created_at).desc(),
+            )
+            .all()
+        ),
+    )
+
+    seen: set[str] = set()
+    entries: list[LabEvaluationEntry] = []
+    for panel in panels:
+        results = cast(
+            list[LabResult],
+            list(LabResult.where(LabResult.lab_panel_id == panel.id).all()),
+        )
+        for result in results:
+            if result.biomarker in seen:
+                continue
+            seen.add(result.biomarker)
+
+            spec, override = _effective_range(doctor.id, result.biomarker)
+            classification = lab_ranges_service.classify(result.value, spec)
+
+            entries.append(
+                LabEvaluationEntry(
+                    biomarker=result.biomarker,
+                    display_name=biomarker_display_name(result.biomarker),
+                    value=result.value,
+                    unit=result.unit,
+                    collected_on=(
+                        panel.collected_on.isoformat() if panel.collected_on else None
+                    ),
+                    classification=classification,
+                    standard_low=spec.standard_low if spec else None,
+                    standard_high=spec.standard_high if spec else None,
+                    optimal_low=spec.optimal_low if spec else None,
+                    optimal_high=spec.optimal_high if spec else None,
+                    source_url=override.source_url if override else None,
+                )
+            )
+
+    return LabEvaluationPanel(entries=entries)
+
+
+class LabRangeData(BaseModel, extra="forbid"):
+    biomarker: str
+    display_name: str
+    unit: str | None
+    standard_low: float | None
+    standard_high: float | None
+    optimal_low: float | None
+    optimal_high: float | None
+    source_url: str | None
+    is_override: bool
+
+
+def _lab_range_data(biomarker: str, doctor_id) -> LabRangeData:
+    spec, override = _effective_range(doctor_id, biomarker)
+    return LabRangeData(
+        biomarker=biomarker,
+        display_name=biomarker_display_name(biomarker),
+        unit=(override.unit if override else None) or default_unit(biomarker),
+        standard_low=spec.standard_low if spec else None,
+        standard_high=spec.standard_high if spec else None,
+        optimal_low=spec.optimal_low if spec else None,
+        optimal_high=spec.optimal_high if spec else None,
+        source_url=override.source_url if override else None,
+        is_override=override is not None,
+    )
+
+
+@internal_api_app.get("/lab-ranges", name="lab_range_list")
+def lab_range_list(request: Request) -> list[LabRangeData]:
+    "effective ranges (defaults merged with this doctor's overrides) for all biomarkers"
+    doctor: Doctor = request.state.doctor
+    if not reference_toolkit_enabled_for(doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return [_lab_range_data(key, doctor.id) for key in BIOMARKERS_BY_KEY]
+
+
+class UpdateLabRange(BaseModel, extra="forbid"):
+    unit: str | None = Field(default=None, max_length=40)
+    standard_low: float | None = None
+    standard_high: float | None = None
+    optimal_low: float | None = None
+    optimal_high: float | None = None
+    source_url: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _bounds_must_be_coherent(self):
+        """Reject range sets that would silently mislabel every result.
+
+        classify() treats a value as out of range when it is below `low` OR
+        above `high`. If a provider transposes two numbers so that low > high,
+        both tests pass for every value and *every* lab that provider views is
+        flagged abnormal — with no error anywhere to explain it.
+        """
+
+        for label, low, high in (
+            ("standard", self.standard_low, self.standard_high),
+            ("optimal", self.optimal_low, self.optimal_high),
+        ):
+            if low is not None and high is not None and low > high:
+                raise ValueError(
+                    f"{label}_low must be less than or equal to {label}_high"
+                )
+
+        for name, value in (
+            ("standard_low", self.standard_low),
+            ("standard_high", self.standard_high),
+            ("optimal_low", self.optimal_low),
+            ("optimal_high", self.optimal_high),
+        ):
+            if value is not None and value < 0:
+                raise ValueError(f"{name} cannot be negative")
+
+        return self
+
+
+@internal_api_app.put("/lab-ranges/{biomarker}", name="lab_range_upsert")
+def lab_range_upsert(
+    request: Request, biomarker: Annotated[str, Path()], data: UpdateLabRange
+) -> LabRangeData:
+    doctor: Doctor = request.state.doctor
+    if not reference_toolkit_enabled_for(doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if biomarker not in BIOMARKERS_BY_KEY:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    row = LabRangeSet.find_or_initialize_by(doctor_id=doctor.id, biomarker=biomarker)
+    row.unit = data.unit
+    row.standard_low = data.standard_low
+    row.standard_high = data.standard_high
+    row.optimal_low = data.optimal_low
+    row.optimal_high = data.optimal_high
+    row.source_url = data.source_url
+    row.save()
+
+    return _lab_range_data(biomarker, doctor.id)
+
+
+@internal_api_app.delete(
+    "/lab-ranges/{biomarker}",
+    name="lab_range_reset",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def lab_range_reset(request: Request, biomarker: Annotated[str, Path()]) -> None:
+    "remove the provider override, reverting to the platform default"
+    doctor: Doctor = request.state.doctor
+    if not reference_toolkit_enabled_for(doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    row = LabRangeSet.get(doctor_id=doctor.id, biomarker=biomarker)
+    if row is not None:
+        row.delete()

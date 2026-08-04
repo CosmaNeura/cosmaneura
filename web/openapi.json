@@ -1343,6 +1343,181 @@
           }
         }
       }
+    },
+    "/internal/v1/patients/{patient_id}/lab-evaluations": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Evaluations",
+        "description": "latest value per biomarker, classified against the effective dual range",
+        "operationId": "lab_evaluations",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabEvaluationPanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/lab-ranges": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Range List",
+        "description": "effective ranges (defaults merged with this doctor's overrides) for all biomarkers",
+        "operationId": "lab_range_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LabRangeData"
+                  },
+                  "type": "array",
+                  "title": "Response Lab Range List Internal V1 Lab Ranges Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/lab-ranges/{biomarker}": {
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Range Upsert",
+        "operationId": "lab_range_upsert",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "biomarker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Biomarker"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLabRange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabRangeData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Range Reset",
+        "description": "remove the provider override, reverting to the platform default",
+        "operationId": "lab_range_reset",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "biomarker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Biomarker"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2371,6 +2546,136 @@
         ],
         "title": "IntakeStatus"
       },
+      "LabEvaluationEntry": {
+        "properties": {
+          "biomarker": {
+            "type": "string",
+            "title": "Biomarker"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "collected_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected On"
+          },
+          "classification": {
+            "type": "string",
+            "title": "Classification"
+          },
+          "standard_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard Low"
+          },
+          "standard_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard High"
+          },
+          "optimal_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal Low"
+          },
+          "optimal_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal High"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "biomarker",
+          "display_name",
+          "value",
+          "unit",
+          "collected_on",
+          "classification",
+          "standard_low",
+          "standard_high",
+          "optimal_low",
+          "optimal_high",
+          "source_url"
+        ],
+        "title": "LabEvaluationEntry"
+      },
+      "LabEvaluationPanel": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LabEvaluationEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "LabEvaluationPanel"
+      },
       "LabPanelData": {
         "properties": {
           "id": {
@@ -2442,6 +2747,102 @@
           "failed"
         ],
         "title": "LabPanelStatus"
+      },
+      "LabRangeData": {
+        "properties": {
+          "biomarker": {
+            "type": "string",
+            "title": "Biomarker"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "standard_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard Low"
+          },
+          "standard_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard High"
+          },
+          "optimal_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal Low"
+          },
+          "optimal_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal High"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "is_override": {
+            "type": "boolean",
+            "title": "Is Override"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "biomarker",
+          "display_name",
+          "unit",
+          "standard_low",
+          "standard_high",
+          "optimal_low",
+          "optimal_high",
+          "source_url",
+          "is_override"
+        ],
+        "title": "LabRangeData"
       },
       "LabResultData": {
         "properties": {
@@ -3367,6 +3768,81 @@
           "endTime"
         ],
         "title": "TranscriptEntry"
+      },
+      "UpdateLabRange": {
+        "properties": {
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "standard_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard Low"
+          },
+          "standard_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard High"
+          },
+          "optimal_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal Low"
+          },
+          "optimal_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal High"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateLabRange"
       },
       "UpdateMedication": {
         "properties": {
