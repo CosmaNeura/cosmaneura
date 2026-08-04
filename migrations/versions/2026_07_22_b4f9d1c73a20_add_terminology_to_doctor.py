@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     sa.Enum('doctor_patient', 'therapist_client', 'counselor_client', 'nutritionist_client', name='terminology').create(op.get_bind())
-    op.add_column('doctor', sa.Column('terminology', postgresql.ENUM('doctor_patient', 'therapist_client', 'counselor_client', 'nutritionist_client', name='terminology', create_type=False), nullable=False, server_default='doctor_patient'))
+    op.add_column('doctor', sa.Column('terminology', postgresql.ENUM('doctor_patient', 'therapist_client', 'counselor_client', 'nutritionist_client', name='terminology', create_type=False), nullable=False, server_default='doctor_patient', comment='which provider/patient role labels this doctor sees and generates content with'))
 
 
 def downgrade() -> None:
