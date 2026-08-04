@@ -15,6 +15,7 @@ import { noteDetail } from "~/configuration/client"
 import type { EngagementRole } from "~/configuration/client"
 import { standardDateFormat } from "~/lib/date"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
+import { useTerminology } from "~/utils/terminology"
 
 import { useUser } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
@@ -57,12 +58,13 @@ export const meta: MetaFunction = () => {
 }
 
 function Header({ title }: { title?: string }) {
+  const t = useTerminology()
   return (
     <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="mr-2 h-4" />
       <h1 className="text-lg font-semibold">
-        {title ? title : "Select a patient"}
+        {title ? title : `Select a ${t.patient}`}
       </h1>
       <div className="ml-auto">
         <UploadRecordingButton />

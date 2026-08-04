@@ -21,6 +21,8 @@ import {
 import { Switch } from "~/components/ui/switch"
 import { updateNoteCustomization } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+import { useTerminology } from "~/utils/terminology"
+import type { LabelSet } from "~/utils/terminology"
 
 import { zodResolver } from "@hookform/resolvers/zod"
 
@@ -49,7 +51,9 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>
 
-const SELECTS: {
+const buildSelects = (
+  t: LabelSet,
+): {
   name: keyof Pick<
     FormValues,
     "subjective_source" | "pronoun_style" | "plan_ordering"
@@ -57,29 +61,29 @@ const SELECTS: {
   label: string
   help: string
   options: { value: string; label: string }[]
-}[] = [
+}[] => [
   {
     name: "subjective_source",
     label: "Subjective source",
     help: "Where the Subjective section draws from.",
     options: [
-      { value: "patient_only", label: "Patient statements only" },
+      { value: "patient_only", label: `${t.patientTitle} statements only` },
       {
         value: "patient_and_doctor",
-        label: "Patient + doctor-elicited history",
+        label: `${t.patientTitle} + ${t.provider}-elicited history`,
       },
     ],
   },
   {
     name: "pronoun_style",
     label: "Pronouns",
-    help: "How the note refers to the patient.",
+    help: `How the note refers to the ${t.patient}.`,
     options: [
       {
         value: "infer_from_transcript",
         label: "Infer pronouns from the visit",
       },
-      { value: "neutral", label: 'Always "the patient"' },
+      { value: "neutral", label: `Always "the ${t.patient}"` },
     ],
   },
   {
@@ -89,7 +93,7 @@ const SELECTS: {
     options: [
       {
         value: "patient_then_doctor",
-        label: "Patient actions first, then doctor",
+        label: `${t.patientTitle} actions first, then ${t.provider}`,
       },
       { value: "as_discussed", label: "As discussed" },
     ],
@@ -126,6 +130,7 @@ export function NoteCustomizationForm({
   schema: SchemaLite
   customization: Customization
 }) {
+  const t = useTerminology()
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -158,7 +163,7 @@ export function NoteCustomizationForm({
       <div className="font-medium">{schema.note_type}</div>
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit)} className="mt-3 space-y-4">
-          {SELECTS.map((s) => (
+          {buildSelects(t).map((s) => (
             <FormField
               key={s.name}
               control={form.control}
