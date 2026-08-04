@@ -30,6 +30,7 @@ import {
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { requireEnv } from "~/utils/environment"
+import { useTerminology } from "~/utils/terminology"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { invariant } from "@epic-web/invariant"
@@ -70,12 +71,13 @@ export async function clientLoader(_: Route.ClientLoaderArgs) {
 // ─── Step 0: Welcome ────────────────────────────────────────────────────────
 
 function WelcomeStep({ onNext }: { onNext: () => void }) {
+  const t = useTerminology()
   return (
     <div className="flex flex-col items-center gap-6 text-center">
       <h1 className="text-3xl font-bold">Welcome to Cosma</h1>
       <p className="text-muted-foreground max-w-md text-base">
-        Cosma is your AI medical scribe. It listens to your patient visits,
-        generates notes in your style, and handles patient intake so you can
+        Cosma is your AI medical scribe. It listens to your {t.patient} visits,
+        generates notes in your style, and handles {t.patient} intake so you can
         focus on care.
       </p>
       <p className="text-muted-foreground max-w-md text-sm">
@@ -98,6 +100,7 @@ function BiographyStep({
   biography: string | null
   onComplete: () => void
 }) {
+  const t = useTerminology()
   const formSchema = z.object({
     biography: z.string().min(1, "Biography is required"),
   })
@@ -117,7 +120,8 @@ function BiographyStep({
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold">Tell us about yourself</h2>
         <p className="text-muted-foreground text-sm">
-          This helps Cosma personalize your patient intake and note generation.
+          This helps Cosma personalize your {t.patient} intake and note
+          generation.
         </p>
       </div>
       <Form {...form}>

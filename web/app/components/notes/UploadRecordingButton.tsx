@@ -43,6 +43,7 @@ import {
 import { useToast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { standardDateFormat } from "~/lib/date"
+import { useTerminology } from "~/utils/terminology"
 
 import * as Sentry from "@sentry/react"
 import { invariant } from "@epic-web/invariant"
@@ -159,6 +160,7 @@ function VisitAudioUploadForm({
 }: {
   closeDialogBox: () => void
 }) {
+  const t = useTerminology()
   const { toast } = useToast()
   const tomorrow = addDays(new Date(), 1)
 
@@ -258,13 +260,13 @@ function VisitAudioUploadForm({
           name="patient_name"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Patient Name</FormLabel>
+              <FormLabel>{t.patientTitle} Name</FormLabel>
               <FormControl>
                 <PatientComboboxSearch {...field} form={form} />
               </FormControl>
               <FormDescription>
-                Search for an existing patient, or just type in a new patients
-                name to create a new patient.
+                Search for an existing {t.patient}, or just type in a new{" "}
+                {t.patientPossessive} name to create a new {t.patient}.
               </FormDescription>
               <FormMessage />
             </FormItem>
@@ -301,7 +303,7 @@ function VisitAudioUploadForm({
           render={({ field }) => (
             <FormItem>
               <FormDescription>
-                Upload an audio recording from a patient visit.
+                Upload an audio recording from a {t.patient} visit.
               </FormDescription>
               <FormControl>
                 <AudioVideoDropzone
@@ -330,6 +332,7 @@ function VisitAudioUploadForm({
 
 // button which triggers the upload dialog to be opened
 export function UploadRecordingButton() {
+  const t = useTerminology()
   const [open, setOpen] = useState(false)
 
   return (
@@ -353,7 +356,7 @@ export function UploadRecordingButton() {
           </DialogContent>
         </Dialog>
         <TooltipContent>
-          Upload an audio recording of a patient visit
+          Upload an audio recording of a {t.patient} visit
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
