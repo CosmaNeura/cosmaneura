@@ -3,7 +3,6 @@ Summarize all the intake data for a given appointment.
 """
 
 import json
-import os
 from textwrap import dedent
 from typing import cast
 
@@ -12,6 +11,7 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.environments import should_use_test_openai_fallback
 from app.services.patient_context import days_since, latest_note_for_patient
 from app.services.terminology import terminology_terms
 
@@ -20,13 +20,6 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
-
-
-def should_use_test_openai_fallback() -> bool:
-    return os.environ.get("PYTHON_ENV") == "test" and not (
-        os.environ.get("AZURE_OPENAI_API_KEY")
-        and os.environ.get("AZURE_OPENAI_ENDPOINT")
-    )
 
 
 def _local_generate_intake_summary(intake: Intake) -> str:
