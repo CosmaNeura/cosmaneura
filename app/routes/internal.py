@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field, computed_field
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
+import app.jobs.extract_medications as extract_medications_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.services.reference_toolkit_gate import reference_toolkit_enabled_for
 from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 
 from activemodel.session_manager import aglobal_session
@@ -32,6 +34,12 @@ from app.models.note_type_customization import (
     default_customization,
 )
 from app.models.patient import Patient
+from app.models.patient_medication import (
+    MedicationKind,
+    MedicationSource,
+    MedicationStatus,
+    PatientMedication,
+)
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy.orm import selectinload
 
@@ -526,3 +534,189 @@ def cancel_meeting(request: Request, zoom_meeting_id: Annotated[str, Path()]) ->
 
     meeting.status = ZoomMeetingStatus.cancelled
     meeting.save()
+
+
+class MedicationData(BaseModel, extra="forbid"):
+    id: str
+    name: str
+    # display_name is what a provider should be shown; normalized_name is the
+    # lowercased match key and is not meant for display
+    display_name: str | None
+    normalized_name: str | None
+    rxnorm_cui: str | None
+    kind: MedicationKind
+    status: MedicationStatus
+    source: MedicationSource
+    dosage: str | None
+    confirmed: bool
+
+
+def _medication_data(row: PatientMedication) -> MedicationData:
+    return MedicationData(
+        id=str(row.id),
+        name=row.name,
+        display_name=row.display_name,
+        normalized_name=row.normalized_name,
+        rxnorm_cui=row.rxnorm_cui,
+        kind=row.kind,
+        status=row.status,
+        source=row.source,
+        dosage=row.dosage,
+        confirmed=row.confirmed,
+    )
+
+
+def _reference_patient_or_404(doctor: Doctor, patient_id: str) -> Patient:
+    if not reference_toolkit_enabled_for(doctor.email):
+        # 404 not 403 — don't advertise the gated feature's existence
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    patient = Patient.get(id=patient_id, doctor_id=doctor.id)
+    if patient is None:
+        # 404 not 403 — don't leak existence of other doctors' patients
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return patient
+
+
+def _owned_medication_or_404(doctor: Doctor, medication_id: str) -> PatientMedication:
+    if not reference_toolkit_enabled_for(doctor.email):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    row = PatientMedication.get(id=medication_id, doctor_id=doctor.id)
+    if row is None or row.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    return row
+
+
+@internal_api_app.get("/patients/{patient_id}/medications", name="medication_list")
+def medication_list(
+    request: Request, patient_id: Annotated[str, Path()]
+) -> list[MedicationData]:
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    rows = (
+        PatientMedication.where(
+            (PatientMedication.doctor_id == doctor.id)
+            & (PatientMedication.patient_id == patient.id)
+            & cast(Any, PatientMedication.deleted_at).is_(None)
+        )
+        .order_by(cast(Any, PatientMedication.created_at).desc())
+        .all()
+    )
+
+    return [_medication_data(r) for r in cast(list[PatientMedication], rows)]
+
+
+class CreateMedication(BaseModel, extra="forbid"):
+    name: str = Field(min_length=1, max_length=300)
+    kind: MedicationKind = MedicationKind.unknown
+    status: MedicationStatus = MedicationStatus.active
+    dosage: str | None = Field(default=None, max_length=300)
+
+
+@internal_api_app.post("/patients/{patient_id}/medications", name="medication_create")
+def medication_create(
+    request: Request, patient_id: Annotated[str, Path()], data: CreateMedication
+) -> MedicationData:
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    row = PatientMedication(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        name=data.name.strip(),
+        # manual entry never consults RxNorm, so the provider's own wording is
+        # the most authoritative name we have
+        display_name=data.name.strip(),
+        normalized_name=data.name.strip().lower(),
+        kind=data.kind,
+        status=data.status,
+        source=MedicationSource.manual,
+        dosage=data.dosage,
+        # manually entered rows are confirmed by definition
+        confirmed=True,
+        confirmed_at=datetime.now(timezone.utc),
+    ).save()
+
+    return _medication_data(row)
+
+
+class UpdateMedication(BaseModel, extra="forbid"):
+    name: str | None = Field(default=None, min_length=1, max_length=300)
+    kind: MedicationKind | None = None
+    status: MedicationStatus | None = None
+    dosage: str | None = Field(default=None, max_length=300)
+    confirmed: bool | None = None
+
+
+@internal_api_app.patch("/medications/{medication_id}", name="medication_update")
+def medication_update(
+    request: Request,
+    medication_id: Annotated[str, Path()],
+    data: UpdateMedication,
+) -> MedicationData:
+    doctor: Doctor = request.state.doctor
+    row = _owned_medication_or_404(doctor, medication_id)
+
+    if data.name is not None:
+        row.name = data.name.strip()
+        row.display_name = data.name.strip()
+        row.normalized_name = data.name.strip().lower()
+        # name changed by hand; drop the stale RxNorm mapping and its canonical
+        row.rxnorm_cui = None
+    if data.kind is not None:
+        row.kind = data.kind
+    if data.status is not None:
+        row.status = data.status
+    if data.dosage is not None:
+        row.dosage = data.dosage
+    if data.confirmed is not None and data.confirmed and not row.confirmed:
+        row.confirmed = True
+        row.confirmed_at = datetime.now(timezone.utc)
+    elif data.confirmed is not None and not data.confirmed:
+        row.confirmed = False
+        row.confirmed_at = None
+
+    row.save()
+    return _medication_data(row)
+
+
+@internal_api_app.delete(
+    "/medications/{medication_id}",
+    name="medication_delete",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def medication_delete(request: Request, medication_id: Annotated[str, Path()]) -> None:
+    doctor: Doctor = request.state.doctor
+    row = _owned_medication_or_404(doctor, medication_id)
+    row.delete()
+
+
+class ExtractMedications(BaseModel, extra="forbid"):
+    appointment_id: str
+
+
+@internal_api_app.post(
+    "/patients/{patient_id}/medications/extract", name="medication_extract"
+)
+def medication_extract(
+    request: Request,
+    patient_id: Annotated[str, Path()],
+    data: ExtractMedications,
+) -> None:
+    "re-run extraction on demand for a patient's appointment transcript"
+    doctor: Doctor = request.state.doctor
+    patient = _reference_patient_or_404(doctor, patient_id)
+
+    transcript = AIVisitTranscript.get(
+        appointment_id=data.appointment_id,
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+    )
+    if transcript is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+
+    extract_medications_job.queue(transcript_id=transcript.id)
