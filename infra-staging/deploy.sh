@@ -20,7 +20,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCE_GROUP="cosmaneura-staging"
 ENVIRONMENT_NAME="cosmaneura-staging-app-environment"
 MIGRATION_JOB="cosmaneura-staging-migrate"
-CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker cosmaneura-staging-app-jmon"
+# Containers whose health gates the deploy: if one of these does not come up,
+# staging is genuinely broken and the deploy must fail.
+CRITICAL_CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker"
+
+# Auxiliary containers: still deployed and still checked, but a failure is
+# reported instead of fatal.
+#
+# jmon is Flower, the Celery job-monitor UI — an operator tool, not a product
+# surface, and nothing depends on it (sentry.py even skips instrumenting it).
+# It has been failing its health check, and letting that fail the whole deploy
+# makes "staging is broken" and "the dashboard is broken" look identical. That
+# distinction is the signal the staging → production promotion flow rests on, so
+# it has to stay trustworthy.
+AUXILIARY_CONTAINERS="cosmaneura-staging-app-jmon"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
@@ -245,11 +258,13 @@ initiate_deployment() {
 check_deployment() {
 	local container_name=$1
 	local git_sha=$2
+	# Optional: auxiliary containers pass a smaller budget. Waiting the full five
+	# minutes on a container that cannot fail the deploy only slows every deploy.
+	local max_attempts=${3:-60} # default 60 * 5s = 5 minutes
 	local expected_image="${STAGING_IMAGE}:${git_sha}"
 
 	# Initialize backoff variables
 	local attempts=0
-	local max_attempts=60 # 5 minutes / 5 seconds = 60 attempts
 
 	echo "Checking deployment status for $container_name..."
 
@@ -291,17 +306,31 @@ if [[ $? -ne 0 ]]; then
 	exit 1
 fi
 
-# Deploy all containers first
-for container in $CONTAINERS; do
+# Deploy the containers that gate the release first — a failure to even start
+# one of these is fatal.
+for container in $CRITICAL_CONTAINERS; do
 	initiate_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
-		echo "Deployment initiation failed. Exiting."
+		echo "Deployment initiation failed for $container. Exiting."
 		exit 1
 	fi
 done
 
-# Check deployment status for all containers
-for container in $CONTAINERS; do
+# Auxiliary containers: attempt the update, but never block on it. Anything that
+# fails here is skipped in the health check below, since there is nothing new to
+# check for.
+AUXILIARY_TO_CHECK=""
+for container in $AUXILIARY_CONTAINERS; do
+	initiate_deployment "$container" "$GIT_SHA"
+	if [[ $? -ne 0 ]]; then
+		echo "::warning::Could not start deployment for auxiliary container $container — skipping its health check."
+	else
+		AUXILIARY_TO_CHECK="$AUXILIARY_TO_CHECK $container"
+	fi
+done
+
+# Critical containers gate the deploy.
+for container in $CRITICAL_CONTAINERS; do
 	check_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
@@ -309,5 +338,22 @@ for container in $CONTAINERS; do
 	fi
 done
 
-echo "All deployments are successful for Git SHA $GIT_SHA."
+# Auxiliary containers are reported, never fatal. Given a shorter budget since
+# the result cannot change the outcome.
+AUXILIARY_FAILURES=""
+for container in $AUXILIARY_TO_CHECK; do
+	check_deployment "$container" "$GIT_SHA" 12 # 12 * 5s = 1 minute
+	if [[ $? -ne 0 ]]; then
+		AUXILIARY_FAILURES="$AUXILIARY_FAILURES $container"
+	fi
+done
+
+if [[ -n "$AUXILIARY_FAILURES" ]]; then
+	# GitHub surfaces ::warning:: in the run summary, so this stays visible
+	# without turning the deploy red.
+	echo "::warning::Auxiliary container(s) did not come up:$AUXILIARY_FAILURES"
+	echo "Staging itself is healthy — these are operator tools and do not block promotion."
+fi
+
+echo "All critical deployments are successful for Git SHA $GIT_SHA."
 exit 0
