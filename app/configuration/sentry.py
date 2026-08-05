@@ -3,12 +3,7 @@ import sentry_sdk.integrations
 from decouple import config
 from posthog.sentry.posthog_integration import PostHogIntegration
 
-from ..environments import (
-    is_job_monitor,
-    is_production,
-    is_staging,
-    python_environment,
-)
+from ..environments import is_job_monitor, is_production, python_environment
 
 
 def scrub_event(event, _hint):
@@ -39,31 +34,11 @@ def scrub_event(event, _hint):
 def configure_sentry(integrations=[]):
     from app import log
 
-    # staging is included deliberately. It is the environment the promotion flow
-    # depends on, and it was the only deployed environment running blind: every
-    # other guard in app/configuration treats it like production
-    # (database.py, debugging.py, static.py all check is_production() or
-    # is_staging()). `environment=python_environment()` keeps the events
-    # separated in Sentry.
-    if not (is_production() or is_staging()):
+    if not is_production():
         return
 
     if is_job_monitor():
-        # we don't care about monitoring the job monitoring frontend.
-        # NOTE this only ever matches production's jmon — the container name is
-        # hardcoded. Staging no longer deploys one at all.
-        return
-
-    # setup() runs as an import side effect and is fail-fast, so an unset DSN
-    # here would stop the container from booting rather than just disable error
-    # reporting. Warn and carry on: losing Sentry should not lose the deploy.
-    dsn = config("SENTRY_DSN", default="", cast=str)
-
-    if not dsn:
-        log.warning(
-            "SENTRY_DSN is not set, skipping sentry configuration",
-            environment=python_environment(),
-        )
+        # we don't care about monitoring the job monitoring frontend
         return
 
     def filter_transactions(event, _hint):
@@ -86,7 +61,7 @@ def configure_sentry(integrations=[]):
         return event
 
     sentry_sdk.init(
-        dsn=dsn,
+        dsn=config("SENTRY_DSN", cast=str),
         release=config("BUILD_COMMIT", cast=str),
         environment=python_environment(),
         enable_tracing=True,
