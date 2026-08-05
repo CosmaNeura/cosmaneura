@@ -25,15 +25,19 @@ MIGRATION_JOB="cosmaneura-staging-migrate"
 CRITICAL_CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker"
 
 # Auxiliary containers: still deployed and still checked, but a failure is
-# reported instead of fatal.
+# reported instead of fatal. Empty on purpose — see below.
 #
-# jmon is Flower, the Celery job-monitor UI — an operator tool, not a product
-# surface, and nothing depends on it (sentry.py even skips instrumenting it).
-# It has been failing its health check, and letting that fail the whole deploy
-# makes "staging is broken" and "the dashboard is broken" look identical. That
-# distinction is the signal the staging → production promotion flow rests on, so
-# it has to stay trustworthy.
-AUXILIARY_CONTAINERS="cosmaneura-staging-app-jmon"
+# staging used to deploy cosmaneura-staging-app-jmon (Flower, the Celery
+# job-monitor UI) here. It was removed rather than merely demoted, because its
+# health check could never have passed: the azurerm_container_app "job-monitor"
+# block in main.tf is entirely commented out, FLOWER_PORT included, so Flower
+# has nothing to bind to. The container that still answers in Azure is drift —
+# Terraform does not manage it. Deploying it meant pushing an image to an
+# unmanaged container and then waiting on a probe with no possible outcome.
+#
+# Production is unaffected: infra/ still deploys its own jmon, and that one is
+# configured.
+AUXILIARY_CONTAINERS=""
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
