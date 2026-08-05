@@ -4,7 +4,7 @@ Admin-only routes:
 - login_as / user impersonation, similar to https://clerk.com/docs/users/user-impersonation but without a $100/month sub
 """
 
-from typing import Annotated
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel as BasePydanticModel
@@ -64,6 +64,11 @@ def user_list(request: Request) -> UserListResponse:
         users=list(
             Doctor.select(Doctor.clerk_id, Doctor.email, Doctor.id)
             .where(Doctor.role != DoctorRole.admin)
+            # Without an explicit order Postgres may return these rows in any
+            # order it likes, which reshuffles the login_as picker between
+            # requests. created_at alone is not enough — users created inside a
+            # single transaction can share a timestamp — so id breaks the tie.
+            .order_by(cast(Any, Doctor.created_at).asc(), cast(Any, Doctor.id).asc())
             .all()
         ),  # type: ignore
     )
