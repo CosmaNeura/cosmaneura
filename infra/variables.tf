@@ -55,7 +55,10 @@ variable "python_public_vars" {
     "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT",
     # public origin of this backend, used to build the zak_url that Recall
     # bots fetch on join
-    "API_BASE_URL"
+    "API_BASE_URL",
+    # app-only Entra authentication for the feature-flagged Scribe workload route
+    "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
+    "SCRIBE_CALLER_CLIENT_ID"
   ]
 }
 
