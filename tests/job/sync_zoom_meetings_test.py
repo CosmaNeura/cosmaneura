@@ -122,3 +122,44 @@ def test_sync_skips_doctor_without_zoom(global_session):
     ) as mock_get:
         perform(str(doctor.id))
         mock_get.assert_not_called()
+
+
+def test_sync_skips_meetings_without_start_time(global_session):
+    """Zoom omits start_time for "no fixed time" recurring meetings and PMI
+    meetings. The sync must skip those instead of crashing — a single such
+    meeting used to KeyError the whole job, so no meetings synced and the
+    bot never joined anything."""
+    doctor = DoctorFactory.build().save()
+    _create_zoom_integration(doctor)
+
+    meetings = [
+        FAKE_MEETINGS[0],
+        {
+            # "no fixed time" recurring meeting: Zoom omits the key entirely
+            "id": "555000111",
+            "topic": "Recurring Care Team Huddle",
+            "duration": 30,
+            "join_url": "https://zoom.us/j/555000111",
+        },
+        {
+            # PMI-style: key present but null
+            "id": "555000222",
+            "topic": "Personal Meeting Room",
+            "start_time": None,
+            "duration": 0,
+            "join_url": "https://zoom.us/j/555000222",
+        },
+    ]
+
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=meetings,
+    ):
+        perform(str(doctor.id))  # must not raise
+
+    synced = cast(
+        list[ZoomMeeting],
+        list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()),
+    )
+    assert len(synced) == 1
+    assert synced[0].zoom_meeting_id == "123456789"

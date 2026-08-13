@@ -20,9 +20,23 @@ def perform(doctor_id: str) -> None:
 
     meetings = zoom_service.get_user_meetings(doctor)
 
+    skipped = 0
     for m in meetings:
         zoom_meeting_id = str(m["id"])
-        start_time = m["start_time"]
+
+        # Zoom omits start_time for "no fixed time" recurring meetings and
+        # PMI meetings — there is nothing to schedule a bot for, so skip
+        # them instead of crashing the whole sync.
+        start_time = m.get("start_time")
+        if not start_time:
+            log.warning(
+                "skipping zoom meeting without start_time (recurring/PMI)",
+                doctor_id=doctor_id,
+                zoom_meeting_id=zoom_meeting_id,
+            )
+            skipped += 1
+            continue
+
         if isinstance(start_time, str):
             start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
 
@@ -49,7 +63,12 @@ def perform(doctor_id: str) -> None:
                 join_url=m["join_url"],
             ).save()
 
-    log.info("zoom meetings synced", doctor_id=doctor_id, count=len(meetings))
+    log.info(
+        "zoom meetings synced",
+        doctor_id=doctor_id,
+        count=len(meetings) - skipped,
+        skipped=skipped,
+    )
 
 
 perform_celery = celery_app.task(perform)
