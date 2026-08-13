@@ -30,15 +30,36 @@ _BOT_READY_STATUSES = {
     "in_call_recording",
     "recording_permission_allowed",
 }
-# `recording_permission_denied` is terminal-ish: the host rejected the
-# prompt, so no recording can ever happen on this bot. Treat it like the
-# other terminal states so we bail out quickly instead of waiting 45s.
+# Statuses that prove Zoom confirmed the host approved recording. Reaching
+# one of these is what makes a start_recording command stick, so we only
+# treat an earlier `in_call_not_recording` as ready once no approval is
+# pending (see _wait_until_bot_ready).
+_BOT_APPROVED_STATUSES = {
+    "recording_permission_allowed",
+    "in_call_recording",
+}
 _BOT_TERMINAL_STATUSES = {
     "call_ended",
     "fatal",
     "done",
-    "recording_permission_denied",
 }
+# `recording_permission_denied` is NOT terminal, despite the name. Zoom's
+# consent handshake transitions *through* it on the way to
+# `recording_permission_allowed` on every single Zoom session — successful
+# ones included — carrying the sub_code below for a window of ~0.5-0.8s.
+# Verified against Recall bot history for 7 production sessions (2026-08).
+#
+# Treating it as terminal meant a 2s poll that happened to land inside that
+# ~600ms window aborted a perfectly healthy, already-approved bot and kicked
+# it out of the visit: a ~30% failure rate matching 600ms/2000ms. Any *other*
+# sub_code is a genuine host rejection and is still terminal.
+_BOT_PERMISSION_DENIED_STATUS = "recording_permission_denied"
+_TRANSIENT_PERMISSION_DENIED_SUB_CODE = "zoom_local_recording_request_disabled"
+# Approval lands ~0.5-0.8s after the transient denial, so poll faster than the
+# normal interval while inside that window. Sleeping a full 2s there would
+# delay start_recording past the moment the bot was authorized and drop the
+# opening seconds of the visit from the transcript.
+_PERMISSION_PHASE_POLL_INTERVAL = 1.0
 
 # Display name the bot uses inside Zoom. Kept as a module constant so
 # zoom_webhooks can match participants against the same string when
@@ -118,11 +139,48 @@ def get_bot(bot_id: str) -> dict:
         return response.json()
 
 
+def _bot_status_changes(bot: dict) -> list[dict]:
+    return bot.get("status_changes") or []
+
+
 def _current_bot_status(bot: dict) -> str | None:
-    changes = bot.get("status_changes") or []
+    changes = _bot_status_changes(bot)
     if not changes:
         return None
     return changes[-1].get("code")
+
+
+def _current_bot_sub_code(bot: dict) -> str | None:
+    changes = _bot_status_changes(bot)
+    if not changes:
+        return None
+    return changes[-1].get("sub_code")
+
+
+def _latest_ready_status(bot: dict) -> str | None:
+    """Most recent ready status anywhere in the bot's history, or None.
+
+    We scan the whole history rather than only `status_changes[-1]` because
+    the bot can move through several states between two of our polls: the
+    Zoom consent handshake emits `in_call_not_recording` ->
+    `recording_permission_denied` -> `recording_permission_allowed` inside
+    ~800ms, so sampling only the latest entry every 2s loses whichever
+    transitions fell between polls. Reaching a ready state is a fact about
+    the bot that stays true, so the history is the reliable signal.
+    """
+    for change in reversed(_bot_status_changes(bot)):
+        code = change.get("code")
+        if code in _BOT_READY_STATUSES:
+            return code
+    return None
+
+
+def _has_recording_approval(bot: dict) -> bool:
+    "True once Zoom has confirmed the host approved recording."
+    return any(
+        change.get("code") in _BOT_APPROVED_STATUSES
+        for change in _bot_status_changes(bot)
+    )
 
 
 def _wait_until_bot_ready(
@@ -130,8 +188,8 @@ def _wait_until_bot_ready(
     timeout_seconds: float = 45.0,
     poll_interval: float = 2.0,
 ) -> str | None:
-    """Poll Recall until the bot is actually in the call (or has terminated).
-    Returns the final observed status, or None on timeout."""
+    """Poll Recall until the bot can accept start_recording (or has really
+    terminated). Returns the final observed status, or None on timeout."""
     deadline = time.monotonic() + timeout_seconds
     last_status: str | None = None
     while time.monotonic() < deadline:
@@ -151,14 +209,42 @@ def _wait_until_bot_ready(
             log.info("recall bot status", bot_id=bot_id, status=status)
             last_status = status
 
-        if status in _BOT_READY_STATUSES:
-            return status
         if status in _BOT_TERMINAL_STATUSES:
             log.warning(
                 "recall bot reached terminal state before becoming ready",
                 bot_id=bot_id,
                 status=status,
             )
+            return status
+
+        if status == _BOT_PERMISSION_DENIED_STATUS:
+            sub_code = _current_bot_sub_code(bot)
+            if sub_code != _TRANSIENT_PERMISSION_DENIED_SUB_CODE:
+                log.warning(
+                    "recall bot recording permission denied by host",
+                    bot_id=bot_id,
+                    status=status,
+                    sub_code=sub_code,
+                )
+                return status
+            # Transient phase of the Zoom consent handshake. Keep waiting for
+            # the approval that lands a few hundred ms later instead of
+            # aborting a bot that is already sitting in the call.
+            log.info(
+                "recall bot in transient recording-permission phase, waiting",
+                bot_id=bot_id,
+                sub_code=sub_code,
+            )
+            time.sleep(min(poll_interval, _PERMISSION_PHASE_POLL_INTERVAL))
+            continue
+
+        if _has_recording_approval(bot):
+            # Approval may have been superseded between polls (e.g. the bot
+            # already moved on to in_call_recording), so report the most
+            # recent ready status — start_recording keys off it to avoid
+            # double-starting a recording.
+            return _latest_ready_status(bot) or status
+        if status in _BOT_READY_STATUSES:
             return status
         time.sleep(poll_interval)
 
