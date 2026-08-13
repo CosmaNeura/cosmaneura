@@ -221,6 +221,90 @@ def test_doctor_identified_marks_present(
     assert mock_recall["create_bot"] == []
 
 
+def test_doctor_recognized_when_host_id_not_yet_in_redis(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+):
+    """participant_joined can be handled before meeting.started has written
+    host_id — they are concurrent celery tasks. The host must still be
+    classified as the doctor, resolved from the DB."""
+    from app.services import zoom_webhooks
+
+    assert clean_redis.get(_key("host_id")) is None
+
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+
+    assert clean_redis.get(_key("doctor_present")) == b"1"
+    # The doctor must never be queued as a patient.
+    assert clean_redis.llen(_key("participants_order")) == 0
+
+
+def test_concurrent_participant_joined_survives_meeting_started_cleanup(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    """Reproduces the production race: Zoom fires participant_joined for the
+    host ~50ms after meeting.started, and the two run as concurrent celery
+    tasks. We fire the join from inside the window between meeting.started's
+    stale-key cleanup and its host_id write — the interleaving that used to
+    drop doctor_present and park the visit in "holding" with no bot."""
+    from app.services import zoom as zoom_service
+    from app.services import zoom_webhooks
+
+    real_get_integration = zoom_service.get_zoom_integration
+    fired = {"joined": False}
+
+    def get_integration_then_race(doctor):
+        integration = real_get_integration(doctor)
+        if not fired["joined"]:
+            fired["joined"] = True
+            zoom_webhooks.handle_participant_joined(
+                _participant_joined_payload(HOST_ID, "Test Doctor")
+            )
+        return integration
+
+    monkeypatch.setattr(zoom_service, "get_zoom_integration", get_integration_then_race)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert fired["joined"]
+    # The concurrent handler's state must not have been wiped by the cleanup.
+    assert clean_redis.get(_key("doctor_present")) == b"1"
+    assert clean_redis.get(_key("host_id")).decode() == HOST_ID
+
+    # ...and the visit proceeds normally: the patient's arrival starts the bot.
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-1", "Patient One")
+    )
+
+    assert len(mock_recall["create_bot"]) == 1
+    assert clean_redis.get(_key("recording_active")) == b"1"
+
+
+def test_doctor_leaving_recognized_when_host_id_absent(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+):
+    "participant_left must resolve the host the same way participant_joined does."
+    from app.services import zoom_webhooks
+
+    zoom_webhooks.handle_participant_left(
+        _participant_left_payload(HOST_ID, "Test Doctor")
+    )
+
+    # Classified as the doctor leaving, not as a departing patient.
+    assert clean_redis.get(_key("patient_count")) is None
+
+
 def test_patient_joins_first_then_doctor_starts_session(
     clean_redis,
     doctor_with_zoom,
@@ -1088,3 +1172,59 @@ def test_prod_blocks_staging_test_account(
 
     assert mock_recall["create_bot"] == []
     assert clean_redis.get(_key("bot_id")) is None
+
+
+# --------- Payload-shape probe (temporary, see _log_payload_shape) ---------
+
+
+def test_payload_shape_probe_logs_field_names_only():
+    """The probe exists to answer whether Zoom sends uuid/host_id on every
+    event. It must never log payload *values* — those carry PHI."""
+    from structlog.testing import capture_logs
+
+    from app.services import zoom_webhooks
+
+    payload = _participant_joined_payload(HOST_ID, "Jane Patient")
+
+    with capture_logs() as logs:
+        zoom_webhooks._log_payload_shape("meeting.participant_joined", payload)
+
+    entry = next(e for e in logs if e["event"] == "zoom payload shape")
+    assert entry["object_keys"] == ["id", "participant"]
+    assert entry["participant_keys"] == ["id", "user_name"]
+    assert entry["has_uuid"] is False
+    assert entry["has_host_id"] is False
+    # No value from the payload may appear anywhere in the emitted event.
+    assert "Jane Patient" not in str(entry)
+    assert HOST_ID not in str(entry)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"payload": {}},
+        {"payload": {"object": None}},
+        {"payload": {"object": {}}},
+        {"payload": {"object": {"participant": "not-a-dict"}}},
+    ],
+)
+def test_payload_shape_probe_tolerates_malformed_payloads(payload):
+    """The probe runs on every zoom webhook before dispatch, so raising here
+    would take down all zoom processing."""
+    from app.services import zoom_webhooks
+
+    zoom_webhooks._log_payload_shape("meeting.started", payload)
+
+
+def test_dispatch_logs_shape_even_for_unhandled_event_types():
+    from structlog.testing import capture_logs
+
+    from app.services import zoom_webhooks
+
+    with capture_logs() as logs:
+        zoom_webhooks.dispatch("meeting.sharing_started", _started_payload())
+
+    events = [e["event"] for e in logs]
+    assert "zoom payload shape" in events
+    assert "no handler for zoom event type" in events

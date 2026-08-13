@@ -76,6 +76,21 @@ def handle_meeting_started(payload: dict[str, Any]):
         )
         return
 
+    # Clear any orphaned state from a previous session with this meeting_id.
+    # Personal meeting rooms reuse the same ID, so meeting.ended may not have
+    # fired (or may have been missed) before the next meeting.started arrives.
+    # Preserve the lock we just acquired — it gates duplicate meeting.started
+    # for the rest of this session.
+    #
+    # This runs immediately after the lock and *before* the doctor lookups
+    # below, which cost ~200ms of DB round-trips. participant_joined for the
+    # host lands ~50ms after meeting.started and is handled by a separate,
+    # concurrent celery task: clearing late used to wipe the doctor_present
+    # and participants_order that the concurrent handler had already written,
+    # leaving the session stuck in "holding" with no bot.
+    _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
+    log.info("cleared stale meeting keys", meeting_id=meeting_id)
+
     doctor = cast(
         Doctor | None,
         Doctor.where(
@@ -102,14 +117,6 @@ def handle_meeting_started(payload: dict[str, Any]):
             doctor_id=str(doctor.id),
         )
         return
-
-    # Clear any orphaned state from a previous session with this meeting_id.
-    # Personal meeting rooms reuse the same ID, so meeting.ended may not have
-    # fired (or may have been missed) before the next meeting.started arrives.
-    # Preserve the lock we just acquired — it gates duplicate meeting.started
-    # for the rest of this session.
-    _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
-    log.info("cleared stale meeting keys", meeting_id=meeting_id)
 
     ttl = timedelta(hours=24)
     redis.set(f"recall:meeting:{meeting_id}:doctor_id", str(doctor.id), ex=ttl)
@@ -148,6 +155,50 @@ def _role_for(participant: dict, host_id: str | None) -> str:
     if host_id and participant.get("id") == host_id:
         return "doctor"
     return "other"
+
+
+def _resolve_host_id(redis, meeting_id: str, participant: dict) -> str | None:
+    """The meeting's Zoom host_id, falling back to the database.
+
+    meeting.started and participant_joined arrive as two independent celery
+    tasks and run concurrently on the prefork worker. meeting.started needs
+    ~200ms of DB round-trips before it writes host_id to Redis, but Zoom
+    fires participant_joined for the host only ~50ms later — so the handler
+    for the doctor's own join can read this key before it exists, classify
+    the doctor as "other" and park the session in "non-doctor joined before
+    doctor, holding". No bot is ever dispatched and the visit is lost.
+
+    When the key is missing we ask the same source of truth meeting.started
+    uses: a zoom DoctorVideoIntegration whose provider_user_id is this
+    participant. That makes classification independent of task ordering, and
+    also covers a meeting.started webhook that was dropped entirely.
+    """
+    host_id = _rget(redis, f"recall:meeting:{meeting_id}:host_id")
+    if host_id:
+        return host_id
+
+    # Zoom leaves participant.id empty for guests, and a guest is never the
+    # host — so an empty candidate means "not the doctor", not "look it up".
+    candidate = participant.get("id")
+    if not candidate:
+        return None
+
+    integration = cast(
+        DoctorVideoIntegration | None,
+        DoctorVideoIntegration.where(
+            (DoctorVideoIntegration.provider == VideoProvider.zoom)
+            & (DoctorVideoIntegration.provider_user_id == candidate)
+        ).first(),
+    )
+    if not integration:
+        return None
+
+    log.info(
+        "host_id absent from redis, resolved zoom host from db",
+        meeting_id=meeting_id,
+        participant_id=candidate,
+    )
+    return candidate
 
 
 def _start_appointment_session(meeting_id: str, participant_id: str, user_name: str):
@@ -319,7 +370,7 @@ def handle_participant_joined(payload: dict[str, Any]):
     user_name = participant.get("user_name") or ""
 
     redis = get_redis()
-    host_id = _rget(redis, f"recall:meeting:{meeting_id}:host_id")
+    host_id = _resolve_host_id(redis, meeting_id, participant)
     role = _role_for(participant, host_id)
 
     if role == "bot":
@@ -518,7 +569,7 @@ def handle_participant_left(payload: dict[str, Any]):
     user_name = participant.get("user_name") or ""
 
     redis = get_redis()
-    host_id = _rget(redis, f"recall:meeting:{meeting_id}:host_id")
+    host_id = _resolve_host_id(redis, meeting_id, participant)
     role = _role_for(participant, host_id)
 
     if role == "bot":
@@ -740,7 +791,43 @@ HANDLERS = {
 }
 
 
+def _log_payload_shape(event_type: str, payload: dict[str, Any]) -> None:
+    """TEMPORARY probe (added 2026-08-13). Confirms whether Zoom sends `uuid`
+    and `host_id` at the object level on *every* meeting event, not just
+    meeting.started.
+
+    If it does, per-meeting Redis state can be namespaced by the session
+    `uuid` — unique per meeting instance, unlike `id`, which personal meeting
+    rooms reuse. That would let handle_meeting_started stop clearing stale
+    keys entirely, which is what forces every handler to race against the
+    cleanup today. `host_id` on participant_joined would additionally remove
+    the Redis/DB lookup in _resolve_host_id.
+
+    Logs field *names* only, never values, so no participant name or email can
+    reach the log pipeline. Remove once one real production meeting has been
+    observed — the answer does not change per meeting.
+    """
+    obj = payload.get("payload", {}).get("object", {})
+    if not isinstance(obj, dict):
+        log.info("zoom payload shape: object missing", event_type=event_type)
+        return
+
+    participant = obj.get("participant")
+    log.info(
+        "zoom payload shape",
+        event_type=event_type,
+        object_keys=sorted(obj.keys()),
+        participant_keys=(
+            sorted(participant.keys()) if isinstance(participant, dict) else None
+        ),
+        has_uuid="uuid" in obj,
+        has_host_id="host_id" in obj,
+    )
+
+
 def dispatch(event_type: str, payload: dict[str, Any]):
+    _log_payload_shape(event_type, payload)
+
     handler = HANDLERS.get(event_type)
     if not handler:
         log.info("no handler for zoom event type", event_type=event_type)
