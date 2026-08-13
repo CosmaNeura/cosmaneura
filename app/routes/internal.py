@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
-from pydantic import BaseModel, Field, computed_field
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Request, status
+from pydantic import BaseModel, Field, computed_field, model_validator
 
+import app.commands.scribe_transcript
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
@@ -16,7 +17,7 @@ from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
-from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
@@ -245,6 +246,58 @@ def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> 
         # TODO(mbianco) model_dump does not retain the types, so we lose type checking on `perform`
         **data.model_dump(),
     )
+
+
+class ScribeTranscriptEntry(BaseModel, extra="forbid"):
+    speaker: Literal["Doctor", "Patient", "Other", "Unknown"]
+    content: str = Field(min_length=1)
+    startTime: int = Field(ge=0)
+    endTime: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def timestamps_are_ordered(self):
+        if self.endTime <= self.startTime:
+            raise ValueError("endTime must be greater than startTime")
+        return self
+
+
+class ScribeTranscriptImport(BaseModel, extra="forbid"):
+    doctor_id: TypeIDType
+    appointment_id: TypeIDType
+    patient_id: TypeIDType
+    duration: int = Field(ge=0)
+    transcript_data: list[ScribeTranscriptEntry] = Field(min_length=1)
+
+
+@internal_api_app.post("/scribe/transcripts", response_model=AIVisitTranscript)
+def import_scribe_transcript(
+    request: Request,
+    data: ScribeTranscriptImport,
+    _idempotency_key: Annotated[
+        str,
+        Header(alias="Idempotency-Key", min_length=8, max_length=255),
+    ],
+) -> AIVisitTranscript:
+    doctor: Doctor = request.state.doctor
+    appointment = Appointment.get(id=data.appointment_id)
+    if (
+        appointment is None
+        or appointment.doctor_id != doctor.id
+        or data.doctor_id != appointment.doctor_id
+        or data.patient_id != appointment.patient_id
+    ):
+        raise HTTPException(status_code=404, detail="Appointment not found.")
+
+    try:
+        return app.commands.scribe_transcript.perform(
+            appointment=appointment,
+            duration=data.duration,
+            transcript_data=[
+                TranscriptEntry(**entry.model_dump()) for entry in data.transcript_data
+            ],
+        )
+    except app.commands.scribe_transcript.TranscriptConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # for "raw" types like str, we need to explicitly specify the response_model

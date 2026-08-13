@@ -352,6 +352,65 @@
         ]
       }
     },
+    "/internal/v1/scribe/transcripts": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Import Scribe Transcript",
+        "operationId": "import_scribe_transcript",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 255,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScribeTranscriptImport"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AIVisitTranscript"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/notes/get-signed-url": {
       "post": {
         "tags": [
@@ -1919,6 +1978,83 @@
           "meetings"
         ],
         "title": "ScheduleResponse"
+      },
+      "ScribeTranscriptEntry": {
+        "properties": {
+          "speaker": {
+            "type": "string",
+            "enum": [
+              "Doctor",
+              "Patient",
+              "Other",
+              "Unknown"
+            ],
+            "title": "Speaker"
+          },
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Content"
+          },
+          "startTime": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Starttime"
+          },
+          "endTime": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Endtime"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "speaker",
+          "content",
+          "startTime",
+          "endTime"
+        ],
+        "title": "ScribeTranscriptEntry"
+      },
+      "ScribeTranscriptImport": {
+        "properties": {
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          },
+          "patient_id": {
+            "type": "string",
+            "title": "Patient Id"
+          },
+          "duration": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Duration"
+          },
+          "transcript_data": {
+            "items": {
+              "$ref": "#/components/schemas/ScribeTranscriptEntry"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Transcript Data"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doctor_id",
+          "appointment_id",
+          "patient_id",
+          "duration",
+          "transcript_data"
+        ],
+        "title": "ScribeTranscriptImport"
       },
       "SettingsData": {
         "properties": {
