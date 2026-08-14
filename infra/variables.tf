@@ -107,6 +107,54 @@ variable "scribe_service_timeout_seconds" {
   }
 }
 
+variable "deploy_parallel_vnet_environment" {
+  description = "Create the empty East US VNet-integrated platform foundation after a separately approved plan."
+  type        = bool
+  default     = false
+}
+
+variable "parallel_platform_location" {
+  description = "Target region for the parallel platform network and Container Apps environment."
+  type        = string
+  default     = "eastus"
+}
+
+variable "parallel_platform_vnet_address_space" {
+  description = "Non-overlapping address space for the parallel platform VNet."
+  type        = list(string)
+  default     = ["10.43.0.0/16"]
+
+  validation {
+    condition     = length(var.parallel_platform_vnet_address_space) > 0 && alltrue([for prefix in var.parallel_platform_vnet_address_space : can(cidrnetmask(prefix))])
+    error_message = "parallel_platform_vnet_address_space must contain valid CIDR prefixes"
+  }
+}
+
+variable "parallel_platform_container_apps_subnet_address_prefixes" {
+  description = "Dedicated subnet prefixes for the parallel Container Apps workload-profile environment."
+  type        = list(string)
+  default     = ["10.43.2.0/23"]
+
+  validation {
+    condition     = length(var.parallel_platform_container_apps_subnet_address_prefixes) > 0 && alltrue([for prefix in var.parallel_platform_container_apps_subnet_address_prefixes : can(cidrnetmask(prefix))])
+    error_message = "parallel_platform_container_apps_subnet_address_prefixes must contain valid CIDR prefixes"
+  }
+}
+
+variable "scribe_virtual_network_id" {
+  description = "Resource ID of the Scribe VNet to peer for an approved synthetic connectivity phase."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.scribe_virtual_network_id == "" ||
+      can(regex("^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+$", var.scribe_virtual_network_id))
+    )
+    error_message = "scribe_virtual_network_id must be an Azure virtual network resource ID"
+  }
+}
+
 # start commands for the container types
 data "external" "procfile" {
   program     = ["yq", "Procfile", "--output-format", "json"]

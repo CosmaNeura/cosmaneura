@@ -104,3 +104,11 @@ and principal IDs are non-secret outputs; the principal receives only the Entra 
 `Scribe.Workflow.Access`. The feature remains false by default. The current platform Container Apps
 environment has no VNet integration, so private network reachability must be designed and reviewed
 before enablement. See [`../docs/SCRIBE_WORKFLOW.md`](../docs/SCRIBE_WORKFLOW.md).
+
+## Parallel platform network
+
+The review-only East US replacement foundation is defined behind
+`deploy_parallel_vnet_environment = false`. The default configuration creates nothing. It never
+clones a Container App, binds a custom domain, changes DNS, or moves traffic. See
+[`../docs/PLATFORM_SCRIBE_NETWORK_PLAN.md`](../docs/PLATFORM_SCRIBE_NETWORK_PLAN.md) for the paired
+platform/Scribe plans and approval gates.

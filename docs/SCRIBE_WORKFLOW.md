@@ -48,6 +48,11 @@ them. Keep `enable_scribe_workflow = false` until a reviewed, non-destructive ne
 connects the platform runtime to the Scribe VNet and private DNS. Do not make Scribe public as a
 workaround.
 
+The approved design is a false-by-default parallel East US environment with same-region VNet
+peering and Scribe private-DNS resolution. Its implementation and review gates are in
+[`PLATFORM_SCRIBE_NETWORK_PLAN.md`](PLATFORM_SCRIBE_NETWORK_PLAN.md). No foundation deployment,
+workload clone, DNS change, or cutover is approved by that design.
+
 ## Rollout
 
 1. Review the OpenTofu plan for the new platform managed identity and its attachment. Apply with
