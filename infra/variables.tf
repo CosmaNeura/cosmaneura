@@ -155,6 +155,60 @@ variable "scribe_virtual_network_id" {
   }
 }
 
+variable "deploy_parallel_private_data_endpoints" {
+  description = "Add private endpoints from the parallel East US VNet to the current PostgreSQL, Redis, and uploads storage after separate review."
+  type        = bool
+  default     = false
+}
+
+variable "parallel_platform_private_endpoint_subnet_address_prefixes" {
+  description = "Dedicated subnet prefixes for cross-region private endpoints used during migration."
+  type        = list(string)
+  default     = ["10.43.1.0/24"]
+
+  validation {
+    condition     = length(var.parallel_platform_private_endpoint_subnet_address_prefixes) > 0 && alltrue([for prefix in var.parallel_platform_private_endpoint_subnet_address_prefixes : can(cidrnetmask(prefix))])
+    error_message = "parallel_platform_private_endpoint_subnet_address_prefixes must contain valid CIDR prefixes"
+  }
+}
+
+variable "deploy_parallel_network_smoke_job" {
+  description = "Create a manual, scale-to-zero synthetic job in the parallel environment after its image and private network are approved."
+  type        = bool
+  default     = false
+}
+
+variable "parallel_network_smoke_image_repository" {
+  description = "Repository path in the existing ACR for the synthetic network probe image."
+  type        = string
+  default     = "cosmaneura/platform-network-smoke"
+}
+
+variable "parallel_network_smoke_image_tag" {
+  description = "Immutable commit SHA for the synthetic network probe image."
+  type        = string
+  default     = "not-built"
+
+  validation {
+    condition     = var.parallel_network_smoke_image_tag == "not-built" || can(regex("^[0-9a-f]{7,64}$", var.parallel_network_smoke_image_tag))
+    error_message = "parallel_network_smoke_image_tag must be not-built or a lowercase hexadecimal commit SHA"
+  }
+}
+
+variable "parallel_scribe_private_base_url" {
+  description = "Private HTTPS Scribe origin used only by the synthetic network probe; contains no credential."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.parallel_scribe_private_base_url == "" ||
+      can(regex("^https://[^/]+/?$", var.parallel_scribe_private_base_url))
+    )
+    error_message = "parallel_scribe_private_base_url must be an HTTPS origin without a path"
+  }
+}
+
 # start commands for the container types
 data "external" "procfile" {
   program     = ["yq", "Procfile", "--output-format", "json"]

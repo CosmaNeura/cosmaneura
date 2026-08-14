@@ -3,6 +3,10 @@
 **Plan date:** 2026-08-13  
 **Approval state:** design approved; deployment and cutover not approved
 
+The next review-only slice—private data endpoints, synthetic job, workload clone ordering, Redis
+retirement, and current cost envelope—is in
+[`EAST_US_DATA_PATH_PLAN.md`](EAST_US_DATA_PATH_PLAN.md).
+
 ## Outcome
 
 Build a second platform Container Apps environment beside the live one, connect its VNet privately
@@ -126,16 +130,20 @@ Apply only after the Scribe plan shows two additions, zero changes, and zero des
 peerings report `Connected` and the existing Scribe wildcard still resolves to `10.42.2.62` from
 the platform VNet.
 
-### Gate 3 — synthetic workload validation (not designed or approved here)
+### Gate 3 — synthetic workload validation (designed; deployment and execution not approved)
 
-Define a separate, scale-to-zero test caller in the parallel environment. Do not clone production
-settings wholesale. With synthetic identifiers only, prove:
+The false-by-default manual job is defined in `infra/parallel_network_smoke.tf`; its bounded probe
+source is in `infra/network_smoke/`. Do not clone production settings wholesale. With synthetic
+inputs only, prove:
 
 - the Scribe FQDN resolves to its private IP;
 - an unauthenticated workflow call returns `401`;
 - a valid token without the required role or caller identity returns `403`;
 - the exact managed identity and role can complete one idempotent consent/session flow; and
 - logs contain no tokens, identity claims, patient data, transcript text, or signed URLs.
+
+Build, job deployment, and job start are three separate future approvals. See
+[`EAST_US_DATA_PATH_PLAN.md`](EAST_US_DATA_PATH_PLAN.md).
 
 ### Gate 4 — production workload and data-path design (not approved)
 
