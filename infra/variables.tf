@@ -62,6 +62,51 @@ variable "python_public_vars" {
   ]
 }
 
+variable "enable_scribe_workflow" {
+  description = "Enable passwordless calls from the platform web API to the private Scribe API."
+  type        = bool
+  default     = false
+}
+
+variable "scribe_service_base_url" {
+  description = "Private HTTPS origin of the Scribe API; contains no credential."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      !var.enable_scribe_workflow ||
+      can(regex("^https://", var.scribe_service_base_url))
+    )
+    error_message = "scribe_service_base_url must be HTTPS when Scribe workflow calls are enabled"
+  }
+}
+
+variable "scribe_service_scope" {
+  description = "Scribe Entra API scope in api://<app-id>/.default form; contains no credential."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      !var.enable_scribe_workflow ||
+      can(regex("^api://.+/\\.default$", var.scribe_service_scope))
+    )
+    error_message = "scribe_service_scope must use api://<app-id>/.default when enabled"
+  }
+}
+
+variable "scribe_service_timeout_seconds" {
+  description = "Timeout for one platform-to-Scribe API request."
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.scribe_service_timeout_seconds >= 1 && var.scribe_service_timeout_seconds <= 60
+    error_message = "scribe_service_timeout_seconds must be between 1 and 60"
+  }
+}
+
 # start commands for the container types
 data "external" "procfile" {
   program     = ["yq", "Procfile", "--output-format", "json"]

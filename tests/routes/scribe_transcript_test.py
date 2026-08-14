@@ -41,7 +41,7 @@ def _settings() -> EntraServiceAuthSettings:
     return EntraServiceAuthSettings(
         enabled=True,
         tenant_id=TENANT_ID,
-        audience="api://cosmaneura-platform",
+        audience=str(uuid4()),
         scribe_client_id=SCRIBE_CLIENT_ID,
     )
 

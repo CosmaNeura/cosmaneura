@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 from decouple import config
 
@@ -21,7 +22,13 @@ class EntraServiceAuthSettings:
         return f"https://login.microsoftonline.com/{self.tenant_id}/discovery/v2.0/keys"
 
     def is_complete(self) -> bool:
-        return bool(self.tenant_id and self.audience and self.scribe_client_id)
+        try:
+            UUID(self.tenant_id)
+            UUID(self.audience)
+            UUID(self.scribe_client_id)
+        except ValueError:
+            return False
+        return True
 
 
 SERVICE_AUTH_SETTINGS = EntraServiceAuthSettings(

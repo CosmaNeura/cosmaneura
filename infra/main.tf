@@ -456,6 +456,11 @@ resource "azurerm_container_app" "app" {
   # > When in single revision mode, Container Apps handles the automatic switch between revisions to support zero downtime deployment.
   revision_mode = "Single"
 
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.scribe_workflow.id]
+  }
+
   ingress {
     external_enabled = true
     target_port      = 80
@@ -520,6 +525,37 @@ resource "azurerm_container_app" "app" {
           name        = env.key
           secret_name = replace(lower(env.key), "_", "-")
         }
+      }
+
+      env {
+        name  = "SCRIBE_WORKFLOW_ENABLED"
+        value = tostring(var.enable_scribe_workflow)
+      }
+
+      env {
+        name  = "SCRIBE_MANAGED_IDENTITY_CLIENT_ID"
+        value = azurerm_user_assigned_identity.scribe_workflow.client_id
+      }
+
+      dynamic "env" {
+        for_each = var.enable_scribe_workflow ? [1] : []
+        content {
+          name  = "SCRIBE_SERVICE_BASE_URL"
+          value = var.scribe_service_base_url
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.enable_scribe_workflow ? [1] : []
+        content {
+          name  = "SCRIBE_SERVICE_SCOPE"
+          value = var.scribe_service_scope
+        }
+      }
+
+      env {
+        name  = "SCRIBE_SERVICE_TIMEOUT_SECONDS"
+        value = tostring(var.scribe_service_timeout_seconds)
       }
 
       # yes, memory is defined as a string and CPU is defined as a float
@@ -990,6 +1026,17 @@ resource "azurerm_container_app" "job-monitor" {
 ####################
 # Health Services Access
 ####################
+
+# Passwordless, app-only identity for calls from the platform web API to Scribe.
+# Its Scribe.Workflow.Access application-role assignment is configured in Entra,
+# outside Azure resource RBAC. No client secret is created or stored here.
+resource "azurerm_user_assigned_identity" "scribe_workflow" {
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  name                = "${local.base_name}-scribe-workflow"
+
+  tags = var.tags
+}
 
 resource "azurerm_user_assigned_identity" "health_services" {
   resource_group_name = azurerm_resource_group.main.name

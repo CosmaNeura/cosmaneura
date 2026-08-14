@@ -22,12 +22,16 @@ assignment are complete:
 ```text
 SCRIBE_HANDOFF_ENABLED=true
 ENTRA_TENANT_ID=<tenant-id>
-SCRIBE_API_AUDIENCE=api://<platform-api-client-id>
+SCRIBE_API_AUDIENCE=<platform-api-client-id>
 SCRIBE_CALLER_CLIENT_ID=<scribe-managed-identity-client-id>
 ```
 
 These are identifiers, not credentials. Do not add a client secret. Scribe uses its Azure managed
 identity to obtain a short-lived token for `api://<platform-api-client-id>/.default`.
+
+The platform API app registration must issue v2 access tokens and add the `idtyp` optional claim
+to access tokens. The v2 token's `aud` is the bare application client ID UUID; it is not the
+`api://.../.default` scope string.
 
 The matching Entra setup and rollout steps are documented in the Scribe repository at
 `docs/MASTER_PLATFORM_HANDOFF.md`.
