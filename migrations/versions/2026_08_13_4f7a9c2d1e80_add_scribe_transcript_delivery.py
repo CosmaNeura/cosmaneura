@@ -53,6 +53,11 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("payload_sha256", sa.String(length=64), nullable=False),
+        sa.Column(
+            "pipeline_dispatched_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
         sa.ForeignKeyConstraint(
             ["appointment_id"],
             ["appointment.id"],

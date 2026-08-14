@@ -174,6 +174,45 @@ def test_scribe_transcript_delivery_is_idempotent_and_queues_pipeline_once(
     assert queued_scores == queued_notes
 
 
+def test_scribe_transcript_retry_repairs_pipeline_dispatch(
+    scribe_client: TestClient,
+    monkeypatch,
+) -> None:
+    appointment = _appointment()
+    payload = _payload(appointment)
+    note_attempts: list[object] = []
+    score_attempts: list[object] = []
+
+    def fail_first_note_dispatch(transcript: AIVisitTranscript) -> None:
+        note_attempts.append(transcript.id)
+        if len(note_attempts) == 1:
+            raise RuntimeError("synthetic broker outage")
+
+    monkeypatch.setattr(
+        app.jobs.transcribe,
+        "queue_schema_transcription",
+        fail_first_note_dispatch,
+    )
+    monkeypatch.setattr(
+        app.jobs.score_engagement,
+        "queue",
+        lambda *, transcript_id: score_attempts.append(transcript_id),
+    )
+    url = api_app.url_path_for("import_scribe_transcript")
+
+    with pytest.raises(RuntimeError, match="synthetic broker outage"):
+        scribe_client.post(url, headers=_headers(), json=payload)
+    replay = scribe_client.post(url, headers=_headers(), json=payload)
+
+    assert replay.status_code == status.HTTP_200_OK
+    assert replay.json()["disposition"] == "replayed"
+    assert len(note_attempts) == 2
+    assert score_attempts == [note_attempts[-1]]
+    receipt = ScribeTranscriptDelivery.get(appointment_id=appointment.id)
+    assert receipt is not None
+    assert receipt.pipeline_dispatched_at is not None
+
+
 def test_scribe_transcript_delivery_rejects_changed_retry(
     scribe_client: TestClient,
     monkeypatch,

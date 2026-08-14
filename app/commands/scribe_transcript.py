@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, cast
 from uuid import UUID
 
@@ -82,7 +83,25 @@ def _replayed_result(
     transcript = session.get(AIVisitTranscript, receipt.transcript_id)
     if transcript is None:
         raise TranscriptPersistenceError("Transcript receipt is incomplete.")
+    _dispatch_pipeline_if_needed(session, receipt, transcript)
     return TranscriptImportResult(transcript=transcript, disposition="replayed")
+
+
+def _dispatch_pipeline_if_needed(
+    session: Session,
+    receipt: ScribeTranscriptDelivery,
+    transcript: AIVisitTranscript,
+) -> None:
+    if receipt.pipeline_dispatched_at is not None:
+        return
+
+    # Downstream tasks are idempotent. Mark the receipt only after both sends
+    # return so a transient broker failure is repaired by the next delivery retry.
+    app.jobs.transcribe.queue_schema_transcription(transcript)
+    app.jobs.score_engagement.queue(transcript_id=transcript.id)
+    receipt.pipeline_dispatched_at = datetime.now(UTC)
+    session.add(receipt)
+    session.commit()
 
 
 def perform(
@@ -168,9 +187,7 @@ def perform(
             raise TranscriptPersistenceError from exc
         return _replayed_result(session, receipt)
 
-    if created:
-        app.jobs.transcribe.queue_schema_transcription(transcript)
-        app.jobs.score_engagement.queue(transcript_id=transcript.id)
+    _dispatch_pipeline_if_needed(session, delivery, transcript)
 
     return TranscriptImportResult(
         transcript=transcript,

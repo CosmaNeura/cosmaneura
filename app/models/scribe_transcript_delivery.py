@@ -1,3 +1,4 @@
+from datetime import datetime
 from uuid import UUID
 
 from activemodel import BaseModel
@@ -35,3 +36,4 @@ class ScribeTranscriptDelivery(
     appointment_id: TypeIDType = Appointment.foreign_key()
     transcript_id: TypeIDType = AIVisitTranscript.foreign_key()
     payload_sha256: str = Field(max_length=64)
+    pipeline_dispatched_at: datetime | None = Field(default=None, nullable=True)

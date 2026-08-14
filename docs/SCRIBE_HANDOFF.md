@@ -39,8 +39,10 @@ caller's idempotency key and Scribe session ID to a canonical encounter, payload
 transcript. Identical retries return the same transcript as `replayed`. A changed payload or
 identifier reuse returns `409`; content is never overwritten.
 
-The existing note-schema and engagement jobs are queued only when the transcript is first created.
-The browser upload and AssemblyAI path remains present during the feature-flagged rollout.
+The note-schema and engagement jobs are dispatched once after acceptance. A durable marker repairs
+a transient broker failure on the next identical retry; downstream task idempotency makes this
+at-least-once dispatch safe. The browser upload and AssemblyAI path remains present during the
+feature-flagged rollout.
 
 ## Acceptance check
 
