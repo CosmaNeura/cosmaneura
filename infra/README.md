@@ -96,3 +96,30 @@ resource is added: `tofu apply` must create the container before
 `deploy.sh` can `az containerapp update` its image. `deploy.sh` is
 defensive about this — it skips containers that don't exist yet with
 a warning instead of failing the whole deploy.
+
+## Scribe workflow identity
+
+The web API has a dedicated user-assigned managed identity for platform-to-Scribe calls. Its client
+and principal IDs are non-secret outputs; the principal receives only the Entra application role
+`Scribe.Workflow.Access`. The feature remains false by default. The current platform Container Apps
+environment has no VNet integration, so private network reachability must be designed and reviewed
+before enablement. See [`../docs/SCRIBE_WORKFLOW.md`](../docs/SCRIBE_WORKFLOW.md).
+
+## Parallel platform network
+
+The review-only East US replacement foundation is defined behind
+`deploy_parallel_vnet_environment = false`. The default configuration creates nothing. It never
+clones a Container App, binds a custom domain, changes DNS, or moves traffic. See
+[`../docs/PLATFORM_SCRIBE_NETWORK_PLAN.md`](../docs/PLATFORM_SCRIBE_NETWORK_PLAN.md) for the paired
+platform/Scribe plans and approval gates.
+
+The separately gated private bridge and manual synthetic probe are also false by default:
+
+```hcl
+deploy_parallel_private_data_endpoints = false
+deploy_parallel_network_smoke_job      = false
+```
+
+They are documented in [`../docs/EAST_US_DATA_PATH_PLAN.md`](../docs/EAST_US_DATA_PATH_PLAN.md).
+The bridge does not disable current public endpoints, rotate credentials, or clone a production
+workload.

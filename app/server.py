@@ -10,6 +10,8 @@ from typing import Any
 import arrow
 import orjson
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette import status
 
@@ -26,6 +28,7 @@ from .environments import is_production
 from .routes.chat import chat_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
+from .routes.service import service_api_app
 from .routes.static import mount_public_directory
 
 fast_api_args = {}
@@ -63,6 +66,8 @@ api_app = FastAPI(
 )
 
 api_app.include_router(internal_api_app)
+# Workload-only routes intentionally stay out of the browser client schema.
+api_app.include_router(service_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
@@ -70,6 +75,20 @@ api_app.include_router(zoom_auth_app)
 api_app.include_router(recall_callbacks_app)
 
 add_middleware(api_app)
+
+
+@api_app.exception_handler(RequestValidationError)
+async def safe_request_validation_handler(
+    request: Request, exc: RequestValidationError
+):
+    if request.url.path.startswith("/service/v1/"):
+        # FastAPI's default 422 body includes rejected input. Service payloads
+        # can contain PHI, so return only a generic contract error here.
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": "Invalid service request."},
+        )
+    return await request_validation_exception_handler(request, exc)
 
 
 @api_app.get("/healthcheck")
