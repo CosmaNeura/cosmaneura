@@ -122,3 +122,71 @@ def test_sync_skips_doctor_without_zoom(global_session):
     ) as mock_get:
         perform(str(doctor.id))
         mock_get.assert_not_called()
+
+
+# A recurring meeting with no fixed time (Zoom type 3): no start_time, no
+# duration. This shape raised KeyError('start_time') in production from
+# 2026-07-29, killing the sync mid-loop.
+RECURRING_NO_FIXED_TIME = {
+    "id": "555000555",
+    "topic": "Open Office Hours",
+    "type": 3,
+    "join_url": "https://zoom.us/j/555000555",
+}
+
+
+def test_sync_skips_recurring_meeting_without_start_time(global_session):
+    doctor = DoctorFactory.build().save()
+    _create_zoom_integration(doctor)
+
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=[RECURRING_NO_FIXED_TIME],
+    ):
+        perform(str(doctor.id))
+
+    assert ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).count() == 0
+
+
+def test_sync_continues_past_untimed_meeting(global_session):
+    """Regression: the untimed meeting sits *between* two timed ones, so a
+    raise here would persist the first and silently drop the last —
+    truncating the agenda instead of failing loudly."""
+    doctor = DoctorFactory.build().save()
+    _create_zoom_integration(doctor)
+
+    payload = [FAKE_MEETINGS[0], RECURRING_NO_FIXED_TIME, FAKE_MEETINGS[1]]
+
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=payload,
+    ):
+        perform(str(doctor.id))
+
+    meetings = cast(
+        list[ZoomMeeting],
+        list(ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).all()),
+    )
+    assert {m.topic for m in meetings} == {"Patient Follow-up", "New Patient Intake"}
+    assert "Open Office Hours" not in {m.topic for m in meetings}
+
+
+def test_sync_tolerates_missing_optional_fields(global_session):
+    "topic/duration/join_url must not be able to abort the sync either."
+    doctor = DoctorFactory.build().save()
+    _create_zoom_integration(doctor)
+
+    sparse = {"id": "777000777", "start_time": "2026-04-07T18:00:00Z"}
+
+    with patch(
+        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+        return_value=[sparse],
+    ):
+        perform(str(doctor.id))
+
+    meeting = cast(
+        ZoomMeeting,
+        ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id="777000777"),
+    )
+    assert meeting is not None
+    assert meeting.duration == 0

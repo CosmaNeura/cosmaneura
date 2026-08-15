@@ -54,7 +54,10 @@ variable "python_public_vars" {
     # recall.ai region
     "RECALL_API_BASE",
     # explicit cookie domain to avoid using internal Azure Container App domains
-    "COOKIE_DOMAIN"
+    "COOKIE_DOMAIN",
+    # app-only Entra authentication for the feature-flagged Scribe workload route
+    "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
+    "SCRIBE_CALLER_CLIENT_ID"
   ]
 }
 
