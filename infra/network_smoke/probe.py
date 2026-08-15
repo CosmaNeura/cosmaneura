@@ -72,11 +72,15 @@ def _request_status(url: str, *, method: str, timeout_seconds: int) -> int:
         raise ProbeFailure("https_request_failed") from exc
 
 
-def run_probe(health_url: str, workflow_url: str, *, timeout_seconds: int = 10) -> dict[str, object]:
+def run_probe(
+    health_url: str, workflow_url: str, *, timeout_seconds: int = 10
+) -> dict[str, object]:
     hostname, _ = _validated_endpoints(health_url, workflow_url)
     resolve_private_addresses(hostname)
 
-    health_status = _request_status(health_url, method="GET", timeout_seconds=timeout_seconds)
+    health_status = _request_status(
+        health_url, method="GET", timeout_seconds=timeout_seconds
+    )
     if health_status != 200:
         raise ProbeFailure("health_status_unexpected")
 
@@ -109,7 +113,9 @@ def main() -> int:
         print(json.dumps({"code": code, "result": "failed"}, sort_keys=True))
         return 1
     except Exception:
-        print(json.dumps({"code": "unexpected_error", "result": "failed"}, sort_keys=True))
+        print(
+            json.dumps({"code": "unexpected_error", "result": "failed"}, sort_keys=True)
+        )
         return 1
 
     print(json.dumps(result, sort_keys=True))
