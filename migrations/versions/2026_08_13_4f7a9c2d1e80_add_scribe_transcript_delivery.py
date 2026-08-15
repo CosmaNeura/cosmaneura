@@ -81,12 +81,7 @@ def upgrade() -> None:
             "scribe_session_id",
             name="uq_scribe_delivery_caller_session",
         ),
-    )
-    op.execute(
-        sa.text(
-            "COMMENT ON TABLE scribe_transcript_delivery "
-            "IS 'Non-PHI idempotency receipt for Scribe transcript delivery.'"
-        )
+        comment="Non-PHI idempotency receipt for Scribe transcript delivery.",
     )
     op.create_index(
         op.f("scribe_transcript_delivery_caller_client_id_idx"),

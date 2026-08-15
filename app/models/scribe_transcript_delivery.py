@@ -16,7 +16,7 @@ class ScribeTranscriptDelivery(
     TypeIDMixin("scribe_delivery"),
     table=True,
 ):
-    """Non-PHI receipt that makes the Scribe handoff safe to retry."""
+    """Non-PHI idempotency receipt for Scribe transcript delivery."""
 
     __table_args__ = (
         UniqueConstraint(
