@@ -27,7 +27,9 @@ class StaticCredential:
     async def get_token(self, *scopes: str, **kwargs: object) -> AccessToken:
         del kwargs
         self.scopes.extend(scopes)
-        return AccessToken("test-access-token", int(datetime.now(UTC).timestamp()) + 300)
+        return AccessToken(
+            "test-access-token", int(datetime.now(UTC).timestamp()) + 300
+        )
 
     async def close(self) -> None:
         self.closed = True

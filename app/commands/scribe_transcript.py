@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal, cast
+from typing import Literal
 from uuid import UUID
 
 import app.jobs.score_engagement
@@ -104,8 +104,9 @@ def _dispatch_pipeline_if_needed(
     session.commit()
 
 
-def perform(
+def _perform(
     *,
+    session: Session,
     encounter_id: TypeIDType,
     caller_client_id: str,
     idempotency_key: str,
@@ -114,8 +115,6 @@ def perform(
     duration: int,
     transcript_data: list[TranscriptEntry],
 ) -> TranscriptImportResult:
-    session = cast(Session, get_session())
-
     # Serializing deliveries for one encounter prevents two callers from
     # creating competing transcript rows before either receipt is visible.
     appointment = session.exec(
@@ -193,3 +192,26 @@ def perform(
         transcript=transcript,
         disposition="created" if created else "replayed",
     )
+
+
+def perform(
+    *,
+    encounter_id: TypeIDType,
+    caller_client_id: str,
+    idempotency_key: str,
+    scribe_session_id: UUID,
+    payload_sha256: str,
+    duration: int,
+    transcript_data: list[TranscriptEntry],
+) -> TranscriptImportResult:
+    with get_session() as session:
+        return _perform(
+            session=session,
+            encounter_id=encounter_id,
+            caller_client_id=caller_client_id,
+            idempotency_key=idempotency_key,
+            scribe_session_id=scribe_session_id,
+            payload_sha256=payload_sha256,
+            duration=duration,
+            transcript_data=transcript_data,
+        )
