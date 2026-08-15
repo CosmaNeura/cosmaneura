@@ -81,16 +81,21 @@ def upgrade() -> None:
             "scribe_session_id",
             name="uq_scribe_delivery_caller_session",
         ),
-        comment="Non-PHI idempotency receipt for Scribe transcript delivery.",
+    )
+    op.create_table_comment(
+        "scribe_transcript_delivery",
+        "Non-PHI idempotency receipt for Scribe transcript delivery.",
+        existing_comment=None,
+        schema=None,
     )
     op.create_index(
-        op.f("ix_scribe_transcript_delivery_caller_client_id"),
+        op.f("scribe_transcript_delivery_caller_client_id_idx"),
         "scribe_transcript_delivery",
         ["caller_client_id"],
         unique=False,
     )
     op.create_index(
-        op.f("ix_scribe_transcript_delivery_scribe_session_id"),
+        op.f("scribe_transcript_delivery_scribe_session_id_idx"),
         "scribe_transcript_delivery",
         ["scribe_session_id"],
         unique=False,
@@ -99,11 +104,11 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index(
-        op.f("ix_scribe_transcript_delivery_scribe_session_id"),
+        op.f("scribe_transcript_delivery_scribe_session_id_idx"),
         table_name="scribe_transcript_delivery",
     )
     op.drop_index(
-        op.f("ix_scribe_transcript_delivery_caller_client_id"),
+        op.f("scribe_transcript_delivery_caller_client_id_idx"),
         table_name="scribe_transcript_delivery",
     )
     op.drop_table("scribe_transcript_delivery")

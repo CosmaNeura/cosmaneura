@@ -1,6 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
+import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
@@ -36,4 +37,8 @@ class ScribeTranscriptDelivery(
     appointment_id: TypeIDType = Appointment.foreign_key()
     transcript_id: TypeIDType = AIVisitTranscript.foreign_key()
     payload_sha256: str = Field(max_length=64)
-    pipeline_dispatched_at: datetime | None = Field(default=None, nullable=True)
+    pipeline_dispatched_at: datetime | None = Field(
+        default=None,
+        nullable=True,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
