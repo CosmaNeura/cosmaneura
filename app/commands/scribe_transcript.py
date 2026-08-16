@@ -12,7 +12,10 @@ from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
-from app.models.scribe_transcript_delivery import ScribeTranscriptDelivery
+from app.models.scribe_transcript_delivery import (
+    LOGICAL_SCRIBE_PRODUCER,
+    ScribeTranscriptDelivery,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
@@ -42,7 +45,7 @@ def _entry_data(entries: list[TranscriptEntry]) -> list[dict[str, object]]:
 def _matching_receipt(
     session: Session,
     *,
-    caller_client_id: str,
+    logical_producer: str,
     idempotency_key: str,
     scribe_session_id: UUID,
     appointment_id: TypeIDType,
@@ -50,13 +53,13 @@ def _matching_receipt(
 ) -> ScribeTranscriptDelivery | None:
     by_key = session.exec(
         select(ScribeTranscriptDelivery).where(
-            ScribeTranscriptDelivery.caller_client_id == caller_client_id,
+            ScribeTranscriptDelivery.logical_producer == logical_producer,
             ScribeTranscriptDelivery.idempotency_key == idempotency_key,
         )
     ).first()
     by_session = session.exec(
         select(ScribeTranscriptDelivery).where(
-            ScribeTranscriptDelivery.caller_client_id == caller_client_id,
+            ScribeTranscriptDelivery.logical_producer == logical_producer,
             ScribeTranscriptDelivery.scribe_session_id == scribe_session_id,
         )
     ).first()
@@ -125,7 +128,7 @@ def _perform(
 
     receipt = _matching_receipt(
         session,
-        caller_client_id=caller_client_id,
+        logical_producer=LOGICAL_SCRIBE_PRODUCER,
         idempotency_key=idempotency_key,
         scribe_session_id=scribe_session_id,
         appointment_id=appointment.id,
@@ -160,6 +163,7 @@ def _perform(
         session.flush()
 
     delivery = ScribeTranscriptDelivery(
+        logical_producer=LOGICAL_SCRIBE_PRODUCER,
         caller_client_id=caller_client_id,
         idempotency_key=idempotency_key,
         scribe_session_id=scribe_session_id,
@@ -176,7 +180,7 @@ def _perform(
         session.rollback()
         receipt = _matching_receipt(
             session,
-            caller_client_id=caller_client_id,
+            logical_producer=LOGICAL_SCRIBE_PRODUCER,
             idempotency_key=idempotency_key,
             scribe_session_id=scribe_session_id,
             appointment_id=appointment.id,

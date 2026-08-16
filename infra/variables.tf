@@ -58,7 +58,7 @@ variable "python_public_vars" {
     "API_BASE_URL",
     # app-only Entra authentication for the feature-flagged Scribe workload route
     "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
-    "SCRIBE_CALLER_CLIENT_ID"
+    "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID"
   ]
 }
 
