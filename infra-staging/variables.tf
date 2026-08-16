@@ -57,7 +57,7 @@ variable "python_public_vars" {
     "COOKIE_DOMAIN",
     # app-only Entra authentication for feature-flagged workload routes
     "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
-    "SCRIBE_CALLER_CLIENT_ID",
+    "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
     "AGENT_API_ENABLED", "AGENT_API_AUDIENCE", "AGENT_API_SOVEREIGN_CLIENT_IDS",
     "AUTHORITY_KERNEL_ENABLED"
   ]

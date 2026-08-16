@@ -26,7 +26,7 @@ class EntraServiceAuthSettings:
         try:
             UUID(self.tenant_id)
             UUID(self.audience)
-        except ValueError:
+        except (ValueError, TypeError, AttributeError):
             return False
         return True
 
@@ -38,27 +38,40 @@ class EntraServiceAuthPolicy:
     settings: EntraServiceAuthSettings
     allowed_client_ids: frozenset[str]
     required_role: str
+    required_client_count: int = 1
+    log_namespace: str = "service_auth"
 
     def is_complete(self) -> bool:
         if (
             not self.settings.is_complete()
             or not self.allowed_client_ids
             or not self.required_role
+            or len(self.allowed_client_ids) != self.required_client_count
         ):
             return False
 
         try:
             for client_id in self.allowed_client_ids:
                 UUID(client_id)
-        except ValueError:
+        except (ValueError, TypeError, AttributeError):
             return False
         return True
 
 
-def _client_id_allowlist(value: str) -> frozenset[str]:
-    return frozenset(
-        client_id.strip() for client_id in value.split(",") if client_id.strip()
-    )
+def _client_id_allowlist(*values: str) -> frozenset[str]:
+    """Canonicalize UUIDs while retaining invalid values so policy fails closed."""
+
+    client_ids: set[str] = set()
+    for value in values:
+        for candidate in value.split(","):
+            candidate = candidate.strip()
+            if not candidate:
+                continue
+            try:
+                client_ids.add(str(UUID(candidate)))
+            except (ValueError, TypeError, AttributeError):
+                client_ids.add(candidate)
+    return frozenset(client_ids)
 
 
 SCRIBE_SERVICE_AUTH_SETTINGS = EntraServiceAuthSettings(
@@ -70,9 +83,12 @@ SCRIBE_SERVICE_AUTH_SETTINGS = EntraServiceAuthSettings(
 SCRIBE_SERVICE_AUTH_POLICY = EntraServiceAuthPolicy(
     settings=SCRIBE_SERVICE_AUTH_SETTINGS,
     allowed_client_ids=_client_id_allowlist(
-        config("SCRIBE_CALLER_CLIENT_ID", default="", cast=str)
+        config("SCRIBE_CALLER_CLIENT_ID", default="", cast=str),
+        config("SCRIBE_RECONCILER_CALLER_CLIENT_ID", default="", cast=str),
     ),
     required_role=SCRIBE_TRANSCRIPT_WRITE_ROLE,
+    required_client_count=2,
+    log_namespace="scribe_handoff",
 )
 
 AGENT_API_AUTH_SETTINGS = EntraServiceAuthSettings(
@@ -88,4 +104,5 @@ AGENT_API_AUTH_POLICY = EntraServiceAuthPolicy(
         config("AGENT_API_SOVEREIGN_CLIENT_IDS", default="", cast=str)
     ),
     required_role=AGENT_API_ACCESS_ROLE,
+    log_namespace="agent_api",
 )

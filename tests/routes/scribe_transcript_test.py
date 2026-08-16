@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -10,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import status
 from fastapi.testclient import TestClient
 from jwt import InvalidTokenError
+from structlog.testing import capture_logs
 
 import app.jobs.score_engagement
 import app.jobs.transcribe
@@ -29,13 +31,21 @@ from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
-from app.models.scribe_transcript_delivery import ScribeTranscriptDelivery
+from app.models.scribe_transcript_delivery import (
+    LOGICAL_SCRIBE_PRODUCER,
+    ScribeTranscriptDelivery,
+)
+from sqlalchemy.exc import IntegrityError
 
 from tests.routes.utils import get_clerk_dev_user
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 SCRIBE_CLIENT_ID = "22222222-2222-2222-2222-222222222222"
+SCRIBE_RECONCILER_CLIENT_ID = "33333333-3333-3333-3333-333333333333"
+UNAUTHORIZED_CLIENT_ID = "44444444-4444-4444-4444-444444444444"
 VALID_TOKEN = "signed-entra-app-token"
+RECONCILER_TOKEN = "signed-entra-reconciler-token"
+UNAUTHORIZED_TOKEN = "signed-entra-unauthorized-token"
 
 
 def _policy() -> EntraServiceAuthPolicy:
@@ -45,24 +55,37 @@ def _policy() -> EntraServiceAuthPolicy:
             tenant_id=TENANT_ID,
             audience=str(uuid4()),
         ),
-        allowed_client_ids=frozenset({SCRIBE_CLIENT_ID}),
+        allowed_client_ids=frozenset(
+            {SCRIBE_CLIENT_ID, SCRIBE_RECONCILER_CLIENT_ID}
+        ),
         required_role=SCRIBE_TRANSCRIPT_WRITE_ROLE,
+        required_client_count=2,
+        log_namespace="scribe_handoff",
     )
 
 
-def _claims(*, roles: list[str] | None = None) -> dict[str, Any]:
+def _claims(
+    *,
+    client_id: str = SCRIBE_CLIENT_ID,
+    roles: list[str] | None = None,
+) -> dict[str, Any]:
     return {
         "tid": TENANT_ID,
-        "azp": SCRIBE_CLIENT_ID,
+        "azp": client_id,
         "idtyp": "app",
         "roles": roles if roles is not None else [SCRIBE_TRANSCRIPT_WRITE_ROLE],
     }
 
 
 def _decoder(token: str) -> dict[str, Any]:
-    if token != VALID_TOKEN:
+    caller_by_token = {
+        VALID_TOKEN: SCRIBE_CLIENT_ID,
+        RECONCILER_TOKEN: SCRIBE_RECONCILER_CLIENT_ID,
+        UNAUTHORIZED_TOKEN: UNAUTHORIZED_CLIENT_ID,
+    }
+    if token not in caller_by_token:
         raise InvalidTokenError
-    return _claims()
+    return _claims(client_id=caller_by_token[token])
 
 
 class StaticJwksClient:
@@ -178,6 +201,101 @@ def test_scribe_transcript_delivery_is_idempotent_and_queues_pipeline_once(
     assert queued_scores == queued_notes
 
 
+def test_scribe_transcript_delivery_deduplicates_across_physical_callers(
+    scribe_client: TestClient,
+    monkeypatch,
+) -> None:
+    appointment = _appointment()
+    payload = _payload(appointment)
+    queued_notes: list[object] = []
+    queued_scores: list[object] = []
+    monkeypatch.setattr(
+        app.jobs.transcribe,
+        "queue_schema_transcription",
+        lambda transcript: queued_notes.append(transcript.id),
+    )
+    monkeypatch.setattr(
+        app.jobs.score_engagement,
+        "queue",
+        lambda *, transcript_id: queued_scores.append(transcript_id),
+    )
+    url = api_app.url_path_for("import_scribe_transcript")
+
+    with capture_logs() as logs:
+        first = scribe_client.post(url, headers=_headers(), json=payload)
+        replay = scribe_client.post(
+            url,
+            headers=_headers(token=RECONCILER_TOKEN),
+            json=payload,
+        )
+
+    assert first.status_code == status.HTTP_201_CREATED
+    assert replay.status_code == status.HTTP_200_OK
+    assert replay.json()["transcript_id"] == first.json()["transcript_id"]
+    receipt = ScribeTranscriptDelivery.get(appointment_id=appointment.id)
+    assert receipt is not None
+    assert receipt.logical_producer == LOGICAL_SCRIBE_PRODUCER
+    assert receipt.caller_client_id == SCRIBE_CLIENT_ID
+    assert queued_notes == [receipt.transcript_id]
+    assert queued_scores == [receipt.transcript_id]
+    delivery_audits = [
+        entry
+        for entry in logs
+        if entry.get("action", "").startswith("scribe_handoff.delivery_")
+    ]
+    assert [entry["action"] for entry in delivery_audits] == [
+        "scribe_handoff.delivery_created",
+        "scribe_handoff.delivery_replayed",
+    ]
+    assert [entry["actual_caller_client_id"] for entry in delivery_audits] == [
+        SCRIBE_CLIENT_ID,
+        SCRIBE_RECONCILER_CLIENT_ID,
+    ]
+
+
+@pytest.mark.parametrize("collision", ["idempotency_key", "scribe_session_id"])
+def test_database_enforces_logical_identity_across_physical_callers(
+    scribe_client: TestClient,
+    monkeypatch,
+    collision: str,
+) -> None:
+    appointment = _appointment()
+    payload = _payload(appointment)
+    monkeypatch.setattr(
+        app.jobs.transcribe, "queue_schema_transcription", lambda transcript: None
+    )
+    monkeypatch.setattr(
+        app.jobs.score_engagement, "queue", lambda *, transcript_id: None
+    )
+    response = scribe_client.post(
+        api_app.url_path_for("import_scribe_transcript"),
+        headers=_headers(idempotency_key="database-key-1000"),
+        json=payload,
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    receipt = ScribeTranscriptDelivery.get(appointment_id=appointment.id)
+    assert receipt is not None
+
+    with pytest.raises(IntegrityError):
+        ScribeTranscriptDelivery(
+            logical_producer=LOGICAL_SCRIBE_PRODUCER,
+            caller_client_id=SCRIBE_RECONCILER_CLIENT_ID,
+            idempotency_key=(
+                receipt.idempotency_key
+                if collision == "idempotency_key"
+                else "different-database-key-1000"
+            ),
+            scribe_session_id=(
+                receipt.scribe_session_id
+                if collision == "scribe_session_id"
+                else uuid4()
+            ),
+            appointment_id=receipt.appointment_id,
+            transcript_id=receipt.transcript_id,
+            payload_sha256=receipt.payload_sha256,
+        ).save()
+
+
 def test_scribe_transcript_retry_repairs_pipeline_dispatch(
     scribe_client: TestClient,
     monkeypatch,
@@ -233,9 +351,21 @@ def test_scribe_transcript_delivery_rejects_changed_retry(
     assert scribe_client.post(url, headers=_headers(), json=payload).status_code == 201
 
     payload["segments"][0]["content"] = "Different content"
-    response = scribe_client.post(url, headers=_headers(), json=payload)
+    with capture_logs() as logs:
+        response = scribe_client.post(
+            url,
+            headers=_headers(token=RECONCILER_TOKEN),
+            json=payload,
+        )
 
     assert response.status_code == status.HTTP_409_CONFLICT
+    rejection = next(
+        entry
+        for entry in logs
+        if entry.get("action") == "scribe_handoff.delivery_rejected"
+    )
+    assert rejection["error_class"] == "delivery_conflict"
+    assert rejection["actual_caller_client_id"] == SCRIBE_RECONCILER_CLIENT_ID
     assert (
         AIVisitTranscript.where(
             AIVisitTranscript.appointment_id == appointment.id
@@ -261,7 +391,10 @@ def test_scribe_transcript_delivery_accepts_same_session_with_new_retry_key(
     assert scribe_client.post(url, headers=_headers(), json=payload).status_code == 201
     replay = scribe_client.post(
         url,
-        headers=_headers(idempotency_key="scribe-import-retry-1000"),
+        headers=_headers(
+            token=RECONCILER_TOKEN,
+            idempotency_key="scribe-import-retry-1000",
+        ),
         json=payload,
     )
 
@@ -310,6 +443,68 @@ def test_scribe_transcript_delivery_requires_app_role(
         api_app.dependency_overrides.pop(authenticate_scribe_service_request, None)
 
     assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_scribe_transcript_delivery_rejects_unallowlisted_app(
+    client: TestClient,
+) -> None:
+    api_app.dependency_overrides[authenticate_scribe_service_request] = (
+        EntraServiceAuthenticator(_policy(), decoder=_decoder)
+    )
+    try:
+        with capture_logs() as logs:
+            response = client.post(
+                api_app.url_path_for("import_scribe_transcript"),
+                headers=_headers(
+                    token=UNAUTHORIZED_TOKEN,
+                    idempotency_key="scribe-import-unauthorized-1000",
+                ),
+                json=_payload(_appointment()),
+            )
+    finally:
+        api_app.dependency_overrides.pop(authenticate_scribe_service_request, None)
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    rejection = next(
+        entry
+        for entry in logs
+        if entry.get("action") == "scribe_handoff.authorization_rejected"
+    )
+    assert rejection["actual_caller_client_id"] == UNAUTHORIZED_CLIENT_ID
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        replace(
+            _policy(),
+            allowed_client_ids=frozenset({SCRIBE_CLIENT_ID}),
+        ),
+        replace(
+            _policy(),
+            allowed_client_ids=frozenset(
+                {SCRIBE_CLIENT_ID, "not-a-uuid"}
+            ),
+        ),
+    ],
+)
+def test_scribe_transcript_delivery_fails_closed_for_incomplete_allowlist(
+    client: TestClient,
+    policy: EntraServiceAuthPolicy,
+) -> None:
+    api_app.dependency_overrides[authenticate_scribe_service_request] = (
+        EntraServiceAuthenticator(policy, decoder=_decoder)
+    )
+    try:
+        response = client.post(
+            api_app.url_path_for("import_scribe_transcript"),
+            headers=_headers(idempotency_key="scribe-import-incomplete-1000"),
+            json=_payload(_appointment()),
+        )
+    finally:
+        api_app.dependency_overrides.pop(authenticate_scribe_service_request, None)
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
 
 
 def test_entra_decoder_verifies_signature_issuer_and_audience() -> None:

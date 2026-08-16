@@ -1,12 +1,14 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
+from uuid import UUID
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient, PyJWTError
 
+from app import log
 from app.configuration.service_auth import (
     AGENT_API_AUTH_POLICY,
     SCRIBE_SERVICE_AUTH_POLICY,
@@ -64,6 +66,21 @@ class EntraServiceAuthenticator:
         self.policy = policy
         self.decoder = decoder
 
+    def _log_rejection(
+        self,
+        stage: str,
+        error_class: str,
+        *,
+        client_id: str | None = None,
+    ) -> None:
+        fields: dict[str, Any] = {
+            "action": f"{self.policy.log_namespace}.{stage}_rejected",
+            "error_class": error_class,
+        }
+        if client_id is not None:
+            fields["actual_caller_client_id"] = client_id
+        log.warning("service authentication rejected", **fields)
+
     def __call__(
         self,
         credentials: Annotated[
@@ -72,37 +89,57 @@ class EntraServiceAuthenticator:
         ],
     ) -> EntraServicePrincipal:
         if not self.policy.settings.enabled or not self.policy.is_complete():
+            self._log_rejection("authentication", "service_auth_not_configured")
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Service authentication is not configured.",
             )
 
         if credentials is None or credentials.scheme.lower() != "bearer":
+            self._log_rejection("authentication", "missing_bearer_token")
             raise _authentication_error()
 
         decoder = self.decoder or EntraTokenDecoder(self.policy.settings)
         try:
             claims = decoder(credentials.credentials)
         except (PyJWTError, ValueError, TypeError):
+            self._log_rejection("authentication", "invalid_access_token")
             raise _authentication_error() from None
 
+        raw_client_id = claims.get("azp")
+        try:
+            client_id = (
+                str(UUID(raw_client_id)) if isinstance(raw_client_id, str) else None
+            )
+        except ValueError:
+            client_id = None
+
         if claims.get("tid") != self.policy.settings.tenant_id:
+            self._log_rejection(
+                "authentication",
+                "tenant_mismatch",
+                client_id=client_id,
+            )
             raise _authentication_error()
 
-        client_id = claims.get("azp")
         roles = claims.get("roles")
         if (
             claims.get("idtyp") != "app"
-            or not isinstance(client_id, str)
             or client_id not in self.policy.allowed_client_ids
             or not isinstance(roles, list)
             or self.policy.required_role not in roles
         ):
+            self._log_rejection(
+                "authorization",
+                "app_claims_not_authorized",
+                client_id=client_id,
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Service caller is not authorized.",
             )
 
+        assert client_id is not None
         return EntraServicePrincipal(client_id=client_id)
 
 

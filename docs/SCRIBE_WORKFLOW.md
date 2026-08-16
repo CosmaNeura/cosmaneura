@@ -40,6 +40,12 @@ The platform requests the `.default` scope. Scribe validates the resulting token
 application client ID UUID, plus the exact platform client ID and role. The Scribe API app
 registration must issue v2 access tokens and add `idtyp` as an access-token optional claim.
 
+This outbound scope is intentionally distinct from the inbound handoff setting
+`SCRIBE_API_AUDIENCE`, which must contain the master platform API application ID. Migrating the
+outbound Entra registration means updating only `SCRIBE_SERVICE_SCOPE` while the workflow remains
+disabled, validating the resulting token's Scribe audience and role, and then following the private
+network rollout below. Never copy the Scribe API application ID into `SCRIBE_API_AUDIENCE`.
+
 ## Network prerequisite
 
 The currently deployed platform Container Apps environment is not VNet-integrated, while Scribe is

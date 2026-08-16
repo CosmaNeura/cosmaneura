@@ -10,6 +10,7 @@ from jwt import MissingRequiredClaimError
 
 from app.configuration.service_auth import (
     AGENT_API_ACCESS_ROLE,
+    SCRIBE_TRANSCRIPT_WRITE_ROLE,
     EntraServiceAuthPolicy,
     EntraServiceAuthSettings,
 )
@@ -21,6 +22,8 @@ from app.routes.dependencies.entra_service import (
 TENANT_ID = str(uuid4())
 AUDIENCE = str(uuid4())
 SOVEREIGN_CLIENT_ID = str(uuid4())
+SCRIBE_CLIENT_ID = str(uuid4())
+SCRIBE_RECONCILER_CLIENT_ID = str(uuid4())
 
 
 def _policy() -> EntraServiceAuthPolicy:
@@ -40,6 +43,22 @@ def _credentials() -> HTTPAuthorizationCredentials:
     return HTTPAuthorizationCredentials(scheme="Bearer", credentials="synthetic")
 
 
+def _scribe_policy() -> EntraServiceAuthPolicy:
+    return EntraServiceAuthPolicy(
+        settings=EntraServiceAuthSettings(
+            enabled=True,
+            tenant_id=TENANT_ID,
+            audience=AUDIENCE,
+        ),
+        allowed_client_ids=frozenset(
+            {SCRIBE_CLIENT_ID, SCRIBE_RECONCILER_CLIENT_ID}
+        ),
+        required_role=SCRIBE_TRANSCRIPT_WRITE_ROLE,
+        required_client_count=2,
+        log_namespace="scribe_handoff",
+    )
+
+
 def test_agent_auth_requires_allowlisted_sovereign_and_agent_role() -> None:
     claims = {
         "tid": TENANT_ID,
@@ -52,6 +71,43 @@ def test_agent_auth_requires_allowlisted_sovereign_and_agent_role() -> None:
     principal = authenticator(_credentials())
 
     assert principal.client_id == SOVEREIGN_CLIENT_ID
+
+
+@pytest.mark.parametrize("client_id", [SCRIBE_CLIENT_ID, SCRIBE_RECONCILER_CLIENT_ID])
+def test_scribe_auth_preserves_both_physical_callers(client_id: str) -> None:
+    claims = {
+        "tid": TENANT_ID,
+        "azp": client_id,
+        "idtyp": "app",
+        "roles": [SCRIBE_TRANSCRIPT_WRITE_ROLE],
+    }
+    authenticator = EntraServiceAuthenticator(
+        _scribe_policy(),
+        decoder=lambda token: claims,
+    )
+
+    principal = authenticator(_credentials())
+
+    assert principal.client_id == client_id
+
+
+def test_scribe_auth_fails_closed_when_two_caller_allowlist_collapses() -> None:
+    policy = EntraServiceAuthPolicy(
+        settings=_scribe_policy().settings,
+        allowed_client_ids=frozenset({SCRIBE_CLIENT_ID}),
+        required_role=SCRIBE_TRANSCRIPT_WRITE_ROLE,
+        required_client_count=2,
+        log_namespace="scribe_handoff",
+    )
+    authenticator = EntraServiceAuthenticator(
+        policy,
+        decoder=lambda token: {},
+    )
+
+    with pytest.raises(HTTPException) as error:
+        authenticator(_credentials())
+
+    assert error.value.status_code == 503
 
 
 @pytest.mark.parametrize(
