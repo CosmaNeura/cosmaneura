@@ -3,6 +3,7 @@ import type { MetaFunction } from "react-router"
 import { Route } from "./+types/detail"
 
 import { UploadRecordingButton } from "@/components/notes/UploadRecordingButton"
+import { SovereignPanelHost } from "@/components/sovereign/SovereignPanelHost"
 import { Separator } from "@/components/ui/separator"
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import VisitNoteViewer from "~/components/VisitNoteViewer"
@@ -123,6 +124,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
 
   return (
     <SidebarInset>
+      <SovereignPanelHost recordId={loaderData.patient.id} />
       <Header title={loaderData.patient.name} />
       <InnerScrollableContent>
         <NoteHeader
