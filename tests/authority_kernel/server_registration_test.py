@@ -22,6 +22,7 @@ def test_authority_routes_are_registered_on_the_platform_server() -> None:
         "/embed/v1/context-tokens/exchange",
         "/embed/v1/context-tokens/rotate",
         "/service/v1/agent/mount-context/resolve",
+        "/service/v1/agent/conversation-turns/write",
     } <= paths
 
 
@@ -70,3 +71,31 @@ def test_authority_validation_errors_use_safe_contract_shapes() -> None:
     assert invalid_turn.status_code == 400
     assert invalid_turn.json()["code"] == "CLIENT_TURN_INVALID"
     assert "not-a-client-turn" not in invalid_turn.text
+
+    api_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    try:
+        missing_interaction = client.post(
+            "/service/v1/agent/conversation-turns/write",
+            headers={
+                "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+                "X-Cosmaneura-Client-Turn-ID": ("11111111-1111-4111-8111-111111111111"),
+                "Idempotency-Key": "idem-user-accepted-0001",
+            },
+            json={
+                "phase": "user_accepted",
+                "ingress_kind": "chat_text",
+                "action_code": None,
+                "message": {
+                    "content_type": "text/plain",
+                    "content": "Synthetic safe text",
+                },
+            },
+        )
+    finally:
+        api_app.dependency_overrides.pop(authenticate_agent_api_request, None)
+
+    assert missing_interaction.status_code == 400
+    assert missing_interaction.json()["code"] == "INTERACTION_REQUIRED"
+    assert "mctx_synthetic" not in missing_interaction.text

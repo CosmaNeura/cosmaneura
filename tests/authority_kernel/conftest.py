@@ -70,6 +70,11 @@ from app.models.authority import (  # noqa: E402
     MountContextSession,
     MountContextToken,
 )
+from app.models.authority_conversation import (  # noqa: E402
+    CanonicalConversationFinalPhase,
+    CanonicalConversationTurn,
+    CanonicalConversationUserPhase,
+)
 
 # The stub is needed only while importing ``app`` above.  Leaving it in
 # ``sys.modules`` leaks into unrelated tests collected in the same pytest run
@@ -93,6 +98,9 @@ _AUTHORITY_TABLES = [
         MountContextSession,
         MountContextToken,
         InteractionLineage,
+        CanonicalConversationTurn,
+        CanonicalConversationUserPhase,
+        CanonicalConversationFinalPhase,
         AuthorityIdempotencyRecord,
         AuthorityAuditEvent,
     )

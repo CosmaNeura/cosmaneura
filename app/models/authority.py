@@ -349,6 +349,7 @@ class AuthorityIdempotencyRecord(
         UniqueConstraint(
             "workload_client_id",
             "operation",
+            "interaction_id",
             "idempotency_key",
             name="uq_authority_idempotency_scope_key",
         ),

@@ -164,8 +164,17 @@ async def safe_request_validation_handler(
         if "X-Cosmaneura-Mount-Context" in missing_fields:
             code = "CONTEXT_REQUIRED"
             status_code = status.HTTP_400_BAD_REQUEST
+        elif "X-Cosmaneura-Interaction-Ref" in missing_fields:
+            code = "INTERACTION_REQUIRED"
+            status_code = status.HTTP_400_BAD_REQUEST
         elif "X-Cosmaneura-Client-Turn-ID" in missing_fields:
             code = "CLIENT_TURN_REQUIRED"
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif any(
+            error.get("loc") and str(error["loc"][-1]) == "X-Cosmaneura-Interaction-Ref"
+            for error in errors
+        ):
+            code = "INTERACTION_INVALID"
             status_code = status.HTTP_400_BAD_REQUEST
         elif any(
             error.get("loc") and str(error["loc"][-1]) == "X-Cosmaneura-Client-Turn-ID"

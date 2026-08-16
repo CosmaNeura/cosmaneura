@@ -1,9 +1,12 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 import app.services.authority
+import app.services.authority_conversation
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.sentry import scrub_event
 from app.routes.agent import agent_api_app, get_agent_authority_settings
@@ -134,11 +137,191 @@ def test_mount_resolution_returns_only_five_fields_and_lineage_headers(
     assert response.headers["cache-control"] == "no-store"
 
 
+def test_conversation_write_returns_contract_receipt_and_forwards_no_browser_scope(
+    monkeypatch,
+) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    fastapi_app.dependency_overrides[get_agent_authority_settings] = lambda: (
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+        )
+    )
+    client_turn_id = uuid4()
+    recorded_at = datetime.now(UTC)
+
+    def synthetic_write(**kwargs):
+        assert kwargs == {
+            "workload_client_id": "11111111-1111-4111-8111-111111111111",
+            "mount_context_token": "mctx_synthetic_token_000000000000",
+            "interaction_ref": "ix_synthetic_interaction_0001",
+            "client_turn_id": client_turn_id,
+            "idempotency_key": "idem-user-accepted-0001",
+            "payload": {
+                "phase": "user_accepted",
+                "ingress_kind": "chat_text",
+                "action_code": None,
+                "message": {
+                    "content_type": "text/plain",
+                    "content": "Exact accepted text",
+                },
+            },
+            "settings": fastapi_app.dependency_overrides[
+                get_agent_authority_settings
+            ](),
+        }
+        return app.services.authority_conversation.ConversationWriteResult(
+            client_turn_id=client_turn_id,
+            turn_ref="conversation_turn_0000000000000001",
+            phase="user_accepted",
+            state="accepted",
+            recorded_at=recorded_at,
+            replayed=False,
+        )
+
+    monkeypatch.setattr(
+        app.services.authority_conversation,
+        "write_conversation_turn",
+        synthetic_write,
+    )
+    client = TestClient(fastapi_app)
+    response = client.post(
+        "/service/v1/agent/conversation-turns/write",
+        headers={
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Cosmaneura-Interaction-Ref": "ix_synthetic_interaction_0001",
+            "X-Cosmaneura-Client-Turn-ID": str(client_turn_id),
+            "Idempotency-Key": "idem-user-accepted-0001",
+        },
+        json={
+            "phase": "user_accepted",
+            "ingress_kind": "chat_text",
+            "action_code": None,
+            "message": {
+                "content_type": "text/plain",
+                "content": "Exact accepted text",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json() == {
+        "client_turn_id": str(client_turn_id),
+        "turn_ref": "conversation_turn_0000000000000001",
+        "phase": "user_accepted",
+        "state": "accepted",
+        "recorded_at": recorded_at.isoformat().replace("+00:00", "Z"),
+    }
+    assert response.headers["x-cosmaneura-client-turn-id"] == str(client_turn_id)
+    assert response.headers["idempotency-replayed"] == "false"
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_conversation_write_authenticates_before_reading_invalid_body() -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+
+    def reject_workload() -> None:
+        raise HTTPException(status_code=401)
+
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = reject_workload
+    client = TestClient(fastapi_app)
+
+    response = client.post(
+        "/service/v1/agent/conversation-turns/write",
+        headers={
+            "Content-Type": "application/json",
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Cosmaneura-Interaction-Ref": "ix_synthetic_interaction_0001",
+            "X-Cosmaneura-Client-Turn-ID": str(uuid4()),
+            "Idempotency-Key": "idem-user-accepted-0001",
+        },
+        content=b'{"phase":',
+    )
+
+    assert response.status_code == 401
+
+    missing_context = client.post(
+        "/service/v1/agent/conversation-turns/write",
+        headers={
+            "Content-Type": "application/json",
+            "X-Cosmaneura-Interaction-Ref": "ix_synthetic_interaction_0001",
+            "X-Cosmaneura-Client-Turn-ID": str(uuid4()),
+            "Idempotency-Key": "idem-user-accepted-0001",
+        },
+        content=b'{"phase":',
+    )
+
+    assert missing_context.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {
+            "ingress_kind": "chat_text",
+            "action_code": None,
+            "message": {"content_type": "text/plain", "content": "Missing phase"},
+        },
+        {
+            "phase": "user_accepted",
+            "ingress_kind": "chat_text",
+            "action_code": None,
+            "message": {"content_type": "text/plain", "content": "Closed"},
+            "browser_history": [],
+        },
+        {
+            "phase": "final_response",
+            "outcome": "completed",
+            "response": {"content_type": "text/plain", "content": "Safe text"},
+            "presentation": {
+                "mode": "sensitive_disclosure",
+                "suppress": ["disclaimer"],
+                "human_contact": None,
+            },
+        },
+    ],
+)
+def test_conversation_write_rejects_missing_phase_browser_fields_and_unsafe_sensitive_shape(
+    body: dict[str, object],
+) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    client = TestClient(fastapi_app)
+
+    response = client.post(
+        "/service/v1/agent/conversation-turns/write",
+        headers={
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Cosmaneura-Interaction-Ref": "ix_synthetic_interaction_0001",
+            "X-Cosmaneura-Client-Turn-ID": str(uuid4()),
+            "Idempotency-Key": "idem-user-accepted-0001",
+        },
+        json=body,
+    )
+
+    expected_code = (
+        "TURN_PHASE_REQUIRED" if "phase" not in body else "VALIDATION_FAILED"
+    )
+    expected_status = 400 if "phase" not in body else 422
+    assert response.status_code == expected_status
+    assert response.json()["code"] == expected_code
+    assert "browser_history" not in response.text
+
+
 def test_error_telemetry_scrubs_mount_context_tokens_case_insensitively() -> None:
     event = {
         "request": {
             "headers": {
                 "authorization": "Bearer workload-secret",
+                "Idempotency-Key": "idem-sensitive-correlation",
+                "X-Cosmaneura-Client-Turn-ID": str(uuid4()),
+                "X-Cosmaneura-Interaction-Ref": "ix_sensitive-correlation",
                 "X-Cosmaneura-Mount-Context": "mctx_plaintext-secret",
                 "Content-Type": "application/json",
             }

@@ -22,6 +22,9 @@ def scrub_event(event, _hint):
             sensitive_headers = {
                 "authorization",
                 "cookie",
+                "idempotency-key",
+                "x-cosmaneura-client-turn-id",
+                "x-cosmaneura-interaction-ref",
                 "x-cosmaneura-mount-context",
             }
             for header in list(headers):

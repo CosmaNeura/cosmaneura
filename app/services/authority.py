@@ -87,6 +87,10 @@ class ClientTurnConflictError(AuthorityKernelError):
     pass
 
 
+class InteractionInvalidError(AuthorityKernelError):
+    pass
+
+
 @dataclass(frozen=True)
 class ContextTokenIssueResult:
     context_token: str
@@ -120,6 +124,13 @@ class MountResolutionResult:
     context: ResolvedMountContext
     interaction_ref: str
     reused: bool
+
+
+@dataclass(frozen=True)
+class AuthorizedInteraction:
+    context: ResolvedMountContext
+    mount_session: MountContextSession
+    lineage: InteractionLineage
 
 
 def _ensure_enabled(settings: AuthorityKernelSettings) -> None:
@@ -610,6 +621,45 @@ def _binding_fingerprint(context: ResolvedMountContext) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def authorize_interaction(
+    *,
+    session: Session,
+    workload_client_id: str,
+    mount_context_token: str,
+    interaction_ref: str,
+    client_turn_id: UUID,
+    settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+) -> AuthorizedInteraction:
+    """Re-resolve current authority and lock one exact interaction lineage."""
+
+    _ensure_enabled(settings)
+    _, mount_session = _active_token(
+        session,
+        mount_context_token,
+        lock_for_update=True,
+    )
+    context = _context_for_session(session, mount_session)
+    lineage = session.exec(
+        select(InteractionLineage)
+        .where(InteractionLineage.interaction_ref == interaction_ref)
+        .with_for_update()
+    ).first()
+    if lineage is None:
+        raise InteractionInvalidError
+    if (
+        lineage.workload_client_id != workload_client_id
+        or lineage.client_turn_id != client_turn_id
+        or lineage.session_id != mount_session.id
+        or lineage.binding_fingerprint != _binding_fingerprint(context)
+    ):
+        raise ClientTurnConflictError
+    return AuthorizedInteraction(
+        context=context,
+        mount_session=mount_session,
+        lineage=lineage,
+    )
 
 
 def rotate_context_token(
