@@ -9,10 +9,12 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from pydantic import BaseModel, Field, model_validator
 
 import app.commands.scribe_transcript
+from app import log
 
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import TranscriptEntry
+from app.models.scribe_transcript_delivery import LOGICAL_SCRIBE_PRODUCER
 from sqlalchemy.exc import SQLAlchemyError
 
 from .dependencies.entra_service import (
@@ -101,21 +103,49 @@ def import_scribe_transcript(
             ],
         )
     except app.commands.scribe_transcript.EncounterNotFoundError as exc:
+        log.warning(
+            "scribe transcript delivery rejected",
+            action="scribe_handoff.delivery_rejected",
+            error_class="encounter_not_found",
+            actual_caller_client_id=principal.client_id,
+            logical_producer=LOGICAL_SCRIBE_PRODUCER,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Encounter not found.",
         ) from exc
     except app.commands.scribe_transcript.TranscriptConflictError as exc:
+        log.warning(
+            "scribe transcript delivery rejected",
+            action="scribe_handoff.delivery_rejected",
+            error_class="delivery_conflict",
+            actual_caller_client_id=principal.client_id,
+            logical_producer=LOGICAL_SCRIBE_PRODUCER,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
         ) from exc
     except app.commands.scribe_transcript.TranscriptPersistenceError as exc:
+        log.warning(
+            "scribe transcript delivery rejected",
+            action="scribe_handoff.delivery_rejected",
+            error_class="persistence_unavailable",
+            actual_caller_client_id=principal.client_id,
+            logical_producer=LOGICAL_SCRIBE_PRODUCER,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Transcript delivery is temporarily unavailable.",
         ) from exc
     except SQLAlchemyError as exc:
+        log.warning(
+            "scribe transcript delivery rejected",
+            action="scribe_handoff.delivery_rejected",
+            error_class="database_unavailable",
+            actual_caller_client_id=principal.client_id,
+            logical_producer=LOGICAL_SCRIBE_PRODUCER,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Transcript delivery is temporarily unavailable.",
@@ -123,6 +153,13 @@ def import_scribe_transcript(
 
     if result.disposition == "replayed":
         response.status_code = status.HTTP_200_OK
+
+    log.info(
+        "scribe transcript delivery accepted",
+        action=f"scribe_handoff.delivery_{result.disposition}",
+        actual_caller_client_id=principal.client_id,
+        logical_producer=LOGICAL_SCRIBE_PRODUCER,
+    )
 
     return ScribeTranscriptDeliveryResponse(
         transcript_id=result.transcript.id,
