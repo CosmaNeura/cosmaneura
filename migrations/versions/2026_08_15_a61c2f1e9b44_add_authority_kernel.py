@@ -554,7 +554,11 @@ def upgrade() -> None:
             "interaction_id",
             name="uq_authority_idempotency_logical_operation",
         ),
-        comment="Request-digest binding for future consequence-bearing Agent API writes.",
+        comment=(
+            "Request-digest binding for one future Agent API logical operation slot.\n\n"
+            "``operation`` includes any contract phase discriminator, so a changed key\n"
+            "cannot create a second effect for the same interaction and phase."
+        ),
     )
     op.create_index(
         op.f("authority_idempotency_record_retain_until_idx"),
