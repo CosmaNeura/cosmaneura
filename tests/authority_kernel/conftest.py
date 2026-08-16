@@ -45,7 +45,6 @@ _TEST_ENVIRONMENT = {
     "ZOOM_REDIRECT_URI": "https://api.test.invalid/callback",
     "ZOOM_SUCCESS_REDIRECT": "https://app.test.invalid",
     "TEST_REDIS_URL": "redis://localhost:6379/15",
-    "COOKIE_DOMAIN": "testserver",
 }
 for name, value in _TEST_ENVIRONMENT.items():
     os.environ.setdefault(name, value)

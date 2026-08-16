@@ -4,6 +4,7 @@ from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
 )
+from app.routes.middleware import allowed_hosts
 from app.server import api_app
 
 
@@ -25,7 +26,7 @@ def test_authority_routes_are_registered_on_the_platform_server() -> None:
 
 
 def test_authority_validation_errors_use_safe_contract_shapes() -> None:
-    client = TestClient(api_app, base_url="https://testserver")
+    client = TestClient(api_app, base_url=allowed_hosts(with_scheme=True)[0])
     unsupported_version = client.post(
         "/embed/v1/context-tokens/anonymous",
         json={"requested_surface": "public"},
