@@ -56,9 +56,11 @@ variable "python_public_vars" {
     # public origin of this backend, used to build the zak_url that Recall
     # bots fetch on join
     "API_BASE_URL",
-    # app-only Entra authentication for the feature-flagged Scribe workload route
+    # app-only Entra authentication for feature-flagged workload routes
     "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
-    "SCRIBE_CALLER_CLIENT_ID"
+    "SCRIBE_CALLER_CLIENT_ID",
+    "AGENT_API_ENABLED", "AGENT_API_AUDIENCE", "AGENT_API_SOVEREIGN_CLIENT_IDS",
+    "AUTHORITY_KERNEL_ENABLED"
   ]
 }
 

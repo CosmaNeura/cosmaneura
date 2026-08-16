@@ -15,6 +15,7 @@ import app.jobs.score_engagement
 import app.jobs.transcribe
 from app.configuration.service_auth import (
     SCRIBE_TRANSCRIPT_WRITE_ROLE,
+    EntraServiceAuthPolicy,
     EntraServiceAuthSettings,
 )
 from app.routes.dependencies.entra_service import (
@@ -37,12 +38,15 @@ SCRIBE_CLIENT_ID = "22222222-2222-2222-2222-222222222222"
 VALID_TOKEN = "signed-entra-app-token"
 
 
-def _settings() -> EntraServiceAuthSettings:
-    return EntraServiceAuthSettings(
-        enabled=True,
-        tenant_id=TENANT_ID,
-        audience=str(uuid4()),
-        scribe_client_id=SCRIBE_CLIENT_ID,
+def _policy() -> EntraServiceAuthPolicy:
+    return EntraServiceAuthPolicy(
+        settings=EntraServiceAuthSettings(
+            enabled=True,
+            tenant_id=TENANT_ID,
+            audience=str(uuid4()),
+        ),
+        allowed_client_ids=frozenset({SCRIBE_CLIENT_ID}),
+        required_role=SCRIBE_TRANSCRIPT_WRITE_ROLE,
     )
 
 
@@ -73,7 +77,7 @@ class StaticJwksClient:
 @pytest.fixture
 def scribe_client(client: TestClient):
     api_app.dependency_overrides[authenticate_scribe_service_request] = (
-        EntraServiceAuthenticator(_settings(), decoder=_decoder)
+        EntraServiceAuthenticator(_policy(), decoder=_decoder)
     )
     yield client
     api_app.dependency_overrides.pop(authenticate_scribe_service_request, None)
@@ -294,7 +298,7 @@ def test_scribe_transcript_delivery_requires_app_role(
         return _claims(roles=[])
 
     api_app.dependency_overrides[authenticate_scribe_service_request] = (
-        EntraServiceAuthenticator(_settings(), decoder=decoder_without_role)
+        EntraServiceAuthenticator(_policy(), decoder=decoder_without_role)
     )
     try:
         response = client.post(
@@ -310,7 +314,7 @@ def test_scribe_transcript_delivery_requires_app_role(
 
 def test_entra_decoder_verifies_signature_issuer_and_audience() -> None:
     private_key = rsa.generate_private_key(public_exponent=65_537, key_size=2048)
-    settings = _settings()
+    settings = _policy().settings
     now = datetime.now(UTC)
     token = jwt.encode(
         {

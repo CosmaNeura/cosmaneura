@@ -55,9 +55,11 @@ variable "python_public_vars" {
     "RECALL_API_BASE",
     # explicit cookie domain to avoid using internal Azure Container App domains
     "COOKIE_DOMAIN",
-    # app-only Entra authentication for the feature-flagged Scribe workload route
+    # app-only Entra authentication for feature-flagged workload routes
     "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
-    "SCRIBE_CALLER_CLIENT_ID"
+    "SCRIBE_CALLER_CLIENT_ID",
+    "AGENT_API_ENABLED", "AGENT_API_AUDIENCE", "AGENT_API_SOVEREIGN_CLIENT_IDS",
+    "AUTHORITY_KERNEL_ENABLED"
   ]
 }
 

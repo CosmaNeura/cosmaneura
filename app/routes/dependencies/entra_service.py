@@ -8,8 +8,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient, PyJWTError
 
 from app.configuration.service_auth import (
-    SCRIBE_TRANSCRIPT_WRITE_ROLE,
-    SERVICE_AUTH_SETTINGS,
+    AGENT_API_AUTH_POLICY,
+    SCRIBE_SERVICE_AUTH_POLICY,
+    EntraServiceAuthPolicy,
     EntraServiceAuthSettings,
 )
 
@@ -31,13 +32,16 @@ class EntraTokenDecoder:
 
     def __call__(self, token: str) -> dict[str, Any]:
         signing_key = self.jwks_client.get_signing_key_from_jwt(token)
+        required_claims = ["aud", "exp", "iat", "iss", "sub", "tid"]
+        if self.settings.require_nbf:
+            required_claims.append("nbf")
         return jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             audience=self.settings.audience,
             issuer=self.settings.issuer,
-            options={"require": ["aud", "exp", "iat", "iss", "sub", "tid"]},
+            options={"require": required_claims},
         )
 
 
@@ -50,14 +54,14 @@ def _authentication_error() -> HTTPException:
 
 
 class EntraServiceAuthenticator:
-    """Authorize one app-only Entra caller with one application role."""
+    """Authorize an allowlisted app-only Entra caller for one workload API."""
 
     def __init__(
         self,
-        settings: EntraServiceAuthSettings,
+        policy: EntraServiceAuthPolicy,
         decoder: TokenDecoder | None = None,
     ):
-        self.settings = settings
+        self.policy = policy
         self.decoder = decoder
 
     def __call__(
@@ -67,7 +71,7 @@ class EntraServiceAuthenticator:
             Depends(HTTPBearer(auto_error=False)),
         ],
     ) -> EntraServicePrincipal:
-        if not self.settings.enabled or not self.settings.is_complete():
+        if not self.policy.settings.enabled or not self.policy.is_complete():
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Service authentication is not configured.",
@@ -76,13 +80,13 @@ class EntraServiceAuthenticator:
         if credentials is None or credentials.scheme.lower() != "bearer":
             raise _authentication_error()
 
-        decoder = self.decoder or EntraTokenDecoder(self.settings)
+        decoder = self.decoder or EntraTokenDecoder(self.policy.settings)
         try:
             claims = decoder(credentials.credentials)
         except (PyJWTError, ValueError, TypeError):
             raise _authentication_error() from None
 
-        if claims.get("tid") != self.settings.tenant_id:
+        if claims.get("tid") != self.policy.settings.tenant_id:
             raise _authentication_error()
 
         client_id = claims.get("azp")
@@ -90,9 +94,9 @@ class EntraServiceAuthenticator:
         if (
             claims.get("idtyp") != "app"
             or not isinstance(client_id, str)
-            or client_id != self.settings.scribe_client_id
+            or client_id not in self.policy.allowed_client_ids
             or not isinstance(roles, list)
-            or SCRIBE_TRANSCRIPT_WRITE_ROLE not in roles
+            or self.policy.required_role not in roles
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -102,4 +106,7 @@ class EntraServiceAuthenticator:
         return EntraServicePrincipal(client_id=client_id)
 
 
-authenticate_scribe_service_request = EntraServiceAuthenticator(SERVICE_AUTH_SETTINGS)
+authenticate_scribe_service_request = EntraServiceAuthenticator(
+    SCRIBE_SERVICE_AUTH_POLICY
+)
+authenticate_agent_api_request = EntraServiceAuthenticator(AGENT_API_AUTH_POLICY)
