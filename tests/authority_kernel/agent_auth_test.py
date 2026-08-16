@@ -50,9 +50,7 @@ def _scribe_policy() -> EntraServiceAuthPolicy:
             tenant_id=TENANT_ID,
             audience=AUDIENCE,
         ),
-        allowed_client_ids=frozenset(
-            {SCRIBE_CLIENT_ID, SCRIBE_RECONCILER_CLIENT_ID}
-        ),
+        allowed_client_ids=frozenset({SCRIBE_CLIENT_ID, SCRIBE_RECONCILER_CLIENT_ID}),
         required_role=SCRIBE_TRANSCRIPT_WRITE_ROLE,
         required_client_count=2,
         log_namespace="scribe_handoff",
