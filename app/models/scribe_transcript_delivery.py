@@ -9,6 +9,8 @@ from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from sqlmodel import Field, UniqueConstraint
 
+LOGICAL_SCRIBE_PRODUCER = "cosmaneura-scribe-v1"
+
 
 class ScribeTranscriptDelivery(
     BaseModel,
@@ -20,17 +22,20 @@ class ScribeTranscriptDelivery(
 
     __table_args__ = (
         UniqueConstraint(
-            "caller_client_id",
+            "logical_producer",
             "idempotency_key",
-            name="uq_scribe_delivery_caller_idempotency_key",
+            name="uq_scribe_delivery_producer_idempotency_key",
         ),
         UniqueConstraint(
-            "caller_client_id",
+            "logical_producer",
             "scribe_session_id",
-            name="uq_scribe_delivery_caller_session",
+            name="uq_scribe_delivery_producer_session",
         ),
     )
 
+    logical_producer: str = Field(default=LOGICAL_SCRIBE_PRODUCER, max_length=64)
+    # The authenticated client that first created this receipt. Later replay callers
+    # are emitted in fixed, metadata-only audit events.
     caller_client_id: str = Field(index=True, max_length=64)
     idempotency_key: str = Field(max_length=255)
     scribe_session_id: UUID = Field(index=True)
