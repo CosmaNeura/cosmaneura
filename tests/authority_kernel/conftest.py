@@ -71,6 +71,13 @@ from app.models.authority import (  # noqa: E402
     MountContextSession,
     MountContextToken,
 )
+
+# The stub is needed only while importing ``app`` above.  Leaving it in
+# ``sys.modules`` leaks into unrelated tests collected in the same pytest run
+# (notably ``tests/functional/version_test.py``), which must exercise the real
+# versions module.
+sys.modules.pop(versions_stub.__name__, None)
+
 from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 

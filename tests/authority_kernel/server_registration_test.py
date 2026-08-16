@@ -7,6 +7,12 @@ from app.routes.dependencies.entra_service import (
 from app.server import api_app
 
 
+def test_authority_fixture_does_not_shadow_real_versions_module() -> None:
+    from app.configuration.versions import VERSIONS_FILE
+
+    assert VERSIONS_FILE.name == ".service-versions"
+
+
 def test_authority_routes_are_registered_on_the_platform_server() -> None:
     paths = {getattr(route, "path", "") for route in api_app.routes}
 
