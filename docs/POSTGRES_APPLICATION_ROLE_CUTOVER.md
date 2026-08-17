@@ -30,6 +30,10 @@ administrator password is a later change, after the rollback window closes.
   do not grant `PUBLIC` access to future tables, sequences, functions, or types.
 - The new Container Apps secret is `database-url-v2`; `database-url` is never
   deleted or overwritten by the cutover operator.
+- OpenTofu can declare both secret names while the source-controlled selector
+  stays on `database-url`. Its read-only live guard refuses to select v2 until
+  all five workloads already use v2, so an apply can adopt but cannot perform
+  the staged cutover.
 - The workload order is fixed: job monitor, worker, scheduler, API, migration
   job configuration. Rollback runs the reverse order.
 - Every production process imports application models and invokes Alembic at
@@ -43,33 +47,67 @@ separately reviewed change window:
 
 1. Hold application deployments, migration merges, and Terraform applies.
 2. Confirm a restorable database backup and name the rollback operator.
-3. Resolve Terraform ownership after the cutover. `infra/main.tf` currently
-   declares the unversioned `database-url` secret and environment reference. A
-   later Terraform apply can revert an out-of-band `database-url-v2` reference.
-   The script requires `--acknowledge-no-infra-apply-window` for this reason; it
-   does not pretend the drift is harmless.
-4. Refactor or hold `infra/deploy.sh` during the window. Its existing migration
-   job path passes `key=value` secrets to Azure CLI arguments and continues to
-   refresh the old `database-url` secret. The new operators do neither.
+3. Land and apply the reviewed phase-A configuration: set
+   `DATABASE_URL_V2_ENABLED=true` in `.env.production.backend` while leaving
+   `DATABASE_URL_SECRET_NAME=database-url`. Review that the plan only stages the
+   unused v2 secret and retains the old secret. This repository's current secret
+   model stores both encrypted values in the protected OpenTofu state; avoiding
+   that requires the separate Key Vault/managed-identity design.
+4. Hold `infra/deploy.sh` during the staged switch. Its database URLs now travel
+   only over stdin to an authenticated ARM request, and its value-free guard
+   requires all five live references to match the checked-in selector. Other
+   legacy migration-job and registry secrets still use Azure CLI arguments and
+   remain separate hardening work.
 5. Confirm the direct ARM `listSecrets`/PATCH behavior in a non-production
    Container App using the same Azure API version before using it in production.
-6. Audit `CONNECT` and `TEMP` on every other database in the PostgreSQL server.
-   PostgreSQL logins are cluster-global, and default `PUBLIC` grants on databases
-   such as `postgres` can permit connection even though this role has no objects
-   or ownership there. This foundation scopes ownership and default `SET ROLE`
-   to `production`; it does not claim server-wide connection isolation or mutate
-   unrelated database ACLs.
+6. Run `infra/database_cluster_scope.py` and resolve every reported hard blocker.
+   PostgreSQL logins are cluster-global. The tool can transactionally remove
+   `PUBLIC` access from the ordinary `postgres` database only after exact plan,
+   role-preservation, scope, and impact confirmations. Azure-managed and template
+   databases are audit-only: the tool will not mutate them, and any exposure
+   there requires Azure-supported isolation or a separately reviewed decision.
 7. Review PostgreSQL and audit-extension logging policy. The operator derives a
    SCRAM verifier locally, sends it through `COPY` rather than a SQL bind, and
    never submits the plaintext password as SQL. The database must nevertheless
    be configured so password-management utility statements and SCRAM verifiers
    are not captured in audit exports.
 
-The durable follow-up should choose one owner for runtime secret configuration
-(for example, reviewed Key Vault references or fully externalized Container App
-secret management) so a Terraform refresh cannot undo the selection. No new
-database secret value is added to Terraform configuration or state by this
-foundation.
+The checked-in selector is the durable owner for the current inline-secret
+model. The cutover operator performs the staged switch; the selector is changed
+only afterward so the next plan is adoption-only. Both database values enter
+the protected OpenTofu state while v2 is enabled. A future Key Vault-reference
+design can remove inline secret values from state, but it is not implied here.
+OpenTofu owns the four long-running Container Apps. The existing migration job
+remains deploy-owned: deploy refuses to create it, reconciles only its database
+v2 secret through ARM/stdin, requires the existing old rollback secret without
+replacing its value, and adopts the same checked-in selector. Importing that
+live job into OpenTofu requires a separate import/in-place plan review; a
+replacement plan is a stop condition.
+
+## 0. Read-only scope and migration preflights
+
+Audit every cluster database before creating the application login:
+
+```bash
+python infra/database_cluster_scope.py
+```
+
+The output contains database/role names, counts, and a plan digest—never a URL
+or password. It expands default `PUBLIC` ACLs and checks effective access for
+the app/owner roles when they exist. `hard_blockers` must be empty before
+cutover. Do not use its explicit `--apply` mode without a separately reviewed
+plan; it never automates changes to `azure_*` or template databases.
+
+Check migration `91d2c4e5f6a7` without returning patient or doctor identifiers:
+
+```bash
+python infra/migration_91d2c4e5f6a7_preflight.py
+```
+
+This read-only transaction reports the Alembic revision, new-table/object
+presence, duplicate and null-risk counts, relation-size/row estimates, lock
+counts, and long-transaction counts. `readiness.ready` must be true before the
+migration job runs.
 
 ## 1. Prepare the PostgreSQL roles
 
@@ -122,7 +160,8 @@ stop; do not try to repair an unknown state with `--apply`.
 
 ## 3. Versioned cutover
 
-Only after the blockers and change-window controls above are satisfied:
+Only after phase A is applied, all blockers are resolved, and the change-window
+controls above are satisfied:
 
 ```bash
 op read 'op://Production/postgres-app-v2/python-connection-string' |
@@ -158,6 +197,11 @@ starting a migration execution.
 If any step fails, the current step and all completed steps are pointed back to
 `database-url` in reverse order. The versioned secret is retained for diagnosis.
 
+After all five workloads are verified on v2, change only
+`DATABASE_URL_SECRET_NAME` to `database-url-v2`. The live guard makes the plan
+fail if any workload is still old or mixed; a valid phase-B plan adopts the
+already-live state and retains `database-url` for rollback.
+
 ## 4. Explicit rollback
 
 Rollback needs no new database credential because the old secret remains:
@@ -172,13 +216,17 @@ python infra/database_url_cutover.py \
 The order is migration configuration, API, scheduler, worker, job monitor. Each
 revision is verified before proceeding. Unknown references or a missing old
 secret fail closed. Do not remove `database-url-v2` during incident response.
+Before ending the freeze, revert `DATABASE_URL_SECRET_NAME` to `database-url`
+and review an adoption-only plan. A normal deploy is deliberately blocked while
+the checked-in selector and live references disagree.
 
 ## 5. Close the rollback window
 
 After an agreed soak period, live application and background-job checks, a
 successful migration-job execution, and a separate rollback rehearsal:
 
-1. Land the reviewed durable secret-ownership solution.
+1. Confirm the checked-in selector is v2 and OpenTofu shows no secret-reference
+   drift.
 2. Rotate the Azure PostgreSQL server-administrator password.
 3. Verify the application continues to use `cosmaneura_app`.
 4. Remove the old administrator URL only in a separate, audited change.
@@ -191,7 +239,11 @@ Unit tests (the PostgreSQL integration test skips by default):
 PYTHONPATH=. PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
   pytest --confcutdir=tests/infrastructure -q \
   tests/infrastructure/test_database_role.py \
-  tests/infrastructure/test_database_url_cutover.py
+  tests/infrastructure/test_database_url_cutover.py \
+  tests/infrastructure/test_database_url_live_guard.py \
+  tests/infrastructure/test_database_url_deployment_ownership.py \
+  tests/infrastructure/test_database_cluster_scope.py \
+  tests/infrastructure/test_migration_91d2c4e5f6a7_preflight.py
 ```
 
 Against an explicitly disposable PostgreSQL 16 database:

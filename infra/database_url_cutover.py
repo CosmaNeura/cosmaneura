@@ -2,9 +2,10 @@
 """Cut Container Apps over to a versioned application DATABASE_URL secret.
 
 Default mode is a read-only plan.  Mutating modes require an explicit flag and
-subscription/resource-group confirmations.  The new URL is accepted only via
-an environment variable or stdin; it is sent directly to ARM and is never
-placed in an ``az`` command argument or Terraform state.
+subscription/resource-group confirmations.  This operator accepts database
+URLs only via an environment variable or stdin and sends them directly to ARM,
+never through an ``az`` command argument.  The separate source-controlled
+phase-A path is documented as storing inline values in protected OpenTofu state.
 """
 
 from __future__ import annotations
@@ -23,8 +24,6 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Sequence
-
-import psycopg
 
 ARM_API_VERSION = "2025-07-01"
 ARM_ORIGIN = "https://management.azure.com"
@@ -106,6 +105,7 @@ def _run_az(arguments: Sequence[str]) -> str:
     # DATABASE_URL is the privileged administrative credential.  Neither it
     # nor the versioned application credential belongs in an Azure CLI child.
     subprocess_environment.pop("DATABASE_URL", None)
+    subprocess_environment.pop("DATABASE_URL_V2", None)
     subprocess_environment.pop("COSMANEURA_DATABASE_URL_V2", None)
     try:
         result = subprocess.run(
@@ -257,6 +257,88 @@ class ArmClient:
             time.sleep(2)
         raise CutoverError("secret upsert verification timed out")
 
+    def reconcile_secret_values(
+        self,
+        resource_id: str,
+        *,
+        replacements: dict[str, str],
+        required_names: set[str] | None = None,
+    ) -> None:
+        """Reconcile named value secrets without placing values on argv.
+
+        Required and unrelated secrets are retained byte-for-byte.  Existing
+        Key Vault-reference secrets are never silently converted to inline
+        values, and an ETag protects against concurrent configuration updates.
+        """
+
+        required = required_names or set()
+        if not replacements and not required:
+            raise CutoverError("database secret reconciliation is empty")
+        if any(
+            not SECRET_NAME_RE.fullmatch(name) or not value
+            for name, value in replacements.items()
+        ) or any(not SECRET_NAME_RE.fullmatch(name) for name in required):
+            raise CutoverError("database secret reconciliation is invalid")
+        if required.intersection(replacements):
+            raise CutoverError("refusing to replace a required rollback secret")
+        resource = self.get_resource(resource_id)
+        etag = resource.get("etag")
+        if not isinstance(etag, str) or not etag:
+            raise CutoverError("resource ETag is missing")
+        current = self.list_secrets(resource_id)
+        by_name = {entry["name"]: entry for entry in current}
+        if len(by_name) != len(current):
+            raise CutoverError("resource has duplicate secret names")
+        if not required.issubset(by_name):
+            raise CutoverError("required rollback secret is missing")
+
+        changed = False
+        updated: list[dict[str, Any]] = []
+        for entry in current:
+            name = entry["name"]
+            if name not in replacements:
+                updated.append(entry)
+                continue
+            existing_value = entry.get("value")
+            if not isinstance(existing_value, str):
+                raise CutoverError("refusing to replace a non-value database secret")
+            replacement = replacements[name]
+            if hmac.compare_digest(existing_value, replacement):
+                updated.append(entry)
+            else:
+                updated.append({"name": name, "value": replacement})
+                changed = True
+        for name, value in replacements.items():
+            if name not in by_name:
+                updated.append({"name": name, "value": value})
+                changed = True
+        if not changed:
+            return
+
+        expected_names = {entry["name"] for entry in updated}
+        self.request(
+            "PATCH",
+            resource_id,
+            body={"properties": {"configuration": {"secrets": updated}}},
+            etag=etag,
+        )
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            verified_entries = self.list_secrets(resource_id)
+            verified = {entry["name"]: entry for entry in verified_entries}
+            if (
+                len(verified) == len(verified_entries)
+                and set(verified) == expected_names
+            ):
+                if all(
+                    isinstance(verified[name].get("value"), str)
+                    and hmac.compare_digest(verified[name]["value"], value)
+                    for name, value in replacements.items()
+                ):
+                    return
+            time.sleep(2)
+        raise CutoverError("database secret reconciliation timed out")
+
 
 def validate_secret_name(value: str) -> str:
     if not SECRET_NAME_RE.fullmatch(value):
@@ -304,6 +386,46 @@ def read_database_url(*, env_name: str, from_stdin: bool) -> str:
     if not value or "\x00" in value or "\n" in value or "\r" in value:
         raise CutoverError("versioned URL has an invalid format")
     return value
+
+
+def read_migration_secret_bundle(stream: Any) -> dict[str, str]:
+    payload = stream.read(65537)
+    if len(payload) > 65536:
+        raise CutoverError("migration database secret input is too large")
+    try:
+        parsed = json.loads(payload)
+    except (json.JSONDecodeError, UnicodeError) as error:
+        raise CutoverError("migration database secret input is invalid") from error
+    if not isinstance(parsed, dict) or not set(parsed).issubset({"database-url-v2"}):
+        raise CutoverError("migration database secret fields are invalid")
+    result: dict[str, str] = {}
+    for name, value in parsed.items():
+        if (
+            not isinstance(name, str)
+            or not isinstance(value, str)
+            or not value
+            or any(character in value for character in ("\x00", "\n", "\r"))
+        ):
+            raise CutoverError("migration database secret value is invalid")
+        result[name] = value
+    return result
+
+
+def validate_migration_secret_bundle(
+    values: dict[str, str], *, selected_secret: str
+) -> None:
+    if selected_secret not in {"database-url", "database-url-v2"}:
+        raise CutoverError("selected migration database secret is invalid")
+    if selected_secret == "database-url-v2" and selected_secret not in values:
+        raise CutoverError("selected migration database secret is unavailable")
+    versioned = values.get("database-url-v2")
+    if versioned is not None:
+        validate_database_url(
+            versioned,
+            expected_database=PRODUCTION_DATABASE_NAME,
+            expected_login_role=APPLICATION_LOGIN_ROLE,
+            expected_host=PRODUCTION_DATABASE_HOST,
+        )
 
 
 def validate_database_url(
@@ -372,6 +494,10 @@ def verify_database_login(
         or schema != PRODUCTION_SCHEMA_NAME
     ):
         raise CutoverError("application database verification target is unexpected")
+    try:
+        import psycopg
+    except ImportError as error:
+        raise CutoverError("PostgreSQL client dependency is unavailable") from error
     try:
         with psycopg.connect(database_url, connect_timeout=15) as connection:
             with connection.cursor() as cursor:
@@ -464,6 +590,8 @@ def verify_database_login(
                     raise CutoverError("database is owned by an application role")
                 if ownership[2] is not True:
                     raise CutoverError("Alembic version table is unavailable")
+    except CutoverError:
+        raise
     except psycopg.Error as error:
         raise CutoverError("application database verification failed") from error
 
@@ -695,6 +823,35 @@ class CutoverOperator:
                 new_value=database_url,
             )
 
+    def reconcile_migration_job(
+        self, values: dict[str, str], *, selected_secret: str
+    ) -> None:
+        migration = WORKLOADS[-1]
+        if migration.label != "migration" or migration.revisioned:
+            raise CutoverError("migration workload definition is invalid")
+        if self.old_secret_name in values:
+            raise CutoverError("refusing to replace the migration rollback secret")
+        self.arm.reconcile_secret_values(
+            self.resource_id(migration),
+            replacements=values,
+            required_names={self.old_secret_name},
+        )
+        expected_revision = update_database_reference(
+            migration,
+            subscription_id=self.subscription_id,
+            resource_group=self.resource_group,
+            secret_name=selected_secret,
+            revision_suffix="unused",
+        )
+        verify_revision(
+            migration,
+            subscription_id=self.subscription_id,
+            resource_group=self.resource_group,
+            expected_secret=selected_secret,
+            expected_revision_name=expected_revision,
+            timeout_seconds=self.timeout_seconds,
+        )
+
     def _switch(self, workload: Workload, secret_name: str) -> None:
         if secret_name == self.new_secret_name:
             direction = "n"
@@ -767,6 +924,11 @@ def build_parser() -> argparse.ArgumentParser:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--rollback", action="store_true")
+    mode.add_argument(
+        "--reconcile-migration-secrets-stdin",
+        action="store_true",
+        help="securely reconcile migration database secrets from a JSON stdin map",
+    )
     parser.add_argument(
         "--subscription-id",
         type=validate_subscription,
@@ -784,6 +946,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--new-secret-name", default="database-url-v2", type=validate_secret_name
+    )
+    parser.add_argument(
+        "--selected-secret-name", default="database-url", type=validate_secret_name
     )
     parser.add_argument(
         "--database-url-env",
@@ -837,7 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"code": "timeout_invalid", "result": "failed"}))
         return 2
 
-    mutating = args.apply or args.rollback
+    mutating = args.apply or args.rollback or args.reconcile_migration_secrets_stdin
     if mutating and (
         args.confirm_subscription != args.subscription_id
         or args.confirm_resource_group != args.resource_group
@@ -856,6 +1021,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     database_url: str | None = None
+    migration_values: dict[str, str] | None = None
     try:
         if args.apply:
             try:
@@ -880,6 +1046,12 @@ def main(argv: list[str] | None = None) -> int:
                 expected_owner_role=args.expected_owner_role,
                 schema=args.schema,
             )
+        if args.reconcile_migration_secrets_stdin:
+            migration_values = read_migration_secret_bundle(sys.stdin)
+            validate_migration_secret_bundle(
+                migration_values,
+                selected_secret=args.selected_secret_name,
+            )
     except CutoverError:
         print(json.dumps({"code": "cutover_failed", "result": "failed"}))
         return 1
@@ -897,6 +1069,24 @@ def main(argv: list[str] | None = None) -> int:
             new_secret_name=args.new_secret_name,
             timeout_seconds=args.timeout_seconds,
         )
+        if args.reconcile_migration_secrets_stdin:
+            if migration_values is None:
+                raise CutoverError("migration database secrets were not loaded")
+            operator.reconcile_migration_job(
+                migration_values,
+                selected_secret=args.selected_secret_name,
+            )
+            print(
+                json.dumps(
+                    {
+                        "mode": "reconcile-migration-secrets",
+                        "result": "succeeded",
+                        "selected_secret": args.selected_secret_name,
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 0
         if args.apply:
             if database_url is None:
                 raise CutoverError("versioned URL was not loaded")

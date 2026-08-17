@@ -110,12 +110,32 @@ def test_database_url_is_read_only_from_env_or_stdin(
     )
 
 
+def test_migration_secret_bundle_is_strict_and_selector_bound() -> None:
+    new_url = (
+        f"postgresql://cosmaneura_app:{STRONG_PASSWORD}@"
+        "cosmaneura-prod-postgres.postgres.database.azure.com/"
+        "production?sslmode=require"
+    )
+    values = cutover.read_migration_secret_bundle(
+        io.StringIO(json.dumps({"database-url-v2": new_url}))
+    )
+    cutover.validate_migration_secret_bundle(values, selected_secret="database-url-v2")
+
+    with pytest.raises(cutover.CutoverError, match="fields"):
+        cutover.read_migration_secret_bundle(
+            io.StringIO(json.dumps({"database-url": "must-not-be-replaced"}))
+        )
+    with pytest.raises(cutover.CutoverError, match="unavailable"):
+        cutover.validate_migration_secret_bundle({}, selected_secret="database-url-v2")
+
+
 def test_az_subprocess_receives_no_database_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     new_secret = "postgresql://new-secret-must-not-reach-az"
     admin_secret = "postgresql://admin-secret-must-not-reach-az"
     monkeypatch.setenv("COSMANEURA_DATABASE_URL_V2", new_secret)
+    monkeypatch.setenv("DATABASE_URL_V2", new_secret)
     monkeypatch.setenv("DATABASE_URL", admin_secret)
 
     class Result:
@@ -127,6 +147,7 @@ def test_az_subprocess_receives_no_database_secret(
         assert all(new_secret not in argument for argument in command)
         assert all(admin_secret not in argument for argument in command)
         assert "COSMANEURA_DATABASE_URL_V2" not in kwargs["env"]
+        assert "DATABASE_URL_V2" not in kwargs["env"]
         assert "DATABASE_URL" not in kwargs["env"]
         return Result()
 
@@ -305,9 +326,58 @@ def test_arm_secret_upsert_preserves_old_and_unrelated_secrets() -> None:
     ]
 
 
+def test_arm_reconcile_updates_named_values_and_preserves_unrelated() -> None:
+    replacements = {
+        "database-url-v2": "application-value",
+    }
+    responses = iter(
+        (
+            {"etag": '"safe-etag"'},
+            {
+                "value": [
+                    {"name": "database-url", "value": "old-rollback-value"},
+                    {"name": "unrelated", "value": "keep-value"},
+                ]
+            },
+            {},
+            {
+                "value": [
+                    {"name": "database-url", "value": "old-rollback-value"},
+                    {"name": "unrelated", "value": "keep-value"},
+                    {
+                        "name": "database-url-v2",
+                        "value": replacements["database-url-v2"],
+                    },
+                ]
+            },
+        )
+    )
+    requests: list[Any] = []
+
+    def opener(request: Any, *, timeout: int) -> FakeResponse:
+        requests.append(request)
+        return FakeResponse(next(responses))
+
+    arm = cutover.ArmClient("opaque-token", opener=opener)
+    arm.reconcile_secret_values(
+        "/subscriptions/test/resourceGroups/test/providers/Microsoft.App/jobs/test",
+        replacements=replacements,
+        required_names={"database-url"},
+    )
+
+    assert [request.method for request in requests] == ["GET", "POST", "PATCH", "POST"]
+    patch_body = json.loads(requests[2].data)
+    assert patch_body["properties"]["configuration"]["secrets"] == [
+        {"name": "database-url", "value": "old-rollback-value"},
+        {"name": "unrelated", "value": "keep-value"},
+        {"name": "database-url-v2", "value": replacements["database-url-v2"]},
+    ]
+
+
 class FakeArm:
     def __init__(self) -> None:
         self.upserts: list[tuple[str, str, str, str]] = []
+        self.reconciliations: list[tuple[str, dict[str, str], set[str]]] = []
 
     def upsert_versioned_secret(
         self,
@@ -321,6 +391,17 @@ class FakeArm:
 
     def list_secrets(self, resource_id: str) -> list[dict[str, str]]:
         return [{"name": "database-url"}, {"name": "database-url-v2"}]
+
+    def reconcile_secret_values(
+        self,
+        resource_id: str,
+        *,
+        replacements: dict[str, str],
+        required_names: set[str] | None = None,
+    ) -> None:
+        self.reconciliations.append(
+            (resource_id, replacements, required_names or set())
+        )
 
 
 def test_operator_installs_secret_without_subprocess_arguments() -> None:
@@ -339,6 +420,60 @@ def test_operator_installs_secret_without_subprocess_arguments() -> None:
 
     assert len(arm.upserts) == len(cutover.WORKLOADS)
     assert all(item[3] == secret_value for item in arm.upserts)
+
+
+def test_migration_reconcile_passes_only_secret_names_to_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arm = FakeArm()
+    operator = cutover.CutoverOperator(
+        arm=arm,  # type: ignore[arg-type]
+        subscription_id="00000000-0000-0000-0000-000000000000",
+        resource_group="cosmaneura-prod",
+        old_secret_name="database-url",
+        new_secret_name="database-url-v2",
+        timeout_seconds=300,
+    )
+    values = {
+        "database-url-v2": "postgresql://new-secret",
+    }
+    calls: list[tuple[str, str]] = []
+
+    def update(workload: cutover.Workload, **kwargs: Any) -> None:
+        serialized = json.dumps(kwargs)
+        assert values["database-url-v2"] not in serialized
+        calls.append((workload.label, kwargs["secret_name"]))
+        return None
+
+    monkeypatch.setattr(cutover, "update_database_reference", update)
+    monkeypatch.setattr(cutover, "verify_revision", lambda *args, **kwargs: None)
+
+    operator.reconcile_migration_job(values, selected_secret="database-url-v2")
+
+    assert "database-url" not in values
+    assert calls == [("migration", "database-url-v2")]
+    assert arm.reconciliations[0][1] == values
+    assert arm.reconciliations[0][2] == {"database-url"}
+
+
+def test_migration_reconcile_refuses_to_replace_old_rollback_value() -> None:
+    arm = FakeArm()
+    operator = cutover.CutoverOperator(
+        arm=arm,  # type: ignore[arg-type]
+        subscription_id="00000000-0000-0000-0000-000000000000",
+        resource_group="cosmaneura-prod",
+        old_secret_name="database-url",
+        new_secret_name="database-url-v2",
+        timeout_seconds=300,
+    )
+
+    with pytest.raises(cutover.CutoverError, match="rollback secret"):
+        operator.reconcile_migration_job(
+            {"database-url": "postgresql://different-old-value"},
+            selected_secret="database-url",
+        )
+
+    assert arm.reconciliations == []
 
 
 def test_apply_rolls_back_completed_steps_in_reverse_order(
