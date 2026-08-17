@@ -36,7 +36,7 @@ type ClerkClient = {
   load: () => Promise<void>
   user?: ClerkUser
   session?: {
-    getToken: () => Promise<string | null>
+    getToken: (options?: { template?: string }) => Promise<string | null>
   }
   redirectToSignIn: () => Promise<void>
 }
@@ -62,7 +62,10 @@ function makeTestClerkClient(userId: string): ClerkClient {
     loaded: true,
     load: async () => {},
     user: { id: userId },
-    session: { getToken: async () => `test:${userId}` },
+    session: {
+      getToken: async (options) =>
+        options?.template ? `test-provider:${userId}` : `test:${userId}`,
+    },
     redirectToSignIn: async () => {},
   }
 }
