@@ -1,13 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 from pydantic import BaseModel, Field, computed_field
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
+import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
@@ -185,6 +186,40 @@ def note_detail(
     )
 
     return note_detail
+
+
+class OpenSandboxRecord(BaseModel, extra="forbid"):
+    record_ref: str
+
+
+@internal_api_app.get(
+    "/notes/{appointment_id}/ehr-labs-record",
+    response_model=OpenSandboxRecord,
+)
+def open_sandbox_labs_record(
+    request: Request,
+    response: Response,
+    appointment_id: Annotated[TypeIDType, Path()],
+) -> OpenSandboxRecord:
+    """Resolve the authenticated doctor's current synthetic Preview record.
+
+    The browser supplies only its open platform appointment. The opaque EHR
+    reference comes exclusively from the operator-provisioned server mapping;
+    names and chart content are neither accepted nor returned.
+    """
+
+    doctor: Doctor = request.state.doctor
+    record_ref = ehr_sandbox_record_mapping.resolve_open_athena_preview_record_ref(
+        doctor_id=doctor.id,
+        appointment_id=appointment_id,
+    )
+    if record_ref is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Synthetic sandbox record is unavailable.",
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return OpenSandboxRecord(record_ref=record_ref)
 
 
 class IntakeDetail(BaseModel, extra="forbid"):

@@ -1,7 +1,12 @@
 import json
+from typing import cast
 
 import typer
 from fastapi.routing import APIRoute
+from typeid import TypeID
+
+from activemodel.session_manager import global_session
+from activemodel.types import TypeIDType
 
 app = typer.Typer()
 
@@ -79,6 +84,86 @@ def routes():
             typer.echo(f"{method}   {route.path}    {route.name}")
         else:
             typer.echo(f"unsupported route: {route}")
+
+
+def _typeid(value: str, expected_prefix: str) -> TypeIDType:
+    try:
+        parsed = TypeID.from_string(value)
+    except Exception as exc:
+        raise typer.BadParameter("must be a valid TypeID") from exc
+    if parsed.prefix != expected_prefix:
+        raise typer.BadParameter(f"must have the {expected_prefix}_ prefix")
+    # ActiveModel annotates TypeID-valued model fields with its SQLAlchemy
+    # TypeDecorator even though the validated runtime value is typeid.TypeID.
+    return cast(TypeIDType, parsed)
+
+
+@app.command("provision-athena-preview-record")
+def provision_athena_preview_record(
+    doctor_id: str = typer.Option(...),
+    patient_id: str = typer.Option(...),
+    record_ref: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+    confirm_synthetic_only: bool = typer.Option(
+        False,
+        "--confirm-synthetic-only",
+        help="Confirm this is athena Preview practice 195900 synthetic data.",
+    ),
+) -> None:
+    """Provision the single governed sandbox record mapping for a patient."""
+
+    from app.services.ehr_sandbox_record_mapping import (
+        SandboxRecordMappingError,
+        provision_athena_preview_mapping,
+    )
+
+    if not confirm_synthetic_only:
+        typer.echo(
+            "Provisioning refused: --confirm-synthetic-only is required.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    try:
+        with global_session():
+            mapping = provision_athena_preview_mapping(
+                doctor_id=_typeid(doctor_id, "doctor"),
+                patient_id=_typeid(patient_id, "patient"),
+                record_ref=record_ref,
+                operator_ref=operator_ref,
+            )
+    except SandboxRecordMappingError as exc:
+        typer.echo(f"Provisioning refused: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Provisioned synthetic Preview mapping {mapping.id}.")
+
+
+@app.command("revoke-athena-preview-record")
+def revoke_athena_preview_record(
+    doctor_id: str = typer.Option(...),
+    patient_id: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+) -> None:
+    """Revoke an active sandbox mapping without deleting its history."""
+
+    from app.services.ehr_sandbox_record_mapping import (
+        SandboxRecordMappingError,
+        revoke_athena_preview_mapping,
+    )
+
+    try:
+        with global_session():
+            mapping = revoke_athena_preview_mapping(
+                doctor_id=_typeid(doctor_id, "doctor"),
+                patient_id=_typeid(patient_id, "patient"),
+                operator_ref=operator_ref,
+            )
+    except SandboxRecordMappingError as exc:
+        typer.echo(f"Revocation refused: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    typer.echo(f"Revoked synthetic Preview mapping {mapping.id}.")
 
 
 if __name__ == "__main__":

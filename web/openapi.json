@@ -234,6 +234,54 @@
         }
       }
     },
+    "/internal/v1/notes/{appointment_id}/ehr-labs-record": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Open Sandbox Labs Record",
+        "description": "Resolve the authenticated doctor's current synthetic Preview record.\n\nThe browser supplies only its open platform appointment. The opaque EHR\nreference comes exclusively from the operator-provisioned server mapping;\nnames and chart content are neither accepted nor returned.",
+        "operationId": "open_sandbox_labs_record",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenSandboxRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake/{appointment_id}": {
       "get": {
         "tags": [
@@ -1722,6 +1770,20 @@
           "appointments"
         ],
         "title": "NotetakingData"
+      },
+      "OpenSandboxRecord": {
+        "properties": {
+          "record_ref": {
+            "type": "string",
+            "title": "Record Ref"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "record_ref"
+        ],
+        "title": "OpenSandboxRecord"
       },
       "Patient": {
         "properties": {

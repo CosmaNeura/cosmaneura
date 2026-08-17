@@ -14,6 +14,7 @@ import { StatusBadge } from "~/components/shared/StatusBadge"
 import { noteDetail } from "~/configuration/client"
 import type { EngagementRole } from "~/configuration/client"
 import { standardDateFormat } from "~/lib/date"
+import { SovereignPanelHost } from "~/sovereign/SovereignPanelHost"
 import { isEngagementEnabled } from "~/utils/engagement-feature"
 
 import { useUser } from "@clerk/clerk-react"
@@ -153,6 +154,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
 
         <VisitTranscriptViewer transcript={transcript} />
       </InnerScrollableContent>
+      <SovereignPanelHost appointmentId={loaderData.appointment.id} />
     </SidebarInset>
   )
 }
