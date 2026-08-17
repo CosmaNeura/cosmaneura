@@ -106,6 +106,7 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
 def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     workflow = _read(".github/workflows/build_and_publish.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
+    plan_workflow = _read(".github/workflows/infra_plan.yml")
 
     assert "production_infra_changed" in workflow
     assert "infra .github/workflows/infra_apply.yml Procfile" in workflow
@@ -127,6 +128,18 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     assert workflow.count("cancel-in-progress: false") == 1
     assert apply_workflow.count("group: cosmaneura-production-container-apps") == 1
     assert "cancel-in-progress: false" in apply_workflow
+
+    assert "  issues: write" in plan_workflow
+    plan_step = plan_workflow[
+        plan_workflow.index("      - name: tofu plan") : plan_workflow.index(
+            "      - name: Post plan as PR comment"
+        )
+    ]
+    comment_step = plan_workflow[
+        plan_workflow.index("      - name: Post plan as PR comment") :
+    ]
+    assert "continue-on-error" not in plan_step
+    assert "continue-on-error: true" in comment_step
 
     documentation = _read("infra/README.md")
     assert "Wait for **Terraform Apply**" in documentation

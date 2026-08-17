@@ -19,11 +19,13 @@ on:
   workflow_dispatch:
 
 # Federated OIDC token issued by GitHub → Azure AD. id-token: write is
-# required to mint the token. pull-requests: write is required so we
-# can post the plan as a PR comment.
+# required to mint the token. The sticky plan uses the issue-comments REST
+# API, so `issues: write` is required even though the target is a pull request.
+# `pull-requests: write` remains explicit for PR-scoped metadata.
 permissions:
   contents: read
   id-token: write
+  issues: write
   pull-requests: write
 
 # A single PR can push multiple commits in quick succession. Cancel the
@@ -133,6 +135,10 @@ jobs:
       - name: Post plan as PR comment
         uses: actions/github-script@v7
         if: github.event_name == 'pull_request'
+        # The step summary and plan exit code remain authoritative. A transient
+        # GitHub comment API failure must not turn a successful infrastructure
+        # plan into a failed plan check.
+        continue-on-error: true
         with:
           script: |
             const fs = require('fs');
