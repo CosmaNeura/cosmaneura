@@ -6,8 +6,10 @@ from app.services.ehr_sandbox_record_mapping import (
     SandboxRecordMappingConflict,
     SandboxRecordMappingError,
     SandboxRecordMappingNotFound,
+    designate_athena_preview_patient,
     provision_athena_preview_mapping,
     revoke_athena_preview_mapping,
+    revoke_athena_preview_patient_designation,
 )
 
 from app.models.doctor import Doctor
@@ -39,9 +41,18 @@ def _patient(doctor: Doctor, name: str = "Synthetic Preview Record") -> Patient:
     ).save()
 
 
+def _designate(doctor: Doctor, patient: Patient) -> None:
+    designate_athena_preview_patient(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        operator_ref="operator_synthetic_designator",
+    )
+
+
 def test_provisioning_is_fixed_to_synthetic_athena_preview_195900_and_idempotent():
     doctor = _doctor("user_test_ehr_preview_owner")
     patient = _patient(doctor)
+    _designate(doctor, patient)
 
     first = provision_athena_preview_mapping(
         doctor_id=doctor.id,
@@ -71,6 +82,15 @@ def test_provisioning_refuses_cross_doctor_patient_and_nonopaque_references():
     other = _doctor("user_test_ehr_preview_other_owner")
     patient = _patient(owner)
 
+    with pytest.raises(SandboxRecordMappingConflict, match="lacks an active"):
+        provision_athena_preview_mapping(
+            doctor_id=owner.id,
+            patient_id=patient.id,
+            record_ref=RECORD_REF,
+            operator_ref=OPERATOR_REF,
+        )
+    _designate(owner, patient)
+
     with pytest.raises(SandboxRecordMappingNotFound):
         provision_athena_preview_mapping(
             doctor_id=other.id,
@@ -93,6 +113,8 @@ def test_active_scope_and_record_are_unique_and_race_failures_are_safe():
     doctor = _doctor("user_test_ehr_preview_unique")
     first_patient = _patient(doctor, "Synthetic One")
     second_patient = _patient(doctor, "Synthetic Two")
+    _designate(doctor, first_patient)
+    _designate(doctor, second_patient)
     provision_athena_preview_mapping(
         doctor_id=doctor.id,
         patient_id=first_patient.id,
@@ -120,6 +142,7 @@ def test_active_scope_and_record_are_unique_and_race_failures_are_safe():
 def test_revocation_is_durable_and_allows_deliberate_reprovisioning():
     doctor = _doctor("user_test_ehr_preview_revoke")
     patient = _patient(doctor)
+    _designate(doctor, patient)
     original = provision_athena_preview_mapping(
         doctor_id=doctor.id,
         patient_id=patient.id,
@@ -135,6 +158,22 @@ def test_revocation_is_durable_and_allows_deliberate_reprovisioning():
     assert revoked.id == original.id
     assert revoked.revoked_at is not None
     assert revoked.revoked_by == "operator_revoker"
+
+    designation = revoke_athena_preview_patient_designation(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        operator_ref="operator_designation_revoker",
+    )
+    assert designation.revoked_at is not None
+
+    with pytest.raises(SandboxRecordMappingConflict, match="lacks an active"):
+        provision_athena_preview_mapping(
+            doctor_id=doctor.id,
+            patient_id=patient.id,
+            record_ref="a-195900.E-60179",
+            operator_ref="operator_reprovisioner",
+        )
+    _designate(doctor, patient)
 
     replacement = provision_athena_preview_mapping(
         doctor_id=doctor.id,

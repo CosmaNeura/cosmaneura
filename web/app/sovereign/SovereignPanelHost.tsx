@@ -42,7 +42,9 @@ export type SovereignProviderConfig = {
 }
 
 const TEMPLATE_NAME = /^[A-Za-z0-9_-]{1,64}$/
-const OPAQUE_RECORD_REF = /^[A-Za-z0-9._~-]{3,160}$/
+// Fernet is urlsafe-base64. The host treats this as an opaque, short-lived
+// grant; it never receives or parses the athena vendor patient identifier.
+const OPAQUE_RECORD_GRANT = /^[A-Za-z0-9_-]{80,4096}={0,2}$/
 
 export function resolveSovereignProviderConfig(
   environment: ViteEnvironment = import.meta.env,
@@ -160,7 +162,8 @@ function parseRecordRef(value: unknown): string {
     Object.keys(value).length !== 1 ||
     !("record_ref" in value) ||
     typeof value.record_ref !== "string" ||
-    !OPAQUE_RECORD_REF.test(value.record_ref)
+    value.record_ref.length > 4096 ||
+    !OPAQUE_RECORD_GRANT.test(value.record_ref)
   ) {
     throw new Error("Sandbox record response is invalid")
   }
@@ -195,9 +198,7 @@ export function SovereignPanelHost({
   appointmentId: string
 }) {
   const config = resolveSovereignProviderConfig()
-  const appointmentRef = useRef(appointmentId)
   const panelRef = useRef<PanelInstance | null>(null)
-  appointmentRef.current = appointmentId
 
   useEffect(() => {
     if (!config) return
@@ -205,27 +206,35 @@ export function SovereignPanelHost({
     let mounted: PanelInstance | null = null
 
     void loadPinnedPanel()
-      .then((panel) => {
+      .then(async (panel) => {
         if (cancelled) return
-        mounted = panel.mount({
+        const candidate = panel.mount({
           sovereignUrl: config.origin,
           getAuthToken: () => sovereignProviderToken(config.clerkTemplate),
           getContext: async () => {
-            const openAppointment = appointmentRef.current
-            const recordRef = await loadOpenRecordRef(openAppointment)
-            if (appointmentRef.current !== openAppointment) {
+            const recordRef = await loadOpenRecordRef(appointmentId)
+            if (cancelled) {
               throw new Error("Open record changed while context was resolving")
             }
             return recordRef
-              ? { clientId: openAppointment, record_ref: recordRef }
-              : { clientId: openAppointment }
+              ? { clientId: appointmentId, record_ref: recordRef }
+              : { clientId: appointmentId }
           },
           shiftContent: true,
         })
-        panelRef.current = mounted
-        void mounted.setRecord(appointmentRef.current)
+        mounted = candidate
+        await candidate.setRecord(appointmentId)
+        // Cleanup owns destruction once the effect has been cancelled. Do not
+        // dereference `mounted` here: cleanup deliberately nulls it while an
+        // asynchronous initial bind may still be resolving.
+        if (cancelled) return
+        panelRef.current = candidate
       })
       .catch(() => {
+        const failed = mounted
+        mounted = null
+        if (panelRef.current === failed) panelRef.current = null
+        failed?.destroy()
         // The Notes surface remains usable when the separately deployed panel
         // is unavailable. The panel itself renders network errors per turn.
       })
@@ -233,13 +242,11 @@ export function SovereignPanelHost({
     return () => {
       cancelled = true
       panelRef.current = null
-      mounted?.destroy()
+      const previous = mounted
+      mounted = null
+      previous?.destroy()
     }
-  }, [config?.clerkTemplate, config?.origin])
-
-  useEffect(() => {
-    if (panelRef.current) void panelRef.current.setRecord(appointmentId)
-  }, [appointmentId])
+  }, [appointmentId, config?.clerkTemplate, config?.origin])
 
   return null
 }

@@ -139,6 +139,46 @@ def provision_athena_preview_record(
     typer.echo(f"Provisioned synthetic Preview mapping {mapping.id}.")
 
 
+@app.command("designate-athena-preview-patient")
+def designate_athena_preview_patient_record(
+    doctor_id: str = typer.Option(...),
+    patient_id: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+    confirm_no_real_patient_data: bool = typer.Option(
+        False,
+        "--confirm-no-real-patient-data",
+        help=(
+            "Confirm this platform patient is a synthetic demo record and "
+            "contains no real patient data."
+        ),
+    ),
+) -> None:
+    """Designate a doctor-scoped platform patient as synthetic-only."""
+
+    from app.services.ehr_sandbox_record_mapping import (
+        SandboxRecordMappingError,
+        designate_athena_preview_patient,
+    )
+
+    if not confirm_no_real_patient_data:
+        typer.echo(
+            "Designation refused: --confirm-no-real-patient-data is required.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    try:
+        with global_session():
+            designation = designate_athena_preview_patient(
+                doctor_id=_typeid(doctor_id, "doctor"),
+                patient_id=_typeid(patient_id, "patient"),
+                operator_ref=operator_ref,
+            )
+    except SandboxRecordMappingError as exc:
+        typer.echo(f"Designation refused: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Designated synthetic Preview patient {designation.id}.")
+
+
 @app.command("revoke-athena-preview-record")
 def revoke_athena_preview_record(
     doctor_id: str = typer.Option(...),
@@ -164,6 +204,32 @@ def revoke_athena_preview_record(
         raise typer.Exit(1) from exc
 
     typer.echo(f"Revoked synthetic Preview mapping {mapping.id}.")
+
+
+@app.command("revoke-athena-preview-patient-designation")
+def revoke_athena_preview_patient_record_designation(
+    doctor_id: str = typer.Option(...),
+    patient_id: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+) -> None:
+    """Remove synthetic status after the associated mapping is revoked."""
+
+    from app.services.ehr_sandbox_record_mapping import (
+        SandboxRecordMappingError,
+        revoke_athena_preview_patient_designation,
+    )
+
+    try:
+        with global_session():
+            designation = revoke_athena_preview_patient_designation(
+                doctor_id=_typeid(doctor_id, "doctor"),
+                patient_id=_typeid(patient_id, "patient"),
+                operator_ref=operator_ref,
+            )
+    except SandboxRecordMappingError as exc:
+        typer.echo(f"Designation revocation refused: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Revoked synthetic patient designation {designation.id}.")
 
 
 if __name__ == "__main__":

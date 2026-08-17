@@ -14,6 +14,71 @@ ATHENA_PREVIEW_ENVIRONMENT = "preview"
 ATHENA_PREVIEW_PRACTICE = "195900"
 
 
+class EHRSandboxPatientDesignation(
+    BaseModel,
+    TimestampsMixin,
+    TypeIDMixin("ehr_sandbox_designation"),
+    table=True,
+):
+    """Durable operator assertion that one platform patient is synthetic-only."""
+
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["patient_id", "doctor_id"],
+            ["patient.id", "patient.doctor_id"],
+            name="fk_ehr_sandbox_designation_patient_doctor_scope",
+        ),
+        sa.UniqueConstraint(
+            "id",
+            "doctor_id",
+            "patient_id",
+            name="uq_ehr_sandbox_designation_id_doctor_patient",
+        ),
+    )
+
+    doctor_id: TypeIDType = Doctor.foreign_key()
+    patient_id: TypeIDType = Patient.foreign_key()
+    adapter: str = Field(
+        default=ATHENA_ADAPTER,
+        sa_column=Column(sa.String(32), nullable=False),
+    )
+    environment: str = Field(
+        default=ATHENA_PREVIEW_ENVIRONMENT,
+        sa_column=Column(sa.String(32), nullable=False),
+    )
+    practice_ref: str = Field(
+        default=ATHENA_PREVIEW_PRACTICE,
+        sa_column=Column(sa.String(32), nullable=False),
+    )
+    synthetic_only: bool = Field(
+        default=True,
+        sa_column=Column(sa.Boolean(), nullable=False),
+    )
+    designated_by: str = Field(sa_column=Column(sa.String(160), nullable=False))
+    revoked_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    revoked_by: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(160), nullable=True),
+    )
+
+    def before_save(self) -> None:
+        if (
+            self.adapter != ATHENA_ADAPTER
+            or self.environment != ATHENA_PREVIEW_ENVIRONMENT
+            or self.practice_ref != ATHENA_PREVIEW_PRACTICE
+            or self.synthetic_only is not True
+        ):
+            raise ValueError(
+                "synthetic designations are restricted to athena Preview "
+                "practice 195900"
+            )
+        if (self.revoked_at is None) != (self.revoked_by is None):
+            raise ValueError("revocation timestamp and actor must be set together")
+
+
 class EHRSandboxRecordMapping(
     BaseModel,
     TimestampsMixin,
@@ -27,8 +92,21 @@ class EHRSandboxRecordMapping(
     carries its synthetic-only assertion and revocation history durably.
     """
 
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["designation_id", "doctor_id", "patient_id"],
+            [
+                "ehr_sandbox_patient_designation.id",
+                "ehr_sandbox_patient_designation.doctor_id",
+                "ehr_sandbox_patient_designation.patient_id",
+            ],
+            name="fk_ehr_sandbox_mapping_designation_scope",
+        ),
+    )
+
     doctor_id: TypeIDType = Doctor.foreign_key()
     patient_id: TypeIDType = Patient.foreign_key()
+    designation_id: TypeIDType = EHRSandboxPatientDesignation.foreign_key()
 
     adapter: str = Field(
         default=ATHENA_ADAPTER,

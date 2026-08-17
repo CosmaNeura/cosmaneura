@@ -1775,7 +1775,11 @@
         "properties": {
           "record_ref": {
             "type": "string",
-            "title": "Record Ref"
+            "maxLength": 4096,
+            "minLength": 80,
+            "pattern": "^[A-Za-z0-9_-]{80,4096}={0,2}$",
+            "title": "Record Ref",
+            "description": "Opaque, short-lived, authenticated grant bound to the Clerk actor and current doctor/appointment/patient scope. It is not an EHR patient identifier and clients must not parse it."
           }
         },
         "additionalProperties": false,
@@ -1783,7 +1787,8 @@
         "required": [
           "record_ref"
         ],
-        "title": "OpenSandboxRecord"
+        "title": "OpenSandboxRecord",
+        "description": "Opaque, short-lived record grant; never a vendor patient identifier."
       },
       "Patient": {
         "properties": {

@@ -18,7 +18,7 @@ import {
   SovereignPanelHost,
   resolveSovereignProviderConfig,
 } from "./SovereignPanelHost"
-import { render, waitFor } from "@testing-library/react"
+import { act, render, waitFor } from "@testing-library/react"
 
 vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
 
@@ -33,6 +33,9 @@ const mount = vi.fn((options: PanelOptions) => {
   return mountImplementation(options)
 })
 const panelApi: PanelApi = { mount }
+const RECORD_GRANT_A = `gA${"a".repeat(118)}`
+const RECORD_GRANT_B = `gB${"b".repeat(118)}`
+const RECORD_GRANT_STALE = `gS${"c".repeat(118)}`
 
 function signedInClerk() {
   return {
@@ -126,9 +129,9 @@ describe("SovereignPanelHost", () => {
           })
         }
         if (url.includes("appointment_a"))
-          return json({ record_ref: "a-195900.E-60178" })
+          return json({ record_ref: RECORD_GRANT_A })
         if (url.includes("appointment_b"))
-          return json({ record_ref: "a-195900.E-60179" })
+          return json({ record_ref: RECORD_GRANT_B })
         if (url.includes("appointment_c"))
           return json({ detail: "unavailable" }, 404)
         throw new Error(`unexpected URL ${url} ${String(init?.method)}`)
@@ -165,7 +168,7 @@ describe("SovereignPanelHost", () => {
 
     await expect(options.getContext()).resolves.toEqual({
       clientId: "appointment_a",
-      record_ref: "a-195900.E-60178",
+      record_ref: RECORD_GRANT_A,
     })
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/internal/v1/notes/appointment_a/ehr-labs-record",
@@ -181,28 +184,113 @@ describe("SovereignPanelHost", () => {
     )
 
     view.rerender(<SovereignPanelHost appointmentId="appointment_b" />)
+    await waitFor(() => expect(mount).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_b"))
-    await expect(options.getContext()).resolves.toEqual({
+    const optionsB = mount.mock.calls[1][0]
+    await expect(optionsB.getContext()).resolves.toEqual({
       clientId: "appointment_b",
-      record_ref: "a-195900.E-60179",
+      record_ref: RECORD_GRANT_B,
     })
 
     delayNext = true
-    const staleContext = options.getContext()
+    const staleContext = optionsB.getContext()
     view.rerender(<SovereignPanelHost appointmentId="appointment_c" />)
+    await waitFor(() => expect(mount).toHaveBeenCalledTimes(3))
     await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_c"))
-    delayedResolve(json({ record_ref: "a-195900.E-stale" }))
+    delayedResolve(json({ record_ref: RECORD_GRANT_STALE }))
     await expect(staleContext).rejects.toThrow("Open record changed")
 
-    await expect(options.getContext()).resolves.toEqual({
+    const optionsC = mount.mock.calls[2][0]
+    await expect(optionsC.getContext()).resolves.toEqual({
       clientId: "appointment_c",
     })
-    const serializedContext = JSON.stringify(await options.getContext())
+    const serializedContext = JSON.stringify(await optionsC.getContext())
     expect(serializedContext).not.toContain("name")
     expect(serializedContext).not.toContain("chart")
     expect(serializedContext).not.toContain("date_of_birth")
 
     view.unmount()
-    expect(destroy).toHaveBeenCalledTimes(1)
+    expect(destroy).toHaveBeenCalledTimes(3)
+  })
+
+  it("destroys and detaches the panel when the initial record bind fails", async () => {
+    vi.mocked(getClient).mockResolvedValue(signedInClerk())
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json({ record_ref: RECORD_GRANT_A })),
+    )
+    const destroy = vi.fn()
+    const setRecord = vi.fn(async () => {
+      throw new Error("bind failed")
+    })
+    mountImplementation = () => ({ setRecord, destroy })
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
+
+    render(<SovereignPanelHost appointmentId="appointment_a" />)
+    await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_a"))
+    await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1))
+  })
+
+  it("destroys an obsolete panel exactly once when its initial bind resolves late", async () => {
+    vi.mocked(getClient).mockResolvedValue(signedInClerk())
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json({ record_ref: RECORD_GRANT_A })),
+    )
+
+    let finishFirstBind: () => void = () => {
+      throw new Error("first bind was not started")
+    }
+    const firstSetRecord = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFirstBind = resolve
+        }),
+    )
+    const firstDestroy = vi.fn()
+    const secondSetRecord = vi.fn(async () => {})
+    const secondDestroy = vi.fn()
+    let mountCount = 0
+    mountImplementation = () => {
+      mountCount += 1
+      return mountCount === 1
+        ? { setRecord: firstSetRecord, destroy: firstDestroy }
+        : { setRecord: secondSetRecord, destroy: secondDestroy }
+    }
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
+
+    const view = render(<SovereignPanelHost appointmentId="appointment_a" />)
+    await waitFor(() =>
+      expect(firstSetRecord).toHaveBeenCalledWith("appointment_a"),
+    )
+
+    view.rerender(<SovereignPanelHost appointmentId="appointment_b" />)
+    await waitFor(() =>
+      expect(secondSetRecord).toHaveBeenCalledWith("appointment_b"),
+    )
+    expect(firstDestroy).toHaveBeenCalledTimes(1)
+
+    await act(async () => finishFirstBind())
+    expect(firstDestroy).toHaveBeenCalledTimes(1)
+    expect(secondDestroy).not.toHaveBeenCalled()
+
+    view.unmount()
+    expect(secondDestroy).toHaveBeenCalledTimes(1)
   })
 })

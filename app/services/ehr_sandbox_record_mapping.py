@@ -4,6 +4,11 @@ import re
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from app.services.sovereign_record_grant import (
+    RecordGrantScope,
+    issue_record_grant,
+)
+
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
@@ -11,6 +16,7 @@ from app.models.ehr_sandbox_record_mapping import (
     ATHENA_ADAPTER,
     ATHENA_PREVIEW_ENVIRONMENT,
     ATHENA_PREVIEW_PRACTICE,
+    EHRSandboxPatientDesignation,
     EHRSandboxRecordMapping,
 )
 from app.models.patient import Patient
@@ -39,6 +45,53 @@ def _validated_opaque(value: str, *, field: str, maximum: int = 160) -> str:
     return value
 
 
+def designate_athena_preview_patient(
+    *,
+    doctor_id: TypeIDType,
+    patient_id: TypeIDType,
+    operator_ref: str,
+) -> EHRSandboxPatientDesignation:
+    """Explicitly mark one doctor-scoped platform patient as synthetic-only."""
+
+    operator_ref = _validated_opaque(operator_ref, field="operator_ref")
+    with get_session() as session:
+        patient = session.exec(
+            select(Patient)
+            .where(Patient.id == patient_id, Patient.doctor_id == doctor_id)
+            .with_for_update()
+        ).one_or_none()
+        if patient is None:
+            raise SandboxRecordMappingNotFound(
+                "patient was not found in the specified doctor's scope"
+            )
+        current = session.exec(
+            select(EHRSandboxPatientDesignation)
+            .where(
+                EHRSandboxPatientDesignation.doctor_id == doctor_id,
+                EHRSandboxPatientDesignation.patient_id == patient_id,
+                cast(Any, EHRSandboxPatientDesignation.revoked_at).is_(None),
+            )
+            .with_for_update()
+        ).one_or_none()
+        if current is not None:
+            return current
+        designation = EHRSandboxPatientDesignation(
+            doctor_id=doctor_id,
+            patient_id=patient_id,
+            designated_by=operator_ref,
+        )
+        session.add(designation)
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise SandboxRecordMappingConflict(
+                "a concurrent synthetic designation change won the race"
+            ) from exc
+        session.refresh(designation)
+        return designation
+
+
 def provision_athena_preview_mapping(
     *,
     doctor_id: TypeIDType,
@@ -65,6 +118,24 @@ def provision_athena_preview_mapping(
         if patient is None:
             raise SandboxRecordMappingNotFound(
                 "patient was not found in the specified doctor's scope"
+            )
+
+        designation = session.exec(
+            select(EHRSandboxPatientDesignation)
+            .where(
+                EHRSandboxPatientDesignation.doctor_id == doctor_id,
+                EHRSandboxPatientDesignation.patient_id == patient_id,
+                EHRSandboxPatientDesignation.adapter == ATHENA_ADAPTER,
+                EHRSandboxPatientDesignation.environment == ATHENA_PREVIEW_ENVIRONMENT,
+                EHRSandboxPatientDesignation.practice_ref == ATHENA_PREVIEW_PRACTICE,
+                cast(Any, EHRSandboxPatientDesignation.synthetic_only).is_(True),
+                cast(Any, EHRSandboxPatientDesignation.revoked_at).is_(None),
+            )
+            .with_for_update()
+        ).one_or_none()
+        if designation is None:
+            raise SandboxRecordMappingConflict(
+                "patient lacks an active synthetic Preview designation"
             )
 
         current = session.exec(
@@ -102,6 +173,7 @@ def provision_athena_preview_mapping(
         mapping = EHRSandboxRecordMapping(
             doctor_id=doctor_id,
             patient_id=patient_id,
+            designation_id=designation.id,
             record_ref=record_ref,
             provisioned_by=operator_ref,
         )
@@ -151,10 +223,68 @@ def revoke_athena_preview_mapping(
         return mapping
 
 
-def resolve_open_athena_preview_record_ref(
+def revoke_athena_preview_patient_designation(
+    *,
+    doctor_id: TypeIDType,
+    patient_id: TypeIDType,
+    operator_ref: str,
+) -> EHRSandboxPatientDesignation:
+    """Remove synthetic status only after its active record mapping is revoked."""
+
+    operator_ref = _validated_opaque(operator_ref, field="operator_ref")
+    with get_session() as session:
+        # Use the same first lock as designation/provisioning. Without this
+        # ordering, a provisioner could commit an active mapping after this
+        # transaction checked for one but before it revoked the designation.
+        patient = session.exec(
+            select(Patient)
+            .where(Patient.id == patient_id, Patient.doctor_id == doctor_id)
+            .with_for_update()
+        ).one_or_none()
+        if patient is None:
+            raise SandboxRecordMappingNotFound(
+                "patient was not found in the specified doctor's scope"
+            )
+        active_mapping = session.exec(
+            select(EHRSandboxRecordMapping)
+            .where(
+                EHRSandboxRecordMapping.doctor_id == doctor_id,
+                EHRSandboxRecordMapping.patient_id == patient_id,
+                cast(Any, EHRSandboxRecordMapping.revoked_at).is_(None),
+            )
+            .with_for_update()
+        ).one_or_none()
+        if active_mapping is not None:
+            raise SandboxRecordMappingConflict(
+                "revoke the active sandbox mapping before removing designation"
+            )
+        designation = session.exec(
+            select(EHRSandboxPatientDesignation)
+            .where(
+                EHRSandboxPatientDesignation.doctor_id == doctor_id,
+                EHRSandboxPatientDesignation.patient_id == patient_id,
+                cast(Any, EHRSandboxPatientDesignation.revoked_at).is_(None),
+            )
+            .with_for_update()
+        ).one_or_none()
+        if designation is None:
+            raise SandboxRecordMappingNotFound(
+                "no active synthetic patient designation was found"
+            )
+        designation.revoked_at = datetime.now(UTC)
+        designation.revoked_by = operator_ref
+        session.add(designation)
+        session.commit()
+        session.refresh(designation)
+        return designation
+
+
+def issue_open_athena_preview_record_grant(
     *,
     doctor_id: TypeIDType,
     appointment_id: TypeIDType,
+    actor_ref: str,
+    key: bytes,
 ) -> str | None:
     """Resolve only an active, synthetic mapping for the doctor's open record.
 
@@ -165,7 +295,11 @@ def resolve_open_athena_preview_record_ref(
 
     with get_session() as session:
         statement = (
-            select(EHRSandboxRecordMapping.record_ref)
+            select(
+                EHRSandboxRecordMapping,
+                EHRSandboxPatientDesignation,
+                Appointment,
+            )
             .join(
                 Appointment,
                 and_(
@@ -182,6 +316,17 @@ def resolve_open_athena_preview_record_ref(
                     cast(Any, Patient.doctor_id) == Appointment.doctor_id,
                 ),
             )
+            .join(
+                EHRSandboxPatientDesignation,
+                and_(
+                    cast(Any, EHRSandboxPatientDesignation.id)
+                    == EHRSandboxRecordMapping.designation_id,
+                    cast(Any, EHRSandboxPatientDesignation.doctor_id)
+                    == EHRSandboxRecordMapping.doctor_id,
+                    cast(Any, EHRSandboxPatientDesignation.patient_id)
+                    == EHRSandboxRecordMapping.patient_id,
+                ),
+            )
             .where(
                 Appointment.id == appointment_id,
                 Appointment.doctor_id == doctor_id,
@@ -191,7 +336,31 @@ def resolve_open_athena_preview_record_ref(
                 EHRSandboxRecordMapping.practice_ref == ATHENA_PREVIEW_PRACTICE,
                 cast(Any, EHRSandboxRecordMapping.synthetic_only).is_(True),
                 cast(Any, EHRSandboxRecordMapping.revoked_at).is_(None),
+                EHRSandboxPatientDesignation.adapter == ATHENA_ADAPTER,
+                EHRSandboxPatientDesignation.environment == ATHENA_PREVIEW_ENVIRONMENT,
+                EHRSandboxPatientDesignation.practice_ref == ATHENA_PREVIEW_PRACTICE,
+                cast(Any, EHRSandboxPatientDesignation.synthetic_only).is_(True),
+                cast(Any, EHRSandboxPatientDesignation.revoked_at).is_(None),
             )
-            .with_for_update(read=True, of=EHRSandboxRecordMapping)
+            .with_for_update(
+                read=True,
+                of=(
+                    cast(Any, EHRSandboxRecordMapping),
+                    cast(Any, EHRSandboxPatientDesignation),
+                ),
+            )
         )
-        return session.exec(statement).one_or_none()
+        row = session.exec(statement).one_or_none()
+        if row is None:
+            return None
+        mapping, _designation, appointment = row
+        return issue_record_grant(
+            RecordGrantScope(
+                actor_ref=_validated_opaque(actor_ref, field="actor_ref"),
+                doctor_ref=str(doctor_id),
+                appointment_ref=str(appointment_id),
+                patient_ref=str(appointment.patient_id),
+                vendor_record_ref=mapping.record_ref,
+            ),
+            key=key,
+        )

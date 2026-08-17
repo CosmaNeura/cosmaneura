@@ -26,7 +26,8 @@ variable "python_secret_vars" {
     "SESSION_SECRET_KEY",
     # fernet key for encrypting oauth tokens at rest (doctor_video_integration)
     "ENCRYPTION_KEY",
-    "CLERK_PRIVATE_KEY", "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
+    "CLERK_PRIVATE_KEY", "SOVEREIGN_RECORD_GRANT_SECRET",
+    "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
     # azure openai secret
     "AZURE_OPENAI_API_KEY",
     # azure upload
