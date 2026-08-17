@@ -16,6 +16,8 @@ _PRIVATE_NETWORKS = (
     ipaddress.ip_network("fc00::/7"),
 )
 
+PROBE_TIMEOUT_SECONDS = 60
+
 
 class ProbeFailure(Exception):
     def __init__(self, code: str) -> None:
@@ -73,7 +75,10 @@ def _request_status(url: str, *, method: str, timeout_seconds: int) -> int:
 
 
 def run_probe(
-    health_url: str, workflow_url: str, *, timeout_seconds: int = 10
+    health_url: str,
+    workflow_url: str,
+    *,
+    timeout_seconds: int = PROBE_TIMEOUT_SECONDS,
 ) -> dict[str, object]:
     hostname, _ = _validated_endpoints(health_url, workflow_url)
     resolve_private_addresses(hostname)
@@ -104,8 +109,10 @@ def main() -> int:
     health_url = os.environ.get("SCRIBE_HEALTH_URL", "")
     workflow_url = os.environ.get("SCRIBE_UNAUTHENTICATED_WORKFLOW_URL", "")
     try:
-        timeout_seconds = int(os.environ.get("PROBE_TIMEOUT_SECONDS", "10"))
-        if not 1 <= timeout_seconds <= 30:
+        timeout_seconds = int(
+            os.environ.get("PROBE_TIMEOUT_SECONDS", str(PROBE_TIMEOUT_SECONDS))
+        )
+        if not 1 <= timeout_seconds <= PROBE_TIMEOUT_SECONDS:
             raise ProbeFailure("timeout_out_of_range")
         result = run_probe(health_url, workflow_url, timeout_seconds=timeout_seconds)
     except (ProbeFailure, ValueError) as exc:

@@ -65,6 +65,12 @@ Logs contain only a fixed result code and status numbers. They never contain the
 hostname, resolved address, headers, response body, token, or PHI. The job has no schedule and
 scales to zero between explicitly started executions.
 
+The probe image owns a 60-second per-request timeout, which is also its enforced maximum. The first
+`/healthz` request must allow the Scribe API to scale from zero; the unauthenticated request runs
+only after that health check succeeds. Each check is issued once, the separate job timeout remains
+300 seconds, and the Container Apps retry limit remains zero. Do not override the timeout when
+starting the job.
+
 Future build command, not approved for execution:
 
 ```bash
