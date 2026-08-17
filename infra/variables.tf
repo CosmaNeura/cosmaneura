@@ -26,7 +26,8 @@ variable "python_secret_vars" {
     "SESSION_SECRET_KEY",
     # fernet key for encrypting oauth tokens at rest (doctor_video_integration)
     "ENCRYPTION_KEY",
-    "CLERK_PRIVATE_KEY", "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
+    "CLERK_PRIVATE_KEY",
+    "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
     # azure openai secret
     "AZURE_OPENAI_API_KEY",
     # azure upload
@@ -37,6 +38,16 @@ variable "python_secret_vars" {
     "RECALL_API_KEY",
     # zoom oauth
     "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "ZOOM_SECRET_TOKEN"
+  ]
+}
+
+# Secrets used only by the HTTP API. Keep capability-bearing values out of
+# worker, scheduler, job-monitor, and migration workloads.
+variable "python_api_only_secret_vars" {
+  description = "Secret ENV vars exposed only to the API Container App"
+  type        = set(string)
+  default = [
+    "SOVEREIGN_RECORD_GRANT_SECRET",
   ]
 }
 

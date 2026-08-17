@@ -1,16 +1,22 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 from pydantic import BaseModel, Field, computed_field
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
+import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.services.sovereign_record_grant import (
+    RECORD_GRANT_PATTERN,
+    RecordGrantConfigurationError,
+    configured_record_grant_key,
+)
 from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 
 from activemodel.session_manager import aglobal_session
@@ -185,6 +191,75 @@ def note_detail(
     )
 
     return note_detail
+
+
+class OpenSandboxRecord(BaseModel, extra="forbid"):
+    """Opaque, short-lived record grant; never a vendor patient identifier."""
+
+    record_ref: str = Field(
+        min_length=80,
+        max_length=4096,
+        pattern=RECORD_GRANT_PATTERN,
+        description=(
+            "Opaque, short-lived, authenticated grant bound to the Clerk actor "
+            "and current doctor/appointment/patient scope. It is not an EHR "
+            "patient identifier and clients must not parse it."
+        ),
+    )
+
+
+@internal_api_app.get(
+    "/notes/{appointment_id}/ehr-labs-record",
+    response_model=OpenSandboxRecord,
+)
+def open_sandbox_labs_record(
+    request: Request,
+    response: Response,
+    appointment_id: Annotated[TypeIDType, Path()],
+) -> OpenSandboxRecord:
+    """Resolve the authenticated doctor's current synthetic Preview record.
+
+    The browser supplies only its open platform appointment. The opaque EHR
+    reference comes exclusively from the operator-provisioned server mapping;
+    names and chart content are neither accepted nor returned.
+    """
+
+    doctor: Doctor = request.state.doctor
+    actor_ref = request.state.auth_state.payload.get("sub")
+    if not isinstance(actor_ref, str) or not actor_ref.strip():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not Authenticated",
+        )
+    # Admin login-as changes request.state.doctor after Clerk authentication.
+    # That delegation is useful for ordinary support workflows but is not a
+    # ratified EHR authorization path. Never mint a target doctor's record
+    # grant for a different Clerk subject.
+    if doctor.clerk_id != actor_ref:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Synthetic sandbox record is unavailable.",
+        )
+    try:
+        grant_key = configured_record_grant_key()
+    except RecordGrantConfigurationError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Synthetic sandbox record grants are unavailable.",
+        ) from None
+    record_ref = ehr_sandbox_record_mapping.issue_open_athena_preview_record_grant(
+        doctor_id=doctor.id,
+        appointment_id=appointment_id,
+        actor_ref=actor_ref,
+        key=grant_key,
+    )
+    if record_ref is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Synthetic sandbox record is unavailable.",
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return OpenSandboxRecord(record_ref=record_ref)
 
 
 class IntakeDetail(BaseModel, extra="forbid"):

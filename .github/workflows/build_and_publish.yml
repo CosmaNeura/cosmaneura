@@ -9,13 +9,20 @@ on:
         description: "Run with tmate enabled (https://github.com/marketplace/actions/debugging-with-tmate)"
         required: false
         default: false
+      terraform_apply_run_id:
+        type: string
+        description: "Successful Terraform Apply run that authorizes a held production deploy"
+        required: false
   push:
     branches: [master, staging]
   pull_request: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer master run must not cancel an in-flight production deployment:
+  # cancellation releases the deploy job's cross-workflow mutex while Azure
+  # may still be reconciling revisions. PR and staging runs remain cancellable.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   # run `just secrets_ci_grant-github-actions` to set
@@ -43,6 +50,38 @@ env:
   COLUMNS: 120
 
 jobs:
+  deployment-scope:
+    name: Release scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      production_infra_changed: ${{ steps.classify.outputs.production_infra_changed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Hold app deployment when production infrastructure changes
+        id: classify
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        run: |
+          production_infra_changed=false
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            if [[ -z "$BEFORE_SHA" ]] || ! git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+              # Unknown push scope must fail closed. An operator can run this
+              # workflow manually on master after Terraform Apply is green.
+              production_infra_changed=true
+            elif ! git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- \
+              infra .github/workflows/infra_apply.yml Procfile; then
+              production_infra_changed=true
+            fi
+          fi
+          echo "production_infra_changed=$production_infra_changed" >> "$GITHUB_OUTPUT"
+          if [[ "$production_infra_changed" == "true" ]]; then
+            echo "Production app deployment is held until Terraform Apply is green. Re-run Build & Publish manually on master to deploy the image." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   # NOTE there is no global timeout minutes, so we need to set it on each job :/
 
   app:
@@ -116,18 +155,77 @@ jobs:
     name: 🚀 Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [web, app]
-    if: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' }}
+    concurrency:
+      group: cosmaneura-production-container-apps
+      cancel-in-progress: false
+    needs: [web, app, deployment-scope]
+    if: >-
+      ${{
+        github.ref == 'refs/heads/master' &&
+        (
+          github.event_name == 'workflow_dispatch' ||
+          (
+            github.event_name == 'push' &&
+            needs.deployment-scope.outputs.production_infra_changed != 'true'
+          )
+        )
+      }}
     environment: production
     env:
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
     permissions:
+      actions: read
       contents: read
       # TODO why exactly do we need id-token here?
       id-token: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Verify successful applicable Terraform Apply
+        env:
+          TERRAFORM_APPLY_RUN_ID: ${{ inputs.terraform_apply_run_id }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            TERRAFORM_APPLY_RUN_ID=$(
+              gh api \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/infra_apply.yml/runs?branch=master&status=success&per_page=1" \
+                --jq '.workflow_runs[0].id // empty'
+            )
+          fi
+          if [[ ! "$TERRAFORM_APPLY_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "No successful Terraform Apply is available for this production deploy." >&2
+            exit 1
+          fi
+          mapfile -t apply_run < <(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TERRAFORM_APPLY_RUN_ID" \
+              --jq '[.name, .path, .conclusion, .event, .head_branch, .head_sha] | .[]'
+          )
+          if [[ "${apply_run[0]:-}" != "Terraform Apply" || \
+                "${apply_run[1]:-}" != ".github/workflows/infra_apply.yml" || \
+                "${apply_run[2]:-}" != "success" || \
+                "${apply_run[4]:-}" != "master" ]]; then
+            echo "The supplied run is not a successful Terraform Apply on master." >&2
+            exit 1
+          fi
+          if [[ "${apply_run[3]:-}" != "push" && \
+                "${apply_run[3]:-}" != "workflow_dispatch" ]]; then
+            echo "The supplied Terraform Apply run has an invalid trigger." >&2
+            exit 1
+          fi
+          apply_sha="${apply_run[5]:-}"
+          if [[ -z "$apply_sha" ]] || \
+             ! git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"; then
+            echo "The supplied Terraform Apply commit is not an ancestor of this deploy." >&2
+            exit 1
+          fi
+          if ! git diff --quiet "$apply_sha" "$TARGET_SHA" -- \
+            infra .github/workflows/infra_apply.yml Procfile; then
+            echo "Production infrastructure changed after the supplied Terraform Apply." >&2
+            exit 1
+          fi
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
@@ -180,6 +278,7 @@ jobs:
       CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
+      ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
       JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
       PYTHON_ENV: staging
     permissions:
