@@ -28,7 +28,9 @@ permissions:
 # waits for the current one to finish instead of being killed — losing
 # half-applied state mid-flight is worse than waiting a few minutes.
 concurrency:
-  group: terraform-apply
+  # Shared with the production image-deploy job. Infrastructure and image
+  # updates must never create Container App revisions concurrently.
+  group: cosmaneura-production-container-apps
   cancel-in-progress: false
 
 jobs:

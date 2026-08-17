@@ -21,6 +21,9 @@ RESOURCE_GROUP="cosmaneura-staging"
 ENVIRONMENT_NAME="cosmaneura-staging-app-environment"
 MIGRATION_JOB="cosmaneura-staging-migrate"
 CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker cosmaneura-staging-app-jmon"
+API_CONTAINER="cosmaneura-staging-app"
+GRANT_SECRET_ENV_NAME="SOVEREIGN_RECORD_GRANT_SECRET"
+GRANT_SECRET_RESOURCE_NAME="sovereign-record-grant-secret"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
@@ -78,18 +81,41 @@ echo "Revision string: $REVISION_STRING"
 
 # Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
 # Must stay in sync with variables.tf python_secret_vars / python_public_vars.
-ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend)
+if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
+	echo "Failed to load staging deployment configuration."
+	exit 1
+fi
+
+ENABLE_SOVEREIGN_RECORD_GRANTS=$(
+	echo "$ENV_JSON" | jq -r '.ENABLE_SOVEREIGN_RECORD_GRANTS // "false"'
+)
+if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" && \
+	"$ENABLE_SOVEREIGN_RECORD_GRANTS" != "false" ]]; then
+	echo "ENABLE_SOVEREIGN_RECORD_GRANTS must be true or false."
+	exit 1
+fi
+if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
+	-z "$(echo "$ENV_JSON" | jq -r '.SOVEREIGN_RECORD_GRANT_SECRET // empty')" ]]; then
+	echo "Staging record grants were enabled without a configured key."
+	exit 1
+fi
 
 # Must match variables.tf python_secret_vars
-SECRET_VARS=(
+COMMON_SECRET_VARS=(
 	DATABASE_URL REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
-	CLERK_PRIVATE_KEY SOVEREIGN_RECORD_GRANT_SECRET
+	CLERK_PRIVATE_KEY
 	SENTRY_DSN ASSEMBLY_API_KEY SMTP_URL
 	AZURE_OPENAI_API_KEY
 	AZURE_UPLOADS_ACCOUNT_NAME AZURE_UPLOADS_ACCOUNT_KEY AZURE_UPLOADS_ACCOUNT_URL
 	AZURE_DEID_TENANT_ID AZURE_DEID_CLIENT_ID AZURE_DEID_CLIENT_SECRET AZURE_DEID_ENDPOINT
 	RECALL_API_KEY
 	ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET ZOOM_SECRET_TOKEN
+)
+
+# Capability-bearing secrets that only the HTTP API may receive. Never append
+# these to the migration, worker, scheduler, or job-monitor environments.
+API_ONLY_SECRET_VARS=(
+	SOVEREIGN_RECORD_GRANT_SECRET
 )
 
 # Must match variables.tf python_public_vars
@@ -112,7 +138,7 @@ run_migrations() {
 	local secrets_args=()
 	local env_args=()
 
-	for var in "${SECRET_VARS[@]}"; do
+	for var in "${COMMON_SECRET_VARS[@]}"; do
 		local value
 		value=$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")
 		[[ -z "$value" ]] && continue
@@ -195,6 +221,12 @@ run_migrations() {
 	return 1
 }
 
+record_grants_enabled_for() {
+	local container_name=$1
+	[[ "$container_name" == "$API_CONTAINER" && \
+		"$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" ]]
+}
+
 initiate_deployment() {
 	local container_name=$1
 	local git_sha=$2
@@ -204,8 +236,12 @@ initiate_deployment() {
 	# We skip missing vars so we never reference a secretref that doesn't exist.
 	local secrets_args=()
 	local env_args=()
+	local container_secret_vars=("${COMMON_SECRET_VARS[@]}")
+	if record_grants_enabled_for "$container_name"; then
+		container_secret_vars+=("${API_ONLY_SECRET_VARS[@]}")
+	fi
 
-	for var in "${SECRET_VARS[@]}"; do
+	for var in "${container_secret_vars[@]}"; do
 		local value
 		value=$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")
 		[[ -z "$value" ]] && continue
@@ -225,15 +261,25 @@ initiate_deployment() {
 
 	# Secrets must be set separately; az containerapp update does not support --secrets.
 	if [[ ${#secrets_args[@]} -gt 0 ]]; then
-		az containerapp secret set -n "$container_name" -g "$RESOURCE_GROUP" \
-			--secrets "${secrets_args[@]}"
+		if ! az containerapp secret set -n "$container_name" -g "$RESOURCE_GROUP" \
+			--secrets "${secrets_args[@]}"; then
+			echo "Failed to configure secrets for $container_name."
+			return 1
+		fi
 	fi
 
-	# Single update call: image + env vars + revision suffix.
-	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" \
-		-i "$image" \
-		--revision-suffix "$REVISION_STRING" \
+	# Single update call: image + env vars + revision suffix. Reconcile the
+	# capability out of every workload except an explicitly enabled API.
+	local update_args=(
+		-i "$image"
+		--revision-suffix "$REVISION_STRING"
 		--set-env-vars "${env_args[@]}"
+	)
+	if ! record_grants_enabled_for "$container_name"; then
+		update_args+=(--remove-env-vars "$GRANT_SECRET_ENV_NAME")
+	fi
+	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" \
+		"${update_args[@]}"
 
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment initiation failed for $container_name."
@@ -242,6 +288,22 @@ initiate_deployment() {
 
 	echo "Deployment initiated for $container_name."
 	return 0
+}
+
+remove_disabled_record_grant_secret() {
+	local container_name=$1
+	if record_grants_enabled_for "$container_name"; then
+		return 0
+	fi
+
+	local secret_count
+	secret_count=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--query "properties.configuration.secrets[?name=='$GRANT_SECRET_RESOURCE_NAME'] | length(@)" \
+		-o tsv) || return 1
+	if [[ "$secret_count" != "0" ]]; then
+		az containerapp secret remove -n "$container_name" -g "$RESOURCE_GROUP" \
+			--secret-names "$GRANT_SECRET_RESOURCE_NAME"
+	fi
 }
 
 # Function to check deployment status
@@ -308,6 +370,17 @@ for container in $CONTAINERS; do
 	check_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
+		exit 1
+	fi
+done
+
+# A false gate is a real revocation, not merely a refusal to add the key on the
+# next revision. Remove any stale app-level secret after the new revisions no
+# longer reference it.
+for container in $CONTAINERS; do
+	remove_disabled_record_grant_secret "$container"
+	if [[ $? -ne 0 ]]; then
+		echo "Failed to reconcile record-grant scope for $container."
 		exit 1
 	fi
 done
