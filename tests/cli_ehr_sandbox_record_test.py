@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+from click import unstyle
 from typer.testing import CliRunner
 
 from app.cli import app
@@ -47,11 +48,12 @@ def test_provision_command_requires_explicit_synthetic_confirmation():
 
 def test_operator_commands_do_not_accept_environment_or_practice_overrides():
     help_result = CliRunner().invoke(app, ["provision-athena-preview-record", "--help"])
+    help_output = unstyle(help_result.output)
 
     assert help_result.exit_code == 0
-    assert "--environment" not in help_result.output
-    assert "--practice" not in help_result.output
-    assert "--confirm-synthetic-only" in help_result.output
+    assert "--environment" not in help_output
+    assert "--practice" not in help_output
+    assert "--confirm-synthetic-only" in help_output
 
 
 def test_operator_can_provision_and_revoke_without_echoing_record_ref():
