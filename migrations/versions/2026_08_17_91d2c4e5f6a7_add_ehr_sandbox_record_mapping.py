@@ -254,11 +254,10 @@ def upgrade() -> None:
         postgresql_where=sa.text("revoked_at IS NULL"),
     )
     op.create_index(
-        "uq_ehr_sandbox_mapping_active_record",
+        "uq_ehr_sandbox_mapping_record_history",
         "ehr_sandbox_record_mapping",
         ["adapter", "environment", "practice_ref", "record_ref"],
         unique=True,
-        postgresql_where=sa.text("revoked_at IS NULL"),
     )
     op.create_index(
         op.f("ehr_sandbox_record_mapping_patient_id_idx"),
@@ -290,7 +289,7 @@ def downgrade() -> None:
         table_name="ehr_sandbox_record_mapping",
     )
     op.drop_index(
-        "uq_ehr_sandbox_mapping_active_record",
+        "uq_ehr_sandbox_mapping_record_history",
         table_name="ehr_sandbox_record_mapping",
     )
     op.drop_index(

@@ -12,6 +12,7 @@ from app.services.ehr_sandbox_record_mapping import (
     revoke_athena_preview_patient_designation,
 )
 
+import sqlalchemy as sa
 from app.models.doctor import Doctor
 from app.models.ehr_sandbox_record_mapping import (
     ATHENA_ADAPTER,
@@ -20,6 +21,7 @@ from app.models.ehr_sandbox_record_mapping import (
     EHRSandboxRecordMapping,
 )
 from app.models.patient import Patient
+from sqlmodel import SQLModel
 
 RECORD_REF = "a-195900.E-60178"
 OPERATOR_REF = "operator_preview_provisioner"
@@ -130,7 +132,7 @@ def test_active_scope_and_record_are_unique_and_race_failures_are_safe():
             operator_ref=OPERATOR_REF,
         )
 
-    with pytest.raises(SandboxRecordMappingConflict, match="already mapped"):
+    with pytest.raises(SandboxRecordMappingConflict, match="mapping history"):
         provision_athena_preview_mapping(
             doctor_id=doctor.id,
             patient_id=second_patient.id,
@@ -158,6 +160,16 @@ def test_revocation_is_durable_and_allows_deliberate_reprovisioning():
     assert revoked.id == original.id
     assert revoked.revoked_at is not None
     assert revoked.revoked_by == "operator_revoker"
+
+    reassignment_target = _patient(doctor, "Synthetic Reassignment Target")
+    _designate(doctor, reassignment_target)
+    with pytest.raises(SandboxRecordMappingConflict, match="mapping history"):
+        provision_athena_preview_mapping(
+            doctor_id=doctor.id,
+            patient_id=reassignment_target.id,
+            record_ref=RECORD_REF,
+            operator_ref="operator_unsafe_record_reuser",
+        )
 
     designation = revoke_athena_preview_patient_designation(
         doctor_id=doctor.id,
@@ -191,3 +203,104 @@ def test_revocation_is_durable_and_allows_deliberate_reprovisioning():
             patient_id=_patient(doctor, "Never Mapped").id,
             operator_ref="operator_revoker",
         )
+
+
+def test_model_metadata_matches_migration_safety_boundaries() -> None:
+    designation = SQLModel.metadata.tables["ehr_sandbox_patient_designation"]
+    mapping = SQLModel.metadata.tables["ehr_sandbox_record_mapping"]
+
+    assert designation.comment == (
+        "Operator-controlled assertion that a platform patient contains "
+        "synthetic-only athena Preview practice 195900 data."
+    )
+    assert mapping.comment == (
+        "Operator-controlled binding to one synthetic sandbox EHR record. "
+        "Restricted to athena Preview practice 195900."
+    )
+
+    expected_checks = {
+        "ehr_sandbox_patient_designation_ck_ehr_sandbox_designation_athena_only_check": (
+            "adapter = 'athena'"
+        ),
+        "ehr_sandbox_patient_designation_ck_ehr_sandbox_designation_preview_only_check": (
+            "environment = 'preview'"
+        ),
+        "ehr_sandbox_patient_designation_ck_ehr_sandbox_designation_practice_195900_only_check": (
+            "practice_ref = '195900'"
+        ),
+        "ehr_sandbox_patient_designation_ck_ehr_sandbox_designation_synthetic_only_check": (
+            "synthetic_only IS TRUE"
+        ),
+        "ehr_sandbox_patient_designation_ck_ehr_sandbox_designation_revocation_complete_check": (
+            "(revoked_at IS NULL AND revoked_by IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_by IS NOT NULL)"
+        ),
+        "ehr_sandbox_record_mapping_ck_ehr_sandbox_mapping_athena_only_check": (
+            "adapter = 'athena'"
+        ),
+        "ehr_sandbox_record_mapping_ck_ehr_sandbox_mapping_preview_only_check": (
+            "environment = 'preview'"
+        ),
+        "ehr_sandbox_record_mapping_ck_ehr_sandbox_mapping_practice_195900_only_check": (
+            "practice_ref = '195900'"
+        ),
+        "ehr_sandbox_record_mapping_ck_ehr_sandbox_mapping_synthetic_only_check": (
+            "synthetic_only IS TRUE"
+        ),
+        "ehr_sandbox_record_mapping_ck_ehr_sandbox_mapping_revocation_complete_check": (
+            "(revoked_at IS NULL AND revoked_by IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_by IS NOT NULL)"
+        ),
+    }
+    actual_checks = {
+        constraint.name: str(constraint.sqltext)
+        for table in (designation, mapping)
+        for constraint in table.constraints
+        if isinstance(constraint, sa.CheckConstraint)
+    }
+    assert actual_checks == expected_checks
+
+    indexes: dict[str, sa.Index] = {
+        str(index.name): index
+        for table in (designation, mapping)
+        for index in table.indexes
+        if index.name is not None
+    }
+    assert set(indexes) == {
+        "uq_ehr_sandbox_designation_active_patient",
+        "uq_ehr_sandbox_mapping_active_patient",
+        "uq_ehr_sandbox_mapping_record_history",
+        "ehr_sandbox_record_mapping_patient_id_idx",
+    }
+    for name in (
+        "uq_ehr_sandbox_designation_active_patient",
+        "uq_ehr_sandbox_mapping_active_patient",
+    ):
+        assert indexes[name].unique is True
+        assert (
+            str(indexes[name].dialect_options["postgresql"]["where"])
+            == "revoked_at IS NULL"
+        )
+    history = indexes["uq_ehr_sandbox_mapping_record_history"]
+    assert history.unique is True
+    assert [column.name for column in history.columns] == [
+        "adapter",
+        "environment",
+        "practice_ref",
+        "record_ref",
+    ]
+    assert history.dialect_options["postgresql"]["where"] is None
+
+    expected_defaults = {
+        "adapter": ATHENA_ADAPTER,
+        "environment": ATHENA_PREVIEW_ENVIRONMENT,
+        "practice_ref": ATHENA_PREVIEW_PRACTICE,
+        "synthetic_only": "true",
+    }
+    for table in (designation, mapping):
+        actual_defaults: dict[str, str] = {}
+        for column_name in expected_defaults:
+            default = table.c[column_name].server_default
+            assert isinstance(default, sa.DefaultClause)
+            actual_defaults[column_name] = str(default.arg)
+        assert actual_defaults == expected_defaults

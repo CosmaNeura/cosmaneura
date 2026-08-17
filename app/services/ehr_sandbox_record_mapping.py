@@ -161,13 +161,13 @@ def provision_athena_preview_mapping(
                 EHRSandboxRecordMapping.environment == ATHENA_PREVIEW_ENVIRONMENT,
                 EHRSandboxRecordMapping.practice_ref == ATHENA_PREVIEW_PRACTICE,
                 EHRSandboxRecordMapping.record_ref == record_ref,
-                cast(Any, EHRSandboxRecordMapping.revoked_at).is_(None),
             )
             .with_for_update()
         ).one_or_none()
         if record_owner is not None:
             raise SandboxRecordMappingConflict(
-                "the sandbox record is already mapped to another scope"
+                "the sandbox record is already present in mapping history and "
+                "cannot be reassigned"
             )
 
         mapping = EHRSandboxRecordMapping(

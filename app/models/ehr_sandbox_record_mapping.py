@@ -20,9 +20,30 @@ class EHRSandboxPatientDesignation(
     TypeIDMixin("ehr_sandbox_designation"),
     table=True,
 ):
-    """Durable operator assertion that one platform patient is synthetic-only."""
+    """Operator-controlled assertion that a platform patient contains synthetic-only athena Preview practice 195900 data."""
 
     __table_args__ = (
+        sa.CheckConstraint(
+            "adapter = 'athena'",
+            name="ck_ehr_sandbox_designation_athena_only",
+        ),
+        sa.CheckConstraint(
+            "environment = 'preview'",
+            name="ck_ehr_sandbox_designation_preview_only",
+        ),
+        sa.CheckConstraint(
+            "practice_ref = '195900'",
+            name="ck_ehr_sandbox_designation_practice_195900_only",
+        ),
+        sa.CheckConstraint(
+            "synthetic_only IS TRUE",
+            name="ck_ehr_sandbox_designation_synthetic_only",
+        ),
+        sa.CheckConstraint(
+            "(revoked_at IS NULL AND revoked_by IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_by IS NOT NULL)",
+            name="ck_ehr_sandbox_designation_revocation_complete",
+        ),
         sa.ForeignKeyConstraint(
             ["patient_id", "doctor_id"],
             ["patient.id", "patient.doctor_id"],
@@ -34,25 +55,38 @@ class EHRSandboxPatientDesignation(
             "patient_id",
             name="uq_ehr_sandbox_designation_id_doctor_patient",
         ),
+        sa.Index(
+            "uq_ehr_sandbox_designation_active_patient",
+            "doctor_id",
+            "patient_id",
+            unique=True,
+            postgresql_where=sa.text("revoked_at IS NULL"),
+        ),
     )
 
     doctor_id: TypeIDType = Doctor.foreign_key()
     patient_id: TypeIDType = Patient.foreign_key()
     adapter: str = Field(
         default=ATHENA_ADAPTER,
-        sa_column=Column(sa.String(32), nullable=False),
+        sa_column=Column(sa.String(32), nullable=False, server_default=ATHENA_ADAPTER),
     )
     environment: str = Field(
         default=ATHENA_PREVIEW_ENVIRONMENT,
-        sa_column=Column(sa.String(32), nullable=False),
+        sa_column=Column(
+            sa.String(32),
+            nullable=False,
+            server_default=ATHENA_PREVIEW_ENVIRONMENT,
+        ),
     )
     practice_ref: str = Field(
         default=ATHENA_PREVIEW_PRACTICE,
-        sa_column=Column(sa.String(32), nullable=False),
+        sa_column=Column(
+            sa.String(32), nullable=False, server_default=ATHENA_PREVIEW_PRACTICE
+        ),
     )
     synthetic_only: bool = Field(
         default=True,
-        sa_column=Column(sa.Boolean(), nullable=False),
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
     )
     designated_by: str = Field(sa_column=Column(sa.String(160), nullable=False))
     revoked_at: datetime | None = Field(
@@ -85,14 +119,30 @@ class EHRSandboxRecordMapping(
     TypeIDMixin("ehr_sandbox_mapping"),
     table=True,
 ):
-    """Operator-controlled binding to one synthetic sandbox EHR record.
-
-    This table is deliberately narrower than a production EHR authorization
-    model.  It can represent only the ratified athenahealth Preview pilot and
-    carries its synthetic-only assertion and revocation history durably.
-    """
+    """Operator-controlled binding to one synthetic sandbox EHR record. Restricted to athena Preview practice 195900."""
 
     __table_args__ = (
+        sa.CheckConstraint(
+            "adapter = 'athena'",
+            name="ck_ehr_sandbox_mapping_athena_only",
+        ),
+        sa.CheckConstraint(
+            "environment = 'preview'",
+            name="ck_ehr_sandbox_mapping_preview_only",
+        ),
+        sa.CheckConstraint(
+            "practice_ref = '195900'",
+            name="ck_ehr_sandbox_mapping_practice_195900_only",
+        ),
+        sa.CheckConstraint(
+            "synthetic_only IS TRUE",
+            name="ck_ehr_sandbox_mapping_synthetic_only",
+        ),
+        sa.CheckConstraint(
+            "(revoked_at IS NULL AND revoked_by IS NULL) OR "
+            "(revoked_at IS NOT NULL AND revoked_by IS NOT NULL)",
+            name="ck_ehr_sandbox_mapping_revocation_complete",
+        ),
         sa.ForeignKeyConstraint(
             ["designation_id", "doctor_id", "patient_id"],
             [
@@ -102,6 +152,25 @@ class EHRSandboxRecordMapping(
             ],
             name="fk_ehr_sandbox_mapping_designation_scope",
         ),
+        sa.Index(
+            "uq_ehr_sandbox_mapping_active_patient",
+            "doctor_id",
+            "patient_id",
+            unique=True,
+            postgresql_where=sa.text("revoked_at IS NULL"),
+        ),
+        sa.Index(
+            "uq_ehr_sandbox_mapping_record_history",
+            "adapter",
+            "environment",
+            "practice_ref",
+            "record_ref",
+            unique=True,
+        ),
+        sa.Index(
+            "ehr_sandbox_record_mapping_patient_id_idx",
+            "patient_id",
+        ),
     )
 
     doctor_id: TypeIDType = Doctor.foreign_key()
@@ -110,20 +179,26 @@ class EHRSandboxRecordMapping(
 
     adapter: str = Field(
         default=ATHENA_ADAPTER,
-        sa_column=Column(sa.String(32), nullable=False),
+        sa_column=Column(sa.String(32), nullable=False, server_default=ATHENA_ADAPTER),
     )
     environment: str = Field(
         default=ATHENA_PREVIEW_ENVIRONMENT,
-        sa_column=Column(sa.String(32), nullable=False),
+        sa_column=Column(
+            sa.String(32),
+            nullable=False,
+            server_default=ATHENA_PREVIEW_ENVIRONMENT,
+        ),
     )
     practice_ref: str = Field(
         default=ATHENA_PREVIEW_PRACTICE,
-        sa_column=Column(sa.String(32), nullable=False),
+        sa_column=Column(
+            sa.String(32), nullable=False, server_default=ATHENA_PREVIEW_PRACTICE
+        ),
     )
     record_ref: str = Field(sa_column=Column(sa.String(160), nullable=False))
     synthetic_only: bool = Field(
         default=True,
-        sa_column=Column(sa.Boolean(), nullable=False),
+        sa_column=Column(sa.Boolean(), nullable=False, server_default=sa.true()),
     )
 
     provisioned_by: str = Field(sa_column=Column(sa.String(160), nullable=False))

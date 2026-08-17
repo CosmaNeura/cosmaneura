@@ -224,3 +224,113 @@ def test_database_fences_designation_and_mapping_to_exact_doctor_patient_scope()
                 (doctor_a, doctor_b),
             )
             connection.commit()
+
+
+def test_database_never_reuses_a_vendor_record_after_revocation() -> None:
+    """A still-valid grant can never point at a newly reassigned vendor record."""
+
+    assert POSTGRES_URL is not None
+    doctor_id = uuid4()
+    first_patient_id = uuid4()
+    second_patient_id = uuid4()
+    first_designation_id = uuid4()
+    second_designation_id = uuid4()
+    record_ref = f"a-195900.E-history-{uuid4().hex}"
+
+    try:
+        with psycopg.connect(POSTGRES_URL) as connection:
+            connection.execute(
+                """
+                INSERT INTO doctor (id, clerk_id, email, biography)
+                VALUES (%s, %s, %s, NULL)
+                """,
+                (
+                    doctor_id,
+                    f"user_mapping_history_{doctor_id.hex}",
+                    f"mapping-history-{doctor_id.hex}@example.test",
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO patient (id, doctor_id, name, date_of_birth)
+                VALUES
+                    (%s, %s, 'Synthetic History One', %s),
+                    (%s, %s, 'Synthetic History Two', %s)
+                """,
+                (
+                    first_patient_id,
+                    doctor_id,
+                    datetime(2000, 1, 1, tzinfo=UTC),
+                    second_patient_id,
+                    doctor_id,
+                    datetime(2000, 1, 1, tzinfo=UTC),
+                ),
+            )
+            for designation_id, patient_id in (
+                (first_designation_id, first_patient_id),
+                (second_designation_id, second_patient_id),
+            ):
+                connection.execute(
+                    """
+                    INSERT INTO ehr_sandbox_patient_designation (
+                        id, doctor_id, patient_id, designated_by
+                    ) VALUES (%s, %s, %s, 'operator_history_fixture')
+                    """,
+                    (designation_id, doctor_id, patient_id),
+                )
+            connection.execute(
+                """
+                INSERT INTO ehr_sandbox_record_mapping (
+                    id, doctor_id, patient_id, designation_id, record_ref,
+                    provisioned_by, revoked_at, revoked_by
+                ) VALUES (
+                    %s, %s, %s, %s, %s, 'operator_history_fixture',
+                    now(), 'operator_history_revoker'
+                )
+                """,
+                (
+                    uuid4(),
+                    doctor_id,
+                    first_patient_id,
+                    first_designation_id,
+                    record_ref,
+                ),
+            )
+            connection.commit()
+
+            with pytest.raises(UniqueViolation):
+                connection.execute(
+                    """
+                    INSERT INTO ehr_sandbox_record_mapping (
+                        id, doctor_id, patient_id, designation_id, record_ref,
+                        provisioned_by
+                    ) VALUES (
+                        %s, %s, %s, %s, %s, 'operator_history_reuser'
+                    )
+                    """,
+                    (
+                        uuid4(),
+                        doctor_id,
+                        second_patient_id,
+                        second_designation_id,
+                        record_ref,
+                    ),
+                )
+                connection.commit()
+            connection.rollback()
+    finally:
+        with psycopg.connect(POSTGRES_URL) as connection:
+            connection.execute(
+                "DELETE FROM ehr_sandbox_record_mapping WHERE doctor_id = %s",
+                (doctor_id,),
+            )
+            connection.execute(
+                "DELETE FROM ehr_sandbox_patient_designation WHERE doctor_id = %s",
+                (doctor_id,),
+            )
+            connection.execute(
+                "DELETE FROM patient WHERE doctor_id = %s",
+                (doctor_id,),
+            )
+            connection.execute("DELETE FROM doctor WHERE id = %s", (doctor_id,))
+            connection.commit()
