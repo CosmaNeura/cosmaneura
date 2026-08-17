@@ -117,6 +117,15 @@ environment variable `ENABLE_SOVEREIGN_RECORD_GRANTS=true` only for the
 controlled staging deploy. Returning it to `false` removes the environment
 reference and stale app-level secret from every staging workload.
 
+## PostgreSQL application role cutover
+
+The default-off role preparation and versioned Container Apps secret operator
+are documented in
+[`../docs/POSTGRES_APPLICATION_ROLE_CUTOVER.md`](../docs/POSTGRES_APPLICATION_ROLE_CUTOVER.md).
+They do not authorize a live cutover. The runbook records the required
+deployment/Terraform freeze, startup-Alembic behavior, rollback order, and the
+remaining Terraform secret-ownership blocker.
+
 ## Scribe workflow identity
 
 The web API has a dedicated user-assigned managed identity for platform-to-Scribe calls. Its client
