@@ -80,22 +80,42 @@ Registrations → (your app) → Certificates & secrets → Federated
 credentials → Add. Scenario: GitHub Actions deploying Azure
 resources. Entity type: Pull request.
 
-## Deploy ordering nuance
+## Deterministic infrastructure/application ordering
 
-Image deploys (`bash deploy.sh <sha>` triggered by `build_and_publish.yml`)
-and infrastructure applies (this workflow) run independently on the
-same push. In practice:
+A push to `master` that changes `infra/**`, `Procfile`, or the Terraform Apply
+workflow starts the automatic Terraform Apply but deliberately holds the
+production application deploy. This prevents two independent workflows from
+creating competing Container App revisions.
 
-- `tofu apply` keeps `image = ":latest"` for every container app.
-- `deploy.sh` writes `image = ":<sha>"` to the same field.
-- `:latest` and `:<sha>` point to the same physical image, so the diff
-  is cosmetic and converges either way.
+For a change that includes both infrastructure and application code:
 
-The exception is the FIRST run after a new `azurerm_container_app`
-resource is added: `tofu apply` must create the container before
-`deploy.sh` can `az containerapp update` its image. `deploy.sh` is
-defensive about this — it skips containers that don't exist yet with
-a warning instead of failing the whole deploy.
+1. Merge only after reviewing the PR's Terraform plan.
+2. Wait for **Terraform Apply** on the merge commit to finish successfully.
+3. Copy that successful run's numeric ID from its Actions URL.
+4. Manually run **Build & Publish** on `master`, supplying the ID as
+   `terraform_apply_run_id`. The workflow verifies the run, its ancestry, and
+   that no later production-infrastructure change exists before it deploys the
+   current immutable commit image.
+
+Application-only pushes keep their existing automatic behavior, but the deploy
+first resolves the latest successful Terraform Apply and performs the same
+ancestry/no-drift verification. An unknown push comparison fails closed and
+requires the same manual run.
+Terraform Apply and the production deploy additionally share one
+non-cancelling concurrency group, so a later application-only push queues
+instead of mutating Container Apps during an in-flight apply.
+
+## Provider record-grant secret scope
+
+`SOVEREIGN_RECORD_GRANT_SECRET` is a capability-bearing key used only by the
+HTTP API to mint short-lived synthetic Preview record grants. OpenTofu exposes
+it only to `cosmaneura-prod-app`; it is excluded from the worker, scheduler,
+job-monitor, and migration job. Staging's deployment script enforces the same
+API-only split for `cosmaneura-staging-app`. Staging remains off by default;
+provision its separate 1Password item first, then set the staging GitHub
+environment variable `ENABLE_SOVEREIGN_RECORD_GRANTS=true` only for the
+controlled staging deploy. Returning it to `false` removes the environment
+reference and stale app-level secret from every staging workload.
 
 ## Scribe workflow identity
 

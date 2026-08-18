@@ -75,10 +75,12 @@ echo "Revision string: $REVISION_STRING"
 # Must stay in sync with variables.tf python_secret_vars / python_public_vars.
 ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.production.backend)
 
-# Must match variables.tf python_secret_vars
-SECRET_VARS=(
+# Must match variables.tf python_secret_vars. API-only secrets are provisioned
+# by OpenTofu and must never be copied into the migration job.
+COMMON_SECRET_VARS=(
 	DATABASE_URL REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
-	CLERK_PRIVATE_KEY SENTRY_DSN ASSEMBLY_API_KEY SMTP_URL
+	CLERK_PRIVATE_KEY
+	SENTRY_DSN ASSEMBLY_API_KEY SMTP_URL
 	AZURE_OPENAI_API_KEY
 	AZURE_UPLOADS_ACCOUNT_NAME AZURE_UPLOADS_ACCOUNT_KEY AZURE_UPLOADS_ACCOUNT_URL
 	AZURE_DEID_TENANT_ID AZURE_DEID_CLIENT_ID AZURE_DEID_CLIENT_SECRET AZURE_DEID_ENDPOINT
@@ -95,6 +97,7 @@ PUBLIC_VARS=(
 	ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
 	API_BASE_URL
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
+	SCRIBE_RECONCILER_CALLER_CLIENT_ID
 )
 
 run_migrations() {
@@ -103,7 +106,7 @@ run_migrations() {
 	local secrets_args=()
 	local env_args=()
 
-	for var in "${SECRET_VARS[@]}"; do
+	for var in "${COMMON_SECRET_VARS[@]}"; do
 		local value
 		value=$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")
 		[[ -z "$value" ]] && continue

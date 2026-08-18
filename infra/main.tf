@@ -519,7 +519,10 @@ resource "azurerm_container_app" "app" {
       }
 
       dynamic "env" {
-        for_each = var.python_secret_vars
+        for_each = setunion(
+          var.python_secret_vars,
+          var.python_api_only_secret_vars,
+        )
 
         content {
           name        = env.key
@@ -565,7 +568,10 @@ resource "azurerm_container_app" "app" {
   }
 
   dynamic "secret" {
-    for_each = var.python_secret_vars
+    for_each = setunion(
+      var.python_secret_vars,
+      var.python_api_only_secret_vars,
+    )
 
     content {
       name  = replace(lower(secret.key), "_", "-")

@@ -1,12 +1,14 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
+from uuid import UUID
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient, PyJWTError
 
+from app import log
 from app.configuration.service_auth import (
     SCRIBE_TRANSCRIPT_WRITE_ROLE,
     SERVICE_AUTH_SETTINGS,
@@ -50,7 +52,7 @@ def _authentication_error() -> HTTPException:
 
 
 class EntraServiceAuthenticator:
-    """Authorize one app-only Entra caller with one application role."""
+    """Authorize an explicitly allowlisted app-only caller with one app role."""
 
     def __init__(
         self,
@@ -68,37 +70,70 @@ class EntraServiceAuthenticator:
         ],
     ) -> EntraServicePrincipal:
         if not self.settings.enabled or not self.settings.is_complete():
+            log.warning(
+                "scribe service authentication rejected",
+                action="scribe_handoff.authentication_rejected",
+                error_class="service_auth_not_configured",
+            )
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Service authentication is not configured.",
             )
 
         if credentials is None or credentials.scheme.lower() != "bearer":
+            log.warning(
+                "scribe service authentication rejected",
+                action="scribe_handoff.authentication_rejected",
+                error_class="missing_bearer_token",
+            )
             raise _authentication_error()
 
         decoder = self.decoder or EntraTokenDecoder(self.settings)
         try:
             claims = decoder(credentials.credentials)
         except (PyJWTError, ValueError, TypeError):
+            log.warning(
+                "scribe service authentication rejected",
+                action="scribe_handoff.authentication_rejected",
+                error_class="invalid_access_token",
+            )
             raise _authentication_error() from None
 
+        raw_client_id = claims.get("azp")
+        try:
+            client_id = (
+                str(UUID(raw_client_id)) if isinstance(raw_client_id, str) else None
+            )
+        except ValueError:
+            client_id = None
+
         if claims.get("tid") != self.settings.tenant_id:
+            log.warning(
+                "scribe service authentication rejected",
+                action="scribe_handoff.authentication_rejected",
+                error_class="tenant_mismatch",
+                actual_caller_client_id=client_id,
+            )
             raise _authentication_error()
 
-        client_id = claims.get("azp")
         roles = claims.get("roles")
         if (
             claims.get("idtyp") != "app"
-            or not isinstance(client_id, str)
-            or client_id != self.settings.scribe_client_id
+            or client_id not in self.settings.allowed_client_ids
             or not isinstance(roles, list)
             or SCRIBE_TRANSCRIPT_WRITE_ROLE not in roles
         ):
+            log.warning(
+                "scribe service authorization rejected",
+                action="scribe_handoff.authorization_rejected",
+                error_class="app_claims_not_authorized",
+                actual_caller_client_id=client_id,
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Service caller is not authorized.",
             )
-
+        assert client_id is not None
         return EntraServicePrincipal(client_id=client_id)
 
 

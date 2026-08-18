@@ -234,6 +234,54 @@
         }
       }
     },
+    "/internal/v1/notes/{appointment_id}/ehr-labs-record": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Open Sandbox Labs Record",
+        "description": "Resolve the authenticated doctor's current synthetic Preview record.\n\nThe browser supplies only its open platform appointment. The opaque EHR\nreference comes exclusively from the operator-provisioned server mapping;\nnames and chart content are neither accepted nor returned.",
+        "operationId": "open_sandbox_labs_record",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenSandboxRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake/{appointment_id}": {
       "get": {
         "tags": [
@@ -3326,6 +3374,25 @@
           "medications"
         ],
         "title": "NutrientDepletionPanel"
+      },
+      "OpenSandboxRecord": {
+        "properties": {
+          "record_ref": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 80,
+            "pattern": "^[A-Za-z0-9_-]{80,4096}={0,2}$",
+            "title": "Record Ref",
+            "description": "Opaque, short-lived, authenticated grant bound to the Clerk actor and current doctor/appointment/patient scope. It is not an EHR patient identifier and clients must not parse it."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "record_ref"
+        ],
+        "title": "OpenSandboxRecord",
+        "description": "Opaque, short-lived record grant; never a vendor patient identifier."
       },
       "Patient": {
         "properties": {

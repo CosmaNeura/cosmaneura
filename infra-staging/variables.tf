@@ -24,7 +24,8 @@ variable "python_secret_vars" {
   default = [
     "DATABASE_URL", "REDIS_URL",
     "SESSION_SECRET_KEY",
-    "CLERK_PRIVATE_KEY", "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
+    "CLERK_PRIVATE_KEY",
+    "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
     # azure openai secret
     "AZURE_OPENAI_API_KEY",
     # azure upload
@@ -35,6 +36,16 @@ variable "python_secret_vars" {
     "RECALL_API_KEY",
     # zoom oauth
     "ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET", "ZOOM_SECRET_TOKEN"
+  ]
+}
+
+# Secrets used only by the HTTP API. Staging's current Container Apps are
+# configured by deploy.sh, which enforces this same split explicitly.
+variable "python_api_only_secret_vars" {
+  description = "Secret ENV vars exposed only to the API Container App"
+  type        = set(string)
+  default = [
+    "SOVEREIGN_RECORD_GRANT_SECRET",
   ]
 }
 
@@ -57,7 +68,7 @@ variable "python_public_vars" {
     "COOKIE_DOMAIN",
     # app-only Entra authentication for the feature-flagged Scribe workload route
     "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
-    "SCRIBE_CALLER_CLIENT_ID"
+    "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID"
   ]
 }
 
