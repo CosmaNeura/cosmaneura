@@ -233,3 +233,18 @@ data "external" "secrets" {
   program     = ["just", "direnv_export", ".env.production.backend"]
   working_dir = "${path.module}/.."
 }
+
+# This read-only guard makes the selector an adoption mechanism, never a bulk
+# cutover mechanism.  Phase A may add the unused v2 value while all workloads
+# still select database-url.  Selecting v2 is accepted only after the staged
+# operator has already moved all five live workloads and retained the old
+# rollback secret.
+data "external" "database_url_live_guard" {
+  program = ["python", "${path.module}/database_url_live_guard.py"]
+  query = {
+    resource_group  = azurerm_resource_group.main.name
+    selected_secret = local.database_url_secret_name
+    subscription_id = local.azure_subscription_id
+    v2_enabled      = local.database_url_v2_enabled_text
+  }
+}

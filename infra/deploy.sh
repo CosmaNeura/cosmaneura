@@ -18,7 +18,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
 RESOURCE_GROUP="cosmaneura-prod"
-ENVIRONMENT_NAME="cosmaneura-prod-app-environment"
 MIGRATION_JOB="cosmaneura-prod-migrate"
 CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-scheduler cosmaneura-prod-app-jmon"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
@@ -75,10 +74,39 @@ echo "Revision string: $REVISION_STRING"
 # Must stay in sync with variables.tf python_secret_vars / python_public_vars.
 ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.production.backend)
 
+DATABASE_SECRET_NAME=$(printf '%s' "$ENV_JSON" | jq -er '.DATABASE_URL_SECRET_NAME')
+DATABASE_URL_V2_ENABLED=$(printf '%s' "$ENV_JSON" | jq -er '.DATABASE_URL_V2_ENABLED')
+if [[ "$DATABASE_SECRET_NAME" != "database-url" && "$DATABASE_SECRET_NAME" != "database-url-v2" ]]; then
+	echo "Invalid DATABASE_URL secret selector."
+	exit 1
+fi
+if [[ "$DATABASE_URL_V2_ENABLED" != "true" && "$DATABASE_URL_V2_ENABLED" != "false" ]]; then
+	echo "Invalid DATABASE_URL v2 enablement flag."
+	exit 1
+fi
+if [[ "$DATABASE_SECRET_NAME" == "database-url-v2" && "$DATABASE_URL_V2_ENABLED" != "true" ]]; then
+	echo "DATABASE_URL v2 cannot be selected while disabled."
+	exit 1
+fi
+
+# A deploy may adopt an already-staged selection, but must never become the
+# mechanism that moves all workloads at once.  The guard is value-free and
+# requires all five live references to match the source-controlled selector.
+if ! jq -n \
+	--arg resource_group "$RESOURCE_GROUP" \
+	--arg selected_secret "$DATABASE_SECRET_NAME" \
+	--arg subscription_id "${AZURE_SUBSCRIPTION_ID:?AZURE_SUBSCRIPTION_ID is required}" \
+	--arg v2_enabled "$DATABASE_URL_V2_ENABLED" \
+	'{resource_group: $resource_group, selected_secret: $selected_secret, subscription_id: $subscription_id, v2_enabled: $v2_enabled}' |
+	python "$SCRIPT_DIR/database_url_live_guard.py"; then
+	echo "Live DATABASE_URL state does not match the checked-in selector."
+	exit 1
+fi
+
 # Must match variables.tf python_secret_vars. API-only secrets are provisioned
 # by OpenTofu and must never be copied into the migration job.
 COMMON_SECRET_VARS=(
-	DATABASE_URL REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
+	REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
 	CLERK_PRIVATE_KEY
 	SENTRY_DSN ASSEMBLY_API_KEY SMTP_URL
 	AZURE_OPENAI_API_KEY
@@ -88,23 +116,10 @@ COMMON_SECRET_VARS=(
 	ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET ZOOM_SECRET_TOKEN
 )
 
-# Must match variables.tf python_public_vars
-PUBLIC_VARS=(
-	PYTHON_ENV
-	LOG_LEVEL EMAIL_FROM_ADDRESS PORT ALLOWED_HOST_LIST INTAKE_CHAT_DOMAIN
-	AZURE_OPENAI_ENDPOINT
-	AZURE_UPLOADS_CONTAINER_NAME AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
-	ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
-	API_BASE_URL
-	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
-	SCRIBE_RECONCILER_CALLER_CLIENT_ID
-)
-
 run_migrations() {
 	echo "Running database migrations with image $PRODUCTION_TAG..."
 
 	local secrets_args=()
-	local env_args=()
 
 	for var in "${COMMON_SECRET_VARS[@]}"; do
 		local value
@@ -113,13 +128,6 @@ run_migrations() {
 		local secret_name
 		secret_name=$(echo "$var" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
 		secrets_args+=("${secret_name}=${value}")
-		env_args+=("${var}=secretref:${secret_name}")
-	done
-
-	for var in "${PUBLIC_VARS[@]}"; do
-		local value
-		value=$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")
-		[[ -n "$value" ]] && env_args+=("${var}=${value}")
 	done
 
 	# ACR admin creds so the job can pull the image.
@@ -129,37 +137,49 @@ run_migrations() {
 	local acr_user="${CONTAINER_REGISTRY_USERNAME:?CONTAINER_REGISTRY_USERNAME env is required}"
 	local acr_pw="${CONTAINER_REGISTRY_PASSWORD:?CONTAINER_REGISTRY_PASSWORD env is required}"
 
-	if az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
-		echo "Updating existing migration job..."
-		if [[ ${#secrets_args[@]} -gt 0 ]]; then
-			az containerapp job secret set -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-				--secrets "${secrets_args[@]}"
-		fi
-		az containerapp job registry set -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-			--server "$acr_server" --username "$acr_user" --password "$acr_pw"
-		az containerapp job update -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-			--image "$PRODUCTION_TAG"
-	else
-		echo "Creating migration job for the first time..."
-		az containerapp job create \
-			--name "$MIGRATION_JOB" \
-			--resource-group "$RESOURCE_GROUP" \
-			--environment "$ENVIRONMENT_NAME" \
-			--trigger-type Manual \
-			--replica-timeout 300 \
-			--replica-retry-limit 0 \
-			--image "$PRODUCTION_TAG" \
-			--args "/opt/venv/bin/alembic upgrade head" \
-			--cpu 0.5 --memory 1Gi \
-			--registry-server "$acr_server" \
-			--registry-username "$acr_user" \
-			--registry-password "$acr_pw" \
-			--secrets "${secrets_args[@]}" \
-			--env-vars "${env_args[@]}"
+	if ! az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
+		echo "Migration job is missing; provision and review it before deploying."
+		return 1
 	fi
 
-	if [[ $? -ne 0 ]]; then
-		echo "Failed to configure migration job."
+	echo "Updating existing migration job..."
+	if [[ ${#secrets_args[@]} -gt 0 ]]; then
+		if ! az containerapp job secret set -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+			--secrets "${secrets_args[@]}"; then
+			echo "Failed to configure migration job secrets."
+			return 1
+		fi
+	fi
+	if ! az containerapp job registry set -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--server "$acr_server" --username "$acr_user" --password "$acr_pw"; then
+		echo "Failed to configure migration job registry."
+		return 1
+	fi
+	if ! az containerapp job update -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--image "$PRODUCTION_TAG"; then
+		echo "Failed to configure migration job image."
+		return 1
+	fi
+
+	# The versioned database URL never enters an Azure CLI argument.  A strict
+	# JSON subset is passed on stdin to the ARM reconciler.  The known-good
+	# database-url value is not read from ENV_JSON or replaced; the reconciler
+	# requires that rollback secret to remain present.
+	if ! printf '%s' "$ENV_JSON" |
+		jq -c '
+			if .DATABASE_URL_V2_ENABLED == "true"
+			 then {"database-url-v2": .DATABASE_URL_V2}
+			 else {}
+			 end
+		' |
+		python "$SCRIPT_DIR/database_url_cutover.py" \
+			--subscription-id "$AZURE_SUBSCRIPTION_ID" \
+			--resource-group "$RESOURCE_GROUP" \
+			--confirm-subscription "$AZURE_SUBSCRIPTION_ID" \
+			--confirm-resource-group "$RESOURCE_GROUP" \
+			--selected-secret-name "$DATABASE_SECRET_NAME" \
+			--reconcile-migration-secrets-stdin; then
+		echo "Failed to reconcile migration database secrets."
 		return 1
 	fi
 
