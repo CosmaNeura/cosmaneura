@@ -67,6 +67,11 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert api_only.count(GRANT_SECRET) == 1
 
     deploy = _read("infra-staging/deploy.sh")
+    control_default = (
+        'ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"'
+    )
+    assert deploy.index(control_default) < deploy.index("if ! ENV_JSON=")
+    assert ".ENABLE_SOVEREIGN_RECORD_GRANTS" not in deploy
     assert GRANT_SECRET not in _shell_array(deploy, "COMMON_SECRET_VARS")
     assert _shell_array(deploy, "API_ONLY_SECRET_VARS").count(GRANT_SECRET) == 1
     assert 'API_CONTAINER="cosmaneura-staging-app"' in deploy

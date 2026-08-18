@@ -96,6 +96,13 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
+# Preserve the explicit deployment control before direnv renders the secret
+# bundle. `direnv export` emits a delta, so a value inherited unchanged by the
+# rendered environment is intentionally absent from its JSON output. Reading
+# this switch back from ENV_JSON would therefore turn an explicit `true` into
+# the false default even though the guarded grant secret was resolved.
+ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"
+
 # Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
 # Must stay in sync with variables.tf python_secret_vars / python_public_vars.
 if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
@@ -103,9 +110,6 @@ if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend);
 	exit 1
 fi
 
-ENABLE_SOVEREIGN_RECORD_GRANTS=$(
-	echo "$ENV_JSON" | jq -r '.ENABLE_SOVEREIGN_RECORD_GRANTS // "false"'
-)
 if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" && \
 	"$ENABLE_SOVEREIGN_RECORD_GRANTS" != "false" ]]; then
 	echo "ENABLE_SOVEREIGN_RECORD_GRANTS must be true or false."
