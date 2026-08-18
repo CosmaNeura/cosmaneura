@@ -144,3 +144,19 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     documentation = _read("infra/README.md")
     assert "Wait for **Terraform Apply**" in documentation
     assert "`terraform_apply_run_id`" in documentation
+
+
+def test_terraform_plan_installs_only_required_host_package() -> None:
+    workflow = _read(".github/workflows/infra_plan.yml")
+    setup = workflow[
+        workflow.index("      - uses: ./.github/actions/common-setup") : workflow.index(
+            "      - uses: azure/login@v3"
+        )
+    ]
+
+    assert "timeout-minutes: 5" in setup
+    assert "        with:" in setup
+    assert "          apt-packages: zsh" in setup
+    assert "libnss3-tools" not in setup
+    assert "poppler-utils" not in setup
+    assert "ffmpeg" not in setup

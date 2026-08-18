@@ -73,6 +73,11 @@ jobs:
       # data "external" "secrets" shells out to `just direnv_export`.
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5
+        with:
+          # Planning only needs zsh for `just`; browser/media packages are
+          # application runtime dependencies and can stall the runner's apt
+          # mirror before Azure login or OpenTofu ever starts.
+          apt-packages: zsh
 
       - uses: azure/login@v3
         with:
