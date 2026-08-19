@@ -5,6 +5,7 @@ import { z } from "zod"
 
 import type { Route } from "./+types/onboarding"
 
+import { OnboardingZoomStep } from "~/components/OnboardingZoomStep"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
@@ -29,14 +30,13 @@ import {
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
-import { requireEnv } from "~/utils/environment"
+import { canSkipZoomOnboarding } from "~/utils/onboarding-zoom-skip"
 import { useTerminology } from "~/utils/terminology"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { motion } from "motion/react"
-import { SiZoom } from "react-icons/si"
 
 type Step = 0 | 1 | 2 | 3 | 4
 
@@ -297,83 +297,9 @@ function NotesStep({ onComplete }: { onComplete: () => void }) {
   )
 }
 
-// ─── Step 3: Zoom ────────────────────────────────────────────────────────────
-
-function ZoomStep({
-  onComplete,
-  zoomEnabled,
-}: {
-  onComplete: () => void
-  zoomEnabled: boolean
-}) {
-  const [loading, setLoading] = useState(false)
-
-  async function connectZoom() {
-    setLoading(true)
-    const clerk = await getClient()
-    const token = await clerk!.session!.getToken()
-    const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
-    const res = await fetch(`${base}/internal/v1/zoom-auth-url`, {
-      headers: { Authorization: `Bearer ${token}` },
-      credentials: "include",
-    })
-    const { url } = (await res.json()) as { url: string }
-    if (url) window.location.href = url
-    setLoading(false)
-  }
-
-  if (!zoomEnabled) {
-    return (
-      <div className="flex flex-col items-center gap-6 text-center">
-        <div className="space-y-1">
-          <div className="flex items-center justify-center gap-2">
-            <h2 className="text-2xl font-semibold">Connect Zoom</h2>
-            <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
-              Coming Soon
-            </span>
-          </div>
-          <p className="text-muted-foreground text-sm">
-            Zoom integration is coming soon. You'll be able to connect your
-            account so Cosma can automatically join your meetings and generate
-            visit notes after each session.
-          </p>
-        </div>
-        <Button onClick={onComplete}>Continue</Button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="flex flex-col items-center gap-6 text-center">
-      <div className="space-y-1">
-        <h2 className="text-2xl font-semibold">Connect Zoom</h2>
-        <p className="text-muted-foreground text-sm">
-          Connect your Zoom account so Cosma can automatically join your
-          meetings and generate visit notes after each session.
-        </p>
-      </div>
-      <Button onClick={connectZoom} disabled={loading} size="lg">
-        {loading ? (
-          <>
-            <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-            Connecting...
-          </>
-        ) : (
-          <>
-            <span className="mr-2 flex h-6 w-6 items-center justify-center rounded-sm border border-white">
-              <SiZoom className="size-4 text-white" />
-            </span>
-            Connect Zoom
-          </>
-        )}
-      </Button>
-    </div>
-  )
-}
-
 // ─── Step 4: All Set ─────────────────────────────────────────────────────────
 
-function AllSetStep() {
+function AllSetStep({ zoomConnected }: { zoomConnected: boolean }) {
   const [loading, setLoading] = useState(false)
 
   async function handleGoToCosma() {
@@ -426,9 +352,9 @@ function AllSetStep() {
       >
         <h2 className="text-3xl font-bold">You're all set!</h2>
         <p className="text-muted-foreground max-w-md text-base">
-          Your biography is saved, your note style is loaded, and Cosma will
-          join your Zoom meetings automatically. You're ready to start using
-          Cosma.
+          {zoomConnected
+            ? "Your biography is saved, your note style is loaded, and Cosma will join your Zoom meetings automatically. You're ready to start using Cosma."
+            : "Your biography is saved and your note style is loaded. You can connect Zoom later from Settings. You're ready to start using Cosma."}
         </p>
         <Button
           size="lg"
@@ -466,6 +392,7 @@ function OnboardingStepIndicator({ step }: { step: Step }) {
 
 export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
   const zoomEnabled = isZoomEnabled(loaderData.email)
+  const allowZoomSkip = canSkipZoomOnboarding(loaderData.email)
   const initialStep = getInitialStep(loaderData, zoomEnabled)
   const [step, setStep] = useState<Step>(initialStep)
 
@@ -485,9 +412,13 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
         )}
         {step === 2 && <NotesStep onComplete={advance} />}
         {step === 3 && (
-          <ZoomStep onComplete={advance} zoomEnabled={zoomEnabled} />
+          <OnboardingZoomStep
+            onComplete={advance}
+            zoomEnabled={zoomEnabled}
+            allowZoomSkip={allowZoomSkip}
+          />
         )}
-        {step === 4 && <AllSetStep />}
+        {step === 4 && <AllSetStep zoomConnected={loaderData.zoom_connected} />}
       </div>
     </div>
   )
