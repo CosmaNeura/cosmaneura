@@ -95,6 +95,13 @@ jobs:
           fetch-depth: 0
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
+        with:
+          # Backend recipes require zsh, and the localias step below calls
+          # certutil from libnss3-tools to trust its test-only HTTPS CA.
+          # Media binaries are runtime/live-test dependencies, not default CI
+          # prerequisites; omitting them avoids ffmpeg's large apt dependency
+          # tree and the Azure mirror stalls it has triggered.
+          apt-packages: zsh libnss3-tools
       - uses: iloveitaly/github-action-localias@master
         with:
           chrome: true
