@@ -29,8 +29,7 @@ def test_generated_user_becomes_cleanup_eligible_only_after_cutoff(monkeypatch):
     user = _user("user_ephemeral", email)
     assert stale_clerk_test_user_id(user, now_ns=CREATED_NS) is None
     assert (
-        stale_clerk_test_user_id(user, now_ns=AFTER_STALE_CUTOFF_NS)
-        == "user_ephemeral"
+        stale_clerk_test_user_id(user, now_ns=AFTER_STALE_CUTOFF_NS) == "user_ephemeral"
     )
 
 

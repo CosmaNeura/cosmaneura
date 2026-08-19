@@ -55,9 +55,10 @@ def stale_clerk_test_user_id(user: object, *, now_ns: int) -> str | None:
         return None
 
     email = getattr(email_addresses[0], "email_address", None)
-    if not isinstance(email, str) or (
-        email_match := _CLERK_TEST_USER_EMAIL.fullmatch(email)
-    ) is None:
+    if (
+        not isinstance(email, str)
+        or (email_match := _CLERK_TEST_USER_EMAIL.fullmatch(email)) is None
+    ):
         return None
 
     created_ns = int(email_match.group("created_ns"))
