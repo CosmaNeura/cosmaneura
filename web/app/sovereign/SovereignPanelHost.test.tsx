@@ -161,6 +161,7 @@ describe("SovereignPanelHost", () => {
     expect(script.crossOrigin).toBe("anonymous")
 
     const options = mount.mock.calls[0][0]
+    expect(options.fabBottom).toBe("84px")
     await expect(options.getAuthToken()).resolves.toBe("provider-oidc-token")
     expect(clerk.session.getToken).toHaveBeenCalledWith({
       template: "cosmaneura-sovereign",

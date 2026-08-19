@@ -17,6 +17,7 @@ type PanelMountOptions = {
   getAuthToken: () => Promise<string>
   getContext: () => Promise<PanelContext>
   shiftContent: boolean
+  fabBottom: string
 }
 
 type PanelInstance = {
@@ -221,6 +222,10 @@ export function SovereignPanelHost({
               : { clientId: appointmentId }
           },
           shiftContent: true,
+          // The platform's persistent "Report a Bug" control owns the
+          // bottom-right corner. Keep the assistant launcher visibly above it
+          // instead of leaving two fixed controls on the same hit target.
+          fabBottom: "84px",
         })
         mounted = candidate
         await candidate.setRecord(appointmentId)
