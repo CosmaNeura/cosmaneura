@@ -98,6 +98,56 @@ def _typeid(value: str, expected_prefix: str) -> TypeIDType:
     return cast(TypeIDType, parsed)
 
 
+@app.command("ensure-staging-synthetic-preview-appointment")
+def ensure_staging_synthetic_preview_appointment(
+    doctor_id: str = typer.Option(...),
+    doctor_email: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+    confirm_staging_only: bool = typer.Option(
+        False,
+        "--confirm-staging-only",
+        help="Confirm this command is targeting the staging deployment only.",
+    ),
+    confirm_no_real_patient_data: bool = typer.Option(
+        False,
+        "--confirm-no-real-patient-data",
+        help="Confirm the command must create fixed synthetic data only.",
+    ),
+) -> None:
+    """Create or find one fixed synthetic staging patient and appointment."""
+
+    from app.services.staging_synthetic_appointment import (
+        StagingSyntheticAppointmentError,
+        ensure_staging_synthetic_appointment,
+    )
+
+    if not confirm_staging_only or not confirm_no_real_patient_data:
+        typer.echo(
+            "Provisioning refused: --confirm-staging-only and "
+            "--confirm-no-real-patient-data are required.",
+            err=True,
+        )
+        raise typer.Exit(2)
+
+    try:
+        with global_session():
+            result = ensure_staging_synthetic_appointment(
+                doctor_id=_typeid(doctor_id, "doctor"),
+                doctor_email=doctor_email,
+                operator_ref=operator_ref,
+            )
+    except StagingSyntheticAppointmentError as exc:
+        typer.echo(f"Provisioning refused: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    state = "created" if result.created else "already exists"
+    typer.echo(
+        "Synthetic staging fixture "
+        f"{state}: patient_id={result.patient.id} "
+        f"appointment_id={result.appointment.id}."
+    )
+
+
 @app.command("provision-athena-preview-record")
 def provision_athena_preview_record(
     doctor_id: str = typer.Option(...),
