@@ -152,6 +152,12 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
+        with:
+          # Frontend recipes require zsh, and browser tests retain certutil
+          # from libnss3-tools. Media binaries are not Frontend CI host deps;
+          # omitting them avoids the apt-mirror stalls caused by ffmpeg's
+          # substantially larger dependency tree.
+          apt-packages: zsh libnss3-tools
       - run: just js_setup
       - name: Generate OpenAPI client
         run: cd web && pnpm run openapi
