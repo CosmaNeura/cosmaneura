@@ -286,6 +286,7 @@ jobs:
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
       ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
+      ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
       JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
       PYTHON_ENV: staging
     permissions:

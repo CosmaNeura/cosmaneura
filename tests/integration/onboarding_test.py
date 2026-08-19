@@ -71,6 +71,7 @@ def test_onboarding_flow(server, page: Page) -> None:
     # Step 3: Zoom. clerk_test_email() returns a random address that is not
     # in the zoom beta list, so the wizard shows the "Coming Soon" variant
     # with a plain Continue button (no real Zoom OAuth round-trip).
+    expect(page.get_by_role("button", name="Continue without Zoom")).to_have_count(0)
     page.get_by_role("button", name="Continue").click()
     wait_for_loading(page)
 
