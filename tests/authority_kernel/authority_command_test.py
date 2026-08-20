@@ -12,6 +12,7 @@ from app.services.authority import (
     ClientTurnConflictError,
     ContextTokenExpiredError,
     ContextTokenInvalidError,
+    bootstrap_mount_context,
     exchange_context_token,
     provider_record_actor_ref,
     resolve_mount_context,
@@ -22,6 +23,7 @@ from app.models.authority import (
     AuthorityActor,
     AuthorityActorExternalIdentity,
     AuthorityAuditEvent,
+    AuthorityIdempotencyRecord,
     AuthorityPerson,
     AuthorityPersonBinding,
     AuthorityPersonOrigin,
@@ -31,6 +33,12 @@ from app.models.authority import (
     MountContextSession,
     MountContextToken,
 )
+from app.models.authority_conversation import (
+    CanonicalConversationFinalPhase,
+    CanonicalConversationTurn,
+    CanonicalConversationUserPhase,
+)
+from app.models.authority_usage import AgentModelUsageEvent
 from sqlmodel import Session, select
 
 TEST_CLERK_ISSUER = "https://test.clerk.invalid"
@@ -40,6 +48,32 @@ ENABLED_SETTINGS = AuthorityKernelSettings(
     token_refresh_after_seconds=300,
     clerk_issuer=TEST_CLERK_ISSUER,
 )
+
+_V7_PERSISTED_MODELS = (
+    AuthorityTenant,
+    AuthorityActor,
+    AuthorityPerson,
+    AuthorityActorExternalIdentity,
+    AuthorityTenantMembership,
+    AuthorityPersonOrigin,
+    AuthorityPersonBinding,
+    MountContextSession,
+    MountContextToken,
+    InteractionLineage,
+    CanonicalConversationTurn,
+    CanonicalConversationUserPhase,
+    CanonicalConversationFinalPhase,
+    AgentModelUsageEvent,
+    AuthorityIdempotencyRecord,
+    AuthorityAuditEvent,
+)
+
+
+def _v7_row_counts(session: Session) -> dict[str, int]:
+    return {
+        model.__name__: len(session.exec(select(model)).all())
+        for model in _V7_PERSISTED_MODELS
+    }
 
 
 def _provider_authority(
@@ -83,6 +117,39 @@ def _provider_authority(
     session.add_all([identity, membership, origin, binding])
     session.commit()
     return actor, tenant, membership, binding
+
+
+def _public_authority(
+    session: Session,
+    *,
+    clerk_subject: str = "user_test_patient",
+    record_ref: str = "record_patient_001",
+) -> None:
+    now = datetime.now(UTC)
+    actor = AuthorityActor(actor_kind="human", status="active")
+    person = AuthorityPerson(lifecycle_state="patient", status="active")
+    session.add_all([actor, person])
+    session.flush()
+    session.add_all(
+        [
+            AuthorityActorExternalIdentity(
+                actor_id=actor.id,
+                issuer=TEST_CLERK_ISSUER,
+                subject=clerk_subject,
+                verified_at=now,
+            ),
+            AuthorityPersonOrigin(person_id=person.id, origin="self_service"),
+            AuthorityPersonBinding(
+                person_id=person.id,
+                actor_id=actor.id,
+                binding_ref=record_ref,
+                binding_kind="identified_session",
+                status="active",
+                verified_at=now,
+            ),
+        ]
+    )
+    session.commit()
 
 
 def _exchange_provider(
@@ -158,6 +225,66 @@ def test_provider_exchange_hashes_token_and_resolves_from_current_state(
             session=authority_session,
             settings=ENABLED_SETTINGS,
         )
+
+
+def test_provider_bootstrap_is_read_only_and_does_not_open_lineage(
+    authority_session: Session,
+) -> None:
+    actor, tenant, _membership, _binding = _provider_authority(authority_session)
+    issued = _exchange_provider(authority_session)
+    before = _v7_row_counts(authority_session)
+
+    context = bootstrap_mount_context(
+        mount_context_token=issued.context_token,
+        session=authority_session,
+        settings=ENABLED_SETTINGS,
+    )
+
+    assert context.public_body() == {
+        "surface": "provider_assistant",
+        "auth_tier": "provider",
+        "capabilities": [
+            "education:answer",
+            "ethics:consult",
+            "plan-workbench:run",
+            "referrals:search",
+            "visit-prep:run",
+        ],
+        "tenant_id": str(tenant.id),
+        "actor_id": str(actor.id),
+    }
+    assert _v7_row_counts(authority_session) == before
+    assert not authority_session.new
+    assert not authority_session.dirty
+    assert not authority_session.deleted
+
+
+def test_bootstrap_contract_is_mount_generic_and_public_resolution_is_read_only(
+    authority_session: Session,
+) -> None:
+    _public_authority(authority_session)
+    issued = exchange_context_token(
+        clerk_issuer=TEST_CLERK_ISSUER,
+        clerk_subject="user_test_patient",
+        requested_surface="public",
+        record_ref="record_patient_001",
+        session=authority_session,
+        settings=ENABLED_SETTINGS,
+    )
+    before = _v7_row_counts(authority_session)
+
+    context = bootstrap_mount_context(
+        mount_context_token=issued.context_token,
+        session=authority_session,
+        settings=ENABLED_SETTINGS,
+    )
+
+    assert context.surface == "public"
+    assert context.auth_tier == "identified"
+    assert _v7_row_counts(authority_session) == before
+    assert not authority_session.new
+    assert not authority_session.dirty
+    assert not authority_session.deleted
 
 
 def test_provider_record_grant_actor_is_derived_from_current_authority(

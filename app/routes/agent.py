@@ -20,6 +20,7 @@ import app.services.authority
 import app.services.authority_audit
 import app.services.authority_conversation
 import app.services.authority_usage
+from app import log
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
@@ -28,7 +29,7 @@ from app.configuration.authority import (
 from activemodel.session_manager import aglobal_session
 from sqlalchemy.exc import SQLAlchemyError
 
-from .authority_errors import agent_problem_response, new_trace_id
+from .authority_errors import agent_problem_response, normalize_trace_id
 from .dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
@@ -393,12 +394,123 @@ def get_agent_authority_settings() -> AuthorityKernelSettings:
     return AUTHORITY_KERNEL_SETTINGS
 
 
-def _resolved_trace_id(trace_id: str | None) -> str:
-    if trace_id is None or not 16 <= len(trace_id) <= 128:
-        return new_trace_id()
-    if not all(character.isalnum() or character in "._~-" for character in trace_id):
-        return new_trace_id()
-    return trace_id
+@agent_api_app.post(
+    "/mount-context/bootstrap",
+    response_model=MountContextResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def bootstrap_mount_context(
+    request: Request,
+    response: Response,
+    principal: Annotated[
+        EntraServicePrincipal,
+        Depends(authenticate_agent_api_request),
+    ],
+    mount_context_token: Annotated[
+        str,
+        Header(
+            alias="X-Cosmaneura-Mount-Context",
+            min_length=16,
+            max_length=8192,
+        ),
+    ],
+    settings: Annotated[
+        AuthorityKernelSettings,
+        Depends(get_agent_authority_settings),
+    ],
+    trace_id: Annotated[
+        str | None,
+        Header(alias="X-Trace-ID"),
+    ] = None,
+) -> MountContextResponse | JSONResponse:
+    """Resolve pre-turn UI context without creating durable lineage."""
+
+    # Authentication dependencies resolve before the endpoint reads the body.
+    # Keep this operation bodyless so it cannot become a hidden action channel.
+    submitted_trace_ids = request.headers.getlist("x-trace-id")
+    resolved_trace_id = normalize_trace_id(
+        trace_id if len(submitted_trace_ids) == 1 else None
+    )
+    forbidden_turn_headers = (
+        "X-Cosmaneura-Client-Turn-ID",
+        "X-Cosmaneura-Interaction-Ref",
+        "Idempotency-Key",
+    )
+    if await request.body() or any(
+        header in request.headers for header in forbidden_turn_headers
+    ):
+        return agent_problem_response(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code="VALIDATION_FAILED",
+            title="Validation failed",
+            detail="The mount-context bootstrap request is invalid.",
+            trace_id=resolved_trace_id,
+        )
+
+    try:
+        context = app.services.authority.bootstrap_mount_context(
+            mount_context_token=mount_context_token,
+            settings=settings,
+        )
+        response_body = MountContextResponse.model_validate(context.public_body())
+    except app.services.authority.AuthorityKernelDisabledError:
+        return agent_problem_response(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="PLATFORM_UNAVAILABLE",
+            title="Platform unavailable",
+            detail="Mount-context bootstrap is not available.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.authority.ContextTokenExpiredError:
+        return agent_problem_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="CONTEXT_EXPIRED",
+            title="Context expired",
+            detail="The mount context has expired.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.authority.ContextTokenInvalidError:
+        return agent_problem_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="CONTEXT_INVALID",
+            title="Context invalid",
+            detail="A valid mount context is required.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.authority.AuthorityRequestDeniedError:
+        return agent_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="SCOPE_DENIED",
+            title="Scope denied",
+            detail="The current mount context is not authorized.",
+            trace_id=resolved_trace_id,
+        )
+    except SQLAlchemyError:
+        return agent_problem_response(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="PLATFORM_UNAVAILABLE",
+            title="Platform unavailable",
+            detail="Mount-context bootstrap is temporarily unavailable.",
+            retryable=True,
+            trace_id=resolved_trace_id,
+        )
+    except Exception as error:
+        log.error(
+            "agent mount bootstrap failed",
+            action="agent_api.mount_bootstrap_failed",
+            error_class=type(error).__name__,
+        )
+        return agent_problem_response(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code="INTERNAL_ERROR",
+            title="Internal error",
+            detail="The platform agent API request could not be completed.",
+            trace_id=resolved_trace_id,
+        )
+
+    response.headers["X-Trace-ID"] = resolved_trace_id
+    response.headers["Cache-Control"] = "no-store"
+    return response_body
 
 
 @agent_api_app.post(
@@ -433,7 +545,7 @@ def resolve_mount_context(
         Header(alias="X-Trace-ID"),
     ] = None,
 ) -> MountContextResponse | JSONResponse:
-    resolved_trace_id = _resolved_trace_id(trace_id)
+    resolved_trace_id = normalize_trace_id(trace_id)
     try:
         result = app.services.authority.resolve_mount_context(
             workload_client_id=principal.client_id,
@@ -560,7 +672,7 @@ async def write_conversation_turn(
         Header(alias="X-Trace-ID"),
     ] = None,
 ) -> ConversationTurnWriteResponse | JSONResponse:
-    resolved_trace_id = _resolved_trace_id(trace_id)
+    resolved_trace_id = normalize_trace_id(trace_id)
     content_type = request.headers.get("content-type", "").partition(";")[0].strip()
     if content_type.lower() != "application/json":
         return agent_problem_response(
@@ -764,7 +876,7 @@ async def write_audit_event(
         Header(alias="X-Trace-ID"),
     ] = None,
 ) -> WriteReceipt | JSONResponse:
-    resolved_trace_id = _resolved_trace_id(trace_id)
+    resolved_trace_id = normalize_trace_id(trace_id)
     data = await _validated_audit_body(request, trace_id=resolved_trace_id)
     if isinstance(data, JSONResponse):
         return data
@@ -911,7 +1023,7 @@ async def report_model_usage_event(
         Header(alias="X-Trace-ID"),
     ] = None,
 ) -> WriteReceipt | JSONResponse:
-    resolved_trace_id = _resolved_trace_id(trace_id)
+    resolved_trace_id = normalize_trace_id(trace_id)
     data = await _validated_usage_body(request, trace_id=resolved_trace_id)
     if isinstance(data, JSONResponse):
         return data

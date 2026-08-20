@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from uuid import uuid4
 
 from fastapi.responses import JSONResponse
@@ -23,6 +24,14 @@ class AuthorityProblemDetails(BaseModel):
 
 def new_trace_id() -> str:
     return f"trace_{uuid4().hex}"
+
+
+def normalize_trace_id(trace_id: str | None) -> str:
+    """Return a contract-safe caller trace or a fresh opaque replacement."""
+
+    if trace_id is None or re.fullmatch(r"[A-Za-z0-9._~-]{16,128}", trace_id) is None:
+        return new_trace_id()
+    return trace_id
 
 
 def _problem_response(

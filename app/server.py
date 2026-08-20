@@ -29,7 +29,11 @@ from app.models.doctor import Doctor
 
 from .environments import is_production
 from .routes.agent import agent_api_app
-from .routes.authority_errors import agent_problem_response, token_problem_response
+from .routes.authority_errors import (
+    agent_problem_response,
+    normalize_trace_id,
+    token_problem_response,
+)
 from .routes.chat import chat_api_app
 from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
@@ -86,6 +90,17 @@ api_app.include_router(recall_callbacks_app)
 
 add_middleware(api_app)
 
+_MOUNT_BOOTSTRAP_PATH = "/service/v1/agent/mount-context/bootstrap"
+
+
+def _bootstrap_error_trace_id(request: Request) -> str | None:
+    """Preserve only one contract-valid bootstrap trace across framework errors."""
+
+    if request.url.path != _MOUNT_BOOTSTRAP_PATH:
+        return None
+    submitted = request.headers.getlist("x-trace-id")
+    return normalize_trace_id(submitted[0] if len(submitted) == 1 else None)
+
 
 @api_app.exception_handler(HTTPException)
 async def safe_authority_http_exception_handler(request: Request, exc: HTTPException):
@@ -120,12 +135,14 @@ async def safe_authority_http_exception_handler(request: Request, exc: HTTPExcep
         )
 
     if request.url.path.startswith("/service/v1/agent/"):
+        trace_id = _bootstrap_error_trace_id(request)
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             return agent_problem_response(
                 status_code=exc.status_code,
                 code="INVALID_WORKLOAD_TOKEN",
                 title="Workload authentication failed",
                 detail="A valid workload credential is required.",
+                trace_id=trace_id,
             )
         if exc.status_code == status.HTTP_403_FORBIDDEN:
             return agent_problem_response(
@@ -133,6 +150,7 @@ async def safe_authority_http_exception_handler(request: Request, exc: HTTPExcep
                 code="WORKLOAD_NOT_ALLOWED",
                 title="Workload not allowed",
                 detail="The workload is not authorized for this API.",
+                trace_id=trace_id,
             )
         return agent_problem_response(
             status_code=exc.status_code,
@@ -140,6 +158,7 @@ async def safe_authority_http_exception_handler(request: Request, exc: HTTPExcep
             title="Platform unavailable",
             detail="The platform agent API is temporarily unavailable.",
             retryable=exc.status_code >= 500,
+            trace_id=trace_id,
         )
 
     return await http_exception_handler(request, exc)
@@ -165,6 +184,11 @@ async def safe_request_validation_handler(
         }
         if "X-Cosmaneura-Mount-Context" in missing_fields:
             code = "CONTEXT_REQUIRED"
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif request.url.path == _MOUNT_BOOTSTRAP_PATH:
+            # Bootstrap has no 422 outcome: any malformed declared input is a
+            # generic, value-free bad request under Agent API 1.1.
+            code = "VALIDATION_FAILED"
             status_code = status.HTTP_400_BAD_REQUEST
         elif "X-Cosmaneura-Interaction-Ref" in missing_fields:
             code = "INTERACTION_REQUIRED"
@@ -192,6 +216,7 @@ async def safe_request_validation_handler(
             code=code,
             title="Invalid request",
             detail="The platform agent API request is invalid.",
+            trace_id=_bootstrap_error_trace_id(request),
         )
     if request.url.path.startswith("/service/v1/"):
         # FastAPI's default 422 body includes rejected input. Service payloads

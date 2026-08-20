@@ -969,3 +969,35 @@ def resolve_mount_context(
         interaction_ref=lineage.interaction_ref,
         reused=False,
     )
+
+
+def bootstrap_mount_context(
+    *,
+    mount_context_token: str,
+    session: Session | None = None,
+    settings: AuthorityKernelSettings = AUTHORITY_KERNEL_SETTINGS,
+) -> ResolvedMountContext:
+    """Resolve a governed mount without opening an interaction lineage.
+
+    This read-only operation exists for pre-turn UI bootstrap. It intentionally
+    does not accept a client-turn identifier, create an idempotency record, or
+    grant action authority. A later user turn must use ``resolve_mount_context``
+    before any durable action or model work begins.
+    """
+
+    _ensure_enabled(settings)
+    if session is None:
+        with get_session() as managed_session:
+            return bootstrap_mount_context(
+                mount_context_token=mount_context_token,
+                session=cast(Session, managed_session),
+                settings=settings,
+            )
+
+    _, mount_session = _active_token(session, mount_context_token)
+    context = _context_for_session(
+        session,
+        mount_session,
+        clerk_issuer=settings.clerk_issuer,
+    )
+    return context

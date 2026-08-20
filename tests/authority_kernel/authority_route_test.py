@@ -12,6 +12,7 @@ import app.services.authority_usage
 from app.configuration.authority import AuthorityKernelSettings
 from app.configuration.sentry import scrub_event
 from app.routes.agent import agent_api_app, get_agent_authority_settings
+from app.routes.authority_errors import normalize_trace_id
 from app.routes.dependencies.entra_service import (
     EntraServicePrincipal,
     authenticate_agent_api_request,
@@ -33,6 +34,18 @@ def _isolated_app(router) -> FastAPI:
     app.include_router(router)
     app.dependency_overrides[aglobal_session] = lambda: None
     return app
+
+
+def test_trace_normalization_rejects_unicode_alphanumeric_lookalikes() -> None:
+    submitted = "é" * 16
+
+    normalized = normalize_trace_id(submitted)
+
+    assert normalized.startswith("trace_")
+    assert normalized != submitted
+    assert normalize_trace_id("trace_ascii_contract_0001") == (
+        "trace_ascii_contract_0001"
+    )
 
 
 def test_anonymous_issuance_is_safely_disabled() -> None:
@@ -145,6 +158,268 @@ def test_mount_resolution_returns_only_five_fields_and_lineage_headers(
     assert response.headers["x-cosmaneura-client-turn-id"] == str(client_turn_id)
     assert response.headers["x-cosmaneura-interaction-reused"] == "false"
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_mount_bootstrap_returns_only_context_and_trace(monkeypatch) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    fastapi_app.dependency_overrides[get_agent_authority_settings] = lambda: (
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+            clerk_issuer=TEST_CLERK_ISSUER,
+        )
+    )
+
+    def synthetic_bootstrap(**kwargs):
+        assert kwargs == {
+            "mount_context_token": "mctx_synthetic_token_000000000000",
+            "settings": fastapi_app.dependency_overrides[
+                get_agent_authority_settings
+            ](),
+        }
+        return app.services.authority.ResolvedMountContext(
+            surface="provider_assistant",
+            auth_tier="provider",
+            capabilities=("education:answer", "visit-prep:run"),
+            tenant_id="authority_tenant_0001",
+            actor_id="authority_actor_0001",
+            session_id="mount_session_0001",  # type: ignore[arg-type]
+            person_id="authority_person_0001",  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(
+        app.services.authority,
+        "bootstrap_mount_context",
+        synthetic_bootstrap,
+    )
+    trace_id = "trace_synthetic_bootstrap_0001"
+    response = TestClient(fastapi_app).post(
+        "/service/v1/agent/mount-context/bootstrap",
+        headers={
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Trace-ID": trace_id,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "surface": "provider_assistant",
+        "auth_tier": "provider",
+        "capabilities": ["education:answer", "visit-prep:run"],
+        "tenant_id": "authority_tenant_0001",
+        "actor_id": "authority_actor_0001",
+    }
+    assert response.headers["x-trace-id"] == trace_id
+    assert response.headers["cache-control"] == "no-store"
+    assert "x-cosmaneura-client-turn-id" not in response.headers
+    assert "x-cosmaneura-interaction-ref" not in response.headers
+    assert "idempotency-replayed" not in response.headers
+
+
+@pytest.mark.parametrize("submitted_trace", [None, "unsafe trace sentinel!"])
+def test_mount_bootstrap_normalizes_missing_or_invalid_trace(
+    monkeypatch,
+    submitted_trace: str | None,
+) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    fastapi_app.dependency_overrides[get_agent_authority_settings] = lambda: (
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+            clerk_issuer=TEST_CLERK_ISSUER,
+        )
+    )
+    monkeypatch.setattr(
+        app.services.authority,
+        "bootstrap_mount_context",
+        lambda **kwargs: app.services.authority.ResolvedMountContext(
+            surface="provider_assistant",
+            auth_tier="provider",
+            capabilities=(),
+            tenant_id="authority_tenant_0001",
+            actor_id="authority_actor_0001",
+            session_id="mount_session_0001",  # type: ignore[arg-type]
+            person_id="authority_person_0001",  # type: ignore[arg-type]
+        ),
+    )
+    headers = {
+        "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+    }
+    if submitted_trace is not None:
+        headers["X-Trace-ID"] = submitted_trace
+
+    response = TestClient(fastapi_app).post(
+        "/service/v1/agent/mount-context/bootstrap",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-trace-id"].startswith("trace_")
+    assert len(response.headers["x-trace-id"]) == 38
+    if submitted_trace is not None:
+        assert submitted_trace not in response.text
+        assert response.headers["x-trace-id"] != submitted_trace
+
+
+def test_mount_bootstrap_rejects_a_body_without_reflecting_it(monkeypatch) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    fastapi_app.dependency_overrides[get_agent_authority_settings] = lambda: (
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+            clerk_issuer=TEST_CLERK_ISSUER,
+        )
+    )
+
+    def unexpected_bootstrap(**kwargs):
+        pytest.fail(f"body-bearing bootstrap reached authority service: {kwargs!r}")
+
+    monkeypatch.setattr(
+        app.services.authority,
+        "bootstrap_mount_context",
+        unexpected_bootstrap,
+    )
+    response = TestClient(fastapi_app).post(
+        "/service/v1/agent/mount-context/bootstrap",
+        headers={
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Trace-ID": "trace_synthetic_bootstrap_0002",
+        },
+        content=b'{"patient":"sentinel private value"}',
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_FAILED"
+    assert "sentinel private value" not in response.text
+
+
+@pytest.mark.parametrize(
+    "forbidden_header",
+    [
+        "X-Cosmaneura-Client-Turn-ID",
+        "X-Cosmaneura-Interaction-Ref",
+        "Idempotency-Key",
+    ],
+)
+def test_mount_bootstrap_rejects_turn_and_idempotency_headers(
+    monkeypatch,
+    forbidden_header: str,
+) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+
+    def unexpected_bootstrap(**kwargs):
+        pytest.fail(f"turn-bearing bootstrap reached authority service: {kwargs!r}")
+
+    monkeypatch.setattr(
+        app.services.authority,
+        "bootstrap_mount_context",
+        unexpected_bootstrap,
+    )
+    forbidden_value = "sentinel_forbidden_turn_value"
+    response = TestClient(fastapi_app).post(
+        "/service/v1/agent/mount-context/bootstrap",
+        headers={
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Trace-ID": "trace_synthetic_bootstrap_0004",
+            forbidden_header: forbidden_value,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_FAILED"
+    assert forbidden_value not in response.text
+
+
+def test_mount_bootstrap_rejects_an_unapproved_workload_before_service(
+    monkeypatch,
+) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+
+    def reject_workload() -> None:
+        raise HTTPException(status_code=403, detail="Service caller is not authorized.")
+
+    def unexpected_bootstrap(**kwargs):
+        pytest.fail(f"unapproved workload reached authority service: {kwargs!r}")
+
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = reject_workload
+    monkeypatch.setattr(
+        app.services.authority,
+        "bootstrap_mount_context",
+        unexpected_bootstrap,
+    )
+    response = TestClient(fastapi_app).post(
+        "/service/v1/agent/mount-context/bootstrap",
+        headers={
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Trace-ID": "trace_synthetic_bootstrap_0003",
+        },
+        content=b"sentinel private value",
+    )
+
+    assert response.status_code == 403
+    assert "sentinel private value" not in response.text
+
+
+def test_mount_bootstrap_unexpected_failure_is_safe_problem_details(
+    monkeypatch,
+) -> None:
+    fastapi_app = _isolated_app(agent_api_app)
+    fastapi_app.dependency_overrides[authenticate_agent_api_request] = lambda: (
+        EntraServicePrincipal(client_id="11111111-1111-4111-8111-111111111111")
+    )
+    fastapi_app.dependency_overrides[get_agent_authority_settings] = lambda: (
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+            clerk_issuer=TEST_CLERK_ISSUER,
+        )
+    )
+
+    def fail_bootstrap(**kwargs):
+        raise RuntimeError("sentinel private exception detail")
+
+    monkeypatch.setattr(
+        app.services.authority,
+        "bootstrap_mount_context",
+        fail_bootstrap,
+    )
+    trace_id = "trace_synthetic_bootstrap_failure_0001"
+    response = TestClient(
+        fastapi_app,
+        raise_server_exceptions=False,
+    ).post(
+        "/service/v1/agent/mount-context/bootstrap",
+        headers={
+            "X-Cosmaneura-Mount-Context": "mctx_synthetic_token_000000000000",
+            "X-Trace-ID": trace_id,
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.headers["content-type"] == "application/problem+json"
+    assert response.headers["x-trace-id"] == trace_id
+    assert response.json()["trace_id"] == trace_id
+    assert response.json()["code"] == "INTERNAL_ERROR"
+    assert "sentinel private exception detail" not in response.text
+    assert "x-cosmaneura-client-turn-id" not in response.headers
+    assert "x-cosmaneura-interaction-ref" not in response.headers
+    assert "idempotency-replayed" not in response.headers
 
 
 def test_audit_route_returns_contract_receipt_and_replay_header(monkeypatch) -> None:
