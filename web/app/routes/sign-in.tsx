@@ -12,10 +12,11 @@ export default function SignInPage() {
 
   return (
     <ChannelAuthChrome channel={channel}>
+      {/* fallback only: forceRedirectUrl would override Clerk's redirect_url
+          and send deep-linked users to /onboarding instead of their target */}
       <SignIn
         path="/sign-in"
         signUpUrl={channelSibling("sign-in", channel)}
-        forceRedirectUrl={channelRedirect(channel)}
         fallbackRedirectUrl={channelRedirect(channel)}
       />
     </ChannelAuthChrome>
