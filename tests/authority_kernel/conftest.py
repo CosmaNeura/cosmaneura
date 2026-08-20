@@ -4,6 +4,7 @@ This test subtree is run with ``--confcutdir=tests/authority_kernel`` so the
 repository-wide session hook cannot delete Clerk users or truncate PostgreSQL.
 """
 
+import importlib
 import os
 import sys
 from collections.abc import Iterator
@@ -53,9 +54,12 @@ for name, value in _TEST_ENVIRONMENT.items():
 # ``app`` normally checks live PostgreSQL and Redis versions during import.
 # These unit tests provide their own in-memory SQLAlchemy session and must not
 # touch either service.
-versions_stub = ModuleType("app.configuration.versions")
-versions_stub.check_service_versions = lambda: None  # type: ignore[attr-defined]
-sys.modules[versions_stub.__name__] = versions_stub
+_VERSIONS_MODULE_NAME = "app.configuration.versions"
+_installed_versions_stub = _VERSIONS_MODULE_NAME not in sys.modules
+if _installed_versions_stub:
+    versions_stub = ModuleType(_VERSIONS_MODULE_NAME)
+    versions_stub.check_service_versions = lambda: None  # type: ignore[attr-defined]
+    sys.modules[_VERSIONS_MODULE_NAME] = versions_stub
 
 from app.models.authority import (  # noqa: E402
     AuthorityActor,
@@ -79,6 +83,20 @@ from app.models.authority_conversation import (  # noqa: E402
 from app.models.authority_usage import AgentModelUsageEvent  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
+
+# The temporary module exists only long enough for isolated authority-model
+# bootstrap. Leaving it in ``sys.modules`` makes later test collection import
+# an incomplete fake instead of ``app.configuration.versions``.
+if _installed_versions_stub:
+    sys.modules.pop(_VERSIONS_MODULE_NAME, None)
+    real_versions_module = importlib.import_module(_VERSIONS_MODULE_NAME)
+    app_module = sys.modules.get("app")
+    if app_module is not None:
+        setattr(
+            app_module,
+            "check_service_versions",
+            real_versions_module.check_service_versions,
+        )
 
 _AUTHORITY_TABLES = [
     model.__table__  # type: ignore[attr-defined]
