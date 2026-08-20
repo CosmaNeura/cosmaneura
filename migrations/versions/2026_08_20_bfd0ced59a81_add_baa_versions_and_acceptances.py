@@ -65,14 +65,6 @@ def upgrade() -> None:
         sa.UniqueConstraint("doc_id", "version", name="baa_version_doc_version_key"),
         comment="One row per published BAA version. Text changes are new rows, never edits.",
     )
-    op.create_index(
-        "baa_version_current_idx",
-        "baa_version",
-        ["doc_id"],
-        unique=True,
-        postgresql_where=sa.text("is_current"),
-    )
-
     op.create_table(
         "baa_acceptance",
         sa.Column(
@@ -144,10 +136,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("baa_acceptance_pkey")),
         comment="Append-only clickwrap execution record; never updated or deleted.",
     )
-    op.create_index(
-        "baa_acceptance_practice_idx", "baa_acceptance", ["practice_id"], unique=False
-    )
-
     op.add_column(
         "practice",
         sa.Column(
@@ -192,7 +180,5 @@ def downgrade() -> None:
     op.drop_column("practice", "negotiated_baa_reference")
     op.drop_column("practice", "negotiated_baa_effective_date")
     op.drop_column("practice", "negotiated_baa_on_file")
-    op.drop_index("baa_acceptance_practice_idx", table_name="baa_acceptance")
     op.drop_table("baa_acceptance")
-    op.drop_index("baa_version_current_idx", table_name="baa_version")
     op.drop_table("baa_version")

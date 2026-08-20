@@ -31,6 +31,10 @@ BAA_CURRENT_FILENAME = "baa_cn-baa-cust-cw_v2.2.html"
 class BaaVersion(BaseModel, TimestampsMixin, TypeIDMixin("baa_version"), table=True):
     """One row per published BAA version. Text changes are new rows, never edits."""
 
+    __table_args__ = (
+        sa.UniqueConstraint("doc_id", "version", name="baa_version_doc_version_key"),
+    )
+
     doc_id: str
     version: str
     sha256: str
@@ -45,11 +49,12 @@ class BaaVersion(BaseModel, TimestampsMixin, TypeIDMixin("baa_version"), table=T
         return (get_root_path() / self.content_path).read_text()
 
 
+# No update or delete paths exist for acceptances in application code by
+# design; retention is indefinite (45 C.F.R. § 164.316(b)(2) is the floor).
 class BaaAcceptance(
     BaseModel, TimestampsMixin, TypeIDMixin("baa_acceptance"), table=True
 ):
-    """Append-only clickwrap execution record. No update or delete paths exist
-    in application code by design; retention is indefinite."""
+    """Append-only clickwrap execution record; never updated or deleted."""
 
     practice_id: TypeIDType = Practice.foreign_key()
     baa_version_id: TypeIDType = BaaVersion.foreign_key()
