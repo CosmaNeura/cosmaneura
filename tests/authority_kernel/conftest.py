@@ -48,8 +48,16 @@ _TEST_ENVIRONMENT = {
     "TEST_REDIS_URL": "redis://localhost:6379/15",
     "COOKIE_DOMAIN": "testserver",
 }
-for name, value in _TEST_ENVIRONMENT.items():
-    os.environ.setdefault(name, value)
+
+# The repository-wide conftest configures the real test environment before it
+# imports ``app``.  Do not fill in missing settings during normal collection:
+# middleware reads some settings at import time, so doing so would leak this
+# isolated fixture's synthetic host/cookie configuration into unrelated route
+# tests.  The defaults are only needed when this subtree is collected with its
+# documented ``--confcutdir`` isolation.
+_isolated_authority_bootstrap = "app" not in sys.modules
+if _isolated_authority_bootstrap:
+    os.environ.update(_TEST_ENVIRONMENT)
 
 # ``app`` normally checks live PostgreSQL and Redis versions during import.
 # These unit tests provide their own in-memory SQLAlchemy session and must not

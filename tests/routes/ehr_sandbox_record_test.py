@@ -128,7 +128,8 @@ def test_open_record_platform_mode_binds_grant_to_derived_authority_actor(
     _provision(doctor, patient)
     authority_actor_ref = "authority_actor_01k2a3b4c5d6e7f8g9h0j1k2m3"
 
-    def resolve_actor(*, clerk_subject: str, record_ref: str) -> str:
+    def resolve_actor(*, clerk_issuer: str, clerk_subject: str, record_ref: str) -> str:
+        assert clerk_issuer == "https://resolved-emu-53.clerk.accounts.dev"
         assert clerk_subject == doctor.clerk_id
         assert record_ref == str(appointment.id)
         return authority_actor_ref

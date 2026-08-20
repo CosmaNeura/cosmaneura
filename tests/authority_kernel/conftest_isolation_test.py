@@ -10,3 +10,9 @@ def test_authority_bootstrap_restores_real_versions_module() -> None:
     assert Path(versions.__file__).name == "versions.py"
     assert VERSIONS_FILE.name == ".service-versions"
     assert configured_version_check is versions.check_service_versions
+
+
+def test_authority_bootstrap_does_not_leak_synthetic_cookie_domain() -> None:
+    from app.routes.middleware import COOKIE_DOMAIN, allowed_hosts
+
+    assert COOKIE_DOMAIN != "testserver" or "testserver" in allowed_hosts()
