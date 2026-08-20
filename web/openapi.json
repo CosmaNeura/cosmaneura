@@ -103,6 +103,53 @@
         ]
       }
     },
+    "/internal/v1/admin/baa-acceptances": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Baa Acceptances Export",
+        "description": "Compliance export of every BAA acceptance record (CSV or JSON).\nAdmin-only via require_admin on the router.",
+        "operationId": "baa_acceptances_export",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "json",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
@@ -749,6 +796,33 @@
         ]
       }
     },
+    "/internal/v1/baa/current": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Baa Current",
+        "description": "The canonical, hash-verified BAA text presented in the clickwrap.",
+        "operationId": "baa_current",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaaDocument"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/practice/baa": {
       "post": {
         "tags": [
@@ -783,6 +857,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/baa/acceptances": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Baa Acceptances",
+        "description": "The practice's BAA acceptance history, for the settings page.",
+        "operationId": "practice_baa_acceptances",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BaaAcceptanceRecord"
+                  },
+                  "type": "array",
+                  "title": "Response Practice Baa Acceptances Internal V1 Practice Baa Acceptances Get"
                 }
               }
             }
@@ -970,52 +1075,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/internal/v1/baa/current": {
-      "get": {
-        "tags": [
-          "private"
-        ],
-        "summary": "Baa Current",
-        "operationId": "baa_current",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BaaDocument"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/internal/v1/practice/baa/acceptances": {
-      "get": {
-        "tags": [
-          "private"
-        ],
-        "summary": "Practice Baa Acceptances",
-        "operationId": "practice_baa_acceptances",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/BaaAcceptanceRecord"
-                  },
-                  "type": "array",
-                  "title": "Response Practice Baa Acceptances"
                 }
               }
             }
@@ -1327,6 +1386,80 @@
         ],
         "title": "Appointment",
         "description": "Represents an appointment with a patient from accuity"
+      },
+      "BaaAcceptanceRecord": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "accepted_by_name": {
+            "type": "string",
+            "title": "Accepted By Name"
+          },
+          "accepted_by_title": {
+            "type": "string",
+            "title": "Accepted By Title"
+          },
+          "accepted_by_email": {
+            "type": "string",
+            "title": "Accepted By Email"
+          },
+          "accepted_at_utc": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Accepted At Utc"
+          },
+          "content_sha256": {
+            "type": "string",
+            "title": "Content Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doc_id",
+          "version",
+          "accepted_by_name",
+          "accepted_by_title",
+          "accepted_by_email",
+          "accepted_at_utc",
+          "content_sha256"
+        ],
+        "title": "BaaAcceptanceRecord"
+      },
+      "BaaDocument": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "html": {
+            "type": "string",
+            "title": "Html"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doc_id",
+          "version",
+          "sha256",
+          "html"
+        ],
+        "title": "BaaDocument"
       },
       "ConfidenceBand": {
         "type": "string",
@@ -2571,6 +2704,14 @@
             "type": "boolean",
             "title": "Onboarding Completed"
           },
+          "practice_ready": {
+            "type": "boolean",
+            "title": "Practice Ready"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin"
+          },
           "note_customizations": {
             "items": {
               "$ref": "#/components/schemas/NoteTypeCustomizationData"
@@ -2580,14 +2721,6 @@
           },
           "terminology": {
             "$ref": "#/components/schemas/Terminology"
-          },
-          "practice_ready": {
-            "type": "boolean",
-            "title": "Practice Ready"
-          },
-          "is_admin": {
-            "type": "boolean",
-            "title": "Is Admin"
           }
         },
         "additionalProperties": false,
@@ -2600,10 +2733,10 @@
           "zoom_revoked",
           "email",
           "onboarding_completed",
-          "note_customizations",
-          "terminology",
           "practice_ready",
-          "is_admin"
+          "is_admin",
+          "note_customizations",
+          "terminology"
         ],
         "title": "SettingsData"
       },
@@ -3039,80 +3172,6 @@
           "cancelled"
         ],
         "title": "ZoomMeetingStatus"
-      },
-      "BaaDocument": {
-        "properties": {
-          "doc_id": {
-            "type": "string",
-            "title": "Doc Id"
-          },
-          "version": {
-            "type": "string",
-            "title": "Version"
-          },
-          "sha256": {
-            "type": "string",
-            "title": "Sha256"
-          },
-          "html": {
-            "type": "string",
-            "title": "Html"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "doc_id",
-          "version",
-          "sha256",
-          "html"
-        ],
-        "title": "BaaDocument"
-      },
-      "BaaAcceptanceRecord": {
-        "properties": {
-          "doc_id": {
-            "type": "string",
-            "title": "Doc Id"
-          },
-          "version": {
-            "type": "string",
-            "title": "Version"
-          },
-          "accepted_by_name": {
-            "type": "string",
-            "title": "Accepted By Name"
-          },
-          "accepted_by_title": {
-            "type": "string",
-            "title": "Accepted By Title"
-          },
-          "accepted_by_email": {
-            "type": "string",
-            "title": "Accepted By Email"
-          },
-          "accepted_at_utc": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Accepted At Utc"
-          },
-          "content_sha256": {
-            "type": "string",
-            "title": "Content Sha256"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "doc_id",
-          "version",
-          "accepted_by_name",
-          "accepted_by_title",
-          "accepted_by_email",
-          "accepted_at_utc",
-          "content_sha256"
-        ],
-        "title": "BaaAcceptanceRecord"
       }
     },
     "securitySchemes": {

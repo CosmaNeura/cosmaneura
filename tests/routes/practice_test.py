@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -43,6 +44,16 @@ def _accept_baa(client: TestClient) -> dict:
     )
     assert resp.status_code == status.HTTP_200_OK, resp.text
     return resp.json()
+
+
+def _own_practice(doctor: Doctor) -> Practice:
+    """The practice this test's doctor belongs to. Never query practices or
+    acceptances globally: the session seeds provision their own practice."""
+    member = PracticeMember.get(doctor_id=doctor.id)
+    assert member
+    practice = Practice.get(id=member.practice_id)
+    assert practice
+    return practice
 
 
 def test_complete_onboarding_requires_practice(
@@ -120,13 +131,20 @@ def test_baa_acceptance_writes_append_only_record(
 ):
     doctor = _authed_doctor()
     _create_practice(bare_authenticated_client)
-    assert BaaAcceptance.count() == 0
+    practice = _own_practice(doctor)
+
+    def acceptance_count():
+        return BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count()
+
+    assert acceptance_count() == 0
 
     before = datetime.now(timezone.utc)
     _accept_baa(bare_authenticated_client)
 
-    record = BaaAcceptance.first()
-    assert record
+    record = cast(
+        BaaAcceptance,
+        BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).one(),
+    )
     assert record.covered_entity_legal_name.startswith("Riverside")
     assert record.accepted_by_name == "Pat Owner"
     assert record.accepted_by_title == "Physician / owner"
@@ -137,7 +155,7 @@ def test_baa_acceptance_writes_append_only_record(
 
     # idempotent per (practice, version): re-accepting is a no-op
     _accept_baa(bare_authenticated_client)
-    assert BaaAcceptance.count() == 1
+    assert acceptance_count() == 1
 
 
 def test_join_requires_matching_email_domain(bare_authenticated_client: TestClient):
@@ -243,12 +261,11 @@ def test_baa_acceptance_starts_trial_and_opens_the_gate(
 def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
     bare_authenticated_client: TestClient,
 ):
-    _authed_doctor()
+    doctor = _authed_doctor()
     _create_practice(bare_authenticated_client)
     _accept_baa(bare_authenticated_client)
 
-    practice = Practice.first()
-    assert practice
+    practice = _own_practice(doctor)
 
     practice.trial_ends_at = datetime.now(timezone.utc) - timedelta(days=1)
     practice.save()
@@ -286,8 +303,7 @@ def test_negotiated_baa_on_file_satisfies_the_gate(
     blocked = bare_authenticated_client.get(api_app.url_path_for("note_list"))
     assert blocked.status_code == status.HTTP_403_FORBIDDEN
 
-    practice = Practice.first()
-    assert practice
+    practice = _own_practice(doctor)
     practice.negotiated_baa_on_file = True
     practice.negotiated_baa_effective_date = datetime.now(timezone.utc)
     practice.negotiated_baa_reference = "CN-BAA-CUST v2.2 — countersigned"
