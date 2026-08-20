@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 from pydantic import BaseModel, Field, computed_field
 
@@ -11,9 +12,12 @@ import app.commands.uploads.upload_visit_audio_file
 import app.jobs.extract
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
+import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
+from app import log
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.configuration.stripe import stripe_billing_configured
 from app.services.sovereign_record_grant import (
     RECORD_GRANT_PATTERN,
     RecordGrantConfigurationError,
@@ -52,6 +56,7 @@ from app.models.note_type_customization import (
 )
 from app.models.patient import Patient
 from app.models.practice import (
+    ENTITLED_SUBSCRIPTION_STATUSES,
     TRIAL_LENGTH,
     OriginChannel,
     Practice,
@@ -597,6 +602,7 @@ def _practice_payload(
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
         entitled=practice.entitled(),
+        subscription_status=practice.subscription_status,
     )
 
 
@@ -612,6 +618,7 @@ class PracticeStatus(BaseModel, extra="forbid"):
     trial_ends_at: datetime | None
     billing_exempt: bool
     entitled: bool
+    subscription_status: str | None
 
 
 class JoinMismatch(BaseModel, extra="forbid"):
@@ -859,6 +866,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,
             entitled=practice.entitled(),
+            subscription_status=practice.subscription_status,
         )
     )
 
@@ -911,6 +919,9 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         attested_at=datetime.now(timezone.utc),
         attestation_name=data.attestation_name.strip(),
     ).save()
+    # $89/clinician/month: keep the Stripe quantity in step with attested
+    # members (failure-tolerant — billing drift must never block a join)
+    stripe_billing.sync_subscription_quantity(practice)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -936,6 +947,151 @@ def complete_onboarding(request: Request) -> None:
         )
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
     doctor.save()
+
+
+class BillingCheckoutBody(BaseModel, extra="forbid"):
+    success_path: str = Field(default="/settings", max_length=200)
+    cancel_path: str = Field(default="/settings", max_length=200)
+
+
+class BillingPortalBody(BaseModel, extra="forbid"):
+    return_path: str = Field(default="/settings", max_length=200)
+
+
+class BillingSessionUrl(BaseModel, extra="forbid"):
+    url: str
+
+
+def _owner_practice_for_billing(doctor: Doctor) -> Practice:
+    member = _membership_for(doctor)
+    if not member or member.role != PracticeRole.owner.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the practice owner can manage billing.",
+        )
+    practice = Practice.get(id=member.practice_id)
+    assert practice
+    return practice
+
+
+def _validated_web_origin(request: Request) -> str:
+    """Stripe redirect targets always point back at one of our own origins;
+    the client only ever chooses the path."""
+    from .middleware import allowed_hosts
+
+    allowed = allowed_hosts(True)
+    origin = request.headers.get("origin")
+    if origin and origin in allowed:
+        return origin
+    referer = request.headers.get("referer") or ""
+    for candidate in allowed:
+        if referer == candidate or referer.startswith(f"{candidate}/"):
+            return candidate
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Billing requires a recognized web origin.",
+    )
+
+
+def _safe_redirect_path(path: str) -> str:
+    if not path.startswith("/") or path.startswith("//"):
+        return "/settings"
+    return path
+
+
+@internal_api_app.post("/practice/billing/checkout", name="create_billing_checkout")
+def create_billing_checkout(
+    request: Request, data: BillingCheckoutBody
+) -> BillingSessionUrl:
+    """Start a Stripe Checkout subscription for the practice.
+
+    Exempt from the practice gate on purpose: a practice whose trial lapsed
+    (402 everywhere else) must still be able to reach checkout to pay.
+    """
+    doctor: Doctor = request.state.doctor
+    practice = _owner_practice_for_billing(doctor)
+
+    if not stripe_billing_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        )
+    if practice.subscription_status in ENTITLED_SUBSCRIPTION_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This practice already has an active subscription.",
+        )
+
+    origin = _validated_web_origin(request)
+    try:
+        url = stripe_billing.create_checkout_session(
+            practice,
+            customer_email=doctor.email,
+            success_url=f"{origin}{_safe_redirect_path(data.success_path)}",
+            cancel_url=f"{origin}{_safe_redirect_path(data.cancel_path)}",
+        )
+    except stripe_billing.StripeNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        log.warning(
+            "stripe checkout session creation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Stripe rejected the checkout request. Try again shortly.",
+        ) from exc
+    return BillingSessionUrl(url=url)
+
+
+@internal_api_app.post("/practice/billing/portal", name="create_billing_portal")
+def create_billing_portal(
+    request: Request, data: BillingPortalBody
+) -> BillingSessionUrl:
+    """Open the Stripe customer portal (card changes, invoices, cancellation).
+
+    Also gate-exempt: a lapsed practice manages its billing from here.
+    """
+    doctor: Doctor = request.state.doctor
+    practice = _owner_practice_for_billing(doctor)
+
+    if not stripe_billing_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        )
+    if not practice.stripe_customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No billing account exists for this practice yet.",
+        )
+
+    origin = _validated_web_origin(request)
+    try:
+        url = stripe_billing.create_portal_session(
+            practice,
+            return_url=f"{origin}{_safe_redirect_path(data.return_path)}",
+        )
+    except stripe_billing.StripeNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        log.warning(
+            "stripe portal session creation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Stripe rejected the billing portal request. Try again shortly.",
+        ) from exc
+    return BillingSessionUrl(url=url)
 
 
 class ZoomMeetingResponse(BaseModel, extra="forbid"):

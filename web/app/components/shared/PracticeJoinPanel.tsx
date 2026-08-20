@@ -1,7 +1,83 @@
-import { CopyButton } from "~/components/shared/CopyButton"
-import type { PracticeStatus } from "~/lib/practice-api"
+import { useState } from "react"
 
-export function PracticeJoinPanel({ practice }: { practice: PracticeStatus }) {
+import { CopyButton } from "~/components/shared/CopyButton"
+import { Button } from "~/components/ui/button"
+import { toast } from "~/hooks/use-toast"
+import {
+  type PracticeStatus,
+  createBillingCheckout,
+  createBillingPortal,
+} from "~/lib/practice-api"
+
+const SUBSCRIBED_STATUSES = new Set(["active", "trialing"])
+
+function BillingActions({ practice }: { practice: PracticeStatus }) {
+  const [pending, setPending] = useState(false)
+
+  // comped practices (pilots, MCD, centrally billed) never see billing
+  if (practice.billing_exempt) return null
+
+  const subscribed =
+    practice.subscription_status !== null &&
+    SUBSCRIBED_STATUSES.has(practice.subscription_status)
+
+  async function open(
+    create: () => Promise<{ url: string }>,
+    failureTitle: string,
+  ) {
+    setPending(true)
+    try {
+      const { url } = await create()
+      window.location.assign(url)
+    } catch (error) {
+      setPending(false)
+      toast({
+        title: failureTitle,
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive",
+      })
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      {subscribed ? (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={pending}
+          onClick={() => open(createBillingPortal, "Could not open billing")}
+        >
+          Manage billing
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          disabled={pending}
+          onClick={() =>
+            open(createBillingCheckout, "Could not start checkout")
+          }
+        >
+          {practice.entitled ? "Add payment now" : "Reactivate Cosmas"}
+        </Button>
+      )}
+      {!subscribed && practice.entitled ? (
+        <p className="text-muted-foreground mt-1 text-xs">
+          Adding payment during the trial never shortens it — billing starts
+          when the trial ends.
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+export function PracticeJoinPanel({
+  practice,
+  showBillingActions = false,
+}: {
+  practice: PracticeStatus
+  showBillingActions?: boolean
+}) {
   const isOwner = practice.role === "owner"
 
   return (
@@ -27,6 +103,9 @@ export function PracticeJoinPanel({ practice }: { practice: PracticeStatus }) {
         <p className="text-muted-foreground mt-1 text-sm">
           Early-adopter access — no billing yet.
         </p>
+      ) : practice.subscription_status &&
+        SUBSCRIBED_STATUSES.has(practice.subscription_status) ? (
+        <p className="mt-1 text-sm">Subscription active.</p>
       ) : practice.trial_ends_at ? (
         <p className="mt-1 text-sm">
           {practice.entitled ? "Free trial through " : "Free trial ended "}
@@ -36,6 +115,9 @@ export function PracticeJoinPanel({ practice }: { practice: PracticeStatus }) {
           })}
           .
         </p>
+      ) : null}
+      {isOwner && showBillingActions ? (
+        <BillingActions practice={practice} />
       ) : null}
       {isOwner ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">

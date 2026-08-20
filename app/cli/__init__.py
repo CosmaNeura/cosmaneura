@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from typing import cast
 
 import typer
@@ -230,6 +231,106 @@ def revoke_athena_preview_patient_record_designation(
         typer.echo(f"Designation revocation refused: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"Revoked synthetic patient designation {designation.id}.")
+
+
+@app.command("list-pilot-doctors")
+def list_pilot_doctors() -> None:
+    """List pre-cutover doctors (onboarded, no practice membership yet).
+
+    These are the early-adopter pilots: on next login the frontend routes
+    them through practice creation + BAA acceptance, which starts a 14-day
+    trial. Comp them with ``set-billing-exempt`` once their practice exists.
+    Practices are never created for them here — the covered entity's legal
+    name on an acceptance record must be typed by the accepting owner.
+    """
+    from app.models.doctor import Doctor
+    from app.models.practice import PracticeMember
+
+    with global_session():
+        pilots = [
+            doctor
+            for doctor in cast(list[Doctor], Doctor.all())
+            if doctor.onboarding_completed_at is not None
+            and PracticeMember.get(doctor_id=doctor.id) is None
+        ]
+        if not pilots:
+            typer.echo("No onboarded doctors without a practice membership.")
+            return
+        for doctor in pilots:
+            typer.echo(f"{doctor.id}  {doctor.email}")
+
+
+def _practice_by_join_code(join_code: str):
+    from app.models.practice import Practice
+
+    practice = Practice.get(join_code=join_code.strip().upper())
+    if practice is None:
+        typer.echo(f"No practice with join code {join_code!r}.", err=True)
+        raise typer.Exit(1)
+    return practice
+
+
+def _utc_date(value: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise typer.BadParameter("must be a YYYY-MM-DD date") from exc
+
+
+@app.command("set-billing-exempt")
+def set_billing_exempt(
+    join_code: str = typer.Option(..., help="The practice's join code."),
+    until: str | None = typer.Option(
+        None, help="End of the comp (YYYY-MM-DD, UTC). Omit for indefinite."
+    ),
+    clear: bool = typer.Option(False, "--clear", help="Remove the exemption."),
+) -> None:
+    """Comp a practice (pilot / MCD / centrally billed): entitled without Stripe."""
+
+    with global_session():
+        practice = _practice_by_join_code(join_code)
+        if clear:
+            practice.billing_exempt = False
+            practice.billing_exempt_until = None
+        else:
+            practice.billing_exempt = True
+            practice.billing_exempt_until = _utc_date(until) if until else None
+        practice.save()
+        typer.echo(
+            f"{practice.legal_name}: billing_exempt={practice.billing_exempt}"
+            f" until={practice.billing_exempt_until or '—'}"
+        )
+
+
+@app.command("set-negotiated-baa")
+def set_negotiated_baa(
+    join_code: str = typer.Option(..., help="The practice's join code."),
+    reference: str = typer.Option(
+        ..., help="Document reference for the countersigned instrument."
+    ),
+    effective: str | None = typer.Option(
+        None, help="Effective date (YYYY-MM-DD, UTC). Defaults to today."
+    ),
+) -> None:
+    """Record that a negotiated CN-BAA-CUST is on file (enterprise fallback).
+
+    Satisfies PHI gating without clickwrap. Only set this once the
+    countersigned instrument is actually on file.
+    """
+
+    with global_session():
+        practice = _practice_by_join_code(join_code)
+        practice.negotiated_baa_on_file = True
+        practice.negotiated_baa_effective_date = (
+            _utc_date(effective) if effective else datetime.now(timezone.utc)
+        )
+        practice.negotiated_baa_reference = reference
+        practice.save()
+        typer.echo(
+            f"{practice.legal_name}: negotiated BAA on file"
+            f" ({practice.negotiated_baa_reference},"
+            f" effective {practice.negotiated_baa_effective_date:%Y-%m-%d})"
+        )
 
 
 if __name__ == "__main__":

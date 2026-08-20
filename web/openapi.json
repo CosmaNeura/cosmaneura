@@ -1016,6 +1016,100 @@
         ]
       }
     },
+    "/internal/v1/practice/billing/checkout": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Billing Checkout",
+        "description": "Start a Stripe Checkout subscription for the practice.\n\nExempt from the practice gate on purpose: a practice whose trial lapsed\n(402 everywhere else) must still be able to reach checkout to pay.",
+        "operationId": "create_billing_checkout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingCheckoutBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingSessionUrl"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/billing/portal": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Billing Portal",
+        "description": "Open the Stripe customer portal (card changes, invoices, cancellation).\n\nAlso gate-exempt: a lapsed practice manages its billing from here.",
+        "operationId": "create_billing_portal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingPortalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingSessionUrl"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/schedule": {
       "get": {
         "tags": [
@@ -1460,6 +1554,52 @@
           "html"
         ],
         "title": "BaaDocument"
+      },
+      "BillingCheckoutBody": {
+        "properties": {
+          "success_path": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Success Path",
+            "default": "/settings"
+          },
+          "cancel_path": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Cancel Path",
+            "default": "/settings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingCheckoutBody"
+      },
+      "BillingPortalBody": {
+        "properties": {
+          "return_path": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Return Path",
+            "default": "/settings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingPortalBody"
+      },
+      "BillingSessionUrl": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "BillingSessionUrl"
       },
       "ConfidenceBand": {
         "type": "string",
@@ -2563,6 +2703,17 @@
           "entitled": {
             "type": "boolean",
             "title": "Entitled"
+          },
+          "subscription_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Status"
           }
         },
         "additionalProperties": false,
@@ -2578,7 +2729,8 @@
           "attested",
           "trial_ends_at",
           "billing_exempt",
-          "entitled"
+          "entitled",
+          "subscription_status"
         ],
         "title": "PracticeStatus"
       },

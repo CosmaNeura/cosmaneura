@@ -10,7 +10,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import app.jobs.webhooks
+import app.services.stripe_billing as stripe_billing
 from app import log
+from app.configuration import stripe as stripe_config
 from app.configuration.redis import get_redis
 from app.configuration.zoom import ZOOM_SECRET_TOKEN
 
@@ -90,13 +92,29 @@ def _stable_event_id(
     return f"{provider}:{digest}"
 
 
+def _webhook_dedupe_key(provider: str, event_id: str) -> str:
+    return f"webhook:{provider}:{event_id}"
+
+
 def _already_processed(provider: str, event_id: str) -> bool:
-    key = f"webhook:{provider}:{event_id}"
     redis = get_redis()
 
     # 48h is enough for provider retries while keeping keyspace bounded.
-    inserted = redis.set(key, "1", nx=True, ex=timedelta(hours=48))
+    inserted = redis.set(
+        _webhook_dedupe_key(provider, event_id), "1", nx=True, ex=timedelta(hours=48)
+    )
     return inserted is None
+
+
+def _already_processed_probe(provider: str, event_id: str) -> bool:
+    "check without marking — for handlers that mark only after success"
+    return bool(get_redis().exists(_webhook_dedupe_key(provider, event_id)))
+
+
+def _mark_processed(provider: str, event_id: str) -> None:
+    get_redis().set(
+        _webhook_dedupe_key(provider, event_id), "1", ex=timedelta(hours=48)
+    )
 
 
 async def _queue_webhook(
@@ -165,3 +183,50 @@ async def zoom_webhook(request: Request):
 @webhook_api_app.post("/recall")
 async def recall_webhook(request: Request) -> WebhookAck:
     return await _queue_webhook(provider="recall", request=request)
+
+
+@webhook_api_app.post("/stripe")
+async def stripe_webhook(request: Request):
+    """Mirror verified Stripe subscription events onto the practice.
+
+    Entitlement lives on the platform (ADR 0017); Stripe events only set the
+    mirrored ``subscription_status``/ids. Unverifiable events are never
+    accepted: 503 with no secret configured, 401 on a bad signature.
+    """
+    raw_body = await request.body()
+
+    if not stripe_config.STRIPE_WEBHOOK_SECRET:
+        log.warning("stripe webhook received but STRIPE_WEBHOOK_SECRET is unset")
+        return JSONResponse(
+            {"status": "webhook secret not configured"}, status_code=503
+        )
+
+    if not stripe_billing.verify_webhook_signature(
+        raw_body, request.headers.get("stripe-signature")
+    ):
+        log.warning("stripe webhook signature verification failed")
+        return JSONResponse({"status": "invalid signature"}, status_code=401)
+
+    event = json.loads(raw_body)
+    event_id = str(event.get("id") or "")
+    event_type = str(event.get("type") or "unknown")
+
+    # processed synchronously (unlike zoom/recall, which queue): the mirror is
+    # a couple of row writes, so dedupe only after it succeeds — a failure
+    # then surfaces as a 500 and Stripe's retry gets a clean second attempt
+    if event_id and _already_processed_probe(provider="stripe", event_id=event_id):
+        log.info("stripe webhook already processed", event_id=event_id)
+        return WebhookAck(status="ok", duplicate=True)
+
+    applied = stripe_billing.apply_stripe_event(event)
+
+    if event_id:
+        _mark_processed(provider="stripe", event_id=event_id)
+
+    log.info(
+        "stripe webhook processed",
+        event_id=event_id,
+        event_type=event_type,
+        applied=applied,
+    )
+    return WebhookAck(status="ok")

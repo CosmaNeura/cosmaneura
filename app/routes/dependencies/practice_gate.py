@@ -33,6 +33,10 @@ EXEMPT_ROUTE_NAMES = {
     "practice_baa_acceptances",
     # enforces its own practice/BAA rules
     "complete_onboarding",
+    # a practice whose trial lapsed (402 below) must still be able to reach
+    # checkout and the billing portal, or it could never pay its way back in
+    "create_billing_checkout",
+    "create_billing_portal",
 }
 
 ADMIN_PATH_PREFIX = "/internal/v1/admin"
