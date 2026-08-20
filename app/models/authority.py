@@ -11,6 +11,7 @@ import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, UniqueConstraint
 
 
@@ -339,11 +340,10 @@ class AuthorityIdempotencyRecord(
     TypeIDMixin("authority_idem"),
     table=True,
 ):
-    """Request-digest binding for one Agent API logical operation slot.
+    """Twenty-four-hour receipt binding for Agent API writes."""
 
-    ``operation`` includes any contract phase discriminator, so a changed key
-    cannot create a second effect for the same interaction and phase.
-    """
+    # ``operation`` includes any contract phase discriminator, so a changed
+    # key cannot create a second effect for the same interaction and phase.
 
     __table_args__ = (
         UniqueConstraint(
@@ -385,13 +385,12 @@ class AuthorityAuditEvent(
     TypeIDMixin("authority_audit"),
     table=True,
 ):
-    """Append-only, privacy-minimized platform audit fact.
+    """Append-only, privacy-minimized authoritative platform audit fact."""
 
-    Observational events retain only the contract's closed set of hashes, safe
-    routing labels, and validated opaque references. Authoritative identity and
-    scope are copied from the locked interaction lineage, never accepted from
-    the caller payload.
-    """
+    # Observational events retain only the contract's closed set of hashes,
+    # safe routing labels, and validated opaque references. Authoritative
+    # identity and scope are copied from the locked interaction lineage, never
+    # accepted from the caller payload.
 
     __table_args__ = (
         UniqueConstraint(
@@ -445,7 +444,14 @@ class AuthorityAuditEvent(
     route: str | None = Field(default=None, nullable=True, max_length=128)
     intent: str | None = Field(default=None, nullable=True, max_length=128)
     content_sha256: str | None = Field(default=None, nullable=True, max_length=64)
-    platform_refs: list[dict[str, str]] = Field(default_factory=list, sa_type=sa.JSON)
+    platform_refs: list[dict[str, str]] = Field(
+        default_factory=list,
+        sa_column=sa.Column(
+            JSONB().with_variant(sa.JSON(), "sqlite"),
+            nullable=False,
+            server_default=sa.text("'[]'"),
+        ),
+    )
 
 
 @sa.event.listens_for(AuthorityPersonOrigin, "before_update")

@@ -21,7 +21,7 @@ class AgentModelUsageEvent(
     TypeIDMixin("model_usage"),
     table=True,
 ):
-    """One provider-reported model call, enriched from platform authority."""
+    """Append-only provider-reported model call without content or PHI."""
 
     __table_args__ = (
         UniqueConstraint(

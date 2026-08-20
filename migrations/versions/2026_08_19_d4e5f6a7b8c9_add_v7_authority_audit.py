@@ -1029,7 +1029,7 @@ def upgrade() -> None:
             "platform_refs",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=False,
-            server_default=sa.text("'[]'::jsonb"),
+            server_default=sa.text("'[]'"),
         ),
         sa.CheckConstraint(
             "event_source IN ('platform_authoritative', 'sovereign_observational')",
