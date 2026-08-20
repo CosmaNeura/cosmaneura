@@ -16,10 +16,7 @@ describe("email domain matching", () => {
 
   it("allows exact domain and subdomains, not lookalikes", () => {
     expect(
-      emailMatchesDomain(
-        "np@nashua.mycatholicdoctor.com",
-        MCD_EMAIL_DOMAIN,
-      ),
+      emailMatchesDomain("np@nashua.mycatholicdoctor.com", MCD_EMAIL_DOMAIN),
     ).toBe(true)
     expect(
       emailMatchesDomain(

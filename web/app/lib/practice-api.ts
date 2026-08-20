@@ -1,5 +1,4 @@
 import { getClient } from "~/configuration/clerk"
-
 import { requireEnv } from "~/utils/environment"
 
 export type PracticeStatus = {
@@ -127,6 +126,8 @@ export function joinPractice(body: {
   })
 }
 
-export function practiceReady(practice: PracticeStatus | null | undefined) {
+export function practiceReady(
+  practice: PracticeStatus | null | undefined,
+): practice is PracticeStatus {
   return Boolean(practice?.baa_accepted && practice.attested)
 }

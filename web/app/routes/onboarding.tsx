@@ -3,18 +3,14 @@ import { useForm } from "react-hook-form"
 import { href, redirect } from "react-router"
 import { z } from "zod"
 
-import type { Route } from "./+types/onboarding"
-
-import { UserButton } from "@clerk/clerk-react"
-import { invariant } from "@epic-web/invariant"
-import { zodResolver } from "@hookform/resolvers/zod"
 import { ArrowRight, Building2, UserRound } from "lucide-react"
-import { motion } from "motion/react"
-import { SiZoom } from "react-icons/si"
+
+import type { Route } from "./+types/onboarding"
 
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
+import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import { Button } from "~/components/ui/button"
 import {
@@ -61,6 +57,12 @@ import {
 import { cn } from "~/lib/utils"
 import { requireEnv } from "~/utils/environment"
 import { isZoomEnabled } from "~/utils/zoom-feature"
+
+import { UserButton } from "@clerk/clerk-react"
+import { invariant } from "@epic-web/invariant"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { motion } from "motion/react"
+import { SiZoom } from "react-icons/si"
 
 type Path = "undecided" | "owner" | "workforce"
 type OptionalStep = "choice" | "bio" | "notes" | "zoom" | "allset"
@@ -109,6 +111,7 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           <OptionalSetup
             biography={loaderData.biography}
             zoomEnabled={zoomEnabled}
+            practice={practice}
           />
         ) : (
           <PracticeFlow
@@ -218,12 +221,7 @@ function ChoosePath({
             this email. If you are on MCD, sign out (top right) and create the
             account with the address MCD has on file.
           </p>
-          <Button
-            type="button"
-            size="lg"
-            className="mt-6"
-            onClick={onSolo}
-          >
+          <Button type="button" size="lg" className="mt-6" onClick={onSolo}>
             Start my own Cosmas practice
             <ArrowRight className="size-4" />
           </Button>
@@ -283,7 +281,7 @@ function PathCard({
       type="button"
       aria-label={title}
       onClick={onClick}
-      className="bg-card hover:border-[var(--brand-navy-deep)] rounded-xl border p-6 text-left transition-colors"
+      className="bg-card rounded-xl border p-6 text-left transition-colors hover:border-[var(--brand-navy-deep)]"
     >
       <span className="grid size-10 place-items-center rounded-lg bg-[var(--brand-cream)]">
         {icon}
@@ -408,8 +406,8 @@ function PracticeForm({
       <DisplayTitle>Name the practice</DisplayTitle>
       <p className="text-muted-foreground mt-3">
         This legal name appears on the BAA with {COMPANY}. Solo or group — one
-        agreement either way. Workforce will have to sign in from the same
-        email domain as this account.
+        agreement either way. Workforce will have to sign in from the same email
+        domain as this account.
         {formChannel === "mcd"
           ? " MyCatholicDoctor is the network. Cosmas is still the product."
           : ""}
@@ -551,8 +549,8 @@ function BaaClickwrap({
           {BAA_VERSION}.
         </p>
         <p className="mt-3 rounded-lg border border-[var(--brand-gold)] bg-[var(--brand-cream)] px-4 py-3 text-sm text-[var(--brand-navy-deep)]">
-          Draft for Cosmas onboarding UX. Counsel must ratify before this is
-          the operative production BAA.
+          Draft for Cosmas onboarding UX. Counsel must ratify before this is the
+          operative production BAA.
         </p>
         <ScrollArea className="bg-card mt-6 h-[28rem] rounded-xl border p-5">
           <ol className="space-y-6 pr-4">
@@ -571,7 +569,7 @@ function BaaClickwrap({
         </ScrollArea>
       </div>
       <aside className="bg-card h-fit rounded-xl border p-5">
-        <p className="text-xs font-semibold tracking-[0.18em] text-[var(--brand-gold)] uppercase">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand-gold)]">
           Clickwrap
         </p>
         <div className="mt-4 grid gap-4">
@@ -583,7 +581,10 @@ function BaaClickwrap({
                 setChecks((prev) => ({ ...prev, [item.id]: next }))
               }
             >
-              {item.label.replace("the practice named above", practice.legal_name)}
+              {item.label.replace(
+                "the practice named above",
+                practice.legal_name,
+              )}
             </CheckRow>
           ))}
         </div>
@@ -693,9 +694,9 @@ function WorkforceFlow({
       <StepKicker n="02" label="Workforce" />
       <DisplayTitle>Join a practice</DisplayTitle>
       <p className="text-muted-foreground mt-3">
-        You attest under the practice’s BAA with {COMPANY}. The join code is
-        not enough — this account’s email must be on the practice domain. You
-        do not become a separate party.
+        You attest under the practice’s BAA with {COMPANY}. The join code is not
+        enough — this account’s email must be on the practice domain. You do not
+        become a separate party.
       </p>
       <form onSubmit={(e) => void onLookup(e)} className="mt-8 flex gap-2">
         <Input
@@ -715,7 +716,7 @@ function WorkforceFlow({
       </p>
       {found ? (
         <div className="bg-card mt-6 rounded-xl border p-5">
-          <p className="text-xs font-semibold tracking-[0.18em] text-[var(--brand-gold)] uppercase">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand-gold)]">
             Covered entity
           </p>
           <p
@@ -726,9 +727,7 @@ function WorkforceFlow({
           </p>
           <p className="text-muted-foreground mt-1 text-sm">
             @{found.email_domain}
-            {found.baa_accepted
-              ? " · BAA on file"
-              : " · BAA not yet accepted"}
+            {found.baa_accepted ? " · BAA on file" : " · BAA not yet accepted"}
           </p>
           {!found.baa_accepted ? (
             <p className="text-destructive mt-4 text-sm">
@@ -775,9 +774,11 @@ function WorkforceFlow({
 function OptionalSetup({
   biography,
   zoomEnabled,
+  practice,
 }: {
   biography: string | null
   zoomEnabled: boolean
+  practice: PracticeStatus
 }) {
   const [step, setStep] = useState<OptionalStep>("choice")
 
@@ -794,11 +795,7 @@ function OptionalSetup({
           <Button size="lg" onClick={() => setStep("allset")}>
             Start using Cosmas
           </Button>
-          <Button
-            size="lg"
-            variant="outline"
-            onClick={() => setStep("bio")}
-          >
+          <Button size="lg" variant="outline" onClick={() => setStep("bio")}>
             Set these up now
           </Button>
         </div>
@@ -830,7 +827,7 @@ function OptionalSetup({
       />
     )
   }
-  return <AllSetStep />
+  return <AllSetStep practice={practice} />
 }
 
 function BiographyStep({
@@ -861,12 +858,15 @@ function BiographyStep({
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold">Tell us about yourself</h2>
         <p className="text-muted-foreground text-sm">
-          This helps Cosmas personalize your patient intake and note
-          generation. You can skip this and add it later in Settings.
+          This helps Cosmas personalize your patient intake and note generation.
+          You can skip this and add it later in Settings.
         </p>
       </div>
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className="w-full space-y-4">
+        <form
+          onSubmit={form.handleSubmit(onSubmit)}
+          className="w-full space-y-4"
+        >
           <FormField
             control={form.control}
             name="biography"
@@ -902,7 +902,12 @@ function BiographyStep({
               "Save & Continue"
             )}
           </Button>
-          <Button type="button" variant="ghost" className="w-full" onClick={onSkip}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full"
+            onClick={onSkip}
+          >
             Skip for now
           </Button>
         </form>
@@ -973,8 +978,8 @@ function NotesStep({
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold">Upload an example note</h2>
         <p className="text-muted-foreground text-sm">
-          Optional. Upload a high-quality example of a visit note you've
-          written so Cosmas can learn your style.
+          Optional. Upload a high-quality example of a visit note you've written
+          so Cosmas can learn your style.
         </p>
       </div>
       <Form {...form}>
@@ -1038,7 +1043,12 @@ function NotesStep({
               "Upload & Continue"
             )}
           </Button>
-          <Button type="button" variant="ghost" className="w-full" onClick={onSkip}>
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full"
+            onClick={onSkip}
+          >
             Skip for now
           </Button>
         </form>
@@ -1120,7 +1130,7 @@ function ZoomStep({
   )
 }
 
-function AllSetStep() {
+function AllSetStep({ practice }: { practice: PracticeStatus }) {
   const [loading, setLoading] = useState(false)
 
   async function handleGoToCosmas() {
@@ -1167,12 +1177,13 @@ function AllSetStep() {
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.7, duration: 0.4 }}
-        className="flex flex-col items-center gap-3"
+        className="flex w-full flex-col items-center gap-3"
       >
         <h2 className="text-3xl font-bold">You're all set!</h2>
         <p className="text-muted-foreground max-w-md text-base">
           Your practice is on the Cosmaneura Inc BAA. Cosmas is ready.
         </p>
+        <PracticeJoinPanel practice={practice} />
         <Button
           size="lg"
           onClick={handleGoToCosmas}
@@ -1195,7 +1206,7 @@ function AllSetStep() {
 
 function StepKicker({ n, label }: { n: string; label: string }) {
   return (
-    <p className="text-xs font-semibold tracking-[0.28em] text-[var(--brand-gold)] uppercase">
+    <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--brand-gold)]">
       {n} · {label}
     </p>
   )

@@ -15,6 +15,7 @@ import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
+import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
@@ -35,6 +36,7 @@ import {
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
+import { type PracticeStatus, getPractice } from "~/lib/practice-api"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { useUser } from "@clerk/clerk-react"
@@ -42,6 +44,16 @@ import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 
 type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
+
+function PracticeSettings({ practice }: { practice: PracticeStatus | null }) {
+  if (!practice) return null
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>Practice</h3>
+      <PracticeJoinPanel practice={practice} />
+    </section>
+  )
+}
 
 function BiographyInput({ biography }: { biography: string | null }) {
   const formSchema = z.object({
@@ -516,7 +528,8 @@ export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
     )
   }
 
-  return data
+  const practice = await getPractice().catch(() => null)
+  return { ...data, practice }
 }
 export const meta: MetaFunction = () => {
   return [
@@ -541,6 +554,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
           <h1 className="text-lg font-semibold">Settings</h1>
         </header>
         <InnerScrollableContent>
+          <PracticeSettings practice={loaderData.practice} />
           <BiographyInput biography={loaderData.biography} />
           <NoteUpload noteSchemas={loaderData.notes_schema} />
           <NoteCustomization

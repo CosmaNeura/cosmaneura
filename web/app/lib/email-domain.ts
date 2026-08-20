@@ -7,7 +7,10 @@ export function extractEmailDomain(
   if (!email) return null
   const at = email.lastIndexOf("@")
   if (at <= 0 || at === email.length - 1) return null
-  return email.slice(at + 1).trim().toLowerCase()
+  return email
+    .slice(at + 1)
+    .trim()
+    .toLowerCase()
 }
 
 /**

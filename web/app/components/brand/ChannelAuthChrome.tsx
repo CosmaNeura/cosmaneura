@@ -14,7 +14,9 @@ import { MCD_EMAIL_DOMAIN } from "~/lib/email-domain"
 export function useAuthChannel() {
   const [params] = useSearchParams()
   const fromSearch = params.get("channel")
-  const [channel, setChannel] = useState<Channel>(() => parseChannel(fromSearch))
+  const [channel, setChannel] = useState<Channel>(() =>
+    parseChannel(fromSearch),
+  )
 
   useEffect(() => {
     setChannel(resolveChannel(fromSearch))
@@ -37,7 +39,7 @@ export function ChannelAuthChrome({
       <header className="border-b px-4 py-5">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between">
           <BrandLogo variant="dark" size="sm" />
-          <span className="text-muted-foreground text-[11px] font-semibold tracking-[0.22em] uppercase">
+          <span className="text-muted-foreground text-[11px] font-semibold uppercase tracking-[0.22em]">
             {copy.kicker}
           </span>
         </div>

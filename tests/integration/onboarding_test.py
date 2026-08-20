@@ -67,6 +67,7 @@ def test_onboarding_flow(server, page: Page) -> None:
     page.get_by_role("button", name="Start using Cosmas").click()
 
     expect(page.locator("body")).to_contain_text("You're all set!")
+    expect(page.locator("body")).to_contain_text("Workforce must sign in from @")
     page.get_by_role("button", name="Go to Cosmas").click()
     wait_for_loading(page)
 

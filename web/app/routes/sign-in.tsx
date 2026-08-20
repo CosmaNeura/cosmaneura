@@ -1,11 +1,11 @@
-import { SignIn } from "@clerk/clerk-react"
-
 import {
   ChannelAuthChrome,
   channelRedirect,
   channelSibling,
   useAuthChannel,
 } from "~/components/brand/ChannelAuthChrome"
+
+import { SignIn } from "@clerk/clerk-react"
 
 export default function SignInPage() {
   const channel = useAuthChannel()
