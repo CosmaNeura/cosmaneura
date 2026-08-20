@@ -210,6 +210,9 @@ def test_open_record_refuses_admin_login_as_as_an_ehr_authority(
         clerk_id="user_test_ehr_preview_impersonated",
         email="ehr-preview-impersonated@example.test",
         biography=None,
+        # grandfathered past the practice gate: this test is about EHR
+        # authority under login_as, not onboarding
+        onboarding_completed_at=datetime.now(UTC),
     ).save()
     patient = Patient(
         doctor_id=target.id,

@@ -3,6 +3,7 @@ import hashlib
 import json
 import typing as t
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 import itsdangerous
 import pytest
@@ -102,6 +103,14 @@ def get_clerk_dev_user():
     """
     user = _get_or_create_clerk_user(CLERK_DEV_USER_EMAIL)
     assert user
+
+    # the dev user's doctor predates practices — the grandfathered production
+    # case — so it passes the practice gate. Tests exercising the fresh-signup
+    # path clear onboarding_completed_at explicitly.
+    doctor = Doctor.find_or_create_by(clerk_id=user.id)
+    if doctor.onboarding_completed_at is None:
+        doctor.onboarding_completed_at = datetime.now(timezone.utc)
+        doctor.save()
 
     return CLERK_DEV_USER_EMAIL, CLERK_DEV_USER_PASSWORD, user
 

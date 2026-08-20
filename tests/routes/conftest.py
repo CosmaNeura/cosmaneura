@@ -80,15 +80,6 @@ def authenticated_client():
         doctor.email = dev_user.email_addresses[0].email_address
         doctor.save()
 
-    # the dev doctor predates practices, i.e. the grandfathered production
-    # case: onboarded, no practice, passes the practice gate. Tests that
-    # exercise the fresh-signup path clear this explicitly.
-    if doctor.onboarding_completed_at is None:
-        from datetime import datetime, timezone
-
-        doctor.onboarding_completed_at = datetime.now(timezone.utc)
-        doctor.save()
-
     api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
         MockAuthenticateRequest()
     )
