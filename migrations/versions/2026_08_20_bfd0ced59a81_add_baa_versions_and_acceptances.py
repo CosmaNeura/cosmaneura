@@ -16,6 +16,7 @@ from typing import Sequence, Union
 import activemodel
 import sqlalchemy as sa
 from alembic import op
+from typeid import TypeID
 
 
 revision: str = "bfd0ced59a81"
@@ -162,17 +163,23 @@ def upgrade() -> None:
         ),
     )
 
-    # TypeID columns store as native UUIDs; the prefix is app-side only
+    # TypeID columns store as native UUIDs, and TypeID requires UUIDv7: a
+    # gen_random_uuid() (v4) row round-trips to a *different* uuid through
+    # TypeID.from_uuid and can never be refreshed by primary key again.
     op.execute(
         sa.text(
             """
             INSERT INTO baa_version
                 (id, doc_id, version, sha256, content_path, published_at, is_current)
             VALUES
-                (gen_random_uuid(), 'CN-BAA-CUST-CW', '2.2', :sha, :path, now(), true)
+                (CAST(:id AS uuid), 'CN-BAA-CUST-CW', '2.2', :sha, :path, now(), true)
             ON CONFLICT ON CONSTRAINT baa_version_doc_version_key DO NOTHING
             """
-        ).bindparams(sha=BAA_V22_SHA256, path=BAA_V22_PATH)
+        ).bindparams(
+            id=str(TypeID(prefix="baa_version").uuid),
+            sha=BAA_V22_SHA256,
+            path=BAA_V22_PATH,
+        )
     )
 
 

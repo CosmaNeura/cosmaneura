@@ -20,7 +20,14 @@ from httpx import Response
 from app.configuration.clerk import CLERK_PRIVATE_KEY, clerk
 from app.utils.email_domain import extract_email_domain
 
-from app.models.baa import BAA_DOC_ID, BaaAcceptance, BaaVersion
+from app.models.baa import (
+    BAA_CURRENT_FILENAME,
+    BAA_CURRENT_SHA256,
+    BAA_CURRENT_VERSION,
+    BAA_DOC_ID,
+    BaaAcceptance,
+    BaaVersion,
+)
 from app.models.doctor import Doctor, DoctorRole
 from app.models.practice import Practice, PracticeMember
 
@@ -111,6 +118,26 @@ def get_clerk_dev_user():
     return CLERK_DEV_USER_EMAIL, CLERK_DEV_USER_PASSWORD, user
 
 
+def ensure_current_baa_version() -> BaaVersion:
+    """(Re)create the current BAA version row from the model constants.
+
+    The migration seeds it in real databases, but the test harness truncates
+    every table at session start (and again before each integration test), so
+    test setup must be able to restore it."""
+
+    version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
+    if version:
+        return version
+    return BaaVersion(
+        doc_id=BAA_DOC_ID,
+        version=BAA_CURRENT_VERSION,
+        sha256=BAA_CURRENT_SHA256,
+        content_path=f"app/assets/baa/{BAA_CURRENT_FILENAME}",
+        published_at=datetime.now(timezone.utc),
+        is_current=True,
+    ).save()
+
+
 def provision_practice_in_force(doctor: Doctor) -> Practice:
     """Give a doctor an owner membership in a practice whose BAA is in force
     and which is entitled — the state every PHI-bearing route requires under
@@ -122,8 +149,7 @@ def provision_practice_in_force(doctor: Doctor) -> Practice:
         assert practice
         return practice
 
-    version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
-    assert version, "no current BAA version — did the seed migration run?"
+    version = ensure_current_baa_version()
 
     now = datetime.now(timezone.utc)
     practice = Practice(
