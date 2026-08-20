@@ -17,6 +17,7 @@ import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
+import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
   Form,
@@ -37,6 +38,13 @@ import {
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
+import { BAA_PDF_URL } from "~/lib/baa"
+import {
+  type BaaAcceptanceRecord,
+  type PracticeStatus,
+  getBaaAcceptances,
+  getPractice,
+} from "~/lib/practice-api"
 import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
 import { useTerminology } from "~/utils/terminology"
 import { isTerminologyEnabled } from "~/utils/terminology-feature"
@@ -47,6 +55,49 @@ import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 
 type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
+
+function PracticeSettings({
+  practice,
+  acceptances,
+}: {
+  practice: PracticeStatus | null
+  acceptances: BaaAcceptanceRecord[]
+}) {
+  if (!practice) return null
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>Practice</h3>
+      <PracticeJoinPanel practice={practice} />
+      {acceptances.length > 0 ? (
+        <div className="not-prose rounded-lg border p-4 text-sm">
+          <p className="font-semibold">Legal / Agreements</p>
+          <ul className="mt-2 space-y-1">
+            {acceptances.map((record) => (
+              <li
+                key={record.accepted_at_utc}
+                className="text-muted-foreground"
+              >
+                {record.doc_id} v{record.version} — accepted by{" "}
+                {record.accepted_by_name} ({record.accepted_by_title}) on{" "}
+                {new Date(record.accepted_at_utc).toLocaleString()}
+              </li>
+            ))}
+          </ul>
+          <p className="text-muted-foreground mt-2 text-xs">
+            <a
+              href={BAA_PDF_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2"
+            >
+              Download the agreement (PDF)
+            </a>
+          </p>
+        </div>
+      ) : null}
+    </section>
+  )
+}
 
 function BiographyInput({ biography }: { biography: string | null }) {
   const formSchema = z.object({
@@ -524,7 +575,11 @@ export async function clientLoader(_loaderArgs: Route.ClientLoaderArgs) {
     )
   }
 
-  return data
+  const practice = await getPractice().catch(() => null)
+  const baa_acceptances = await getBaaAcceptances().catch(
+    () => [] as BaaAcceptanceRecord[],
+  )
+  return { ...data, practice, baa_acceptances }
 }
 export const meta: MetaFunction = () => {
   return [
@@ -601,6 +656,10 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
           <h1 className="text-lg font-semibold">Settings</h1>
         </header>
         <InnerScrollableContent>
+          <PracticeSettings
+            practice={loaderData.practice}
+            acceptances={loaderData.baa_acceptances}
+          />
           <BiographyInput biography={loaderData.biography} />
           {terminologyEnabled && (
             <TerminologySettings

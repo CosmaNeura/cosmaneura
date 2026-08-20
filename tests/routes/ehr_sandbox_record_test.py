@@ -20,7 +20,7 @@ from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 
-from tests.routes.utils import get_clerk_dev_user
+from tests.routes.utils import get_clerk_dev_user, provision_practice_in_force
 
 RECORD_REF = "a-195900.E-60178"
 GRANT_KEY = Fernet.generate_key()
@@ -244,6 +244,9 @@ def test_open_record_refuses_admin_login_as_as_an_ehr_authority(
         email="ehr-preview-impersonated@example.test",
         biography=None,
     ).save()
+    # give the impersonated doctor a practice that passes the gate: this test
+    # is about EHR authority under login_as, not the practice gate
+    provision_practice_in_force(target)
     patient = Patient(
         doctor_id=target.id,
         name="Synthetic Impersonated Record",

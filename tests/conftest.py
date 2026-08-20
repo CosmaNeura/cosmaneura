@@ -161,6 +161,13 @@ def datatabase_reset_transaction_for_standard_tests(request):
         # db connection in memory and therefore the transaction rollback does not work. To get around this, we truncate the
         # database before running any tests, although this also has the side effect of destroying any test seed data.
         database_reset_truncate()
+
+        # truncation also destroys the migration-seeded BAA version row, which
+        # the onboarding clickwrap (accept_practice_baa) needs to exist
+        from tests.routes.utils import ensure_current_baa_version
+
+        ensure_current_baa_version()
+
         yield
         return
 

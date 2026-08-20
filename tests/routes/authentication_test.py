@@ -3,7 +3,13 @@ from fastapi.testclient import TestClient
 
 from app.server import api_app
 
-from tests.routes.utils import get_valid_token
+from app.models.doctor import Doctor
+
+from tests.routes.utils import (
+    get_clerk_dev_user,
+    get_valid_token,
+    provision_practice_in_force,
+)
 
 
 def test_unauthorized_no_credentials(client: TestClient):
@@ -23,6 +29,11 @@ def test_authorized_bad_credentials(client: TestClient):
 
 def test_authorized_good_credentials(client: TestClient):
     "Use this test to get a mock of valid authorization credentials"
+
+    # /notes sits behind the practice gate, so the dev doctor needs a
+    # practice whose BAA is in force before the request
+    _, _, clerk_user = get_clerk_dev_user()
+    provision_practice_in_force(Doctor.find_or_create_by(clerk_id=clerk_user.id))
 
     token_id = get_valid_token()
 

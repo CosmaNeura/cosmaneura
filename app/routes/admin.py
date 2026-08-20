@@ -4,9 +4,12 @@ Admin-only routes:
 - login_as / user impersonation, similar to https://clerk.com/docs/users/user-impersonation but without a $100/month sub
 """
 
+import csv
+import io
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel as BasePydanticModel
 from pydantic import ConfigDict
 from starlette import status
@@ -22,6 +25,7 @@ from app.services.usage import (
     TimeToNoteRow,
 )
 
+from app.models.baa import BaaAcceptance, BaaVersion
 from app.models.doctor import Doctor, DoctorRole
 
 SESSION_KEY_LOGIN_AS_USER = "login_as_user"
@@ -111,3 +115,54 @@ def usage_dashboard() -> UsageResponse:
         pending_uploads=usage_service.pending_uploads(),
         time_to_note=usage_service.time_to_note(),
     )
+
+
+class BaaAcceptanceExportRow(BasePydanticModel):
+    practice_legal_name: str
+    doc_id: str
+    version: str
+    accepted_by_name: str
+    accepted_by_title: str
+    accepted_by_email: str
+    accepted_at_utc: str
+    ip_address: str | None
+    user_agent: str | None
+    content_sha256: str
+
+
+@admin_api_app.get("/baa-acceptances")
+def baa_acceptances_export(format: str = "json") -> Response:
+    """Compliance export of every BAA acceptance record (CSV or JSON).
+    Admin-only via require_admin on the router."""
+
+    versions = {v.id: v for v in BaaVersion.all()}
+    rows = [
+        BaaAcceptanceExportRow(
+            practice_legal_name=r.covered_entity_legal_name,
+            doc_id=versions[r.baa_version_id].doc_id,
+            version=versions[r.baa_version_id].version,
+            accepted_by_name=r.accepted_by_name,
+            accepted_by_title=r.accepted_by_title,
+            accepted_by_email=r.accepted_by_email,
+            accepted_at_utc=r.accepted_at_utc.isoformat(),
+            ip_address=r.ip_address,
+            user_agent=r.user_agent,
+            content_sha256=r.content_sha256,
+        )
+        for r in BaaAcceptance.all()
+    ]
+
+    if format == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(
+            buffer, fieldnames=list(BaaAcceptanceExportRow.model_fields)
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row.model_dump())
+        return Response(
+            content=buffer.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=baa-acceptances.csv"},
+        )
+    return JSONResponse(content=[row.model_dump() for row in rows])

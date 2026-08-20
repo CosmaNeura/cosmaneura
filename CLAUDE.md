@@ -78,6 +78,10 @@ just js_generate-openapi
 - **Los nombres de métodos de las rutas importan**: se vuelven operation IDs de OpenAPI → nombres
   de métodos del cliente JS generado.
 - **`internal_api_app`** es la app cuyo spec OpenAPI alimenta el frontend.
+- **Migraciones Alembic: nunca inventes revision IDs a mano** (ya causó una colisión y un ciclo
+  en el grafo). Genera migraciones con `just db_generate_migration`; si escribes una a mano,
+  el ID sale de `python -c 'import secrets; print(secrets.token_hex(6))'`.
+  `tests/migrations_graph_test.py` verifica el grafo (IDs únicos, sin ciclos, un solo head).
 - Worker y scheduler corren en **contenedores separados** a propósito.
 - Env se gestiona **exclusivamente vía direnv** (`.envrc` + `.env.*`), no en el Justfile.
 - Auto-deploy vía GitHub Actions: push a `main` y `staging` despliegan al build exitoso.

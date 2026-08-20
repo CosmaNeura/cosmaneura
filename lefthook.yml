@@ -29,6 +29,13 @@ commit-msg:
       run: ! which commitlint > /dev/null
 
 
+pre-commit:
+  commands:
+    migrations_graph:
+      # revision-id collisions break alembic's whole graph; catch them before they leave the machine
+      glob: "migrations/versions/*.py"
+      run: uv run pytest -q tests/migrations_graph_test.py
+
 # scripts cannot be to run Justfile recipes, they must reference a specific file
 pre-push:
   parallel: true
