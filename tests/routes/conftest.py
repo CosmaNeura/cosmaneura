@@ -11,6 +11,7 @@ from tests.routes.utils import (
     MockAuthenticateRequest,
     base_server_url,
     get_clerk_dev_user,
+    provision_practice_in_force,
 )
 
 
@@ -64,8 +65,7 @@ def client():
         yield client
 
 
-@pytest.fixture
-def authenticated_client():
+def _mocked_clerk_client(provision: bool):
     "mocks out the clerk authentication and returns a static response"
 
     from app.routes.internal import authenticate_clerk_request_middleware
@@ -79,6 +79,11 @@ def authenticated_client():
         assert dev_user.email_addresses
         doctor.email = dev_user.email_addresses[0].email_address
         doctor.save()
+
+    if provision:
+        # the practice gate fails closed: most route tests need the dev doctor
+        # inside a practice whose BAA is in force and which is entitled
+        provision_practice_in_force(doctor)
 
     api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
         MockAuthenticateRequest()
@@ -97,6 +102,19 @@ def authenticated_client():
         yield client
 
     api_app.dependency_overrides = {}
+
+
+@pytest.fixture
+def authenticated_client():
+    "mocked clerk auth with the dev doctor in a practice that passes the practice gate"
+    yield from _mocked_clerk_client(provision=True)
+
+
+@pytest.fixture
+def bare_authenticated_client():
+    """mocked clerk auth with a bare dev doctor (no practice) — for tests that
+    exercise the onboarding / practice / BAA flow itself"""
+    yield from _mocked_clerk_client(provision=False)
 
 
 @pytest.fixture

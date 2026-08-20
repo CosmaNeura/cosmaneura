@@ -11,9 +11,12 @@ import {
 
 import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
-// Guard: any authenticated route redirects to /onboarding until the doctor completes it.
-// This runs in parallel with child loaders; if onboarding is incomplete React Router
-// cancels the child loaders and performs the redirect.
+// Guard: any authenticated route redirects to /onboarding until the doctor
+// completes it AND their practice's BAA is in force. Doctors who predate
+// practices are onboarding_completed but not practice_ready — they get one
+// stop in onboarding to name the covered entity and accept the counsel-
+// approved BAA before PHI routes will serve them (the backend enforces the
+// same rule server-side). Admin accounts have no practice and skip both.
 //
 // Prefetch through the shared query cache (not a raw settingsData() call) so the
 // ZoomConnectionAlert below — mounted on every authenticated route — reads the same
@@ -24,7 +27,11 @@ export async function clientLoader(_: Route.ClientLoaderArgs) {
     staleTime: SETTINGS_STALE_TIME,
   })
 
-  if (data && !data.onboarding_completed) {
+  if (
+    data &&
+    !data.is_admin &&
+    (!data.onboarding_completed || !data.practice_ready)
+  ) {
     throw redirect(href("/onboarding"))
   }
 

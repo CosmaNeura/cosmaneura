@@ -127,11 +127,15 @@ def login_as_dev_user(page: Page) -> Doctor:
     assert doctor
 
     # Bypass the onboarding wizard for tests that focus on post-onboarding
-    # surface area. `page.goto(home_url())` is required after the DB write
-    # so the layout's loader re-fetches settings and stops redirecting to
-    # /onboarding.
+    # surface area: mark onboarding complete AND give the doctor a practice
+    # whose BAA is in force (the practice gate has no grandfather path).
+    # `page.goto(home_url())` is required after the DB writes so the layout's
+    # loader re-fetches settings and stops redirecting to /onboarding.
+    from tests.routes.utils import provision_practice_in_force
+
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
     doctor.save()
+    provision_practice_in_force(doctor)
     page.goto(home_url())
     wait_for_loading(page)
 

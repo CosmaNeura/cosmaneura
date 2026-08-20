@@ -1,6 +1,6 @@
 # seed fresh test databases with data
 
-from datetime import datetime
+from datetime import datetime, timezone
 from textwrap import dedent
 
 import pytz
@@ -17,7 +17,7 @@ from app.models.patient import Patient
 from app.models.visit_audio_file import VisitAudioFile
 
 from tests.log import log
-from tests.routes.utils import get_clerk_seed_user
+from tests.routes.utils import get_clerk_seed_user, provision_practice_in_force
 
 
 def seed_test_data():
@@ -30,6 +30,14 @@ def seed_test_data():
         assert user.email_addresses
         doctor.email = user.email_addresses[0].email_address
         doctor.save()
+
+    if doctor.onboarding_completed_at is None:
+        doctor.onboarding_completed_at = datetime.now(timezone.utc)
+        doctor.save()
+
+    # the practice gate fails closed: the seed doctor needs a practice whose
+    # BAA is in force before any PHI route will serve its data
+    provision_practice_in_force(doctor)
 
     if not doctor.biography:
         doctor.biography = dedent("""

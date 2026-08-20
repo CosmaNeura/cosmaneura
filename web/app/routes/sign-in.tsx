@@ -1,14 +1,24 @@
-import { AppFooter } from "~/components/shared/AppFooter"
+import {
+  ChannelAuthChrome,
+  channelRedirect,
+  channelSibling,
+  useAuthChannel,
+} from "~/components/brand/ChannelAuthChrome"
 
 import { SignIn } from "@clerk/clerk-react"
 
 export default function SignInPage() {
+  const channel = useAuthChannel()
+
   return (
-    <div className="bg-background flex min-h-screen flex-col">
-      <div className="flex flex-1 items-center justify-center px-4 py-8">
-        <SignIn path="/sign-in" signUpUrl="/sign-up" />
-      </div>
-      <AppFooter />
-    </div>
+    <ChannelAuthChrome channel={channel}>
+      {/* fallback only: forceRedirectUrl would override Clerk's redirect_url
+          and send deep-linked users to /onboarding instead of their target */}
+      <SignIn
+        path="/sign-in"
+        signUpUrl={channelSibling("sign-in", channel)}
+        fallbackRedirectUrl={channelRedirect(channel)}
+      />
+    </ChannelAuthChrome>
   )
 }

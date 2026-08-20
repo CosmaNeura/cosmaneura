@@ -14,9 +14,11 @@ def test_login_existing_user(server, page: Page) -> None:
     doctor = login_as_dev_user(page)
 
     # login_as_dev_user bypasses the onboarding wizard, so the user should
-    # land on the main app surface and not on the welcome screen.
+    # land on the main app surface and not on the practice/BAA screen.
     expect(page.locator("body")).to_contain_text("Select a patient")
-    expect(page.locator("body")).not_to_contain_text("Welcome to Cosma")
+    expect(page.locator("body")).not_to_contain_text(
+        "How will this Cosmas account be used"
+    )
 
     assert Doctor.count() == 1
     assert doctor.onboarding_completed_at is not None
@@ -48,9 +50,9 @@ def test_signup(server, page: Page) -> None:
 
     wait_for_loading(page)
 
-    # Fresh signups land on the onboarding wizard; the wizard itself is
+    # Fresh signups land on practice/BAA onboarding; the wizard itself is
     # covered end-to-end in test_onboarding_flow.
-    expect(page.get_by_role("button", name="Get Started")).to_be_visible()
+    expect(page.locator("body")).to_contain_text("How will this Cosmas account be used")
     assert "/onboarding" in page.url
 
     assert Doctor.count() == 1
