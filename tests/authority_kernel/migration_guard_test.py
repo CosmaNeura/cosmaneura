@@ -11,7 +11,9 @@ MIGRATION_PATH = (
 
 
 def _migration_module():
-    spec = importlib.util.spec_from_file_location("v7_authority_migration", MIGRATION_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "v7_authority_migration", MIGRATION_PATH
+    )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -42,9 +44,13 @@ class _Connection:
 
 def test_downgrade_guard_fails_closed_offline() -> None:
     migration = _migration_module()
-    migration.op = SimpleNamespace(
-        get_context=lambda: SimpleNamespace(as_sql=True),
-        get_bind=lambda: pytest.fail("offline guard must not request a connection"),
+    setattr(
+        migration,
+        "op",
+        SimpleNamespace(
+            get_context=lambda: SimpleNamespace(as_sql=True),
+            get_bind=lambda: pytest.fail("offline guard must not request a connection"),
+        ),
     )
 
     with pytest.raises(RuntimeError, match="unsupported in offline mode"):
@@ -54,9 +60,13 @@ def test_downgrade_guard_fails_closed_offline() -> None:
 def test_downgrade_guard_refuses_any_populated_durable_table() -> None:
     migration = _migration_module()
     connection = _Connection(populated_table="agent_model_usage_event")
-    migration.op = SimpleNamespace(
-        get_context=lambda: SimpleNamespace(as_sql=False),
-        get_bind=lambda: connection,
+    setattr(
+        migration,
+        "op",
+        SimpleNamespace(
+            get_context=lambda: SimpleNamespace(as_sql=False),
+            get_bind=lambda: connection,
+        ),
     )
 
     with pytest.raises(RuntimeError, match="durable records exist"):
@@ -71,9 +81,13 @@ def test_downgrade_guard_refuses_any_populated_durable_table() -> None:
 def test_downgrade_guard_allows_only_an_empty_online_schema() -> None:
     migration = _migration_module()
     connection = _Connection()
-    migration.op = SimpleNamespace(
-        get_context=lambda: SimpleNamespace(as_sql=False),
-        get_bind=lambda: connection,
+    setattr(
+        migration,
+        "op",
+        SimpleNamespace(
+            get_context=lambda: SimpleNamespace(as_sql=False),
+            get_bind=lambda: connection,
+        ),
     )
 
     migration._refuse_populated_or_offline_downgrade()

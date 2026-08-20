@@ -54,8 +54,8 @@ def _lineage(
         binding_fingerprint="a" * 64,
         audit_status=audit_status,
         usage_status=usage_status,
-        created_at=now - timedelta(minutes=age_minutes),
     )
+    lineage.created_at = now - timedelta(minutes=age_minutes)
     session.add(lineage)
     session.commit()
     return lineage
@@ -198,7 +198,9 @@ def test_stale_accepted_turn_reconciliation_is_dry_run_fixed_and_idempotent(
     assert dry_run.state == "eligible"
     assert dry_run.dry_run is True
     assert dry_run.changed is False
-    assert authority_session.exec(select(CanonicalConversationFinalPhase)).first() is None
+    assert (
+        authority_session.exec(select(CanonicalConversationFinalPhase)).first() is None
+    )
 
     applied = reconcile_stale_accepted_turn(
         turn_id=turn.id,

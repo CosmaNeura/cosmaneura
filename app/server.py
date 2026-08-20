@@ -173,15 +173,13 @@ async def safe_request_validation_handler(
             code = "CLIENT_TURN_REQUIRED"
             status_code = status.HTTP_400_BAD_REQUEST
         elif any(
-            error.get("loc")
-            and str(error["loc"][-1]) == "X-Cosmaneura-Interaction-Ref"
+            error.get("loc") and str(error["loc"][-1]) == "X-Cosmaneura-Interaction-Ref"
             for error in errors
         ):
             code = "INTERACTION_INVALID"
             status_code = status.HTTP_400_BAD_REQUEST
         elif any(
-            error.get("loc")
-            and str(error["loc"][-1]) == "X-Cosmaneura-Client-Turn-ID"
+            error.get("loc") and str(error["loc"][-1]) == "X-Cosmaneura-Client-Turn-ID"
             for error in errors
         ):
             code = "CLIENT_TURN_INVALID"

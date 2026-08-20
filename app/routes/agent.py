@@ -706,6 +706,7 @@ async def write_conversation_turn(
         recorded_at=result.recorded_at,
     )
 
+
 @agent_api_app.post(
     "/audit-events/write",
     response_model=WriteReceipt,

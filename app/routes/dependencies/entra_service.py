@@ -24,15 +24,32 @@ TokenDecoder = Callable[[str], dict[str, Any]]
 
 
 class EntraAuthPolicy(Protocol):
-    enabled: bool
-    tenant_id: str
-    audience: str
-    issuer: str
-    jwks_url: str
-    allowed_client_ids: frozenset[str]
-    required_role: str
-    log_namespace: str
-    require_nbf: bool
+    @property
+    def enabled(self) -> bool: ...
+
+    @property
+    def tenant_id(self) -> str: ...
+
+    @property
+    def audience(self) -> str: ...
+
+    @property
+    def issuer(self) -> str: ...
+
+    @property
+    def jwks_url(self) -> str: ...
+
+    @property
+    def allowed_client_ids(self) -> frozenset[str]: ...
+
+    @property
+    def required_role(self) -> str: ...
+
+    @property
+    def log_namespace(self) -> str: ...
+
+    @property
+    def require_nbf(self) -> bool: ...
 
     def is_complete(self) -> bool: ...
 

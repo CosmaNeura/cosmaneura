@@ -15,13 +15,24 @@ describe("pinned Sovereign panel asset", () => {
     const bytes = await readFile(
       resolve(process.cwd(), "public", SOVEREIGN_PANEL_ASSET_PATH.slice(1)),
     )
+    const prettierIgnore = await readFile(
+      resolve(process.cwd(), ".prettierignore"),
+      "utf8",
+    )
+    const eslintConfig = await readFile(
+      resolve(process.cwd(), "eslint.config.js"),
+      "utf8",
+    )
     const digest = createHash("sha256").update(bytes).digest()
+    const sourceAssetPath = `public${SOVEREIGN_PANEL_ASSET_PATH}`
 
     expect(digest.toString("hex")).toBe(SOVEREIGN_PANEL_SHA256)
     expect(`sha256-${digest.toString("base64")}`).toBe(
       SOVEREIGN_PANEL_INTEGRITY,
     )
     expect(SOVEREIGN_PANEL_ASSET_PATH).toContain(SOVEREIGN_PANEL_SHA256)
+    expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
+    expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
       "471f497d1824535cf2a7903f25406c0fa7ae39e9",
     )

@@ -55,13 +55,16 @@ def test_downgrade_guard_serializes_concurrent_inserts_and_observes_commits() ->
     assert SQLALCHEMY_POSTGRES_URL is not None
     engine = sa.create_engine(SQLALCHEMY_POSTGRES_URL)
     with engine.begin() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar() == (
-            migration.revision
-        )
+        assert connection.execute(
+            sa.text("SELECT version_num FROM alembic_version")
+        ).scalar() == (migration.revision)
         for table_name in migration._DURABLE_V7_TABLES:
-            assert connection.execute(
-                sa.text(f'SELECT count(*) FROM "{table_name}"')
-            ).scalar() == 0
+            assert (
+                connection.execute(
+                    sa.text(f'SELECT count(*) FROM "{table_name}"')
+                ).scalar()
+                == 0
+            )
 
     writer = engine.connect()
     writer_transaction = writer.begin()
@@ -70,9 +73,13 @@ def test_downgrade_guard_serializes_concurrent_inserts_and_observes_commits() ->
 
     def guarded_downgrade_check() -> None:
         with engine.connect() as connection, connection.begin():
-            migration.op = SimpleNamespace(
-                get_context=lambda: SimpleNamespace(as_sql=False),
-                get_bind=lambda: connection,
+            setattr(
+                migration,
+                "op",
+                SimpleNamespace(
+                    get_context=lambda: SimpleNamespace(as_sql=False),
+                    get_bind=lambda: connection,
+                ),
             )
             guard_started.set()
             migration._refuse_populated_or_offline_downgrade()
@@ -88,10 +95,13 @@ def test_downgrade_guard_serializes_concurrent_inserts_and_observes_commits() ->
             guarded.result(timeout=5)
 
     with engine.begin() as connection:
-        assert connection.execute(
-            sa.text("SELECT count(*) FROM authority_tenant WHERE id = :id"),
-            {"id": FIRST_ID},
-        ).scalar() == 1
+        assert (
+            connection.execute(
+                sa.text("SELECT count(*) FROM authority_tenant WHERE id = :id"),
+                {"id": FIRST_ID},
+            ).scalar()
+            == 1
+        )
         connection.execute(
             sa.text("DELETE FROM authority_tenant WHERE id = :id"),
             {"id": FIRST_ID},
@@ -99,9 +109,13 @@ def test_downgrade_guard_serializes_concurrent_inserts_and_observes_commits() ->
 
     lock_connection = engine.connect()
     lock_transaction = lock_connection.begin()
-    migration.op = SimpleNamespace(
-        get_context=lambda: SimpleNamespace(as_sql=False),
-        get_bind=lambda: lock_connection,
+    setattr(
+        migration,
+        "op",
+        SimpleNamespace(
+            get_context=lambda: SimpleNamespace(as_sql=False),
+            get_bind=lambda: lock_connection,
+        ),
     )
     migration._refuse_populated_or_offline_downgrade()
 
@@ -122,10 +136,13 @@ def test_downgrade_guard_serializes_concurrent_inserts_and_observes_commits() ->
         inserted.result(timeout=5)
 
     with engine.begin() as connection:
-        assert connection.execute(
-            sa.text("SELECT count(*) FROM authority_tenant WHERE id = :id"),
-            {"id": SECOND_ID},
-        ).scalar() == 1
+        assert (
+            connection.execute(
+                sa.text("SELECT count(*) FROM authority_tenant WHERE id = :id"),
+                {"id": SECOND_ID},
+            ).scalar()
+            == 1
+        )
         connection.execute(
             sa.text("DELETE FROM authority_tenant WHERE id = :id"),
             {"id": SECOND_ID},

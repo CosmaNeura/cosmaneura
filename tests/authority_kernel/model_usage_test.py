@@ -236,9 +236,7 @@ def _terminal_payload(
 def test_usage_is_authoritatively_enriched_and_exactly_replayed(
     authority_session: Session,
 ) -> None:
-    token, interaction_ref, actor, tenant, person = _provider_lineage(
-        authority_session
-    )
+    token, interaction_ref, actor, tenant, person = _provider_lineage(authority_session)
     _persist_user_phase(
         authority_session,
         token=token,
@@ -435,17 +433,13 @@ def test_nonterminal_audit_stays_pending_then_terminal_closes_both_ledgers(
             idempotency_key="opaque-late-audit-key-001",
             payload={
                 "client_event_id": str(uuid4()),
-                "observed_at": datetime.now(UTC).isoformat().replace(
-                    "+00:00", "Z"
-                ),
+                "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "event_type": "orchestration.completed",
                 "observation_status": "completed",
                 "route": "concierge",
                 "intent": None,
                 "content_sha256": None,
-                "platform_refs": [
-                    {"kind": "person", "ref": str(person.id)}
-                ],
+                "platform_refs": [{"kind": "person", "ref": str(person.id)}],
             },
             mount_context_token=None,
             session=authority_session,
@@ -727,17 +721,13 @@ def test_reconciled_failed_lineage_rejects_late_audit_usage_and_terminal(
             idempotency_key="opaque-failed-audit-key-01",
             payload={
                 "client_event_id": str(uuid4()),
-                "observed_at": datetime.now(UTC).isoformat().replace(
-                    "+00:00", "Z"
-                ),
+                "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                 "event_type": "orchestration.completed",
                 "observation_status": "completed",
                 "route": None,
                 "intent": None,
                 "content_sha256": None,
-                "platform_refs": [
-                    {"kind": "person", "ref": str(person.id)}
-                ],
+                "platform_refs": [{"kind": "person", "ref": str(person.id)}],
             },
             mount_context_token=token,
             session=authority_session,
@@ -765,7 +755,10 @@ def test_reconciled_failed_lineage_rejects_late_audit_usage_and_terminal(
             settings=ENABLED_SETTINGS,
         )
 
-def test_usage_rollback_and_append_only_fence(authority_session: Session, monkeypatch) -> None:
+
+def test_usage_rollback_and_append_only_fence(
+    authority_session: Session, monkeypatch
+) -> None:
     token, interaction_ref, _, _, _ = _provider_lineage(authority_session)
     _persist_user_phase(
         authority_session,
@@ -790,8 +783,7 @@ def test_usage_rollback_and_append_only_fence(authority_session: Session, monkey
     assert not authority_session.exec(select(AgentModelUsageEvent)).all()
     assert not authority_session.exec(
         select(AuthorityIdempotencyRecord).where(
-            AuthorityIdempotencyRecord.operation
-            == usage_service.MODEL_USAGE_OPERATION
+            AuthorityIdempotencyRecord.operation == usage_service.MODEL_USAGE_OPERATION
         )
     ).all()
 

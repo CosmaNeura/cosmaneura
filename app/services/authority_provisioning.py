@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
@@ -93,11 +93,12 @@ def provision_staging_provider_authority(
         raise AuthorityProvisioningError(
             "the configured Clerk identity issuer is unavailable"
         )
-    if (
-        not 3 <= len(operator_ref) <= 160
-        or not all(character.isalnum() or character in "._~-" for character in operator_ref)
+    if not 3 <= len(operator_ref) <= 160 or not all(
+        character.isalnum() or character in "._~-" for character in operator_ref
     ):
-        raise AuthorityProvisioningError("operator_ref must be an opaque audit reference")
+        raise AuthorityProvisioningError(
+            "operator_ref must be an opaque audit reference"
+        )
     if session is None:
         with get_session() as managed_session:
             return provision_staging_provider_authority(
@@ -126,7 +127,7 @@ def provision_staging_provider_authority(
         select(SyntheticPreviewAppointmentFixture).where(
             SyntheticPreviewAppointmentFixture.doctor_id == doctor.id,
             SyntheticPreviewAppointmentFixture.appointment_id == appointment_id,
-            SyntheticPreviewAppointmentFixture.synthetic_only.is_(True),
+            cast(Any, SyntheticPreviewAppointmentFixture.synthetic_only).is_(True),
             SyntheticPreviewAppointmentFixture.fixture_version
             == SYNTHETIC_PREVIEW_FIXTURE_VERSION,
         )

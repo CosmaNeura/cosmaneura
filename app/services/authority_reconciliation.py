@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -47,7 +47,9 @@ OPERATOR_FINAL_REQUEST_DIGEST = hashlib.sha256(
         sort_keys=True,
     ).encode()
 ).hexdigest()
-OPERATOR_FINAL_CONTENT_SHA256 = hashlib.sha256(OPERATOR_FINAL_CONTENT.encode()).hexdigest()
+OPERATOR_FINAL_CONTENT_SHA256 = hashlib.sha256(
+    OPERATOR_FINAL_CONTENT.encode()
+).hexdigest()
 
 
 class IngestionReconciliationError(Exception):
@@ -120,11 +122,14 @@ def incomplete_ingestion_status(
     rows = session.exec(
         select(InteractionLineage)
         .where(
-            InteractionLineage.created_at <= cutoff,
+            cast(Any, InteractionLineage.created_at) <= cutoff,
             (InteractionLineage.audit_status != "complete")
             | (InteractionLineage.usage_status != "complete"),
         )
-        .order_by(InteractionLineage.created_at, InteractionLineage.interaction_ref)
+        .order_by(
+            cast(Any, InteractionLineage.created_at),
+            cast(Any, InteractionLineage.interaction_ref),
+        )
     ).all()
     limited = rows[:limit]
     return IngestionStatusReport(
@@ -172,7 +177,7 @@ def mark_stale_ingestion_failed(
     if lineage is None:
         raise IngestionReconciliationStateError
     cutoff = datetime.now(UTC) - timedelta(minutes=older_than_minutes)
-    if _aware(lineage.created_at) > cutoff:
+    if lineage.created_at is None or _aware(lineage.created_at) > cutoff:
         raise IngestionReconciliationStateError
 
     components = ("audit", "usage") if component == "both" else (component,)
@@ -201,8 +206,12 @@ def mark_stale_ingestion_failed(
                 outcome="failed",
                 occurred_at=now,
                 workload_client_id=lineage.workload_client_id,
-                tenant_id=(mount_session.tenant_id if mount_session is not None else None),
-                actor_id=(mount_session.actor_id if mount_session is not None else None),
+                tenant_id=(
+                    mount_session.tenant_id if mount_session is not None else None
+                ),
+                actor_id=(
+                    mount_session.actor_id if mount_session is not None else None
+                ),
                 person_id=(binding.person_id if binding is not None else None),
                 interaction_id=lineage.id,
                 resource_type=f"interaction_{name}_ingestion",
@@ -295,8 +304,7 @@ def reconcile_stale_accepted_turn(
     idempotency_key = f"operator-final-{turn.client_turn_id}"
     idempotency = session.exec(
         select(AuthorityIdempotencyRecord).where(
-            AuthorityIdempotencyRecord.workload_client_id
-            == turn.workload_client_id,
+            AuthorityIdempotencyRecord.workload_client_id == turn.workload_client_id,
             AuthorityIdempotencyRecord.operation == OPERATOR_FINAL_OPERATION,
             AuthorityIdempotencyRecord.interaction_id == lineage.id,
             AuthorityIdempotencyRecord.logical_ref == str(turn.client_turn_id),

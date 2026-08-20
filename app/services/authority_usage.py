@@ -197,7 +197,11 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     started_at = _utc_datetime(payload["started_at"], nullable=True)
     completed_at = _utc_datetime(payload["completed_at"], nullable=True)
-    if started_at is not None and completed_at is not None and completed_at < started_at:
+    if (
+        started_at is not None
+        and completed_at is not None
+        and completed_at < started_at
+    ):
         raise ModelUsagePayloadInvalidError
 
     return {
@@ -231,7 +235,9 @@ def _canonical_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _request_digest(payload: dict[str, Any]) -> str:
-    return hashlib.sha256(orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)).hexdigest()
+    return hashlib.sha256(
+        orjson.dumps(payload, option=orjson.OPT_SORT_KEYS)
+    ).hexdigest()
 
 
 def _idempotency_records(
@@ -381,10 +387,10 @@ def report_model_usage_event(
             request_digest=request_digest,
         )
 
-    if (
-        authorized.lineage.audit_status in {"complete", "failed"}
-        or authorized.lineage.usage_status in {"complete", "failed"}
-    ):
+    if authorized.lineage.audit_status in {
+        "complete",
+        "failed",
+    } or authorized.lineage.usage_status in {"complete", "failed"}:
         raise ModelUsageLineageClosedError
     _require_open_conversation_phase(session, authorized=authorized)
     existing_sequence = session.exec(

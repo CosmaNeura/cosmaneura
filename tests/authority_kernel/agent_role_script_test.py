@@ -17,7 +17,7 @@ SCRIBE_ROLE_ID = "90151a73-578b-4a7d-aa9c-58372dfc2646"
 AGENT_ROLE_ID = "5f7c87d1-b2c1-4e92-9d51-54c3160fdfe6"
 UNRELATED_ROLE_ID = "00000000-0000-4000-8000-000000000003"
 
-FAKE_AZ = r'''#!/usr/bin/env python3
+FAKE_AZ = r"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -91,7 +91,7 @@ else:
 
 if "--output" not in args or option("--output") != "none":
     print(json.dumps(result))
-'''
+"""
 
 
 def _state() -> dict[str, object]:
@@ -158,7 +158,9 @@ def _setup_fake_az(tmp_path: Path) -> tuple[dict[str, str], Path]:
     return environment, state_directory
 
 
-def _run(environment: dict[str, str], *arguments: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    environment: dict[str, str], *arguments: str
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(SCRIPT), *arguments],
         env=environment,
@@ -168,7 +170,9 @@ def _run(environment: dict[str, str], *arguments: str) -> subprocess.CompletedPr
     )
 
 
-def test_default_status_is_read_only_and_verifies_public_exclusion(tmp_path: Path) -> None:
+def test_default_status_is_read_only_and_verifies_public_exclusion(
+    tmp_path: Path,
+) -> None:
     environment, state_directory = _setup_fake_az(tmp_path)
 
     result = _run(environment)
@@ -209,7 +213,9 @@ def test_wrong_resource_audience_refuses_before_graph_mutation(tmp_path: Path) -
     assert not (state_directory / "mutations.log").exists()
 
 
-def test_apply_is_idempotent_and_revoke_preserves_unrelated_state(tmp_path: Path) -> None:
+def test_apply_is_idempotent_and_revoke_preserves_unrelated_state(
+    tmp_path: Path,
+) -> None:
     environment, state_directory = _setup_fake_az(tmp_path)
     original = json.loads((state_directory / "state.json").read_text())
 

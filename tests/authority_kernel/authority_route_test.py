@@ -280,9 +280,7 @@ def test_model_usage_route_returns_receipt_and_forwards_closed_schema(
     body = _model_usage_body(event_id, recorded_at)
 
     def synthetic_report(**kwargs):
-        assert kwargs["workload_client_id"] == (
-            "11111111-1111-4111-8111-111111111111"
-        )
+        assert kwargs["workload_client_id"] == ("11111111-1111-4111-8111-111111111111")
         assert kwargs["interaction_ref"] == "ix_synthetic_interaction_0001"
         assert kwargs["mount_context_token"] is None
         assert kwargs["payload"] == body
@@ -524,7 +522,6 @@ def test_conversation_write_rejects_missing_phase_browser_fields_and_unsafe_sens
     assert response.status_code == expected_status
     assert response.json()["code"] == expected_code
     assert "browser_history" not in response.text
-
 
 
 def test_error_telemetry_scrubs_mount_context_tokens_case_insensitively() -> None:

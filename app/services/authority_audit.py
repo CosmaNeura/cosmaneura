@@ -306,7 +306,7 @@ def _validate_terminal_usage_closure(
     usage_events = session.exec(
         select(AgentModelUsageEvent)
         .where(AgentModelUsageEvent.interaction_id == authorized.lineage.id)
-        .order_by(AgentModelUsageEvent.call_sequence)
+        .order_by(cast(Any, AgentModelUsageEvent.call_sequence))
     ).all()
     expected_sequences = list(range(1, len(usage_events) + 1))
     actual_sequences = [event.call_sequence for event in usage_events]

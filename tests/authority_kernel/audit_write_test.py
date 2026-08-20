@@ -123,9 +123,7 @@ def _write(
 def test_audit_write_is_atomic_derived_and_exactly_replayed(
     authority_session: Session,
 ) -> None:
-    token, interaction_ref, actor, tenant, person = _provider_lineage(
-        authority_session
-    )
+    token, interaction_ref, actor, tenant, person = _provider_lineage(authority_session)
     payload = _payload(person)
 
     first = _write(

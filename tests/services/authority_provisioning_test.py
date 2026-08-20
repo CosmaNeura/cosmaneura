@@ -81,15 +81,16 @@ def test_provider_authority_provisioning_is_explicit_and_idempotent(monkeypatch)
     assert second.binding_actor_id is None
     assert AuthorityActor.count() == 1
     assert AuthorityActorExternalIdentity.count() == 1
-    assert AuthorityActorExternalIdentity.first().issuer == "https://test.clerk.invalid"
+    identity = AuthorityActorExternalIdentity.first()
+    assert identity is not None
+    assert identity.issuer == "https://test.clerk.invalid"
     assert AuthorityTenant.count() == 1
     assert AuthorityTenantMembership.count() == 1
     assert AuthorityPerson.count() == 1
     assert AuthorityPersonBinding.count() == 1
     assert (
         AuthorityAuditEvent.where(
-            AuthorityAuditEvent.event_type
-            == "authority.provider_fixture.provisioned"
+            AuthorityAuditEvent.event_type == "authority.provider_fixture.provisioned"
         ).count()
         == 1
     )
@@ -144,10 +145,10 @@ def test_same_subject_from_another_issuer_never_cross_binds(monkeypatch):
 
     assert result.actor_id != other_actor.id
     exact_identity = AuthorityActorExternalIdentity.where(
-        AuthorityActorExternalIdentity.issuer
-        == TEST_AUTHORITY_SETTINGS.clerk_issuer,
+        AuthorityActorExternalIdentity.issuer == TEST_AUTHORITY_SETTINGS.clerk_issuer,
         AuthorityActorExternalIdentity.subject == doctor.clerk_id,
     ).one()
+    assert isinstance(exact_identity, AuthorityActorExternalIdentity)
     assert exact_identity.actor_id == result.actor_id
     assert AuthorityActorExternalIdentity.count() == 2
 
