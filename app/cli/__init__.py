@@ -1,5 +1,5 @@
 import json
-from typing import cast
+from typing import Literal, cast
 
 import typer
 from fastapi.routing import APIRoute
@@ -280,6 +280,203 @@ def revoke_athena_preview_patient_record_designation(
         typer.echo(f"Designation revocation refused: {exc}", err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"Revoked synthetic patient designation {designation.id}.")
+
+
+@app.command("provision-staging-provider-authority")
+def provision_staging_provider_authority(
+    doctor_id: str = typer.Option(...),
+    doctor_email: str = typer.Option(...),
+    appointment_id: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+    tenant_id: str | None = typer.Option(
+        None,
+        help=(
+            "Optional existing authority tenant. Omit for the first pilot provider; "
+            "reuse the returned tenant id for additional providers in that practice."
+        ),
+    ),
+    confirm_staging_only: bool = typer.Option(
+        False,
+        "--confirm-staging-only",
+    ),
+    confirm_synthetic_only: bool = typer.Option(
+        False,
+        "--confirm-synthetic-only",
+    ),
+) -> None:
+    """Bind a signed-in provider and synthetic appointment to authority records."""
+
+    from app.services.authority_provisioning import (
+        AuthorityProvisioningError,
+    )
+    from app.services.authority_provisioning import (
+        provision_staging_provider_authority as provision,
+    )
+
+    if not confirm_staging_only or not confirm_synthetic_only:
+        typer.echo(
+            "Provisioning refused: --confirm-staging-only and "
+            "--confirm-synthetic-only are required.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    try:
+        with global_session():
+            result = provision(
+                doctor_id=_typeid(doctor_id, "doctor"),
+                doctor_email=doctor_email,
+                appointment_id=_typeid(appointment_id, "appointment"),
+                operator_ref=operator_ref,
+                tenant_id=(
+                    _typeid(tenant_id, "authority_tenant") if tenant_id else None
+                ),
+            )
+    except AuthorityProvisioningError as exc:
+        typer.echo(f"Provisioning refused: {exc}", err=True)
+        raise typer.Exit(1) from exc
+
+    state = "created" if result.created else "already exists"
+    typer.echo(
+        "Provider authority "
+        f"{state}: actor_id={result.actor_id} tenant_id={result.tenant_id} "
+        f"person_id={result.person_id} binding_ref={result.binding_ref}."
+    )
+
+
+@app.command("authority-ingestion-status")
+def authority_ingestion_status(
+    older_than_minutes: int = typer.Option(15, min=1),
+    limit: int = typer.Option(100, min=1, max=1000),
+) -> None:
+    """Print value-free stale ingestion counts and opaque interaction refs."""
+
+    from app.services.authority_reconciliation import incomplete_ingestion_status
+
+    with global_session():
+        report = incomplete_ingestion_status(
+            older_than_minutes=older_than_minutes,
+            limit=limit,
+        )
+    typer.echo(
+        json.dumps(
+            {
+                "older_than_minutes": report.older_than_minutes,
+                "matching_interaction_count": report.matching_interaction_count,
+                "pending_audit_count": report.pending_audit_count,
+                "failed_audit_count": report.failed_audit_count,
+                "pending_usage_count": report.pending_usage_count,
+                "failed_usage_count": report.failed_usage_count,
+                "interactions": [
+                    {
+                        "interaction_ref": row.interaction_ref,
+                        "audit_status": row.audit_status,
+                        "usage_status": row.usage_status,
+                    }
+                    for row in report.interactions
+                ],
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+
+
+@app.command("reconcile-authority-ingestion-failed")
+def reconcile_authority_ingestion_failed(
+    interaction_ref: str = typer.Option(...),
+    component: str = typer.Option(..., help="One of: audit, usage, both."),
+    older_than_minutes: int = typer.Option(15, min=1),
+    confirm_staging_only: bool = typer.Option(False, "--confirm-staging-only"),
+) -> None:
+    """Explicitly mark one stale staging ingestion component failed."""
+
+    from app.environments import is_staging
+    from app.services.authority_reconciliation import (
+        IngestionReconciliationError,
+        mark_stale_ingestion_failed,
+    )
+
+    if not confirm_staging_only or not is_staging():
+        typer.echo(
+            "Reconciliation refused: staging environment and "
+            "--confirm-staging-only are required.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    if component not in {"audit", "usage", "both"}:
+        typer.echo("Reconciliation refused: invalid component.", err=True)
+        raise typer.Exit(2)
+    try:
+        with global_session():
+            result = mark_stale_ingestion_failed(
+                interaction_ref=interaction_ref,
+                component=cast(Literal["audit", "usage", "both"], component),
+                older_than_minutes=older_than_minutes,
+            )
+    except IngestionReconciliationError as exc:
+        typer.echo("Reconciliation refused: interaction state is ineligible.", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "interaction_ref": result.interaction_ref,
+                "audit_status": result.audit_status,
+                "usage_status": result.usage_status,
+                "changed": result.changed,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+
+
+@app.command("reconcile-stale-canonical-turn")
+def reconcile_stale_canonical_turn(
+    turn_ref: str = typer.Option(...),
+    older_than_minutes: int = typer.Option(15, min=1),
+    apply: bool = typer.Option(False, "--apply"),
+    confirm_staging_only: bool = typer.Option(False, "--confirm-staging-only"),
+) -> None:
+    """Dry-run or write one fixed unavailable final for one stale accepted turn."""
+
+    from app.environments import is_staging
+    from app.services.authority_reconciliation import (
+        IngestionReconciliationError,
+        reconcile_stale_accepted_turn,
+    )
+
+    if not is_staging():
+        typer.echo("Reconciliation refused: staging environment is required.", err=True)
+        raise typer.Exit(2)
+    if apply and not confirm_staging_only:
+        typer.echo(
+            "Reconciliation refused: --apply requires --confirm-staging-only.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    try:
+        with global_session():
+            result = reconcile_stale_accepted_turn(
+                turn_id=_typeid(turn_ref, "conversation_turn"),
+                older_than_minutes=older_than_minutes,
+                apply=apply,
+            )
+    except IngestionReconciliationError as exc:
+        typer.echo("Reconciliation refused: turn state is ineligible.", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(
+        json.dumps(
+            {
+                "turn_ref": result.turn_ref,
+                "interaction_ref": result.interaction_ref,
+                "state": result.state,
+                "mode": "apply" if apply else "dry-run",
+                "changed": result.changed,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

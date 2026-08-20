@@ -10,7 +10,10 @@ from typing import Any
 import arrow
 import orjson
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette import status
@@ -25,7 +28,10 @@ from app.routes.zoom_auth import zoom_auth_app
 from app.models.doctor import Doctor
 
 from .environments import is_production
+from .routes.agent import agent_api_app
+from .routes.authority_errors import agent_problem_response, token_problem_response
 from .routes.chat import chat_api_app
+from .routes.embed_context import embed_context_api_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.service import service_api_app
@@ -68,6 +74,10 @@ api_app = FastAPI(
 api_app.include_router(internal_api_app)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)
+# Agent and context-token contracts are workload/host APIs and intentionally stay
+# out of the browser-generated client schema.
+api_app.include_router(agent_api_app, include_in_schema=False)
+api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
@@ -77,10 +87,112 @@ api_app.include_router(recall_callbacks_app)
 add_middleware(api_app)
 
 
+@api_app.exception_handler(HTTPException)
+async def safe_authority_http_exception_handler(request: Request, exc: HTTPException):
+    if request.url.path.startswith("/embed/v1/context-tokens/"):
+        if exc.status_code == status.HTTP_426_UPGRADE_REQUIRED:
+            return token_problem_response(
+                status_code=exc.status_code,
+                code="EMBED_VERSION_UNSUPPORTED",
+                title="Embed version unsupported",
+                detail="The requested embed contract version is not supported.",
+            )
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            return token_problem_response(
+                status_code=exc.status_code,
+                code="SESSION_REQUIRED",
+                title="Session required",
+                detail="A verified platform session is required.",
+            )
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            return token_problem_response(
+                status_code=exc.status_code,
+                code="REQUEST_DENIED",
+                title="Request denied",
+                detail="The requested context cannot be issued.",
+            )
+        return token_problem_response(
+            status_code=exc.status_code,
+            code="SERVICE_UNAVAILABLE",
+            title="Context service unavailable",
+            detail="The context-token service is temporarily unavailable.",
+            retryable=exc.status_code >= 500,
+        )
+
+    if request.url.path.startswith("/service/v1/agent/"):
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            return agent_problem_response(
+                status_code=exc.status_code,
+                code="INVALID_WORKLOAD_TOKEN",
+                title="Workload authentication failed",
+                detail="A valid workload credential is required.",
+            )
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            return agent_problem_response(
+                status_code=exc.status_code,
+                code="WORKLOAD_NOT_ALLOWED",
+                title="Workload not allowed",
+                detail="The workload is not authorized for this API.",
+            )
+        return agent_problem_response(
+            status_code=exc.status_code,
+            code="PLATFORM_UNAVAILABLE",
+            title="Platform unavailable",
+            detail="The platform agent API is temporarily unavailable.",
+            retryable=exc.status_code >= 500,
+        )
+
+    return await http_exception_handler(request, exc)
+
+
 @api_app.exception_handler(RequestValidationError)
 async def safe_request_validation_handler(
     request: Request, exc: RequestValidationError
 ):
+    if request.url.path.startswith("/embed/v1/context-tokens/"):
+        return token_problem_response(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            code="REQUEST_DENIED",
+            title="Invalid request",
+            detail="The context-token request is invalid.",
+        )
+    if request.url.path.startswith("/service/v1/agent/"):
+        errors = exc.errors()
+        missing_fields = {
+            str(error["loc"][-1])
+            for error in errors
+            if error.get("type") == "missing" and error.get("loc")
+        }
+        if "X-Cosmaneura-Mount-Context" in missing_fields:
+            code = "CONTEXT_REQUIRED"
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif "X-Cosmaneura-Interaction-Ref" in missing_fields:
+            code = "INTERACTION_REQUIRED"
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif "X-Cosmaneura-Client-Turn-ID" in missing_fields:
+            code = "CLIENT_TURN_REQUIRED"
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif any(
+            error.get("loc") and str(error["loc"][-1]) == "X-Cosmaneura-Interaction-Ref"
+            for error in errors
+        ):
+            code = "INTERACTION_INVALID"
+            status_code = status.HTTP_400_BAD_REQUEST
+        elif any(
+            error.get("loc") and str(error["loc"][-1]) == "X-Cosmaneura-Client-Turn-ID"
+            for error in errors
+        ):
+            code = "CLIENT_TURN_INVALID"
+            status_code = status.HTTP_400_BAD_REQUEST
+        else:
+            code = "VALIDATION_FAILED"
+            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+        return agent_problem_response(
+            status_code=status_code,
+            code=code,
+            title="Invalid request",
+            detail="The platform agent API request is invalid.",
+        )
     if request.url.path.startswith("/service/v1/"):
         # FastAPI's default 422 body includes rejected input. Service payloads
         # can contain PHI, so return only a generic contract error here.
