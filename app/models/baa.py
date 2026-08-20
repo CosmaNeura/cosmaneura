@@ -1,0 +1,71 @@
+"""BAA versions and acceptance records.
+
+The canonical BAA text lives as a hash-verified HTML asset (see
+``BAA_ASSET_DIR``); ``baa_version`` rows point at it and ``baa_acceptance``
+rows are the append-only clickwrap execution record (CLAUDE_BAA_IMPLEMENTATION,
+45 C.F.R. § 164.316(b)(2) retention). Never update or delete an acceptance
+row; re-acceptance inserts a new one.
+"""
+
+from datetime import datetime
+
+from app.setup import get_root_path
+
+import sqlalchemy as sa
+from activemodel import BaseModel
+from activemodel.mixins import TimestampsMixin, TypeIDMixin
+from activemodel.types import TypeIDType
+from sqlmodel import Column, Field
+
+from .doctor import Doctor
+from .practice import Practice
+
+BAA_ASSET_DIR = get_root_path() / "app" / "assets" / "baa"
+
+BAA_DOC_ID = "CN-BAA-CUST-CW"
+BAA_CURRENT_VERSION = "2.2"
+BAA_CURRENT_SHA256 = "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
+BAA_CURRENT_FILENAME = "baa_cn-baa-cust-cw_v2.2.html"
+
+
+class BaaVersion(BaseModel, TimestampsMixin, TypeIDMixin("baa_version"), table=True):
+    """One row per published BAA version. Text changes are new rows, never edits."""
+
+    doc_id: str
+    version: str
+    sha256: str
+    content_path: str
+    "Repo-relative path of the canonical HTML asset."
+    published_at: datetime = Field(
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    is_current: bool = False
+
+    def content(self) -> str:
+        return (get_root_path() / self.content_path).read_text()
+
+
+class BaaAcceptance(
+    BaseModel, TimestampsMixin, TypeIDMixin("baa_acceptance"), table=True
+):
+    """Append-only clickwrap execution record. No update or delete paths exist
+    in application code by design; retention is indefinite."""
+
+    practice_id: TypeIDType = Practice.foreign_key()
+    baa_version_id: TypeIDType = BaaVersion.foreign_key()
+
+    covered_entity_legal_name: str
+    accepted_by_doctor_id: TypeIDType = Doctor.foreign_key()
+    accepted_by_name: str
+    accepted_by_title: str
+    accepted_by_email: str
+    accepted_at_utc: datetime = Field(
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Server-generated; the client clock is never trusted."
+    ip_address: str | None = None
+    user_agent: str | None = Field(
+        default=None, sa_column=Column(sa.String(length=512), nullable=True)
+    )
+    content_sha256: str
+    "Hash of the exact text presented at acceptance."

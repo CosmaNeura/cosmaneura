@@ -208,3 +208,27 @@
     color: var(--brand-gold);
   }
 }
+
+/* Canonical BAA legal text (served hash-verified by the backend). The HTML
+   itself must never be edited — style the container and descendants only. */
+.cn-baa-container .cn-baa {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--foreground);
+}
+.cn-baa-container .cn-baa p {
+  margin: 0.65rem 0;
+}
+.cn-baa-container .cn-baa blockquote {
+  margin: 0.65rem 0 0.65rem 1.25rem;
+}
+.cn-baa-container .cn-baa table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+}
+.cn-baa-container .cn-baa td {
+  border: 1px solid var(--border);
+  padding: 0.375rem 0.625rem;
+  vertical-align: top;
+}

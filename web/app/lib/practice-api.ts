@@ -134,3 +134,28 @@ export function practiceReady(
 ): practice is PracticeStatus {
   return Boolean(practice?.baa_accepted && practice.attested)
 }
+
+export type BaaDocument = {
+  doc_id: string
+  version: string
+  sha256: string
+  html: string
+}
+
+export type BaaAcceptanceRecord = {
+  doc_id: string
+  version: string
+  accepted_by_name: string
+  accepted_by_title: string
+  accepted_by_email: string
+  accepted_at_utc: string
+  content_sha256: string
+}
+
+export function getBaaCurrent() {
+  return practiceRequest<BaaDocument>("/baa/current")
+}
+
+export function getBaaAcceptances() {
+  return practiceRequest<BaaAcceptanceRecord[]>("/practice/baa/acceptances")
+}

@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
@@ -31,7 +32,12 @@ from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
-from app.models.doctor import Doctor, Terminology
+from app.models.baa import (
+    BAA_DOC_ID,
+    BaaAcceptance,
+    BaaVersion,
+)
+from app.models.doctor import Doctor, DoctorRole, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
@@ -396,6 +402,9 @@ class SettingsData(BaseModel, extra="forbid"):
     zoom_revoked: bool
     email: str | None
     onboarding_completed: bool
+    practice_ready: bool
+    "member of a practice whose BAA is in force, with attestation recorded"
+    is_admin: bool
     note_customizations: list[NoteTypeCustomizationData]
     terminology: Terminology
 
@@ -443,6 +452,8 @@ def settings_data(request: Request) -> SettingsData:
         zoom_revoked=zoom_revoked,
         email=doctor.email,
         onboarding_completed=doctor.onboarding_completed_at is not None,
+        practice_ready=_practice_ready(doctor),
+        is_admin=doctor.role == DoctorRole.admin,
         note_customizations=note_customizations,
         terminology=doctor.terminology,
     )
@@ -533,8 +544,20 @@ def zoom_revoked_ack(request: Request) -> None:
     get_redis().delete(zoom_revoked_redis_key(str(doctor.id)))
 
 
-BAA_VERSION = "2026-08-19-ux-1"
 _JOIN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _current_baa_version() -> BaaVersion:
+    version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
+    assert version, "no current BAA version published — seed migration missing?"
+    return version
+
+
+def _client_ip(request: Request) -> str | None:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else None
 
 
 def _make_join_code() -> str:
@@ -549,6 +572,14 @@ def _membership_for(doctor: Doctor) -> PracticeMember | None:
     return PracticeMember.get(doctor_id=doctor.id)
 
 
+def _practice_ready(doctor: Doctor) -> bool:
+    member = _membership_for(doctor)
+    if not member:
+        return False
+    practice = Practice.get(id=member.practice_id)
+    return bool(practice and practice.baa_in_force() and member.attested_at)
+
+
 def _practice_payload(
     practice: Practice | None, member: PracticeMember | None
 ) -> "PracticeStatus | None":
@@ -560,7 +591,7 @@ def _practice_payload(
         email_domain=practice.email_domain,
         origin_channel=practice.origin_channel,
         pastoral_pack=practice.pastoral_pack,
-        baa_accepted=practice.baa_accepted_at is not None,
+        baa_accepted=practice.baa_in_force(),
         role=member.role,
         attested=member.attested_at is not None,
         trial_ends_at=practice.trial_ends_at,
@@ -671,6 +702,31 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
     return payload
 
 
+class BaaDocument(BaseModel, extra="forbid"):
+    doc_id: str
+    version: str
+    sha256: str
+    html: str
+
+
+@internal_api_app.get("/baa/current", name="baa_current")
+def baa_current(request: Request) -> BaaDocument:
+    """The canonical, hash-verified BAA text presented in the clickwrap."""
+    version = _current_baa_version()
+    html = version.content()
+    content_sha = hashlib.sha256(html.encode("utf-8")).hexdigest()
+    if content_sha != version.sha256:
+        # guardrail 2 of the BAA implementation brief: fail loudly, never
+        # present text that doesn't match the recorded hash
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="BAA text failed integrity verification.",
+        )
+    return BaaDocument(
+        doc_id=version.doc_id, version=version.version, sha256=version.sha256, html=html
+    )
+
+
 class AcceptBaaBody(BaseModel, extra="forbid"):
     signature_name: str = Field(min_length=2, max_length=120)
     signature_title: str = Field(min_length=2, max_length=120)
@@ -679,11 +735,10 @@ class AcceptBaaBody(BaseModel, extra="forbid"):
 
 @internal_api_app.post("/practice/baa", name="accept_practice_baa")
 def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus:
-    required = {"authority", "read", "accept", "phi"}
-    if not required.issubset(set(data.checks)):
+    if "baa" not in data.checks:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="All BAA acknowledgements are required.",
+            detail="The BAA acceptance box must be checked.",
         )
     doctor: Doctor = request.state.doctor
     member = _membership_for(doctor)
@@ -694,23 +749,82 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         )
     practice = Practice.get(id=member.practice_id)
     assert practice
-    if practice.baa_accepted_at is None:
-        practice.baa_version = BAA_VERSION
-        practice.baa_accepted_at = datetime.now(timezone.utc)
+
+    version = _current_baa_version()
+    # idempotent per (practice, version): re-accepting the same version is a
+    # no-op that returns the existing record's state
+    existing = BaaAcceptance.get(practice_id=practice.id, baa_version_id=version.id)
+    if existing is None:
+        accepted_at = datetime.now(timezone.utc)
+        BaaAcceptance(
+            practice_id=practice.id,
+            baa_version_id=version.id,
+            covered_entity_legal_name=practice.legal_name,
+            accepted_by_doctor_id=doctor.id,
+            accepted_by_name=data.signature_name.strip(),
+            accepted_by_title=data.signature_title.strip(),
+            accepted_by_email=doctor.email or "",
+            accepted_at_utc=accepted_at,
+            ip_address=_client_ip(request),
+            user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+            content_sha256=version.sha256,
+        ).save()
+
+        practice.baa_version = f"{version.doc_id} v{version.version}"
+        practice.baa_accepted_at = accepted_at
         practice.baa_accepted_by_doctor_id = doctor.id
         practice.baa_signature_name = data.signature_name.strip()
         practice.baa_signature_title = data.signature_title.strip()
         # entitlement begins at the legal moment: the BAA is in force, the
-        # trial runs, and billing is invited later (ADR 0016)
+        # trial runs, and billing is invited later (ADR 0017)
         if not practice.billing_exempt and practice.trial_ends_at is None:
             practice.trial_ends_at = datetime.now(timezone.utc) + TRIAL_LENGTH
         practice.save()
+
     member.attested_at = datetime.now(timezone.utc)
     member.attestation_name = data.signature_name.strip()
     member.save()
     payload = _practice_payload(practice, member)
     assert payload
     return payload
+
+
+class BaaAcceptanceRecord(BaseModel, extra="forbid"):
+    doc_id: str
+    version: str
+    accepted_by_name: str
+    accepted_by_title: str
+    accepted_by_email: str
+    accepted_at_utc: datetime
+    content_sha256: str
+
+
+@internal_api_app.get("/practice/baa/acceptances", name="practice_baa_acceptances")
+def practice_baa_acceptances(request: Request) -> list[BaaAcceptanceRecord]:
+    """The practice's BAA acceptance history, for the settings page."""
+    doctor: Doctor = request.state.doctor
+    member = _membership_for(doctor)
+    if not member:
+        return []
+    records = cast(
+        list[BaaAcceptance],
+        BaaAcceptance.where(BaaAcceptance.practice_id == member.practice_id)
+        .order_by(cast(Any, BaaAcceptance.accepted_at_utc).desc())
+        .all(),
+    )
+    versions = {v.id: v for v in BaaVersion.all()}
+    return [
+        BaaAcceptanceRecord(
+            doc_id=versions[r.baa_version_id].doc_id,
+            version=versions[r.baa_version_id].version,
+            accepted_by_name=r.accepted_by_name,
+            accepted_by_title=r.accepted_by_title,
+            accepted_by_email=r.accepted_by_email,
+            accepted_at_utc=r.accepted_at_utc,
+            content_sha256=r.content_sha256,
+        )
+        for r in records
+    ]
 
 
 class JoinCodeBody(BaseModel, extra="forbid"):
@@ -739,7 +853,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             email_domain=practice.email_domain,
             origin_channel=practice.origin_channel,
             pastoral_pack=practice.pastoral_pack,
-            baa_accepted=practice.baa_accepted_at is not None,
+            baa_accepted=practice.baa_in_force(),
             role=PracticeRole.workforce.value,
             attested=False,
             trial_ends_at=practice.trial_ends_at,
@@ -785,7 +899,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 "Start your own Cosmas practice instead."
             ),
         )
-    if practice.baa_accepted_at is None:
+    if not practice.baa_in_force():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
@@ -810,7 +924,7 @@ def complete_onboarding(request: Request) -> None:
     member = _membership_for(doctor)
     if member:
         practice = Practice.get(id=member.practice_id)
-        if not practice or not practice.baa_accepted_at or not member.attested_at:
+        if not practice or not practice.baa_in_force() or not member.attested_at:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",

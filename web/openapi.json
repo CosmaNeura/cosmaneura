@@ -976,6 +976,52 @@
           }
         }
       }
+    },
+    "/internal/v1/baa/current": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Baa Current",
+        "operationId": "baa_current",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaaDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/baa/acceptances": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Baa Acceptances",
+        "operationId": "practice_baa_acceptances",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BaaAcceptanceRecord"
+                  },
+                  "type": "array",
+                  "title": "Response Practice Baa Acceptances"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2534,6 +2580,14 @@
           },
           "terminology": {
             "$ref": "#/components/schemas/Terminology"
+          },
+          "practice_ready": {
+            "type": "boolean",
+            "title": "Practice Ready"
+          },
+          "is_admin": {
+            "type": "boolean",
+            "title": "Is Admin"
           }
         },
         "additionalProperties": false,
@@ -2547,7 +2601,9 @@
           "email",
           "onboarding_completed",
           "note_customizations",
-          "terminology"
+          "terminology",
+          "practice_ready",
+          "is_admin"
         ],
         "title": "SettingsData"
       },
@@ -2983,6 +3039,80 @@
           "cancelled"
         ],
         "title": "ZoomMeetingStatus"
+      },
+      "BaaDocument": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "html": {
+            "type": "string",
+            "title": "Html"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doc_id",
+          "version",
+          "sha256",
+          "html"
+        ],
+        "title": "BaaDocument"
+      },
+      "BaaAcceptanceRecord": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "accepted_by_name": {
+            "type": "string",
+            "title": "Accepted By Name"
+          },
+          "accepted_by_title": {
+            "type": "string",
+            "title": "Accepted By Title"
+          },
+          "accepted_by_email": {
+            "type": "string",
+            "title": "Accepted By Email"
+          },
+          "accepted_at_utc": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Accepted At Utc"
+          },
+          "content_sha256": {
+            "type": "string",
+            "title": "Content Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doc_id",
+          "version",
+          "accepted_by_name",
+          "accepted_by_title",
+          "accepted_by_email",
+          "accepted_at_utc",
+          "content_sha256"
+        ],
+        "title": "BaaAcceptanceRecord"
       }
     },
     "securitySchemes": {

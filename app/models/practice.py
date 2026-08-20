@@ -73,6 +73,19 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     subscription_status: str | None = None
     "Mirrored from Stripe webhooks (trialing/active/past_due/canceled/paused)."
 
+    negotiated_baa_on_file: bool = False
+    "Enterprise fallback: a countersigned CN-BAA-CUST is on file instead of clickwrap."
+    negotiated_baa_effective_date: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    negotiated_baa_reference: str | None = None
+    "Document reference for the negotiated instrument (internal-admin set)."
+
+    def baa_in_force(self) -> bool:
+        """Clickwrap acceptance recorded, or the negotiated edition on file."""
+        return self.baa_accepted_at is not None or self.negotiated_baa_on_file
+
     def entitled(self) -> bool:
         """The platform is the system of record for entitlement; Stripe is one
         of several ways it gets set (ARCHITECTURE.md §8, ADR 0016). Fail closed."""

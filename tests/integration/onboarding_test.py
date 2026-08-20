@@ -52,15 +52,16 @@ def test_onboarding_flow(server, page: Page) -> None:
     wait_for_loading(page)
 
     expect(page.locator("body")).to_contain_text("Business Associate Agreement")
-    page.get_by_label("I have authority to bind this practice").check()
-    page.get_by_label("I have read the Cosmas Business Associate Agreement").check()
-    page.get_by_label("On behalf of Riverside Family Practice, PLLC").check()
-    page.get_by_label("I will not introduce patient information").check()
-    page.get_by_label("Typed signature").fill("Integration Tester")
+    # the canonical, hash-verified CN-BAA-CUST-CW text is served by the
+    # backend and must render before acceptance is possible
+    expect(page.locator("body")).to_contain_text("HIPAA BUSINESS ASSOCIATE AGREEMENT")
+    expect(page.locator("body")).to_contain_text("CN-BAA-CUST-CW")
+    page.get_by_label("Accepting individual’s name").fill("Integration Tester")
     page.get_by_label("Title").fill("Physician / owner")
-    page.get_by_role(
-        "button", name="Accept BAA for Riverside Family Practice, PLLC"
-    ).click()
+    page.get_by_label(
+        "I have read and agree to the HIPAA Business Associate Agreement"
+    ).check()
+    page.get_by_role("button", name="I Agree").click()
     wait_for_loading(page)
 
     expect(page.locator("body")).to_contain_text("Optional setup")

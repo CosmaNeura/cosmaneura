@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import secrets
 import typing as t
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,8 +18,11 @@ from fastapi import Request, status
 from httpx import Response
 
 from app.configuration.clerk import CLERK_PRIVATE_KEY, clerk
+from app.utils.email_domain import extract_email_domain
 
+from app.models.baa import BAA_DOC_ID, BaaAcceptance, BaaVersion
 from app.models.doctor import Doctor, DoctorRole
+from app.models.practice import Practice, PracticeMember
 
 from tests.constants import (
     CLERK_DEV_ADMIN_EMAIL,
@@ -104,15 +108,55 @@ def get_clerk_dev_user():
     user = _get_or_create_clerk_user(CLERK_DEV_USER_EMAIL)
     assert user
 
-    # the dev user's doctor predates practices — the grandfathered production
-    # case — so it passes the practice gate. Tests exercising the fresh-signup
-    # path clear onboarding_completed_at explicitly.
-    doctor = Doctor.find_or_create_by(clerk_id=user.id)
-    if doctor.onboarding_completed_at is None:
-        doctor.onboarding_completed_at = datetime.now(timezone.utc)
-        doctor.save()
-
     return CLERK_DEV_USER_EMAIL, CLERK_DEV_USER_PASSWORD, user
+
+
+def provision_practice_in_force(doctor: Doctor) -> Practice:
+    """Give a doctor an owner membership in a practice whose BAA is in force
+    and which is entitled — the state every PHI-bearing route requires under
+    the practice gate. Idempotent per doctor."""
+
+    member = PracticeMember.get(doctor_id=doctor.id)
+    if member:
+        practice = Practice.get(id=member.practice_id)
+        assert practice
+        return practice
+
+    version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
+    assert version, "no current BAA version — did the seed migration run?"
+
+    now = datetime.now(timezone.utc)
+    practice = Practice(
+        legal_name="Test Practice, PLLC",
+        join_code=f"T{secrets.token_hex(4).upper()[:7]}",
+        email_domain=extract_email_domain(doctor.email) or "example.com",
+        origin_channel="direct",
+        baa_version=f"{version.doc_id} v{version.version}",
+        baa_accepted_at=now,
+        baa_accepted_by_doctor_id=doctor.id,
+        baa_signature_name="Test Owner",
+        baa_signature_title="Physician / owner",
+        billing_exempt=True,
+    ).save()
+    BaaAcceptance(
+        practice_id=practice.id,
+        baa_version_id=version.id,
+        covered_entity_legal_name=practice.legal_name,
+        accepted_by_doctor_id=doctor.id,
+        accepted_by_name="Test Owner",
+        accepted_by_title="Physician / owner",
+        accepted_by_email=doctor.email or "test@example.com",
+        accepted_at_utc=now,
+        content_sha256=version.sha256,
+    ).save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="owner",
+        attested_at=now,
+        attestation_name="Test Owner",
+    ).save()
+    return practice
 
 
 def get_clerk_seed_user():

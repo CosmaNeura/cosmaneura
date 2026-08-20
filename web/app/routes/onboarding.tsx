@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { href, redirect } from "react-router"
 import { z } from "zod"
@@ -36,19 +36,23 @@ import {
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import {
+  BAA_DOC_ID,
+  BAA_PDF_URL,
   BAA_VERSION,
   COMPANY,
-  OWNER_CHECKS,
   WORKFORCE_CHECKS,
-  baaSections,
+  baaAuthorityLine,
+  baaCheckboxLabel,
 } from "~/lib/baa"
 import { type Channel, resolveChannel } from "~/lib/channel"
 import { MCD_EMAIL_DOMAIN, isMcdEmail } from "~/lib/email-domain"
 import {
+  type BaaDocument,
   type JoinMismatch,
   type PracticeStatus,
   acceptPracticeBaa,
   createPractice,
+  getBaaCurrent,
   getPractice,
   joinPractice,
   lookupPractice,
@@ -71,7 +75,12 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const { data } = await settingsData()
   invariant(data, "settings data failed to load")
 
-  if (data.onboarding_completed) {
+  const practice = await getPractice()
+
+  // Only leave onboarding when the practice BAA is in force too: doctors who
+  // predate practices are onboarding_completed but still owe the (counsel-
+  // approved) BAA before Cosmas will process PHI.
+  if (data.onboarding_completed && (data.is_admin || practiceReady(practice))) {
     throw redirect(href("/notes"))
   }
 
@@ -80,7 +89,6 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const channel = resolveChannel(
     new URL(request.url).searchParams.get("channel"),
   )
-  const practice = await getPractice()
 
   return { ...data, email, channel, practice }
 }
@@ -325,7 +333,13 @@ function OwnerFlow({
       />
     )
   }
-  return <BaaClickwrap practice={practice} onPractice={onPractice} />
+  return (
+    <BaaClickwrap
+      practice={practice}
+      onPractice={onPractice}
+      onDecline={onBack}
+    />
+  )
 }
 
 function PracticeForm({
@@ -500,21 +514,40 @@ function PracticeForm({
 function BaaClickwrap({
   practice,
   onPractice,
+  onDecline,
 }: {
   practice: PracticeStatus
   onPractice: (practice: PracticeStatus) => void
+  onDecline: () => void
 }) {
-  const sections = useMemo(
-    () => baaSections(practice.legal_name),
-    [practice.legal_name],
-  )
-  const [checks, setChecks] = useState<Record<string, boolean>>({})
+  const [doc, setDoc] = useState<BaaDocument | null>(null)
+  const [docError, setDocError] = useState<string | null>(null)
+  const [agreed, setAgreed] = useState(false)
   const [signatureName, setSignatureName] = useState("")
   const [signatureTitle, setSignatureTitle] = useState("Physician / owner")
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    getBaaCurrent()
+      .then((next) => {
+        if (!cancelled) setDoc(next)
+      })
+      .catch((err) => {
+        if (!cancelled)
+          setDocError(
+            err instanceof Error ? err.message : "Could not load the agreement",
+          )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const ready =
-    OWNER_CHECKS.every((item) => checks[item.id]) &&
+    agreed &&
+    doc !== null &&
     signatureName.trim().length >= 2 &&
     signatureTitle.trim().length >= 2
 
@@ -525,7 +558,7 @@ function BaaClickwrap({
       const next = await acceptPracticeBaa({
         signature_name: signatureName,
         signature_title: signatureTitle,
-        checks: OWNER_CHECKS.map((item) => item.id).filter((id) => checks[id]),
+        checks: ["baa"],
       })
       onPractice(next)
     } catch (err) {
@@ -536,7 +569,7 @@ function BaaClickwrap({
   }
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[1fr_20rem]">
+    <div className="grid gap-8 lg:grid-cols-[1fr_22rem]">
       <div>
         <StepKicker n="03" label="Agreement" />
         <DisplayTitle>Business Associate Agreement</DisplayTitle>
@@ -545,51 +578,37 @@ function BaaClickwrap({
           <span className="font-medium text-[var(--brand-navy-deep)]">
             {practice.legal_name}
           </span>
-          . Business associate: {COMPANY}. Product: Cosmas. Version{" "}
-          {BAA_VERSION}.
+          . Business associate: {COMPANY}. {BAA_DOC_ID} v{BAA_VERSION} —
+          approved by counsel.{" "}
+          <a
+            href={BAA_PDF_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2"
+          >
+            Download PDF
+          </a>
         </p>
-        <p className="mt-3 rounded-lg border border-[var(--brand-gold)] bg-[var(--brand-cream)] px-4 py-3 text-sm text-[var(--brand-navy-deep)]">
-          Draft for Cosmas onboarding UX. Counsel must ratify before this is the
-          operative production BAA.
-        </p>
-        <ScrollArea className="bg-card mt-6 h-[28rem] rounded-xl border p-5">
-          <ol className="space-y-6 pr-4">
-            {sections.map((section) => (
-              <li key={section.num}>
-                <h2
-                  className="text-xl font-semibold"
-                  style={{ fontFamily: "'Cormorant Garamond', serif" }}
-                >
-                  § {section.num}. {section.title}
-                </h2>
-                <p className="mt-2 text-sm leading-relaxed">{section.body}</p>
-              </li>
-            ))}
-          </ol>
+        <ScrollArea className="cn-baa-container bg-card mt-6 h-[37.5rem] rounded-xl border p-5">
+          {doc ? (
+            // canonical, hash-verified legal text served by the backend —
+            // rendered verbatim, styled only from outside (.cn-baa)
+            <div dangerouslySetInnerHTML={{ __html: doc.html }} />
+          ) : docError ? (
+            <p className="text-destructive text-sm">{docError}</p>
+          ) : (
+            <p className="text-muted-foreground text-sm">
+              Loading the agreement…
+            </p>
+          )}
         </ScrollArea>
       </div>
       <aside className="bg-card h-fit rounded-xl border p-5">
         <p className="text-xs font-semibold tracking-[0.18em] text-[var(--brand-gold)] uppercase">
-          Clickwrap
+          Acceptance
         </p>
-        <div className="mt-4 grid gap-4">
-          {OWNER_CHECKS.map((item) => (
-            <CheckRow
-              key={item.id}
-              checked={Boolean(checks[item.id])}
-              onChange={(next) =>
-                setChecks((prev) => ({ ...prev, [item.id]: next }))
-              }
-            >
-              {item.label.replace(
-                "the practice named above",
-                practice.legal_name,
-              )}
-            </CheckRow>
-          ))}
-        </div>
-        <div className="mt-5 grid gap-3">
-          <Field label="Typed signature" htmlFor="sig">
+        <div className="mt-4 grid gap-3">
+          <Field label="Accepting individual’s name" htmlFor="sig">
             <Input
               id="sig"
               value={signatureName}
@@ -605,18 +624,38 @@ function BaaClickwrap({
             />
           </Field>
         </div>
+        <div className="mt-4">
+          <CheckRow checked={agreed} onChange={setAgreed}>
+            {baaCheckboxLabel(practice.legal_name)}
+          </CheckRow>
+        </div>
         {error ? (
           <p className="text-destructive mt-3 text-sm">{error}</p>
         ) : null}
+        <p className="text-muted-foreground mt-4 text-xs leading-snug">
+          {baaAuthorityLine(practice.legal_name)}
+        </p>
         <Button
           type="button"
           disabled={!ready || busy}
           onClick={() => void onAccept()}
-          className="mt-5 w-full"
+          className="mt-2 w-full"
           size="lg"
         >
-          {busy ? "Recording…" : `Accept BAA for ${practice.legal_name}`}
+          {busy ? "Recording…" : "I Agree"}
         </Button>
+        <button
+          type="button"
+          onClick={onDecline}
+          className="text-muted-foreground hover:text-foreground mt-3 w-full text-center text-sm"
+        >
+          I’m not authorized to sign this
+        </button>
+        <p className="text-muted-foreground mt-2 text-xs leading-snug">
+          Not the right person? Ask the practice owner or an authorized
+          representative to sign in and accept — nothing is recorded until they
+          do.
+        </p>
       </aside>
     </div>
   )
