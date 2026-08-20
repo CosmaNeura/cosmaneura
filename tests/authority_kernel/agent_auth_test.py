@@ -22,7 +22,8 @@ from app.routes.dependencies.entra_service import (
 TENANT_ID = str(uuid4())
 AUDIENCE = str(uuid4())
 SOVEREIGN_CLIENT_ID = str(uuid4())
-SECOND_SOVEREIGN_CLIENT_ID = str(uuid4())
+PUBLIC_SOVEREIGN_CLIENT_ID = str(uuid4())
+THIRD_PARTY_CLIENT_ID = str(uuid4())
 
 
 def _policy() -> EntraServiceAuthPolicy:
@@ -82,7 +83,13 @@ def test_agent_auth_rejects_other_callers_roles_and_user_tokens(
     assert error.value.status_code == 403
 
 
-def test_staging_agent_policy_allows_only_provider_workload() -> None:
+@pytest.mark.parametrize(
+    "rejected_client_id",
+    [PUBLIC_SOVEREIGN_CLIENT_ID, THIRD_PARTY_CLIENT_ID],
+)
+def test_staging_agent_policy_allows_only_provider_workload(
+    rejected_client_id: str,
+) -> None:
     settings = EntraAgentAuthSettings(
         enabled=True,
         tenant_id=TENANT_ID,
@@ -96,14 +103,14 @@ def test_staging_agent_policy_allows_only_provider_workload() -> None:
         tenant_id=TENANT_ID,
         audience=AUDIENCE,
         sovereign_client_ids=frozenset(
-            {SOVEREIGN_CLIENT_ID, SECOND_SOVEREIGN_CLIENT_ID}
+            {SOVEREIGN_CLIENT_ID, PUBLIC_SOVEREIGN_CLIENT_ID}
         ),
     )
     assert not incomplete.is_complete()
 
     claims = {
         "tid": TENANT_ID,
-        "azp": SECOND_SOVEREIGN_CLIENT_ID,
+        "azp": rejected_client_id,
         "idtyp": "app",
         "roles": [AGENT_API_ACCESS_ROLE],
     }
