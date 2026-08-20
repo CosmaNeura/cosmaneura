@@ -17,6 +17,8 @@ SCRIBE_ROLE_ID="90151a73-578b-4a7d-aa9c-58372dfc2646"
 SCRIBE_ROLE_VALUE="Scribe.Transcript.Write"
 AGENT_ROLE_ID="5f7c87d1-b2c1-4e92-9d51-54c3160fdfe6"
 AGENT_ROLE_VALUE="AgentApi.Access"
+AGENT_ROLE_DESCRIPTION="Allows the provider Sovereign workload to call the governed Agent API."
+AGENT_ROLE_DISPLAY_NAME="Agent API access"
 
 mode="status"
 confirm_staging="false"
@@ -150,63 +152,88 @@ if [[ "$agent_role_count" -gt 1 ]]; then
   echo "Refused: AgentApi.Access role identity is ambiguous." >&2
   exit 1
 fi
+agent_role_definition="$(
+  jq -cn \
+    --arg id "$AGENT_ROLE_ID" \
+    --arg value "$AGENT_ROLE_VALUE" \
+    --arg description "$AGENT_ROLE_DESCRIPTION" \
+    --arg display_name "$AGENT_ROLE_DISPLAY_NAME" \
+    '{
+      allowedMemberTypes: ["Application"],
+      description: $description,
+      displayName: $display_name,
+      id: $id,
+      isEnabled: true,
+      value: $value
+    }'
+)"
 if [[ "$agent_role_count" -eq 1 ]]; then
-  [[ "$(jq -r --arg id "$AGENT_ROLE_ID" --arg value "$AGENT_ROLE_VALUE" '
-    .[0].id == $id and .[0].value == $value and .[0].isEnabled
-    and (.[0].allowedMemberTypes == ["Application"])
-  ' <<<"$agent_roles")" == "true" ]] || {
+  agent_role_matches_definition="$(
+    jq -r --argjson expected "$agent_role_definition" '
+      (.[0] | del(.origin)) == $expected
+      and ((.[0] | has("origin") | not) or .[0].origin == "Application")
+    ' <<<"$agent_roles"
+  )"
+  [[ "$agent_role_matches_definition" == "true" ]] || {
     echo "Refused: AgentApi.Access exists with a conflicting definition." >&2
     exit 1
   }
 fi
 roles_before="$(
-  jq -cS '[.appRoles[] | {
-    allowedMemberTypes,description,displayName,id,isEnabled,value
-  }] | sort_by(.id)' <<<"$app_json"
+  jq -cS '[.appRoles[]] | sort_by(.id)' <<<"$app_json"
 )"
-expected_roles_after="$roles_before"
-if [[ "$mode" == "apply" && "$agent_role_count" -eq 0 ]]; then
-  expected_roles_after="$(
-    jq -cS --arg id "$AGENT_ROLE_ID" --arg value "$AGENT_ROLE_VALUE" '
-      . + [{
-        allowedMemberTypes: ["Application"],
-        description: "Allows the provider Sovereign workload to call the governed Agent API.",
-        displayName: "Agent API access",
-        id: $id,
-        isEnabled: true,
-        value: $value
-      }] | sort_by(.id)
-    ' <<<"$roles_before"
-  )"
-fi
 
 if [[ "$mode" == "apply" && "$agent_role_count" -eq 0 ]]; then
-  app_etag="$(jq -r '."@odata.etag" // empty' <<<"$app_json")"
-  [[ -n "$app_etag" ]] || {
-    echo "Refused: Agent API application ETag is unavailable." >&2
+  # Microsoft Graph does not currently return an application ETag in this
+  # tenant. Re-read the complete role collection immediately before PATCH and
+  # refuse if it moved since validation. This narrows the optimistic-
+  # concurrency window; the exact postcondition below catches visible drift
+  # after PATCH. If Graph begins returning an ETag, also use it conditionally.
+  prepatch_app_json="$(
+    az rest \
+      --method GET \
+      --uri "https://graph.microsoft.com/v1.0/applications/$APP_REGISTRATION_OBJECT_ID" \
+      -o json
+  )"
+  [[ "$(jq -r '.id' <<<"$prepatch_app_json")" == "$APP_REGISTRATION_OBJECT_ID" ]] || {
+    echo "Refused: unexpected pre-PATCH application registration object." >&2
     exit 1
   }
+  [[ "$(jq -r '.appId' <<<"$prepatch_app_json")" == "$AGENT_API_CLIENT_ID" ]] || {
+    echo "Refused: pre-PATCH Agent API application audience mismatch." >&2
+    exit 1
+  }
+  roles_immediately_before_patch="$(
+    jq -cS '[.appRoles[]] | sort_by(.id)' <<<"$prepatch_app_json"
+  )"
+  [[ "$roles_immediately_before_patch" == "$roles_before" ]] || {
+    echo "Refused: application roles changed during pre-PATCH validation." >&2
+    exit 1
+  }
+  app_etag="$(jq -r '."@odata.etag" // empty' <<<"$prepatch_app_json")"
   umask 077
   work_directory="$(mktemp -d)"
   trap 'rm -rf "$work_directory"' EXIT
-  jq --arg id "$AGENT_ROLE_ID" --arg value "$AGENT_ROLE_VALUE" '
+  # origin is read-only in the Graph appRole contract. Retain it in the raw
+  # before/after snapshots above, but never echo it into the PATCH payload.
+  jq --argjson role "$agent_role_definition" '
     {
       appRoles: (
-        .appRoles + [{
-          allowedMemberTypes: ["Application"],
-          description: "Allows the provider Sovereign workload to call the governed Agent API.",
-          displayName: "Agent API access",
-          id: $id,
-          isEnabled: true,
-          value: $value
-        }]
+        [.appRoles[] | {
+          allowedMemberTypes,description,displayName,id,isEnabled,value
+        }] + [$role]
       )
     }
-  ' <<<"$app_json" >"$work_directory/app-role-patch.json"
+  ' \
+    <<<"$prepatch_app_json" >"$work_directory/app-role-patch.json"
+  patch_headers=("Content-Type=application/json")
+  if [[ -n "$app_etag" ]]; then
+    patch_headers+=("If-Match=$app_etag")
+  fi
   az rest \
     --method PATCH \
     --uri "https://graph.microsoft.com/v1.0/applications/$APP_REGISTRATION_OBJECT_ID" \
-    --headers "Content-Type=application/json" "If-Match=$app_etag" \
+    --headers "${patch_headers[@]}" \
     --body "@$work_directory/app-role-patch.json" \
     --output none
   app_json="$(
@@ -215,17 +242,35 @@ if [[ "$mode" == "apply" && "$agent_role_count" -eq 0 ]]; then
       --uri "https://graph.microsoft.com/v1.0/applications/$APP_REGISTRATION_OBJECT_ID" \
       -o json
   )"
+  [[ "$(jq -r '.id' <<<"$app_json")" == "$APP_REGISTRATION_OBJECT_ID" ]] || {
+    echo "Refused: unexpected post-PATCH application registration object." >&2
+    exit 1
+  }
+  [[ "$(jq -r '.appId' <<<"$app_json")" == "$AGENT_API_CLIENT_ID" ]] || {
+    echo "Refused: post-PATCH Agent API application audience mismatch." >&2
+    exit 1
+  }
 fi
 
 roles_after="$(
-  jq -cS '[.appRoles[] | {
-    allowedMemberTypes,description,displayName,id,isEnabled,value
-  }] | sort_by(.id)' <<<"$app_json"
+  jq -cS '[.appRoles[]] | sort_by(.id)' <<<"$app_json"
 )"
-[[ "$roles_after" == "$expected_roles_after" ]] || {
-  echo "Refused: application roles changed outside the exact reconciliation." >&2
-  exit 1
-}
+if [[ "$mode" == "apply" && "$agent_role_count" -eq 0 ]]; then
+  preexisting_roles_after="$(
+    jq -cS --arg id "$AGENT_ROLE_ID" --arg value "$AGENT_ROLE_VALUE" '
+      [.appRoles[] | select(.id != $id and .value != $value)] | sort_by(.id)
+    ' <<<"$app_json"
+  )"
+  [[ "$preexisting_roles_after" == "$roles_before" ]] || {
+    echo "Refused: a pre-existing application role changed during reconciliation." >&2
+    exit 1
+  }
+else
+  [[ "$roles_after" == "$roles_before" ]] || {
+    echo "Refused: application roles changed outside the exact reconciliation." >&2
+    exit 1
+  }
+fi
 
 scribe_after="$(
   jq -cS --arg id "$SCRIBE_ROLE_ID" --arg value "$SCRIBE_ROLE_VALUE" '
@@ -240,11 +285,11 @@ scribe_after="$(
 
 if [[ "$mode" == "apply" ]]; then
   agent_app_role_ok="$(
-    jq -r --arg id "$AGENT_ROLE_ID" --arg value "$AGENT_ROLE_VALUE" '
-      [.appRoles[] | select(
-        .id == $id and .value == $value and .isEnabled
-        and (.allowedMemberTypes == ["Application"])
-      )] | length == 1
+    jq -r --argjson expected "$agent_role_definition" '
+      [.appRoles[] | select(.id == $expected.id or .value == $expected.value)] as $roles
+      | ($roles | length) == 1
+        and (($roles[0] | del(.origin)) == $expected)
+        and (($roles[0] | has("origin") | not) or $roles[0].origin == "Application")
     ' <<<"$app_json"
   )"
   [[ "$agent_app_role_ok" == "true" ]] || {
@@ -257,11 +302,11 @@ if [[ "$mode" == "apply" ]]; then
   for _ in 1 2 3 4 5 6; do
     resource_sp_json="$(az ad sp show --id "$RESOURCE_SERVICE_PRINCIPAL_ID" -o json)"
     resource_role_ok="$(
-      jq -r --arg id "$AGENT_ROLE_ID" --arg value "$AGENT_ROLE_VALUE" '
-        [.appRoles[] | select(
-          .id == $id and .value == $value and .isEnabled
-          and (.allowedMemberTypes == ["Application"])
-        )] | length == 1
+      jq -r --argjson expected "$agent_role_definition" '
+        [.appRoles[] | select(.id == $expected.id or .value == $expected.value)] as $roles
+        | ($roles | length) == 1
+          and (($roles[0] | del(.origin)) == $expected)
+          and (($roles[0] | has("origin") | not) or $roles[0].origin == "Application")
       ' <<<"$resource_sp_json"
     )"
     [[ "$resource_role_ok" == "true" ]] && break
@@ -284,6 +329,21 @@ assignment_count="$(sed '/^$/d' <<<"$assignment_ids" | wc -l | tr -d ' ')"
   echo "Refused: duplicate AgentApi.Access assignments exist." >&2
   exit 1
 }
+if [[ "$assignment_count" -eq 1 ]]; then
+  provider_assignment_principal_ok="$(
+    jq -r \
+      --arg principal "$PROVIDER_UAI_PRINCIPAL_ID" \
+      --arg resource "$RESOURCE_SERVICE_PRINCIPAL_ID" \
+      --arg role "$AGENT_ROLE_ID" '
+        [.value[] | select(.resourceId == $resource and .appRoleId == $role)]
+        | length == 1 and .[0].principalId == $principal
+      ' <<<"$assignments_json"
+  )"
+  [[ "$provider_assignment_principal_ok" == "true" ]] || {
+    echo "Refused: AgentApi.Access assignment principal mismatch." >&2
+    exit 1
+  }
+fi
 
 if [[ "$mode" == "apply" && "$assignment_count" -eq 0 ]]; then
   assignment_body="$(
@@ -317,6 +377,21 @@ assignment_count="$(
     [.value[] | select(.resourceId == $resource and .appRoleId == $role)] | length
   ' <<<"$assignments_json"
 )"
+if [[ "$assignment_count" -eq 1 ]]; then
+  provider_assignment_principal_ok="$(
+    jq -r \
+      --arg principal "$PROVIDER_UAI_PRINCIPAL_ID" \
+      --arg resource "$RESOURCE_SERVICE_PRINCIPAL_ID" \
+      --arg role "$AGENT_ROLE_ID" '
+        [.value[] | select(.resourceId == $resource and .appRoleId == $role)]
+        | length == 1 and .[0].principalId == $principal
+      ' <<<"$assignments_json"
+  )"
+  [[ "$provider_assignment_principal_ok" == "true" ]] || {
+    echo "Refused: AgentApi.Access assignment principal mismatch." >&2
+    exit 1
+  }
+fi
 provider_other_assignments_after="$(
   jq -cS --arg resource "$RESOURCE_SERVICE_PRINCIPAL_ID" --arg role "$AGENT_ROLE_ID" '
     [.value[] | select(.resourceId != $resource or .appRoleId != $role)]

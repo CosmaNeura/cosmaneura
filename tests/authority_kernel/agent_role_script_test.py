@@ -54,18 +54,33 @@ elif args[0] == "rest":
     method = option("--method")
     uri = option("--uri")
     if method == "GET" and "/applications/" in uri:
+        state["application_get_count"] = state.get("application_get_count", 0) + 1
+        if (
+            state.get("drift_on_application_get")
+            == state["application_get_count"]
+        ):
+            state["app"]["appRoles"].append(state["concurrent_role"])
+        save()
         result = state["app"]
     elif method == "GET" and state["provider_sp"]["id"] in uri:
         result = {"value": state["provider_assignments"]}
     elif method == "GET" and state["public_sp"]["id"] in uri:
         result = {"value": state["public_assignments"]}
     elif method == "PATCH" and "/applications/" in uri:
-        if f'If-Match={state["app"]["@odata.etag"]}' not in args:
+        etag = state["app"].get("@odata.etag")
+        if etag and f"If-Match={etag}" not in args:
+            raise SystemExit(4)
+        if not etag and any(value.startswith("If-Match=") for value in args):
             raise SystemExit(4)
         body_argument = option("--body")
         body = json.loads(Path(body_argument.removeprefix("@")).read_text())
+        if any("origin" in role for role in body["appRoles"]):
+            raise SystemExit(7)
+        for role in body["appRoles"]:
+            role["origin"] = "Application"
         state["app"]["appRoles"] = body["appRoles"]
-        state["app"]["@odata.etag"] = 'W/"next"'
+        if etag:
+            state["app"]["@odata.etag"] = 'W/"next"'
         mutate("PATCH")
         save()
         result = {}
@@ -101,6 +116,7 @@ def _state() -> dict[str, object]:
         "displayName": "Scribe transcript write",
         "id": SCRIBE_ROLE_ID,
         "isEnabled": True,
+        "origin": "Application",
         "value": "Scribe.Transcript.Write",
     }
     unrelated_role = {
@@ -109,16 +125,26 @@ def _state() -> dict[str, object]:
         "displayName": "Unrelated role",
         "id": UNRELATED_ROLE_ID,
         "isEnabled": False,
+        "origin": "Application",
         "value": "Unrelated.Access",
+    }
+    concurrent_role = {
+        "allowedMemberTypes": ["Application"],
+        "description": "Role created by a concurrent operator",
+        "displayName": "Concurrent role",
+        "id": "00000000-0000-4000-8000-000000000004",
+        "isEnabled": True,
+        "origin": "Application",
+        "value": "Concurrent.Access",
     }
     return {
         "account": {"tenantId": TENANT_ID, "id": SUBSCRIPTION_ID},
         "app": {
             "id": APP_OBJECT_ID,
             "appId": AGENT_API_CLIENT_ID,
-            "@odata.etag": 'W/"initial"',
             "appRoles": [scribe_role, unrelated_role],
         },
+        "concurrent_role": concurrent_role,
         "resource_sp": {"id": RESOURCE_SP_ID, "appId": AGENT_API_CLIENT_ID},
         "provider_sp": {"id": PROVIDER_PRINCIPAL_ID, "appId": PROVIDER_CLIENT_ID},
         "public_sp": {"id": PUBLIC_PRINCIPAL_ID, "appId": PUBLIC_CLIENT_ID},
@@ -213,7 +239,7 @@ def test_wrong_resource_audience_refuses_before_graph_mutation(tmp_path: Path) -
     assert not (state_directory / "mutations.log").exists()
 
 
-def test_apply_is_idempotent_and_revoke_preserves_unrelated_state(
+def test_apply_without_etag_is_exact_idempotent_and_revoke_preserves_unrelated_state(
     tmp_path: Path,
 ) -> None:
     environment, state_directory = _setup_fake_az(tmp_path)
@@ -233,6 +259,24 @@ def test_apply_is_idempotent_and_revoke_preserves_unrelated_state(
         UNRELATED_ROLE_ID,
     }
     assert next(
+        role for role in state["app"]["appRoles"] if role["id"] == AGENT_ROLE_ID
+    ) == {
+        "allowedMemberTypes": ["Application"],
+        "description": (
+            "Allows the provider Sovereign workload to call the governed Agent API."
+        ),
+        "displayName": "Agent API access",
+        "id": AGENT_ROLE_ID,
+        "isEnabled": True,
+        "origin": "Application",
+        "value": "AgentApi.Access",
+    }
+    assert next(
+        role for role in state["app"]["appRoles"] if role["id"] == SCRIBE_ROLE_ID
+    ) == next(
+        role for role in original["app"]["appRoles"] if role["id"] == SCRIBE_ROLE_ID
+    )
+    assert next(
         role for role in state["app"]["appRoles"] if role["id"] == UNRELATED_ROLE_ID
     ) == next(
         role for role in original["app"]["appRoles"] if role["id"] == UNRELATED_ROLE_ID
@@ -241,6 +285,14 @@ def test_apply_is_idempotent_and_revoke_preserves_unrelated_state(
         SCRIBE_ROLE_ID,
         AGENT_ROLE_ID,
     }
+    assert (
+        next(
+            value
+            for value in state["provider_assignments"]
+            if value["appRoleId"] == SCRIBE_ROLE_ID
+        )
+        == original["provider_assignments"][0]
+    )
     assert state["public_assignments"] == original["public_assignments"]
     assert (state_directory / "mutations.log").read_text().splitlines() == [
         "PATCH",
@@ -255,12 +307,99 @@ def test_apply_is_idempotent_and_revoke_preserves_unrelated_state(
         AGENT_ROLE_ID,
         UNRELATED_ROLE_ID,
     }
-    assert [value["appRoleId"] for value in state["provider_assignments"]] == [
-        SCRIBE_ROLE_ID
-    ]
+    assert state["provider_assignments"] == original["provider_assignments"]
     assert state["public_assignments"] == original["public_assignments"]
     assert (state_directory / "mutations.log").read_text().splitlines() == [
         "PATCH",
         "POST",
         "DELETE",
     ]
+
+
+def test_concurrent_prepatch_role_drift_refuses_without_mutation(
+    tmp_path: Path,
+) -> None:
+    environment, state_directory = _setup_fake_az(tmp_path)
+    state_path = state_directory / "state.json"
+    state = json.loads(state_path.read_text())
+    state["drift_on_application_get"] = 2
+    state_path.write_text(json.dumps(state))
+
+    result = _run(environment, "--apply", "--confirm-staging")
+
+    assert result.returncode == 1
+    assert "application roles changed during pre-PATCH validation" in result.stderr
+    assert not (state_directory / "mutations.log").exists()
+    state = json.loads(state_path.read_text())
+    assert {role["id"] for role in state["app"]["appRoles"]} == {
+        SCRIBE_ROLE_ID,
+        UNRELATED_ROLE_ID,
+        state["concurrent_role"]["id"],
+    }
+
+
+def test_apply_uses_etag_when_graph_supplies_one(tmp_path: Path) -> None:
+    environment, state_directory = _setup_fake_az(tmp_path)
+    state_path = state_directory / "state.json"
+    state = json.loads(state_path.read_text())
+    state["app"]["@odata.etag"] = 'W/"initial"'
+    state_path.write_text(json.dumps(state))
+
+    result = _run(environment, "--apply", "--confirm-staging")
+
+    assert result.returncode == 0, result.stderr
+    state = json.loads(state_path.read_text())
+    assert state["app"]["@odata.etag"] == 'W/"next"'
+    assert (state_directory / "mutations.log").read_text().splitlines() == [
+        "PATCH",
+        "POST",
+    ]
+
+
+def test_conflicting_agent_role_definition_refuses_without_mutation(
+    tmp_path: Path,
+) -> None:
+    environment, state_directory = _setup_fake_az(tmp_path)
+    state_path = state_directory / "state.json"
+    state = json.loads(state_path.read_text())
+    state["app"]["appRoles"].append(
+        {
+            "allowedMemberTypes": ["Application"],
+            "description": (
+                "Allows the provider Sovereign workload to call the governed Agent API."
+            ),
+            "displayName": "Conflicting display name",
+            "id": AGENT_ROLE_ID,
+            "isEnabled": True,
+            "origin": "Application",
+            "value": "AgentApi.Access",
+        }
+    )
+    state_path.write_text(json.dumps(state))
+
+    result = _run(environment, "--apply", "--confirm-staging")
+
+    assert result.returncode == 1
+    assert "conflicting definition" in result.stderr
+    assert not (state_directory / "mutations.log").exists()
+
+
+def test_public_agent_assignment_refuses_without_mutation(tmp_path: Path) -> None:
+    environment, state_directory = _setup_fake_az(tmp_path)
+    state_path = state_directory / "state.json"
+    state = json.loads(state_path.read_text())
+    state["public_assignments"].append(
+        {
+            "id": "assignment-public-agent",
+            "principalId": PUBLIC_PRINCIPAL_ID,
+            "resourceId": RESOURCE_SP_ID,
+            "appRoleId": AGENT_ROLE_ID,
+        }
+    )
+    state_path.write_text(json.dumps(state))
+
+    result = _run(environment, "--apply", "--confirm-staging")
+
+    assert result.returncode == 1
+    assert "public UAI has an AgentApi.Access assignment" in result.stderr
+    assert not (state_directory / "mutations.log").exists()

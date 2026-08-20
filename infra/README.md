@@ -19,6 +19,13 @@ it retains the disabled-by-no-assignment role definition and leaves the existing
 Scribe role unchanged. Run `--status` after either operation and retain its
 value-free output with the staging change record.
 
+Microsoft Graph does not expose an ETag for this application in the staging
+tenant. Before its narrow `appRoles` PATCH, the script therefore takes an
+immediate second complete role snapshot and refuses on any drift; it then
+verifies the exact complete postcondition. This minimizes but cannot eliminate
+the non-atomic interval, so do not run concurrent application-role changes
+during reconciliation.
+
 ## V7 incomplete-turn reconciliation
 
 The status command reports only counts, states, and opaque interaction refs:
