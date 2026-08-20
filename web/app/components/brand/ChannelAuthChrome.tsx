@@ -39,7 +39,7 @@ export function ChannelAuthChrome({
       <header className="border-b px-4 py-5">
         <div className="mx-auto flex w-full max-w-5xl items-center justify-between">
           <BrandLogo variant="dark" size="sm" />
-          <span className="text-muted-foreground text-[11px] font-semibold uppercase tracking-[0.22em]">
+          <span className="text-muted-foreground text-[11px] font-semibold tracking-[0.22em] uppercase">
             {copy.kicker}
           </span>
         </div>

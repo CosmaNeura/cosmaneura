@@ -569,7 +569,7 @@ function BaaClickwrap({
         </ScrollArea>
       </div>
       <aside className="bg-card h-fit rounded-xl border p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand-gold)]">
+        <p className="text-xs font-semibold tracking-[0.18em] text-[var(--brand-gold)] uppercase">
           Clickwrap
         </p>
         <div className="mt-4 grid gap-4">
@@ -716,7 +716,7 @@ function WorkforceFlow({
       </p>
       {found ? (
         <div className="bg-card mt-6 rounded-xl border p-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand-gold)]">
+          <p className="text-xs font-semibold tracking-[0.18em] text-[var(--brand-gold)] uppercase">
             Covered entity
           </p>
           <p
@@ -1206,7 +1206,7 @@ function AllSetStep({ practice }: { practice: PracticeStatus }) {
 
 function StepKicker({ n, label }: { n: string; label: string }) {
   return (
-    <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--brand-gold)]">
+    <p className="text-xs font-semibold tracking-[0.28em] text-[var(--brand-gold)] uppercase">
       {n} · {label}
     </p>
   )

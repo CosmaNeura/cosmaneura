@@ -39,7 +39,7 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=True,
         ),
-        sa.Column("legal_name", sa.Text(), nullable=False),
+        sa.Column("legal_name", sa.String(), nullable=False),
         sa.Column("npi", sa.String(length=10), nullable=True),
         sa.Column("city", sa.String(length=80), nullable=True),
         sa.Column("region", sa.String(length=40), nullable=True),
@@ -70,8 +70,7 @@ def upgrade() -> None:
         sa.Column("baa_signature_name", sa.String(length=120), nullable=True),
         sa.Column("baa_signature_title", sa.String(length=120), nullable=True),
         sa.PrimaryKeyConstraint("id", name=op.f("practice_pkey")),
-        sa.UniqueConstraint("join_code", name="practice_join_code_key"),
-        comment="Covered entity. The BAA principal for Cosmas.",
+        comment="Covered entity. The BAA principal for Cosmas — not the individual clinician.",
     )
     op.create_index("practice_join_code_idx", "practice", ["join_code"], unique=True)
 

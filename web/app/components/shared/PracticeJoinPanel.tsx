@@ -6,7 +6,7 @@ export function PracticeJoinPanel({ practice }: { practice: PracticeStatus }) {
 
   return (
     <div className="w-full rounded-lg border p-4 text-left">
-      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--brand-gold)]">
+      <p className="text-xs font-semibold tracking-[0.18em] text-[var(--brand-gold)] uppercase">
         Practice
       </p>
       <p className="mt-1 text-lg font-semibold">{practice.legal_name}</p>
