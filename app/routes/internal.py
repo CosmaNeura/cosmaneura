@@ -1,7 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Path,
+    Request,
+    Response,
+    status,
+)
 from pydantic import BaseModel, Field, computed_field, model_validator
 
 import app.commands.uploads.sas
@@ -11,6 +20,7 @@ import app.jobs.extract_labs as extract_labs_job
 import app.jobs.extract_medications as extract_medications_job
 import app.jobs.fetch_drug_reference as fetch_drug_reference_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
+import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.zoom as zoom_service
 from app.commands.uploads.sas import UploadType
@@ -71,6 +81,7 @@ from app.models.patient_medication import (
     PatientMedication,
 )
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
@@ -248,6 +259,10 @@ def open_sandbox_labs_record(
     request: Request,
     response: Response,
     appointment_id: Annotated[TypeIDType, Path()],
+    authority_mode: Annotated[
+        str | None,
+        Header(alias="X-Cosmaneura-Provider-Authority"),
+    ] = None,
 ) -> OpenSandboxRecord:
     """Resolve the authenticated doctor's current synthetic Preview record.
 
@@ -257,8 +272,14 @@ def open_sandbox_labs_record(
     """
 
     doctor: Doctor = request.state.doctor
-    actor_ref = request.state.auth_state.payload.get("sub")
-    if not isinstance(actor_ref, str) or not actor_ref.strip():
+    clerk_subject = request.state.auth_state.payload.get("sub")
+    clerk_issuer = request.state.auth_state.payload.get("iss")
+    if (
+        not isinstance(clerk_subject, str)
+        or not clerk_subject.strip()
+        or not isinstance(clerk_issuer, str)
+        or not clerk_issuer.strip()
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not Authenticated",
@@ -267,11 +288,34 @@ def open_sandbox_labs_record(
     # That delegation is useful for ordinary support workflows but is not a
     # ratified EHR authorization path. Never mint a target doctor's record
     # grant for a different Clerk subject.
-    if doctor.clerk_id != actor_ref:
+    if doctor.clerk_id != clerk_subject:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Synthetic sandbox record is unavailable.",
         )
+    if authority_mode not in {None, "platform-v1"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provider authority mode is invalid.",
+        )
+    actor_ref = clerk_subject
+    if authority_mode == "platform-v1":
+        try:
+            actor_ref = authority_service.provider_record_actor_ref(
+                clerk_issuer=clerk_issuer,
+                clerk_subject=clerk_subject,
+                record_ref=str(appointment_id),
+            )
+        except authority_service.AuthorityRequestDeniedError:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Synthetic sandbox record is unavailable.",
+            ) from None
+        except (authority_service.AuthorityKernelDisabledError, SQLAlchemyError):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Provider authority is unavailable.",
+            ) from None
     try:
         grant_key = configured_record_grant_key()
     except RecordGrantConfigurationError:

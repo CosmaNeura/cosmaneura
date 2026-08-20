@@ -23,10 +23,21 @@ describe("pinned Sovereign panel asset", () => {
     )
     expect(SOVEREIGN_PANEL_ASSET_PATH).toContain(SOVEREIGN_PANEL_SHA256)
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "d8ae83112b0a3e5f1f84bf071c3cb8bb92abe3e0",
+      "471f497d1824535cf2a7903f25406c0fa7ae39e9",
     )
     expect(bytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",
+    )
+    expect(bytes.toString("utf8")).toContain('if (opts.embedVersion !== "1.0")')
+    expect(bytes.toString("utf8")).toContain(
+      'if (typeof opts.onHumanContact !== "function")',
+    )
+    expect(bytes.toString("utf8")).toContain(
+      "if (r.status === 401) attempt.forceRefresh = true",
+    )
+    expect(bytes.toString("utf8")).toContain("? { forceRefresh: true }")
+    expect(bytes.toString("utf8")).not.toContain(
+      'headers["x-cosmaneura-mount-context"]',
     )
   })
 })

@@ -1,5 +1,46 @@
 # Infrastructure
 
+## Provider-first Agent API role reconciliation
+
+`infra/scripts/reconcile-agent-api-role.sh` is read-only by default. It verifies
+the exact staging provider UAI, preserves `Scribe.Transcript.Write`, and reports
+whether `AgentApi.Access` and its provider assignment exist. The public UAI is
+deliberately outside this activation.
+
+```bash
+infra/scripts/reconcile-agent-api-role.sh --status
+infra/scripts/reconcile-agent-api-role.sh --apply --confirm-staging
+infra/scripts/reconcile-agent-api-role.sh --revoke --confirm-staging
+```
+
+`--apply` idempotently creates the application role when absent and assigns it
+only to the pinned provider staging UAI. `--revoke` removes only that assignment;
+it retains the disabled-by-no-assignment role definition and leaves the existing
+Scribe role unchanged. Run `--status` after either operation and retain its
+value-free output with the staging change record.
+
+## V7 incomplete-turn reconciliation
+
+The status command reports only counts, states, and opaque interaction refs:
+
+```bash
+python -m app.cli authority-ingestion-status --older-than-minutes 15
+```
+
+Accepted canonical turns without a final phase are reconciled one exact turn
+at a time. The command is staging-only and dry-run by default. Mutation needs
+both explicit flags and writes only the fixed safe `unavailable` final,
+idempotency receipt, and platform-authoritative audit fact; it never sweeps or
+prints conversation content.
+
+```bash
+python -m app.cli reconcile-stale-canonical-turn \
+  --turn-ref conversation_turn_<opaque> --older-than-minutes 15
+python -m app.cli reconcile-stale-canonical-turn \
+  --turn-ref conversation_turn_<opaque> --older-than-minutes 15 \
+  --apply --confirm-staging-only
+```
+
 OpenTofu / Terraform configuration for the cosmaneura production environment.
 State lives in the `cosmaneuratfstate` Azure storage account (see
 `local.tfstate` in `main.tf`).

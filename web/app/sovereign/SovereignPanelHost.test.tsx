@@ -33,9 +33,6 @@ const mount = vi.fn((options: PanelOptions) => {
   return mountImplementation(options)
 })
 const panelApi: PanelApi = { mount }
-const RECORD_GRANT_A = `gA${"a".repeat(118)}`
-const RECORD_GRANT_B = `gB${"b".repeat(118)}`
-const RECORD_GRANT_STALE = `gS${"c".repeat(118)}`
 
 function signedInClerk() {
   return {
@@ -54,8 +51,22 @@ function signedInClerk() {
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Cosmaneura-Embed-Version": "1.0",
+    },
   })
+}
+
+function mountContextResponse(contextToken: string) {
+  const now = Date.now()
+  return {
+    context_token: contextToken,
+    token_type: "Bearer",
+    issued_at: new Date(now - 1_000).toISOString(),
+    refresh_after: new Date(now + 5 * 60_000).toISOString(),
+    expires_at: new Date(now + 15 * 60_000).toISOString(),
+  }
 }
 
 describe("SovereignPanelHost", () => {
@@ -88,6 +99,7 @@ describe("SovereignPanelHost", () => {
     ).toEqual({
       origin: "https://sovereign.example",
       clerkTemplate: "cosmaneura-sovereign",
+      platformAuthorityEnabled: false,
     })
 
     for (const origin of [
@@ -111,35 +123,231 @@ describe("SovereignPanelHost", () => {
     ).toBeNull()
   })
 
-  it("uses the Clerk template directly, rechecks scoped refs, and fences record races", async () => {
+  it("reuses and rotates one appointment-bound mount session when enabled", async () => {
+    vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
+    let now = Date.UTC(2026, 7, 20, 12, 0, 0)
+    vi.spyOn(Date, "now").mockImplementation(() => now)
     const clerk = signedInClerk()
     vi.mocked(getClient).mockResolvedValue(clerk)
-
-    let delayedResolve: (response: Response) => void = () => {
-      throw new Error("delayed response was not requested")
-    }
-    let delayNext = false
+    const mountContext = `mctx_${"a".repeat(48)}`
+    const rotatedContext = `mctx_${"b".repeat(48)}`
+    const scheduledContext = `mctx_${"e".repeat(48)}`
+    const nextRecordContext = `mctx_${"d".repeat(48)}`
+    let exchangeCount = 0
+    let rotationCount = 0
     const fetchMock = vi.fn(
-      async (input: RequestInfo | URL, init?: RequestInit) => {
+      async (input: RequestInfo | URL, _init?: RequestInit) => {
         const url = String(input)
-        if (delayNext) {
-          delayNext = false
-          return await new Promise<Response>((resolve) => {
-            delayedResolve = resolve
-          })
+        if (url === "/embed/v1/context-tokens/exchange") {
+          exchangeCount += 1
+          return json(
+            mountContextResponse(
+              exchangeCount === 1 ? mountContext : nextRecordContext,
+            ),
+          )
         }
-        if (url.includes("appointment_a"))
-          return json({ record_ref: RECORD_GRANT_A })
-        if (url.includes("appointment_b"))
-          return json({ record_ref: RECORD_GRANT_B })
-        if (url.includes("appointment_c"))
-          return json({ detail: "unavailable" }, 404)
-        throw new Error(`unexpected URL ${url} ${String(init?.method)}`)
+        if (url === "/embed/v1/context-tokens/rotate") {
+          rotationCount += 1
+          return json(
+            mountContextResponse(
+              rotationCount === 1 ? rotatedContext : scheduledContext,
+            ),
+          )
+        }
+        throw new Error(`unexpected URL ${url}`)
       },
     )
     vi.stubGlobal("fetch", fetchMock)
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window)
+    const setRecord = vi.fn(async () => 1)
+    mountImplementation = () => ({ setRecord, destroy: vi.fn() })
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
 
-    const setRecord = vi.fn(async (_recordId: string) => {})
+    const view = render(
+      <SovereignPanelHost appointmentId="appointment_synthetic_001" />,
+    )
+    await waitFor(() => expect(mount).toHaveBeenCalledTimes(1))
+    const options = mount.mock.calls[0][0]
+    expect(options.embedVersion).toBe("1.0")
+    expect(options).not.toHaveProperty("requireClientTurnId")
+    expect(options).not.toHaveProperty("loadHistory")
+    await expect(
+      Promise.all([options.getAuthToken(), options.getAuthToken()]),
+    ).resolves.toEqual([mountContext, mountContext])
+    await expect(options.getAuthToken()).resolves.toBe(mountContext)
+    await expect(options.getAuthToken({ forceRefresh: true })).resolves.toBe(
+      rotatedContext,
+    )
+    await expect(options.getAuthToken()).resolves.toBe(rotatedContext)
+    now += 6 * 60_000
+    await expect(options.getAuthToken()).resolves.toBe(scheduledContext)
+    await expect(options.getAuthToken()).resolves.toBe(scheduledContext)
+    await expect(options.getContext()).resolves.toEqual({
+      clientId: "appointment_synthetic_001",
+    })
+
+    const exchanges = fetchMock.mock.calls.filter(
+      ([input]) => String(input) === "/embed/v1/context-tokens/exchange",
+    )
+    expect(exchanges).toHaveLength(1)
+    expect(exchanges[0][1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        redirect: "error",
+        headers: expect.objectContaining({
+          Authorization: "Bearer platform-session-token",
+          "X-Cosmaneura-Embed-Version": "1.0",
+        }),
+        body: JSON.stringify({
+          requested_surface: "provider_assistant",
+          record_ref: "appointment_synthetic_001",
+        }),
+      }),
+    )
+    const rotations = fetchMock.mock.calls.filter(
+      ([input]) => String(input) === "/embed/v1/context-tokens/rotate",
+    )
+    expect(rotations).toHaveLength(2)
+    expect(rotations[0][1]).toEqual(
+      expect.objectContaining({
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        redirect: "error",
+        headers: expect.objectContaining({
+          Authorization: `Bearer ${mountContext}`,
+          "X-Cosmaneura-Embed-Version": "1.0",
+        }),
+        body: JSON.stringify({
+          requested_surface: "provider_assistant",
+          record_ref: "appointment_synthetic_001",
+        }),
+      }),
+    )
+    expect(rotations[1][1]).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: `Bearer ${rotatedContext}`,
+        }),
+      }),
+    )
+    expect(clerk.session.getToken).toHaveBeenCalledTimes(1)
+    expect(clerk.session.getToken).not.toHaveBeenCalledWith({
+      template: "cosmaneura-sovereign",
+    })
+    options.onHumanContact({
+      label: "Talk with a person",
+      action_id: "human-contact",
+      fallback_text: "Contact support.",
+    })
+    expect(open).toHaveBeenCalledWith(
+      "/support#contact",
+      "_blank",
+      "noopener,noreferrer",
+    )
+    expect(() =>
+      options.onHumanContact({
+        label: "Unsafe",
+        action_id: "unreviewed-action",
+        fallback_text: "Do not navigate.",
+      }),
+    ).toThrow("Human contact action is unavailable")
+
+    view.rerender(
+      <SovereignPanelHost appointmentId="appointment_synthetic_003" />,
+    )
+    await waitFor(() => expect(mount).toHaveBeenCalledTimes(2))
+    await expect(options.getAuthToken()).rejects.toThrow(
+      "Provider authority is unavailable",
+    )
+    const nextOptions = mount.mock.calls[1][0]
+    await expect(nextOptions.getAuthToken()).resolves.toBe(nextRecordContext)
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/embed/v1/context-tokens/exchange",
+      ),
+    ).toHaveLength(2)
+    expect(fetchMock.mock.calls.at(-1)?.[1]).toEqual(
+      expect.objectContaining({
+        body: JSON.stringify({
+          requested_surface: "provider_assistant",
+          record_ref: "appointment_synthetic_003",
+        }),
+      }),
+    )
+  })
+
+  it("fails closed after rotation authorization is rejected", async () => {
+    vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
+    const now = Date.UTC(2026, 7, 20, 12, 0, 0)
+    vi.spyOn(Date, "now").mockImplementation(() => now)
+    vi.mocked(getClient).mockResolvedValue(signedInClerk())
+    const mountContext = `mctx_${"c".repeat(48)}`
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === "/embed/v1/context-tokens/exchange") {
+        return json(mountContextResponse(mountContext))
+      }
+      if (url === "/embed/v1/context-tokens/rotate") {
+        return json({ code: "TOKEN_INVALID" }, 401)
+      }
+      throw new Error(`unexpected URL ${url}`)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    mountImplementation = () => ({
+      setRecord: vi.fn(async () => 1),
+      destroy: vi.fn(),
+    })
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
+
+    render(<SovereignPanelHost appointmentId="appointment_synthetic_002" />)
+    await waitFor(() => expect(mount).toHaveBeenCalledTimes(1))
+    const options = mount.mock.calls[0][0]
+    await expect(options.getAuthToken()).resolves.toBe(mountContext)
+    await expect(options.getAuthToken({ forceRefresh: true })).rejects.toThrow(
+      "Provider authority is unavailable",
+    )
+    await expect(options.getAuthToken()).rejects.toThrow(
+      "Provider authority is unavailable",
+    )
+
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/embed/v1/context-tokens/exchange",
+      ),
+    ).toHaveLength(1)
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/embed/v1/context-tokens/rotate",
+      ),
+    ).toHaveLength(1)
+  })
+
+  it("keeps legacy auth default-off from platform authority without a raw clinical bridge", async () => {
+    const clerk = signedInClerk()
+    vi.mocked(getClient).mockResolvedValue(clerk)
+    const fetchMock = vi.fn()
+    vi.stubGlobal("fetch", fetchMock)
+
+    const setRecord = vi.fn(async (_recordId: string | null) => 1)
     const destroy = vi.fn()
     mountImplementation = () => ({ setRecord, destroy })
     const appendSpy = vi.spyOn(document.head, "appendChild")
@@ -155,12 +363,17 @@ describe("SovereignPanelHost", () => {
     await waitFor(() => expect(mount).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_a"))
 
-    const script = appendSpy.mock.calls[0][0] as HTMLScriptElement
-    expect(script.getAttribute("src")).toBe(SOVEREIGN_PANEL_ASSET_PATH)
-    expect(script.integrity).toBe(SOVEREIGN_PANEL_INTEGRITY)
-    expect(script.crossOrigin).toBe("anonymous")
+    if (appendSpy.mock.calls.length) {
+      const script = appendSpy.mock.calls[0][0] as HTMLScriptElement
+      expect(script.getAttribute("src")).toBe(SOVEREIGN_PANEL_ASSET_PATH)
+      expect(script.integrity).toBe(SOVEREIGN_PANEL_INTEGRITY)
+      expect(script.crossOrigin).toBe("anonymous")
+    }
 
     const options = mount.mock.calls[0][0]
+    expect(options.embedVersion).toBe("1.0")
+    expect(options).not.toHaveProperty("requireClientTurnId")
+    expect(options).not.toHaveProperty("loadHistory")
     await expect(options.getAuthToken()).resolves.toBe("provider-oidc-token")
     expect(clerk.session.getToken).toHaveBeenCalledWith({
       template: "cosmaneura-sovereign",
@@ -168,20 +381,8 @@ describe("SovereignPanelHost", () => {
 
     await expect(options.getContext()).resolves.toEqual({
       clientId: "appointment_a",
-      record_ref: RECORD_GRANT_A,
     })
-    expect(fetchMock).toHaveBeenLastCalledWith(
-      "/internal/v1/notes/appointment_a/ehr-labs-record",
-      expect.objectContaining({
-        method: "GET",
-        credentials: "same-origin",
-        cache: "no-store",
-        redirect: "error",
-        headers: expect.objectContaining({
-          Authorization: "Bearer platform-session-token",
-        }),
-      }),
-    )
+    expect(fetchMock).not.toHaveBeenCalled()
 
     view.rerender(<SovereignPanelHost appointmentId="appointment_b" />)
     await waitFor(() => expect(mount).toHaveBeenCalledTimes(2))
@@ -189,16 +390,10 @@ describe("SovereignPanelHost", () => {
     const optionsB = mount.mock.calls[1][0]
     await expect(optionsB.getContext()).resolves.toEqual({
       clientId: "appointment_b",
-      record_ref: RECORD_GRANT_B,
     })
-
-    delayNext = true
-    const staleContext = optionsB.getContext()
     view.rerender(<SovereignPanelHost appointmentId="appointment_c" />)
     await waitFor(() => expect(mount).toHaveBeenCalledTimes(3))
     await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_c"))
-    delayedResolve(json({ record_ref: RECORD_GRANT_STALE }))
-    await expect(staleContext).rejects.toThrow("Open record changed")
 
     const optionsC = mount.mock.calls[2][0]
     await expect(optionsC.getContext()).resolves.toEqual({
@@ -211,16 +406,16 @@ describe("SovereignPanelHost", () => {
 
     view.unmount()
     expect(destroy).toHaveBeenCalledTimes(3)
+    expect(
+      setRecord.mock.calls.filter(([value]) => value === null),
+    ).toHaveLength(3)
   })
 
   it("destroys and detaches the panel when the initial record bind fails", async () => {
     vi.mocked(getClient).mockResolvedValue(signedInClerk())
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => json({ record_ref: RECORD_GRANT_A })),
-    )
     const destroy = vi.fn()
-    const setRecord = vi.fn(async () => {
+    const setRecord = vi.fn(async (recordId: string | null) => {
+      if (recordId === null) return 1
       throw new Error("bind failed")
     })
     mountImplementation = () => ({ setRecord, destroy })
@@ -237,26 +432,23 @@ describe("SovereignPanelHost", () => {
     render(<SovereignPanelHost appointmentId="appointment_a" />)
     await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_a"))
     await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1))
+    expect(setRecord).toHaveBeenCalledWith(null)
   })
 
   it("destroys an obsolete panel exactly once when its initial bind resolves late", async () => {
     vi.mocked(getClient).mockResolvedValue(signedInClerk())
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => json({ record_ref: RECORD_GRANT_A })),
-    )
 
     let finishFirstBind: () => void = () => {
       throw new Error("first bind was not started")
     }
-    const firstSetRecord = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          finishFirstBind = resolve
-        }),
-    )
+    const firstSetRecord = vi.fn((recordId: string | null) => {
+      if (recordId === null) return Promise.resolve(1)
+      return new Promise<void>((resolve) => {
+        finishFirstBind = resolve
+      })
+    })
     const firstDestroy = vi.fn()
-    const secondSetRecord = vi.fn(async () => {})
+    const secondSetRecord = vi.fn(async () => 1)
     const secondDestroy = vi.fn()
     let mountCount = 0
     mountImplementation = () => {
@@ -285,6 +477,7 @@ describe("SovereignPanelHost", () => {
       expect(secondSetRecord).toHaveBeenCalledWith("appointment_b"),
     )
     expect(firstDestroy).toHaveBeenCalledTimes(1)
+    expect(firstSetRecord).toHaveBeenCalledWith(null)
 
     await act(async () => finishFirstBind())
     expect(firstDestroy).toHaveBeenCalledTimes(1)
@@ -292,5 +485,6 @@ describe("SovereignPanelHost", () => {
 
     view.unmount()
     expect(secondDestroy).toHaveBeenCalledTimes(1)
+    expect(secondSetRecord).toHaveBeenCalledWith(null)
   })
 })

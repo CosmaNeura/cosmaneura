@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol
 from uuid import UUID
 
 import jwt
@@ -10,9 +10,8 @@ from jwt import PyJWKClient, PyJWTError
 
 from app import log
 from app.configuration.service_auth import (
-    SCRIBE_TRANSCRIPT_WRITE_ROLE,
+    AGENT_API_AUTH_SETTINGS,
     SERVICE_AUTH_SETTINGS,
-    EntraServiceAuthSettings,
 )
 
 
@@ -24,22 +23,39 @@ class EntraServicePrincipal:
 TokenDecoder = Callable[[str], dict[str, Any]]
 
 
+class EntraAuthPolicy(Protocol):
+    enabled: bool
+    tenant_id: str
+    audience: str
+    issuer: str
+    jwks_url: str
+    allowed_client_ids: frozenset[str]
+    required_role: str
+    log_namespace: str
+    require_nbf: bool
+
+    def is_complete(self) -> bool: ...
+
+
 class EntraTokenDecoder:
     """Verify Entra v2 access tokens against the tenant's published signing keys."""
 
-    def __init__(self, settings: EntraServiceAuthSettings):
+    def __init__(self, settings: EntraAuthPolicy):
         self.settings = settings
         self.jwks_client = PyJWKClient(settings.jwks_url, cache_keys=True)
 
     def __call__(self, token: str) -> dict[str, Any]:
         signing_key = self.jwks_client.get_signing_key_from_jwt(token)
+        required_claims = ["aud", "exp", "iat", "iss", "sub", "tid"]
+        if self.settings.require_nbf:
+            required_claims.append("nbf")
         return jwt.decode(
             token,
             signing_key.key,
             algorithms=["RS256"],
             audience=self.settings.audience,
             issuer=self.settings.issuer,
-            options={"require": ["aud", "exp", "iat", "iss", "sub", "tid"]},
+            options={"require": required_claims},
         )
 
 
@@ -56,7 +72,7 @@ class EntraServiceAuthenticator:
 
     def __init__(
         self,
-        settings: EntraServiceAuthSettings,
+        settings: EntraAuthPolicy,
         decoder: TokenDecoder | None = None,
     ):
         self.settings = settings
@@ -71,8 +87,8 @@ class EntraServiceAuthenticator:
     ) -> EntraServicePrincipal:
         if not self.settings.enabled or not self.settings.is_complete():
             log.warning(
-                "scribe service authentication rejected",
-                action="scribe_handoff.authentication_rejected",
+                "service authentication rejected",
+                action=f"{self.settings.log_namespace}.authentication_rejected",
                 error_class="service_auth_not_configured",
             )
             raise HTTPException(
@@ -82,8 +98,8 @@ class EntraServiceAuthenticator:
 
         if credentials is None or credentials.scheme.lower() != "bearer":
             log.warning(
-                "scribe service authentication rejected",
-                action="scribe_handoff.authentication_rejected",
+                "service authentication rejected",
+                action=f"{self.settings.log_namespace}.authentication_rejected",
                 error_class="missing_bearer_token",
             )
             raise _authentication_error()
@@ -93,8 +109,8 @@ class EntraServiceAuthenticator:
             claims = decoder(credentials.credentials)
         except (PyJWTError, ValueError, TypeError):
             log.warning(
-                "scribe service authentication rejected",
-                action="scribe_handoff.authentication_rejected",
+                "service authentication rejected",
+                action=f"{self.settings.log_namespace}.authentication_rejected",
                 error_class="invalid_access_token",
             )
             raise _authentication_error() from None
@@ -109,8 +125,8 @@ class EntraServiceAuthenticator:
 
         if claims.get("tid") != self.settings.tenant_id:
             log.warning(
-                "scribe service authentication rejected",
-                action="scribe_handoff.authentication_rejected",
+                "service authentication rejected",
+                action=f"{self.settings.log_namespace}.authentication_rejected",
                 error_class="tenant_mismatch",
                 actual_caller_client_id=client_id,
             )
@@ -121,11 +137,11 @@ class EntraServiceAuthenticator:
             claims.get("idtyp") != "app"
             or client_id not in self.settings.allowed_client_ids
             or not isinstance(roles, list)
-            or SCRIBE_TRANSCRIPT_WRITE_ROLE not in roles
+            or self.settings.required_role not in roles
         ):
             log.warning(
-                "scribe service authorization rejected",
-                action="scribe_handoff.authorization_rejected",
+                "service authorization rejected",
+                action=f"{self.settings.log_namespace}.authorization_rejected",
                 error_class="app_claims_not_authorized",
                 actual_caller_client_id=client_id,
             )
@@ -138,3 +154,4 @@ class EntraServiceAuthenticator:
 
 
 authenticate_scribe_service_request = EntraServiceAuthenticator(SERVICE_AUTH_SETTINGS)
+authenticate_agent_api_request = EntraServiceAuthenticator(AGENT_API_AUTH_SETTINGS)

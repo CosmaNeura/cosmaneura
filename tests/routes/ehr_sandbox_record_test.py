@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from fastapi import Request, status
 from fastapi.testclient import TestClient
 
+import app.services.authority as authority_service
 from app.routes.dependencies.login_as import login_as
 from app.server import api_app
 from app.services.ehr_sandbox_record_mapping import (
@@ -107,7 +108,8 @@ def test_open_record_returns_only_server_mapped_opaque_reference(
     ]["get"]
     assert "requestBody" not in operation
     assert [parameter["name"] for parameter in operation["parameters"]] == [
-        "appointment_id"
+        "appointment_id",
+        "X-Cosmaneura-Provider-Authority",
     ]
     schema = api_app.openapi()["components"]["schemas"]["OpenSandboxRecord"][
         "properties"
@@ -116,6 +118,36 @@ def test_open_record_returns_only_server_mapped_opaque_reference(
     assert schema["maxLength"] == 4096
     assert schema["pattern"] == "^[A-Za-z0-9_-]{80,4096}={0,2}$"
     assert "must not parse" in schema["description"]
+
+
+def test_open_record_platform_mode_binds_grant_to_derived_authority_actor(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor, patient, appointment = _open_record()
+    _provision(doctor, patient)
+    authority_actor_ref = "authority_actor_01k2a3b4c5d6e7f8g9h0j1k2m3"
+
+    def resolve_actor(*, clerk_subject: str, record_ref: str) -> str:
+        assert clerk_subject == doctor.clerk_id
+        assert record_ref == str(appointment.id)
+        return authority_actor_ref
+
+    monkeypatch.setattr(
+        authority_service,
+        "provider_record_actor_ref",
+        resolve_actor,
+    )
+    response = authenticated_client.get(
+        _url(appointment),
+        headers={"X-Cosmaneura-Provider-Authority": "platform-v1"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    grant = response.json()["record_ref"]
+    claims = json.loads(Fernet(GRANT_KEY).decrypt(grant.encode("ascii"), ttl=60))
+    assert claims["actor_ref"] == authority_actor_ref
+    assert doctor.clerk_id not in grant
 
 
 def test_open_record_fails_closed_without_mapping_and_immediately_after_revocation(
