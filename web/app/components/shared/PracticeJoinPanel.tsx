@@ -23,6 +23,20 @@ export function PracticeJoinPanel({ practice }: { practice: PracticeStatus }) {
           BAA is not in force yet. Patient information stays locked.
         </p>
       )}
+      {practice.billing_exempt ? (
+        <p className="text-muted-foreground mt-1 text-sm">
+          Early-adopter access — no billing yet.
+        </p>
+      ) : practice.trial_ends_at ? (
+        <p className="mt-1 text-sm">
+          {practice.entitled ? "Free trial through " : "Free trial ended "}
+          {new Date(practice.trial_ends_at).toLocaleDateString(undefined, {
+            month: "long",
+            day: "numeric",
+          })}
+          .
+        </p>
+      ) : null}
       {isOwner ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <code className="bg-muted rounded-md px-3 py-1.5 font-mono text-lg tracking-[0.2em]">

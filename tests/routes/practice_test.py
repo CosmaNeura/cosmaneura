@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -19,8 +19,18 @@ def _authed_doctor() -> Doctor:
     return doctor
 
 
-def test_complete_onboarding_requires_practice(authenticated_client: TestClient):
+def _fresh_signup_doctor() -> Doctor:
+    """The authenticated_client fixture grandfathers the dev doctor; undo that
+    to exercise the fresh-signup path."""
+
     doctor = _authed_doctor()
+    doctor.onboarding_completed_at = None
+    doctor.save()
+    return doctor
+
+
+def test_complete_onboarding_requires_practice(authenticated_client: TestClient):
+    doctor = _fresh_signup_doctor()
     assert doctor.onboarding_completed_at is None
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
@@ -152,3 +162,116 @@ def test_mcd_channel_without_mcd_email_coerces_to_catholic(
     body = resp.json()
     assert body["origin_channel"] == "catholic"
     assert body["email_domain"] == extract_email_domain(doctor.email)
+
+
+def test_practice_gate_blocks_fresh_signup(authenticated_client: TestClient):
+    _fresh_signup_doctor()
+
+    resp = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert "practice" in resp.json()["detail"].lower()
+
+
+def test_practice_gate_grandfathers_doctor_without_practice(
+    authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    assert doctor.onboarding_completed_at is not None
+    assert PracticeMember.get(doctor_id=doctor.id) is None
+
+    resp = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert resp.status_code == status.HTTP_200_OK
+
+
+def test_baa_acceptance_starts_trial_and_opens_the_gate(
+    authenticated_client: TestClient,
+):
+    _fresh_signup_doctor()
+
+    created = authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Riverside Family Practice, PLLC",
+            "is_solo": True,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+    assert created.status_code == status.HTTP_200_OK, created.text
+    assert created.json()["trial_ends_at"] is None
+    assert created.json()["entitled"] is False
+
+    # member without a BAA in force: gate stays closed
+    blocked = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert blocked.status_code == status.HTTP_403_FORBIDDEN
+
+    accepted = authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json={
+            "signature_name": "Pat Owner",
+            "signature_title": "Physician / owner",
+            "checks": ["authority", "read", "accept", "phi"],
+        },
+    )
+    assert accepted.status_code == status.HTTP_200_OK, accepted.text
+    body = accepted.json()
+    assert body["entitled"] is True
+    assert body["billing_exempt"] is False
+    assert body["trial_ends_at"] is not None
+
+    trial_ends_at = datetime.fromisoformat(body["trial_ends_at"])
+    trial_left = trial_ends_at - datetime.now(timezone.utc)
+    assert timedelta(days=13) < trial_left <= timedelta(days=14)
+
+    opened = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert opened.status_code == status.HTTP_200_OK
+
+
+def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
+    authenticated_client: TestClient,
+):
+    _fresh_signup_doctor()
+
+    authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Riverside Family Practice, PLLC",
+            "is_solo": True,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+    authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json={
+            "signature_name": "Pat Owner",
+            "signature_title": "Physician / owner",
+            "checks": ["authority", "read", "accept", "phi"],
+        },
+    )
+
+    practice = Practice.first()
+    assert practice
+
+    practice.trial_ends_at = datetime.now(timezone.utc) - timedelta(days=1)
+    practice.save()
+    lapsed = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert lapsed.status_code == status.HTTP_402_PAYMENT_REQUIRED
+
+    # pilot comp (billing_exempt) reopens the gate
+    practice.billing_exempt = True
+    practice.save()
+    comped = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert comped.status_code == status.HTTP_200_OK
+
+    # a dated comp that has ended closes it again
+    practice.billing_exempt_until = datetime.now(timezone.utc) - timedelta(days=1)
+    practice.save()
+    ended = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert ended.status_code == status.HTTP_402_PAYMENT_REQUIRED
+
+    # an active subscription (mirrored from Stripe) is the third source
+    practice.subscription_status = "active"
+    practice.save()
+    subscribed = authenticated_client.get(api_app.url_path_for("note_list"))
+    assert subscribed.status_code == status.HTTP_200_OK

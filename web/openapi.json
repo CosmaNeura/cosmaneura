@@ -2364,6 +2364,26 @@
           "attested": {
             "type": "boolean",
             "title": "Attested"
+          },
+          "trial_ends_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Ends At"
+          },
+          "billing_exempt": {
+            "type": "boolean",
+            "title": "Billing Exempt"
+          },
+          "entitled": {
+            "type": "boolean",
+            "title": "Entitled"
           }
         },
         "additionalProperties": false,
@@ -2376,7 +2396,10 @@
           "pastoral_pack",
           "baa_accepted",
           "role",
-          "attested"
+          "attested",
+          "trial_ends_at",
+          "billing_exempt",
+          "entitled"
         ],
         "title": "PracticeStatus"
       },

@@ -1,6 +1,6 @@
 # seed fresh test databases with data
 
-from datetime import datetime
+from datetime import datetime, timezone
 from textwrap import dedent
 
 import pytz
@@ -29,6 +29,12 @@ def seed_test_data():
     if not doctor.email:
         assert user.email_addresses
         doctor.email = user.email_addresses[0].email_address
+        doctor.save()
+
+    if doctor.onboarding_completed_at is None:
+        # established doctor predating practices — the grandfathered path
+        # through the practice gate
+        doctor.onboarding_completed_at = datetime.now(timezone.utc)
         doctor.save()
 
     if not doctor.biography:

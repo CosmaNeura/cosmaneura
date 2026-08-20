@@ -10,6 +10,9 @@ export type PracticeStatus = {
   baa_accepted: boolean
   role: string
   attested: boolean
+  trial_ends_at: string | null
+  billing_exempt: boolean
+  entitled: boolean
 }
 
 export type JoinMismatch = {

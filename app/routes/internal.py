@@ -45,7 +45,13 @@ from app.models.note_type_customization import (
     default_customization,
 )
 from app.models.patient import Patient
-from app.models.practice import OriginChannel, Practice, PracticeMember, PracticeRole
+from app.models.practice import (
+    TRIAL_LENGTH,
+    OriginChannel,
+    Practice,
+    PracticeMember,
+    PracticeRole,
+)
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy.orm import selectinload
 
@@ -54,6 +60,7 @@ from .admin import admin_api_app
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.login_as import login_as
+from .dependencies.practice_gate import require_practice_in_force
 
 # extract into variable for test import to easily override dependencies
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
@@ -72,6 +79,9 @@ internal_api_app = APIRouter(
         Depends(inject_doctor_record),
         # allow admins to switch to another doctor
         Depends(login_as),
+        # fail closed: no PHI processing without a BAA-in-force, attested,
+        # entitled practice (runs after login_as so it gates the effective doctor)
+        Depends(require_practice_in_force),
     ],
 )
 
@@ -553,6 +563,9 @@ def _practice_payload(
         baa_accepted=practice.baa_accepted_at is not None,
         role=member.role,
         attested=member.attested_at is not None,
+        trial_ends_at=practice.trial_ends_at,
+        billing_exempt=practice.billing_exempt,
+        entitled=practice.entitled(),
     )
 
 
@@ -565,6 +578,9 @@ class PracticeStatus(BaseModel, extra="forbid"):
     baa_accepted: bool
     role: str
     attested: bool
+    trial_ends_at: datetime | None
+    billing_exempt: bool
+    entitled: bool
 
 
 class JoinMismatch(BaseModel, extra="forbid"):
@@ -684,6 +700,10 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         practice.baa_accepted_by_doctor_id = doctor.id
         practice.baa_signature_name = data.signature_name.strip()
         practice.baa_signature_title = data.signature_title.strip()
+        # entitlement begins at the legal moment: the BAA is in force, the
+        # trial runs, and billing is invited later (ADR 0016)
+        if not practice.billing_exempt and practice.trial_ends_at is None:
+            practice.trial_ends_at = datetime.now(timezone.utc) + TRIAL_LENGTH
         practice.save()
     member.attested_at = datetime.now(timezone.utc)
     member.attestation_name = data.signature_name.strip()
@@ -722,6 +742,9 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             baa_accepted=practice.baa_accepted_at is not None,
             role=PracticeRole.workforce.value,
             attested=False,
+            trial_ends_at=practice.trial_ends_at,
+            billing_exempt=practice.billing_exempt,
+            entitled=practice.entitled(),
         )
     )
 

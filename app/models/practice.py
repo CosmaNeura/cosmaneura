@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 import sqlalchemy as sa
@@ -8,6 +8,12 @@ from activemodel.types import TypeIDType
 from sqlmodel import Column, Field, Relationship
 
 from .doctor import Doctor
+
+TRIAL_LENGTH = timedelta(days=14)
+"Every practice starts on a free trial, stamped when the BAA is accepted."
+
+ENTITLED_SUBSCRIPTION_STATUSES = {"trialing", "active"}
+"Stripe subscription statuses that keep a practice entitled."
 
 
 class OriginChannel(str, Enum):
@@ -47,6 +53,38 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     )
     baa_signature_name: str | None = None
     baa_signature_title: str | None = None
+
+    trial_ends_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Stamped as now + TRIAL_LENGTH the first time the BAA is accepted."
+
+    billing_exempt: bool = False
+    "Comped access (early-adopter pilots, future centrally invoiced groups)."
+    billing_exempt_until: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "End of the comp. Null while billing_exempt means exempt indefinitely."
+
+    stripe_customer_id: str | None = None
+    stripe_subscription_id: str | None = None
+    subscription_status: str | None = None
+    "Mirrored from Stripe webhooks (trialing/active/past_due/canceled/paused)."
+
+    def entitled(self) -> bool:
+        """The platform is the system of record for entitlement; Stripe is one
+        of several ways it gets set (ARCHITECTURE.md §8, ADR 0016). Fail closed."""
+
+        now = datetime.now(timezone.utc)
+        if self.billing_exempt and (
+            self.billing_exempt_until is None or self.billing_exempt_until > now
+        ):
+            return True
+        if self.subscription_status in ENTITLED_SUBSCRIPTION_STATUSES:
+            return True
+        return self.trial_ends_at is not None and self.trial_ends_at > now
 
 
 class PracticeMember(
