@@ -96,17 +96,34 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
-# Preserve the explicit deployment control before direnv renders the secret
-# bundle. `direnv export` emits a delta, so a value inherited unchanged by the
-# rendered environment is intentionally absent from its JSON output. Reading
-# this switch back from ENV_JSON would therefore turn an explicit `true` into
-# the false default even though the guarded grant secret was resolved.
+# Preserve explicit deployment controls before direnv renders the secret
+# bundle. `direnv export` emits a delta, so values inherited unchanged by the
+# rendered environment are intentionally absent from its JSON output.
+ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-false}"
 ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"
+
+if [[ "$ENABLE_PROVIDER_V7" != "true" && "$ENABLE_PROVIDER_V7" != "false" ]]; then
+	echo "ENABLE_PROVIDER_V7 must be true or false."
+	exit 1
+fi
 
 # Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
 # Must stay in sync with variables.tf python_secret_vars / python_public_vars.
 if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
 	echo "Failed to load staging deployment configuration."
+	exit 1
+fi
+
+# The preserved control may be absent from direnv's delta when it is inherited.
+# Reconcile the two runtime gates explicitly so a true staging activation can
+# neither be lost nor split into a partially enabled backend.
+if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
+	--arg enabled "$ENABLE_PROVIDER_V7" \
+	'. + {
+		AUTHORITY_KERNEL_ENABLED: $enabled,
+		AGENT_API_ENABLED: $enabled
+	}'); then
+	echo "Failed to reconcile provider V7 staging configuration."
 	exit 1
 fi
 
