@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
@@ -18,6 +19,12 @@ from app.services.sovereign_record_grant import (
     configured_record_grant_key,
 )
 from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
+from app.utils.email_domain import (
+    MCD_EMAIL_DOMAIN,
+    email_matches_domain,
+    extract_email_domain,
+    is_mcd_email,
+)
 
 from activemodel.session_manager import aglobal_session
 from activemodel.types import TypeIDType
@@ -38,6 +45,7 @@ from app.models.note_type_customization import (
     default_customization,
 )
 from app.models.patient import Patient
+from app.models.practice import OriginChannel, Practice, PracticeMember, PracticeRole
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy.orm import selectinload
 
@@ -515,11 +523,280 @@ def zoom_revoked_ack(request: Request) -> None:
     get_redis().delete(zoom_revoked_redis_key(str(doctor.id)))
 
 
+BAA_VERSION = "2026-08-19-ux-1"
+_JOIN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def _make_join_code() -> str:
+    return "".join(secrets.choice(_JOIN_ALPHABET) for _ in range(8))
+
+
+def _normalize_join_code(value: str) -> str:
+    return value.strip().upper().replace(" ", "").replace("-", "")
+
+
+def _membership_for(doctor: Doctor) -> PracticeMember | None:
+    return PracticeMember.get(doctor_id=doctor.id)
+
+
+def _practice_payload(
+    practice: Practice | None, member: PracticeMember | None
+) -> "PracticeStatus | None":
+    if not practice or not member:
+        return None
+    return PracticeStatus(
+        legal_name=practice.legal_name,
+        join_code=practice.join_code,
+        email_domain=practice.email_domain,
+        origin_channel=practice.origin_channel,
+        pastoral_pack=practice.pastoral_pack,
+        baa_accepted=practice.baa_accepted_at is not None,
+        role=member.role,
+        attested=member.attested_at is not None,
+    )
+
+
+class PracticeStatus(BaseModel, extra="forbid"):
+    legal_name: str
+    join_code: str
+    email_domain: str
+    origin_channel: str
+    pastoral_pack: bool
+    baa_accepted: bool
+    role: str
+    attested: bool
+
+
+class JoinMismatch(BaseModel, extra="forbid"):
+    practice_name: str
+    required_domain: str
+    signed_in_domain: str | None
+
+
+class PracticeLookupResult(BaseModel, extra="forbid"):
+    practice: PracticeStatus | None = None
+    mismatch: JoinMismatch | None = None
+
+
+@internal_api_app.get("/practice", name="practice_status")
+def practice_status(request: Request) -> PracticeStatus | None:
+    doctor: Doctor = request.state.doctor
+    member = _membership_for(doctor)
+    if not member:
+        return None
+    practice = Practice.get(id=member.practice_id)
+    return _practice_payload(practice, member)
+
+
+class CreatePracticeBody(BaseModel, extra="forbid"):
+    legal_name: str = Field(min_length=3, max_length=160)
+    npi: str | None = Field(default=None, max_length=10)
+    city: str | None = Field(default=None, max_length=80)
+    region: str | None = Field(default=None, max_length=40)
+    is_solo: bool = True
+    channel: str = "direct"
+    pastoral_pack: bool = False
+
+
+@internal_api_app.post("/practice", name="create_practice")
+def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatus:
+    doctor: Doctor = request.state.doctor
+    existing = _membership_for(doctor)
+    if existing:
+        practice = Practice.get(id=existing.practice_id)
+        payload = _practice_payload(practice, existing)
+        assert payload
+        return payload
+
+    domain = extract_email_domain(doctor.email)
+    if not domain:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A work email on this account is required to found a practice.",
+        )
+
+    channel = (
+        data.channel
+        if data.channel in {item.value for item in OriginChannel}
+        else OriginChannel.direct.value
+    )
+    email_domain = domain
+    if channel == "mcd":
+        if not is_mcd_email(doctor.email):
+            channel = "catholic"
+        else:
+            email_domain = MCD_EMAIL_DOMAIN
+
+    join_code = _make_join_code()
+    for _ in range(5):
+        if Practice.get(join_code=join_code) is None:
+            break
+        join_code = _make_join_code()
+
+    npi = "".join(ch for ch in (data.npi or "") if ch.isdigit())[:10] or None
+    practice = Practice(
+        legal_name=data.legal_name.strip(),
+        npi=npi,
+        city=(data.city or "").strip() or None,
+        region=(data.region or "").strip() or None,
+        is_solo=data.is_solo,
+        join_code=join_code,
+        email_domain=email_domain,
+        origin_channel=channel,
+        pastoral_pack=data.pastoral_pack,
+    ).save()
+    member = PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role=PracticeRole.owner.value,
+    ).save()
+    payload = _practice_payload(practice, member)
+    assert payload
+    return payload
+
+
+class AcceptBaaBody(BaseModel, extra="forbid"):
+    signature_name: str = Field(min_length=2, max_length=120)
+    signature_title: str = Field(min_length=2, max_length=120)
+    checks: list[str]
+
+
+@internal_api_app.post("/practice/baa", name="accept_practice_baa")
+def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus:
+    required = {"authority", "read", "accept", "phi"}
+    if not required.issubset(set(data.checks)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="All BAA acknowledgements are required.",
+        )
+    doctor: Doctor = request.state.doctor
+    member = _membership_for(doctor)
+    if not member or member.role != PracticeRole.owner.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the practice owner can accept the BAA.",
+        )
+    practice = Practice.get(id=member.practice_id)
+    assert practice
+    if practice.baa_accepted_at is None:
+        practice.baa_version = BAA_VERSION
+        practice.baa_accepted_at = datetime.now(timezone.utc)
+        practice.baa_accepted_by_doctor_id = doctor.id
+        practice.baa_signature_name = data.signature_name.strip()
+        practice.baa_signature_title = data.signature_title.strip()
+        practice.save()
+    member.attested_at = datetime.now(timezone.utc)
+    member.attestation_name = data.signature_name.strip()
+    member.save()
+    payload = _practice_payload(practice, member)
+    assert payload
+    return payload
+
+
+class JoinCodeBody(BaseModel, extra="forbid"):
+    join_code: str = Field(min_length=4, max_length=16)
+
+
+@internal_api_app.post("/practice/lookup", name="lookup_practice")
+def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
+    doctor: Doctor = request.state.doctor
+    code = _normalize_join_code(data.join_code)
+    practice = Practice.get(join_code=code)
+    if not practice:
+        return PracticeLookupResult()
+    if not email_matches_domain(doctor.email, practice.email_domain):
+        return PracticeLookupResult(
+            mismatch=JoinMismatch(
+                practice_name=practice.legal_name,
+                required_domain=practice.email_domain,
+                signed_in_domain=extract_email_domain(doctor.email),
+            )
+        )
+    return PracticeLookupResult(
+        practice=PracticeStatus(
+            legal_name=practice.legal_name,
+            join_code=practice.join_code,
+            email_domain=practice.email_domain,
+            origin_channel=practice.origin_channel,
+            pastoral_pack=practice.pastoral_pack,
+            baa_accepted=practice.baa_accepted_at is not None,
+            role=PracticeRole.workforce.value,
+            attested=False,
+        )
+    )
+
+
+class JoinPracticeBody(BaseModel, extra="forbid"):
+    join_code: str = Field(min_length=4, max_length=16)
+    attestation_name: str = Field(min_length=2, max_length=120)
+    checks: list[str]
+
+
+@internal_api_app.post("/practice/join", name="join_practice")
+def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
+    required = {"workforce", "not-party", "direction", "phi"}
+    if not required.issubset(set(data.checks)):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="All workforce acknowledgements are required.",
+        )
+    doctor: Doctor = request.state.doctor
+    existing = _membership_for(doctor)
+    if existing:
+        practice = Practice.get(id=existing.practice_id)
+        payload = _practice_payload(practice, existing)
+        assert payload
+        return payload
+    code = _normalize_join_code(data.join_code)
+    practice = Practice.get(join_code=code)
+    if not practice:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No practice matches that join code.",
+        )
+    if not email_matches_domain(doctor.email, practice.email_domain):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"{practice.legal_name} is for @{practice.email_domain} inboxes. "
+                "Start your own Cosmas practice instead."
+            ),
+        )
+    if practice.baa_accepted_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
+        )
+    member = PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role=PracticeRole.workforce.value,
+        attested_at=datetime.now(timezone.utc),
+        attestation_name=data.attestation_name.strip(),
+    ).save()
+    payload = _practice_payload(practice, member)
+    assert payload
+    return payload
+
+
 @internal_api_app.post(
     "/onboarding/complete", name="complete_onboarding", status_code=status.HTTP_200_OK
 )
 def complete_onboarding(request: Request) -> None:
     doctor: Doctor = request.state.doctor
+    member = _membership_for(doctor)
+    if member:
+        practice = Practice.get(id=member.practice_id)
+        if not practice or not practice.baa_accepted_at or not member.attested_at:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
+            )
+    elif doctor.onboarding_completed_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Name or join a practice and accept the BAA before using Cosmas.",
+        )
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
     doctor.save()
 

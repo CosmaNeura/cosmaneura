@@ -671,6 +671,222 @@
         ]
       }
     },
+    "/internal/v1/practice": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Status",
+        "operationId": "practice_status",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PracticeStatus"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Practice Status Internal V1 Practice Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Practice",
+        "operationId": "create_practice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePracticeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/baa": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Accept Practice Baa",
+        "operationId": "accept_practice_baa",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptBaaBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/lookup": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lookup Practice",
+        "operationId": "lookup_practice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinCodeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeLookupResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/join": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Join Practice",
+        "operationId": "join_practice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinPracticeBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/onboarding/complete": {
       "post": {
         "tags": [
@@ -918,6 +1134,37 @@
         "title": "AIVisitTranscript",
         "description": "Contents of the note are persisted for a long period of time and then eventually deleted.\n\nWe use soft deletion so we have a clear idea of when the note was deleted."
       },
+      "AcceptBaaBody": {
+        "properties": {
+          "signature_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Signature Name"
+          },
+          "signature_title": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Signature Title"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "signature_name",
+          "signature_title",
+          "checks"
+        ],
+        "title": "AcceptBaaBody"
+      },
       "Appointment": {
         "properties": {
           "id": {
@@ -1043,6 +1290,73 @@
           "High"
         ],
         "title": "ConfidenceBand"
+      },
+      "CreatePracticeBody": {
+        "properties": {
+          "legal_name": {
+            "type": "string",
+            "maxLength": 160,
+            "minLength": 3,
+            "title": "Legal Name"
+          },
+          "npi": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 10
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Npi"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "is_solo": {
+            "type": "boolean",
+            "title": "Is Solo",
+            "default": true
+          },
+          "channel": {
+            "type": "string",
+            "title": "Channel",
+            "default": "direct"
+          },
+          "pastoral_pack": {
+            "type": "boolean",
+            "title": "Pastoral Pack",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "legal_name"
+        ],
+        "title": "CreatePracticeBody"
       },
       "DailyVolumeRow": {
         "properties": {
@@ -1647,6 +1961,84 @@
         ],
         "title": "IntakeStatus"
       },
+      "JoinCodeBody": {
+        "properties": {
+          "join_code": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 4,
+            "title": "Join Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "join_code"
+        ],
+        "title": "JoinCodeBody"
+      },
+      "JoinMismatch": {
+        "properties": {
+          "practice_name": {
+            "type": "string",
+            "title": "Practice Name"
+          },
+          "required_domain": {
+            "type": "string",
+            "title": "Required Domain"
+          },
+          "signed_in_domain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Signed In Domain"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "practice_name",
+          "required_domain",
+          "signed_in_domain"
+        ],
+        "title": "JoinMismatch"
+      },
+      "JoinPracticeBody": {
+        "properties": {
+          "join_code": {
+            "type": "string",
+            "maxLength": 16,
+            "minLength": 4,
+            "title": "Join Code"
+          },
+          "attestation_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Attestation Name"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "join_code",
+          "attestation_name",
+          "checks"
+        ],
+        "title": "JoinPracticeBody"
+      },
       "NoteDetail": {
         "properties": {
           "appointment": {
@@ -1911,6 +2303,82 @@
           "as_discussed"
         ],
         "title": "PlanOrdering"
+      },
+      "PracticeLookupResult": {
+        "properties": {
+          "practice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PracticeStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mismatch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JoinMismatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PracticeLookupResult"
+      },
+      "PracticeStatus": {
+        "properties": {
+          "legal_name": {
+            "type": "string",
+            "title": "Legal Name"
+          },
+          "join_code": {
+            "type": "string",
+            "title": "Join Code"
+          },
+          "email_domain": {
+            "type": "string",
+            "title": "Email Domain"
+          },
+          "origin_channel": {
+            "type": "string",
+            "title": "Origin Channel"
+          },
+          "pastoral_pack": {
+            "type": "boolean",
+            "title": "Pastoral Pack"
+          },
+          "baa_accepted": {
+            "type": "boolean",
+            "title": "Baa Accepted"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "attested": {
+            "type": "boolean",
+            "title": "Attested"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "legal_name",
+          "join_code",
+          "email_domain",
+          "origin_channel",
+          "pastoral_pack",
+          "baa_accepted",
+          "role",
+          "attested"
+        ],
+        "title": "PracticeStatus"
       },
       "PronounStyle": {
         "type": "string",
