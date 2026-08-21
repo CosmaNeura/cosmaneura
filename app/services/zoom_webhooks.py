@@ -31,9 +31,10 @@ from sqlalchemy import select
 # merge into a single note (summarize.py concatenates transcripts). After
 # the window, the bot disconnects and a fresh visit opens a new bot.
 MERGE_WINDOW_SECONDS = 600
-# ZAKs minted by Zoom expire in ~2 hours, so the URL token used to fetch one
-# need not outlive that. A 2h window also bounds replay risk.
-_ZAK_URL_TOKEN_TTL_SECONDS = 2 * 60 * 60
+# Recall fetches the ZAK immediately while joining the just-created bot. Keep
+# its bearer URL valid only for that short join window; the callback consumes
+# it atomically on first use.
+_ZAK_URL_TOKEN_TTL_SECONDS = 5 * 60
 
 # Zoom bot dispatch is gated by an explicit per-environment allowlist. Staging
 # and production are separate Zoom apps, but the same account can be connected

@@ -4,60 +4,49 @@ from __future__ import annotations
 
 from time import perf_counter
 from typing import NamedTuple
-from urllib.parse import quote
 
 import structlog
 from fastapi import FastAPI, Request
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
+from starlette.routing import Match
 from starlette.types import Scope
 from structlog_config.fastapi_access_logger import (
-    get_client_addr,
     get_route_name,
     is_static_assets_request,
 )
 
 log = structlog.get_logger("access_log")
 
-RECALL_ZAK_PATH_PREFIX = "/external/v1/recall/zak/"
-RECALL_ZAK_PATH_TEMPLATE = f"{RECALL_ZAK_PATH_PREFIX}{{token}}"
-REDACTED_QUERY = "[redacted]"
+UNMATCHED_ROUTE = "unmatched"
 
 
 class SafeAccessTarget(NamedTuple):
-    path: str
-    query: str
+    path_template: str
+    route: str
     target: str
 
 
-def safe_access_target(scope: Scope) -> SafeAccessTarget:
-    """Return access-log fields without exposing a Recall ZAK bearer token."""
+def safe_access_target(app: FastAPI, scope: Scope) -> SafeAccessTarget:
+    """Return only developer-defined route metadata, never request targets."""
 
-    path = str(scope.get("path") or "-")
-    raw_query = scope.get("query_string", b"")
-    if isinstance(raw_query, bytes):
-        query = raw_query.decode("ascii", errors="replace")
-    else:
-        query = str(raw_query)
+    route = next(
+        (
+            candidate
+            for candidate in app.router.routes
+            if candidate.matches(scope)[0] == Match.FULL
+        ),
+        None,
+    )
+    if route is None:
+        return SafeAccessTarget(UNMATCHED_ROUTE, UNMATCHED_ROUTE, UNMATCHED_ROUTE)
 
-    if path.startswith(RECALL_ZAK_PATH_PREFIX):
-        safe_path = RECALL_ZAK_PATH_TEMPLATE
-        safe_query = REDACTED_QUERY if query else ""
-        target = safe_path
-        if safe_query:
-            target = f"{target}?{safe_query}"
-        return SafeAccessTarget(safe_path, safe_query, target)
-
-    target = quote(path)
-    if query:
-        target = f"{target}?{query}"
-    return SafeAccessTarget(path, query, target)
-
-
-def _safe_route_name(route_name: str) -> str:
-    if route_name.startswith(RECALL_ZAK_PATH_PREFIX):
-        return RECALL_ZAK_PATH_TEMPLATE
-    return route_name
+    template = getattr(route, "path", None)
+    path_template = template if isinstance(template, str) else UNMATCHED_ROUTE
+    route_name = get_route_name(app, scope)
+    if route_name == scope.get("path"):
+        route_name = UNMATCHED_ROUTE
+    return SafeAccessTarget(path_template, route_name, path_template)
 
 
 def add_middleware(app: FastAPI) -> None:
@@ -75,18 +64,15 @@ def add_middleware(app: FastAPI) -> None:
         response = await call_next(request)
         elapsed = perf_counter() - started_at
 
-        target = safe_access_target(scope)
-        route_name = _safe_route_name(get_route_name(app, scope))
+        target = safe_access_target(app, scope)
         log_method = log.debug if is_static_assets_request(scope) else log.info
         log_method(
             f"{response.status_code} {scope['method']} {target.target}",
             time=round(elapsed * 1000),
             status=response.status_code,
             method=scope["method"],
-            path=target.path,
-            query=target.query,
-            client_ip=get_client_addr(scope),
-            route=route_name,
+            path=target.path_template,
+            route=target.route,
         )
 
         return response

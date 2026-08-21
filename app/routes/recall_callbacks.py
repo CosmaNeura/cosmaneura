@@ -6,10 +6,11 @@ return a fresh ZAK as plain text — the contract their sample app documents
 (see ``recallai/sample-apps/bot_signed_in_zoom_bots``).
 """
 
-from typing import cast
+from typing import Any, cast
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
+from redis.exceptions import ResponseError
 from starlette import status
 
 from app import log
@@ -21,9 +22,29 @@ from app.models.doctor import Doctor
 
 recall_callbacks_app = APIRouter(prefix="/external/v1/recall", tags=["recall"])
 
+_ATOMIC_GET_DELETE = """
+local value = redis.call('GET', KEYS[1])
+if value then
+  redis.call('DEL', KEYS[1])
+end
+return value
+"""
+
 
 def zak_token_redis_key(token: str) -> str:
     return f"recall:zak_url_token:{token}"
+
+
+def _consume_zak_token(redis: Any, token: str) -> bytes | str | None:
+    """Atomically consume a bearer, including on pre-GETDEL Redis servers."""
+
+    key = zak_token_redis_key(token)
+    try:
+        return cast(bytes | str | None, redis.getdel(key))
+    except (AttributeError, ResponseError):
+        # The Lua fallback preserves single-use semantics on Redis versions
+        # that predate GETDEL. Do not split this into separate GET/DEL calls.
+        return cast(bytes | str | None, redis.eval(_ATOMIC_GET_DELETE, 1, key))
 
 
 @recall_callbacks_app.get(
@@ -38,10 +59,11 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
     ``zak_token_redis_key``) generated at bot-creation time and mapped to the
     doctor whose Zoom integration should be used. The token in the URL is the
     only auth — Recall does not send headers — so it must be unguessable and
-    short-lived (TTL set by the writer).
+    short-lived (TTL set by the writer). It is atomically removed before any
+    downstream lookup so a second request cannot replay it.
     """
     redis = get_redis()
-    raw = redis.get(zak_token_redis_key(token))
+    raw = _consume_zak_token(redis, token)
     if raw is None:
         log.info("recall zak callback: unknown or expired token")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)

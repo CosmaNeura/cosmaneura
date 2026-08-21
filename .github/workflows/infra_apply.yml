@@ -1,8 +1,9 @@
 name: Terraform Apply
 
 # Runs `tofu apply` against production whenever a merge to master changes
-# infrastructure code. The matching infra_plan.yml shows reviewers
-# exactly what this workflow will do BEFORE they approve the merge.
+# infrastructure code. Pull requests receive secretless validation and a
+# provider-mocked static plan. A real production-state plan is available only
+# through the protected manual infra_production_plan.yml job on master.
 #
 # Manual fallback: workflow_dispatch lets someone re-run apply without
 # pushing a new commit (useful for retrying after a transient Azure API
@@ -43,8 +44,9 @@ jobs:
     env:
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
       RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
-      # Activation is source-reviewed. Keep this identical to infra_plan.yml;
-      # a protected environment variable cannot pre-arm the cutover.
+      # Activation is source-reviewed. Keep this identical to
+      # infra_production_plan.yml; a protected environment variable cannot
+      # pre-arm the cutover.
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true"
@@ -85,10 +87,10 @@ jobs:
 
       - name: tofu plan (sanity check before apply)
         working-directory: infra
-        # Re-running plan immediately before apply catches state drift
-        # that happened between the PR's plan run and the merge. If a
-        # human applied something out-of-band, this shows it in the
-        # apply log.
+        # Re-running a real plan immediately before apply catches state drift.
+        # The pull-request plan is intentionally backend-free. The protected
+        # manual production-plan workflow is available for trusted-master
+        # state audits, while this step is authoritative for the apply.
         run: tofu plan -no-color -input=false -out=tfplan.bin
 
       - name: tofu apply

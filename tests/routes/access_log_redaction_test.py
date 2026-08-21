@@ -56,18 +56,52 @@ def test_recall_zak_access_log_redacts_path_token_and_query() -> None:
     assert raw_token not in serialized
     assert raw_query not in serialized
     assert "/external/v1/recall/zak/{token}" in serialized
-    assert "[redacted]" in serialized
+    assert "query" not in serialized
 
 
-def test_noncredential_access_target_is_unchanged() -> None:
+def test_generic_dynamic_path_and_query_are_never_logged() -> None:
     access_logging = _load_access_logging()
-    target = access_logging.safe_access_target(
-        {"path": "/healthcheck", "query_string": b"probe=ready"}
-    )
+    captured = _CapturingLog()
+    setattr(access_logging, "log", captured)
 
-    assert target.path == "/healthcheck"
-    assert target.query == "probe=ready"
-    assert target.target == "/healthcheck?probe=ready"
+    app = FastAPI()
+
+    @app.get("/patients/{patient_id}")
+    def patient(patient_id: str) -> dict[str, str]:
+        return {"patient_id": patient_id}
+
+    access_logging.add_middleware(app)
+    patient_id = "patient-path-private-sentinel"
+    query = "clinical-query-private-sentinel"
+    with TestClient(app) as client:
+        response = client.get(f"/patients/{patient_id}?search={query}")
+
+    assert response.status_code == 200
+    serialized = json.dumps(captured.records, sort_keys=True)
+    assert patient_id not in serialized
+    assert query not in serialized
+    assert "/patients/{patient_id}" in serialized
+    assert "query" not in serialized
+    assert "client_ip" not in serialized
+
+
+def test_unmatched_path_and_query_are_never_logged() -> None:
+    access_logging = _load_access_logging()
+    captured = _CapturingLog()
+    setattr(access_logging, "log", captured)
+
+    app = FastAPI()
+    access_logging.add_middleware(app)
+    path = "unmatched-path-private-sentinel"
+    query = "unmatched-query-private-sentinel"
+    with TestClient(app) as client:
+        response = client.get(f"/{path}?search={query}")
+
+    assert response.status_code == 404
+    serialized = json.dumps(captured.records, sort_keys=True)
+    assert path not in serialized
+    assert query not in serialized
+    assert "unmatched" in serialized
 
 
 def test_global_access_logger_is_app_owned_and_uvicorn_access_log_is_disabled() -> None:

@@ -1,0 +1,150 @@
+mock_provider "azapi" {
+  mock_resource "azapi_resource" {
+    defaults = {
+      output = {
+        id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.App/managedEnvironments/mock/certificates/mock"
+      }
+    }
+  }
+}
+
+mock_provider "azurerm" {
+  mock_resource "azurerm_ai_services" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.CognitiveServices/accounts/mock"
+    }
+  }
+
+  mock_resource "azurerm_container_app" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.App/containerApps/mock"
+    }
+  }
+
+  mock_resource "azurerm_container_app_environment" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.App/managedEnvironments/mock"
+    }
+  }
+
+  mock_resource "azurerm_container_registry" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.ContainerRegistry/registries/mock"
+    }
+  }
+
+  mock_resource "azurerm_log_analytics_workspace" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.OperationalInsights/workspaces/mock"
+    }
+  }
+
+  mock_resource "azurerm_postgresql_flexible_server" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.DBforPostgreSQL/flexibleServers/mock"
+    }
+  }
+
+  mock_resource "azurerm_storage_account" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Storage/storageAccounts/mock"
+    }
+  }
+
+  mock_resource "azurerm_user_assigned_identity" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.ManagedIdentity/userAssignedIdentities/mock"
+    }
+  }
+}
+
+mock_provider "external" {}
+mock_provider "onepassword" {}
+mock_provider "random" {}
+
+override_data {
+  target = data.external.procfile
+  values = {
+    result = {
+      api         = "uv run uvicorn app.main:app"
+      job_monitor = "uv run celery --app app.celery flower"
+      scheduler   = "uv run celery --app app.celery beat"
+      worker      = "uv run celery --app app.celery worker"
+    }
+  }
+}
+
+override_data {
+  target = data.external.secrets
+  values = {
+    result = {
+      ALLOWED_HOST_LIST                          = "example.invalid"
+      API_BASE_URL                               = "https://api.example.invalid"
+      ASSEMBLY_API_KEY                           = "not-a-secret"
+      AZURE_DEID_CLIENT_ID                       = "00000000-0000-0000-0000-000000000000"
+      AZURE_DEID_CLIENT_SECRET                   = "not-a-secret"
+      AZURE_DEID_ENDPOINT                        = "https://example.invalid"
+      AZURE_DEID_TENANT_ID                       = "00000000-0000-0000-0000-000000000000"
+      AZURE_OPENAI_API_KEY                       = "not-a-secret"
+      AZURE_OPENAI_ENDPOINT                      = "https://example.invalid"
+      AZURE_UPLOADS_ACCOUNT_KEY                  = "not-a-secret"
+      AZURE_UPLOADS_ACCOUNT_NAME                 = "placeholder"
+      AZURE_UPLOADS_ACCOUNT_URL                  = "https://example.invalid"
+      AZURE_UPLOADS_CONTAINER_NAME               = "uploads"
+      AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME = "example-notes"
+      CLERK_PRIVATE_KEY                          = "not-a-secret"
+      DATABASE_URL                               = "postgresql://placeholder.invalid/app"
+      DATABASE_URL_SECRET_NAME                   = "database-url"
+      DATABASE_URL_V2                            = ""
+      DATABASE_URL_V2_ENABLED                    = "false"
+      DURABLE_WEBHOOK_INBOX_ENABLED              = "false"
+      EMAIL_FROM_ADDRESS                         = "noreply@example.invalid"
+      ENCRYPTION_KEY                             = "not-a-secret"
+      ENTRA_TENANT_ID                            = "00000000-0000-0000-0000-000000000000"
+      INTAKE_CHAT_DOMAIN                         = "example.invalid"
+      LOG_LEVEL                                  = "info"
+      PORT                                       = "80"
+      POSTGRES_PASSWORD                          = "not-a-secret"
+      POSTGRES_USERNAME                          = "placeholder"
+      RECALL_API_BASE                            = "https://example.invalid"
+      RECALL_API_KEY                             = "not-a-secret"
+      RECALL_WEBHOOK_SECRET                      = "not-a-secret"
+      REDIS_URL                                  = "redis://placeholder.invalid/1"
+      SCRIBE_API_AUDIENCE                        = "00000000-0000-0000-0000-000000000000"
+      SCRIBE_CALLER_CLIENT_ID                    = ""
+      SCRIBE_HANDOFF_ENABLED                     = "false"
+      SCRIBE_RECONCILER_CALLER_CLIENT_ID         = ""
+      SENTRY_DSN                                 = ""
+      SESSION_SECRET_KEY                         = "not-a-secret"
+      SMTP_URL                                   = "smtp://placeholder.invalid:1025"
+      SOVEREIGN_RECORD_GRANT_SECRET              = "not-a-secret"
+      ZOOM_CLIENT_ID                             = "not-a-secret"
+      ZOOM_CLIENT_SECRET                         = "not-a-secret"
+      ZOOM_REDIRECT_URI                          = "https://example.invalid/callback"
+      ZOOM_SECRET_TOKEN                          = "not-a-secret"
+      ZOOM_SUCCESS_REDIRECT                      = "https://example.invalid/settings"
+    }
+  }
+}
+
+override_data {
+  target = data.external.database_url_live_guard
+  values = {
+    result = {
+      result = "verified"
+    }
+  }
+}
+
+# Override the built-in remote-state data source as well as every provider so
+# pull-request code cannot reach production state or cloud APIs.
+override_data {
+  target = data.terraform_remote_state.tfstate
+  values = {
+    outputs = {}
+  }
+}
+
+run "secretless_static_plan" {
+  command = plan
+}

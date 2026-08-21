@@ -1,0 +1,96 @@
+name: Terraform Production Plan
+
+# This workflow is deliberately separate from the pull-request plan. It reads
+# production state and credentials only after a trusted operator starts it on
+# master and the protected production environment admits the job.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-production-plan
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Terraform production plan
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 5
+        with:
+          apt-packages: zsh
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_wrapper: false
+
+      - name: tofu init
+        working-directory: infra
+        run: tofu init -input=false
+
+      - name: tofu fmt -check against production configuration
+        working-directory: infra
+        run: tofu fmt -check -diff -recursive
+
+      - name: tofu validate against production configuration
+        working-directory: infra
+        run: tofu validate
+
+      - name: tofu plan against protected production state
+        working-directory: infra
+        run: |
+          set -euo pipefail
+          tofu plan -no-color -input=false -detailed-exitcode -out=tfplan.bin 2>&1 | tee plan.txt || plan_exit=$?
+          plan_exit=${plan_exit:-0}
+          {
+            echo "## Protected Terraform Plan"
+            echo ''
+            echo '```'
+            head -c 60000 plan.txt
+            if [ "$(wc -c < plan.txt)" -gt 60000 ]; then
+              echo ''
+              echo '...[truncated, see full plan in step log]'
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$plan_exit" -eq 1 ]; then
+            exit 1
+          fi

@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
 
@@ -38,9 +39,13 @@ def clean_redis():
     ]
     for s in suffixes:
         redis.delete(_key(s))
+    for key in cast(list[str | bytes], redis.keys("recall:zak_url_token:*")):
+        redis.delete(key)
     yield redis
     for s in suffixes:
         redis.delete(_key(s))
+    for key in cast(list[str | bytes], redis.keys("recall:zak_url_token:*")):
+        redis.delete(key)
 
 
 @pytest.fixture
@@ -379,6 +384,10 @@ def test_patient_joins_first_then_doctor_starts_session(
     assert mock_recall["start_recording"] == [BOT_ID]
     assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
     assert clean_redis.get(_key("recording_active")) == b"1"
+    zak_url = mock_recall["create_bot"][0]["zak_url"]
+    zak_token = zak_url.rsplit("/", maxsplit=1)[-1]
+    zak_ttl = clean_redis.ttl(zoom_webhooks.zak_token_redis_key(zak_token))
+    assert 0 < zak_ttl <= zoom_webhooks._ZAK_URL_TOKEN_TTL_SECONDS <= 5 * 60
 
 
 def test_guest_patient_with_empty_id_still_starts_session(

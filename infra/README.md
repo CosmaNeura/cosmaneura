@@ -8,11 +8,17 @@ State lives in the `cosmaneuratfstate` Azure storage account (see
 
 1. **Open a PR that touches `infra/**` or `Procfile`.**
    The `.github/workflows/infra_plan.yml` workflow runs automatically:
-   - `tofu init`, `tofu fmt -check`, `tofu validate`
-   - `tofu plan` against the live state
-   - Posts (or updates) a sticky PR comment with the plan output
+   - `tofu init -backend=false`, `tofu fmt -check`, `tofu validate`
+   - A provider-mocked static plan using only reviewed dummy inputs
+   - A summary in the workflow run; it does not post to the PR
 
-   Reviewers must see and approve that plan before merging.
+   The pull-request job is intentionally secretless and cannot read the
+   production backend, Azure identity, 1Password, or application secrets.
+   Reviewers must approve the source changes and static-plan result. A real
+   production-state plan is intentionally available only on trusted `master`:
+   run **Terraform Production Plan** manually for state audits. The protected
+   apply job also generates the authoritative real plan immediately before it
+   applies a merged change.
 
 2. **Merge to master.**
    `.github/workflows/infra_apply.yml` runs automatically:
@@ -45,8 +51,8 @@ sync.
 
 ## Required GitHub configuration
 
-These need to exist for the workflows to authenticate; they were set up
-when the existing `build_and_publish.yml` workflow shipped:
+These need to exist for the protected apply/deploy and manual production-plan
+jobs to authenticate; pull-request jobs do not receive them:
 
 **Repository secrets / vars** (under Settings → Secrets and variables → Actions):
 
@@ -63,22 +69,17 @@ when the existing `build_and_publish.yml` workflow shipped:
 - Branch policy: `master` only (already configured). This is what
   causes PR-triggered runs to skip the `apply` job — by design.
 
-**Federated credentials** on the Azure AD App Registration: needs TWO
-entries so both workflows can authenticate to Azure via OIDC.
+**Federated credentials** on the Azure AD App Registration are only for jobs
+that use the protected `production` environment.
 
 | Workflow | Used by | Subject claim |
 | --- | --- | --- |
 | `infra_apply.yml` (master pushes, deploy) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
-| `infra_plan.yml` (PR runs, read-only) | `pull_request` event | `repo:CosmaNeura/cosmaneura:pull_request` |
+| `infra_production_plan.yml` (manual plan on master) | `environment: production` | `repo:CosmaNeura/cosmaneura:environment:production` |
 
-The first credential already exists (the `build_and_publish` deploy
-job uses it). Add the second one if `infra_plan.yml` runs fail with
-an AADSTS70021 / "no matching federated identity record" error.
-
-To add the credential: Azure Portal → Microsoft Entra ID → App
-Registrations → (your app) → Certificates & secrets → Federated
-credentials → Add. Scenario: GitHub Actions deploying Azure
-resources. Entity type: Pull request.
+Both rows share the same environment subject, so one matching federated
+credential is sufficient. Do not add a `pull_request` federated credential;
+PR workflows are deliberately prevented from obtaining Azure tokens.
 
 ## Deterministic infrastructure/application ordering
 
@@ -90,7 +91,9 @@ creating competing Container App revisions.
 
 For a change that includes both infrastructure and application code:
 
-1. Merge only after reviewing the PR's Terraform plan.
+1. Merge only after reviewing the PR's secretless static-plan result. The
+   protected apply job produces the authoritative production-state plan from
+   the merged commit immediately before apply.
 2. Wait for **Terraform Apply** on the merge commit to finish successfully.
 3. Copy that successful run's numeric ID from its Actions URL.
 4. Manually run **Build & Publish** on `master`, supplying the ID as

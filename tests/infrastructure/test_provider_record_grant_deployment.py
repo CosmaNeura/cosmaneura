@@ -68,11 +68,14 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
 
     deploy = _read("infra-staging/deploy.sh")
     assert GRANT_SECRET not in _shell_array(deploy, "COMMON_SECRET_VARS")
-    assert _shell_array(deploy, "API_ONLY_SECRET_VARS").count(GRANT_SECRET) == 1
+    # Recall's always-configured API-only secret is separate from the optional
+    # record-grant capability, which is appended only behind its feature gate.
+    assert GRANT_SECRET not in _shell_array(deploy, "API_ONLY_SECRET_VARS")
     assert 'API_CONTAINER="cosmaneura-staging-app"' in deploy
     assert '"$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true"' in deploy
     assert 'container_secret_vars+=("${API_ONLY_SECRET_VARS[@]}")' in deploy
     assert deploy.count("${API_ONLY_SECRET_VARS[@]}") == 1
+    assert "container_secret_vars+=(SOVEREIGN_RECORD_GRANT_SECRET)" in deploy
     assert "API_ONLY_SECRET_VARS" not in _shell_function(deploy, "run_migrations")
 
     deployment = _shell_function(deploy, "initiate_deployment")
@@ -82,7 +85,8 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert 'echo "Failed to configure secrets for $container_name."' in deployment
     assert "return 1" in deployment[secret_set:app_update]
 
-    assert '--remove-env-vars "$GRANT_SECRET_ENV_NAME"' in deploy
+    assert 'remove_env_vars+=("$GRANT_SECRET_ENV_NAME")' in deploy
+    assert '--remove-env-vars "${remove_env_vars[@]}"' in deploy
     assert "az containerapp secret remove" in deploy
     assert '--secret-names "$GRANT_SECRET_RESOURCE_NAME"' in deploy
 
@@ -107,6 +111,7 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     workflow = _read(".github/workflows/build_and_publish.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
     plan_workflow = _read(".github/workflows/infra_plan.yml")
+    production_plan_workflow = _read(".github/workflows/infra_production_plan.yml")
 
     assert "production_infra_changed" in workflow
     protected_paths = (
@@ -133,18 +138,15 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     assert "cancel-in-progress: false" in apply_workflow
     assert "      - '.env.production.backend'" in apply_workflow
 
-    assert "  issues: write" in plan_workflow
     assert "      - '.env.production.backend'" in plan_workflow
-    plan_step = plan_workflow[
-        plan_workflow.index("      - name: tofu plan") : plan_workflow.index(
-            "      - name: Post plan as PR comment"
-        )
-    ]
-    comment_step = plan_workflow[
-        plan_workflow.index("      - name: Post plan as PR comment") :
-    ]
-    assert "continue-on-error" not in plan_step
-    assert "continue-on-error: true" in comment_step
+    workflow_scope = plan_workflow[: plan_workflow.index("jobs:\n")]
+    assert "permissions:\n  contents: read" in workflow_scope
+    assert "issues: write" not in plan_workflow
+    assert "pull-requests: write" not in plan_workflow
+    assert "Post plan as PR comment" not in plan_workflow
+    assert "Terraform PR checks (secretless)" in plan_workflow
+    assert "This does not read or diff production state." in plan_workflow
+    assert "environment: production" in production_plan_workflow
 
     documentation = _read("infra/README.md")
     assert "Wait for **Terraform Apply**" in documentation

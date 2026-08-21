@@ -37,6 +37,10 @@ environment. The configured and tested region is `us-west-2`.
   migration workloads must have neither the environment entry nor the Azure
   secret object. The production deploy live guard checks names and references
   without querying values.
+- Pull-request workflows receive no production/vault/Recall/Azure credentials
+  and no OIDC permission. Infrastructure PR checks use a backend-disabled,
+  provider-mocked plan; the real production-state plan is a separate,
+  manual-only workflow on `master`, protected by the production environment.
 - A verified, projected payload is Fernet-encrypted in PostgreSQL and committed
   before broker publication. Headers, signatures, callback URLs, provider
   delivery IDs, and full provider responses are not stored.
@@ -55,9 +59,12 @@ environment. The configured and tested region is `us-west-2`.
   and the compatibility-derived pseudonym root; never generate a replacement
   pseudonym root after receipts exist.
 - HTTP access logs render every Recall ZAK callback as
-  `/external/v1/recall/zak/{token}` and redact its query string. Zoom client
-  logs contain only hashed provider references and bounded operation/status
-  fields, never provider paths, response bodies, or raw doctor/meeting IDs.
+  `/external/v1/recall/zak/{token}`. All access logs use developer-defined
+  route templates and omit query strings and client addresses; unmatched
+  routes are labeled `unmatched`. Zoom client logs contain only hashed provider
+  references and bounded operation/status fields, never provider paths,
+  response bodies, or raw doctor/meeting IDs. ZAK callback bearers expire after
+  five minutes and are consumed atomically on their first request.
 - Payload ciphertext is deleted immediately after success and no later than six
   hours after receipt. Expired work is dead-lettered without payload.
 - Recall Create Bot keeps `recording_config: null` for manual control. POST
@@ -103,9 +110,10 @@ side-effect fence during this rolling-deploy window.
    drained.
 2. Open a separate activation PR that changes the checked-in plan, apply, and
    deployment workflow bindings together from `false` to `true` and updates the
-   pre-arm guards. Review the resulting Terraform plan before merging, then
-   apply and deploy once. Changing a protected environment variable alone is
-   intentionally rejected and must never be used to activate only one workload.
+   pre-arm guards. Review the secretless static plan before merging, then
+   inspect the authoritative protected apply plan/result before allowing the
+   held application deployment. Changing a protected environment variable
+   alone is intentionally rejected and must never activate only one workload.
 3. Send provider-owned non-PHI validation events. Confirm HTTP 200, one inbox
    receipt per delivery, payload purge after success, and no raw identifier or
    body in application/Sentry/Celery logs.

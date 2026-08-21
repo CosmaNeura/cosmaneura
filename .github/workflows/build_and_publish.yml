@@ -15,29 +15,21 @@ on:
         required: false
   push:
     branches: [master, staging]
-  pull_request: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # A newer master run must not cancel an in-flight production deployment:
   # cancellation releases the deploy job's cross-workflow mutex while Azure
-  # may still be reconciling revisions. PR and staging runs remain cancellable.
+  # may still be reconciling revisions. Staging runs remain cancellable.
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
+# Long-lived credentials are scoped to the protected deploy jobs below. Pull
+# requests run in the separate, entirely secretless pull_request_checks.yml.
+permissions:
+  contents: read
+
 env:
-  # run `just secrets_ci_grant-github-actions` to set
-  OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
-  VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY || secrets.POSTHOG_KEY }}
-  VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST || secrets.POSTHOG_HOST }}
-  CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
-
-  # for the gh-cli
-  GH_TOKEN: ${{ github.token }}
-
-  # required otherwise github api calls are rate limited
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # a important design goal is to avoid custom configuration in CI. This enables tests to be run in a CI-like environment
   # locally, making it easy to replicate CI issues. This is one of the few CI-specific configuration changes since
@@ -60,6 +52,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Hold app deployment when production infrastructure changes
         id: classify
         env:
@@ -93,6 +86,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
       - uses: iloveitaly/github-action-localias@master
@@ -143,6 +137,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
       - run: just js_setup
@@ -172,10 +168,16 @@ jobs:
       }}
     environment: production
     env:
+      # Long-lived build/deploy credentials are scoped to this protected job.
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
+      VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY || secrets.POSTHOG_KEY }}
+      VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST || secrets.POSTHOG_HOST }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
       RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
     permissions:
       actions: read
       contents: read
@@ -284,18 +286,24 @@ jobs:
     if: ${{ github.ref == 'refs/heads/staging' && github.event_name == 'push' }}
     environment: staging
     env:
+      # Long-lived build/deploy credentials are scoped to this protected job.
+      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
       CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
       CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
+      VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY || secrets.POSTHOG_KEY }}
+      VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST || secrets.POSTHOG_HOST }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
       ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
       RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
       PYTHON_ENV: staging
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
     permissions:
       contents: read
       id-token: write
