@@ -1,0 +1,28 @@
+#!/usr/bin/expect -f
+log_user 0
+set timeout 240
+if {$argc != 4} { exit 64 }
+lassign $argv group app command marker
+
+spawn az containerapp exec --resource-group $group --name $app --command /bin/sh
+expect {
+    -re {[#$] $} {}
+    timeout { exit 70 }
+    eof { exit 71 }
+}
+send -- "$command\r"
+expect {
+    -exact "\r\n$marker\r\n" {}
+    timeout { exit 72 }
+    eof { exit 73 }
+}
+expect {
+    -re {[#$] $} {}
+    timeout { exit 74 }
+    eof { exit 75 }
+}
+send -- "exit\r"
+expect {
+    eof {}
+    timeout { exit 76 }
+}
