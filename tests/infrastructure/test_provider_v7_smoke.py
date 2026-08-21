@@ -164,18 +164,18 @@ def test_status_mode_is_value_free(smoke, monkeypatch, capsys) -> None:
 def test_public_probe_uses_managed_identity_and_requires_exact_denial(
     public_probe, monkeypatch, capsys
 ) -> None:
-    for name, value in {
-        "PYTHON_ENV": "staging",
-        "MOUNT_PROFILE": "public",
-    }.items():
-        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("PYTHON_ENV", raising=False)
+    monkeypatch.setenv("MOUNT_PROFILE", "public")
     monkeypatch.delenv("PLATFORM_AGENT_API_ENABLED", raising=False)
-    monkeypatch.setattr(
-        "azure.identity.ManagedIdentityCredential",
-        lambda: SimpleNamespace(
+    selected_clients: list[str] = []
+
+    def credential(*, client_id: str):
+        selected_clients.append(client_id)
+        return SimpleNamespace(
             get_token=lambda _scope: SimpleNamespace(token="token-sensitive-value")
-        ),
-    )
+        )
+
+    monkeypatch.setattr("azure.identity.ManagedIdentityCredential", credential)
     seen: dict = {}
 
     def post(url, **kwargs):
@@ -194,10 +194,12 @@ def test_public_probe_uses_managed_identity_and_requires_exact_denial(
             "probe",
             "https://platform.test",
             "api://00000000-0000-0000-0000-000000000000/.default",
+            "00000000-0000-0000-0000-000000000001",
         ],
     )
 
     assert public_probe.main() == 0
+    assert selected_clients == ["00000000-0000-0000-0000-000000000001"]
     assert seen["headers"]["Authorization"] == "Bearer token-sensitive-value"
     assert capsys.readouterr().out == "V7_PUBLIC_DENIAL PASS\n"
 
@@ -210,7 +212,8 @@ def test_operator_wrapper_never_accepts_a_workload_token() -> None:
         '/opt/venv/bin/python -c "import base64,zlib;'
         f"exec(zlib.decompress(base64.b64decode('{payload}')))\" "
         "'https://cosmaneura-staging-app.example.northcentralus.azurecontainerapps.io' "
-        "'api://00000000-0000-0000-0000-000000000000/.default'"
+        "'api://00000000-0000-0000-0000-000000000000/.default' "
+        "'00000000-0000-0000-0000-000000000001'"
     )
     assert "WORKLOAD_TOKEN" not in wrapper
     assert "provider_v7_public_probe.py" in wrapper
@@ -220,6 +223,8 @@ def test_operator_wrapper_never_accepts_a_workload_token() -> None:
     assert "name=='API_BASE_URL'" in wrapper
     assert '"$PLATFORM_ORIGIN"' in wrapper
     assert '"https://$PLATFORM_FQDN"' not in wrapper
+    assert "EXPECTED_PUBLIC_CLIENT_ID" in wrapper
+    assert '"$PUBLIC_CLIENT_ID"' in wrapper
     assert "cosmaneura/cosmaneura:$HEAD" in wrapper
     assert len(command) < 1000
     assert "V7_SMOKE PASS" in wrapper

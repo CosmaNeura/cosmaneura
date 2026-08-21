@@ -30,9 +30,13 @@ staging deployment. Stop if any required result differs.
      --query '{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,image:properties.template.containers[0].image}' -o json
    ```
 
-   Require equal latest/ready revisions and the exact separate values in the
-   activation record. Resolve the platform tag to its recorded registry digest;
-   a tag alone is not immutable evidence.
+   Require equal latest/ready revisions. The activation record contains the
+   initial accepted baseline, not a permanent pin: after a reviewed staging
+   deployment, require the live Platform tag to equal the exact audited
+   `staging` commit used by the operator checkout. Resolve every tag to its
+   registry digest; a tag alone is not immutable evidence. Provider and public
+   must remain at their separately accepted immutable digests unless their own
+   reviewed deployment intentionally changes them.
 
 2. Require HTTP 200 from the platform `/healthcheck` and both Sovereign
    `/healthz` endpoints. Retain only the expected health fields. Provider must
@@ -60,8 +64,8 @@ staging deployment. Stop if any required result differs.
    ```
 
    [`run-provider-v7-status.sh`](../infra-staging/run-provider-v7-status.sh)
-   injects only a value-free check into the current `7cc8051` platform image,
-   so it does not require the smoke harness to be deployed. Require
+   injects only a value-free check into the deployed Platform image, so it
+   does not require the smoke harness to be present there. Require
    `V7_STATUS PASS`. It checks the exact one-row failed/failed baseline and
    protected-reference hash in-process and emits no reference or counts.
 
