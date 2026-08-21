@@ -217,6 +217,9 @@ def test_operator_wrapper_never_accepts_a_workload_token() -> None:
     assert "/app/infra-staging/provider_v7_smoke.py" in wrapper
     assert "/usr/bin/expect" in wrapper
     assert '--command "$command"' not in wrapper
+    assert "name=='API_BASE_URL'" in wrapper
+    assert '"$PLATFORM_ORIGIN"' in wrapper
+    assert '"https://$PLATFORM_FQDN"' not in wrapper
     assert "cosmaneura/cosmaneura:$HEAD" in wrapper
     assert len(command) < 1000
     assert "V7_SMOKE PASS" in wrapper
@@ -237,6 +240,50 @@ def test_current_image_status_command_stays_below_exec_limit() -> None:
     assert "V7_STATUS PASS" in wrapper
 
 
+def test_full_smoke_rejects_alternate_platform_origin_before_exec(tmp_path) -> None:
+    wrapper = ROOT / "infra-staging" / "run-provider-v7-smoke.sh"
+    fake_az = tmp_path / "az"
+    az_log = tmp_path / "az.log"
+    head = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    fake_az.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$FAKE_AZ_LOG"\n'
+        'case "$*" in\n'
+        "  *properties.configuration.ingress.fqdn*)\n"
+        '    case "$*" in\n'
+        "      *cosmaneura-staging-app*) echo platform.example.invalid ;;\n"
+        "      *cosmaneura-sovereign-staging-app*) echo provider.example.invalid ;;\n"
+        "      *) echo public.example.invalid ;;\n"
+        "    esac ;;\n"
+        "  *API_BASE_URL*) echo https://attacker.example ;;\n"
+        "  *PLATFORM_AGENT_API_SCOPE*) echo api://00000000-0000-0000-0000-000000000000/.default ;;\n"
+        '  *properties.template.containers\\[0\\].image*) echo "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura:$FAKE_HEAD" ;;\n'
+        "esac\n"
+    )
+    fake_az.chmod(0o755)
+    result = subprocess.run(
+        ["bash", str(wrapper)],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "FAKE_AZ_LOG": str(az_log),
+            "FAKE_HEAD": head,
+        },
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == "V7_SMOKE FAIL\n"
+    assert "containerapp exec" not in az_log.read_text()
+
+
 def test_expect_transport_is_silent_and_uses_interactive_shell(tmp_path) -> None:
     fake_az = tmp_path / "az"
     argv_log = tmp_path / "argv"
@@ -244,8 +291,14 @@ def test_expect_transport_is_silent_and_uses_interactive_shell(tmp_path) -> None
         "#!/bin/sh\n"
         'printf "%s\\n" "$*" > "$FAKE_AZ_ARGV"\n'
         "printf '$ '\n"
+        "IFS= read -r no_echo\n"
+        "[ \"$no_echo\" = 'stty -echo' ] || exit 1\n"
+        "printf '$ '\n"
         "IFS= read -r command\n"
         'printf "\\n%s\\n$ " "$FAKE_MARKER"\n'
+        "IFS= read -r echo_on\n"
+        "[ \"$echo_on\" = 'stty echo' ] || exit 1\n"
+        "printf '$ '\n"
         "IFS= read -r final\n"
         '[ "$final" = exit ]\n'
     )
@@ -258,6 +311,9 @@ def test_expect_transport_is_silent_and_uses_interactive_shell(tmp_path) -> None
         "FAKE_MARKER": marker,
     }
     helper = ROOT / "infra-staging" / "containerapp-exec.expect"
+    assert helper.is_file()
+    if not Path("/usr/bin/expect").is_file():
+        pytest.skip("operator PTY transport requires /usr/bin/expect")
     result = subprocess.run(
         [str(helper), "staging-rg", "staging-app", "printf ignored", marker],
         capture_output=True,

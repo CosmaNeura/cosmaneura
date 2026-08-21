@@ -10,19 +10,31 @@ expect {
     timeout { exit 70 }
     eof { exit 71 }
 }
-send -- "$command\r"
+send -- "stty -echo\r"
 expect {
-    -exact "\r\n$marker\r\n" {}
+    -re {[#$] $} {}
     timeout { exit 72 }
     eof { exit 73 }
 }
+send -- "$command\r"
 expect {
-    -re {[#$] $} {}
+    -exact $marker {}
     timeout { exit 74 }
     eof { exit 75 }
+}
+expect {
+    -re {[#$] $} {}
+    timeout { exit 76 }
+    eof { exit 77 }
+}
+send -- "stty echo\r"
+expect {
+    -re {[#$] $} {}
+    timeout { exit 78 }
+    eof { exit 79 }
 }
 send -- "exit\r"
 expect {
     eof {}
-    timeout { exit 76 }
+    timeout { exit 80 }
 }
