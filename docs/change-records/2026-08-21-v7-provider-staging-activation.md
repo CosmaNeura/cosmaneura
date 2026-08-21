@@ -31,6 +31,11 @@ The platform workload allowlist contains the provider workload only. The
 public mount remains on its separate image with Platform Agent API access off.
 Production was not changed.
 
+These values record the initial accepted activation. Later reviewed
+staging-only Platform deployments may advance its source, image, and revision;
+the operator runbook requires exact deployed-commit provenance and a fresh
+full smoke rather than treating this historical table as a permanent pin.
+
 ## Acceptance result
 
 The final synthetic acceptance established that:
