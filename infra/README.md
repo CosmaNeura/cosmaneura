@@ -191,3 +191,6 @@ deploy_parallel_network_smoke_job      = false
 They are documented in [`../docs/EAST_US_DATA_PATH_PLAN.md`](../docs/EAST_US_DATA_PATH_PLAN.md).
 The bridge does not disable current public endpoints, rotate credentials, or clone a production
 workload.
+
+Provider-only V7 staging pilot boundaries and operator checks are documented in
+[`../docs/V7_PROVIDER_STAGING_PILOT.md`](../docs/V7_PROVIDER_STAGING_PILOT.md).

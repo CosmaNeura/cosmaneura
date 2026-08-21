@@ -1,0 +1,40 @@
+#!/usr/bin/expect -f
+log_user 0
+set timeout 240
+if {$argc != 4} { exit 64 }
+lassign $argv group app command marker
+
+spawn az containerapp exec --resource-group $group --name $app --command /bin/sh
+expect {
+    -re {[#$] $} {}
+    timeout { exit 70 }
+    eof { exit 71 }
+}
+send -- "stty -echo\r"
+expect {
+    -re {[#$] $} {}
+    timeout { exit 72 }
+    eof { exit 73 }
+}
+send -- "$command\r"
+expect {
+    -exact $marker {}
+    timeout { exit 74 }
+    eof { exit 75 }
+}
+expect {
+    -re {[#$] $} {}
+    timeout { exit 76 }
+    eof { exit 77 }
+}
+send -- "stty echo\r"
+expect {
+    -re {[#$] $} {}
+    timeout { exit 78 }
+    eof { exit 79 }
+}
+send -- "exit\r"
+expect {
+    eof {}
+    timeout { exit 80 }
+}
