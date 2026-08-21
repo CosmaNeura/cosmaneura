@@ -14,8 +14,8 @@
 jq_script := """
 with_entries(
 	select((
-		(.key | startswith("DIRENV_") | not)
-		and (.key | IN("VIRTUAL_ENV", "VENV_ACTIVE", "UV_ACTIVE", "PATH", "OP_SERVICE_ACCOUNT_TOKEN") | not)
+			(.key | startswith("DIRENV_") | not)
+			and (.key | IN("VIRTUAL_ENV", "VENV_ACTIVE", "UV_ACTIVE", "PATH", "OP_SERVICE_ACCOUNT_TOKEN", "RECALL_WEBHOOK_SECRET_INPUT", "DURABLE_WEBHOOK_INBOX_ENABLED_INPUT") | not)
 	))
 )
 """
@@ -34,6 +34,8 @@ with_entries(
 	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" op daemon -d
 	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
 		ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}" \
+		RECALL_WEBHOOK_SECRET_INPUT="${RECALL_WEBHOOK_SECRET:-}" \
+		DURABLE_WEBHOOK_INBOX_ENABLED_INPUT="${DURABLE_WEBHOOK_INBOX_ENABLED:-false}" \
 		RENDER_DIRENV="{{target}}" \
 		direnv export json | jq -r '{{jq_script}}'
 
@@ -44,6 +46,8 @@ with_entries(
 # JSON dump of the test environment secrets, used for local pytest runs (direnv.py for more details)
 @direnv_export_ci:
 	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
+		RECALL_WEBHOOK_SECRET_INPUT="${RECALL_WEBHOOK_SECRET:-}" \
+		DURABLE_WEBHOOK_INBOX_ENABLED_INPUT="${DURABLE_WEBHOOK_INBOX_ENABLED:-false}" \
 		CI=true direnv export json | jq -r '{{jq_script}}'
 
 # export env variables for a particular file in a format docker can consume

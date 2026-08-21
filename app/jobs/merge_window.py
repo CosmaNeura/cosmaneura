@@ -15,6 +15,7 @@ from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.services import recall
+from app.services.external_webhook_inbox import provider_log_ref
 
 
 def _rget(redis, key: str) -> str | None:
@@ -29,7 +30,7 @@ def perform(meeting_id: str) -> None:
     if redis.get(f"{key_prefix}:recording_active"):
         log.info(
             "merge window: recording resumed before expiry, no action",
-            meeting_id=meeting_id,
+            meeting_ref=provider_log_ref(meeting_id),
         )
         return
 
@@ -37,22 +38,23 @@ def perform(meeting_id: str) -> None:
     if not bot_id:
         log.info(
             "merge window: no bot tracked, nothing to finalize",
-            meeting_id=meeting_id,
+            meeting_ref=provider_log_ref(meeting_id),
         )
         return
 
     log.info(
         "merge window expired, releasing bot",
-        meeting_id=meeting_id,
-        bot_id=bot_id,
+        meeting_ref=provider_log_ref(meeting_id),
+        bot_ref=provider_log_ref(bot_id),
     )
     try:
         recall.leave_call(bot_id)
-    except Exception:
-        log.exception(
+    except Exception as exc:
+        log.warning(
             "leave_call failed during merge window expiry",
-            bot_id=bot_id,
-            meeting_id=meeting_id,
+            bot_ref=provider_log_ref(bot_id),
+            meeting_ref=provider_log_ref(meeting_id),
+            error_type=type(exc).__name__,
         )
 
     for suffix in (

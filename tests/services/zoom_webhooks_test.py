@@ -64,6 +64,7 @@ def mock_recall(monkeypatch):
         "start_recording": [],
         "stop_recording": [],
         "leave_call": [],
+        "send_chat_message": [],
     }
 
     from app.services import recall
@@ -72,7 +73,7 @@ def mock_recall(monkeypatch):
         meeting_url,
         zak_url,
         bot_name="Cosmas AI Note-Taker",
-        manual_recording=False,
+        manual_recording=True,
         metadata=None,
     ):
         calls["create_bot"].append(
@@ -95,10 +96,14 @@ def mock_recall(monkeypatch):
     def fake_leave_call(bot_id):
         calls["leave_call"].append(bot_id)
 
+    def fake_send_chat_message(bot_id, message, to="everyone"):
+        calls["send_chat_message"].append((bot_id, message, to))
+
     monkeypatch.setattr(recall, "create_bot", fake_create_bot)
     monkeypatch.setattr(recall, "start_recording", fake_start_recording)
     monkeypatch.setattr(recall, "stop_recording", fake_stop_recording)
     monkeypatch.setattr(recall, "leave_call", fake_leave_call)
+    monkeypatch.setattr(recall, "send_chat_message", fake_send_chat_message)
     return calls
 
 
@@ -325,7 +330,8 @@ def test_patient_joins_first_then_doctor_starts_session(
     )
 
     assert len(mock_recall["create_bot"]) == 1
-    assert mock_recall["create_bot"][0]["metadata"]["meeting_id"] == MEETING_ID
+    assert mock_recall["create_bot"][0]["metadata"] is None
+    assert mock_recall["create_bot"][0]["manual_recording"] is True
     assert mock_recall["start_recording"] == [BOT_ID]
     assert clean_redis.get(_key("bot_id")).decode() == BOT_ID
     assert clean_redis.get(_key("recording_active")) == b"1"
@@ -1197,6 +1203,43 @@ def test_payload_shape_probe_logs_field_names_only():
     # No value from the payload may appear anywhere in the emitted event.
     assert "Jane Patient" not in str(entry)
     assert HOST_ID not in str(entry)
+
+
+def test_zoom_session_logs_hash_provider_and_clinical_identifiers(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+):
+    import json
+
+    from structlog.testing import capture_logs
+
+    from app.services import zoom_webhooks
+
+    patient_id = "patient-provider-private"
+    patient_name = "Clinical Name Sentinel"
+    with capture_logs() as logs:
+        zoom_webhooks.handle_meeting_started(_started_payload())
+        zoom_webhooks.handle_participant_joined(
+            _participant_joined_payload(HOST_ID, "Provider Name Sentinel")
+        )
+        zoom_webhooks.handle_participant_joined(
+            _participant_joined_payload(patient_id, patient_name)
+        )
+
+    serialized = json.dumps(logs, sort_keys=True)
+    for raw_value in (
+        MEETING_ID,
+        HOST_ID,
+        BOT_ID,
+        patient_id,
+        patient_name,
+        "Provider Name Sentinel",
+        str(doctor_with_zoom.id),
+    ):
+        assert raw_value not in serialized
+    assert "sha256:" in serialized
 
 
 @pytest.mark.parametrize(

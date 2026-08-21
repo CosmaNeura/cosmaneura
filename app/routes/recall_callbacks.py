@@ -15,6 +15,7 @@ from starlette import status
 from app import log
 from app.configuration.redis import get_redis
 from app.services import zoom as zoom_service
+from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor
 
@@ -48,14 +49,17 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
     doctor_id = raw.decode() if isinstance(raw, bytes) else raw
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
     if not doctor:
-        log.warning("recall zak callback: doctor not found", doctor_id=doctor_id)
+        log.warning(
+            "recall zak callback: doctor not found",
+            doctor_ref=provider_log_ref(doctor_id),
+        )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     integration = zoom_service.get_zoom_integration(doctor)
     if not integration:
         log.warning(
             "recall zak callback: doctor has no zoom integration",
-            doctor_id=doctor_id,
+            doctor_ref=provider_log_ref(doctor_id),
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
@@ -64,8 +68,11 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
     except zoom_service.ZoomIntegrationInvalid:
         log.warning(
             "recall zak callback: doctor revoked Zoom OAuth",
-            doctor_id=doctor_id,
+            doctor_ref=provider_log_ref(doctor_id),
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
-    log.info("recall zak callback: token issued", doctor_id=doctor_id)
+    log.info(
+        "recall zak callback: token issued",
+        doctor_ref=provider_log_ref(doctor_id),
+    )
     return PlainTextResponse(content=zak)

@@ -58,6 +58,8 @@ jobs:
       # Required by infra/main.tf data sources that pull production
       # secrets out of 1Password.
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       # Tell terraform-provider-azurerm and the azurerm backend to use
       # the OIDC token we just minted via azure/login.
       ARM_USE_OIDC: "true"

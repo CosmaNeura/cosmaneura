@@ -11,6 +11,7 @@ from app.jobs import merge_window
 from app.routes.recall_callbacks import zak_token_redis_key
 from app.services import recall
 from app.services import zoom as zoom_service
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.recall import BOT_NAME
 
 from app.models.ai_visit_transcript import AIVisitTranscript
@@ -60,7 +61,13 @@ def handle_meeting_started(payload: dict[str, Any]):
     host_id = obj.get("host_id")
     meeting_id = obj.get("id")
 
-    log.info("meeting.started received", host_id=host_id, meeting_id=meeting_id)
+    log.info(
+        "meeting.started received",
+        host_ref=provider_log_ref(host_id),
+        meeting_ref=provider_log_ref(
+            str(meeting_id) if meeting_id is not None else None
+        ),
+    )
 
     redis = get_redis()
     # Atomic idempotency guard. Zoom occasionally fires meeting.started twice
@@ -72,7 +79,7 @@ def handle_meeting_started(payload: dict[str, Any]):
     if not redis.set(lock_key, "1", nx=True, ex=60):
         log.info(
             "meeting.started duplicate within active lock window, skipping",
-            meeting_id=meeting_id,
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
 
@@ -89,7 +96,10 @@ def handle_meeting_started(payload: dict[str, Any]):
     # and participants_order that the concurrent handler had already written,
     # leaving the session stuck in "holding" with no bot.
     _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
-    log.info("cleared stale meeting keys", meeting_id=meeting_id)
+    log.info(
+        "cleared stale meeting keys",
+        meeting_ref=provider_log_ref(str(meeting_id)),
+    )
 
     doctor = cast(
         Doctor | None,
@@ -106,7 +116,7 @@ def handle_meeting_started(payload: dict[str, Any]):
     if not doctor:
         log.info(
             "no doctor found for zoom host_id, skipping session registration",
-            host_id=host_id,
+            host_ref=provider_log_ref(host_id),
         )
         return
 
@@ -114,7 +124,7 @@ def handle_meeting_started(payload: dict[str, Any]):
     if not integration:
         log.info(
             "doctor has no zoom integration, skipping session registration",
-            doctor_id=str(doctor.id),
+            doctor_ref=provider_log_ref(str(doctor.id)),
         )
         return
 
@@ -124,8 +134,8 @@ def handle_meeting_started(payload: dict[str, Any]):
 
     log.info(
         "meeting session started, awaiting doctor",
-        meeting_id=meeting_id,
-        doctor_id=str(doctor.id),
+        meeting_ref=provider_log_ref(str(meeting_id)),
+        doctor_ref=provider_log_ref(str(doctor.id)),
     )
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=str(meeting_id))
@@ -195,8 +205,8 @@ def _resolve_host_id(redis, meeting_id: str, participant: dict) -> str | None:
 
     log.info(
         "host_id absent from redis, resolved zoom host from db",
-        meeting_id=meeting_id,
-        participant_id=candidate,
+        meeting_ref=provider_log_ref(str(meeting_id)),
+        participant_ref=provider_log_ref(candidate),
     )
     return candidate
 
@@ -212,7 +222,7 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     if not doctor_id:
         log.warning(
             "cannot start appointment: no doctor_id in redis",
-            meeting_id=meeting_id,
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
 
@@ -220,8 +230,8 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     if not doctor:
         log.warning(
             "cannot start appointment: doctor not found",
-            doctor_id=doctor_id,
-            meeting_id=meeting_id,
+            doctor_ref=provider_log_ref(doctor_id),
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
 
@@ -236,9 +246,8 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     if not bot_allowed:
         log.info(
             "zoom bot dispatch blocked (email not in environment allowlist)",
-            doctor_id=doctor_id,
-            email=doctor.email,
-            meeting_id=meeting_id,
+            doctor_ref=provider_log_ref(doctor_id),
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
 
@@ -255,15 +264,14 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     except zoom_service.ZoomIntegrationInvalid:
         log.warning(
             "cannot start appointment: doctor revoked Zoom OAuth",
-            doctor_id=doctor_id,
-            meeting_id=meeting_id,
+            doctor_ref=provider_log_ref(doctor_id),
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
     bot_data = recall.create_bot(
         meeting_url=meeting_url,
         zak_url=zak_url,
         manual_recording=True,
-        metadata={"doctor_id": doctor_id, "meeting_id": str(meeting_id)},
     )
     bot_id = bot_data["id"]
     ttl = timedelta(hours=24)
@@ -275,8 +283,8 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     if not recording_id:
         log.warning(
             "bot never reached ready state, aborting appointment",
-            bot_id=bot_id,
-            meeting_id=meeting_id,
+            bot_ref=provider_log_ref(bot_id),
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         recall.leave_call(bot_id)
         redis.delete(f"recall:meeting:{meeting_id}:bot_id")
@@ -293,9 +301,9 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     except Exception as exc:
         log.warning(
             "failed to post recording disclosure to zoom chat",
-            bot_id=bot_id,
-            meeting_id=meeting_id,
-            error=str(exc),
+            bot_ref=provider_log_ref(bot_id),
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            error_type=type(exc).__name__,
         )
 
     now = datetime.utcnow()
@@ -344,10 +352,9 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
 
     log.info(
         "appointment session started",
-        meeting_id=meeting_id,
-        bot_id=bot_id,
-        appointment_id=str(appointment.id),
-        patient_name=user_name,
+        meeting_ref=provider_log_ref(str(meeting_id)),
+        bot_ref=provider_log_ref(bot_id),
+        appointment_ref=provider_log_ref(str(appointment.id)),
     )
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
@@ -377,9 +384,8 @@ def handle_participant_joined(payload: dict[str, Any]):
         log.info(
             "participant joined: bot",
             role="bot",
-            meeting_id=meeting_id,
-            participant_id=participant_id,
-            user_name=user_name,
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            participant_ref=provider_log_ref(participant_id),
         )
         return
 
@@ -390,9 +396,8 @@ def handle_participant_joined(payload: dict[str, Any]):
         log.info(
             "participant joined: doctor",
             role="doctor",
-            meeting_id=meeting_id,
-            participant_id=participant_id,
-            user_name=user_name,
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            participant_ref=provider_log_ref(participant_id),
             doctor_present=True,
         )
 
@@ -443,9 +448,8 @@ def handle_participant_joined(payload: dict[str, Any]):
     log.info(
         "participant joined: other",
         role="other",
-        meeting_id=meeting_id,
-        participant_id=participant_id,
-        user_name=user_name,
+        meeting_ref=provider_log_ref(str(meeting_id)),
+        participant_ref=provider_log_ref(participant_id),
         doctor_present=doctor_present,
         recording_active=recording_active,
         patient_count=new_count,
@@ -454,8 +458,7 @@ def handle_participant_joined(payload: dict[str, Any]):
     if not doctor_present:
         log.info(
             "non-doctor joined before doctor, holding",
-            meeting_id=meeting_id,
-            user_name=user_name,
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
 
@@ -464,8 +467,7 @@ def handle_participant_joined(payload: dict[str, Any]):
     else:
         log.info(
             "additional participant in active session",
-            meeting_id=meeting_id,
-            user_name=user_name,
+            meeting_ref=provider_log_ref(str(meeting_id)),
             patient_count=new_count,
         )
 
@@ -479,8 +481,7 @@ def _revoke_merge_window_task(redis, meeting_id: str) -> None:
     redis.delete(f"recall:meeting:{meeting_id}:paused_at")
     log.info(
         "merge window task revoked",
-        meeting_id=meeting_id,
-        task_id=task_id,
+        meeting_ref=provider_log_ref(str(meeting_id)),
     )
 
 
@@ -506,9 +507,9 @@ def _resume_or_start_recording(
     redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
     log.info(
         "recording resumed on existing bot within merge window",
-        meeting_id=meeting_id,
-        bot_id=bot_id,
-        participant_id=participant_id,
+        meeting_ref=provider_log_ref(str(meeting_id)),
+        bot_ref=provider_log_ref(bot_id),
+        participant_ref=provider_log_ref(participant_id),
     )
 
 
@@ -531,8 +532,7 @@ def _ensure_appointment(
         )
         log.info(
             "created patient for zoom participant",
-            doctor_id=doctor_id,
-            patient_name=patient_name,
+            doctor_ref=provider_log_ref(doctor_id),
         )
 
     appointment = Appointment.find_or_create_by(
@@ -543,8 +543,8 @@ def _ensure_appointment(
     )
     log.info(
         "created appointment for zoom session",
-        doctor_id=doctor_id,
-        appointment_id=str(appointment.id),
+        doctor_ref=provider_log_ref(doctor_id),
+        appointment_ref=provider_log_ref(str(appointment.id)),
     )
     return cast(Appointment, appointment)
 
@@ -566,7 +566,6 @@ def handle_participant_left(payload: dict[str, Any]):
     # join — otherwise guest joins push empty strings and the doctor-arrives
     # branch never finds a first_id, so _start_appointment_session never runs.
     participant_id = participant.get("id") or participant.get("user_id") or ""
-    user_name = participant.get("user_name") or ""
 
     redis = get_redis()
     host_id = _resolve_host_id(redis, meeting_id, participant)
@@ -576,9 +575,8 @@ def handle_participant_left(payload: dict[str, Any]):
         log.info(
             "participant left: bot",
             role="bot",
-            meeting_id=meeting_id,
-            participant_id=participant_id,
-            user_name=user_name,
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            participant_ref=provider_log_ref(participant_id),
         )
         return
 
@@ -590,9 +588,8 @@ def handle_participant_left(payload: dict[str, Any]):
         log.info(
             "participant left: doctor",
             role="doctor",
-            meeting_id=meeting_id,
-            participant_id=participant_id,
-            user_name=user_name,
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            participant_ref=provider_log_ref(participant_id),
             doctor_present=False,
             recording_active=recording_active,
         )
@@ -609,7 +606,7 @@ def handle_participant_left(payload: dict[str, Any]):
     if new_count < 0:
         log.warning(
             "patient_count went negative, resetting to 0",
-            meeting_id=meeting_id,
+            meeting_ref=provider_log_ref(str(meeting_id)),
             count=new_count,
         )
         redis.set(f"recall:meeting:{meeting_id}:patient_count", 0)
@@ -621,9 +618,8 @@ def handle_participant_left(payload: dict[str, Any]):
     log.info(
         "participant left: other",
         role="other",
-        meeting_id=meeting_id,
-        participant_id=participant_id,
-        user_name=user_name,
+        meeting_ref=provider_log_ref(str(meeting_id)),
+        participant_ref=provider_log_ref(participant_id),
         doctor_present=doctor_present,
         recording_active=recording_active,
         patient_count=new_count,
@@ -649,12 +645,13 @@ def _pause_and_arm_merge_window(redis, meeting_id: str, reason: str) -> None:
     if bot_id:
         try:
             recall.stop_recording(bot_id)
-        except Exception:
-            log.exception(
+        except Exception as exc:
+            log.warning(
                 "stop_recording failed during pause",
-                bot_id=bot_id,
-                meeting_id=meeting_id,
+                bot_ref=provider_log_ref(bot_id),
+                meeting_ref=provider_log_ref(str(meeting_id)),
                 reason=reason,
+                error_type=type(exc).__name__,
             )
 
     redis.delete(f"recall:meeting:{meeting_id}:recording_active")
@@ -673,10 +670,9 @@ def _pause_and_arm_merge_window(redis, meeting_id: str, reason: str) -> None:
     )
     log.info(
         "recording paused, merge window armed",
-        meeting_id=meeting_id,
-        bot_id=bot_id,
+        meeting_ref=provider_log_ref(str(meeting_id)),
+        bot_ref=provider_log_ref(bot_id),
         reason=reason,
-        merge_task_id=task.id,
         countdown_s=MERGE_WINDOW_SECONDS,
     )
 
@@ -728,7 +724,7 @@ def handle_meeting_ended(payload: dict[str, Any]):
     if redis.get(f"recall:meeting:{meeting_id}:starting_lock"):
         log.info(
             "meeting.ended skipped: still inside starting lock window (likely stale)",
-            meeting_id=meeting_id,
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
 
@@ -741,29 +737,31 @@ def handle_meeting_ended(payload: dict[str, Any]):
     if bot_id:
         log.info(
             "meeting ended with active recording",
-            meeting_id=meeting_id,
-            bot_id=bot_id,
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            bot_ref=provider_log_ref(bot_id),
         )
         try:
             recall.stop_recording(bot_id)
-        except Exception:
-            log.exception(
+        except Exception as exc:
+            log.warning(
                 "stop_recording failed during meeting.ended",
-                bot_id=bot_id,
-                meeting_id=meeting_id,
+                bot_ref=provider_log_ref(bot_id),
+                meeting_ref=provider_log_ref(str(meeting_id)),
+                error_type=type(exc).__name__,
             )
         try:
             recall.leave_call(bot_id)
-        except Exception:
-            log.exception(
+        except Exception as exc:
+            log.warning(
                 "leave_call failed during meeting.ended",
-                bot_id=bot_id,
-                meeting_id=meeting_id,
+                bot_ref=provider_log_ref(bot_id),
+                meeting_ref=provider_log_ref(str(meeting_id)),
+                error_type=type(exc).__name__,
             )
     else:
         log.info(
             "meeting ended without recording",
-            meeting_id=meeting_id,
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
 
     _clear_meeting_keys(redis, meeting_id)
@@ -779,7 +777,7 @@ def handle_meeting_ended(payload: dict[str, Any]):
         zoom_mtg.save()
         log.info(
             "zoom meeting status updated to ended",
-            zoom_meeting_id=str(meeting_id),
+            meeting_ref=provider_log_ref(str(meeting_id)),
         )
 
 

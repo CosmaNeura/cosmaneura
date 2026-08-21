@@ -45,6 +45,10 @@ locals {
     data.external.database_url_live_guard.result["result"] == "verified",
     false,
   )
+  recall_webhook_secret_valid = try(
+    length(trimspace(data.external.secrets.result["RECALL_WEBHOOK_SECRET"])) > 0,
+    false,
+  )
 }
 
 terraform {
@@ -634,6 +638,11 @@ resource "azurerm_container_app" "app" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = local.recall_webhook_secret_valid
+      error_message = "RECALL_WEBHOOK_SECRET must be configured for the API before deployment"
+    }
+
     precondition {
       condition     = local.database_url_configuration_valid
       error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"

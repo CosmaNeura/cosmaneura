@@ -11,6 +11,7 @@ from typing import Any, cast
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
@@ -29,7 +30,11 @@ from app.models.note_type_customization import (
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
-    log.info("starting summarization", transcript_id=transcript_id, schema_id=schema_id)
+    log.info(
+        "starting summarization",
+        transcript_ref=provider_log_ref(str(transcript_id)),
+        schema_ref=provider_log_ref(str(schema_id)),
+    )
 
     trigger = AIVisitTranscript.get(id=transcript_id)
     assert trigger
@@ -64,8 +69,8 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     if existing_note and existing_note.ai_transcript_id == latest.id:
         log.info(
             "note already reflects latest transcript, skipping summarization",
-            appointment_id=str(trigger.appointment_id),
-            schema_id=schema_id,
+            appointment_ref=provider_log_ref(str(trigger.appointment_id)),
+            schema_ref=provider_log_ref(str(schema_id)),
         )
         return
 
@@ -171,7 +176,7 @@ perform_celery = celery_app.task(perform)
 
 
 def queue(*args, **kwargs):
-    log.info("queuing summarization job", args=args, kwargs=kwargs)
+    log.info("queuing summarization job")
     perform_celery.delay(*args, **kwargs)
 
 

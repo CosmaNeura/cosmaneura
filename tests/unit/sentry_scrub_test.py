@@ -1,60 +1,115 @@
-from app.configuration.sentry import scrub_event
+import json
+
+from app.configuration import sentry
+
+SENTINEL = "patient-secret-sentinel"
 
 
 def _event() -> dict:
     return {
         "request": {
-            "url": "https://api.example.com/internal/v1/notes",
-            "data": {"transcript": "Patient: my back hurts"},
-            "cookies": {"session": "abc"},
+            "url": f"https://api.example.com/internal/v1/notes?patient={SENTINEL}",
+            "query_string": f"patient={SENTINEL}",
+            "data": {"transcript": SENTINEL},
+            "cookies": {"session": SENTINEL},
+            "env": {"REMOTE_USER": SENTINEL},
             "headers": {
-                "Authorization": "Bearer secret",
-                "Cookie": "session=abc",
-                "User-Agent": "test",
+                "aUtHoRiZaTiOn": f"Bearer {SENTINEL}",
+                "X-Clinical-Context": SENTINEL,
             },
         },
+        "user": {"email": SENTINEL},
+        "extra": {"celery-job": {"args": [SENTINEL]}},
+        "tags": {"patient": SENTINEL},
+        "contexts": {"trace": {"patient": SENTINEL}},
+        "message": SENTINEL,
+        "logentry": {"message": SENTINEL},
+        "fingerprint": [SENTINEL],
         "breadcrumbs": {
+            "values": [{"message": SENTINEL, "data": {"prompt": SENTINEL}}]
+        },
+        "exception": {
             "values": [
                 {
-                    "message": "prompting clinical note model",
-                    "data": {"prompt": "full PHI prompt"},
+                    "type": "ValueError",
+                    "value": SENTINEL,
+                    "stacktrace": {
+                        "frames": [
+                            {
+                                "filename": "app/services/example.py",
+                                "lineno": 42,
+                                "vars": {"transcript": SENTINEL},
+                            }
+                        ]
+                    },
                 }
             ]
         },
-        "exception": {"values": [{"type": "ValueError", "value": "note failed"}]},
+        "spans": [{"op": "http.client", "data": {"url": SENTINEL}}],
+        "transaction": "POST /internal/v1/notes",
+        "release": "test-release",
     }
 
 
-def test_scrub_drops_request_body_cookies_and_auth_headers():
-    event = scrub_event(_event(), None)
+def _assert_scrubbed(event: dict) -> None:
+    serialized = json.dumps(event, sort_keys=True)
+    assert SENTINEL not in serialized
+    exception = event["exception"]["values"][0]
+    assert exception["type"] == "ValueError"
+    frame = exception["stacktrace"]["frames"][0]
+    assert frame["filename"] == "app/services/example.py"
+    assert frame["lineno"] == 42
+    assert event["transaction"] == "POST /internal/v1/notes"
+    assert event["release"] == "test-release"
+
+
+def test_scrub_removes_phi_from_error_events() -> None:
+    event = sentry.scrub_event(_event(), None)
+    assert event is not None
+    _assert_scrubbed(event)
+
+
+def test_transaction_callback_uses_the_same_scrubber(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(sentry, "is_production", lambda: True)
+    monkeypatch.setattr(sentry, "is_job_monitor", lambda: False)
+    monkeypatch.setattr(sentry, "config", lambda *_args, **_kwargs: "configured")
+    monkeypatch.setattr(sentry, "PostHogIntegration", lambda: object())
+    monkeypatch.setattr(
+        sentry.sentry_sdk, "init", lambda **kwargs: captured.update(kwargs)
+    )
+
+    sentry.configure_sentry()
+    callback = captured["before_send_transaction"]
+    event = callback(_event(), None)
 
     assert event is not None
-    assert "data" not in event["request"]
-    assert "cookies" not in event["request"]
-    assert "Authorization" not in event["request"]["headers"]
-    assert "Cookie" not in event["request"]["headers"]
-    # non-sensitive context is preserved
-    assert event["request"]["url"].endswith("/internal/v1/notes")
-    assert event["request"]["headers"]["User-Agent"] == "test"
+    _assert_scrubbed(event)
 
 
-def test_scrub_drops_breadcrumb_data_but_keeps_messages():
-    event = scrub_event(_event(), None)
+def test_transaction_callback_filters_health_before_scrubbing(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(sentry, "is_production", lambda: True)
+    monkeypatch.setattr(sentry, "is_job_monitor", lambda: False)
+    monkeypatch.setattr(sentry, "config", lambda *_args, **_kwargs: "configured")
+    monkeypatch.setattr(sentry, "PostHogIntegration", lambda: object())
+    monkeypatch.setattr(
+        sentry.sentry_sdk, "init", lambda **kwargs: captured.update(kwargs)
+    )
 
-    crumb = event["breadcrumbs"]["values"][0]
-    assert "data" not in crumb
-    assert crumb["message"] == "prompting clinical note model"
+    sentry.configure_sentry(integrations=[])
+
+    assert (
+        captured["before_send_transaction"](
+            {"request": {"url": "https://api.example.com/healthcheck"}}, None
+        )
+        is None
+    )
 
 
-def test_scrub_preserves_exception_summary():
-    event = scrub_event(_event(), None)
-
-    assert event["exception"]["values"][0]["value"] == "note failed"
-
-
-def test_scrub_handles_minimal_events():
-    assert scrub_event({}, None) == {}
-    assert scrub_event({"request": None, "breadcrumbs": None}, None) == {
+def test_scrub_handles_minimal_events() -> None:
+    assert sentry.scrub_event({}, None) == {}
+    assert sentry.scrub_event({"request": None, "breadcrumbs": None}, None) == {
         "request": None,
         "breadcrumbs": None,
     }

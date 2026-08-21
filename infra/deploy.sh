@@ -103,6 +103,18 @@ if ! jq -n \
 	exit 1
 fi
 
+# Verify only secret names and references: the Recall signing credential must
+# exist exactly once on the API and nowhere on workers, beat, Flower or the
+# migration job. The guard never requests or prints secret values.
+if ! jq -n \
+	--arg resource_group "$RESOURCE_GROUP" \
+	--arg subscription_id "${AZURE_SUBSCRIPTION_ID:?AZURE_SUBSCRIPTION_ID is required}" \
+	'{resource_group: $resource_group, subscription_id: $subscription_id}' |
+	python "$SCRIPT_DIR/api_only_secret_live_guard.py"; then
+	echo "Live API-only secret scope is not ready for application deployment."
+	exit 1
+fi
+
 # Must match variables.tf python_secret_vars. API-only secrets are provisioned
 # by OpenTofu and must never be copied into the migration job.
 COMMON_SECRET_VARS=(
@@ -228,14 +240,11 @@ initiate_deployment() {
 	local git_sha=$2
 	local image="${PRODUCTION_IMAGE}:${git_sha}"
 
-	# Tolerate containers that don't exist yet so this script can be a
-	# superset of what terraform has provisioned. Example: a brand-new
-	# container app added to main.tf hasn't been applied yet, but
-	# CONTAINERS already lists it for future deploys. Failing the whole
-	# script over a not-yet-created resource is worse than skipping it.
+	# All declared production workloads are required. In particular, shipping
+	# the inbox without the scheduler would remove crash recovery.
 	if ! az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" &>/dev/null; then
-		echo "Skipping $container_name — does not exist (probably awaiting first terraform apply)."
-		return 0
+		echo "Required container $container_name does not exist; apply infrastructure first."
+		return 1
 	fi
 
 	echo "Initiating deployment for $container_name with image $image..."
@@ -256,11 +265,9 @@ check_deployment() {
 	local git_sha=$2
 	local expected_image="${PRODUCTION_IMAGE}:${git_sha}"
 
-	# Mirror the skip logic from initiate_deployment so the post-deploy
-	# check doesn't fail on a container we deliberately skipped.
 	if ! az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" &>/dev/null; then
-		echo "Skipping deployment check for $container_name — does not exist."
-		return 0
+		echo "Required container $container_name disappeared during deployment."
+		return 1
 	fi
 
 	# Initialize backoff variables

@@ -1,3 +1,5 @@
+import hashlib
+
 import celery_healthcheck
 from celery import Celery, signals
 from celery.app.task import Task
@@ -119,7 +121,8 @@ def worker_process_init_setup_logging(**kwargs):
 def on_task_prerun(sender, task_id, task, args, kwargs, **_kwargs):
     "https://github.com/hynek/structlog/issues/287#issuecomment-991182054"
     log.clear()
-    log.local(task_id=task_id, task_name=task.name)
+    task_ref = hashlib.sha256(str(task_id).encode("utf-8")).hexdigest()[:12]
+    log.local(task_ref=f"sha256:{task_ref}", task_name=task.name)
 
 
 # TODO below should be cleaned up and is probably overkill
@@ -129,33 +132,26 @@ def on_task_prerun(sender, task_id, task, args, kwargs, **_kwargs):
 def on_task_failure(
     sender, task_id, exception, args, kwargs, traceback, einfo, **_kwargs
 ):
-    import traceback as tb
-
     log.error(
         "task failed",
         task_name=sender.name,
-        task_id=task_id,
-        exception=repr(exception),
-        traceback="".join(
-            tb.format_exception(type(exception), exception, exception.__traceback__)
+        task_ref=(
+            "sha256:" + hashlib.sha256(str(task_id).encode("utf-8")).hexdigest()[:12]
         ),
+        error_type=type(exception).__name__,
     )
 
 
 @signals.task_retry.connect
 def on_task_retry(sender, request, reason, einfo, **_kwargs):
-    import traceback as tb
-
-    exc = reason if isinstance(reason, BaseException) else None
     log.warning(
         "task retrying",
         task_name=sender.name,
-        task_id=request.id,
+        task_ref=(
+            "sha256:" + hashlib.sha256(str(request.id).encode("utf-8")).hexdigest()[:12]
+        ),
         retries=request.retries,
-        reason=repr(reason),
-        traceback="".join(tb.format_exception(type(exc), exc, exc.__traceback__))
-        if exc
-        else None,
+        error_type=type(reason).__name__,
     )
 
 
@@ -211,6 +207,13 @@ celery_app.conf.beat_schedule = {
     "transcript_cleanup": {
         "task": "app.jobs.transcript_cleanup.perform",
         "schedule": crontab(minute="0", hour="3"),
+    },
+    # Re-publishes committed webhook receipts after broker/process failures,
+    # reclaims stale fenced leases, expires ciphertext, and resumes transcript
+    # fan-out. The task itself performs no provider calls serially.
+    "external_webhook_inbox_reconcile": {
+        "task": "app.jobs.external_webhooks.reconcile",
+        "schedule": 30.0,
     },
 }
 

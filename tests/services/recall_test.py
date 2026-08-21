@@ -1,4 +1,5 @@
 import httpx
+import pytest
 
 from app.services import recall
 
@@ -68,7 +69,7 @@ def test_leave_call_tolerates_already_done_bot(monkeypatch):
     recall.leave_call("bot-abc-123")
 
 
-def test_create_bot_forwards_metadata_and_zak_url(monkeypatch):
+def test_create_bot_keeps_manual_recording_and_forwards_metadata(monkeypatch):
     captured = {}
 
     class FakeResponse:
@@ -110,6 +111,9 @@ def test_create_bot_forwards_metadata_and_zak_url(monkeypatch):
         "meeting_id": "m1",
     }
     assert payload["bot_name"] == "Cosmas AI Note-Taker"
+    # Recall's Create Bot payload must remain null so creation never starts a
+    # recording. Start Recording supplies the full retention configuration.
+    assert payload["recording_config"] is None
     zoom_cfg = payload["zoom"]
     assert zoom_cfg["zak_url"] == (
         "https://app.cosmaneura.com/external/v1/recall/zak/abc"
@@ -117,6 +121,57 @@ def test_create_bot_forwards_metadata_and_zak_url(monkeypatch):
     assert zoom_cfg["require_recording_permission"] is True
     assert zoom_cfg["request_recording_permission_on_host_join"] is True
     assert "zak_token" not in zoom_cfg
+
+
+def test_create_bot_rejects_automatic_recording(monkeypatch):
+    def fail_client(**_):
+        raise AssertionError("Recall must not be called with automatic recording")
+
+    monkeypatch.setattr(httpx, "Client", fail_client)
+
+    with pytest.raises(ValueError, match="manual recording"):
+        recall.create_bot(
+            meeting_url="https://zoom.us/j/123",
+            zak_url="https://app.cosmaneura.com/external/v1/recall/zak/abc",
+            manual_recording=False,
+        )
+
+
+def test_start_recording_sends_exact_six_hour_retention(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        @property
+        def is_success(self):
+            return True
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "recording-xyz"}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            captured["payload"] = json
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "Client", lambda **_: FakeClient())
+
+    assert recall.start_recording("bot-xyz", wait_for_ready=False) == {
+        "id": "recording-xyz"
+    }
+    assert captured["url"].endswith("/bot/bot-xyz/start_recording/")
+    assert captured["payload"] == {"retention": {"type": "timed", "hours": 6}}
 
 
 def _changes(*codes: str | tuple[str, str]) -> dict:

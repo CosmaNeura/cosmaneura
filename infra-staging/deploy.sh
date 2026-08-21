@@ -20,10 +20,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCE_GROUP="cosmaneura-staging"
 ENVIRONMENT_NAME="cosmaneura-staging-app-environment"
 MIGRATION_JOB="cosmaneura-staging-migrate"
-CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker cosmaneura-staging-app-jmon"
+BACKEND_CONTAINERS="cosmaneura-staging-worker cosmaneura-staging-scheduler cosmaneura-staging-app-jmon"
 API_CONTAINER="cosmaneura-staging-app"
+CONTAINERS="$BACKEND_CONTAINERS $API_CONTAINER"
+SCHEDULER_CONTAINER="cosmaneura-staging-scheduler"
 GRANT_SECRET_ENV_NAME="SOVEREIGN_RECORD_GRANT_SECRET"
 GRANT_SECRET_RESOURCE_NAME="sovereign-record-grant-secret"
+RECALL_SECRET_ENV_NAME="RECALL_WEBHOOK_SECRET"
+RECALL_SECRET_RESOURCE_NAME="recall-webhook-secret"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 
 # Check for Git SHA input and validate it exists in repo
@@ -100,6 +104,36 @@ if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
 	exit 1
 fi
 
+if ! echo "$ENV_JSON" |
+	jq -e '.RECALL_WEBHOOK_SECRET | type == "string" and length > 0' >/dev/null; then
+	echo "Staging Recall webhook signing secret is not configured."
+	exit 1
+fi
+
+DURABLE_WEBHOOK_INBOX_ENABLED=$(
+	echo "$ENV_JSON" | jq -r '.DURABLE_WEBHOOK_INBOX_ENABLED // "false"'
+)
+if [[ "$DURABLE_WEBHOOK_INBOX_ENABLED" != "true" && \
+	"$DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+	echo "DURABLE_WEBHOOK_INBOX_ENABLED must be true or false."
+	exit 1
+fi
+
+SCHEDULER_COMMAND=$(yq -r '.scheduler // ""' "$SCRIPT_DIR/../Procfile")
+if [[ -z "$SCHEDULER_COMMAND" ]]; then
+	echo "Procfile scheduler command is missing."
+	exit 1
+fi
+
+# Recovery is a deployment prerequisite, not a best-effort extra. Fail before
+# migrations or any Container App mutation when a required workload is absent.
+for container in $CONTAINERS; do
+	if ! az containerapp show -n "$container" -g "$RESOURCE_GROUP" &>/dev/null; then
+		echo "Required staging container $container is missing; apply infrastructure first."
+		exit 1
+	fi
+done
+
 # Must match variables.tf python_secret_vars
 COMMON_SECRET_VARS=(
 	DATABASE_URL REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
@@ -115,7 +149,7 @@ COMMON_SECRET_VARS=(
 # Capability-bearing secrets that only the HTTP API may receive. Never append
 # these to the migration, worker, scheduler, or job-monitor environments.
 API_ONLY_SECRET_VARS=(
-	SOVEREIGN_RECORD_GRANT_SECRET
+	RECALL_WEBHOOK_SECRET
 )
 
 # Must match variables.tf python_public_vars
@@ -129,6 +163,7 @@ PUBLIC_VARS=(
 	COOKIE_DOMAIN
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID
+	DURABLE_WEBHOOK_INBOX_ENABLED
 )
 
 run_migrations() {
@@ -237,8 +272,11 @@ initiate_deployment() {
 	local secrets_args=()
 	local env_args=()
 	local container_secret_vars=("${COMMON_SECRET_VARS[@]}")
-	if record_grants_enabled_for "$container_name"; then
+	if [[ "$container_name" == "$API_CONTAINER" ]]; then
 		container_secret_vars+=("${API_ONLY_SECRET_VARS[@]}")
+	fi
+	if record_grants_enabled_for "$container_name"; then
+		container_secret_vars+=(SOVEREIGN_RECORD_GRANT_SECRET)
 	fi
 
 	for var in "${container_secret_vars[@]}"; do
@@ -275,8 +313,18 @@ initiate_deployment() {
 		--revision-suffix "$REVISION_STRING"
 		--set-env-vars "${env_args[@]}"
 	)
+	local remove_env_vars=()
 	if ! record_grants_enabled_for "$container_name"; then
-		update_args+=(--remove-env-vars "$GRANT_SECRET_ENV_NAME")
+		remove_env_vars+=("$GRANT_SECRET_ENV_NAME")
+	fi
+	if [[ "$container_name" != "$API_CONTAINER" ]]; then
+		remove_env_vars+=("$RECALL_SECRET_ENV_NAME")
+	fi
+	if [[ ${#remove_env_vars[@]} -gt 0 ]]; then
+		update_args+=(--remove-env-vars "${remove_env_vars[@]}")
+	fi
+	if [[ "$container_name" == "$SCHEDULER_CONTAINER" ]]; then
+		update_args+=(--args "$SCHEDULER_COMMAND")
 	fi
 	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" \
 		"${update_args[@]}"
@@ -303,6 +351,21 @@ remove_disabled_record_grant_secret() {
 	if [[ "$secret_count" != "0" ]]; then
 		az containerapp secret remove -n "$container_name" -g "$RESOURCE_GROUP" \
 			--secret-names "$GRANT_SECRET_RESOURCE_NAME"
+	fi
+}
+
+remove_disallowed_recall_secret() {
+	local container_name=$1
+	if [[ "$container_name" == "$API_CONTAINER" ]]; then
+		return 0
+	fi
+	local secret_count
+	secret_count=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--query "properties.configuration.secrets[?name=='$RECALL_SECRET_RESOURCE_NAME'] | length(@)" \
+		-o tsv) || return 1
+	if [[ "$secret_count" != "0" ]]; then
+		az containerapp secret remove -n "$container_name" -g "$RESOURCE_GROUP" \
+			--secret-names "$RECALL_SECRET_RESOURCE_NAME"
 	fi
 }
 
@@ -334,7 +397,16 @@ check_deployment() {
 		fi
 
 		# Validate all conditions
-		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && "$running_state" == "Running" ]]; then
+		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && ( "$running_state" == "Running" || "$running_state" == "RunningAtMaxScale" ) ]]; then
+			if [[ "$container_name" == "$SCHEDULER_CONTAINER" ]]; then
+				local live_scheduler_command
+				live_scheduler_command=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+					--query "properties.template.containers[0].args[0]" -o tsv)
+				if [[ "$live_scheduler_command" != "$SCHEDULER_COMMAND" ]]; then
+					echo "Scheduler command does not match the checked-in Procfile."
+					return 1
+				fi
+			fi
 			echo "$container_name deployment is successful."
 			return 0
 		fi
@@ -356,23 +428,22 @@ if [[ $? -ne 0 ]]; then
 	exit 1
 fi
 
-# Deploy all containers first
-for container in $CONTAINERS; do
+# Deploy and verify recovery workloads before making the new API revision live.
+for container in $BACKEND_CONTAINERS; do
 	initiate_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment initiation failed. Exiting."
 		exit 1
 	fi
-done
-
-# Check deployment status for all containers
-for container in $CONTAINERS; do
 	check_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
 		exit 1
 	fi
 done
+
+initiate_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
+check_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
 
 # A false gate is a real revocation, not merely a refusal to add the key on the
 # next revision. Remove any stale app-level secret after the new revisions no
@@ -381,6 +452,11 @@ for container in $CONTAINERS; do
 	remove_disabled_record_grant_secret "$container"
 	if [[ $? -ne 0 ]]; then
 		echo "Failed to reconcile record-grant scope for $container."
+		exit 1
+	fi
+	remove_disallowed_recall_secret "$container"
+	if [[ $? -ne 0 ]]; then
+		echo "Failed to reconcile Recall signing-secret scope for $container."
 		exit 1
 	fi
 done
