@@ -232,3 +232,17 @@
   padding: 0.375rem 0.625rem;
   vertical-align: top;
 }
+
+/* Settings tab: section nav | editor | setup + related */
+.settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+}
+
+@media (min-width: 1024px) {
+  .settings-grid {
+    grid-template-columns: 13.5rem minmax(0, 1fr) 18rem;
+    align-items: start;
+  }
+}

@@ -1,16 +1,10 @@
 import { useState } from "react"
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "~/components/ui/select"
 import { updateSettingsData } from "~/configuration/client"
 import type { Terminology } from "~/configuration/client"
 import { queryClient } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
+import { cn } from "~/lib/utils"
 import { TERMINOLOGY_SETS } from "~/utils/terminology"
 
 import { settingsDataOptions } from "client/@tanstack/react-query.gen"
@@ -57,6 +51,7 @@ export function TerminologySettings({
   const [saving, setSaving] = useState(false)
 
   async function handleChange(next: Terminology) {
+    if (next === value) return
     const previous = value
     setValue(next)
     setSaving(true)
@@ -70,29 +65,52 @@ export function TerminologySettings({
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose max-w-2xl space-y-4">
       <h3>Terminology</h3>
       <p className="text-muted-foreground text-sm">
-        Choose how the app refers to you and the people you care for. This
-        changes labels across the app and the wording of generated notes and
-        intake questions.
+        How Cosmas refers to you and the people you see — in notes and intake.
+        You can change this at any time.
       </p>
-      <Select
-        value={value}
-        onValueChange={(next) => handleChange(next as Terminology)}
-        disabled={saving}
-      >
-        <SelectTrigger className="w-72" aria-label="Terminology">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {Object.entries(TERMINOLOGY_SETS).map(([key, labels]) => (
-            <SelectItem key={key} value={key}>
-              {labels.displayName}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div role="radiogroup" aria-label="Terminology" className="not-prose space-y-1">
+        {(Object.keys(TERMINOLOGY_SETS) as Terminology[]).map((key) => {
+          const labels = TERMINOLOGY_SETS[key]
+          const selected = value === key
+          return (
+            <button
+              key={key}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              disabled={saving}
+              onClick={() => handleChange(key)}
+              className={cn(
+                "flex w-full min-h-11 items-start gap-3 rounded-lg px-3 py-3 text-left",
+                selected ? "bg-muted" : "hover:bg-muted/60",
+              )}
+            >
+              <span
+                className={cn(
+                  "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                  selected ? "border-primary" : "border-muted-foreground/40",
+                )}
+                aria-hidden
+              >
+                {selected && (
+                  <span className="bg-primary size-2 rounded-full" />
+                )}
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">
+                  {labels.displayName}
+                </span>
+                <span className="text-muted-foreground mt-0.5 block text-xs">
+                  Notes and intake say {labels.provider} and {labels.patient}.
+                </span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
     </section>
   )
 }

@@ -40,7 +40,12 @@ describe("TerminologySettings", () => {
     )
 
     expect(screen.getByText("Terminology")).toBeInTheDocument()
-    expect(screen.getByText("Therapist / Client")).toBeInTheDocument()
+    expect(
+      screen.getByRole("radio", { name: /Therapist \/ Client/ }),
+    ).toHaveAttribute("aria-checked", "true")
+    expect(
+      screen.getByRole("radio", { name: /Doctor \/ Patient/ }),
+    ).toHaveAttribute("aria-checked", "false")
   })
 })
 

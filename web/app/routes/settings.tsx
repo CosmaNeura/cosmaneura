@@ -13,10 +13,17 @@ import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
+import {
+  RelatedCard,
+  SettingsShell,
+  SetupCard,
+  type SettingsNavItem,
+  type SettingsSectionId,
+  type SetupItem,
+} from "~/components/settings-layout"
 import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
-import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
 import { SimpleComboBox } from "~/components/shared/SimpleComboBox"
 import {
@@ -46,7 +53,7 @@ import {
   getPractice,
 } from "~/lib/practice-api"
 import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
-import { useTerminology } from "~/utils/terminology"
+import { getTerminology, useTerminology } from "~/utils/terminology"
 import { isTerminologyEnabled } from "~/utils/terminology-feature"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
@@ -65,7 +72,7 @@ function PracticeSettings({
 }) {
   if (!practice) return null
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose max-w-2xl space-y-4">
       <h3>Practice</h3>
       <PracticeJoinPanel practice={practice} />
       {acceptances.length > 0 ? (
@@ -123,7 +130,7 @@ function BiographyInput({ biography }: { biography: string | null }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose max-w-2xl space-y-4">
       <h3>Biography</h3>
       <p className="text-muted-foreground text-sm">
         This is the information that will be used to personalize your
@@ -181,7 +188,7 @@ function NoteSchemaDisplay({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose max-w-2xl space-y-4">
       <h3>Note Types</h3>
       {noteSchemas.length > 0 ? (
         <p>Below are the notes you've uploaded.</p>
@@ -244,7 +251,7 @@ function NoteCustomization({
   )
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose max-w-2xl space-y-4">
       <h3>AI Output Customization</h3>
       <p className="text-sm">
         Tune how Cosmas writes each of your note types. Changes affect only the
@@ -337,8 +344,8 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="flex gap-8">
-        <section className="w-1/2 space-y-4">
+      <form onSubmit={form.handleSubmit(onSubmit)} className="flex flex-col gap-8">
+        <section className="max-w-2xl space-y-4">
           <div className="space-y-2">
             <h2 className="text-left text-xl font-semibold">Notetaking</h2>
             <p className="text-muted-foreground text-left text-sm">
@@ -463,7 +470,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
 
   if (!zoomEnabled) {
     return (
-      <section className="prose-headings prose w-1/2 space-y-4">
+      <section className="prose-headings prose max-w-2xl space-y-4">
         <div className="flex items-center gap-2">
           <h3 className="!mb-0">Zoom Integration</h3>
           <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
@@ -480,7 +487,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose max-w-2xl space-y-4">
       <h3>Zoom Integration</h3>
       <p className="text-muted-foreground text-sm">
         Connect your Zoom account so Cosmas can automatically join your meetings
@@ -613,7 +620,7 @@ function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
   }
 
   return (
-    <section className="prose-headings prose w-1/2 space-y-4">
+    <section className="prose-headings prose max-w-2xl space-y-4">
       <h3>NatMed Pro connection</h3>
       <p className="text-muted-foreground text-sm">
         If you have a NatMed Pro (Natural Medicines) subscription, turn this on
@@ -643,6 +650,44 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const terminologyEnabled = isTerminologyEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
+  const [section, setSection] = useState<SettingsSectionId>("practice")
+
+  const sections: SettingsNavItem[] = [
+    { id: "practice", label: "Practice", hint: "BAA, join code, domain" },
+    { id: "biography", label: "Biography", hint: "Used for intake" },
+    ...(terminologyEnabled
+      ? [
+          {
+            id: "terminology" as const,
+            label: "Terminology",
+            hint: "Doctor / patient labels",
+          },
+        ]
+      : []),
+    { id: "notetaking", label: "Notetaking", hint: "Example visit notes" },
+    { id: "ai", label: "AI output", hint: "How Cosmas writes" },
+    { id: "zoom", label: "Zoom", hint: "Meeting notes" },
+    ...(referenceToolkitEnabled
+      ? [
+          {
+            id: "natmed" as const,
+            label: "NatMed Pro",
+            hint: "Medication lookups",
+          },
+          {
+            id: "lab-ranges" as const,
+            label: "Lab ranges",
+            hint: "Standard and optimal",
+          },
+        ]
+      : []),
+  ]
+
+  const setupItems = buildSetupItems({
+    loaderData,
+    terminologyEnabled,
+    referenceToolkitEnabled,
+  })
 
   return (
     <SidebarProvider
@@ -655,32 +700,147 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         <header className="bg-background sticky top-0 z-10 flex shrink-0 items-center gap-2 border-b p-4">
           <h1 className="text-lg font-semibold">Settings</h1>
         </header>
-        <InnerScrollableContent>
-          <PracticeSettings
-            practice={loaderData.practice}
-            acceptances={loaderData.baa_acceptances}
-          />
-          <BiographyInput biography={loaderData.biography} />
-          {terminologyEnabled && (
+        <SettingsShell
+          sections={sections}
+          section={section}
+          onSection={setSection}
+          setup={<SetupCard items={setupItems} onJump={setSection} />}
+          related={<RelatedCard />}
+        >
+          {section === "practice" && (
+            <PracticeSettings
+              practice={loaderData.practice}
+              acceptances={loaderData.baa_acceptances}
+            />
+          )}
+          {section === "biography" && (
+            <BiographyInput biography={loaderData.biography} />
+          )}
+          {section === "terminology" && terminologyEnabled && (
             <TerminologySettings
               terminology={loaderData.terminology}
               biography={loaderData.biography}
             />
           )}
-          <NoteUpload noteSchemas={loaderData.notes_schema} />
-          <NoteCustomization
-            noteSchemas={loaderData.notes_schema}
-            customizations={loaderData.note_customizations}
-          />
-          <ZoomConnect zoomConnected={loaderData.zoom_connected} />
-          {referenceToolkitEnabled && (
+          {section === "notetaking" && (
+            <NoteUpload noteSchemas={loaderData.notes_schema} />
+          )}
+          {section === "ai" && (
+            <NoteCustomization
+              noteSchemas={loaderData.notes_schema}
+              customizations={loaderData.note_customizations}
+            />
+          )}
+          {section === "zoom" && (
+            <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+          )}
+          {section === "natmed" && referenceToolkitEnabled && (
             <NatMedConnection
               hasSubscription={loaderData.has_natmed_subscription}
             />
           )}
-          {referenceToolkitEnabled && <LabRangeSettings />}
-        </InnerScrollableContent>
+          {section === "lab-ranges" && referenceToolkitEnabled && (
+            <LabRangeSettings />
+          )}
+        </SettingsShell>
       </SidebarInset>
     </SidebarProvider>
   )
+}
+
+function buildSetupItems({
+  loaderData,
+  terminologyEnabled,
+  referenceToolkitEnabled,
+}: {
+  loaderData: Route.ComponentProps["loaderData"]
+  terminologyEnabled: boolean
+  referenceToolkitEnabled: boolean
+}): SetupItem[] {
+  const noteCount = loaderData.notes_schema.length
+  const exampleCount = loaderData.notes_schema.reduce(
+    (n, s) => n + s.example_count,
+    0,
+  )
+  const items: SetupItem[] = [
+    {
+      id: "baa",
+      label: "Practice BAA",
+      status: loaderData.practice?.baa_accepted ? "done" : "open",
+      note: loaderData.practice?.baa_accepted
+        ? "Cosmaneura Inc BAA is in force."
+        : "Patient information stays locked until accepted.",
+      section: "practice",
+    },
+    {
+      id: "bio",
+      label: "Biography",
+      status: (loaderData.biography ?? "").trim().length > 0 ? "done" : "open",
+      note:
+        (loaderData.biography ?? "").trim().length > 0
+          ? "Used to personalize intake."
+          : "Intake has nothing to introduce you with.",
+      section: "biography",
+    },
+  ]
+
+  if (terminologyEnabled) {
+    const labels = getTerminology(loaderData.terminology)
+    items.push({
+      id: "terms",
+      label: "Terminology",
+      status: "done",
+      note: labels.displayName,
+      section: "terminology",
+    })
+  }
+
+  items.push(
+    {
+      id: "notes",
+      label: "Example notes",
+      status: noteCount >= 2 ? "done" : noteCount === 1 ? "review" : "open",
+      note:
+        noteCount === 0
+          ? "Upload a high-quality example to teach Cosmas your format."
+          : `${noteCount} type${noteCount === 1 ? "" : "s"} · ${exampleCount} example${exampleCount === 1 ? "" : "s"}`,
+      section: "notetaking",
+    },
+    {
+      id: "ai",
+      label: "AI output",
+      status:
+        loaderData.notes_schema.length === 0
+          ? "open"
+          : loaderData.note_customizations.length > 0
+            ? "done"
+            : "review",
+      note:
+        loaderData.notes_schema.length === 0
+          ? "Upload a note type first."
+          : "Tune pronouns, plan order, and ROS per note type.",
+      section: "ai",
+    },
+    {
+      id: "zoom",
+      label: "Zoom",
+      status: loaderData.zoom_connected ? "done" : "open",
+      note: loaderData.zoom_connected ? "Connected." : "Not connected.",
+      section: "zoom",
+    },
+  )
+
+  if (referenceToolkitEnabled) {
+    items.push({
+      id: "natmed",
+      label: "NatMed Pro",
+      status: loaderData.has_natmed_subscription ? "done" : "open",
+      note: loaderData.has_natmed_subscription
+        ? "Subscription linked."
+        : "Optional. Turn on if you have NatMed Pro.",
+      section: "natmed",
+    })
+  }
+
+  return items
 }
