@@ -2,8 +2,6 @@
 
 from datetime import datetime
 
-from app.utils.encryption import EncryptedType
-
 import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
@@ -18,10 +16,13 @@ WEBHOOK_DELIVERY_STATES = (
     "dead_letter",
 )
 WEBHOOK_ERROR_CODES = (
+    "decrypt_failed",
     "handler_error",
     "invalid_payload",
+    "meeting_mapping_unavailable",
     "payload_expired",
     "provider_operation_uncertain",
+    "provider_transcript_failed",
     "tenant_mapping_unavailable",
 )
 
@@ -64,8 +65,10 @@ class ExternalWebhookDelivery(
         ),
         sa.CheckConstraint(
             "last_error_code IS NULL OR last_error_code IN "
-            "('handler_error', 'invalid_payload', 'payload_expired', "
-            "'provider_operation_uncertain', 'tenant_mapping_unavailable')",
+            "('decrypt_failed', 'handler_error', 'invalid_payload', "
+            "'meeting_mapping_unavailable', 'payload_expired', "
+            "'provider_operation_uncertain', 'provider_transcript_failed', "
+            "'tenant_mapping_unavailable')",
             name="ck_external_webhook_delivery_error_code",
         ),
         sa.CheckConstraint(
@@ -94,7 +97,10 @@ class ExternalWebhookDelivery(
     event_type: str = Field(max_length=96)
     encrypted_payload: str | None = Field(
         default=None,
-        sa_column=Column(EncryptedType(), nullable=True),
+        # Inbox decryption is deliberately explicit in the claim transaction.
+        # A TypeDecorator would raise while SQLAlchemy materialises this row,
+        # before the worker can quarantine corrupt or retired-key ciphertext.
+        sa_column=Column(sa.Text(), nullable=True),
     )
     payload_sha256: str = Field(max_length=64)
     state: str = Field(default="pending", max_length=24)

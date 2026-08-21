@@ -112,6 +112,7 @@ class WebhookInboxHealthResponse(BasePydanticModel):
     dead_letter: int
     oldest_actionable_age_seconds: float | None
     uncertain_operations: int
+    failed_operations: int
 
 
 class WebhookRedriveResponse(BasePydanticModel):

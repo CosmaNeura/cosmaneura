@@ -17,8 +17,9 @@ class ExternalWebhookOperation(
 ):
     """Provider-resource and downstream-publication fence.
 
-    Only a SHA-256 digest of the adapter-private provider resource reference is
-    stored.  An ``in_flight`` create-transcript receipt is intentionally not
+    Only a context-separated HMAC-SHA-256 pseudonym of the adapter-private
+    provider resource reference is stored. An ``in_flight`` create-transcript
+    receipt is intentionally not
     replayed after an ambiguous failure; a later signed transcript callback
     reconciles it to ``succeeded``.
     """
@@ -31,15 +32,17 @@ class ExternalWebhookOperation(
             name="uq_external_webhook_operation_resource",
         ),
         sa.CheckConstraint(
-            "provider = 'recall'",
+            "provider IN ('recall', 'zoom')",
             name="ck_external_webhook_operation_provider",
         ),
         sa.CheckConstraint(
-            "operation_type IN ('create_transcript', 'ingest_transcript')",
+            "operation_type IN ('create_transcript', 'ingest_transcript', "
+            "'zoom_meeting_started', 'zoom_participant_joined', "
+            "'zoom_participant_left', 'zoom_meeting_ended')",
             name="ck_external_webhook_operation_type",
         ),
         sa.CheckConstraint(
-            "state IN ('in_flight', 'succeeded', 'uncertain')",
+            "state IN ('reserved', 'in_flight', 'succeeded', 'uncertain', 'failed')",
             name="ck_external_webhook_operation_state",
         ),
         sa.CheckConstraint(
@@ -52,8 +55,13 @@ class ExternalWebhookOperation(
         ),
         sa.CheckConstraint(
             "last_error_code IS NULL OR last_error_code IN "
-            "('provider_outcome_uncertain', 'pipeline_publish_failed')",
+            "('provider_outcome_uncertain', 'provider_transcript_failed', "
+            "'pipeline_publish_failed')",
             name="ck_external_webhook_operation_error_code",
+        ),
+        sa.CheckConstraint(
+            "execution_attempt_count >= 0",
+            name="ck_external_webhook_operation_execution_attempt_count",
         ),
         sa.CheckConstraint(
             "pipeline_attempt_count >= 0",
@@ -65,12 +73,23 @@ class ExternalWebhookOperation(
             "state",
             "pipeline_lease_expires_at",
         ),
+        sa.Index(
+            "ix_external_webhook_operation_execution_lease",
+            "provider",
+            "state",
+            "execution_lease_expires_at",
+        ),
     )
 
     provider: str = Field(default="recall", max_length=16)
     operation_type: str = Field(max_length=32)
     provider_resource_digest: str = Field(max_length=64)
     state: str = Field(default="in_flight", max_length=16)
+    execution_lease_expires_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    execution_attempt_count: int = 0
     content_sha256: str | None = Field(default=None, max_length=64)
     result_transcript_id: TypeIDType | None = Field(
         default=None,

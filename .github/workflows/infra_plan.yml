@@ -58,7 +58,11 @@ jobs:
       # Required by infra/main.tf data sources that pull production
       # secrets out of 1Password.
       OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-      RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+      # Pull-request code must never receive the live Recall signing secret.
+      # This fixed value has valid Recall/Svix syntax so Terraform can evaluate
+      # the API secret block, but it is deliberately nonsecret and the durable
+      # webhook path remains disabled for every plan run.
+      RECALL_WEBHOOK_SECRET: "whsec_cHItcGxhbi1ub25zZWNyZXQtZG8tbm90LXVzZQ=="
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       # Tell terraform-provider-azurerm and the azurerm backend to use
       # the OIDC token we just minted via azure/login.

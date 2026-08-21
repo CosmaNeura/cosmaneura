@@ -248,6 +248,50 @@ def test_doctor_recognized_when_host_id_not_yet_in_redis(
     assert clean_redis.llen(_key("participants_order")) == 0
 
 
+def test_durable_participant_waits_for_meeting_mapping_before_side_effects(
+    clean_redis,
+    doctor_with_zoom,
+) -> None:
+    from app.services import external_webhook_inbox as inbox
+    from app.services import zoom_webhooks
+
+    from app.models.external_webhook_operation import ExternalWebhookOperation
+
+    event_type = "meeting.participant_joined"
+    digest = inbox.digest_provider_reference("participant-before-meeting-started")
+    payload = _participant_joined_payload("guest-before-start", "Patient Private")
+
+    with pytest.raises(inbox.RetryableWebhookError) as unavailable:
+        zoom_webhooks.dispatch(
+            event_type,
+            payload,
+            provider_event_digest=digest,
+        )
+
+    assert unavailable.value.code == "meeting_mapping_unavailable"
+    assert clean_redis.llen(_key("participants_order")) == 0
+    operation = ExternalWebhookOperation.get(
+        provider="zoom",
+        provider_resource_digest=digest,
+    )
+    assert operation is not None
+    assert operation.state == "reserved"
+    assert operation.execution_lease_expires_at is None
+
+    clean_redis.set(_key("doctor_id"), str(doctor_with_zoom.id))
+    clean_redis.set(_key("host_id"), HOST_ID)
+    zoom_webhooks.dispatch(
+        event_type,
+        payload,
+        provider_event_digest=digest,
+    )
+
+    assert clean_redis.llen(_key("participants_order")) == 1
+    operation = ExternalWebhookOperation.get(id=operation.id)
+    assert operation is not None
+    assert operation.state == "succeeded"
+
+
 def test_concurrent_participant_joined_survives_meeting_started_cleanup(
     clean_redis,
     doctor_with_zoom,
@@ -1183,7 +1227,7 @@ def test_prod_blocks_staging_test_account(
 # --------- Payload-shape probe (temporary, see _log_payload_shape) ---------
 
 
-def test_payload_shape_probe_logs_field_names_only():
+def test_payload_shape_probe_logs_fixed_booleans_only():
     """The probe exists to answer whether Zoom sends uuid/host_id on every
     event. It must never log payload *values* — those carry PHI."""
     from structlog.testing import capture_logs
@@ -1191,18 +1235,29 @@ def test_payload_shape_probe_logs_field_names_only():
     from app.services import zoom_webhooks
 
     payload = _participant_joined_payload(HOST_ID, "Jane Patient")
+    payload["payload"]["object"]["clinical-key-sentinel"] = "private-value"
+    payload["payload"]["object"]["participant"]["patient-key-sentinel"] = (
+        "private-value"
+    )
 
     with capture_logs() as logs:
         zoom_webhooks._log_payload_shape("meeting.participant_joined", payload)
 
     entry = next(e for e in logs if e["event"] == "zoom payload shape")
-    assert entry["object_keys"] == ["id", "participant"]
-    assert entry["participant_keys"] == ["id", "user_name"]
     assert entry["has_uuid"] is False
     assert entry["has_host_id"] is False
-    # No value from the payload may appear anywhere in the emitted event.
-    assert "Jane Patient" not in str(entry)
-    assert HOST_ID not in str(entry)
+    assert entry["has_participant"] is True
+    assert entry["participant_has_id"] is True
+    assert entry["participant_has_user_id"] is False
+    # No provider-controlled key or value may appear anywhere in the event.
+    for sentinel in (
+        "Jane Patient",
+        HOST_ID,
+        "clinical-key-sentinel",
+        "patient-key-sentinel",
+        "private-value",
+    ):
+        assert sentinel not in str(entry)
 
 
 def test_zoom_session_logs_hash_provider_and_clinical_identifiers(
@@ -1239,7 +1294,7 @@ def test_zoom_session_logs_hash_provider_and_clinical_identifiers(
         str(doctor_with_zoom.id),
     ):
         assert raw_value not in serialized
-    assert "sha256:" in serialized
+    assert "hmac:" in serialized
 
 
 @pytest.mark.parametrize(

@@ -19,6 +19,9 @@ server-authoritative bindings is a Phase 2 release gate.
   `sdk_upload.recording_ended`, `sdk_upload.recording_started`, and
   `sdk_upload.uploading`, but this workspace is **not subscribed** to them.
   Desktop SDK rollout must add and validate those subscriptions separately.
+  The API explicitly rejects every unimplemented Recall event, including all
+  `sdk_upload.*` events, so a dashboard subscription cannot silently activate
+  desktop capture or fall back to the Zoom bot appointment heuristic.
 
 Do not copy the generic Desktop SDK example's `us-east-1` base URL into this
 environment. The configured and tested region is `us-west-2`.
@@ -37,10 +40,24 @@ environment. The configured and tested region is `us-west-2`.
 - A verified, projected payload is Fernet-encrypted in PostgreSQL and committed
   before broker publication. Headers, signatures, callback URLs, provider
   delivery IDs, and full provider responses are not stored.
-- Raw provider delivery/resource IDs are SHA-256 digested in index, receipt,
-  and log fields. The minimum resource IDs needed to finish a handler exist
-  only inside the short-lived encrypted payload. Logs contain only short
-  digests, bounded state, counts, and error class names.
+- Raw provider delivery/resource IDs are transformed with keyed,
+  context-separated HMAC-SHA-256 pseudonyms. Full pseudonyms back indexes and
+  receipts; logs contain only shortened pseudonyms, bounded state, counts, and
+  error class names. The minimum resource IDs needed to finish a handler exist
+  only inside the short-lived encrypted payload. The versioned key ring keeps
+  the active Fernet encryption key separate from the stable pseudonym root so
+  ciphertext keys can rotate without breaking correlation or deduplication;
+  retained encryption keys preserve reads during the six-hour payload window.
+  Bare-key configuration deliberately continues writing legacy Fernet tokens
+  during the code rollout so old replicas can still read refreshed Zoom OAuth
+  credentials. After all replicas understand the versioned format, migrate
+  `ENCRYPTION_KEY` to the JSON key ring while retaining the existing Fernet key
+  and the compatibility-derived pseudonym root; never generate a replacement
+  pseudonym root after receipts exist.
+- HTTP access logs render every Recall ZAK callback as
+  `/external/v1/recall/zak/{token}` and redact its query string. Zoom client
+  logs contain only hashed provider references and bounded operation/status
+  fields, never provider paths, response bodies, or raw doctor/meeting IDs.
 - Payload ciphertext is deleted immediately after success and no later than six
   hours after receipt. Expired work is dead-lettered without payload.
 - Recall Create Bot keeps `recording_config: null` for manual control. POST
@@ -48,8 +65,10 @@ environment. The configured and tested region is `us-west-2`.
 
 ## Two-release cutover
 
-`DURABLE_WEBHOOK_INBOX_ENABLED` defaults to `false`. Secret presence never
-implicitly activates the new path.
+`DURABLE_WEBHOOK_INBOX_ENABLED` is source-locked to `false` in the plan, apply,
+and deployment workflows. Secret presence never implicitly activates the new
+path. A protected environment variable with any non-empty value other than
+`false` aborts apply/deploy; it cannot pre-arm activation outside review.
 
 ### Release A: compatible code, migration, and recovery
 
@@ -82,18 +101,23 @@ side-effect fence during this rolling-deploy window.
 
 1. Confirm Release A workers and scheduler are healthy and the legacy queue is
    drained.
-2. Set `DURABLE_WEBHOOK_INBOX_ENABLED=true` through protected environment
-   configuration and deploy once. Never toggle the flag directly on only one
-   workload.
+2. Open a separate activation PR that changes the checked-in plan, apply, and
+   deployment workflow bindings together from `false` to `true` and updates the
+   pre-arm guards. Review the resulting Terraform plan before merging, then
+   apply and deploy once. Changing a protected environment variable alone is
+   intentionally rejected and must never be used to activate only one workload.
 3. Send provider-owned non-PHI validation events. Confirm HTTP 200, one inbox
    receipt per delivery, payload purge after success, and no raw identifier or
    body in application/Sentry/Celery logs.
 4. Do not add Desktop SDK webhook subscriptions during this cutover. They are a
    separate, reviewed change after the desktop upload adapter exists.
 
-When the flag is false, ordinary verified callbacks return 503 so providers
-retry; Zoom URL validation remains available. This is the deliberate quiesce
-state, not a degraded success mode.
+When the flag is false, ordinary verified callbacks return HTTP 200 after
+enqueueing the hardened compatibility bridge with a keyed pseudonymous event
+reference and no request headers. The compatibility consumer converges that
+work into the encrypted PostgreSQL inbox before invoking a handler. Zoom URL
+validation remains available. This is the Release A migration-safety path, not
+the durable-ingress activation state.
 
 ## Recovery and alerts
 
@@ -102,7 +126,8 @@ leases using an attempt fence, purges expired ciphertext, and recovers pending
 downstream fan-out. Broker publication is at-least-once; the canonical ingest
 receipt and the existing downstream uniqueness/latest-transcript guards absorb
 duplicate jobs. A health alert is emitted when there is any dead letter, any
-ambiguous Recall mutation, or actionable work older than five minutes.
+ambiguous or failed provider mutation, or actionable work older than five
+minutes.
 
 Admin endpoints return metadata only:
 
@@ -116,7 +141,8 @@ TypeID and bounded error code.
 
 ## Stop/rollback conditions
 
-Return the feature flag to `false` and investigate if any of these occur:
+Deploy the reviewed source rollback that returns the feature flag to `false`
+across every workload, and investigate if any of these occur:
 
 - scheduler missing or its Procfile command differs;
 - oldest actionable age exceeds five minutes;
@@ -127,6 +153,7 @@ Return the feature flag to `false` and investigate if any of these occur:
   lease-fencing, replay, or retention tests fail.
 
 Do not declare the boundary ready for active patient traffic until durable
-provider-resource/tenant bindings, key rotation, disposable-PostgreSQL race
-tests in CI, provider reconciliation for ambiguous operations, and end-to-end
-staging validation are complete.
+provider-resource/tenant and exact encounter bindings (with no time-window
+appointment fallback), deployment of the explicit versioned key-ring secret,
+disposable-PostgreSQL race tests in CI, provider reconciliation for ambiguous
+operations, and end-to-end staging validation are complete.

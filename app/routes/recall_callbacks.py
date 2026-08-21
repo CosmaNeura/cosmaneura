@@ -46,7 +46,7 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
         log.info("recall zak callback: unknown or expired token")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
-    doctor_id = raw.decode() if isinstance(raw, bytes) else raw
+    doctor_id = raw.decode() if isinstance(raw, bytes) else cast(str, raw)
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
     if not doctor:
         log.warning(

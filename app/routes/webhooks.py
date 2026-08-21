@@ -26,6 +26,14 @@ webhook_api_app = APIRouter(prefix="/external/v1/webhooks", tags=["webhooks"])
 _SIGNATURE_TTL_SECONDS = 5 * 60
 MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 _EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,96}$")
+RECALL_SUPPORTED_EVENT_TYPES = frozenset(
+    {
+        "recording.done",
+        "transcript.done",
+        "transcript.failed",
+        "transcript.processing",
+    }
+)
 
 
 class WebhookAck(BaseModel):
@@ -57,9 +65,9 @@ async def _read_bounded_body(request: Request) -> bytes:
 
     body = bytearray()
     async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > MAX_WEBHOOK_BODY_BYTES:
+        if len(chunk) > MAX_WEBHOOK_BODY_BYTES - len(body):
             raise WebhookBodyTooLarge
+        body.extend(chunk)
     return bytes(body)
 
 
@@ -168,9 +176,23 @@ def _durable_ack(
     payload: dict[str, Any],
 ) -> WebhookAck | JSONResponse:
     if not DURABLE_WEBHOOK_INBOX_ENABLED:
-        # Explicit cutover quiesce: verified providers retry while compatible
-        # workers/scheduler and the database migration are brought online.
-        return JSONResponse({"status": "temporarily unavailable"}, status_code=503)
+        # Release-A compatibility: keep the existing signed queue path live
+        # while the migration, compatible workers and scheduler roll out. The
+        # broker receives a keyed pseudonym instead of the raw provider ID and
+        # no request headers. Its compatibility consumer converges into the
+        # durable inbox before invoking a handler.
+        from app.jobs import webhooks as legacy_webhooks
+
+        legacy_webhooks.queue(
+            provider=provider,
+            event_id=external_webhook_inbox.queued_provider_event_reference(
+                provider_event_id
+            ),
+            event_type=event_type,
+            payload=payload,
+            headers={},
+        )
+        return WebhookAck(status="ok")
     try:
         stored = external_webhook_inbox.store_verified_external_webhook(
             provider=provider,
@@ -271,6 +293,13 @@ async def recall_webhook(request: Request) -> WebhookAck | JSONResponse:
     event_type = _event_type(payload)
     if event_type is None:
         return JSONResponse({"status": "invalid payload"}, status_code=400)
+    if event_type not in RECALL_SUPPORTED_EVENT_TYPES:
+        # Desktop SDK uploads require a durable, server-authoritative capture
+        # to encounter/tenant binding. Until that adapter exists, reject new
+        # subscriptions explicitly instead of acknowledging and dropping them
+        # or falling back to the Zoom bot's time-window appointment heuristic.
+        log.warning("unsupported recall webhook event type")
+        return JSONResponse({"status": "unsupported event"}, status_code=400)
     assert webhook_id is not None  # required by successful verification
     return _durable_ack(
         provider="recall",

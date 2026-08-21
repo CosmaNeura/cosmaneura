@@ -4,7 +4,10 @@ import pytest
 from structlog.testing import capture_logs
 
 from app.services import recall_webhooks
-from app.services.external_webhook_inbox import RetryableWebhookError
+from app.services.external_webhook_inbox import (
+    PermanentWebhookError,
+    RetryableWebhookError,
+)
 
 from app.models.external_webhook_operation import ExternalWebhookOperation
 
@@ -98,17 +101,44 @@ def test_transcript_done_retries_when_redis_tenant_binding_is_missing(
         "transcript-private-sentinel",
     ):
         assert raw_identifier not in serialized
-    assert "sha256:" in serialized
+    assert "hmac:" in serialized
 
 
 def test_transcript_status_logging_contains_only_hashed_reference() -> None:
     payload = {
         "event": "transcript.processing",
-        "data": {"transcript": {"id": "transcript-status-private"}},
+        "data": {
+            "recording": {"id": "recording-status-private"},
+            "transcript": {"id": "transcript-status-private"},
+        },
     }
     with capture_logs() as logs:
-        recall_webhooks.handle_transcript_status(payload)
+        recall_webhooks.handle_transcript_processing(payload)
 
     serialized = json.dumps(logs, sort_keys=True)
     assert "transcript-status-private" not in serialized
-    assert "sha256:" in serialized
+    assert "recording-status-private" not in serialized
+    assert "hmac:" in serialized
+
+
+def test_transcript_failed_persists_failure_and_dead_letters_delivery() -> None:
+    payload = {
+        "event": "transcript.failed",
+        "data": {
+            "recording": {"id": "recording-failed-private"},
+            "transcript": {"id": "transcript-failed-private"},
+        },
+    }
+
+    with pytest.raises(PermanentWebhookError) as failure:
+        recall_webhooks.handle_transcript_failed(payload)
+
+    assert failure.value.code == "provider_transcript_failed"
+    receipt = ExternalWebhookOperation.get(
+        provider_resource_digest=recall_webhooks.recall_webhook_operations._resource_digest(
+            "recording-failed-private"
+        )
+    )
+    assert receipt is not None
+    assert receipt.state == "failed"
+    assert receipt.last_error_code == "provider_transcript_failed"

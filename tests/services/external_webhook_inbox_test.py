@@ -1,9 +1,11 @@
 import threading
 from datetime import UTC, datetime, timedelta
 
+from structlog.testing import capture_logs
 from typeid import TypeID
 
 from app.services import external_webhook_inbox as inbox
+from app.utils.encryption import decrypt_inbox_payload
 
 from activemodel.session_manager import SessionManager, get_engine, get_session
 from app.models.external_webhook_delivery import ExternalWebhookDelivery
@@ -47,7 +49,10 @@ def test_verified_delivery_is_encrypted_projected_and_idempotent() -> None:
     delivery = _delivery(first.delivery_id)
     assert delivery.encrypted_payload is not None
     assert "clinical-sentinel" not in delivery.encrypted_payload
-    assert "transcript-private" in delivery.encrypted_payload
+    assert "transcript-private" not in delivery.encrypted_payload
+    decrypted = decrypt_inbox_payload(delivery.encrypted_payload)
+    assert "transcript-private" in decrypted
+    assert "clinical-sentinel" not in decrypted
     assert delivery.provider_event_digest == inbox.digest_provider_reference(
         "signed-delivery-private"
     )
@@ -61,9 +66,43 @@ def test_verified_delivery_is_encrypted_projected_and_idempotent() -> None:
             ),
             {"digest": delivery.provider_event_digest},
         ).scalar_one()
-    assert ciphertext != delivery.encrypted_payload
+    assert ciphertext == delivery.encrypted_payload
     assert "transcript-private" not in ciphertext
     assert "clinical-sentinel" not in ciphertext
+
+
+def test_corrupt_ciphertext_dead_letters_without_logging_or_reclaim() -> None:
+    stored = inbox.store_verified_external_webhook(
+        provider="recall",
+        provider_event_id="signed-corrupt-ciphertext",
+        event_type="transcript.processing",
+        payload=_payload(),
+    )
+    sentinel = "corrupt-private-ciphertext-sentinel"
+    digest = inbox.digest_provider_reference("signed-corrupt-ciphertext")
+    with get_session() as session:
+        session.execute(
+            text(
+                "UPDATE external_webhook_delivery SET encrypted_payload = :ciphertext "
+                "WHERE provider_event_digest = :digest"
+            ),
+            {
+                "ciphertext": sentinel,
+                "digest": digest,
+            },
+        )
+        session.commit()
+
+    with capture_logs() as logs:
+        assert inbox.claim_delivery(stored.delivery_id) is None
+
+    delivery = _delivery(stored.delivery_id)
+    assert delivery.state == "dead_letter"
+    assert delivery.last_error_code == "decrypt_failed"
+    assert delivery.encrypted_payload is None
+    assert delivery.payload_purged_at is not None
+    assert inbox.claim_delivery(stored.delivery_id) is None
+    assert sentinel not in str(logs)
 
 
 def test_delivery_identifier_conflict_is_rejected() -> None:
@@ -85,6 +124,25 @@ def test_delivery_identifier_conflict_is_rejected() -> None:
         pass
     else:
         raise AssertionError("changed delivery replay must be rejected")
+
+
+def test_new_legacy_queue_reference_converges_with_direct_durable_delivery() -> None:
+    provider_event_id = "signed-cutover-delivery-private"
+    queued_reference = inbox.queued_provider_event_reference(provider_event_id)
+    legacy = inbox.store_legacy_queued_webhook(
+        provider="recall",
+        event_id=queued_reference,
+        event_type="transcript.done",
+        payload=_payload(),
+    )
+    direct = inbox.store_verified_external_webhook(
+        provider="recall",
+        provider_event_id=provider_event_id,
+        event_type="transcript.done",
+        payload=_payload(),
+    )
+
+    assert direct == inbox.StoredDelivery(legacy.delivery_id, duplicate=True)
 
 
 def test_concurrent_duplicate_delivery_converges_on_one_row() -> None:
@@ -248,3 +306,27 @@ def test_health_reports_stale_provider_mutations_without_provider_ids() -> None:
 
     assert health["uncertain_operations"] == 1
     assert "provider-resource-private" not in str(health)
+
+
+def test_transcript_failed_is_durable_and_visible_as_dead_letter() -> None:
+    stored = inbox.store_verified_external_webhook(
+        provider="recall",
+        provider_event_id="signed-transcript-failed",
+        event_type="transcript.failed",
+        payload={
+            "event": "transcript.failed",
+            "data": {
+                "recording": {"id": "recording-failed-private"},
+                "transcript": {"id": "transcript-failed-private"},
+            },
+        },
+    )
+
+    inbox.process_delivery(stored.delivery_id)
+
+    delivery = _delivery(stored.delivery_id)
+    assert delivery.state == "dead_letter"
+    assert delivery.last_error_code == "provider_transcript_failed"
+    health = inbox.inbox_health()
+    assert health["dead_letter"] == 1
+    assert health["failed_operations"] == 1

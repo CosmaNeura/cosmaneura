@@ -145,16 +145,32 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
     recall_webhook_operations.dispatch_pipeline(result.operation_id)
 
 
-def handle_transcript_status(payload: dict[str, Any]) -> None:
+def handle_transcript_processing(payload: dict[str, Any]) -> None:
     data = payload.get("data")
     if not isinstance(data, dict):
         raise PermanentWebhookError()
+    recording_id = _required_id(data, "recording")
     transcript_id = _required_id(data, "transcript")
+    recall_webhook_operations.confirm_transcript_creation(recording_id)
     log.info(
         "recall transcript status received",
-        event_type=str(payload.get("event") or "unknown"),
+        event_type="transcript.processing",
         transcript_ref=provider_log_ref(transcript_id),
     )
+
+
+def handle_transcript_failed(payload: dict[str, Any]) -> None:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise PermanentWebhookError()
+    recording_id = _required_id(data, "recording")
+    transcript_id = _required_id(data, "transcript")
+    recall_webhook_operations.mark_transcript_creation_failed(recording_id)
+    log.warning(
+        "recall transcript failed",
+        transcript_ref=provider_log_ref(transcript_id),
+    )
+    raise PermanentWebhookError("provider_transcript_failed")
 
 
 def _map_transcript_entries(raw_data: list[dict]) -> list[TranscriptEntry]:
@@ -195,8 +211,8 @@ def _compute_duration_seconds(entries: list[TranscriptEntry]) -> int:
 HANDLERS = {
     "recording.done": handle_recording_done,
     "transcript.done": handle_transcript_done,
-    "transcript.failed": handle_transcript_status,
-    "transcript.processing": handle_transcript_status,
+    "transcript.failed": handle_transcript_failed,
+    "transcript.processing": handle_transcript_processing,
 }
 
 

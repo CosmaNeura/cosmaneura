@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SECRET = "RECALL_WEBHOOK_SECRET"
 FLAG = "DURABLE_WEBHOOK_INBOX_ENABLED"
+PLAN_ONLY_SECRET = "whsec_cHItcGxhbi1ub25zZWNyZXQtZG8tbm90LXVzZQ=="
+PROTECTED_FLAG = f"PROTECTED_{FLAG}"
 
 
 def _read(path: str) -> str:
@@ -83,6 +86,21 @@ def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> No
     )
 
 
+def test_pull_request_plan_uses_only_a_fixed_nonsecret_recall_value() -> None:
+    plan = _read(".github/workflows/infra_plan.yml")
+    protected_reference = f"${{{{ secrets.{SECRET} }}}}"
+
+    assert "  pull_request:" in plan
+    assert protected_reference not in plan
+    assert f"secrets.{SECRET}" not in plan
+    assert plan.count(f'{SECRET}: "{PLAN_ONLY_SECRET}"') == 1
+    assert plan.count(f'{FLAG}: "false"') == 1
+
+    prefix, encoded = PLAN_ONLY_SECRET.split("_", maxsplit=1)
+    assert prefix == "whsec"
+    assert base64.b64decode(encoded, validate=True) == b"pr-plan-nonsecret-do-not-use"
+
+
 def test_secret_sources_are_references_or_protected_workflow_values() -> None:
     production = _read(".env.production.backend")
     staging = _read(".env.staging.backend")
@@ -93,6 +111,54 @@ def test_secret_sources_are_references_or_protected_workflow_values() -> None:
     assert f"export {FLAG}" in production
     assert f"export {FLAG}" in staging
 
-    workflow = _read(".github/workflows/build_and_publish.yml")
-    assert f"{SECRET}: ${{{{ secrets.{SECRET} }}}}" in workflow
-    assert f"vars.{FLAG} || 'false'" in workflow
+    protected_reference = f"{SECRET}: ${{{{ secrets.{SECRET} }}}}"
+
+    apply_workflow = _read(".github/workflows/infra_apply.yml")
+    apply_job = apply_workflow[apply_workflow.index("  apply:\n") :]
+    assert "    environment: production" in apply_job
+    assert apply_job.count(protected_reference) == 1
+
+    publish_workflow = _read(".github/workflows/build_and_publish.yml")
+    production_deploy = publish_workflow[
+        publish_workflow.index("  deploy:\n") : publish_workflow.index(
+            "  deploy-staging:\n"
+        )
+    ]
+    staging_deploy = publish_workflow[publish_workflow.index("  deploy-staging:\n") :]
+    assert "    environment: production" in production_deploy
+    assert production_deploy.count(protected_reference) == 1
+    assert "    environment: staging" in staging_deploy
+    assert staging_deploy.count(protected_reference) == 1
+
+
+def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> None:
+    plan_workflow = _read(".github/workflows/infra_plan.yml")
+    apply_workflow = _read(".github/workflows/infra_apply.yml")
+    publish_workflow = _read(".github/workflows/build_and_publish.yml")
+    production_deploy = publish_workflow[
+        publish_workflow.index("  deploy:\n") : publish_workflow.index(
+            "  deploy-staging:\n"
+        )
+    ]
+    staging_deploy = publish_workflow[publish_workflow.index("  deploy-staging:\n") :]
+    fixed_false = f'{FLAG}: "false"'
+    mutable_default = f"{FLAG}: ${{{{ vars.{FLAG} || 'false' }}}}"
+    protected_probe = f"{PROTECTED_FLAG}: ${{{{ vars.{FLAG} }}}}"
+    presence_check = f'-n "${{{PROTECTED_FLAG}:-}}"'
+    rejection = f'"${PROTECTED_FLAG}" != "false"'
+
+    assert plan_workflow.count(fixed_false) == 1
+    assert mutable_default not in plan_workflow
+    assert f"vars.{FLAG}" not in plan_workflow
+
+    for protected_job in (apply_workflow, production_deploy, staging_deploy):
+        assert protected_job.count(fixed_false) == 1
+        assert mutable_default not in protected_job
+        assert protected_job.count(f"vars.{FLAG}") == 1
+        assert protected_job.count(protected_probe) == 1
+        assert protected_job.count(presence_check) == 1
+        assert protected_job.count(rejection) == 1
+        assert "activation requires a reviewed workflow change" in protected_job
+        assert protected_job.index("Reject unreviewed durable webhook activation") < (
+            protected_job.index("actions/checkout")
+        )

@@ -38,6 +38,7 @@ def test_webhook_inbox_health_is_metadata_only(monkeypatch) -> None:
         "dead_letter": 5,
         "oldest_actionable_age_seconds": 6.0,
         "uncertain_operations": 7,
+        "failed_operations": 8,
     }
     monkeypatch.setattr(admin.external_webhook_inbox, "inbox_health", lambda: health)
 

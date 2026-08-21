@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, TypedDict, cast
@@ -11,6 +11,12 @@ from typing import Any, Literal, TypedDict, cast
 from typeid import TypeID
 
 from app import log
+from app.utils.encryption import (
+    DecryptionError,
+    decrypt_inbox_payload,
+    encrypt_inbox_payload,
+    pseudonymous_digest,
+)
 
 from activemodel.session_manager import get_session
 from app.models.external_webhook_delivery import ExternalWebhookDelivery
@@ -25,6 +31,8 @@ WAKEUP_COOLDOWN = timedelta(minutes=1)
 MAX_ATTEMPTS = 5
 RECONCILE_BATCH_SIZE = 50
 ALERT_AGE = timedelta(minutes=5)
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_PSEUDONYMOUS_EVENT_PREFIX = "hmac-v1:"
 
 
 class WebhookInboxError(Exception):
@@ -57,6 +65,7 @@ class StoredDelivery:
 class ClaimedDelivery:
     delivery_id: str
     provider: str
+    provider_event_digest: str
     event_type: str
     payload_json: str
     fence: int
@@ -70,10 +79,17 @@ class InboxHealth(TypedDict):
     dead_letter: int
     oldest_actionable_age_seconds: float | None
     uncertain_operations: int
+    failed_operations: int
 
 
 def digest_provider_reference(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+    return pseudonymous_digest(value, context="provider-reference")
+
+
+def queued_provider_event_reference(value: str) -> str:
+    """Encode a provider delivery digest for the legacy broker bridge."""
+
+    return f"{_PSEUDONYMOUS_EVENT_PREFIX}{digest_provider_reference(value)}"
 
 
 def provider_log_ref(value: str | None) -> str:
@@ -81,7 +97,7 @@ def provider_log_ref(value: str | None) -> str:
 
     if not value:
         return "absent"
-    return f"sha256:{digest_provider_reference(str(value))[:12]}"
+    return f"hmac:{pseudonymous_digest(str(value), context='provider-log')[:12]}"
 
 
 def _canonical_json(payload: dict[str, Any]) -> str:
@@ -149,7 +165,10 @@ def stable_event_reference(
     candidate = payload.get("event_id") or payload.get("id") or payload.get("uuid")
     if candidate:
         return str(candidate)
-    return f"payload:{hashlib.sha256(_canonical_json(payload).encode()).hexdigest()}"
+    return "payload:" + pseudonymous_digest(
+        _canonical_json(payload),
+        context=f"{provider}-event-fallback",
+    )
 
 
 def store_verified_external_webhook(
@@ -159,15 +178,23 @@ def store_verified_external_webhook(
     event_type: str,
     payload: dict[str, Any],
     now: datetime | None = None,
+    _provider_event_digest: str | None = None,
 ) -> StoredDelivery:
     """Commit a verified delivery before any broker publication or side effect."""
 
     now = now or datetime.now(UTC)
-    event_digest = digest_provider_reference(provider_event_id)
+    event_digest = _provider_event_digest or digest_provider_reference(
+        provider_event_id
+    )
+    if not _DIGEST_RE.fullmatch(event_digest):
+        raise PermanentWebhookError()
     projected_json = _canonical_json(
         project_provider_payload(provider, event_type, payload)
     )
-    payload_sha256 = hashlib.sha256(projected_json.encode("utf-8")).hexdigest()
+    payload_sha256 = pseudonymous_digest(
+        projected_json,
+        context="webhook-payload",
+    )
 
     with get_session() as session:
         existing = session.exec(
@@ -188,7 +215,7 @@ def store_verified_external_webhook(
             provider=provider,
             provider_event_digest=event_digest,
             event_type=event_type,
-            encrypted_payload=projected_json,
+            encrypted_payload=encrypt_inbox_payload(projected_json),
             payload_sha256=payload_sha256,
             next_attempt_at=now,
             received_at=now,
@@ -225,12 +252,19 @@ def store_legacy_queued_webhook(
 ) -> StoredDelivery:
     if provider not in {"recall", "zoom"}:
         raise PermanentWebhookError()
+    precomputed_digest: str | None = None
+    if event_id.startswith(_PSEUDONYMOUS_EVENT_PREFIX):
+        candidate = event_id.removeprefix(_PSEUDONYMOUS_EVENT_PREFIX)
+        if not _DIGEST_RE.fullmatch(candidate):
+            raise PermanentWebhookError()
+        precomputed_digest = candidate
     reference = stable_event_reference(provider, payload, event_id)
     return store_verified_external_webhook(
         provider=cast(Literal["recall", "zoom"], provider),
         provider_event_id=reference,
         event_type=event_type,
         payload=payload,
+        _provider_event_digest=precomputed_digest,
     )
 
 
@@ -299,18 +333,34 @@ def claim_delivery(
         if not eligible:
             return None
 
+        try:
+            payload_json = decrypt_inbox_payload(delivery.encrypted_payload)
+        except DecryptionError:
+            # Decryption must occur while the row is locked so a retired key
+            # or corrupt token becomes a bounded terminal state instead of a
+            # poison row that the reconciler reclaims forever.
+            delivery.state = "dead_letter"
+            delivery.last_error_code = "decrypt_failed"
+            delivery.encrypted_payload = None
+            delivery.payload_purged_at = now
+            delivery.lease_expires_at = None
+            delivery.wakeup_after = None
+            session.add(delivery)
+            session.commit()
+            return None
+
         delivery.state = "processing"
         delivery.attempt_count += 1
         delivery.lease_expires_at = now + DELIVERY_LEASE
         delivery.wakeup_after = None
         delivery.last_error_code = None
-        payload_json = delivery.encrypted_payload
         fence = delivery.attempt_count
         session.add(delivery)
         session.commit()
         return ClaimedDelivery(
             delivery_id=str(delivery.id),
             provider=delivery.provider,
+            provider_event_digest=delivery.provider_event_digest,
             event_type=delivery.event_type,
             payload_json=payload_json,
             fence=fence,
@@ -385,7 +435,11 @@ def _dispatch(claim: ClaimedDelivery, payload: dict[str, Any]) -> None:
     if claim.provider == "zoom":
         from app.services import zoom_webhooks
 
-        zoom_webhooks.dispatch(event_type=claim.event_type, payload=payload)
+        zoom_webhooks.dispatch(
+            event_type=claim.event_type,
+            payload=payload,
+            provider_event_digest=claim.provider_event_digest,
+        )
         return
     raise PermanentWebhookError()
 
@@ -499,12 +553,14 @@ def reconcile() -> dict[str, int | float | None]:
     if (
         health["dead_letter"] > 0
         or health["uncertain_operations"] > 0
+        or health["failed_operations"] > 0
         or (health["oldest_actionable_age_seconds"] or 0) > ALERT_AGE.total_seconds()
     ):
         log.error(
             "external webhook inbox requires operator attention",
             dead_letter=health["dead_letter"],
             uncertain_operations=health["uncertain_operations"],
+            failed_operations=health["failed_operations"],
             oldest_actionable_age_seconds=health["oldest_actionable_age_seconds"],
         )
     return cast(
@@ -558,6 +614,11 @@ def inbox_health(*, now: datetime | None = None) -> InboxHealth:
                 )
             )
         ).one()
+        failed = session.exec(
+            select(func.count())
+            .select_from(ExternalWebhookOperation)
+            .where(ExternalWebhookOperation.state == "failed")
+        ).one()
     age = max(0.0, (now - oldest).total_seconds()) if oldest is not None else None
     return {
         "pending": counts["pending"],
@@ -567,6 +628,7 @@ def inbox_health(*, now: datetime | None = None) -> InboxHealth:
         "dead_letter": counts["dead_letter"],
         "oldest_actionable_age_seconds": age,
         "uncertain_operations": int(uncertain),
+        "failed_operations": int(failed),
     }
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -14,6 +13,7 @@ import app.jobs.score_engagement
 import app.jobs.transcribe
 from app import log
 from app.services.external_webhook_inbox import digest_provider_reference
+from app.utils.encryption import pseudonymous_digest
 
 from activemodel.session_manager import get_session
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -193,6 +193,50 @@ def confirm_transcript_creation(recording_id: str) -> None:
             session.commit()
 
 
+def mark_transcript_creation_failed(recording_id: str) -> None:
+    """Persist a signed provider failure instead of treating it as log-only."""
+
+    digest = _resource_digest(recording_id)
+    with get_session() as session:
+        operation = session.exec(
+            select(ExternalWebhookOperation)
+            .where(
+                ExternalWebhookOperation.provider == "recall",
+                ExternalWebhookOperation.operation_type == "create_transcript",
+                ExternalWebhookOperation.provider_resource_digest == digest,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if operation is None:
+            operation = ExternalWebhookOperation(
+                operation_type="create_transcript",
+                provider_resource_digest=digest,
+                state="failed",
+                last_error_code="provider_transcript_failed",
+            )
+        else:
+            operation.state = "failed"
+            operation.last_error_code = "provider_transcript_failed"
+        session.add(operation)
+        try:
+            session.commit()
+        except IntegrityError:
+            session.rollback()
+            operation = session.exec(
+                select(ExternalWebhookOperation)
+                .where(
+                    ExternalWebhookOperation.provider == "recall",
+                    ExternalWebhookOperation.operation_type == "create_transcript",
+                    ExternalWebhookOperation.provider_resource_digest == digest,
+                )
+                .with_for_update()
+            ).one()
+            operation.state = "failed"
+            operation.last_error_code = "provider_transcript_failed"
+            session.add(operation)
+            session.commit()
+
+
 def _content_digest(
     *,
     doctor_id: str,
@@ -212,7 +256,7 @@ def _content_digest(
         sort_keys=True,
         separators=(",", ":"),
     )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return pseudonymous_digest(canonical, context="recall-transcript-content")
 
 
 def _replayed_ingest(

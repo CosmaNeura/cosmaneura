@@ -181,6 +181,19 @@ async def test_bounded_body_rejects_chunked_body_without_content_length() -> Non
         await webhooks._read_bounded_body(request)
 
 
+async def test_bounded_body_rejects_one_oversized_chunk_before_buffering() -> None:
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b"x" * (webhooks.MAX_WEBHOOK_BODY_BYTES + 1),
+            "more_body": False,
+        }
+
+    request = Request({"type": "http", "headers": []}, receive=receive)
+    with pytest.raises(webhooks.WebhookBodyTooLarge):
+        await webhooks._read_bounded_body(request)
+
+
 @pytest.mark.usefixtures("zoom_secret", "durable_ingress")
 @pytest.mark.parametrize("event", [None, {"patient": "secret"}, "x" * 97])
 def test_zoom_webhook_rejects_unbounded_or_non_string_event_types(
@@ -335,10 +348,21 @@ def test_webhook_logging_does_not_include_body_headers_or_provider_id(
 
 
 @pytest.mark.usefixtures("recall_secret")
-def test_quiesced_cutover_returns_retryable_503_after_verification(
+def test_default_false_keeps_signed_legacy_path_operational(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from app.jobs import webhooks as legacy_webhook_jobs
+
+    queued: list[dict] = []
     monkeypatch.setattr(webhooks, "DURABLE_WEBHOOK_INBOX_ENABLED", False)
+    monkeypatch.setattr(
+        legacy_webhook_jobs, "queue", lambda **kwargs: queued.append(kwargs)
+    )
+    monkeypatch.setattr(
+        webhooks.external_webhook_inbox,
+        "store_verified_external_webhook",
+        lambda **_: (_ for _ in ()).throw(AssertionError("durable path must be off")),
+    )
     body = b'{"event":"recording.done"}'
     ts = str(int(time.time()))
     webhook_id = "msg_quiesced"
@@ -351,4 +375,129 @@ def test_quiesced_cutover_returns_retryable_503_after_verification(
             "webhook-signature": _recall_sign(body, ts, webhook_id),
         },
     )
-    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"status": "ok", "duplicate": False}
+    assert len(queued) == 1
+    assert queued[0]["provider"] == "recall"
+    assert queued[0]["event_id"] != webhook_id
+    assert webhook_id not in queued[0]["event_id"]
+    assert queued[0]["event_id"].startswith("hmac-v1:")
+    assert queued[0]["event_id"].removeprefix("hmac-v1:") == (
+        webhooks.external_webhook_inbox.digest_provider_reference(webhook_id)
+    )
+    assert queued[0]["headers"] == {}
+
+
+@pytest.mark.usefixtures("zoom_secret")
+def test_default_false_keeps_signed_zoom_path_operational(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.jobs import webhooks as legacy_webhook_jobs
+
+    queued: list[dict] = []
+    monkeypatch.setattr(webhooks, "DURABLE_WEBHOOK_INBOX_ENABLED", False)
+    monkeypatch.setattr(
+        legacy_webhook_jobs, "queue", lambda **kwargs: queued.append(kwargs)
+    )
+    body = b'{"event":"meeting.started","payload":{"object":{"id":"42"}}}'
+    ts = str(int(time.time()))
+
+    response = client.post(
+        ZOOM_WEBHOOK_PATH,
+        content=body,
+        headers={
+            "x-zm-request-timestamp": ts,
+            "x-zm-signature": _zoom_sign(body, ts),
+            "x-zm-trackingid": "zoom-private-delivery",
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert len(queued) == 1
+    assert queued[0]["provider"] == "zoom"
+    assert queued[0]["event_id"].startswith("hmac-v1:")
+    assert "zoom-private-delivery" not in queued[0]["event_id"]
+    assert queued[0]["headers"] == {}
+
+
+@pytest.mark.usefixtures("recall_secret")
+def test_true_uses_only_durable_commit_before_publish_path(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.jobs import webhooks as legacy_webhook_jobs
+
+    stored: list[dict] = []
+    published: list[str] = []
+    monkeypatch.setattr(webhooks, "DURABLE_WEBHOOK_INBOX_ENABLED", True)
+    monkeypatch.setattr(
+        legacy_webhook_jobs,
+        "queue",
+        lambda **_: (_ for _ in ()).throw(AssertionError("legacy path must be off")),
+    )
+    monkeypatch.setattr(
+        webhooks.external_webhook_inbox,
+        "store_verified_external_webhook",
+        lambda **kwargs: (
+            stored.append(kwargs)
+            or StoredDelivery("webhook_delivery_01k00000000000000000000000", False)
+        ),
+    )
+    monkeypatch.setattr(
+        webhooks.external_webhook_inbox,
+        "publish_best_effort",
+        published.append,
+    )
+    body = b'{"event":"recording.done"}'
+    ts = str(int(time.time()))
+    webhook_id = "msg_durable_only"
+    response = client.post(
+        RECALL_WEBHOOK_PATH,
+        content=body,
+        headers={
+            "webhook-id": webhook_id,
+            "webhook-timestamp": ts,
+            "webhook-signature": _recall_sign(body, ts, webhook_id),
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert len(stored) == 1
+    assert published == ["webhook_delivery_01k00000000000000000000000"]
+
+
+@pytest.mark.usefixtures("recall_secret")
+def test_desktop_sdk_events_fail_closed_until_exact_capture_binding_exists(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.jobs import webhooks as legacy_webhook_jobs
+
+    monkeypatch.setattr(
+        legacy_webhook_jobs,
+        "queue",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("unsupported SDK event must not be queued")
+        ),
+    )
+    monkeypatch.setattr(
+        webhooks.external_webhook_inbox,
+        "store_verified_external_webhook",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("unsupported SDK event must not be persisted")
+        ),
+    )
+    body = b'{"event":"sdk_upload.complete","data":{}}'
+    ts = str(int(time.time()))
+    webhook_id = "msg-desktop-not-enabled"
+
+    response = client.post(
+        RECALL_WEBHOOK_PATH,
+        content=body,
+        headers={
+            "webhook-id": webhook_id,
+            "webhook-timestamp": ts,
+            "webhook-signature": _recall_sign(body, ts, webhook_id),
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"status": "unsupported event"}

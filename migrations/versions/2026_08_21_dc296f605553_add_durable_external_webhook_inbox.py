@@ -71,8 +71,10 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "last_error_code IS NULL OR last_error_code IN "
-            "('handler_error', 'invalid_payload', 'payload_expired', "
-            "'provider_operation_uncertain', 'tenant_mapping_unavailable')",
+            "('decrypt_failed', 'handler_error', 'invalid_payload', "
+            "'meeting_mapping_unavailable', 'payload_expired', "
+            "'provider_operation_uncertain', 'provider_transcript_failed', "
+            "'tenant_mapping_unavailable')",
             name="ck_external_webhook_delivery_error_code",
         ),
         sa.CheckConstraint(
@@ -155,6 +157,12 @@ def upgrade() -> None:
             server_default="in_flight",
             nullable=False,
         ),
+        sa.Column(
+            "execution_lease_expires_at", sa.DateTime(timezone=True), nullable=True
+        ),
+        sa.Column(
+            "execution_attempt_count", sa.Integer(), server_default="0", nullable=False
+        ),
         sa.Column("content_sha256", sa.String(length=64), nullable=True),
         sa.Column(
             "result_transcript_id",
@@ -184,8 +192,13 @@ def upgrade() -> None:
             name="ck_external_webhook_operation_content_digest",
         ),
         sa.CheckConstraint(
+            "execution_attempt_count >= 0",
+            name="ck_external_webhook_operation_execution_attempt_count",
+        ),
+        sa.CheckConstraint(
             "last_error_code IS NULL OR last_error_code IN "
-            "('provider_outcome_uncertain', 'pipeline_publish_failed')",
+            "('provider_outcome_uncertain', 'provider_transcript_failed', "
+            "'pipeline_publish_failed')",
             name="ck_external_webhook_operation_error_code",
         ),
         sa.CheckConstraint(
@@ -193,18 +206,21 @@ def upgrade() -> None:
             name="ck_external_webhook_operation_pipeline_attempt_count",
         ),
         sa.CheckConstraint(
-            "operation_type IN ('create_transcript', 'ingest_transcript')",
+            "operation_type IN ('create_transcript', 'ingest_transcript', "
+            "'zoom_meeting_started', 'zoom_participant_joined', "
+            "'zoom_participant_left', 'zoom_meeting_ended')",
             name="ck_external_webhook_operation_type",
         ),
         sa.CheckConstraint(
-            "provider = 'recall'", name="ck_external_webhook_operation_provider"
+            "provider IN ('recall', 'zoom')",
+            name="ck_external_webhook_operation_provider",
         ),
         sa.CheckConstraint(
             "provider_resource_digest ~ '^[0-9a-f]{64}$'",
             name="ck_external_webhook_operation_resource_digest",
         ),
         sa.CheckConstraint(
-            "state IN ('in_flight', 'succeeded', 'uncertain')",
+            "state IN ('reserved', 'in_flight', 'succeeded', 'uncertain', 'failed')",
             name="ck_external_webhook_operation_state",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("external_webhook_operation_pkey")),
@@ -216,11 +232,18 @@ def upgrade() -> None:
         ),
         comment=(
             "Provider-resource and downstream-publication fence.\n\n"
-            "Only a SHA-256 digest of the adapter-private provider resource reference is\n"
-            "stored.  An ``in_flight`` create-transcript receipt is intentionally not\n"
+            "Only a context-separated HMAC-SHA-256 pseudonym of the adapter-private\n"
+            "provider resource reference is stored. An ``in_flight`` create-transcript\n"
+            "receipt is intentionally not\n"
             "replayed after an ambiguous failure; a later signed transcript callback\n"
             "reconciles it to ``succeeded``."
         ),
+    )
+    op.create_index(
+        "ix_external_webhook_operation_execution_lease",
+        "external_webhook_operation",
+        ["provider", "state", "execution_lease_expires_at"],
+        unique=False,
     )
     op.create_index(
         "ix_external_webhook_operation_pipeline_due",
@@ -231,6 +254,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_external_webhook_operation_execution_lease",
+        table_name="external_webhook_operation",
+    )
     op.drop_index(
         "ix_external_webhook_operation_pipeline_due",
         table_name="external_webhook_operation",

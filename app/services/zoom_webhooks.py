@@ -1,4 +1,5 @@
 import secrets
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any, cast
 
@@ -9,9 +10,13 @@ from app.configuration.server import API_BASE_URL
 from app.environments import is_production, is_staging
 from app.jobs import merge_window
 from app.routes.recall_callbacks import zak_token_redis_key
-from app.services import recall
+from app.services import recall, zoom_webhook_operations
 from app.services import zoom as zoom_service
-from app.services.external_webhook_inbox import provider_log_ref
+from app.services.external_webhook_inbox import (
+    PermanentWebhookError,
+    RetryableWebhookError,
+    provider_log_ref,
+)
 from app.services.recall import BOT_NAME
 
 from app.models.ai_visit_transcript import AIVisitTranscript
@@ -56,7 +61,18 @@ PROD_ZOOM_EMAILS = frozenset(
 )
 
 
-def handle_meeting_started(payload: dict[str, Any]):
+SideEffectBoundary = Callable[[], None]
+
+
+def _begin_side_effect(boundary: SideEffectBoundary | None) -> None:
+    if boundary is not None:
+        boundary()
+
+
+def handle_meeting_started(
+    payload: dict[str, Any],
+    before_side_effect: SideEffectBoundary | None = None,
+):
     obj = payload.get("payload", {}).get("object", {})
     host_id = obj.get("host_id")
     meeting_id = obj.get("id")
@@ -76,6 +92,7 @@ def handle_meeting_started(payload: dict[str, Any]):
     # succeeds only when the lock does not exist; handle_meeting_ended
     # releases it so a legitimate end+restart past the TTL still works.
     lock_key = f"recall:meeting:{meeting_id}:starting_lock"
+    _begin_side_effect(before_side_effect)
     if not redis.set(lock_key, "1", nx=True, ex=60):
         log.info(
             "meeting.started duplicate within active lock window, skipping",
@@ -364,7 +381,10 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         zoom_mtg.save()
 
 
-def handle_participant_joined(payload: dict[str, Any]):
+def handle_participant_joined(
+    payload: dict[str, Any],
+    before_side_effect: SideEffectBoundary | None = None,
+):
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
     participant = obj.get("participant", {})
@@ -389,7 +409,16 @@ def handle_participant_joined(payload: dict[str, Any]):
         )
         return
 
+    # A durable participant delivery can arrive before meeting.started. If it
+    # completed now, meeting.started would later clear its Redis state and the
+    # visit could be lost. Wait for the server-derived doctor mapping instead.
+    if before_side_effect is not None and not _rget(
+        redis, f"recall:meeting:{meeting_id}:doctor_id"
+    ):
+        raise RetryableWebhookError("meeting_mapping_unavailable")
+
     if role == "doctor":
+        _begin_side_effect(before_side_effect)
         ttl = timedelta(hours=24)
         redis.set(f"recall:meeting:{meeting_id}:doctor_present", "1", ex=ttl)
 
@@ -428,6 +457,7 @@ def handle_participant_joined(payload: dict[str, Any]):
         return
 
     # role == "other"
+    _begin_side_effect(before_side_effect)
     ttl = timedelta(hours=24)
     redis.rpush(f"recall:meeting:{meeting_id}:participants_order", participant_id)
     redis.expire(
@@ -549,7 +579,10 @@ def _ensure_appointment(
     return cast(Appointment, appointment)
 
 
-def handle_participant_left(payload: dict[str, Any]):
+def handle_participant_left(
+    payload: dict[str, Any],
+    before_side_effect: SideEffectBoundary | None = None,
+):
     """Decrement the patient counter. Stop recording and destroy the bot
     when the last non-doctor leaves while the doctor is still present —
     this closes the current appointment and lets the next non-doctor
@@ -580,7 +613,13 @@ def handle_participant_left(payload: dict[str, Any]):
         )
         return
 
+    if before_side_effect is not None and not _rget(
+        redis, f"recall:meeting:{meeting_id}:doctor_id"
+    ):
+        raise RetryableWebhookError("meeting_mapping_unavailable")
+
     if role == "doctor":
+        _begin_side_effect(before_side_effect)
         redis.delete(f"recall:meeting:{meeting_id}:doctor_present")
         recording_active = bool(
             redis.get(f"recall:meeting:{meeting_id}:recording_active")
@@ -599,6 +638,7 @@ def handle_participant_left(payload: dict[str, Any]):
         return
 
     # role == "other"
+    _begin_side_effect(before_side_effect)
     redis.lrem(f"recall:meeting:{meeting_id}:participants_order", 0, participant_id)
     redis.hdel(f"recall:meeting:{meeting_id}:participants_names", participant_id)
     new_count = cast(int, redis.decr(f"recall:meeting:{meeting_id}:patient_count"))
@@ -704,7 +744,10 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
         redis.delete(f"recall:meeting:{meeting_id}:{suffix}")
 
 
-def handle_meeting_ended(payload: dict[str, Any]):
+def handle_meeting_ended(
+    payload: dict[str, Any],
+    before_side_effect: SideEffectBoundary | None = None,
+):
     """meeting.ended is the canonical wind-down. Revoke any pending grace
     task, stop+leave the bot if one exists, and clear all per-meeting
     state. When no bot exists, the meeting ended without ever recording —
@@ -727,6 +770,8 @@ def handle_meeting_ended(payload: dict[str, Any]):
             meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
+
+    _begin_side_effect(before_side_effect)
 
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
     merge_task_id = _rget(redis, f"recall:meeting:{meeting_id}:merge_task_id")
@@ -801,9 +846,10 @@ def _log_payload_shape(event_type: str, payload: dict[str, Any]) -> None:
     cleanup today. `host_id` on participant_joined would additionally remove
     the Redis/DB lookup in _resolve_host_id.
 
-    Logs field *names* only, never values, so no participant name or email can
-    reach the log pipeline. Remove once one real production meeting has been
-    observed — the answer does not change per meeting.
+    Logs only fixed-schema booleans, never provider-controlled field names or
+    values, so no participant name or email can reach the log pipeline. Remove
+    once one real production meeting has been observed — the answer does not
+    change per meeting.
     """
     obj = payload.get("payload", {}).get("object", {})
     if not isinstance(obj, dict):
@@ -814,20 +860,68 @@ def _log_payload_shape(event_type: str, payload: dict[str, Any]) -> None:
     log.info(
         "zoom payload shape",
         event_type=event_type,
-        object_keys=sorted(obj.keys()),
-        participant_keys=(
-            sorted(participant.keys()) if isinstance(participant, dict) else None
-        ),
         has_uuid="uuid" in obj,
         has_host_id="host_id" in obj,
+        has_participant=isinstance(participant, dict),
+        participant_has_id=isinstance(participant, dict) and "id" in participant,
+        participant_has_user_id=(
+            isinstance(participant, dict) and "user_id" in participant
+        ),
     )
 
 
-def dispatch(event_type: str, payload: dict[str, Any]):
+def dispatch(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    provider_event_digest: str | None = None,
+):
     _log_payload_shape(event_type, payload)
 
     handler = HANDLERS.get(event_type)
     if not handler:
         log.info("no handler for zoom event type", event_type=event_type)
         return
-    handler(payload)
+    if provider_event_digest is None:
+        handler(payload)
+        return
+
+    claim = zoom_webhook_operations.claim_event(
+        provider_event_digest=provider_event_digest,
+        event_type=event_type,
+    )
+    if claim.disposition == "succeeded":
+        return
+    if claim.disposition == "busy":
+        raise RetryableWebhookError("handler_error")
+    if claim.disposition == "uncertain":
+        raise PermanentWebhookError("provider_operation_uncertain")
+
+    side_effect_started = False
+
+    def begin_once() -> None:
+        nonlocal side_effect_started
+        if side_effect_started:
+            return
+        if not zoom_webhook_operations.begin_side_effect(claim):
+            raise PermanentWebhookError("provider_operation_uncertain")
+        side_effect_started = True
+
+    try:
+        handler(payload, before_side_effect=begin_once)
+    except (RetryableWebhookError, PermanentWebhookError) as exc:
+        ambiguous = zoom_webhook_operations.fail_event(
+            claim,
+            permanent=isinstance(exc, PermanentWebhookError),
+        )
+        if ambiguous:
+            raise PermanentWebhookError("provider_operation_uncertain") from None
+        raise
+    except Exception:
+        ambiguous = zoom_webhook_operations.fail_event(claim)
+        if ambiguous:
+            raise PermanentWebhookError("provider_operation_uncertain") from None
+        raise
+
+    if not zoom_webhook_operations.complete_event(claim):
+        raise PermanentWebhookError("provider_operation_uncertain")

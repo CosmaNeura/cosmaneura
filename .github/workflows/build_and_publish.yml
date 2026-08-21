@@ -175,13 +175,23 @@ jobs:
       VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
       RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
-      DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED || 'false' }}
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
     permissions:
       actions: read
       contents: read
       # TODO why exactly do we need id-token here?
       id-token: write
     steps:
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -283,13 +293,23 @@ jobs:
       CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
       ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
       RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
-      DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED || 'false' }}
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
       PYTHON_ENV: staging
     permissions:
       contents: read
       id-token: write
     steps:
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
       - uses: actions/checkout@v5
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
