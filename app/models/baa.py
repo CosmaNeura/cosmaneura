@@ -4,7 +4,7 @@ The canonical BAA text lives as a hash-verified HTML asset (see
 ``BAA_ASSET_DIR``); ``baa_version`` rows point at it and ``baa_acceptance``
 rows are the append-only clickwrap execution record (CLAUDE_BAA_IMPLEMENTATION,
 45 C.F.R. § 164.316(b)(2) retention). Never update or delete an acceptance
-row; re-acceptance inserts a new one.
+row; a retry returns the one immutable execution for that practice/version.
 """
 
 from datetime import datetime
@@ -55,6 +55,14 @@ class BaaAcceptance(
     BaseModel, TimestampsMixin, TypeIDMixin("baa_acceptance"), table=True
 ):
     """Append-only clickwrap execution record; never updated or deleted."""
+
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "practice_id",
+            "baa_version_id",
+            name="baa_acceptance_practice_version_key",
+        ),
+    )
 
     practice_id: TypeIDType = Practice.foreign_key()
     baa_version_id: TypeIDType = BaaVersion.foreign_key()

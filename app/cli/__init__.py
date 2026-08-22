@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta, timezone
 from typing import Literal, cast
 
 import typer
@@ -477,6 +478,140 @@ def reconcile_stale_canonical_turn(
             sort_keys=True,
         )
     )
+
+
+@app.command("list-pilot-doctors")
+def list_pilot_doctors() -> None:
+    """List pre-cutover doctors (onboarded, no practice membership yet).
+
+    These are the early-adopter pilots: on next login the frontend routes
+    them through practice creation + BAA acceptance, which starts a 14-day
+    trial. Comp them with ``set-billing-exempt`` once their practice exists.
+    Practices are never created for them here — the covered entity's legal
+    name on an acceptance record must be typed by the accepting owner.
+    """
+    from app.models.doctor import Doctor
+    from app.models.practice import PracticeMember
+
+    with global_session():
+        pilots = [
+            doctor
+            for doctor in cast(list[Doctor], Doctor.all())
+            if doctor.onboarding_completed_at is not None
+            and PracticeMember.get(doctor_id=doctor.id) is None
+        ]
+        if not pilots:
+            typer.echo("No onboarded doctors without a practice membership.")
+            return
+        for doctor in pilots:
+            typer.echo(f"{doctor.id}  {doctor.email}")
+
+
+def _practice_by_join_code(join_code: str):
+    from app.models.practice import Practice
+
+    normalized = join_code.strip().upper().replace(" ", "").replace("-", "")
+    practice = Practice.get(join_code=normalized)
+    if practice is None:
+        typer.echo(f"No practice with join code {join_code!r}.", err=True)
+        raise typer.Exit(1)
+    return practice
+
+
+def _utc_date(value: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise typer.BadParameter("must be a YYYY-MM-DD date") from exc
+
+
+@app.command("set-billing-exempt")
+def set_billing_exempt(
+    join_code: str = typer.Option(..., help="The practice's join code."),
+    until: str | None = typer.Option(
+        None,
+        help="Last included day of the comp (YYYY-MM-DD, UTC). Omit for indefinite.",
+    ),
+    clear: bool = typer.Option(False, "--clear", help="Remove the exemption."),
+    operator_ref: str = typer.Option(
+        ..., help="Durable operator/ticket reference for this privileged change."
+    ),
+    reason: str = typer.Option(..., help="Why this exemption is being changed."),
+) -> None:
+    """Comp a practice (pilot / MCD / centrally billed): entitled without Stripe."""
+
+    from app.services.practice_access import (
+        PracticeAccessChangeError,
+        set_billing_exemption,
+    )
+
+    with global_session():
+        practice = _practice_by_join_code(join_code)
+        if clear and until:
+            raise typer.BadParameter("--until cannot be combined with --clear")
+        # An inclusive calendar date becomes the following midnight as an
+        # exclusive timestamp, avoiding an unexpected 00:00 start-of-day expiry.
+        expires_at = (_utc_date(until) + timedelta(days=1)) if until else None
+        try:
+            audit = set_billing_exemption(
+                practice,
+                operator_ref=operator_ref,
+                reason=reason,
+                expires_at=expires_at,
+                clear=clear,
+            )
+        except PracticeAccessChangeError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(
+            f"{practice.legal_name}: billing_exempt={practice.billing_exempt}"
+            f" until={practice.billing_exempt_until or '—'} audit={audit.id}"
+        )
+
+
+@app.command("set-negotiated-baa")
+def set_negotiated_baa(
+    join_code: str = typer.Option(..., help="The practice's join code."),
+    reference: str = typer.Option(
+        ..., help="Document reference for the countersigned instrument."
+    ),
+    effective: str | None = typer.Option(
+        None, help="Effective date (YYYY-MM-DD, UTC). Defaults to today."
+    ),
+    operator_ref: str = typer.Option(
+        ..., help="Durable operator/ticket reference for this legal change."
+    ),
+    reason: str = typer.Option(..., help="Why this negotiated BAA is being recorded."),
+) -> None:
+    """Record that a negotiated CN-BAA-CUST is on file (enterprise fallback).
+
+    Satisfies PHI gating without clickwrap. Only set this once the
+    countersigned instrument is actually on file.
+    """
+
+    from app.services.practice_access import (
+        PracticeAccessChangeError,
+        record_negotiated_baa,
+    )
+
+    with global_session():
+        practice = _practice_by_join_code(join_code)
+        effective_at = _utc_date(effective) if effective else datetime.now(timezone.utc)
+        try:
+            audit = record_negotiated_baa(
+                practice,
+                operator_ref=operator_ref,
+                reason=reason,
+                document_reference=reference,
+                effective_at=effective_at,
+            )
+        except PracticeAccessChangeError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(
+            f"{practice.legal_name}: negotiated BAA on file"
+            f" ({practice.negotiated_baa_reference},"
+            f" effective {practice.negotiated_baa_effective_date:%Y-%m-%d},"
+            f" audit={audit.id})"
+        )
 
 
 if __name__ == "__main__":
