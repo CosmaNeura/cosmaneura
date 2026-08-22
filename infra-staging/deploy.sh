@@ -325,9 +325,11 @@ run_migrations() {
 		return 1
 	fi
 
-	# Run the aggregate-only gate as an execution override. The job template
-	# remains Alembic-owned, so a successful preflight is followed by a plain
-	# start while any failure leaves the schema untouched.
+	# Run the aggregate-only gate as an execution override. Azure replaces the
+	# container definition when an override is supplied, so explicitly restore
+	# the DATABASE_URL secret reference. The job template remains Alembic-owned,
+	# so a successful preflight is followed by a plain start while any failure
+	# leaves the schema untouched.
 	local preflight_execution
 	if ! preflight_execution=$(az containerapp job start \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
@@ -335,6 +337,7 @@ run_migrations() {
 		--image "$STAGING_TAG" \
 		--command /opt/venv/bin/python \
 		--args /app/scripts/billing_migration_preflight.py \
+		--env-vars "DATABASE_URL=secretref:database-url" \
 		--query "name" -o tsv); then
 		echo "Billing migration preflight failed to start."
 		return 1
