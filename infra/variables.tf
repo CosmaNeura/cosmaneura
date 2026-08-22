@@ -69,11 +69,7 @@ variable "python_public_vars" {
     "API_BASE_URL",
     # app-only Entra authentication for the feature-flagged Scribe workload route
     "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
-    "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
-    # Agent API remains disabled unless the complete deployment policy is supplied.
-    "AGENT_API_ENABLED", "AGENT_API_AUDIENCE", "AGENT_API_SOVEREIGN_CLIENT_IDS",
-    "AUTHORITY_KERNEL_ENABLED", "AUTHORITY_CLERK_ISSUER", "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
-    "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS", "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS"
+    "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID"
   ]
 }
 
@@ -236,4 +232,19 @@ data "external" "secrets" {
   # Run `just direnv_export .env.production.backend` to inspect results
   program     = ["just", "direnv_export", ".env.production.backend"]
   working_dir = "${path.module}/.."
+}
+
+# This read-only guard makes the selector an adoption mechanism, never a bulk
+# cutover mechanism.  Phase A may add the unused v2 value while all workloads
+# still select database-url.  Selecting v2 is accepted only after the staged
+# operator has already moved all five live workloads and retained the old
+# rollback secret.
+data "external" "database_url_live_guard" {
+  program = ["python", "${path.module}/database_url_live_guard.py"]
+  query = {
+    resource_group  = azurerm_resource_group.main.name
+    selected_secret = local.database_url_secret_name
+    subscription_id = local.azure_subscription_id
+    v2_enabled      = local.database_url_v2_enabled_text
+  }
 }

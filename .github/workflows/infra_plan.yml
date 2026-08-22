@@ -12,6 +12,7 @@ on:
   pull_request:
     paths:
       - 'infra/**'
+      - '.env.production.backend'
       - '.github/workflows/infra_*.yml'
       - 'Procfile'
   # Manual trigger from the Actions UI / gh CLI. Useful for verifying

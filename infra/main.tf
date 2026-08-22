@@ -21,6 +21,30 @@ locals {
   base_name = azurerm_resource_group.main.name
   # azure requires alpha numeric chars only in many places
   base_name_alphanumeric = replace(local.base_name, "/[^a-zA-Z0-9]/", "")
+
+  # DATABASE_URL rollover is a two-phase, source-controlled operation.  Both
+  # values can be staged while every workload still references database-url;
+  # database_url_cutover.py then moves workloads one at a time.  Updating the
+  # non-secret selector after that staged move makes the choice durable across
+  # future OpenTofu applies.  The old secret remains declared for rollback.
+  database_url_v2_enabled_text = try(data.external.secrets.result["DATABASE_URL_V2_ENABLED"], "false")
+  database_url_v2_enabled      = local.database_url_v2_enabled_text == "true"
+  database_url_secret_name     = try(data.external.secrets.result["DATABASE_URL_SECRET_NAME"], "")
+  database_url_v2_value        = try(data.external.secrets.result["DATABASE_URL_V2"], "")
+  database_url_v2_secret_values = local.database_url_v2_enabled ? {
+    "database-url-v2" = local.database_url_v2_value
+  } : {}
+  database_url_configuration_valid = (
+    contains(["true", "false"], local.database_url_v2_enabled_text) &&
+    contains(["database-url", "database-url-v2"], local.database_url_secret_name) &&
+    trimspace(data.external.secrets.result["DATABASE_URL"]) != "" &&
+    (!local.database_url_v2_enabled || trimspace(local.database_url_v2_value) != "") &&
+    (local.database_url_secret_name != "database-url-v2" || local.database_url_v2_enabled)
+  )
+  database_url_live_guard_valid = try(
+    data.external.database_url_live_guard.result["result"] == "verified",
+    false,
+  )
 }
 
 terraform {
@@ -526,7 +550,7 @@ resource "azurerm_container_app" "app" {
 
         content {
           name        = env.key
-          secret_name = replace(lower(env.key), "_", "-")
+          secret_name = env.key == "DATABASE_URL" ? local.database_url_secret_name : replace(lower(env.key), "_", "-")
         }
       }
 
@@ -579,6 +603,15 @@ resource "azurerm_container_app" "app" {
     }
   }
 
+  dynamic "secret" {
+    for_each = local.database_url_v2_secret_values
+
+    content {
+      name  = secret.key
+      value = secret.value
+    }
+  }
+
   # TODO could use identity based login in the future, but the Basic tier of acr doesn't support this
   # https://github.com/microsoft/NubesGen/blob/0d5d4896f5f2c93d1baca01807527bee56ff49b8/terraform/modules/container-apps/main.tf#L91
   registry {
@@ -601,6 +634,16 @@ resource "azurerm_container_app" "app" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = local.database_url_configuration_valid
+      error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
+    }
+
+    precondition {
+      condition     = local.database_url_live_guard_valid
+      error_message = "live DATABASE_URL state must already match the source-controlled selector"
+    }
+
     ignore_changes = [
       template[0].container[0].image,
     ]
@@ -665,7 +708,7 @@ resource "azurerm_container_app" "scheduler" {
 
         content {
           name        = env.key
-          secret_name = replace(lower(env.key), "_", "-")
+          secret_name = env.key == "DATABASE_URL" ? local.database_url_secret_name : replace(lower(env.key), "_", "-")
         }
       }
 
@@ -682,6 +725,15 @@ resource "azurerm_container_app" "scheduler" {
     content {
       name  = replace(lower(secret.key), "_", "-")
       value = data.external.secrets.result[secret.key]
+    }
+  }
+
+  dynamic "secret" {
+    for_each = local.database_url_v2_secret_values
+
+    content {
+      name  = secret.key
+      value = secret.value
     }
   }
 
@@ -702,6 +754,16 @@ resource "azurerm_container_app" "scheduler" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = local.database_url_configuration_valid
+      error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
+    }
+
+    precondition {
+      condition     = local.database_url_live_guard_valid
+      error_message = "live DATABASE_URL state must already match the source-controlled selector"
+    }
+
     ignore_changes = [
       template[0].container[0].image,
     ]
@@ -808,7 +870,7 @@ resource "azurerm_container_app" "worker" {
 
         content {
           name        = env.key
-          secret_name = replace(lower(env.key), "_", "-")
+          secret_name = env.key == "DATABASE_URL" ? local.database_url_secret_name : replace(lower(env.key), "_", "-")
         }
       }
 
@@ -824,6 +886,15 @@ resource "azurerm_container_app" "worker" {
     content {
       name  = replace(lower(secret.key), "_", "-")
       value = data.external.secrets.result[secret.key]
+    }
+  }
+
+  dynamic "secret" {
+    for_each = local.database_url_v2_secret_values
+
+    content {
+      name  = secret.key
+      value = secret.value
     }
   }
 
@@ -849,6 +920,16 @@ resource "azurerm_container_app" "worker" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = local.database_url_configuration_valid
+      error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
+    }
+
+    precondition {
+      condition     = local.database_url_live_guard_valid
+      error_message = "live DATABASE_URL state must already match the source-controlled selector"
+    }
+
     ignore_changes = [
       template[0].container[0].image,
     ]
@@ -969,7 +1050,7 @@ resource "azurerm_container_app" "job-monitor" {
 
         content {
           name        = env.key
-          secret_name = replace(lower(env.key), "_", "-")
+          secret_name = env.key == "DATABASE_URL" ? local.database_url_secret_name : replace(lower(env.key), "_", "-")
         }
       }
 
@@ -985,6 +1066,15 @@ resource "azurerm_container_app" "job-monitor" {
     content {
       name  = replace(lower(secret.key), "_", "-")
       value = data.external.secrets.result[secret.key]
+    }
+  }
+
+  dynamic "secret" {
+    for_each = local.database_url_v2_secret_values
+
+    content {
+      name  = secret.key
+      value = secret.value
     }
   }
 
@@ -1010,6 +1100,16 @@ resource "azurerm_container_app" "job-monitor" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = local.database_url_configuration_valid
+      error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
+    }
+
+    precondition {
+      condition     = local.database_url_live_guard_valid
+      error_message = "live DATABASE_URL state must already match the source-controlled selector"
+    }
+
     ignore_changes = [
       template[0].container[0].image,
     ]

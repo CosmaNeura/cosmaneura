@@ -114,7 +114,10 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     plan_workflow = _read(".github/workflows/infra_plan.yml")
 
     assert "production_infra_changed" in workflow
-    assert "infra .github/workflows/infra_apply.yml Procfile" in workflow
+    protected_paths = (
+        "infra .env.production.backend .github/workflows/infra_apply.yml Procfile"
+    )
+    assert workflow.count(protected_paths) == 2
     assert "needs: [web, app, deployment-scope]" in workflow
     assert (
         "needs.deployment-scope.outputs.production_infra_changed != 'true'" in workflow
@@ -133,8 +136,10 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     assert workflow.count("cancel-in-progress: false") == 1
     assert apply_workflow.count("group: cosmaneura-production-container-apps") == 1
     assert "cancel-in-progress: false" in apply_workflow
+    assert "      - '.env.production.backend'" in apply_workflow
 
     assert "  issues: write" in plan_workflow
+    assert "      - '.env.production.backend'" in plan_workflow
     plan_step = plan_workflow[
         plan_workflow.index("      - name: tofu plan") : plan_workflow.index(
             "      - name: Post plan as PR comment"
