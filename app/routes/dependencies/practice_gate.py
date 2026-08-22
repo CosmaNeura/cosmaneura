@@ -35,12 +35,21 @@ EXEMPT_ROUTE_NAMES = {
     "complete_onboarding",
 }
 
+# These routes still require a real practice, an in-force BAA, and an attested
+# member. Only the entitlement check is skipped so a lapsed owner can pay their
+# way back in without creating a broader practice-gate bypass.
+ENTITLEMENT_EXEMPT_ROUTE_NAMES = {
+    "create_billing_checkout",
+    "create_billing_portal",
+}
+
 ADMIN_PATH_PREFIX = "/internal/v1/admin"
 
 
 def require_practice_in_force(request: Request) -> None:
     route = request.scope.get("route")
-    if route is not None and route.name in EXEMPT_ROUTE_NAMES:
+    route_name = route.name if route is not None else None
+    if route_name in EXEMPT_ROUTE_NAMES:
         return
 
     # the internal-admin surface is Cosmaneura staff tooling: require_admin
@@ -65,6 +74,9 @@ def require_practice_in_force(request: Request) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
         )
+
+    if route_name in ENTITLEMENT_EXEMPT_ROUTE_NAMES:
+        return
 
     if not practice.entitled():
         raise HTTPException(

@@ -17,6 +17,16 @@ from tests.integration.server import (  # noqa: F401
 
 _LOCALIAS_READY = True
 _CLERK_READY = True
+_DATABASE_ONLY_FILES = {
+    (Path(__file__).resolve().parent / "stripe_billing_state_race_test.py").resolve(),
+}
+
+
+def _database_only_run(config) -> bool:
+    requested_paths = {
+        Path(str(argument).split("::", 1)[0]).resolve() for argument in config.args
+    }
+    return bool(requested_paths) and requested_paths <= _DATABASE_ONLY_FILES
 
 
 def _has_clerk_integration_prereqs() -> bool:
@@ -41,9 +51,16 @@ def _has_clerk_integration_prereqs() -> bool:
 def pytest_configure(config):
     # start JS build right away, since it takes some time. Separately, the test server will wait until the build
     # is finished to start running tests against the server.
-    start_js_build()
-
     global _LOCALIAS_READY, _CLERK_READY
+    if _database_only_run(config):
+        # These concurrency regressions need only Postgres. Keeping them free
+        # of the JS/localias/Clerk harness ensures they actually run in a
+        # focused CI or local invocation instead of becoming an infra skip.
+        _LOCALIAS_READY = True
+        _CLERK_READY = True
+        return
+
+    start_js_build()
     _LOCALIAS_READY = report_localias_status()
     _CLERK_READY = _has_clerk_integration_prereqs()
 
@@ -54,7 +71,8 @@ def pytest_collection_modifyitems(config, items):
             reason="integration tests require localalias daemon for https://*.cosma.localhost routing"
         )
         for item in items:
-            item.add_marker(skip_marker)
+            if Path(str(item.fspath)).resolve() not in _DATABASE_ONLY_FILES:
+                item.add_marker(skip_marker)
         return
 
     if _CLERK_READY:

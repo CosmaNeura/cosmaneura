@@ -212,6 +212,19 @@ celery_app.conf.beat_schedule = {
         "task": "app.jobs.transcript_cleanup.perform",
         "schedule": crontab(minute="0", hour="3"),
     },
+    # Membership joins never fail because Stripe is temporarily unavailable.
+    # Their desired paid quantity is persisted on the practice, and this sweep
+    # repairs any drift until Stripe confirms it.
+    "stripe_quantity_reconciliation": {
+        "task": "app.jobs.stripe_billing.perform",
+        "schedule": crontab(minute="*/15"),
+    },
+    # Webhooks return only after a signed event is committed to the DB inbox.
+    # This sweep recovers broker publish failures and worker crashes quickly.
+    "stripe_event_inbox_reconciliation": {
+        "task": "app.jobs.stripe_events.perform",
+        "schedule": crontab(minute="*"),
+    },
 }
 
 # Import crontab at the top of the file

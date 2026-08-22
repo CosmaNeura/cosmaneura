@@ -12,7 +12,16 @@ export type PracticeStatus = {
   attested: boolean
   trial_ends_at: string | null
   billing_exempt: boolean
+  billing_exempt_until: string | null
+  billing_exempt_active: boolean
+  billing_enabled: boolean
+  billing_management_enabled: boolean
+  billing_portal_available: boolean
+  billing_checkout_resumable: boolean
+  billing_subscription_manageable: boolean
+  billing_checkout_available_at: string | null
   entitled: boolean
+  subscription_status: string | null
 }
 
 export type JoinMismatch = {
@@ -158,4 +167,23 @@ export function getBaaCurrent() {
 
 export function getBaaAcceptances() {
   return practiceRequest<BaaAcceptanceRecord[]>("/practice/baa/acceptances")
+}
+
+// Both billing endpoints return a Stripe-hosted URL to send the browser to.
+// They stay reachable after the trial lapses (the 402 gate exempts them).
+export function createBillingCheckout() {
+  return practiceRequest<{ url: string }>("/practice/billing/checkout", {
+    method: "POST",
+    body: JSON.stringify({
+      success_path: "/settings?billing=success",
+      cancel_path: "/settings?billing=cancelled",
+    }),
+  })
+}
+
+export function createBillingPortal() {
+  return practiceRequest<{ url: string }>("/practice/billing/portal", {
+    method: "POST",
+    body: JSON.stringify({ return_path: "/settings" }),
+  })
 }

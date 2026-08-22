@@ -30,7 +30,9 @@ from pathlib import Path
 import pytest
 from pytest import Config, FixtureRequest
 from activemodel.pytest import database_reset_transaction, database_reset_truncate
+from activemodel.session_manager import SessionManager
 from decouple import config as decouple_config
+from sqlalchemy import text
 
 from app.configuration.database import run_migrations
 
@@ -38,6 +40,41 @@ from .constants import TEST_RESULTS_DIRECTORY
 from .utils import delete_stale_clerk_test_users
 from .seeds import seed_test_data
 from .log import log
+
+
+_APPEND_ONLY_TEST_TRIGGERS = {
+    "baa_acceptance": "baa_acceptance_reject_mutation",
+    "practice_access_audit": "practice_access_audit_reject_mutation",
+}
+
+
+def database_reset_truncate_for_tests() -> None:
+    """Reset fixtures without weakening production append-only enforcement.
+
+    The application role cannot mutate legal/audit evidence. Test databases
+    are owned by the test runner, so their cleanup temporarily disables only
+    the two named mutation triggers and always restores them. This keeps the
+    real triggers enabled while every test executes, including the explicit
+    UPDATE/DELETE rejection regressions.
+    """
+
+    assert os.environ["PYTHON_ENV"] == "test"
+    engine = SessionManager.get_instance().get_engine()
+    try:
+        with engine.begin() as connection:
+            for table_name, trigger_name in _APPEND_ONLY_TEST_TRIGGERS.items():
+                connection.execute(
+                    text(
+                        f"ALTER TABLE {table_name} DISABLE TRIGGER {trigger_name}"
+                    )
+                )
+        database_reset_truncate()
+    finally:
+        with engine.begin() as connection:
+            for table_name, trigger_name in _APPEND_ONLY_TEST_TRIGGERS.items():
+                connection.execute(
+                    text(f"ALTER TABLE {table_name} ENABLE TRIGGER {trigger_name}")
+                )
 
 log.info("multiprocess start method", start_method=multiprocessing.get_start_method())
 
@@ -101,7 +138,7 @@ def pytest_sessionstart(session):
     # local test databases can drift when running pytest directly outside the full CI workflow
     run_migrations()
     # clear out any previous cruft in this DB, which is why...
-    database_reset_truncate()
+    database_reset_truncate_for_tests()
     # we reseed the database with a base set of records
     seed_test_data()
 
@@ -160,7 +197,7 @@ def datatabase_reset_transaction_for_standard_tests(request):
         # transaction truncation cannot be used with integration tests since the forked server does not retain the same
         # db connection in memory and therefore the transaction rollback does not work. To get around this, we truncate the
         # database before running any tests, although this also has the side effect of destroying any test seed data.
-        database_reset_truncate()
+        database_reset_truncate_for_tests()
 
         # truncation also destroys the migration-seeded BAA version row, which
         # the onboarding clickwrap (accept_practice_baa) needs to exist
