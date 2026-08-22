@@ -724,24 +724,34 @@ resource "azurerm_container_app_environment" "main" {
 
 
 # create a new password and sync it to 1p for the job monitoring dashboard
+#
+# Commented out to follow the azurerm_container_app "job-monitor" block below,
+# which is itself commented out: the only consumer of this password was that
+# container's FLOWER_PASSWORD env var. Staging no longer deploys a job monitor,
+# so this generated a credential for a login page that does not exist.
+#
+# ⚠️ The next `tofu apply` against infra-staging will show this as a DESTROY of
+# the "Staging Job Monitor Flower Login" item in the staging 1Password vault.
+# That is intended — but eyeball the plan, since 1Password deletions are not
+# something Terraform can hand back.
+#
+# resource "onepassword_item" "job_monitor_login" {
+  # vault = data.external.secrets.result["OP_STAGING_VAULT_UID"]
 
-resource "onepassword_item" "job_monitor_login" {
-  vault = data.external.secrets.result["OP_STAGING_VAULT_UID"]
+  # title    = "${local.environment} Job Monitor Flower Login"
+  # category = "login"
 
-  title    = "${local.environment} Job Monitor Flower Login"
-  category = "login"
+  # # TODO can't do this because of a circular dependency
+  # # url = azurerm_container_app.job-monitor.ingress[0].fqdn
+  # url = "cosmaneura-staging-app-jmon.lemonsmoke-1009414c.northcentralus.azurecontainerapps.io"
 
-  # TODO can't do this because of a circular dependency
-  # url = azurerm_container_app.job-monitor.ingress[0].fqdn
-  url = "cosmaneura-staging-app-jmon.lemonsmoke-1009414c.northcentralus.azurecontainerapps.io"
+  # password_recipe {
+    # length  = 30
+    # symbols = false
+  # }
 
-  password_recipe {
-    length  = 30
-    symbols = false
-  }
-
-  tags = var.onepassword_tags
-}
+  # tags = var.onepassword_tags
+# }
 
 resource "onepassword_item" "session_secret" {
   vault = data.external.secrets.result["OP_STAGING_VAULT_UID"]

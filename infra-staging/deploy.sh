@@ -20,7 +20,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCE_GROUP="cosmaneura-staging"
 ENVIRONMENT_NAME="cosmaneura-staging-app-environment"
 MIGRATION_JOB="cosmaneura-staging-migrate"
-CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker cosmaneura-staging-app-jmon"
+# Containers whose health gates the deploy: if one of these does not come up,
+# staging is genuinely broken and the deploy must fail.
+CRITICAL_CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker"
+
+# Auxiliary containers: still deployed and still checked, but a failure is
+# reported instead of fatal. Empty on purpose — see below.
+#
+# staging used to deploy cosmaneura-staging-app-jmon (Flower, the Celery
+# job-monitor UI) here. It was removed rather than merely demoted, because its
+# health check could never have passed: the azurerm_container_app "job-monitor"
+# block in main.tf is entirely commented out, FLOWER_PORT included, so Flower
+# has nothing to bind to. The container that still answers in Azure is drift —
+# Terraform does not manage it. Deploying it meant pushing an image to an
+# unmanaged container and then waiting on a probe with no possible outcome.
+#
+# Production is unaffected: infra/ still deploys its own jmon, and that one is
+# configured.
+AUXILIARY_CONTAINERS=""
 API_CONTAINER="cosmaneura-staging-app"
 GRANT_SECRET_ENV_NAME="SOVEREIGN_RECORD_GRANT_SECRET"
 GRANT_SECRET_RESOURCE_NAME="sovereign-record-grant-secret"
@@ -79,6 +96,17 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
+# Preserve explicit deployment controls before direnv renders the secret
+# bundle. `direnv export` emits a delta, so values inherited unchanged by the
+# rendered environment are intentionally absent from its JSON output.
+ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-false}"
+ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"
+
+if [[ "$ENABLE_PROVIDER_V7" != "true" && "$ENABLE_PROVIDER_V7" != "false" ]]; then
+	echo "ENABLE_PROVIDER_V7 must be true or false."
+	exit 1
+fi
+
 # Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
 # Must stay in sync with variables.tf python_secret_vars / python_public_vars.
 if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
@@ -86,9 +114,19 @@ if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend);
 	exit 1
 fi
 
-ENABLE_SOVEREIGN_RECORD_GRANTS=$(
-	echo "$ENV_JSON" | jq -r '.ENABLE_SOVEREIGN_RECORD_GRANTS // "false"'
-)
+# The preserved control may be absent from direnv's delta when it is inherited.
+# Reconcile the two runtime gates explicitly so a true staging activation can
+# neither be lost nor split into a partially enabled backend.
+if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
+	--arg enabled "$ENABLE_PROVIDER_V7" \
+	'. + {
+		AUTHORITY_KERNEL_ENABLED: $enabled,
+		AGENT_API_ENABLED: $enabled
+	}'); then
+	echo "Failed to reconcile provider V7 staging configuration."
+	exit 1
+fi
+
 if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" && \
 	"$ENABLE_SOVEREIGN_RECORD_GRANTS" != "false" ]]; then
 	echo "ENABLE_SOVEREIGN_RECORD_GRANTS must be true or false."
@@ -129,6 +167,9 @@ PUBLIC_VARS=(
 	COOKIE_DOMAIN
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID
+	AGENT_API_ENABLED AGENT_API_AUDIENCE AGENT_API_SOVEREIGN_CLIENT_IDS
+	AUTHORITY_KERNEL_ENABLED AUTHORITY_CLERK_ISSUER MOUNT_CONTEXT_TOKEN_TTL_SECONDS
+	MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS
 )
 
 run_migrations() {
@@ -310,11 +351,13 @@ remove_disabled_record_grant_secret() {
 check_deployment() {
 	local container_name=$1
 	local git_sha=$2
+	# Optional: auxiliary containers pass a smaller budget. Waiting the full five
+	# minutes on a container that cannot fail the deploy only slows every deploy.
+	local max_attempts=${3:-60} # default 60 * 5s = 5 minutes
 	local expected_image="${STAGING_IMAGE}:${git_sha}"
 
 	# Initialize backoff variables
 	local attempts=0
-	local max_attempts=60 # 5 minutes / 5 seconds = 60 attempts
 
 	echo "Checking deployment status for $container_name..."
 
@@ -356,17 +399,31 @@ if [[ $? -ne 0 ]]; then
 	exit 1
 fi
 
-# Deploy all containers first
-for container in $CONTAINERS; do
+# Deploy the containers that gate the release first — a failure to even start
+# one of these is fatal.
+for container in $CRITICAL_CONTAINERS; do
 	initiate_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
-		echo "Deployment initiation failed. Exiting."
+		echo "Deployment initiation failed for $container. Exiting."
 		exit 1
 	fi
 done
 
-# Check deployment status for all containers
-for container in $CONTAINERS; do
+# Auxiliary containers: attempt the update, but never block on it. Anything that
+# fails here is skipped in the health check below, since there is nothing new to
+# check for.
+AUXILIARY_TO_CHECK=""
+for container in $AUXILIARY_CONTAINERS; do
+	initiate_deployment "$container" "$GIT_SHA"
+	if [[ $? -ne 0 ]]; then
+		echo "::warning::Could not start deployment for auxiliary container $container — skipping its health check."
+	else
+		AUXILIARY_TO_CHECK="$AUXILIARY_TO_CHECK $container"
+	fi
+done
+
+# Critical containers gate the deploy.
+for container in $CRITICAL_CONTAINERS; do
 	check_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
@@ -374,10 +431,27 @@ for container in $CONTAINERS; do
 	fi
 done
 
+# Auxiliary containers are reported, never fatal. Given a shorter budget since
+# the result cannot change the outcome.
+AUXILIARY_FAILURES=""
+for container in $AUXILIARY_TO_CHECK; do
+	check_deployment "$container" "$GIT_SHA" 12 # 12 * 5s = 1 minute
+	if [[ $? -ne 0 ]]; then
+		AUXILIARY_FAILURES="$AUXILIARY_FAILURES $container"
+	fi
+done
+
+if [[ -n "$AUXILIARY_FAILURES" ]]; then
+	# GitHub surfaces ::warning:: in the run summary, so this stays visible
+	# without turning the deploy red.
+	echo "::warning::Auxiliary container(s) did not come up:$AUXILIARY_FAILURES"
+	echo "Staging itself is healthy — these are operator tools and do not block promotion."
+fi
+
 # A false gate is a real revocation, not merely a refusal to add the key on the
 # next revision. Remove any stale app-level secret after the new revisions no
 # longer reference it.
-for container in $CONTAINERS; do
+for container in $CRITICAL_CONTAINERS $AUXILIARY_CONTAINERS; do
 	remove_disabled_record_grant_secret "$container"
 	if [[ $? -ne 0 ]]; then
 		echo "Failed to reconcile record-grant scope for $container."
@@ -385,5 +459,5 @@ for container in $CONTAINERS; do
 	fi
 done
 
-echo "All deployments are successful for Git SHA $GIT_SHA."
+echo "All critical deployments are successful for Git SHA $GIT_SHA."
 exit 0

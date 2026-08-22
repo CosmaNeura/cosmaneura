@@ -303,6 +303,22 @@
               "type": "string",
               "title": "Appointment Id"
             }
+          },
+          {
+            "name": "X-Cosmaneura-Provider-Authority",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Cosmaneura-Provider-Authority"
+            }
           }
         ],
         "responses": {
@@ -1081,6 +1097,812 @@
           }
         }
       }
+    },
+    "/internal/v1/patients/{patient_id}/medications": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication List",
+        "operationId": "medication_list",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MedicationData"
+                  },
+                  "title": "Response Medication List Internal V1 Patients  Patient Id  Medications Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Create",
+        "operationId": "medication_create",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMedication"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MedicationData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/medications/{medication_id}": {
+      "patch": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Update",
+        "operationId": "medication_update",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMedication"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MedicationData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Delete",
+        "operationId": "medication_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "medication_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Medication Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/patients/{patient_id}/medications/extract": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Extract",
+        "description": "re-run extraction on demand for a patient's appointment transcript",
+        "operationId": "medication_extract",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtractMedications"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/patients/{patient_id}/reference-resources": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Patient Reference Resources",
+        "description": "reference deep links for a patient's confirmed medications, plus the resource directory",
+        "operationId": "patient_reference_resources",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatientResourcePanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/patients/{patient_id}/medications/drug-reference": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Drug Reference",
+        "description": "cached openFDA label sections for the patient's confirmed drugs (not supplements)",
+        "operationId": "medication_drug_reference",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrugReferencePanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/patients/{patient_id}/medications/nutrient-depletions": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Medication Nutrient Depletions",
+        "description": "curated, citation-backed nutrient depletions for the patient's confirmed drugs",
+        "operationId": "medication_nutrient_depletions",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NutrientDepletionPanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/patients/{patient_id}/lab-panels": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Panel List",
+        "operationId": "lab_panel_list",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LabPanelData"
+                  },
+                  "title": "Response Lab Panel List Internal V1 Patients  Patient Id  Lab Panels Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Panel Create",
+        "operationId": "lab_panel_create",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLabPanel"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPanelData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/lab-panels/get-signed-url": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Signed Lab Upload Url",
+        "operationId": "generate_signed_lab_upload_url",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "title": "Response Generate Signed Lab Upload Url Internal V1 Lab Panels Get Signed Url Post"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/patients/{patient_id}/lab-panels/upload-complete": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Panel Upload Complete",
+        "operationId": "lab_panel_upload_complete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabUploadComplete"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabPanelData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/lab-panels/{lab_panel_id}": {
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Panel Delete",
+        "operationId": "lab_panel_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "lab_panel_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Lab Panel Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/patients/{patient_id}/lab-evaluations": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Evaluations",
+        "description": "latest value per biomarker, classified against the effective dual range",
+        "operationId": "lab_evaluations",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "patient_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Patient Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabEvaluationPanel"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/lab-ranges": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Range List",
+        "description": "effective ranges (defaults merged with this doctor's overrides) for all biomarkers",
+        "operationId": "lab_range_list",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LabRangeData"
+                  },
+                  "type": "array",
+                  "title": "Response Lab Range List Internal V1 Lab Ranges Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/lab-ranges/{biomarker}": {
+      "put": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Range Upsert",
+        "operationId": "lab_range_upsert",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "biomarker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Biomarker"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateLabRange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabRangeData"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Lab Range Reset",
+        "description": "remove the provider override, reverting to the platform default",
+        "operationId": "lab_range_reset",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "biomarker",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Biomarker"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1470,6 +2292,71 @@
         ],
         "title": "ConfidenceBand"
       },
+      "CreateLabPanel": {
+        "properties": {
+          "collected_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected On"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ManualLabResult"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Results"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "results"
+        ],
+        "title": "CreateLabPanel"
+      },
+      "CreateMedication": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MedicationKind",
+            "default": "unknown"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MedicationStatus",
+            "default": "active"
+          },
+          "dosage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "CreateMedication"
+      },
       "CreatePracticeBody": {
         "properties": {
           "legal_name": {
@@ -1673,6 +2560,68 @@
           "last_note_at"
         ],
         "title": "DoctorUsageRow"
+      },
+      "DrugReferencePanel": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationDrugReference"
+            },
+            "type": "array",
+            "title": "Medications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source",
+          "medications"
+        ],
+        "title": "DrugReferencePanel"
+      },
+      "DrugReferenceSection": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "text"
+        ],
+        "title": "DrugReferenceSection"
       },
       "EngagementRole": {
         "properties": {
@@ -1929,6 +2878,20 @@
           "additional_info"
         ],
         "title": "ExternalIntakeData"
+      },
+      "ExtractMedications": {
+        "properties": {
+          "appointment_id": {
+            "type": "string",
+            "title": "Appointment Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment_id"
+        ],
+        "title": "ExtractMedications"
       },
       "HTTPValidationError": {
         "properties": {
@@ -2218,6 +3181,594 @@
         ],
         "title": "JoinPracticeBody"
       },
+      "LabEvaluationEntry": {
+        "properties": {
+          "biomarker": {
+            "type": "string",
+            "title": "Biomarker"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "collected_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected On"
+          },
+          "classification": {
+            "type": "string",
+            "title": "Classification"
+          },
+          "standard_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard Low"
+          },
+          "standard_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard High"
+          },
+          "optimal_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal Low"
+          },
+          "optimal_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal High"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "biomarker",
+          "display_name",
+          "value",
+          "unit",
+          "collected_on",
+          "classification",
+          "standard_low",
+          "standard_high",
+          "optimal_low",
+          "optimal_high",
+          "source_url"
+        ],
+        "title": "LabEvaluationEntry"
+      },
+      "LabEvaluationPanel": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/LabEvaluationEntry"
+            },
+            "type": "array",
+            "title": "Entries"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "entries"
+        ],
+        "title": "LabEvaluationPanel"
+      },
+      "LabPanelData": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source": {
+            "$ref": "#/components/schemas/LabPanelSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LabPanelStatus"
+          },
+          "collected_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected On"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/LabResultData"
+            },
+            "type": "array",
+            "title": "Results"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "source",
+          "status",
+          "collected_on",
+          "created_at",
+          "results"
+        ],
+        "title": "LabPanelData"
+      },
+      "LabPanelSource": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "upload"
+        ],
+        "title": "LabPanelSource"
+      },
+      "LabPanelStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "completed",
+          "failed"
+        ],
+        "title": "LabPanelStatus"
+      },
+      "LabRangeData": {
+        "properties": {
+          "biomarker": {
+            "type": "string",
+            "title": "Biomarker"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "standard_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard Low"
+          },
+          "standard_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard High"
+          },
+          "optimal_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal Low"
+          },
+          "optimal_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal High"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "is_override": {
+            "type": "boolean",
+            "title": "Is Override"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "biomarker",
+          "display_name",
+          "unit",
+          "standard_low",
+          "standard_high",
+          "optimal_low",
+          "optimal_high",
+          "source_url",
+          "is_override"
+        ],
+        "title": "LabRangeData"
+      },
+      "LabResultData": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "biomarker": {
+            "type": "string",
+            "title": "Biomarker"
+          },
+          "raw_name": {
+            "type": "string",
+            "title": "Raw Name"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "biomarker",
+          "raw_name",
+          "value",
+          "unit"
+        ],
+        "title": "LabResultData"
+      },
+      "LabUploadComplete": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "title": "File Name"
+          },
+          "collected_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Collected On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file_name"
+        ],
+        "title": "LabUploadComplete"
+      },
+      "ManualLabResult": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "value"
+        ],
+        "title": "ManualLabResult"
+      },
+      "MedicationData": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "normalized_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Normalized Name"
+          },
+          "rxnorm_cui": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rxnorm Cui"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MedicationKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MedicationStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/MedicationSource"
+          },
+          "dosage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage"
+          },
+          "confirmed": {
+            "type": "boolean",
+            "title": "Confirmed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "display_name",
+          "normalized_name",
+          "rxnorm_cui",
+          "kind",
+          "status",
+          "source",
+          "dosage",
+          "confirmed"
+        ],
+        "title": "MedicationData"
+      },
+      "MedicationDepletions": {
+        "properties": {
+          "medication_id": {
+            "type": "string",
+            "title": "Medication Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "depletions": {
+            "items": {
+              "$ref": "#/components/schemas/NutrientDepletionEntry"
+            },
+            "type": "array",
+            "title": "Depletions"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "medication_id",
+          "name",
+          "depletions"
+        ],
+        "title": "MedicationDepletions"
+      },
+      "MedicationDrugReference": {
+        "properties": {
+          "medication_id": {
+            "type": "string",
+            "title": "Medication Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "sections": {
+            "items": {
+              "$ref": "#/components/schemas/DrugReferenceSection"
+            },
+            "type": "array",
+            "title": "Sections"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "medication_id",
+          "name",
+          "status",
+          "sections"
+        ],
+        "title": "MedicationDrugReference"
+      },
+      "MedicationKind": {
+        "type": "string",
+        "enum": [
+          "prescription",
+          "otc",
+          "supplement",
+          "unknown"
+        ],
+        "title": "MedicationKind"
+      },
+      "MedicationResources": {
+        "properties": {
+          "medication": {
+            "$ref": "#/components/schemas/MedicationData"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceLink"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "medication",
+          "links"
+        ],
+        "title": "MedicationResources"
+      },
+      "MedicationSource": {
+        "type": "string",
+        "enum": [
+          "transcript",
+          "intake",
+          "manual"
+        ],
+        "title": "MedicationSource"
+      },
+      "MedicationStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "stopped"
+        ],
+        "title": "MedicationStatus"
+      },
       "NoteDetail": {
         "properties": {
           "appointment": {
@@ -2342,6 +3893,75 @@
         ],
         "title": "NotetakingData"
       },
+      "NutrientDepletionCitation": {
+        "properties": {
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reference",
+          "url"
+        ],
+        "title": "NutrientDepletionCitation"
+      },
+      "NutrientDepletionEntry": {
+        "properties": {
+          "nutrient": {
+            "type": "string",
+            "title": "Nutrient"
+          },
+          "evidence": {
+            "type": "string",
+            "title": "Evidence"
+          },
+          "mechanism": {
+            "type": "string",
+            "title": "Mechanism"
+          },
+          "citation": {
+            "$ref": "#/components/schemas/NutrientDepletionCitation"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "nutrient",
+          "evidence",
+          "mechanism",
+          "citation"
+        ],
+        "title": "NutrientDepletionEntry"
+      },
+      "NutrientDepletionPanel": {
+        "properties": {
+          "disclaimer": {
+            "type": "string",
+            "title": "Disclaimer"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationDepletions"
+            },
+            "type": "array",
+            "title": "Medications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "disclaimer",
+          "medications"
+        ],
+        "title": "NutrientDepletionPanel"
+      },
       "OpenSandboxRecord": {
         "properties": {
           "record_ref": {
@@ -2415,6 +4035,36 @@
         ],
         "title": "Patient",
         "description": "Represents a patient in the system. This to simply help a doctor to find a transcript or intake.\n\nThis is not perfect:\n\n- Doctors will end up having patients with the same name\n- Patient name could be entered in multiple different ways\n\nFixing this is left as an exercise to the reader."
+      },
+      "PatientResourcePanel": {
+        "properties": {
+          "has_natmed_subscription": {
+            "type": "boolean",
+            "title": "Has Natmed Subscription"
+          },
+          "directory": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceLink"
+            },
+            "type": "array",
+            "title": "Directory"
+          },
+          "medications": {
+            "items": {
+              "$ref": "#/components/schemas/MedicationResources"
+            },
+            "type": "array",
+            "title": "Medications"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "has_natmed_subscription",
+          "directory",
+          "medications"
+        ],
+        "title": "PatientResourcePanel"
       },
       "PendingUploadRow": {
         "properties": {
@@ -2635,6 +4285,35 @@
         ],
         "title": "RecentAppointmentRow"
       },
+      "ResourceLink": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "requires_subscription": {
+            "type": "boolean",
+            "title": "Requires Subscription",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "label",
+          "url",
+          "source"
+        ],
+        "title": "ResourceLink"
+      },
       "ScheduleResponse": {
         "properties": {
           "zoom_connected": {
@@ -2719,6 +4398,10 @@
             "type": "array",
             "title": "Note Customizations"
           },
+          "has_natmed_subscription": {
+            "type": "boolean",
+            "title": "Has Natmed Subscription"
+          },
           "terminology": {
             "$ref": "#/components/schemas/Terminology"
           }
@@ -2736,6 +4419,7 @@
           "practice_ready",
           "is_admin",
           "note_customizations",
+          "has_natmed_subscription",
           "terminology"
         ],
         "title": "SettingsData"
@@ -2848,6 +4532,144 @@
         ],
         "title": "TranscriptEntry"
       },
+      "UpdateLabRange": {
+        "properties": {
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "standard_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard Low"
+          },
+          "standard_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard High"
+          },
+          "optimal_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal Low"
+          },
+          "optimal_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Optimal High"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateLabRange"
+      },
+      "UpdateMedication": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MedicationKind"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MedicationStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dosage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dosage"
+          },
+          "confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confirmed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "UpdateMedication"
+      },
       "UpdateNoteTypeCustomization": {
         "properties": {
           "subjective_source": {
@@ -2906,6 +4728,17 @@
               }
             ],
             "title": "Biography"
+          },
+          "has_natmed_subscription": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Has Natmed Subscription"
           },
           "terminology": {
             "anyOf": [

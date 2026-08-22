@@ -67,6 +67,11 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert api_only.count(GRANT_SECRET) == 1
 
     deploy = _read("infra-staging/deploy.sh")
+    control_default = (
+        'ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"'
+    )
+    assert deploy.index(control_default) < deploy.index("if ! ENV_JSON=")
+    assert ".ENABLE_SOVEREIGN_RECORD_GRANTS" not in deploy
     assert GRANT_SECRET not in _shell_array(deploy, "COMMON_SECRET_VARS")
     assert _shell_array(deploy, "API_ONLY_SECRET_VARS").count(GRANT_SECRET) == 1
     assert 'API_CONTAINER="cosmaneura-staging-app"' in deploy
@@ -149,3 +154,19 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     documentation = _read("infra/README.md")
     assert "Wait for **Terraform Apply**" in documentation
     assert "`terraform_apply_run_id`" in documentation
+
+
+def test_terraform_plan_installs_only_required_host_package() -> None:
+    workflow = _read(".github/workflows/infra_plan.yml")
+    setup = workflow[
+        workflow.index("      - uses: ./.github/actions/common-setup") : workflow.index(
+            "      - uses: azure/login@v3"
+        )
+    ]
+
+    assert "timeout-minutes: 5" in setup
+    assert "        with:" in setup
+    assert "          apt-packages: zsh" in setup
+    assert "libnss3-tools" not in setup
+    assert "poppler-utils" not in setup
+    assert "ffmpeg" not in setup
