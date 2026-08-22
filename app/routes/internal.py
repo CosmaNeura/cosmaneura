@@ -46,8 +46,18 @@ from app.services.biomarkers import (
 from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
+from app.services.clerk_identity import verified_primary_email
 from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
 from app.services.nutrient_depletion import depletions_for
+from app.services.organization_access import (
+    OrganizationAccessError,
+    claim_roster_access,
+    doctor_has_managed_roster_assignment,
+    find_access_opportunity,
+    lock_roster_enrollment_email,
+    member_access_in_force,
+    member_authorization_basis,
+)
 from app.services.reference_links import (
     PROVIDER_RESOURCE_DIRECTORY,
     ResourceLink,
@@ -668,7 +678,7 @@ def _practice_ready(doctor: Doctor) -> bool:
     if not member:
         return False
     practice = Practice.get(id=member.practice_id)
-    return bool(practice and practice.baa_in_force() and member.attested_at)
+    return bool(practice and practice.baa_in_force() and member_access_in_force(member))
 
 
 def _practice_payload(
@@ -676,15 +686,21 @@ def _practice_payload(
 ) -> "PracticeStatus | None":
     if not practice or not member:
         return None
+    authorization_basis = member_authorization_basis(member)
     return PracticeStatus(
         legal_name=practice.legal_name,
-        join_code=practice.join_code,
+        # Organization-managed practices use the exact roster + organization
+        # code flow. Never disclose their legacy reusable practice join code.
+        join_code=None if practice.organization_id is not None else practice.join_code,
         email_domain=practice.email_domain,
         origin_channel=practice.origin_channel,
         pastoral_pack=practice.pastoral_pack,
         baa_accepted=practice.baa_in_force(),
         role=member.role,
         attested=member.attested_at is not None,
+        access_authorized=authorization_basis is not None,
+        authorization_basis=authorization_basis,
+        access_revoked=member.access_revoked_at is not None,
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
         billing_exempt_until=practice.billing_exempt_until,
@@ -707,13 +723,16 @@ def _practice_payload(
 
 class PracticeStatus(BaseModel, extra="forbid"):
     legal_name: str
-    join_code: str
+    join_code: str | None
     email_domain: str
     origin_channel: str
     pastoral_pack: bool
     baa_accepted: bool
     role: str
     attested: bool
+    access_authorized: bool
+    authorization_basis: str | None
+    access_revoked: bool
     trial_ends_at: datetime | None
     billing_exempt: bool
     billing_exempt_until: datetime | None
@@ -749,6 +768,106 @@ def practice_status(request: Request) -> PracticeStatus | None:
     return _practice_payload(practice, member)
 
 
+class OrganizationAccessOpportunityResponse(BaseModel, extra="forbid"):
+    organization_name: str
+    email_domain: str
+
+
+@internal_api_app.get(
+    "/practice/organization-access",
+    name="organization_access_opportunity",
+)
+def organization_access_opportunity(
+    request: Request,
+) -> OrganizationAccessOpportunityResponse | None:
+    """Return an exact-roster opportunity without disclosing its access code."""
+
+    doctor: Doctor = request.state.doctor
+    # Admin login-as is intentionally unsupported for self-service enrollment.
+    # The authenticated Clerk subject must be the rostered doctor.
+    if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
+        return None
+    primary_email = verified_primary_email(doctor.clerk_id)
+    if primary_email is None or primary_email != (doctor.email or "").strip().lower():
+        return None
+    opportunity = find_access_opportunity(doctor)
+    if opportunity is None:
+        return None
+    member = _membership_for(doctor)
+    if member is not None and (
+        member.access_revoked_at is not None
+        or member.practice_id != opportunity.practice.id
+        or member.organization_roster_approval_id is not None
+    ):
+        return None
+    return OrganizationAccessOpportunityResponse(
+        organization_name=opportunity.organization.legal_name,
+        email_domain=opportunity.organization.email_domain,
+    )
+
+
+class ClaimOrganizationAccessBody(BaseModel, extra="forbid"):
+    access_code: str = Field(min_length=4, max_length=32)
+
+
+def _consume_organization_access_attempt(doctor: Doctor) -> None:
+    """Bound online code guesses per authenticated account."""
+
+    key_id = hashlib.sha256(str(doctor.id).encode("ascii")).hexdigest()
+    key = f"organization-access-attempt:{key_id}"
+    redis = get_redis()
+    # MULTI/EXEC prevents a process/network failure from leaving an INCR key
+    # without a TTL. Refreshing the TTL makes this an eight-attempt sliding
+    # window and avoids a permanent lockout key.
+    pipe = redis.pipeline(transaction=True)
+    pipe.incr(key)
+    pipe.expire(key, 15 * 60)
+    attempts, _ = pipe.execute()
+    attempts = int(attempts)
+    if attempts > 8:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many organization access attempts. Try again later.",
+        )
+
+
+@internal_api_app.post(
+    "/practice/organization-access/claim",
+    name="claim_organization_access",
+)
+def claim_organization_access(
+    request: Request, data: ClaimOrganizationAccessBody
+) -> PracticeStatus:
+    """Claim exact roster access; this is not a personal BAA attestation."""
+
+    doctor: Doctor = request.state.doctor
+    if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access could not be verified.",
+        )
+    _consume_organization_access_attempt(doctor)
+    primary_email = verified_primary_email(doctor.clerk_id)
+    if primary_email is None or primary_email != (doctor.email or "").strip().lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access could not be verified.",
+        )
+    try:
+        practice, member = claim_roster_access(
+            doctor,
+            supplied_code=data.access_code,
+        )
+    except OrganizationAccessError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access could not be verified.",
+        ) from exc
+    payload = _practice_payload(practice, member)
+    assert payload
+    return payload
+
+
 class CreatePracticeBody(BaseModel, extra="forbid"):
     legal_name: str = Field(min_length=3, max_length=160)
     npi: str | None = Field(default=None, max_length=10)
@@ -769,6 +888,12 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
         assert payload
         return payload
 
+    if doctor_has_managed_roster_assignment(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account has organization-managed access. Use that enrollment path.",
+        )
+
     domain = extract_email_domain(doctor.email)
     if not domain:
         raise HTTPException(
@@ -788,29 +913,75 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
         else:
             email_domain = MCD_EMAIL_DOMAIN
 
-    join_code = _make_join_code()
-    for _ in range(5):
-        if Practice.get(join_code=join_code) is None:
-            break
-        join_code = _make_join_code()
-
     npi = "".join(ch for ch in (data.npi or "") if ch.isdigit())[:10] or None
-    practice = Practice(
-        legal_name=data.legal_name.strip(),
-        npi=npi,
-        city=(data.city or "").strip() or None,
-        region=(data.region or "").strip() or None,
-        is_solo=data.is_solo,
-        join_code=join_code,
-        email_domain=email_domain,
-        origin_channel=channel,
-        pastoral_pack=data.pastoral_pack,
-    ).save()
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role=PracticeRole.owner.value,
-    ).save()
+    normalized_email = (doctor.email or "").strip().lower()
+    with get_session() as session:
+        lock_roster_enrollment_email(session, normalized_email)
+        locked_doctor = session.exec(
+            select(Doctor).where(Doctor.id == doctor.id).with_for_update()
+        ).one()
+        if (locked_doctor.email or "").strip().lower() != normalized_email:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The account email changed during enrollment. Please retry.",
+            )
+        existing = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == locked_doctor.id)
+            .with_for_update()
+        ).one_or_none()
+        if existing is not None:
+            session.commit()
+            session.refresh(existing)
+            existing_practice = Practice.get(id=existing.practice_id)
+            payload = _practice_payload(existing_practice, existing)
+            assert payload
+            return payload
+        if doctor_has_managed_roster_assignment(
+            locked_doctor,
+            session=session,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This account has organization-managed access. "
+                    "Use that enrollment path."
+                ),
+            )
+
+        join_code = _make_join_code()
+        for _ in range(5):
+            if (
+                session.exec(
+                    select(Practice).where(Practice.join_code == join_code)
+                ).first()
+                is None
+            ):
+                break
+            join_code = _make_join_code()
+
+        practice = Practice(
+            legal_name=data.legal_name.strip(),
+            npi=npi,
+            city=(data.city or "").strip() or None,
+            region=(data.region or "").strip() or None,
+            is_solo=data.is_solo,
+            join_code=join_code,
+            email_domain=email_domain,
+            origin_channel=channel,
+            pastoral_pack=data.pastoral_pack,
+        )
+        session.add(practice)
+        session.flush()
+        member = PracticeMember(
+            practice_id=practice.id,
+            doctor_id=locked_doctor.id,
+            role=PracticeRole.owner.value,
+        )
+        session.add(member)
+        session.commit()
+        session.refresh(practice)
+        session.refresh(member)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -870,6 +1041,14 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         practice = session.exec(
             select(Practice).where(Practice.id == member.practice_id).with_for_update()
         ).one()
+        if practice.organization_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This organization-managed practice uses its negotiated BAA; "
+                    "personal clickwrap acceptance is unavailable."
+                ),
+            )
         locked_member = session.exec(
             select(PracticeMember).where(PracticeMember.id == member.id)
         ).one()
@@ -966,9 +1145,11 @@ class JoinCodeBody(BaseModel, extra="forbid"):
 @internal_api_app.post("/practice/lookup", name="lookup_practice")
 def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
     doctor: Doctor = request.state.doctor
+    if doctor_has_managed_roster_assignment(doctor):
+        return PracticeLookupResult()
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
-    if not practice:
+    if not practice or practice.organization_id is not None:
         return PracticeLookupResult()
     if not email_matches_domain(doctor.email, practice.email_domain):
         return PracticeLookupResult(
@@ -988,6 +1169,9 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             baa_accepted=practice.baa_in_force(),
             role=PracticeRole.workforce.value,
             attested=False,
+            access_authorized=False,
+            authorization_basis=None,
+            access_revoked=False,
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,
             billing_exempt_until=practice.billing_exempt_until,
@@ -1032,33 +1216,93 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
+    if doctor_has_managed_roster_assignment(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account has organization-managed access. Use that enrollment path.",
+        )
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
-    if not practice:
+    if not practice or practice.organization_id is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No practice matches that join code.",
         )
-    if not email_matches_domain(doctor.email, practice.email_domain):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"{practice.legal_name} is for @{practice.email_domain} inboxes. "
-                "Start your own Cosmas practice instead."
-            ),
+    with get_session() as session:
+        # Serialize against organization conversion. A lookup that began while
+        # this was a standalone practice must not complete a legacy join after
+        # the practice becomes roster-managed.
+        locked_practice = session.exec(
+            select(Practice).where(Practice.id == practice.id).with_for_update()
+        ).one()
+        normalized_email = (doctor.email or "").strip().lower()
+        lock_roster_enrollment_email(session, normalized_email)
+        locked_doctor = session.exec(
+            select(Doctor).where(Doctor.id == doctor.id).with_for_update()
+        ).one()
+        if (locked_doctor.email or "").strip().lower() != normalized_email:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The account email changed during enrollment. Please retry.",
+            )
+        if doctor_has_managed_roster_assignment(
+            locked_doctor,
+            session=session,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This account has organization-managed access. "
+                    "Use that enrollment path."
+                ),
+            )
+        existing = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == locked_doctor.id)
+            .with_for_update()
+        ).one_or_none()
+        if existing is not None:
+            session.commit()
+            session.refresh(existing)
+            existing_practice = (
+                locked_practice
+                if existing.practice_id == locked_practice.id
+                else Practice.get(id=existing.practice_id)
+            )
+            payload = _practice_payload(existing_practice, existing)
+            assert payload
+            return payload
+        if locked_practice.organization_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No practice matches that join code.",
+            )
+        if not email_matches_domain(locked_doctor.email, locked_practice.email_domain):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"{locked_practice.legal_name} is for "
+                    f"@{locked_practice.email_domain} inboxes. "
+                    "Start your own Cosmas practice instead."
+                ),
+            )
+        if not locked_practice.baa_in_force():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
+            )
+        member = PracticeMember(
+            practice_id=locked_practice.id,
+            doctor_id=locked_doctor.id,
+            role=PracticeRole.workforce.value,
+            attested_at=datetime.now(timezone.utc),
+            attestation_name=data.attestation_name.strip(),
         )
-    if not practice.baa_in_force():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
-        )
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role=PracticeRole.workforce.value,
-        attested_at=datetime.now(timezone.utc),
-        attestation_name=data.attestation_name.strip(),
-    ).save()
+        session.add(member)
+        session.commit()
+        session.refresh(locked_practice)
+        session.refresh(member)
+        practice = locked_practice
     # Persist the desired $89/clinician quantity and return immediately. The
     # 15-minute reconciler performs all Stripe I/O; onboarding must never wait
     # through multiple external 20-second timeouts.
@@ -1076,7 +1320,11 @@ def complete_onboarding(request: Request) -> None:
     member = _membership_for(doctor)
     if member:
         practice = Practice.get(id=member.practice_id)
-        if not practice or not practice.baa_in_force() or not member.attested_at:
+        if (
+            not practice
+            or not practice.baa_in_force()
+            or not member_access_in_force(member)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",

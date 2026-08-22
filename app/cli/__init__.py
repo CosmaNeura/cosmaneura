@@ -574,6 +574,10 @@ def set_negotiated_baa(
     reference: str = typer.Option(
         ..., help="Document reference for the countersigned instrument."
     ),
+    document_sha256: str | None = typer.Option(
+        None,
+        help="SHA-256 of the signed file (recommended; the file itself stays private).",
+    ),
     effective: str | None = typer.Option(
         None, help="Effective date (YYYY-MM-DD, UTC). Defaults to today."
     ),
@@ -602,6 +606,7 @@ def set_negotiated_baa(
                 operator_ref=operator_ref,
                 reason=reason,
                 document_reference=reference,
+                document_sha256=document_sha256,
                 effective_at=effective_at,
             )
         except PracticeAccessChangeError as exc:
@@ -611,6 +616,539 @@ def set_negotiated_baa(
             f" ({practice.negotiated_baa_reference},"
             f" effective {practice.negotiated_baa_effective_date:%Y-%m-%d},"
             f" audit={audit.id})"
+        )
+
+
+def _practice_by_id(practice_id: str):
+    from app.models.practice import Practice
+
+    practice = Practice.get(id=_typeid(practice_id, "practice"))
+    if practice is None:
+        typer.echo("No practice has the supplied id.", err=True)
+        raise typer.Exit(1)
+    return practice
+
+
+def _doctor_by_id(doctor_id: str):
+    from app.models.doctor import Doctor
+
+    doctor = Doctor.get(id=_typeid(doctor_id, "doctor"))
+    if doctor is None:
+        typer.echo("No doctor has the supplied id.", err=True)
+        raise typer.Exit(1)
+    return doctor
+
+
+def _organization_by_slug(slug: str):
+    from app.models.organization_access import ProviderOrganization
+
+    organization = ProviderOrganization.get(slug=slug.strip().lower())
+    if organization is None:
+        typer.echo("No organization has the supplied slug.", err=True)
+        raise typer.Exit(1)
+    return organization
+
+
+def _validate_operator_change(operator_ref: str, reason: str) -> None:
+    if not operator_ref.strip() or len(operator_ref.strip()) > 255:
+        raise typer.BadParameter("operator-ref must contain 1 to 255 characters")
+    if not reason.strip() or len(reason.strip()) > 512:
+        raise typer.BadParameter("reason must contain 1 to 512 characters")
+
+
+def _write_new_private_secret(path_value: str, secret: str) -> None:
+    """Create a new 0600 file without following links or overwriting data."""
+
+    import os
+    from pathlib import Path
+
+    path = Path(path_value)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise typer.BadParameter(
+            "access-code-output must name a new writable file"
+        ) from exc
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, f"{secret}\n".encode("ascii"))
+        os.fsync(descriptor)
+    except Exception:
+        os.close(descriptor)
+        path.unlink(missing_ok=True)
+        raise
+    else:
+        os.close(descriptor)
+
+
+@app.command("configure-provider-organization")
+def configure_provider_organization_command(
+    practice_id: str = typer.Option(..., help="Stable target practice TypeID."),
+    legal_name: str = typer.Option(..., help="Organization's legal name."),
+    slug: str = typer.Option(..., help="Stable lowercase organization slug."),
+    email_domain: str = typer.Option(..., help="Exact approved email domain."),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged change."),
+    access_code_output: str | None = typer.Option(
+        None,
+        help="New 0600 file that receives the one-time code; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the planned change."),
+) -> None:
+    """Configure one provider organization; dry-run unless --apply is supplied."""
+
+    from app.services.organization_access import (
+        OrganizationAccessError,
+        configure_provider_organization,
+    )
+
+    from app.models.organization_access import ProviderOrganization
+
+    normalized_name = legal_name.strip()
+    normalized_slug = slug.strip().lower()
+    normalized_domain = email_domain.strip().lower().lstrip("@")
+    _validate_operator_change(operator_ref, reason)
+    with global_session():
+        practice = _practice_by_id(practice_id)
+        if not normalized_name or len(normalized_name) > 160:
+            raise typer.BadParameter("legal-name must contain 1 to 160 characters")
+        if (
+            not normalized_slug
+            or len(normalized_slug) > 64
+            or any(
+                char not in "abcdefghijklmnopqrstuvwxyz0123456789-"
+                for char in normalized_slug
+            )
+        ):
+            raise typer.BadParameter(
+                "slug must be 1 to 64 lowercase letters, numbers, or hyphens"
+            )
+        if not normalized_domain or len(normalized_domain) > 253:
+            raise typer.BadParameter("email-domain must contain 1 to 253 characters")
+        if normalized_domain != practice.email_domain.strip().lower():
+            raise typer.BadParameter(
+                "email-domain must exactly match the target practice domain"
+            )
+        if practice.organization_id is not None:
+            raise typer.BadParameter("practice is already linked to an organization")
+        if ProviderOrganization.get(slug=normalized_slug) is not None:
+            raise typer.BadParameter("organization slug is already in use")
+        if ProviderOrganization.get(email_domain=normalized_domain) is not None:
+            raise typer.BadParameter("organization email domain is already in use")
+        if not practice.negotiated_baa_in_force():
+            raise typer.BadParameter("an in-force negotiated BAA is required")
+        if not practice.billing_exemption_active():
+            raise typer.BadParameter("an active billing exemption is required")
+        if practice.stripe_checkout_session_id is not None:
+            raise typer.BadParameter(
+                "an existing Stripe checkout must be resolved before organization setup"
+            )
+        from app.services import stripe_billing
+
+        if stripe_billing.has_nonterminal_subscription(practice):
+            raise typer.BadParameter(
+                "an existing Stripe subscription must be resolved before organization setup"
+            )
+
+        if not apply:
+            typer.echo(
+                "DRY RUN: provider organization can be configured "
+                f"for practice_id={practice.id}; no access code was generated."
+            )
+            return
+        if not access_code_output:
+            raise typer.BadParameter("--apply requires --access-code-output")
+
+        from pathlib import Path
+
+        from app.services.organization_access import generate_access_code
+
+        access_code = generate_access_code()
+        _write_new_private_secret(access_code_output, access_code)
+        try:
+            organization, access_code, audit = configure_provider_organization(
+                practice,
+                legal_name=normalized_name,
+                slug=normalized_slug,
+                email_domain=normalized_domain,
+                operator_ref=operator_ref,
+                reason=reason,
+                access_code=access_code,
+            )
+        except Exception as exc:
+            Path(access_code_output).unlink(missing_ok=True)
+            if isinstance(exc, OrganizationAccessError):
+                raise typer.BadParameter(str(exc)) from exc
+            raise
+        typer.echo(
+            "Provider organization configured: "
+            f"organization_id={organization.id} practice_id={practice.id} "
+            f"audit={audit.id}."
+        )
+        typer.echo("One-time access code written to the private output file.")
+
+
+@app.command("rotate-organization-code")
+def rotate_organization_code_command(
+    organization_slug: str = typer.Option(..., help="Organization slug."),
+    practice_id: str = typer.Option(..., help="Stable target practice TypeID."),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged change."),
+    access_code_output: str | None = typer.Option(
+        None,
+        help="New 0600 file that receives the one-time code; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the planned rotation."),
+) -> None:
+    """Rotate an organization access code; dry-run unless --apply is supplied."""
+
+    from app.services.organization_access import (
+        OrganizationAccessError,
+        rotate_access_code,
+    )
+
+    _validate_operator_change(operator_ref, reason)
+    with global_session():
+        practice = _practice_by_id(practice_id)
+        provider_organization = _organization_by_slug(organization_slug)
+        if practice.organization_id != provider_organization.id:
+            raise typer.BadParameter(
+                "target practice is not linked to the supplied organization"
+            )
+        if not apply:
+            typer.echo(
+                "DRY RUN: organization access code can be rotated "
+                f"for organization_id={provider_organization.id}; "
+                "no access code was generated."
+            )
+            return
+        if not access_code_output:
+            raise typer.BadParameter("--apply requires --access-code-output")
+
+        from pathlib import Path
+
+        from app.services.organization_access import generate_access_code
+
+        access_code = generate_access_code()
+        _write_new_private_secret(access_code_output, access_code)
+        try:
+            access_code, audit = rotate_access_code(
+                provider_organization,
+                practice=practice,
+                operator_ref=operator_ref,
+                reason=reason,
+                access_code=access_code,
+            )
+        except Exception as exc:
+            Path(access_code_output).unlink(missing_ok=True)
+            if isinstance(exc, OrganizationAccessError):
+                raise typer.BadParameter(str(exc)) from exc
+            raise
+        typer.echo(
+            "Organization access code rotated: "
+            f"organization_id={provider_organization.id} audit={audit.id}."
+        )
+        typer.echo("One-time access code written to the private output file.")
+
+
+def _read_roster_manifest(path_value: str):
+    """Read a private JSON manifest and return entries plus its raw-file digest."""
+
+    import hashlib
+    import os
+    import stat
+    from pathlib import Path
+
+    from app.services.organization_access import (
+        OrganizationAccessError,
+        RosterApprovalInput,
+        normalize_email,
+    )
+
+    path = Path(path_value)
+    if path.is_symlink():
+        raise typer.BadParameter("manifest must not be a symbolic link")
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise typer.BadParameter("manifest could not be read") from exc
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            metadata = os.fstat(handle.fileno())
+            if not stat.S_ISREG(metadata.st_mode):
+                raise typer.BadParameter("manifest must be a regular file")
+            if metadata.st_mode & 0o077:
+                raise typer.BadParameter(
+                    "manifest must not be readable or writable by group or others "
+                    "(use chmod 600)"
+                )
+            raw = handle.read(1_048_577)
+        if len(raw) > 1_048_576:
+            raise typer.BadParameter("manifest must not exceed 1 MiB")
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter("manifest must be valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "members"}:
+        raise typer.BadParameter(
+            "manifest must contain exactly schema_version and members"
+        )
+    if payload["schema_version"] != 1 or isinstance(payload["schema_version"], bool):
+        raise typer.BadParameter("manifest schema_version must be 1")
+    members = payload["members"]
+    if not isinstance(members, list) or not members:
+        raise typer.BadParameter("manifest members must be a non-empty list")
+
+    entries = []
+    normalized_emails: set[str] = set()
+    for member in members:
+        if not isinstance(member, dict) or set(member) != {"email"}:
+            raise typer.BadParameter("each member must contain exactly email")
+        if not isinstance(member["email"], str):
+            raise typer.BadParameter("each member email must be a string")
+        try:
+            email = normalize_email(member["email"])
+        except OrganizationAccessError as exc:
+            raise typer.BadParameter("manifest contains an invalid email") from exc
+        if email in normalized_emails:
+            raise typer.BadParameter("manifest contains a duplicate email")
+        normalized_emails.add(email)
+
+        entries.append(RosterApprovalInput(email=email))
+
+    return entries, hashlib.sha256(raw).hexdigest()
+
+
+@app.command("import-organization-roster")
+def import_organization_roster_command(
+    manifest: str = typer.Option(..., help="Private schema-version-1 JSON roster."),
+    practice_id: str = typer.Option(..., help="Stable target practice TypeID."),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged change."),
+    source_ref: str = typer.Option(
+        ..., help="Stable reference for the approved roster."
+    ),
+    confirm_sha256: str | None = typer.Option(
+        None,
+        "--confirm-sha256",
+        help="Raw manifest SHA-256 printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the roster approvals."),
+) -> None:
+    """Validate or import exact-email roster approvals without printing emails."""
+
+    from app.services.organization_access import import_roster_approvals
+    from app.utils.email_domain import email_matches_domain
+
+    from app.models.organization_access import ProviderOrganization
+
+    entries, source_sha256 = _read_roster_manifest(manifest)
+    _validate_operator_change(operator_ref, reason)
+    if not source_ref.strip() or len(source_ref.strip()) > 255:
+        raise typer.BadParameter("source-ref must contain 1 to 255 characters")
+    with global_session():
+        practice = _practice_by_id(practice_id)
+        if practice.organization_id is None:
+            raise typer.BadParameter("practice is not linked to an organization")
+        organization = ProviderOrganization.get(id=practice.organization_id)
+        if organization is None or organization.status != "active":
+            raise typer.BadParameter("practice organization is not active")
+        if not practice.negotiated_baa_in_force():
+            raise typer.BadParameter("an in-force negotiated BAA is required")
+        if not practice.billing_exemption_active():
+            raise typer.BadParameter("an active billing exemption is required")
+        if any(
+            not email_matches_domain(entry.email, organization.email_domain)
+            for entry in entries
+        ):
+            raise typer.BadParameter(
+                "one or more roster emails do not match the organization domain"
+            )
+
+        if not apply:
+            typer.echo(
+                "DRY RUN: roster is valid; "
+                f"practice_id={practice.id} members={len(entries)} "
+                f"sha256={source_sha256}."
+            )
+            return
+        confirmed = (confirm_sha256 or "").strip().lower()
+        if confirmed != source_sha256:
+            raise typer.BadParameter(
+                "--apply requires --confirm-sha256 matching the dry-run digest"
+            )
+        try:
+            result = import_roster_approvals(
+                practice,
+                entries,
+                operator_ref=operator_ref,
+                reason=reason,
+                source_ref=source_ref,
+                source_sha256=source_sha256,
+            )
+        except Exception as exc:
+            # Service and database errors can include an address; do not echo them.
+            raise typer.BadParameter(
+                "roster import failed validation; no email addresses were printed"
+            ) from exc
+        typer.echo(
+            "Roster import applied: "
+            f"practice_id={practice.id} created={result.created} "
+            f"unchanged={result.unchanged} sha256={source_sha256}."
+        )
+
+
+@app.command("offboard-practice-member")
+def offboard_practice_member_command(
+    practice_id: str = typer.Option(..., help="Stable target practice TypeID."),
+    doctor_id: str = typer.Option(..., help="Stable doctor TypeID."),
+    confirm_email: str = typer.Option(
+        ..., help="Exact account email confirmation; never written to audit output."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged change."),
+    apply: bool = typer.Option(False, "--apply", help="Apply the revocation."),
+) -> None:
+    """Revoke access and retain its authorization evidence for seven years."""
+
+    from app.services.organization_access import (
+        OrganizationAccessError,
+        normalize_email,
+        offboard_member,
+    )
+
+    from app.models.practice import PracticeMember
+
+    _validate_operator_change(operator_ref, reason)
+    with global_session():
+        practice = _practice_by_id(practice_id)
+        doctor = _doctor_by_id(doctor_id)
+        try:
+            confirmed_email = normalize_email(confirm_email)
+            stored_email = normalize_email(doctor.email or "")
+        except OrganizationAccessError as exc:
+            raise typer.BadParameter("email confirmation is invalid") from exc
+        if confirmed_email != stored_email:
+            raise typer.BadParameter("email confirmation does not match the account")
+        member = PracticeMember.get(practice_id=practice.id, doctor_id=doctor.id)
+        if member is None:
+            raise typer.BadParameter("doctor is not a member of the target practice")
+        if (
+            member.access_revoked_at is not None
+            and member.access_records_retain_until is None
+        ):
+            raise typer.BadParameter("revoked member is missing its retention hold")
+
+        if not apply:
+            state = "already revoked" if member.access_revoked_at else "can be revoked"
+            typer.echo(
+                "DRY RUN: practice member "
+                f"member_id={member.id} {state}; no records will be deleted."
+            )
+            return
+        try:
+            member, retain_until, audit = offboard_member(
+                practice,
+                doctor,
+                operator_ref=operator_ref,
+                reason=reason,
+            )
+        except OrganizationAccessError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo(
+            "Practice member access revoked: "
+            f"member_id={member.id} retain_until={retain_until.isoformat()} "
+            f"audit={audit.id}; no clinical or content records were deleted."
+        )
+
+
+@app.command("revoke-organization-roster-access")
+def revoke_organization_roster_access_command(
+    practice_id: str = typer.Option(..., help="Stable target practice TypeID."),
+    approved_email: str | None = typer.Option(
+        None,
+        help=(
+            "Exact roster email. Omit this option to enter it interactively and "
+            "keep it out of shell history."
+        ),
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged revocation."),
+    apply: bool = typer.Option(False, "--apply", help="Apply the revocation."),
+) -> None:
+    """Revoke claimed or unclaimed roster access; dry-run unless --apply."""
+
+    from app.services.organization_access import (
+        OrganizationAccessError,
+        normalize_email,
+        revoke_roster_access,
+    )
+
+    from app.models.organization_access import OrganizationRosterApproval
+
+    _validate_operator_change(operator_ref, reason)
+    raw_email = approved_email or typer.prompt("Exact approved roster email")
+    try:
+        email = normalize_email(raw_email)
+    except OrganizationAccessError as exc:
+        raise typer.BadParameter("approved email is invalid") from exc
+
+    with global_session():
+        practice = _practice_by_id(practice_id)
+        if practice.organization_id is None:
+            raise typer.BadParameter("practice is not linked to an organization")
+        approvals = cast(
+            list[OrganizationRosterApproval],
+            list(
+                OrganizationRosterApproval.where(
+                    OrganizationRosterApproval.organization_id
+                    == practice.organization_id,
+                    OrganizationRosterApproval.approved_email == email,
+                ).all()
+            ),
+        )
+        if not approvals:
+            raise typer.BadParameter(
+                "no roster approval matches the target practice and email"
+            )
+        active = [approval for approval in approvals if approval.revoked_at is None]
+        target = (
+            active[0]
+            if active
+            else max(
+                approvals,
+                key=lambda row: cast(datetime, row.created_at),
+            )
+        )
+        if not apply:
+            state = (
+                "already revoked"
+                if target.revoked_at is not None
+                else "claimed"
+                if target.claimed_doctor_id is not None
+                else "unclaimed"
+            )
+            typer.echo(
+                "DRY RUN: roster approval "
+                f"approval_id={target.id} state={state}; no records will be deleted."
+            )
+            return
+        try:
+            result = revoke_roster_access(
+                practice,
+                email,
+                operator_ref=operator_ref,
+                reason=reason,
+            )
+        except OrganizationAccessError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        member_ref = str(result.member.id) if result.member is not None else "unclaimed"
+        typer.echo(
+            "Organization roster access revoked: "
+            f"approval_id={result.approval.id} member_id={member_ref} "
+            f"retain_until={result.retain_until.isoformat()} "
+            f"audit={result.audit.id}; no clinical or content records were deleted."
         )
 
 

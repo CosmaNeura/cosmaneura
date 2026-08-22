@@ -3,13 +3,16 @@ import { requireEnv } from "~/utils/environment"
 
 export type PracticeStatus = {
   legal_name: string
-  join_code: string
+  join_code: string | null
   email_domain: string
   origin_channel: string
   pastoral_pack: boolean
   baa_accepted: boolean
   role: string
   attested: boolean
+  access_authorized: boolean
+  authorization_basis: string | null
+  access_revoked: boolean
   trial_ends_at: string | null
   billing_exempt: boolean
   billing_exempt_until: string | null
@@ -33,6 +36,11 @@ export type JoinMismatch = {
 export type PracticeLookupResult = {
   practice: PracticeStatus | null
   mismatch: JoinMismatch | null
+}
+
+export type OrganizationAccessOpportunity = {
+  organization_name: string
+  email_domain: string
 }
 
 async function authHeaders(): Promise<HeadersInit> {
@@ -94,6 +102,22 @@ export function getPractice() {
   return practiceRequest<PracticeStatus | null>("/practice")
 }
 
+export function getOrganizationAccessOpportunity() {
+  return practiceRequest<OrganizationAccessOpportunity | null>(
+    "/practice/organization-access",
+  )
+}
+
+export function claimOrganizationAccess(accessCode: string) {
+  return practiceRequest<PracticeStatus>(
+    "/practice/organization-access/claim",
+    {
+      method: "POST",
+      body: JSON.stringify({ access_code: accessCode }),
+    },
+  )
+}
+
 export function createPractice(body: {
   legal_name: string
   npi?: string | null
@@ -141,7 +165,11 @@ export function joinPractice(body: {
 export function practiceReady(
   practice: PracticeStatus | null | undefined,
 ): practice is PracticeStatus {
-  return Boolean(practice?.baa_accepted && practice.attested)
+  return Boolean(
+    practice?.baa_accepted &&
+      practice.access_authorized &&
+      !practice.access_revoked,
+  )
 }
 
 export type BaaDocument = {

@@ -2,7 +2,7 @@
 
 CLAUDE_BAA_IMPLEMENTATION guardrail 5 and ARCHITECTURE.md §8: no PHI-bearing
 feature is reachable by an account without a recorded BAA acceptance for its
-practice (or the negotiated-BAA-on-file fallback), an attested membership,
+practice (or the negotiated-BAA-on-file fallback), an authorized membership,
 and entitlement (trial, subscription, or exemption — ADR 0017). Routes are
 gated by default so a future endpoint cannot ship ungated; the allowlist is
 the onboarding surface that must work before the BAA exists, and the
@@ -15,6 +15,8 @@ admin sets ``negotiated_baa_on_file``).
 """
 
 from fastapi import HTTPException, Request, status
+
+from app.services.organization_access import member_access_in_force
 
 from app.models.doctor import Doctor, DoctorRole
 from app.models.practice import Practice, PracticeMember
@@ -29,13 +31,15 @@ EXEMPT_ROUTE_NAMES = {
     "accept_practice_baa",
     "lookup_practice",
     "join_practice",
+    "organization_access_opportunity",
+    "claim_organization_access",
     "baa_current",
     "practice_baa_acceptances",
     # enforces its own practice/BAA rules
     "complete_onboarding",
 }
 
-# These routes still require a real practice, an in-force BAA, and an attested
+# These routes still require a real practice, an in-force BAA, and an authorized
 # member. Only the entitlement check is skipped so a lapsed owner can pay their
 # way back in without creating a broader practice-gate bypass.
 ENTITLEMENT_EXEMPT_ROUTE_NAMES = {
@@ -69,7 +73,11 @@ def require_practice_in_force(request: Request) -> None:
         )
 
     practice = Practice.get(id=member.practice_id)
-    if practice is None or not practice.baa_in_force() or member.attested_at is None:
+    if (
+        practice is None
+        or not practice.baa_in_force()
+        or not member_access_in_force(member)
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",

@@ -17,6 +17,9 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     baa_accepted: true,
     role: "owner",
     attested: true,
+    access_authorized: true,
+    authorization_basis: "workforce_attestation",
+    access_revoked: false,
     trial_ends_at: "2026-08-25T20:00:00Z",
     billing_exempt: false,
     billing_exempt_until: null,
@@ -176,5 +179,29 @@ describe("PracticeJoinPanel billing recovery", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("describes roster authorization without claiming personal attestation", () => {
+    render(
+      <PracticeJoinPanel
+        practice={practice({
+          role: "clinician",
+          attested: false,
+          authorization_basis: "organization_roster",
+        })}
+      />,
+    )
+
+    expect(
+      screen.getByText(
+        /access is authorized through the organization’s approved roster/i,
+      ),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/you did not personally attest/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/you attested under this practice/i),
+    ).not.toBeInTheDocument()
   })
 })

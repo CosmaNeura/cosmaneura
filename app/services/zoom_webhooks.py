@@ -103,9 +103,9 @@ def handle_meeting_started(payload: dict[str, Any]):
             .scalar_subquery()
         ).first(),
     )
-    if not doctor:
+    if not doctor or doctor.deleted_at is not None:
         log.info(
-            "no doctor found for zoom host_id, skipping session registration",
+            "no active doctor found for zoom host_id, skipping session registration",
             host_id=host_id,
         )
         return
@@ -217,9 +217,9 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         return
 
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
-    if not doctor:
+    if not doctor or doctor.deleted_at is not None:
         log.warning(
-            "cannot start appointment: doctor not found",
+            "cannot start appointment: doctor unavailable",
             doctor_id=doctor_id,
             meeting_id=meeting_id,
         )
@@ -498,6 +498,17 @@ def _resume_or_start_recording(
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
     if not bot_id:
         _start_appointment_session(meeting_id, participant_id, user_name)
+        return
+
+    doctor_id = _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+    doctor = cast(Doctor | None, Doctor.get(id=doctor_id)) if doctor_id else None
+    if doctor is None or doctor.deleted_at is not None:
+        log.warning(
+            "recording resume blocked: doctor unavailable",
+            doctor_id=doctor_id,
+            meeting_id=meeting_id,
+            bot_id=bot_id,
+        )
         return
 
     _revoke_merge_window_task(redis, meeting_id)

@@ -84,6 +84,7 @@ def record_negotiated_baa(
     operator_ref: str,
     reason: str,
     document_reference: str,
+    document_sha256: str | None = None,
     effective_at: datetime,
 ) -> PracticeAccessAudit:
     """Record a negotiated BAA and append immutable operator evidence.
@@ -95,6 +96,13 @@ def record_negotiated_baa(
     operator = _required(operator_ref, field="operator_ref", limit=255)
     explanation = _required(reason, field="reason", limit=512)
     reference = _required(document_reference, field="document_reference", limit=255)
+    digest = document_sha256.strip().lower() if document_sha256 else None
+    if digest is not None and (
+        len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest)
+    ):
+        raise PracticeAccessChangeError(
+            "document_sha256 must be a 64-character hex digest"
+        )
     if effective_at.tzinfo is None:
         raise PracticeAccessChangeError("effective_at must include a timezone")
     current = datetime.now(timezone.utc)
@@ -117,6 +125,7 @@ def record_negotiated_baa(
         reason=explanation,
         effective_at=effective_at,
         document_reference=reference,
+        evidence_sha256=digest,
     )
     with get_session() as session:
         _attach(session, practice)
