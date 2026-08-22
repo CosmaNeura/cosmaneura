@@ -1,34 +1,19 @@
-import funcy_pipe as fp
-
 from app.configuration.clerk import CLERK_PRIVATE_KEY, clerk
 from app.environments import is_testing
 
-from tests.constants import (
-    CLERK_ALL_USERS_TO_PRESERVE,
-)
+from tests.clerk_cleanup import delete_stale_test_users
 
 from .log import log
 
 
-def delete_all_clerk_users():
-    "clerk dev instances can hold a max of ~100 users, in order to avoid hitting that limit, we delete all users except for the dev users"
+def delete_stale_clerk_test_users() -> int:
+    """Delete only the narrow, verifiably test-owned ephemeral Clerk cohort."""
 
-    log.info("deleting all dev clerk users")
-
-    if not is_testing():
-        raise RuntimeError("cannot delete dev users outside of testing")
-
-    if not CLERK_PRIVATE_KEY:
-        log.info("skipping clerk user cleanup: missing clerk private key")
-        return
-
-    _deleted_users = (
-        clerk.users.list()
-        | fp.filter(
-            lambda user: (
-                user.email_addresses[0].email_address not in CLERK_ALL_USERS_TO_PRESERVE
-            )
-        )
-        | fp.pluck_attr("id")
-        | fp.lmap(lambda uid: clerk.users.delete(user_id=uid))
+    log.info("deleting stale ephemeral clerk test users")
+    count = delete_stale_test_users(
+        users_api=clerk.users,
+        secret_key=CLERK_PRIVATE_KEY,
+        test_environment=is_testing(),
     )
+    log.info("deleted stale ephemeral clerk test users", count=count)
+    return count

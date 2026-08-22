@@ -10,7 +10,12 @@ from app.commands.intake.create import AppointmentRequest
 from activemodel.pytest.factories import ActiveModelFactory
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
-from app.models.doctor import API_KEY_PREFIX, CLERK_OBJECT_PREFIX, Doctor
+from app.models.doctor import (
+    API_KEY_PREFIX,
+    CLERK_OBJECT_PREFIX,
+    Doctor,
+    Terminology,
+)
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
@@ -19,6 +24,10 @@ from app.models.patient import Patient
 
 
 class DoctorFactory(ActiveModelFactory[Doctor]):
+    # polyfactory fills enums with a random member; terminology must default
+    # to doctor/patient or "default wording" assertions become flaky
+    terminology = Terminology.doctor_patient
+
     # TODO cleanup these prefixes
     # TODO can polyfactory handle this for us?
     @classmethod

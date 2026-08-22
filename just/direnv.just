@@ -33,7 +33,9 @@ with_entries(
 	# When run on your local machine, 1p global state may be persisted elsewhere, so this would be a noop.
 	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" op daemon -d
 	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
+		ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-false}" \
 		ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}" \
+		ENABLE_STAGING_PILOT_ZOOM_SKIP="${ENABLE_STAGING_PILOT_ZOOM_SKIP:-false}" \
 		RENDER_DIRENV="{{target}}" \
 		direnv export json | jq -r '{{jq_script}}'
 
