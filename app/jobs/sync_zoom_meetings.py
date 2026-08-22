@@ -3,18 +3,36 @@ from datetime import datetime
 from app import log
 from app.celery import celery_app
 from app.services import zoom as zoom_service
+from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+
+_MAX_LOG_COUNT = 10_000
+
+
+def _bounded_count(value: int) -> int:
+    return min(value, _MAX_LOG_COUNT)
 
 
 def perform(doctor_id: str) -> None:
     """Fetch upcoming Zoom meetings for a doctor and upsert into the DB."""
     doctor = Doctor.get(id=doctor_id)
+    doctor_ref = provider_log_ref(f"doctor:{doctor_id}")
 
-    if not doctor or not zoom_service.get_zoom_integration(doctor):
+    if not doctor:
         log.info(
-            "skipping zoom sync: no doctor or zoom integration", doctor_id=doctor_id
+            "zoom meeting sync skipped",
+            event_code="zoom_sync_doctor_not_found",
+            doctor_ref=doctor_ref,
+        )
+        return
+
+    if not zoom_service.get_zoom_integration(doctor):
+        log.info(
+            "zoom meeting sync skipped",
+            event_code="zoom_sync_integration_missing",
+            doctor_ref=doctor_ref,
         )
         return
 
@@ -76,10 +94,11 @@ def perform(doctor_id: str) -> None:
 
     log.info(
         "zoom meetings synced",
-        doctor_id=doctor_id,
-        count=synced,
-        fetched=len(meetings),
-        skipped_no_start_time=skipped_no_start_time,
+        event_code="zoom_sync_completed",
+        doctor_ref=doctor_ref,
+        count=_bounded_count(synced),
+        fetched=_bounded_count(len(meetings)),
+        skipped_no_start_time=_bounded_count(skipped_no_start_time),
     )
 
 

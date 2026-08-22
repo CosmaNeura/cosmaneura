@@ -67,7 +67,7 @@ override_data {
   values = {
     result = {
       api         = "uv run uvicorn app.main:app"
-      job_monitor = "uv run celery --app app.celery flower"
+      job_monitor = "uv run celery --app app.celery flower --enable_events=False --persistent=False --tasks_columns=name,uuid,state,received,started,runtime,worker"
       scheduler   = "uv run celery --app app.celery beat"
       worker      = "uv run celery --app app.celery worker"
     }
@@ -108,21 +108,23 @@ override_data {
       POSTGRES_USERNAME                          = "placeholder"
       RECALL_API_BASE                            = "https://example.invalid"
       RECALL_API_KEY                             = "not-a-secret"
-      RECALL_WEBHOOK_SECRET                      = "not-a-secret"
-      REDIS_URL                                  = "redis://placeholder.invalid/1"
-      SCRIBE_API_AUDIENCE                        = "00000000-0000-0000-0000-000000000000"
-      SCRIBE_CALLER_CLIENT_ID                    = ""
-      SCRIBE_HANDOFF_ENABLED                     = "false"
-      SCRIBE_RECONCILER_CALLER_CLIENT_ID         = ""
-      SENTRY_DSN                                 = ""
-      SESSION_SECRET_KEY                         = "not-a-secret"
-      SMTP_URL                                   = "smtp://placeholder.invalid:1025"
-      SOVEREIGN_RECORD_GRANT_SECRET              = "not-a-secret"
-      ZOOM_CLIENT_ID                             = "not-a-secret"
-      ZOOM_CLIENT_SECRET                         = "not-a-secret"
-      ZOOM_REDIRECT_URI                          = "https://example.invalid/callback"
-      ZOOM_SECRET_TOKEN                          = "not-a-secret"
-      ZOOM_SUCCESS_REDIRECT                      = "https://example.invalid/settings"
+      # Deliberately fake, non-production key with the required Recall/Svix
+      # whsec_ + base64 syntax so the static plan exercises the shape guard.
+      RECALL_WEBHOOK_SECRET              = "whsec_c3RhdGljLXRlc3Qta2V5IQ=="
+      REDIS_URL                          = "redis://placeholder.invalid/1"
+      SCRIBE_API_AUDIENCE                = "00000000-0000-0000-0000-000000000000"
+      SCRIBE_CALLER_CLIENT_ID            = ""
+      SCRIBE_HANDOFF_ENABLED             = "false"
+      SCRIBE_RECONCILER_CALLER_CLIENT_ID = ""
+      SENTRY_DSN                         = ""
+      SESSION_SECRET_KEY                 = "not-a-secret"
+      SMTP_URL                           = "smtp://placeholder.invalid:1025"
+      SOVEREIGN_RECORD_GRANT_SECRET      = "not-a-secret"
+      ZOOM_CLIENT_ID                     = "not-a-secret"
+      ZOOM_CLIENT_SECRET                 = "not-a-secret"
+      ZOOM_REDIRECT_URI                  = "https://example.invalid/callback"
+      ZOOM_SECRET_TOKEN                  = "not-a-secret"
+      ZOOM_SUCCESS_REDIRECT              = "https://example.invalid/settings"
     }
   }
 }

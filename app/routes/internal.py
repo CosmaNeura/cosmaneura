@@ -12,6 +12,7 @@ import app.jobs.extract
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.zoom as zoom_service
+import app.services.zoom_oauth_state as zoom_oauth_state
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
 from app.services.sovereign_record_grant import (
@@ -517,10 +518,21 @@ class ZoomAuthUrlResponse(BaseModel, extra="forbid"):
 
 
 @internal_api_app.get("/zoom-auth-url", name="zoom_auth_url")
-def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
+def zoom_auth_url(request: Request, response: Response) -> ZoomAuthUrlResponse:
     doctor: Doctor = request.state.doctor
-    base = str(request.base_url).rstrip("/")
-    url = f"{base}/external/v1/zoom-oauth-start?state={doctor.clerk_id}"
+    issued = zoom_oauth_state.issue_zoom_oauth_state(str(doctor.id))
+    response.set_cookie(
+        key=zoom_oauth_state.ZOOM_OAUTH_BINDING_COOKIE,
+        value=issued.browser_binding,
+        max_age=zoom_oauth_state.ZOOM_OAUTH_STATE_TTL_SECONDS,
+        path=zoom_oauth_state.ZOOM_OAUTH_BINDING_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    url = str(
+        request.url_for("zoom_oauth_start").include_query_params(state=issued.state)
+    )
     return ZoomAuthUrlResponse(url=url)
 
 

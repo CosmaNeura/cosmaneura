@@ -30,6 +30,16 @@ RECALL_SECRET_ENV_NAME="RECALL_WEBHOOK_SECRET"
 RECALL_SECRET_RESOURCE_NAME="recall-webhook-secret"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 
+# Resolve protected configuration before invoking git, Docker, Azure, or any
+# other provider-facing subprocess. Keep the resolved JSON in this shell only,
+# then drop the ambient capabilities immediately. ENV_JSON is deliberately not
+# exported, so child processes receive only values passed to them explicitly.
+if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
+	echo "Failed to load staging deployment configuration."
+	exit 1
+fi
+unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
+
 # Check for Git SHA input and validate it exists in repo
 if [[ -z "$GIT_SHA" ]]; then
 	echo "Error: Please provide a Git SHA as an argument."
@@ -83,13 +93,6 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
-# Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
-# Must stay in sync with variables.tf python_secret_vars / python_public_vars.
-if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
-	echo "Failed to load staging deployment configuration."
-	exit 1
-fi
-
 ENABLE_SOVEREIGN_RECORD_GRANTS=$(
 	echo "$ENV_JSON" | jq -r '.ENABLE_SOVEREIGN_RECORD_GRANTS // "false"'
 )
@@ -104,11 +107,18 @@ if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
 	exit 1
 fi
 
-if ! echo "$ENV_JSON" |
-	jq -e '.RECALL_WEBHOOK_SECRET | type == "string" and length > 0' >/dev/null; then
-	echo "Staging Recall webhook signing secret is not configured."
+if ! RECALL_WEBHOOK_SECRET_INPUT=$(printf '%s' "$ENV_JSON" |
+	jq -er '.RECALL_WEBHOOK_SECRET | select(type == "string")'); then
+	echo "Staging Recall webhook signing credential is invalid."
 	exit 1
 fi
+if ! RECALL_WEBHOOK_SECRET="$RECALL_WEBHOOK_SECRET_INPUT" \
+	python "$SCRIPT_DIR/../infra/api_only_secret_live_guard.py" \
+	--validate-signing-secret-only; then
+	echo "Staging Recall webhook signing credential is invalid."
+	exit 1
+fi
+unset RECALL_WEBHOOK_SECRET_INPUT
 
 DURABLE_WEBHOOK_INBOX_ENABLED=$(
 	echo "$ENV_JSON" | jq -r '.DURABLE_WEBHOOK_INBOX_ENABLED // "false"'

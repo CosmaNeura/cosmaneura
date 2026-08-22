@@ -102,7 +102,8 @@ dev_kill:
 # Setup
 #######################
 
-# NOTE nixpacks is installed during the deployment step and not as a development prerequisite
+# NOTE CI installs a pinned, checksum-verified Nixpacks release during deployment;
+# local development still treats it as an optional prerequisite.
 BREW_PACKAGES := "fd entr 1password-cli yq jq fzf poppler ffmpeg"
 EXTRA_BREW_PACKAGES := "lefthook peterldowns/tap/localias foreman pstree"
 

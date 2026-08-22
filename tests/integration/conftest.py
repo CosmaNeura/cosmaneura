@@ -17,6 +17,15 @@ from tests.integration.server import (  # noqa: F401
 
 _LOCALIAS_READY = True
 _CLERK_READY = True
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+_CLERK_REQUIRED_FILES = frozenset(
+    {
+        Path("tests/integration/onboarding_test.py"),
+        Path("tests/integration/settings_test.py"),
+        Path("tests/integration/upload_visit_test.py"),
+        Path("tests/integration/user_creation_test.py"),
+    }
+)
 
 
 def _has_clerk_integration_prereqs() -> bool:
@@ -35,6 +44,14 @@ def _has_clerk_integration_prereqs() -> bool:
     )
 
     return bool(frontend_api_url and has_token_or_private_key)
+
+
+def _requires_clerk_integration(path: Path) -> bool:
+    try:
+        repository_path = path.resolve().relative_to(_REPOSITORY_ROOT)
+    except ValueError:
+        return False
+    return repository_path in _CLERK_REQUIRED_FILES
 
 
 # NOTE this runs on any pytest invocation, even if no tests are run, once per pytest invocation
@@ -67,13 +84,8 @@ def pytest_collection_modifyitems(config, items):
             "plus CLERK_TESTING_TOKEN or CLERK_PRIVATE_KEY"
         )
     )
-    clerk_required_files = {
-        Path("tests/integration/settings_test.py"),
-        Path("tests/integration/upload_visit_test.py"),
-        Path("tests/integration/user_creation_test.py"),
-    }
     for item in items:
-        if Path(str(item.fspath)) in clerk_required_files:
+        if _requires_clerk_integration(Path(str(item.fspath))):
             item.add_marker(clerk_skip_marker)
 
 

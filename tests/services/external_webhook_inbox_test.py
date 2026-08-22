@@ -71,6 +71,79 @@ def test_verified_delivery_is_encrypted_projected_and_idempotent() -> None:
     assert "clinical-sentinel" not in ciphertext
 
 
+def test_zoom_teardown_intent_is_encrypted_health_visible_and_reconciled(
+    monkeypatch,
+) -> None:
+    from app.jobs import merge_window
+
+    stored = inbox.store_zoom_teardown_intent(
+        action="release",
+        meeting_id="zoom-meeting-private",
+        bot_id="recall-bot-private",
+        occurrence_digest=inbox.digest_provider_reference("occurrence-private"),
+        generation=3,
+        stop_recording=True,
+        cleanup_session=True,
+        doctor_id="doctor-private",
+        mark_meeting_ended=True,
+        now=datetime.now(UTC) - timedelta(minutes=4),
+    )
+
+    delivery = _delivery(stored.delivery_id)
+    assert delivery.state == "pending"
+    assert delivery.encrypted_payload is not None
+    assert "recall-bot-private" not in delivery.encrypted_payload
+    assert inbox.inbox_health()["pending"] >= 1
+
+    reconciled: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        merge_window,
+        "reconcile_teardown_intent",
+        lambda event_type, payload: reconciled.append((event_type, payload)),
+    )
+    inbox.process_delivery(stored.delivery_id)
+
+    assert reconciled[0][0] == "internal.zoom_bot_release"
+    assert reconciled[0][1]["teardown_intent"]["bot_id"] == "recall-bot-private"
+    assert reconciled[0][1]["teardown_intent"]["doctor_id"] == "doctor-private"
+    assert reconciled[0][1]["teardown_intent"]["mark_meeting_ended"] is True
+    completed = _delivery(stored.delivery_id)
+    assert completed.state == "completed"
+    assert completed.encrypted_payload is None
+
+
+def test_zoom_projection_discards_participant_name_and_keeps_bot_classification() -> (
+    None
+):
+    stored = inbox.store_verified_external_webhook(
+        provider="zoom",
+        provider_event_id="zoom-name-minimization",
+        event_type="meeting.participant_joined",
+        payload={
+            "event": "meeting.participant_joined",
+            "event_ts": 1_700_000_000_123,
+            "payload": {
+                "object": {
+                    "id": "meeting-private",
+                    "uuid": "occurrence-private",
+                    "participant": {
+                        "id": "participant-private",
+                        "user_name": "Cosmas AI Note-Taker",
+                    },
+                }
+            },
+        },
+    )
+
+    delivery = _delivery(stored.delivery_id)
+    assert delivery.encrypted_payload is not None
+    projected = decrypt_inbox_payload(delivery.encrypted_payload)
+    assert "Cosmas AI Note-Taker" not in projected
+    assert '"is_bot":true' in projected
+    assert '"user_name"' not in projected
+    assert '"event_ts":1700000000123' in projected
+
+
 def test_corrupt_ciphertext_dead_letters_without_logging_or_reclaim() -> None:
     stored = inbox.store_verified_external_webhook(
         provider="recall",

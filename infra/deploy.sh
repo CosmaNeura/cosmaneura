@@ -19,8 +19,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Define variables
 RESOURCE_GROUP="cosmaneura-prod"
 MIGRATION_JOB="cosmaneura-prod-migrate"
-CONTAINERS="cosmaneura-prod-app cosmaneura-prod-worker cosmaneura-prod-scheduler cosmaneura-prod-app-jmon"
+WORKER_SCHEDULER_CONTAINERS="cosmaneura-prod-worker cosmaneura-prod-scheduler"
+API_CONTAINER="cosmaneura-prod-app"
+JMON_CONTAINER="cosmaneura-prod-app-jmon"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
+
+# Resolve protected configuration before invoking git, Docker, Azure, or any
+# other provider-facing subprocess. Keep the resolved JSON in this shell only,
+# then drop the ambient capabilities immediately. ENV_JSON is deliberately not
+# exported, so child processes receive only values passed to them explicitly.
+if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.production.backend); then
+	echo "Failed to load production deployment configuration."
+	exit 1
+fi
+unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 
 # Check for Git SHA input and validate it exists in repo
 if [[ -z "$GIT_SHA" ]]; then
@@ -70,10 +82,6 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
-# Read all production secrets from 1Password (same mechanism as tofu uses).
-# Must stay in sync with variables.tf python_secret_vars / python_public_vars.
-ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.production.backend)
-
 DATABASE_SECRET_NAME=$(printf '%s' "$ENV_JSON" | jq -er '.DATABASE_URL_SECRET_NAME')
 DATABASE_URL_V2_ENABLED=$(printf '%s' "$ENV_JSON" | jq -er '.DATABASE_URL_V2_ENABLED')
 if [[ "$DATABASE_SECRET_NAME" != "database-url" && "$DATABASE_SECRET_NAME" != "database-url-v2" ]]; then
@@ -106,14 +114,22 @@ fi
 # Verify only secret names and references: the Recall signing credential must
 # exist exactly once on the API and nowhere on workers, beat, Flower or the
 # migration job. The guard never requests or prints secret values.
+if ! RECALL_WEBHOOK_SECRET_GUARD=$(printf '%s' "$ENV_JSON" |
+	jq -er '.RECALL_WEBHOOK_SECRET | select(type == "string")'); then
+	echo "Production Recall webhook signing credential is invalid."
+	exit 1
+fi
 if ! jq -n \
 	--arg resource_group "$RESOURCE_GROUP" \
 	--arg subscription_id "${AZURE_SUBSCRIPTION_ID:?AZURE_SUBSCRIPTION_ID is required}" \
 	'{resource_group: $resource_group, subscription_id: $subscription_id}' |
+	RECALL_WEBHOOK_SECRET="$RECALL_WEBHOOK_SECRET_GUARD" \
 	python "$SCRIPT_DIR/api_only_secret_live_guard.py"; then
+	unset RECALL_WEBHOOK_SECRET_GUARD
 	echo "Live API-only secret scope is not ready for application deployment."
 	exit 1
 fi
+unset RECALL_WEBHOOK_SECRET_GUARD
 
 # Must match variables.tf python_secret_vars. API-only secrets are provisioned
 # by OpenTofu and must never be copied into the migration job.
@@ -344,23 +360,28 @@ if [[ $? -ne 0 ]]; then
 	exit 1
 fi
 
-# Deploy all containers first
-for container in $CONTAINERS; do
+# Deploy and verify consumers/recovery before exposing the new API revision.
+# This preserves rolling compatibility: migrations land first, then workers
+# and the scheduler can consume both old and new work before the API produces
+# anything new.  Job Monitor is observational and updates last.
+for container in $WORKER_SCHEDULER_CONTAINERS; do
 	initiate_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment initiation failed. Exiting."
 		exit 1
 	fi
-done
-
-# Check deployment status for all containers
-for container in $CONTAINERS; do
 	check_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
 		exit 1
 	fi
 done
+
+initiate_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
+check_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
+
+initiate_deployment "$JMON_CONTAINER" "$GIT_SHA" || exit 1
+check_deployment "$JMON_CONTAINER" "$GIT_SHA" || exit 1
 
 echo "All deployments are successful for Git SHA $GIT_SHA."
 exit 0

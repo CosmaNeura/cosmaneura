@@ -1,7 +1,10 @@
 # pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportArgumentType=false, reportReturnType=false, reportOptionalOperand=false, reportCallIssue=false
 
+import json
 from datetime import datetime, timezone
 from unittest.mock import patch
+
+from structlog.testing import capture_logs
 
 from app.jobs.anonymize import perform
 
@@ -38,7 +41,10 @@ def test_perform_deidentifies_and_tombstones_transcript():
 
     initial_non_phi_count = AIVisitTranscriptNonPHI.where().count()
 
-    with patch("app.jobs.anonymize.deidentify", side_effect=lambda s: f"DEID({s})"):
+    with (
+        patch("app.jobs.anonymize.deidentify", side_effect=lambda s: f"DEID({s})"),
+        capture_logs() as logs,
+    ):
         perform(transcript.id)
 
     # New NonPHI row exists with deidentified entries.
@@ -63,6 +69,20 @@ def test_perform_deidentifies_and_tombstones_transcript():
     assert refreshed is not None
     assert refreshed.transcript_data == []
     assert refreshed.deleted_at is not None
+
+    serialized = json.dumps(logs, sort_keys=True)
+    for private_value in (
+        str(transcript.id),
+        "My name is John Smith and I live in Chicago.",
+        "Have you been to Dr. Mozal recently?",
+        "DEID(My name is John Smith and I live in Chicago.)",
+    ):
+        assert private_value not in serialized
+    assert "hmac:" in serialized
+    assert any(
+        entry.get("event_code") == "transcript_deidentification_started"
+        for entry in logs
+    )
 
 
 def test_perform_is_idempotent_when_already_deleted():

@@ -45,8 +45,23 @@ def _event() -> dict:
                 }
             ]
         },
-        "spans": [{"op": "http.client", "data": {"url": SENTINEL}}],
+        "spans": [
+            {
+                "op": "http.client",
+                "description": f"GET https://api.example.com/users/{SENTINEL}",
+                "data": {"url": SENTINEL},
+                "tags": {"provider_user": SENTINEL},
+                "measurements": {SENTINEL: {"value": 1}},
+                "_metrics_summary": {SENTINEL: {"count": 1}},
+                "future_sdk_field": {"provider_path": SENTINEL},
+            },
+            {
+                "op": f"http.client.{SENTINEL}",
+                "description": SENTINEL,
+            },
+        ],
         "transaction": "POST /internal/v1/notes",
+        "transaction_info": {"source": "route", "future_field": SENTINEL},
         "release": "test-release",
     }
 
@@ -60,7 +75,9 @@ def _assert_scrubbed(event: dict) -> None:
     assert frame["filename"] == "app/services/example.py"
     assert frame["lineno"] == 42
     assert event["transaction"] == "POST /internal/v1/notes"
+    assert event["transaction_info"] == {"source": "route"}
     assert event["release"] == "test-release"
+    assert event["spans"] == [{"op": "http.client"}, {}]
 
 
 def test_scrub_removes_phi_from_error_events() -> None:
@@ -113,3 +130,17 @@ def test_scrub_handles_minimal_events() -> None:
         "request": None,
         "breadcrumbs": None,
     }
+
+
+def test_scrub_replaces_url_or_unknown_transaction_names() -> None:
+    for source in ("url", "custom", None):
+        event = {
+            "transaction": f"GET /external/v1/recall/zak/{SENTINEL}",
+            "transaction_info": {"source": source} if source else None,
+        }
+
+        scrubbed = sentry.scrub_event(event)
+
+        assert SENTINEL not in json.dumps(scrubbed)
+        assert scrubbed["transaction"] == "<redacted transaction>"
+        assert scrubbed["transaction_info"] == {"source": "custom"}

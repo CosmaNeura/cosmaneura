@@ -21,6 +21,20 @@ class ZoomMeeting(BaseModel, TimestampsMixin, TypeIDMixin("zmtg"), table=True):
         UniqueConstraint(
             "doctor_id", "zoom_meeting_id", name="uq_zoom_meeting_doctor_meeting"
         ),
+        sa.CheckConstraint(
+            "capture_authorization_occurrence_digest IS NULL OR "
+            "capture_authorization_occurrence_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_zoom_meeting_capture_authorization_occurrence_digest",
+        ),
+        sa.CheckConstraint(
+            "(capture_authorization_occurrence_digest IS NULL AND "
+            "capture_authorization_expires_at IS NULL AND "
+            "capture_authorization_consumed_at IS NULL) OR "
+            "(appointment_id IS NOT NULL AND "
+            "capture_authorization_occurrence_digest IS NOT NULL AND "
+            "capture_authorization_expires_at IS NOT NULL)",
+            name="ck_zoom_meeting_capture_authorization_complete",
+        ),
     )
 
     doctor_id: TypeIDType = Doctor.foreign_key()
@@ -48,4 +62,22 @@ class ZoomMeeting(BaseModel, TimestampsMixin, TypeIDMixin("zmtg"), table=True):
         default=None,
         sa_column=Column(TypeIDType("appointment"), nullable=True),
     )
-    "Soft reference to Appointment — no FK constraint intentional: appointment is set async via webhook after meeting starts, and may not exist yet when the ZoomMeeting row is created"
+    "Soft reference to Appointment retained for schedule-to-note navigation"
+
+    capture_authorization_occurrence_digest: str | None = Field(
+        default=None,
+        max_length=64,
+    )
+    "HMAC digest of the one Zoom occurrence authorized to capture this appointment"
+
+    capture_authorization_expires_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Deadline after which this capture authorization fails closed"
+
+    capture_authorization_consumed_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Set atomically before the authorized occurrence creates a Recall bot"

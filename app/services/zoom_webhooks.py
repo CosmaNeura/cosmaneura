@@ -1,6 +1,6 @@
 import secrets
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from app import log
@@ -15,26 +15,38 @@ from app.services import zoom as zoom_service
 from app.services.external_webhook_inbox import (
     PermanentWebhookError,
     RetryableWebhookError,
+    complete_zoom_teardown_intent,
+    digest_provider_reference,
     provider_log_ref,
+    store_zoom_teardown_intent,
 )
 from app.services.recall import BOT_NAME
 
+from activemodel.session_manager import get_session
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.patient import Patient
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
-from sqlalchemy import select
+from sqlmodel import select
 
-# Two recording segments tied to the same appointment within this window
-# merge into a single note (summarize.py concatenates transcripts). After
-# the window, the bot disconnects and a fresh visit opens a new bot.
+# After the only allowed recording segment stops, keep the bot handle for this
+# long so a confirmed leave can be retried without losing provider ownership.
+# Recording resume is deliberately disabled until exact encounter-bound launch
+# authorization exists.
 MERGE_WINDOW_SECONDS = 600
 # Recall fetches the ZAK immediately while joining the just-created bot. Keep
 # its bearer URL valid only for that short join window; the callback consumes
 # it atomically on first use.
 _ZAK_URL_TOKEN_TTL_SECONDS = 5 * 60
+# Serialize every Recall lifecycle transition for one Zoom meeting.  Recall
+# calls have a 30-second request timeout and start_recording can also wait up
+# to 45 seconds for the bot to become ready, so the lease is deliberately
+# longer than the longest supported transition.  The merge generation below
+# additionally fences revoked/stale Celery tasks after the lock is released.
+_LIFECYCLE_LOCK_TIMEOUT_SECONDS = 180
+_LIFECYCLE_LOCK_BLOCKING_TIMEOUT_SECONDS = 90
 
 # Zoom bot dispatch is gated by an explicit per-environment allowlist. Staging
 # and production are separate Zoom apps, but the same account can be connected
@@ -77,6 +89,8 @@ def handle_meeting_started(
     obj = payload.get("payload", {}).get("object", {})
     host_id = obj.get("host_id")
     meeting_id = obj.get("id")
+    meeting_id_str = str(meeting_id)
+    event_occurrence = _occurrence_digest(obj)
 
     log.info(
         "meeting.started received",
@@ -87,19 +101,13 @@ def handle_meeting_started(
     )
 
     redis = get_redis()
-    # Atomic idempotency guard. Zoom occasionally fires meeting.started twice
-    # for the same session (personal-meeting-room quirks, waiting-room
-    # reactivation) which would otherwise create a duplicate bot. SET NX
-    # succeeds only when the lock does not exist; handle_meeting_ended
-    # releases it so a legitimate end+restart past the TTL still works.
+    # Retain the legacy 60-second duplicate fence for rolling compatibility,
+    # but never use it as the identity of a meeting occurrence. A genuine
+    # short meeting can start and end inside this window, and PMR meeting IDs
+    # are reused indefinitely.
     lock_key = f"recall:meeting:{meeting_id}:starting_lock"
     _begin_side_effect(before_side_effect)
-    if not redis.set(lock_key, "1", nx=True, ex=60):
-        log.info(
-            "meeting.started duplicate within active lock window, skipping",
-            meeting_ref=provider_log_ref(str(meeting_id)),
-        )
-        return
+    acquired_legacy_fence = bool(redis.set(lock_key, "1", nx=True, ex=60))
 
     # Clear any orphaned state from a previous session with this meeting_id.
     # Personal meeting rooms reuse the same ID, so meeting.ended may not have
@@ -113,12 +121,80 @@ def handle_meeting_started(
     # concurrent celery task: clearing late used to wipe the doctor_present
     # and participants_order that the concurrent handler had already written,
     # leaving the session stuck in "holding" with no bot.
-    _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
-    log.info(
-        "cleared stale meeting keys",
-        meeting_ref=provider_log_ref(str(meeting_id)),
-    )
+    with _lifecycle_lock(redis, meeting_id_str):
+        active_occurrence = _rget(
+            redis, f"recall:meeting:{meeting_id}:occurrence_digest"
+        )
+        tracked_bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+        if event_occurrence is None and active_occurrence is not None:
+            log.warning(
+                "uuid-less meeting start fenced from occurrence-bound state",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
+            return
+        if (
+            active_occurrence is not None
+            and event_occurrence is not None
+            and active_occurrence != event_occurrence
+        ):
+            # Order cannot be inferred from arrival time. A delayed start from
+            # an earlier PMR occurrence must never replace the currently bound
+            # doctor/participant state. Only canonical meeting.ended clears an
+            # occurrence and permits the next one to bind.
+            log.warning(
+                "meeting.started fenced from active different occurrence",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
+            return
+        if (
+            event_occurrence is not None
+            and active_occurrence == event_occurrence
+            and _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+        ):
+            log.info(
+                "duplicate meeting.started for active occurrence, skipping",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
+            return
+        if event_occurrence is None and not acquired_legacy_fence:
+            log.info(
+                "legacy meeting.started duplicate within lock window, skipping",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
+            return
+        if tracked_bot_id:
+            # A duplicate meeting.started (or a reused PMR whose prior bot did
+            # not confirm leave) is not authority to discard provider
+            # ownership. Keep every key intact so meeting.ended, expiry, or an
+            # operator can finish teardown safely.
+            log.warning(
+                "meeting start blocked while prior bot ownership is unresolved",
+                meeting_ref=provider_log_ref(str(meeting_id)),
+                bot_ref=provider_log_ref(tracked_bot_id),
+            )
+            return
+        continuing_race = (
+            event_occurrence is not None
+            and active_occurrence == event_occurrence
+            and not _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+        )
+        if not continuing_race:
+            _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
+            if event_occurrence is not None:
+                redis.set(
+                    f"recall:meeting:{meeting_id}:occurrence_digest",
+                    event_occurrence,
+                    ex=timedelta(hours=24),
+                )
+            log.info(
+                "cleared stale meeting keys",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
 
+    # Database lookups do not mutate lifecycle state and intentionally run
+    # outside the Redis lock. A participant delivery may arrive here; it binds
+    # to the occurrence above, then the second lock below verifies the same
+    # occurrence is still active before publishing the server mapping.
     doctor = cast(
         Doctor | None,
         Doctor.where(
@@ -146,17 +222,27 @@ def handle_meeting_started(
         )
         return
 
-    ttl = timedelta(hours=24)
-    redis.set(f"recall:meeting:{meeting_id}:doctor_id", str(doctor.id), ex=ttl)
-    redis.set(f"recall:meeting:{meeting_id}:host_id", host_id, ex=ttl)
+    with _lifecycle_lock(redis, meeting_id_str):
+        if (
+            _rget(redis, f"recall:meeting:{meeting_id}:occurrence_digest")
+            != event_occurrence
+        ):
+            log.warning(
+                "meeting start mapping fenced after occurrence changed",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
+            return
+        ttl = timedelta(hours=24)
+        redis.set(f"recall:meeting:{meeting_id}:doctor_id", str(doctor.id), ex=ttl)
+        redis.set(f"recall:meeting:{meeting_id}:host_id", host_id, ex=ttl)
 
     log.info(
         "meeting session started, awaiting doctor",
-        meeting_ref=provider_log_ref(str(meeting_id)),
+        meeting_ref=provider_log_ref(meeting_id_str),
         doctor_ref=provider_log_ref(str(doctor.id)),
     )
 
-    zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=str(meeting_id))
+    zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=meeting_id_str)
     if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
@@ -177,8 +263,158 @@ def _rhget(redis, key: str, field: str) -> str | None:
     return val.decode() if isinstance(val, bytes) else cast(str | None, val)
 
 
+def _lifecycle_lock(redis, meeting_id: str):
+    return redis.lock(
+        f"recall:meeting:{meeting_id}:lifecycle_lock",
+        timeout=_LIFECYCLE_LOCK_TIMEOUT_SECONDS,
+        blocking_timeout=_LIFECYCLE_LOCK_BLOCKING_TIMEOUT_SECONDS,
+    )
+
+
+def _occurrence_digest(obj: dict[str, Any]) -> str | None:
+    """Return a non-reversible identity for one Zoom meeting occurrence."""
+
+    occurrence_uuid = obj.get("uuid")
+    if not isinstance(occurrence_uuid, str) or not occurrence_uuid.strip():
+        return None
+    return digest_provider_reference(f"zoom-occurrence:{occurrence_uuid}")
+
+
+def _participant_ref(
+    meeting_id: str,
+    occurrence_digest: str | None,
+    participant_id: str,
+) -> str:
+    """Return a non-reversible occurrence-scoped participant membership key."""
+
+    return digest_provider_reference(
+        f"zoom-participant:{meeting_id}:{occurrence_digest or 'legacy'}:{participant_id}"
+    )
+
+
+def _participant_event_timestamp(payload: dict[str, Any]) -> int | None:
+    value = payload.get("event_ts")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None
+    return value
+
+
+def _apply_participant_event_order(
+    redis,
+    *,
+    meeting_id: str,
+    participant_ref: str,
+    event_timestamp: int | None,
+    joined: bool,
+) -> bool:
+    """Apply one signed participant event only when it is newer than prior state."""
+
+    prefix = f"recall:meeting:{meeting_id}"
+    order_key = f"{prefix}:participant_event_order"
+    # Zoom's current signed contract supplies event_ts. UUID-less payloads from
+    # an old worker may not, so they retain only duplicate suppression during a
+    # quiescent rolling cutover and must never replace timestamped state.
+    if event_timestamp is None:
+        marker = "legacy:1" if joined else "legacy:2"
+        previous = _rhget(redis, order_key, participant_ref)
+        if previous == marker or (
+            previous is not None and not previous.startswith("legacy:")
+        ):
+            return False
+    else:
+        marker = f"{event_timestamp}:{1 if joined else 2}"
+        previous = _rhget(redis, order_key, participant_ref)
+        if previous is not None:
+            if previous.startswith("legacy:"):
+                previous_order = (-1, int(previous.rsplit(":", 1)[1]))
+            else:
+                previous_timestamp, previous_kind = previous.split(":", 1)
+                previous_order = (int(previous_timestamp), int(previous_kind))
+            current_order = (event_timestamp, 1 if joined else 2)
+            if current_order <= previous_order:
+                return False
+
+    ttl_seconds = int(timedelta(hours=24).total_seconds())
+    redis.hset(order_key, participant_ref, marker)
+    redis.expire(order_key, ttl_seconds)
+    return True
+
+
+def _set_participant_membership(
+    redis,
+    *,
+    meeting_id: str,
+    participant_ref: str,
+    joined: bool,
+) -> int:
+    """Update an idempotent participant set and its derived compatibility count."""
+
+    prefix = f"recall:meeting:{meeting_id}"
+    members_key = f"{prefix}:participants_present"
+    order_key = f"{prefix}:participants_order"
+    ttl_seconds = int(timedelta(hours=24).total_seconds())
+    if joined:
+        if redis.sadd(members_key, participant_ref):
+            redis.rpush(order_key, participant_ref)
+    else:
+        redis.srem(members_key, participant_ref)
+        redis.lrem(order_key, 0, participant_ref)
+
+    count = cast(int, redis.scard(members_key))
+    redis.set(f"{prefix}:patient_count", count, ex=ttl_seconds)
+    redis.expire(members_key, ttl_seconds)
+    redis.expire(order_key, ttl_seconds)
+    return count
+
+
+def _bind_participant_occurrence(
+    redis,
+    *,
+    meeting_id: str,
+    event_occurrence: str | None,
+) -> bool:
+    """Fence a participant event to the active PMR occurrence.
+
+    During a rolling cutover, a session created by an old worker has no
+    occurrence key.  The first UUID-bearing event may adopt that legacy state
+    only when the authoritative server mapping already exists. Participant
+    deliveries never establish a new occurrence by themselves. Once a UUID is
+    bound, UUID-less and mismatched events always fail closed.
+    """
+
+    prefix = f"recall:meeting:{meeting_id}"
+    active_occurrence = _rget(redis, f"{prefix}:occurrence_digest")
+    if active_occurrence is not None:
+        if event_occurrence == active_occurrence:
+            return True
+        log.warning(
+            "zoom participant event fenced from a different occurrence",
+            meeting_ref=provider_log_ref(meeting_id),
+            event_has_occurrence=event_occurrence is not None,
+        )
+        return False
+
+    if event_occurrence is None:
+        # Rolling compatibility for state established entirely by old workers.
+        return True
+
+    if not _rget(redis, f"{prefix}:doctor_id"):
+        return False
+
+    redis.set(
+        f"{prefix}:occurrence_digest",
+        event_occurrence,
+        ex=timedelta(hours=24),
+    )
+    log.info(
+        "adopted zoom occurrence for rolling lifecycle state",
+        meeting_ref=provider_log_ref(meeting_id),
+    )
+    return True
+
+
 def _role_for(participant: dict, host_id: str | None) -> str:
-    if participant.get("user_name") == BOT_NAME:
+    if participant.get("is_bot") is True or participant.get("user_name") == BOT_NAME:
         return "bot"
     if host_id and participant.get("id") == host_id:
         return "doctor"
@@ -229,9 +465,12 @@ def _resolve_host_id(redis, meeting_id: str, participant: dict) -> str | None:
     return candidate
 
 
-def _start_appointment_session(meeting_id: str, participant_id: str, user_name: str):
-    """Idempotent via recording_active. Creates bot, waits for ready,
-    starts recording, resolves or creates the appointment/patient."""
+def _start_appointment_session(
+    meeting_id: str,
+    _participant_id: str,
+    _user_name: str,
+):
+    """Start one recording for an already server-bound appointment."""
     redis = get_redis()
     if redis.get(f"recall:meeting:{meeting_id}:recording_active"):
         return
@@ -269,14 +508,6 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         )
         return
 
-    # Recall fetches the ZAK just-in-time from our /external/v1/recall/zak/{token}
-    # endpoint when the bot joins. The token in the URL is the only auth Recall
-    # sends, so it must be unguessable and short-lived; we map it to the doctor
-    # in Redis with the same TTL as the ZAK itself.
-    url_token = secrets.token_urlsafe(32)
-    redis.set(zak_token_redis_key(url_token), doctor_id, ex=_ZAK_URL_TOKEN_TTL_SECONDS)
-    zak_url = f"{API_BASE_URL}/external/v1/recall/zak/{url_token}"
-
     try:
         meeting_url = zoom_service.get_meeting_join_url(doctor, meeting_id)
     except zoom_service.ZoomIntegrationInvalid:
@@ -286,6 +517,27 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
             meeting_ref=provider_log_ref(str(meeting_id)),
         )
         return
+
+    appointment = _consume_bound_appointment(
+        doctor_id,
+        str(meeting_id),
+        occurrence_digest=_rget(
+            redis, f"recall:meeting:{meeting_id}:occurrence_digest"
+        ),
+    )
+    if appointment is None:
+        # Never create a bot or start PHI capture until the server has bound
+        # this Zoom meeting to one exact, tenant-valid appointment.
+        return
+
+    # Recall fetches the ZAK just-in-time from our /external/v1/recall/zak/{token}
+    # endpoint when the bot joins. The token in the URL is the only auth Recall
+    # sends, so it must be unguessable and short-lived; we map it to the doctor
+    # in Redis with the same TTL as the ZAK itself.
+    url_token = secrets.token_urlsafe(32)
+    redis.set(zak_token_redis_key(url_token), doctor_id, ex=_ZAK_URL_TOKEN_TTL_SECONDS)
+    zak_url = f"{API_BASE_URL}/external/v1/recall/zak/{url_token}"
+
     bot_data = recall.create_bot(
         meeting_url=meeting_url,
         zak_url=zak_url,
@@ -294,7 +546,20 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
     bot_id = bot_data["id"]
     ttl = timedelta(hours=24)
     redis.set(f"recall:meeting:{meeting_id}:bot_id", bot_id, ex=ttl)
-    redis.set(f"recall:bot:{bot_id}:doctor_id", doctor_id, ex=ttl)
+    # Until recording-scoped ownership is fully established, a worker death
+    # or ambiguous start response must cause this bot to be released rather
+    # than leave an untracked recorder in the call.
+    launch_teardown_intent = store_zoom_teardown_intent(
+        action="release",
+        meeting_id=str(meeting_id),
+        bot_id=bot_id,
+        occurrence_digest=_rget(
+            redis, f"recall:meeting:{meeting_id}:occurrence_digest"
+        ),
+        generation=None,
+        stop_recording=True,
+        cleanup_session=False,
+    )
 
     recording_data = recall.start_recording(bot_id)
     recording_id = recording_data.get("id")
@@ -306,9 +571,15 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         )
         recall.leave_call(bot_id)
         redis.delete(f"recall:meeting:{meeting_id}:bot_id")
-        redis.delete(f"recall:bot:{bot_id}:doctor_id")
+        complete_zoom_teardown_intent(launch_teardown_intent.delivery_id)
         return
 
+    # Until Phase 2 provides a durable, exact encounter authorization, one
+    # Zoom meeting lifecycle may own only one recording segment.  Persist the
+    # fence as soon as Recall confirms the first recording ID; it intentionally
+    # outlives merge-window cleanup and is reset only by a new meeting.started
+    # (or the canonical meeting.ended cleanup).
+    redis.set(f"recall:meeting:{meeting_id}:capture_started", "1", ex=ttl)
     redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
 
     # Reinforce the recording disclosure with an in-call chat notice. Best-effort
@@ -324,36 +595,6 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
             error_type=type(exc).__name__,
         )
 
-    now = datetime.utcnow()
-    # Phase 1 band-aid for Mode A scenario #9: a previous visit on the
-    # same meeting_id can leave an appointment in the ±4h window that
-    # already has transcripts. Binding to it again would pile new
-    # transcripts onto a stale appointment and confuse summarize.
-    # Filtering by `transcript IS NULL` keeps brand-new appointments
-    # (calendar-pre-created, no transcript yet) eligible. Phase 2
-    # replaces this whole time-window matcher with calendar binding.
-    appointment = cast(
-        Appointment | None,
-        Appointment.where(
-            (Appointment.doctor_id == doctor_id)
-            & (Appointment.appointment_date >= now - timedelta(hours=4))
-            & (Appointment.appointment_date <= now + timedelta(hours=1))
-        )
-        .outerjoin(
-            AIVisitTranscript,
-            cast(Any, AIVisitTranscript.appointment_id) == Appointment.id,
-        )
-        .where(cast(Any, AIVisitTranscript.id).is_(None))
-        .order_by(cast(Any, Appointment.appointment_date).desc())
-        .first(),
-    )
-    if not appointment:
-        appointment = _ensure_appointment(
-            doctor_id=doctor_id,
-            patient_name=user_name or "Unknown",
-            now=now,
-        )
-
     redis.set(f"recall:recording:{recording_id}:doctor_id", doctor_id, ex=ttl)
     redis.set(
         f"recall:recording:{recording_id}:appointment_id",
@@ -365,9 +606,7 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
         str(appointment.patient_id),
         ex=ttl,
     )
-    redis.set(f"recall:bot:{bot_id}:appointment_id", str(appointment.id), ex=ttl)
-    redis.set(f"recall:bot:{bot_id}:patient_id", str(appointment.patient_id), ex=ttl)
-
+    complete_zoom_teardown_intent(launch_teardown_intent.delivery_id)
     log.info(
         "appointment session started",
         meeting_ref=provider_log_ref(str(meeting_id)),
@@ -377,7 +616,6 @@ def _start_appointment_session(meeting_id: str, participant_id: str, user_name: 
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor_id, zoom_meeting_id=str(meeting_id))
     if zoom_mtg:
-        zoom_mtg.appointment_id = appointment.id
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
 
@@ -395,10 +633,12 @@ def handle_participant_joined(
     # join — otherwise guest joins push empty strings and the doctor-arrives
     # branch never finds a first_id, so _start_appointment_session never runs.
     participant_id = participant.get("id") or participant.get("user_id") or ""
-    user_name = participant.get("user_name") or ""
 
+    meeting_id_str = str(meeting_id)
+    event_occurrence = _occurrence_digest(obj)
+    event_timestamp = _participant_event_timestamp(payload)
     redis = get_redis()
-    host_id = _resolve_host_id(redis, meeting_id, participant)
+    host_id = _resolve_host_id(redis, meeting_id_str, participant)
     role = _role_for(participant, host_id)
 
     if role == "bot":
@@ -410,110 +650,153 @@ def handle_participant_joined(
         )
         return
 
-    # A durable participant delivery can arrive before meeting.started. If it
-    # completed now, meeting.started would later clear its Redis state and the
-    # visit could be lost. Wait for the server-derived doctor mapping instead.
-    if before_side_effect is not None and not _rget(
-        redis, f"recall:meeting:{meeting_id}:doctor_id"
-    ):
-        raise RetryableWebhookError("meeting_mapping_unavailable")
-
-    if role == "doctor":
-        _begin_side_effect(before_side_effect)
-        ttl = timedelta(hours=24)
-        redis.set(f"recall:meeting:{meeting_id}:doctor_present", "1", ex=ttl)
-
-        log.info(
-            "participant joined: doctor",
-            role="doctor",
-            meeting_ref=provider_log_ref(str(meeting_id)),
-            participant_ref=provider_log_ref(participant_id),
-            doctor_present=True,
+    if not participant_id:
+        if before_side_effect is not None:
+            raise PermanentWebhookError()
+        log.warning(
+            "zoom participant join ignored without stable participant identity",
+            meeting_ref=provider_log_ref(meeting_id_str),
         )
+        return
+    if event_occurrence is not None and event_timestamp is None:
+        if before_side_effect is not None:
+            raise PermanentWebhookError()
+        log.warning(
+            "zoom participant join ignored without signed event ordering",
+            meeting_ref=provider_log_ref(meeting_id_str),
+        )
+        return
 
-        # If recording is already running, nothing to do.
-        recording_active = redis.get(f"recall:meeting:{meeting_id}:recording_active")
-        if recording_active:
-            return
-
-        first_id = _rlindex(
+    with _lifecycle_lock(redis, meeting_id_str):
+        occurrence_bound = _bind_participant_occurrence(
             redis,
-            f"recall:meeting:{meeting_id}:participants_order",
-            0,
+            meeting_id=meeting_id_str,
+            event_occurrence=event_occurrence,
         )
-        if not first_id:
-            # Doctor returned to an empty room; keep any merge_window armed.
+        # A durable participant delivery can arrive before meeting.started. It
+        # must retry until that authoritative event establishes the occurrence
+        # and doctor mapping; participant arrival order is never authority.
+        if not occurrence_bound:
+            active_occurrence = _rget(
+                redis, f"recall:meeting:{meeting_id}:occurrence_digest"
+            )
+            if before_side_effect is not None and active_occurrence is None:
+                raise RetryableWebhookError("meeting_mapping_unavailable")
+            return
+        if before_side_effect is not None and not _rget(
+            redis, f"recall:meeting:{meeting_id}:doctor_id"
+        ):
+            raise RetryableWebhookError("meeting_mapping_unavailable")
+
+        participant_reference = _participant_ref(
+            meeting_id_str, event_occurrence, participant_id
+        )
+        _begin_side_effect(before_side_effect)
+        if not _apply_participant_event_order(
+            redis,
+            meeting_id=meeting_id_str,
+            participant_ref=participant_reference,
+            event_timestamp=event_timestamp,
+            joined=True,
+        ):
+            log.info(
+                "stale or duplicate participant join ignored",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                participant_ref=provider_log_ref(participant_id),
+            )
             return
 
-        _resume_or_start_recording(
-            meeting_id=meeting_id,
-            participant_id=first_id,
-            user_name=_rhget(
-                redis,
-                f"recall:meeting:{meeting_id}:participants_names",
-                first_id,
+        if role == "doctor":
+            ttl = timedelta(hours=24)
+            redis.set(f"recall:meeting:{meeting_id}:doctor_present", "1", ex=ttl)
+
+            log.info(
+                "participant joined: doctor",
+                role="doctor",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                participant_ref=provider_log_ref(participant_id),
+                doctor_present=True,
             )
-            or "Unknown",
+
+            if redis.get(f"recall:meeting:{meeting_id}:recording_active"):
+                return
+
+            first_id = _rlindex(
+                redis,
+                f"recall:meeting:{meeting_id}:participants_order",
+                0,
+            )
+            if not first_id:
+                return
+
+            _resume_or_start_recording_locked(
+                redis,
+                meeting_id=meeting_id_str,
+                participant_id=first_id,
+                user_name="",
+            )
+            return
+
+        new_count = _set_participant_membership(
+            redis,
+            meeting_id=meeting_id_str,
+            participant_ref=participant_reference,
+            joined=True,
         )
-        return
 
-    # role == "other"
-    _begin_side_effect(before_side_effect)
-    ttl = timedelta(hours=24)
-    redis.rpush(f"recall:meeting:{meeting_id}:participants_order", participant_id)
-    redis.expire(
-        f"recall:meeting:{meeting_id}:participants_order", int(ttl.total_seconds())
-    )
-    redis.hset(
-        f"recall:meeting:{meeting_id}:participants_names", participant_id, user_name
-    )
-    redis.expire(
-        f"recall:meeting:{meeting_id}:participants_names", int(ttl.total_seconds())
-    )
-    new_count = cast(int, redis.incr(f"recall:meeting:{meeting_id}:patient_count"))
-    redis.expire(f"recall:meeting:{meeting_id}:patient_count", int(ttl.total_seconds()))
-
-    doctor_present = bool(redis.get(f"recall:meeting:{meeting_id}:doctor_present"))
-    recording_active = bool(redis.get(f"recall:meeting:{meeting_id}:recording_active"))
-
-    log.info(
-        "participant joined: other",
-        role="other",
-        meeting_ref=provider_log_ref(str(meeting_id)),
-        participant_ref=provider_log_ref(participant_id),
-        doctor_present=doctor_present,
-        recording_active=recording_active,
-        patient_count=new_count,
-    )
-
-    if not doctor_present:
-        log.info(
-            "non-doctor joined before doctor, holding",
-            meeting_ref=provider_log_ref(str(meeting_id)),
+        doctor_present = bool(redis.get(f"recall:meeting:{meeting_id}:doctor_present"))
+        recording_active = bool(
+            redis.get(f"recall:meeting:{meeting_id}:recording_active")
         )
-        return
 
-    if not recording_active:
-        _resume_or_start_recording(meeting_id, participant_id, user_name)
-    else:
         log.info(
-            "additional participant in active session",
-            meeting_ref=provider_log_ref(str(meeting_id)),
+            "participant joined: other",
+            role="other",
+            meeting_ref=provider_log_ref(meeting_id_str),
+            participant_ref=provider_log_ref(participant_id),
+            doctor_present=doctor_present,
+            recording_active=recording_active,
             patient_count=new_count,
         )
 
+        if not doctor_present:
+            log.info(
+                "non-doctor joined before doctor, holding",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
+            return
 
-def _revoke_merge_window_task(redis, meeting_id: str) -> None:
-    task_id = _rget(redis, f"recall:meeting:{meeting_id}:merge_task_id")
+        if not recording_active:
+            _resume_or_start_recording_locked(
+                redis, meeting_id_str, participant_reference, ""
+            )
+        else:
+            log.info(
+                "additional participant in active session",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                patient_count=new_count,
+            )
+
+
+def _revoke_merge_window_task(task_id: str | None, meeting_id: str) -> None:
     if not task_id:
         return
-    celery_app.control.revoke(task_id)
-    redis.delete(f"recall:meeting:{meeting_id}:merge_task_id")
-    redis.delete(f"recall:meeting:{meeting_id}:paused_at")
-    log.info(
-        "merge window task revoked",
-        meeting_ref=provider_log_ref(str(meeting_id)),
-    )
+    try:
+        celery_app.control.revoke(task_id)
+    except Exception as exc:
+        # recording_active plus the monotonically increasing generation are
+        # the correctness fences. Revocation only saves a stale task run, so
+        # a broker/control-plane error must not undo confirmed local teardown.
+        log.warning(
+            "merge window task revoke failed after lifecycle transition",
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            error_type=type(exc).__name__,
+        )
+    else:
+        log.info(
+            "merge window task revoked",
+            meeting_ref=provider_log_ref(str(meeting_id)),
+        )
 
 
 def _resume_or_start_recording(
@@ -521,63 +804,130 @@ def _resume_or_start_recording(
     participant_id: str,
     user_name: str,
 ) -> None:
-    """If a paused bot exists for this meeting, resume on it via
-    start_recording. Otherwise create a brand-new bot and open an
-    appointment. The bot_id key surviving past a participant_left is
-    the signal that the previous session is still inside its merge
-    window — resume there so segments concatenate into one note."""
+    """Start the first recording segment for a Zoom meeting lifecycle.
+
+    A paused bot proves that a prior segment exists, but it does not prove the
+    returning participant belongs to the same patient or encounter.  Until an
+    exact encounter authorization exists, keep the bot handle available for
+    confirmed teardown and reject every resume/second-segment attempt.
+    """
     redis = get_redis()
+    with _lifecycle_lock(redis, meeting_id):
+        _resume_or_start_recording_locked(redis, meeting_id, participant_id, user_name)
+
+
+def _resume_or_start_recording_locked(
+    redis,
+    meeting_id: str,
+    participant_id: str,
+    user_name: str,
+) -> None:
     bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
-    if not bot_id:
-        _start_appointment_session(meeting_id, participant_id, user_name)
+    capture_started = bool(redis.get(f"recall:meeting:{meeting_id}:capture_started"))
+    if bot_id or capture_started:
+        log.warning(
+            "recording continuation blocked without exact encounter binding",
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            bot_ref=provider_log_ref(bot_id) if bot_id else None,
+            capture_started=capture_started,
+        )
         return
 
-    _revoke_merge_window_task(redis, meeting_id)
-    recall.start_recording(bot_id)
-    ttl = timedelta(hours=24)
-    redis.set(f"recall:meeting:{meeting_id}:recording_active", "1", ex=ttl)
-    log.info(
-        "recording resumed on existing bot within merge window",
-        meeting_ref=provider_log_ref(str(meeting_id)),
-        bot_ref=provider_log_ref(bot_id),
-        participant_ref=provider_log_ref(participant_id),
-    )
+    # The caller holds the lifecycle lock so two join deliveries cannot both
+    # observe an empty slot and create bots.
+    _start_appointment_session(meeting_id, participant_id, user_name)
 
 
-def _ensure_appointment(
-    doctor_id: str, patient_name: str, now: datetime
-) -> Appointment:
-    """Find or create a Patient + Appointment for an ad-hoc Zoom session."""
-    patient = cast(
-        Patient | None,
-        Patient.where(
-            (Patient.doctor_id == doctor_id) & (Patient.name == patient_name)
-        ).first(),
-    )
-    if not patient:
-        # date_of_birth is required — use sentinel; doctor should update later
-        patient = Patient.find_or_create_by(
-            doctor_id=doctor_id,
-            name=patient_name,
-            date_of_birth=datetime(1900, 1, 1),
+def _consume_bound_appointment(
+    doctor_id: str,
+    meeting_id: str,
+    *,
+    occurrence_digest: str | None,
+) -> Appointment | None:
+    """Consume and return an exact server-bound appointment or fail closed.
+
+    Zoom participant IDs and display names are not chart identifiers.  The
+    legacy path may use only a ZoomMeeting appointment binding plus explicit
+    occurrence-scoped authorization created by a trusted server-side workflow.
+    The authorization is consumed under a database row lock before any bot
+    joins, while appointment_id remains available for dashboard navigation.
+    """
+    now = datetime.now(UTC)
+    with get_session() as session:
+        zoom_mtg = session.exec(
+            select(ZoomMeeting)
+            .where(
+                ZoomMeeting.doctor_id == doctor_id,
+                ZoomMeeting.zoom_meeting_id == meeting_id,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if not zoom_mtg or not zoom_mtg.appointment_id:
+            log.warning(
+                "zoom capture blocked: exact appointment binding unavailable",
+                doctor_ref=provider_log_ref(doctor_id),
+                meeting_ref=provider_log_ref(meeting_id),
+            )
+            return None
+
+        expires_at = zoom_mtg.capture_authorization_expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if (
+            occurrence_digest is None
+            or zoom_mtg.capture_authorization_occurrence_digest != occurrence_digest
+            or expires_at is None
+            or expires_at <= now
+            or zoom_mtg.capture_authorization_consumed_at is not None
+        ):
+            log.warning(
+                "zoom capture blocked: occurrence authorization unavailable",
+                doctor_ref=provider_log_ref(doctor_id),
+                meeting_ref=provider_log_ref(meeting_id),
+            )
+            return None
+
+        appointment = session.get(Appointment, zoom_mtg.appointment_id)
+        patient = (
+            session.get(Patient, appointment.patient_id)
+            if appointment is not None
+            else None
         )
-        log.info(
-            "created patient for zoom participant",
-            doctor_ref=provider_log_ref(doctor_id),
-        )
+        if (
+            appointment is None
+            or str(appointment.doctor_id) != doctor_id
+            or patient is None
+            or str(patient.doctor_id) != doctor_id
+        ):
+            log.warning(
+                "zoom capture blocked: invalid appointment tenant binding",
+                doctor_ref=provider_log_ref(doctor_id),
+                meeting_ref=provider_log_ref(meeting_id),
+            )
+            return None
 
-    appointment = Appointment.find_or_create_by(
-        doctor_id=doctor_id,
-        patient_id=patient.id,
-        appointment_date=now,
-        created_by_system="recall",
-    )
-    log.info(
-        "created appointment for zoom session",
-        doctor_ref=provider_log_ref(doctor_id),
-        appointment_ref=provider_log_ref(str(appointment.id)),
-    )
-    return cast(Appointment, appointment)
+        existing_transcript = session.exec(
+            select(AIVisitTranscript)
+            .where(AIVisitTranscript.appointment_id == appointment.id)
+            .limit(1)
+        ).first()
+        if existing_transcript is not None:
+            log.warning(
+                "zoom capture blocked: appointment already has a transcript",
+                doctor_ref=provider_log_ref(doctor_id),
+                meeting_ref=provider_log_ref(meeting_id),
+                appointment_ref=provider_log_ref(str(appointment.id)),
+            )
+            return None
+
+        # Consume before the external mutation. If bot creation fails, the
+        # trusted producer must deliberately re-authorize this occurrence.
+        zoom_mtg.capture_authorization_consumed_at = now
+        session.add(zoom_mtg)
+        session.commit()
+        session.refresh(appointment)
+        session.expunge(appointment)
+        return appointment
 
 
 def handle_participant_left(
@@ -601,8 +951,11 @@ def handle_participant_left(
     # branch never finds a first_id, so _start_appointment_session never runs.
     participant_id = participant.get("id") or participant.get("user_id") or ""
 
+    meeting_id_str = str(meeting_id)
+    event_occurrence = _occurrence_digest(obj)
+    event_timestamp = _participant_event_timestamp(payload)
     redis = get_redis()
-    host_id = _resolve_host_id(redis, meeting_id, participant)
+    host_id = _resolve_host_id(redis, meeting_id_str, participant)
     role = _role_for(participant, host_id)
 
     if role == "bot":
@@ -614,114 +967,212 @@ def handle_participant_left(
         )
         return
 
-    if before_side_effect is not None and not _rget(
-        redis, f"recall:meeting:{meeting_id}:doctor_id"
-    ):
-        raise RetryableWebhookError("meeting_mapping_unavailable")
+    if not participant_id:
+        if before_side_effect is not None:
+            raise PermanentWebhookError()
+        log.warning(
+            "zoom participant leave ignored without stable participant identity",
+            meeting_ref=provider_log_ref(meeting_id_str),
+        )
+        return
+    if event_occurrence is not None and event_timestamp is None:
+        if before_side_effect is not None:
+            raise PermanentWebhookError()
+        log.warning(
+            "zoom participant leave ignored without signed event ordering",
+            meeting_ref=provider_log_ref(meeting_id_str),
+        )
+        return
 
-    if role == "doctor":
+    with _lifecycle_lock(redis, meeting_id_str):
+        occurrence_bound = _bind_participant_occurrence(
+            redis,
+            meeting_id=meeting_id_str,
+            event_occurrence=event_occurrence,
+        )
+        if not occurrence_bound:
+            active_occurrence = _rget(
+                redis, f"recall:meeting:{meeting_id}:occurrence_digest"
+            )
+            if before_side_effect is not None and active_occurrence is None:
+                raise RetryableWebhookError("meeting_mapping_unavailable")
+            return
+        if before_side_effect is not None and not _rget(
+            redis, f"recall:meeting:{meeting_id}:doctor_id"
+        ):
+            raise RetryableWebhookError("meeting_mapping_unavailable")
+
+        participant_reference = _participant_ref(
+            meeting_id_str, event_occurrence, participant_id
+        )
         _begin_side_effect(before_side_effect)
-        redis.delete(f"recall:meeting:{meeting_id}:doctor_present")
+        if not _apply_participant_event_order(
+            redis,
+            meeting_id=meeting_id_str,
+            participant_ref=participant_reference,
+            event_timestamp=event_timestamp,
+            joined=False,
+        ):
+            log.info(
+                "stale or duplicate participant leave ignored",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                participant_ref=provider_log_ref(participant_id),
+            )
+            return
+
+        if role == "doctor":
+            redis.delete(f"recall:meeting:{meeting_id}:doctor_present")
+            recording_active = bool(
+                redis.get(f"recall:meeting:{meeting_id}:recording_active")
+            )
+            log.info(
+                "participant left: doctor",
+                role="doctor",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                participant_ref=provider_log_ref(participant_id),
+                doctor_present=False,
+                recording_active=recording_active,
+            )
+
+            if recording_active:
+                _pause_and_arm_merge_window_locked(
+                    redis, meeting_id_str, reason="doctor_left"
+                )
+            return
+
+        new_count = _set_participant_membership(
+            redis,
+            meeting_id=meeting_id_str,
+            participant_ref=participant_reference,
+            joined=False,
+        )
+
+        doctor_present = bool(redis.get(f"recall:meeting:{meeting_id}:doctor_present"))
         recording_active = bool(
             redis.get(f"recall:meeting:{meeting_id}:recording_active")
         )
+
         log.info(
-            "participant left: doctor",
-            role="doctor",
-            meeting_ref=provider_log_ref(str(meeting_id)),
+            "participant left: other",
+            role="other",
+            meeting_ref=provider_log_ref(meeting_id_str),
             participant_ref=provider_log_ref(participant_id),
-            doctor_present=False,
+            doctor_present=doctor_present,
             recording_active=recording_active,
+            patient_count=new_count,
         )
 
-        if recording_active:
-            _pause_and_arm_merge_window(redis, meeting_id, reason="doctor_left")
-        return
-
-    # role == "other"
-    _begin_side_effect(before_side_effect)
-    redis.lrem(f"recall:meeting:{meeting_id}:participants_order", 0, participant_id)
-    redis.hdel(f"recall:meeting:{meeting_id}:participants_names", participant_id)
-    new_count = cast(int, redis.decr(f"recall:meeting:{meeting_id}:patient_count"))
-
-    if new_count < 0:
-        log.warning(
-            "patient_count went negative, resetting to 0",
-            meeting_ref=provider_log_ref(str(meeting_id)),
-            count=new_count,
-        )
-        redis.set(f"recall:meeting:{meeting_id}:patient_count", 0)
-        return
-
-    doctor_present = bool(redis.get(f"recall:meeting:{meeting_id}:doctor_present"))
-    recording_active = bool(redis.get(f"recall:meeting:{meeting_id}:recording_active"))
-
-    log.info(
-        "participant left: other",
-        role="other",
-        meeting_ref=provider_log_ref(str(meeting_id)),
-        participant_ref=provider_log_ref(participant_id),
-        doctor_present=doctor_present,
-        recording_active=recording_active,
-        patient_count=new_count,
-    )
-
-    if new_count == 0 and doctor_present and recording_active:
-        # Mirror the doctor-leaves behavior: pause and arm the merge
-        # window so a follow-up patient inside 10 min lands on the same
-        # bot and concatenates into one note (Mode A back-to-back).
-        _pause_and_arm_merge_window(
-            redis,
-            meeting_id,
-            reason="last_patient_left",
-        )
+        if new_count == 0 and doctor_present and recording_active:
+            _pause_and_arm_merge_window_locked(
+                redis,
+                meeting_id_str,
+                reason="last_patient_left",
+            )
 
 
 def _pause_and_arm_merge_window(redis, meeting_id: str, reason: str) -> None:
     """Pause the active recording: stop the bot (it stays connected) and
-    arm the merge_window task. If a non-doctor or the doctor returns
-    within the window, we resume on the same bot. If the window expires,
-    merge_window.perform issues leave_call and clears state."""
-    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
-    if bot_id:
-        try:
-            recall.stop_recording(bot_id)
-        except Exception as exc:
-            log.warning(
-                "stop_recording failed during pause",
-                bot_ref=provider_log_ref(bot_id),
-                meeting_ref=provider_log_ref(str(meeting_id)),
-                reason=reason,
-                error_type=type(exc).__name__,
-            )
+    arm the merge_window task. Returns never resume this bot: the task owns
+    confirmed leave and only then clears the provider handle."""
+    with _lifecycle_lock(redis, meeting_id):
+        _pause_and_arm_merge_window_locked(redis, meeting_id, reason)
 
+
+def _pause_and_arm_merge_window_locked(redis, meeting_id: str, reason: str) -> None:
+    # Another participant event may have completed the same pause while this
+    # handler waited for the lock. Re-check inside the serialized lifecycle
+    # boundary before issuing any provider mutation.
+    if not redis.get(f"recall:meeting:{meeting_id}:recording_active"):
+        return
+
+    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+    if not bot_id:
+        raise RuntimeError("active recording has no tracked bot")
+
+    previous_generation = _rget(redis, f"recall:meeting:{meeting_id}:merge_generation")
+    generation = int(previous_generation or "0") + 1
+    occurrence_digest = _rget(redis, f"recall:meeting:{meeting_id}:occurrence_digest")
+    intent = store_zoom_teardown_intent(
+        action="pause",
+        meeting_id=meeting_id,
+        bot_id=bot_id,
+        occurrence_digest=occurrence_digest,
+        generation=generation,
+        stop_recording=True,
+        cleanup_session=False,
+    )
+    release_intent = store_zoom_teardown_intent(
+        action="release",
+        meeting_id=meeting_id,
+        bot_id=bot_id,
+        occurrence_digest=occurrence_digest,
+        generation=generation,
+        stop_recording=True,
+        cleanup_session=False,
+        recovery_delay=timedelta(seconds=MERGE_WINDOW_SECONDS),
+    )
+
+    try:
+        recall.stop_recording(bot_id)
+    except Exception as exc:
+        log.warning(
+            "stop_recording failed during pause",
+            bot_ref=provider_log_ref(bot_id),
+            meeting_ref=provider_log_ref(str(meeting_id)),
+            reason=reason,
+            error_type=type(exc).__name__,
+        )
+        # The encrypted inbox intent retains the bot handle and target state;
+        # reconciliation can safely retry even if Redis or this worker is lost.
+        raise
+
+    redis.set(f"recall:meeting:{meeting_id}:merge_generation", generation)
     redis.delete(f"recall:meeting:{meeting_id}:recording_active")
 
     ttl = timedelta(hours=24)
+    redis.expire(
+        f"recall:meeting:{meeting_id}:merge_generation",
+        int(ttl.total_seconds()),
+    )
     redis.set(
         f"recall:meeting:{meeting_id}:paused_at",
         datetime.utcnow().isoformat(),
         ex=ttl,
     )
-    task = merge_window.queue(meeting_id, countdown=MERGE_WINDOW_SECONDS)
+    task = merge_window.queue(
+        meeting_id,
+        generation,
+        occurrence_digest=occurrence_digest,
+        release_delivery_id=release_intent.delivery_id,
+        countdown=MERGE_WINDOW_SECONDS,
+    )
     redis.set(
         f"recall:meeting:{meeting_id}:merge_task_id",
         task.id,
         ex=ttl,
     )
+    redis.set(
+        f"recall:meeting:{meeting_id}:merge_release_intent_id",
+        release_intent.delivery_id,
+        ex=ttl,
+    )
+    complete_zoom_teardown_intent(intent.delivery_id)
     log.info(
         "recording paused, merge window armed",
         meeting_ref=provider_log_ref(str(meeting_id)),
         bot_ref=provider_log_ref(bot_id),
         reason=reason,
+        merge_generation=generation,
         countdown_s=MERGE_WINDOW_SECONDS,
     )
 
 
 def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> None:
-    """Delete all per-meeting Redis state. Called on meeting.ended so keys
-    don't linger for the full 24h TTL — especially important for personal
-    meeting rooms that reuse the same meeting_id across sessions.
+    """Delete session state while retaining the cross-session generation fence.
+
+    Called on meeting.ended so operational keys don't linger for the full 24h
+    TTL — especially important for personal meeting rooms that reuse the same
+    meeting_id across sessions.
 
     preserve_lock keeps the starting_lock in place when we are mid-session
     (e.g. cleaning orphan state during handle_meeting_started) so duplicate
@@ -735,10 +1186,19 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
         "recording_active",
         "participants_order",
         "participants_names",
+        "participants_present",
+        "participant_event_order",
         "patient_count",
+        "capture_started",
+        "occurrence_digest",
         "merge_task_id",
+        "merge_release_intent_id",
         "paused_at",
     ]
+    # Keep merge_generation until its own 24-hour TTL. Personal meeting rooms
+    # reuse meeting_id, and a revoked task from the prior session can still be
+    # delivered after this cleanup. Resetting the counter would let that stale
+    # task collide with generation 1 of the new session and release its bot.
     if not preserve_lock:
         suffixes.append("starting_lock")
     for suffix in suffixes:
@@ -754,77 +1214,139 @@ def handle_meeting_ended(
     state. When no bot exists, the meeting ended without ever recording —
     the expected outcome when the doctor never joined.
 
-    Stale-event guard: Zoom occasionally redelivers a meeting.ended from a
-    prior PMR session shortly after a fresh meeting.started for the same
-    meeting_id. If we're still inside the starting_lock window of an
-    active session, this ended is almost certainly stale — clearing state
-    here wipes host_id, which makes _role_for misclassify the doctor as
-    "other" once they join, so the bot is never created. Skip.
+    Zoom's occurrence UUID, rather than the reusable PMR meeting ID, is the
+    authority for teardown. A matching occurrence can end immediately even
+    inside the legacy 60-second start fence; a delayed prior-occurrence event
+    cannot alter the new occurrence.
     """
     obj = payload.get("payload", {}).get("object", {})
     meeting_id = obj.get("id")
+    meeting_id_str = str(meeting_id)
+    event_occurrence = _occurrence_digest(obj)
 
     redis = get_redis()
-    if redis.get(f"recall:meeting:{meeting_id}:starting_lock"):
-        log.info(
-            "meeting.ended skipped: still inside starting lock window (likely stale)",
-            meeting_ref=provider_log_ref(str(meeting_id)),
+    merge_task_id: str | None = None
+    with _lifecycle_lock(redis, meeting_id_str):
+        active_occurrence = _rget(
+            redis, f"recall:meeting:{meeting_id}:occurrence_digest"
         )
-        return
-
-    _begin_side_effect(before_side_effect)
-
-    bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
-    merge_task_id = _rget(redis, f"recall:meeting:{meeting_id}:merge_task_id")
-
-    if merge_task_id:
-        celery_app.control.revoke(merge_task_id)
-
-    if bot_id:
-        log.info(
-            "meeting ended with active recording",
-            meeting_ref=provider_log_ref(str(meeting_id)),
-            bot_ref=provider_log_ref(bot_id),
-        )
-        try:
-            recall.stop_recording(bot_id)
-        except Exception as exc:
+        if active_occurrence is not None and event_occurrence != active_occurrence:
             log.warning(
-                "stop_recording failed during meeting.ended",
-                bot_ref=provider_log_ref(bot_id),
-                meeting_ref=provider_log_ref(str(meeting_id)),
-                error_type=type(exc).__name__,
+                "meeting.ended fenced from a different occurrence",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                event_has_occurrence=event_occurrence is not None,
             )
-        try:
-            recall.leave_call(bot_id)
-        except Exception as exc:
-            log.warning(
-                "leave_call failed during meeting.ended",
-                bot_ref=provider_log_ref(bot_id),
-                meeting_ref=provider_log_ref(str(meeting_id)),
-                error_type=type(exc).__name__,
+            return
+        if active_occurrence is None and event_occurrence is not None:
+            has_legacy_state = any(
+                redis.get(f"recall:meeting:{meeting_id}:{suffix}")
+                for suffix in ("doctor_id", "host_id", "bot_id")
             )
-    else:
-        log.info(
-            "meeting ended without recording",
-            meeting_ref=provider_log_ref(str(meeting_id)),
-        )
+            if not has_legacy_state:
+                log.info(
+                    "meeting.ended ignored without active occurrence state",
+                    meeting_ref=provider_log_ref(meeting_id_str),
+                )
+                return
+            # Rolling compatibility: old workers did not write an occurrence
+            # key. Adopt the UUID carried by the end event before mutation.
+            redis.set(
+                f"recall:meeting:{meeting_id}:occurrence_digest",
+                event_occurrence,
+                ex=timedelta(hours=24),
+            )
+            active_occurrence = event_occurrence
+        elif (
+            active_occurrence is None
+            and event_occurrence is None
+            and redis.get(f"recall:meeting:{meeting_id}:starting_lock")
+        ):
+            # Old payload + old state: retain the pre-cutover stale-event guard.
+            log.info(
+                "legacy meeting.ended skipped inside starting lock window",
+                meeting_ref=provider_log_ref(meeting_id_str),
+            )
+            return
 
-    _clear_meeting_keys(redis, meeting_id)
-
-    zoom_mtg = cast(
-        ZoomMeeting | None,
-        ZoomMeeting.where(
-            cast(Any, ZoomMeeting.zoom_meeting_id) == str(meeting_id)
-        ).first(),
-    )
-    if zoom_mtg:
-        zoom_mtg.status = ZoomMeetingStatus.ended
-        zoom_mtg.save()
-        log.info(
-            "zoom meeting status updated to ended",
-            meeting_ref=provider_log_ref(str(meeting_id)),
+        bot_id = _rget(redis, f"recall:meeting:{meeting_id}:bot_id")
+        doctor_id = _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+        merge_task_id = _rget(redis, f"recall:meeting:{meeting_id}:merge_task_id")
+        merge_release_intent_id = _rget(
+            redis, f"recall:meeting:{meeting_id}:merge_release_intent_id"
         )
+        teardown_intent = None
+
+        if bot_id:
+            generation_value = _rget(
+                redis, f"recall:meeting:{meeting_id}:merge_generation"
+            )
+            teardown_intent = store_zoom_teardown_intent(
+                action="release",
+                meeting_id=meeting_id_str,
+                bot_id=bot_id,
+                occurrence_digest=active_occurrence,
+                generation=(
+                    int(generation_value) if generation_value is not None else None
+                ),
+                stop_recording=True,
+                cleanup_session=True,
+                doctor_id=doctor_id,
+                mark_meeting_ended=True,
+            )
+            _begin_side_effect(before_side_effect)
+            log.info(
+                "meeting ended with tracked bot",
+                meeting_ref=provider_log_ref(meeting_id_str),
+                bot_ref=provider_log_ref(bot_id),
+            )
+            try:
+                recall.stop_recording(bot_id)
+            except Exception as exc:
+                # A failed stop must not prevent the stronger teardown call.
+                # If leave succeeds, Recall has confirmed the bot is gone and
+                # local ownership can safely be released.
+                log.warning(
+                    "stop_recording failed during meeting.ended; attempting leave",
+                    bot_ref=provider_log_ref(bot_id),
+                    meeting_ref=provider_log_ref(str(meeting_id)),
+                    error_type=type(exc).__name__,
+                )
+            try:
+                recall.leave_call(bot_id)
+            except Exception as exc:
+                log.warning(
+                    "leave_call failed during meeting.ended; retaining bot state",
+                    bot_ref=provider_log_ref(bot_id),
+                    meeting_ref=provider_log_ref(str(meeting_id)),
+                    error_type=type(exc).__name__,
+                )
+                # Do not revoke the expiry task, clear the provider handle, or
+                # mark the meeting ended without a confirmed leave.  Raising
+                # crosses dispatch's ambiguity fence and feeds health alerts.
+                raise
+        else:
+            log.info(
+                "meeting ended without recording",
+                meeting_ref=provider_log_ref(str(meeting_id)),
+            )
+
+        # Provider departure is confirmed before the local status transition;
+        # the encrypted release intent retains doctor_id so reconciliation can
+        # retry this idempotent database write without depending on Redis.
+        if merge_window.mark_meeting_ended(doctor_id, meeting_id_str):
+            log.info(
+                "zoom meeting status updated to ended",
+                meeting_ref=provider_log_ref(str(meeting_id)),
+            )
+
+        _clear_meeting_keys(redis, meeting_id)
+
+        if teardown_intent is not None:
+            complete_zoom_teardown_intent(teardown_intent.delivery_id)
+            if merge_release_intent_id is not None:
+                complete_zoom_teardown_intent(merge_release_intent_id)
+
+    _revoke_merge_window_task(merge_task_id, meeting_id_str)
 
 
 HANDLERS = {

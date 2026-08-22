@@ -1,6 +1,9 @@
+import json
 from datetime import datetime, timedelta, timezone
 from typing import cast
 from unittest.mock import patch
+
+from structlog.testing import capture_logs
 
 from app.jobs.sync_zoom_meetings import perform
 
@@ -43,9 +46,12 @@ def test_sync_creates_zoom_meetings(global_session):
     doctor = DoctorFactory.build().save()
     _create_zoom_integration(doctor)
 
-    with patch(
-        "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
-        return_value=FAKE_MEETINGS,
+    with (
+        patch(
+            "app.jobs.sync_zoom_meetings.zoom_service.get_user_meetings",
+            return_value=FAKE_MEETINGS,
+        ),
+        capture_logs() as logs,
     ):
         perform(str(doctor.id))
 
@@ -56,6 +62,20 @@ def test_sync_creates_zoom_meetings(global_session):
     assert len(meetings) == 2
     topics = {m.topic for m in meetings}
     assert topics == {"Patient Follow-up", "New Patient Intake"}
+
+    serialized = json.dumps(logs, sort_keys=True)
+    for private_value in (
+        str(doctor.id),
+        "zoom_user_abc",
+        "123456789",
+        "987654321",
+        "Patient Follow-up",
+        "New Patient Intake",
+        "https://zoom.us/j/123456789",
+    ):
+        assert private_value not in serialized
+    assert "hmac:" in serialized
+    assert any(entry.get("event_code") == "zoom_sync_completed" for entry in logs)
 
 
 def test_sync_upserts_existing_meetings(global_session):

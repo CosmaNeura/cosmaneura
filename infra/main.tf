@@ -45,9 +45,21 @@ locals {
     data.external.database_url_live_guard.result["result"] == "verified",
     false,
   )
-  recall_webhook_secret_valid = try(
-    length(trimspace(data.external.secrets.result["RECALL_WEBHOOK_SECRET"])) > 0,
-    false,
+  recall_webhook_secret         = try(data.external.secrets.result["RECALL_WEBHOOK_SECRET"], "")
+  recall_webhook_secret_payload = trimprefix(local.recall_webhook_secret, "whsec_")
+  # Validate only the Recall/Svix whsec_ + canonical base64 shape. Never place
+  # the credential in an output, diagnostic, summary, or provider query.
+  recall_webhook_secret_valid = (
+    local.recall_webhook_secret == trimspace(local.recall_webhook_secret) &&
+    startswith(local.recall_webhook_secret, "whsec_") &&
+    # Any canonical base64 encoding of at least 16 decoded bytes is 24 or more
+    # characters. This rejects syntactically valid but trivially weak keys.
+    length(local.recall_webhook_secret_payload) >= 24 &&
+    length(local.recall_webhook_secret_payload) % 4 == 0 &&
+    can(regex(
+      "^([A-Za-z0-9+/]{4})*([A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$",
+      local.recall_webhook_secret_payload,
+    ))
   )
 }
 
@@ -640,7 +652,7 @@ resource "azurerm_container_app" "app" {
   lifecycle {
     precondition {
       condition     = local.recall_webhook_secret_valid
-      error_message = "RECALL_WEBHOOK_SECRET must be configured for the API before deployment"
+      error_message = "RECALL_WEBHOOK_SECRET must use a whsec_ prefix and canonical base64 payload of at least 16 decoded bytes"
     }
 
     precondition {
@@ -1189,9 +1201,12 @@ resource "azurerm_federated_identity_credential" "ghactions" {
   audience = ["api://AzureADTokenExchange"]
   issuer   = "https://token.actions.githubusercontent.com"
 
-  # TODO understand how these are constructed
-  # NOTE the casing here is very important, without the exact casing, this will fail
-  subject = "repo:CosmaNeura/cosmaneura:ref:refs/heads/master"
+  # Desired state: bind Azure trust to the protected GitHub environment, not
+  # merely to the branch ref. The live credential must first be bootstrapped
+  # out of band and imported/adopted under the reviewed reconciliation hold in
+  # infra/README.md; this resource cannot bootstrap its own OIDC access.
+  # NOTE the casing here is very important; an exact mismatch fails auth.
+  subject = "repo:CosmaNeura/cosmaneura:environment:production"
 }
 
 # push new containers to ACR

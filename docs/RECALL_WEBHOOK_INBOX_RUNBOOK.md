@@ -65,10 +65,32 @@ environment. The configured and tested region is `us-west-2`.
   references and bounded operation/status fields, never provider paths,
   response bodies, or raw doctor/meeting IDs. ZAK callback bearers expire after
   five minutes and are consumed atomically on their first request.
+- Sentry drops request targets, unmatched/custom transaction names, span
+  descriptions/data/tags, exception text, locals, and identity context before
+  transmission. Celery publishes fixed
+  redacted argument representations, has no result backend, emits no task
+  events, and reduces framework logs to fixed metadata. Flower neither enables
+  task events nor persists state and displays no args, kwargs, or results;
+  application-owned task lifecycle logs contain only a hashed task reference,
+  task name, state, retry count, and exception class. Worker `conf`/`report`
+  inspection returns fixed privacy-mode metadata because extension
+  configuration can contain URLs that Celery's built-in censor does not
+  recognize; ping, safe task inspection, and revoke remain available.
 - Payload ciphertext is deleted immediately after success and no later than six
   hours after receipt. Expired work is dead-lettered without payload.
 - Recall Create Bot keeps `recording_config: null` for manual control. POST
   Start Recording receives exactly `{"retention":{"type":"timed","hours":6}}`.
+- Zoom bot pause and release transitions are serialized per meeting. A durable,
+  encrypted release intent owns the raw bot/meeting identifiers; the delayed
+  merge-window task carries only that internal delivery ID. A failed provider
+  stop retains the active bot state and does not arm expiry; a failed leave
+  retains the bot handle and raises for health visibility. Redis loss cannot
+  erase the release command, and neither `meeting.ended` nor merge-window
+  expiry may clear ownership until Recall confirms the leave and any requested
+  dashboard status update succeeds.
+- Participant membership uses occurrence-scoped HMAC references and signed
+  Zoom `event_ts` monotonic ordering. A participant callback cannot establish a
+  new occurrence ahead of authoritative `meeting.started`.
 
 ## Two-release cutover
 
@@ -88,15 +110,24 @@ path. A protected environment variable with any non-empty value other than
    and the single-replica scheduler. Staging deployment stops before migrations
    if any required workload or the checked-in Procfile scheduler command is
    absent.
-4. Verify the production API-only secret live guard. It must report `verified`;
+4. For production application deployment, run migrations first; update and
+   verify the worker and scheduler before exposing the API revision; update and
+   verify Job Monitor last. Stop the rollout at the first failed verification.
+5. Verify the production API-only secret live guard. It must report `verified`;
    it must not print or fetch a secret value.
-5. Verify the scheduler is running the checked-in `scheduler` Procfile command
+6. Verify the scheduler is running the checked-in `scheduler` Procfile command
    and that the 30-second `external_webhook_inbox_reconcile` beat entry fires.
-6. Inspect Celery active/reserved/scheduled tasks and wait until legacy
-   `app.jobs.webhooks.perform` work is empty. Do not purge Redis queues. The
-   compatibility consumer converts any already-queued legacy payload into the
-   PostgreSQL inbox before handling it.
-7. Verify `GET /internal/v1/admin/webhook-inbox/health` as an authenticated
+7. Inspect Celery active/reserved/scheduled task names and states and wait until
+   legacy `app.jobs.webhooks.perform` work is empty. Arguments, results, and
+   exception details are deliberately unavailable in Flower. Do not purge
+   Redis queues. The compatibility consumer converts any already-queued legacy
+   payload into the PostgreSQL inbox before handling it.
+8. After every old worker and Job Monitor revision is gone, inventory and
+   remove only legacy Celery result keys (`celery-task-meta-*` and
+   `celery-taskset-meta-*`) under an approved change record. Never use
+   `FLUSHDB`, and do not touch queue, unacked, redbeat, session, or application
+   keys. Run one non-PHI probe task and confirm that no result key reappears.
+9. Verify `GET /internal/v1/admin/webhook-inbox/health` as an authenticated
    admin. Pending/retry age and dead-letter/uncertain counts must remain zero.
 
 Legacy Recall tasks generally used a payload-derived event ID, while new
@@ -119,6 +150,10 @@ side-effect fence during this rolling-deploy window.
    body in application/Sentry/Celery logs.
 4. Do not add Desktop SDK webhook subscriptions during this cutover. They are a
    separate, reviewed change after the desktop upload adapter exists.
+5. Keep Zoom clinical capture disabled until activation gate D2 supplies each
+   `ZoomMeeting` with an exact appointment plus an unexpired occurrence digest.
+   This runtime deliberately contains no producer for that authorization and
+   fails closed when it is absent, mismatched, expired, or already consumed.
 
 When the flag is false, ordinary verified callbacks return HTTP 200 after
 enqueueing the hardened compatibility bridge with a keyed pseudonymous event
@@ -148,6 +183,17 @@ URLs, or exception text into an incident ticket. Use the internal delivery
 TypeID and bounded error code.
 
 ## Stop/rollback conditions
+
+After durable ingress or authorized capture has accepted traffic, a database
+downgrade is **not** a rollback mechanism. Never downgrade revisions
+`dc296f605553` (durable webhook inbox), `a81c9d7e4f20` (visit-note uniqueness),
+or `e4b9a63f210d` (Zoom capture authorization) as an incident response. First
+disable ingress and new capture at their source and through the reviewed
+feature flags, stop new mutations, drain in-flight workers without purging
+queues, and preserve or back up the inbox, receipts, authorization records,
+and related audit evidence. A source/flag rollback must retain the migrated
+tables, constraints, and evidence needed for replay, reconciliation, and
+forensic review.
 
 Deploy the reviewed source rollback that returns the feature flag to `false`
 across every workload, and investigate if any of these occur:

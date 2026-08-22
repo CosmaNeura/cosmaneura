@@ -1,0 +1,58 @@
+name: Install pinned 1Password CLI
+description: Install an exact checksum-verified 1Password CLI release
+
+runs:
+  using: composite
+  steps:
+    - name: Install verified 1Password CLI
+      shell: bash
+      env:
+        # SHA-256 published by the official 1Password Debian Packages index:
+        # https://downloads.1password.com/linux/debian/amd64/dists/stable/main/binary-amd64/Packages
+        OP_CLI_DEB_SHA256: 3d5230a1a57f6b7259a837e345fb7886614e20cd87b53640fa4a93c67c0b2bf1
+        OP_CLI_PACKAGE_VERSION: 2.39.0-1
+        OP_CLI_VERSION: 2.39.0
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS" != "Linux" || "$RUNNER_ARCH" != "X64" ]]; then
+          echo "The pinned 1Password CLI installer supports only Linux X64 runners." >&2
+          exit 1
+        fi
+
+        install_root=$(mktemp -d "$RUNNER_TEMP/op-cli.XXXXXX")
+        chmod 0700 "$install_root"
+        trap 'rm -rf "$install_root"' EXIT
+        package="$install_root/1password-cli.deb"
+        extract_dir="$install_root/extracted"
+        install_dir=$(mktemp -d "$RUNNER_TEMP/op-cli-bin.XXXXXX")
+        chmod 0700 "$install_dir"
+        url="https://downloads.1password.com/linux/debian/amd64/pool/main/1/1password-cli/1password-cli-${OP_CLI_PACKAGE_VERSION}.amd64.deb"
+
+        curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+          "$url" --output "$package"
+        printf '%s  %s\n' "$OP_CLI_DEB_SHA256" "$package" |
+          sha256sum --check --strict
+
+        package_name=$(dpkg-deb --field "$package" Package)
+        package_version=$(dpkg-deb --field "$package" Version)
+        package_architecture=$(dpkg-deb --field "$package" Architecture)
+        if [[ "$package_name" != "1password-cli" || \
+              "$package_version" != "$OP_CLI_PACKAGE_VERSION" || \
+              "$package_architecture" != "amd64" ]]; then
+          echo "The 1Password CLI package metadata does not match the pin." >&2
+          exit 1
+        fi
+
+        mkdir -m 0700 "$extract_dir"
+        dpkg-deb --extract "$package" "$extract_dir"
+        op_binary="$extract_dir/usr/bin/op"
+        if [[ ! -f "$op_binary" || -L "$op_binary" ]]; then
+          echo "The 1Password CLI package did not contain a regular op binary." >&2
+          exit 1
+        fi
+        install -m 0755 "$op_binary" "$install_dir/op"
+        if [[ "$("$install_dir/op" --version)" != "$OP_CLI_VERSION" ]]; then
+          echo "The installed 1Password CLI version does not match the pin." >&2
+          exit 1
+        fi
+        echo "$install_dir" >> "$GITHUB_PATH"

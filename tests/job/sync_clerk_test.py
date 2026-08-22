@@ -1,5 +1,8 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from structlog.testing import capture_logs
 
 from app.jobs.sync_clerk import perform
 
@@ -48,7 +51,10 @@ def test_collision_skips_doctor_and_continues_with_others(global_session):
             )
         raise AssertionError(f"unexpected user_id {user_id}")
 
-    with patch("app.jobs.sync_clerk.clerk.users.get", side_effect=fake_get):
+    with (
+        patch("app.jobs.sync_clerk.clerk.users.get", side_effect=fake_get),
+        capture_logs() as logs,
+    ):
         perform()
 
     owner_after = Doctor.get(id=owner.id)
@@ -58,6 +64,24 @@ def test_collision_skips_doctor_and_continues_with_others(global_session):
     assert owner_after.email == "taken@example.com"
     assert colliding_after.email is None
     assert fresh_after.email == "fresh@example.com"
+
+    serialized = json.dumps(logs, sort_keys=True)
+    for private_value in (
+        str(owner.id),
+        str(colliding.id),
+        str(fresh.id),
+        owner.clerk_id,
+        colliding.clerk_id,
+        fresh.clerk_id,
+        "taken@example.com",
+        "fresh@example.com",
+        "e_owner",
+        "e_colliding",
+        "e_fresh",
+    ):
+        assert private_value not in serialized
+    assert "hmac:" in serialized
+    assert any(entry.get("event_code") == "clerk_email_collision" for entry in logs)
 
 
 def test_uses_primary_email_not_first_in_list(global_session):

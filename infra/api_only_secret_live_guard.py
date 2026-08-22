@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Value-free live guard for the Recall webhook signing secret scope."""
+"""Non-disclosing live guard for Recall signing-secret syntax and scope."""
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -16,6 +18,7 @@ SUBSCRIPTION_RE = re.compile(
 )
 RESOURCE_GROUP_RE = re.compile(r"^[A-Za-z0-9._()\-]{1,90}$")
 ENV_NAME = "RECALL_WEBHOOK_SECRET"
+MIN_SIGNING_SECRET_BYTES = 16
 SECRET_NAME = "recall-webhook-secret"
 
 
@@ -43,6 +46,7 @@ WORKLOADS = (
 def _run_az(arguments: tuple[str, ...]) -> str:
     environment = os.environ.copy()
     environment.pop(ENV_NAME, None)
+    environment.pop("OP_SERVICE_ACCOUNT_TOKEN", None)
     try:
         result = subprocess.run(
             ["az", *arguments, "--only-show-errors"],
@@ -82,6 +86,23 @@ def validate_query(query: dict[str, str]) -> None:
         raise LiveGuardError("resource group is invalid")
 
 
+def validate_signing_secret(secret: str) -> None:
+    """Validate only syntax; errors never include the credential value."""
+
+    if secret != secret.strip() or not secret.startswith("whsec_"):
+        raise LiveGuardError("Recall signing credential syntax is invalid")
+    payload = secret.removeprefix("whsec_")
+    try:
+        decoded = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise LiveGuardError("Recall signing credential syntax is invalid") from None
+    if (
+        len(decoded) < MIN_SIGNING_SECRET_BYTES
+        or base64.b64encode(decoded).decode("ascii") != payload
+    ):
+        raise LiveGuardError("Recall signing credential syntax is invalid")
+
+
 def secret_scope_state(resource: dict[str, Any]) -> tuple[list[dict], list[str]]:
     try:
         containers = resource["properties"]["template"]["containers"]
@@ -108,8 +129,16 @@ def secret_scope_state(resource: dict[str, Any]) -> tuple[list[dict], list[str]]
     return entries, names
 
 
-def verify_live_state(query: dict[str, str], *, runner: Any = _run_az) -> int:
+def verify_live_state(
+    query: dict[str, str],
+    *,
+    runner: Any = _run_az,
+    signing_secret: str | None = None,
+) -> int:
     validate_query(query)
+    validate_signing_secret(
+        os.environ.get(ENV_NAME, "") if signing_secret is None else signing_secret
+    )
     for workload in WORKLOADS:
         raw = runner(
             (
@@ -159,5 +188,29 @@ def main() -> int:
     return 0
 
 
+def validate_signing_secret_only() -> int:
+    """Validate the configured signing key without querying or mutating Azure."""
+
+    try:
+        validate_signing_secret(os.environ.get(ENV_NAME, ""))
+    except LiveGuardError:
+        print(
+            json.dumps({"code": "recall_signing_secret_validation_failed"}),
+            file=sys.stderr,
+        )
+        return 1
+    print(json.dumps({"result": "verified"}))
+    return 0
+
+
+def cli(arguments: list[str]) -> int:
+    if arguments == ["--validate-signing-secret-only"]:
+        return validate_signing_secret_only()
+    if arguments:
+        print(json.dumps({"code": "invalid_guard_arguments"}), file=sys.stderr)
+        return 1
+    return main()
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(cli(sys.argv[1:]))

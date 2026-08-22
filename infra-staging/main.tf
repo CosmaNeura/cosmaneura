@@ -1052,9 +1052,13 @@ resource "azurerm_federated_identity_credential" "ghactions" {
   audience = ["api://AzureADTokenExchange"]
   issuer   = "https://token.actions.githubusercontent.com"
 
-  # TODO understand how these are constructed
-  # NOTE the casing here is very important, without the exact casing, this will fail
-  subject = "repo:CosmaNeura/cosmaneura:ref:refs/heads/master"
+  # Desired state: bind Azure trust to the protected staging environment. The
+  # live identity already has an environment-subject credential under another
+  # name, so it must be imported/adopted or deliberately renamed under the
+  # reviewed reconciliation hold in infra/README.md before an apply. Applying
+  # this resource directly can collide with the existing issuer/subject pair.
+  # NOTE the casing here is very important; an exact mismatch fails auth.
+  subject = "repo:CosmaNeura/cosmaneura:environment:staging"
 }
 
 # push new containers to ACR

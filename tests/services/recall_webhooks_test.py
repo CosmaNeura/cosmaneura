@@ -104,6 +104,33 @@ def test_transcript_done_retries_when_redis_tenant_binding_is_missing(
     assert "hmac:" in serialized
 
 
+def test_transcript_done_rejects_bot_scoped_fallback_binding(monkeypatch) -> None:
+    """A second recording ID must not inherit the first patient's bot mapping."""
+    redis_values = {
+        "recall:bot:bot-private-sentinel:doctor_id": b"doctor-a",
+        "recall:bot:bot-private-sentinel:appointment_id": b"appointment-a",
+        "recall:bot:bot-private-sentinel:patient_id": b"patient-a",
+    }
+
+    class FakeRedis:
+        def get(self, key):
+            return redis_values.get(key)
+
+    monkeypatch.setattr(recall_webhooks, "get_redis", lambda: FakeRedis())
+    monkeypatch.setattr(
+        recall_webhooks.recall_service,
+        "get_transcript",
+        lambda _transcript_id: (_ for _ in ()).throw(
+            AssertionError("provider must not be called for an unbound recording")
+        ),
+    )
+
+    with pytest.raises(RetryableWebhookError) as error:
+        recall_webhooks.handle_transcript_done(_transcript_payload())
+
+    assert error.value.code == "tenant_mapping_unavailable"
+
+
 def test_transcript_status_logging_contains_only_hashed_reference() -> None:
     payload = {
         "event": "transcript.processing",

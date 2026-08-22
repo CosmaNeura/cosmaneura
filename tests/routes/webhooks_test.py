@@ -212,6 +212,86 @@ def test_zoom_webhook_rejects_unbounded_or_non_string_event_types(
     assert response.status_code == status.HTTP_400_BAD_REQUEST
 
 
+def test_zoom_supported_event_allowlist_is_exact() -> None:
+    assert webhooks.ZOOM_SUPPORTED_EVENT_TYPES == frozenset(
+        {
+            "meeting.started",
+            "meeting.participant_joined",
+            "meeting.participant_left",
+            "meeting.ended",
+        }
+    )
+
+
+def test_recall_supported_event_allowlist_is_exact() -> None:
+    assert webhooks.RECALL_SUPPORTED_EVENT_TYPES == frozenset(
+        {
+            "recording.done",
+            "transcript.done",
+            "transcript.failed",
+            "transcript.processing",
+        }
+    )
+
+
+@pytest.mark.usefixtures("zoom_secret")
+@pytest.mark.parametrize("event_type", sorted(webhooks.ZOOM_SUPPORTED_EVENT_TYPES))
+def test_zoom_webhook_accepts_only_supported_external_event_types(
+    client: TestClient,
+    durable_ingress: dict[str, list],
+    event_type: str,
+) -> None:
+    body = json.dumps({"event": event_type, "payload": {}}).encode()
+    ts = str(int(time.time()))
+    response = client.post(
+        ZOOM_WEBHOOK_PATH,
+        content=body,
+        headers={
+            "x-zm-request-timestamp": ts,
+            "x-zm-signature": _zoom_sign(body, ts),
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert durable_ingress["stored"][0]["event_type"] == event_type
+
+
+@pytest.mark.usefixtures("zoom_secret")
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "meeting.created",
+        "internal.zoom_bot_pause",
+        "internal.zoom_bot_release",
+    ],
+)
+def test_zoom_webhook_rejects_signed_unknown_and_internal_events_before_storage(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    event_type: str,
+) -> None:
+    monkeypatch.setattr(
+        webhooks,
+        "_durable_ack",
+        lambda **_: (_ for _ in ()).throw(
+            AssertionError("unsupported event must not be stored or published")
+        ),
+    )
+    body = json.dumps({"event": event_type, "payload": {}}).encode()
+    ts = str(int(time.time()))
+    response = client.post(
+        ZOOM_WEBHOOK_PATH,
+        content=body,
+        headers={
+            "x-zm-request-timestamp": ts,
+            "x-zm-signature": _zoom_sign(body, ts),
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.json() == {"status": "unsupported event"}
+
+
 @pytest.mark.usefixtures("recall_secret")
 def test_recall_webhook_accepts_valid_signature_and_publishes_internal_id(
     client: TestClient, durable_ingress: dict[str, list]

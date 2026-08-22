@@ -34,6 +34,14 @@ RECALL_SUPPORTED_EVENT_TYPES = frozenset(
         "transcript.processing",
     }
 )
+ZOOM_SUPPORTED_EVENT_TYPES = frozenset(
+    {
+        "meeting.started",
+        "meeting.participant_joined",
+        "meeting.participant_left",
+        "meeting.ended",
+    }
+)
 
 
 class WebhookAck(BaseModel):
@@ -250,6 +258,9 @@ async def zoom_webhook(request: Request) -> WebhookAck | JSONResponse:
     event_type = _event_type(payload)
     if event_type is None:
         return JSONResponse({"status": "invalid payload"}, status_code=400)
+    if event_type not in ZOOM_SUPPORTED_EVENT_TYPES:
+        log.warning("unsupported zoom webhook event type")
+        return JSONResponse({"status": "unsupported event"}, status_code=400)
     tracking_id = request.headers.get("x-zm-trackingid")
     provider_event_id = external_webhook_inbox.stable_event_reference(
         "zoom", payload, tracking_id

@@ -5,6 +5,44 @@ from posthog.sentry.posthog_integration import PostHogIntegration
 
 from ..environments import is_job_monitor, is_production, python_environment
 
+_SAFE_SPAN_FIELDS = frozenset(
+    {
+        "trace_id",
+        "span_id",
+        "parent_span_id",
+        "same_process_as_parent",
+        "op",
+        "start_timestamp",
+        "timestamp",
+        "status",
+        "origin",
+    }
+)
+# Fixed SDK operation categories retain useful trace shape without accepting an
+# arbitrary application/provider-derived operation string.
+_SAFE_SPAN_OPERATIONS = frozenset(
+    {
+        "ai.chat_completions.create.openai",
+        "ai.embeddings.create.openai",
+        "cache.get",
+        "cache.put",
+        "db",
+        "db.redis",
+        "function",
+        "http.client",
+        "http.client.stream",
+        "middleware.starlette",
+        "middleware.starlette.receive",
+        "middleware.starlette.send",
+        "queue.publish",
+        "queue.process",
+        "queue.submit.celery",
+        "queue.task.celery",
+    }
+)
+_SAFE_TRANSACTION_SOURCES = frozenset({"component", "route", "task", "view"})
+_REDACTED_TRANSACTION = "<redacted transaction>"
+
 
 def scrub_event(event, _hint=None):
     """
@@ -46,7 +84,35 @@ def scrub_event(event, _hint=None):
     if isinstance(spans, list):
         for span in spans:
             if isinstance(span, dict):
-                span.pop("data", None)
+                # HTTP client integrations put the complete outbound path in
+                # ``description`` (for example ``/users/{clerk_id}``) even
+                # when span data is disabled.  Keep only structural timing
+                # fields; operation names and provider paths are not a safe
+                # telemetry boundary.
+                for field in tuple(span):
+                    if field not in _SAFE_SPAN_FIELDS:
+                        span.pop(field, None)
+                # Preserve only SDK-defined operation categories. Custom
+                # operation strings are unconstrained and can contain the
+                # same outbound provider paths or identifiers as description.
+                if span.get("op") not in _SAFE_SPAN_OPERATIONS:
+                    span.pop("op", None)
+
+    transaction_info = event.get("transaction_info")
+    transaction_source = (
+        transaction_info.get("source") if isinstance(transaction_info, dict) else None
+    )
+    if "transaction" in event and transaction_source not in _SAFE_TRANSACTION_SOURCES:
+        # Unmatched ASGI requests use their literal URL as the transaction
+        # name. Custom/unknown sources have the same unconstrained shape. The
+        # allowed sources are generated from this application's registered
+        # route, endpoint, view, or Celery task names rather than request data.
+        event["transaction"] = _REDACTED_TRANSACTION
+        event["transaction_info"] = {"source": "custom"}
+    elif isinstance(transaction_info, dict):
+        for field in tuple(transaction_info):
+            if field != "source":
+                transaction_info.pop(field, None)
 
     for field in (
         "extra",

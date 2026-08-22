@@ -31,8 +31,15 @@ WAKEUP_COOLDOWN = timedelta(minutes=1)
 MAX_ATTEMPTS = 5
 RECONCILE_BATCH_SIZE = 50
 ALERT_AGE = timedelta(minutes=5)
+ZOOM_TEARDOWN_RECOVERY_DELAY = timedelta(minutes=3)
+ZOOM_TEARDOWN_EVENTS = frozenset(
+    {"internal.zoom_bot_pause", "internal.zoom_bot_release"}
+)
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _PSEUDONYMOUS_EVENT_PREFIX = "hmac-v1:"
+# Keep aligned with app.services.recall.BOT_NAME without importing that module
+# here (recall itself imports inbox logging helpers during application startup).
+_ZOOM_BOT_PARTICIPANT_NAME = "Cosmas AI Note-Taker"
 
 
 class WebhookInboxError(Exception):
@@ -119,6 +126,26 @@ def _project_recall(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_zoom(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if event_type in ZOOM_TEARDOWN_EVENTS:
+        intent = payload.get("teardown_intent")
+        if not isinstance(intent, dict):
+            intent = {}
+        projected_intent = {
+            key: intent[key]
+            for key in (
+                "meeting_id",
+                "bot_id",
+                "doctor_id",
+                "occurrence_digest",
+                "generation",
+                "stop_recording",
+                "cleanup_session",
+                "mark_meeting_ended",
+            )
+            if intent.get(key) is not None
+        }
+        return {"event": event_type, "teardown_intent": projected_intent}
+
     payload_value = payload.get("payload")
     obj = payload_value.get("object") if isinstance(payload_value, dict) else None
     if not isinstance(obj, dict):
@@ -131,11 +158,26 @@ def _project_zoom(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(participant, dict):
         projected_participant = {
             key: participant[key]
-            for key in ("id", "user_id", "user_name")
+            for key in ("id", "user_id")
             if participant.get(key) is not None
         }
+        # The handlers need to exclude our bot, but no clinical/display name
+        # needs to survive ingress. Persist only the derived classification.
+        projected_participant["is_bot"] = (
+            participant.get("user_name") == _ZOOM_BOT_PARTICIPANT_NAME
+        )
         projected_obj["participant"] = projected_participant
-    return {"event": event_type, "payload": {"object": projected_obj}}
+    projected: dict[str, Any] = {
+        "event": event_type,
+        "payload": {"object": projected_obj},
+    }
+    # Zoom's signed millisecond event timestamp is ordering evidence, not
+    # clinical content. Retain only its normalized integer form so independent
+    # participant deliveries can be applied monotonically after broker races.
+    event_ts = payload.get("event_ts")
+    if isinstance(event_ts, int) and not isinstance(event_ts, bool) and event_ts >= 0:
+        projected["event_ts"] = event_ts
+    return projected
 
 
 def project_provider_payload(
@@ -179,6 +221,7 @@ def store_verified_external_webhook(
     payload: dict[str, Any],
     now: datetime | None = None,
     _provider_event_digest: str | None = None,
+    _next_attempt_at: datetime | None = None,
 ) -> StoredDelivery:
     """Commit a verified delivery before any broker publication or side effect."""
 
@@ -217,7 +260,7 @@ def store_verified_external_webhook(
             event_type=event_type,
             encrypted_payload=encrypt_inbox_payload(projected_json),
             payload_sha256=payload_sha256,
-            next_attempt_at=now,
+            next_attempt_at=_next_attempt_at or now,
             received_at=now,
             verified_at=now,
             payload_expires_at=now + PAYLOAD_RETENTION,
@@ -241,6 +284,97 @@ def store_verified_external_webhook(
                 raise WebhookConflictError("delivery identifier conflict") from None
             return StoredDelivery(str(existing.id), duplicate=True)
         return StoredDelivery(str(delivery.id), duplicate=False)
+
+
+def store_zoom_teardown_intent(
+    *,
+    action: Literal["pause", "release"],
+    meeting_id: str,
+    bot_id: str,
+    occurrence_digest: str | None,
+    generation: int | None,
+    stop_recording: bool,
+    cleanup_session: bool,
+    doctor_id: str | None = None,
+    mark_meeting_ended: bool = False,
+    recovery_delay: timedelta = ZOOM_TEARDOWN_RECOVERY_DELAY,
+    now: datetime | None = None,
+) -> StoredDelivery:
+    """Persist an encrypted bot teardown command before provider mutation.
+
+    The row is intentionally left pending. The initiating worker completes it
+    after stop/leave/queue succeeds; if that worker dies or a provider/broker
+    call is ambiguous, the ordinary inbox reconciler discovers and retries it.
+    """
+
+    now = now or datetime.now(UTC)
+    event_type = f"internal.zoom_bot_{action}"
+    if event_type not in ZOOM_TEARDOWN_EVENTS:
+        raise ValueError("unsupported Zoom teardown action")
+    if not meeting_id or not bot_id:
+        raise ValueError("missing Zoom teardown target")
+    if doctor_id is not None and not doctor_id:
+        raise ValueError("invalid Zoom teardown doctor")
+    if occurrence_digest is not None and not _DIGEST_RE.fullmatch(occurrence_digest):
+        raise ValueError("invalid Zoom occurrence digest")
+    if generation is not None and generation < 0:
+        raise ValueError("invalid Zoom teardown generation")
+    intent = {
+        "meeting_id": meeting_id,
+        "bot_id": bot_id,
+        "doctor_id": doctor_id,
+        "occurrence_digest": occurrence_digest,
+        "generation": generation,
+        "stop_recording": stop_recording,
+        "cleanup_session": cleanup_session,
+        "mark_meeting_ended": mark_meeting_ended,
+    }
+    # Raw provider IDs are used only as HMAC input and inside encrypted
+    # payload. Neither identifier reaches a DB index, task argument, or log.
+    provider_event_id = (
+        f"{event_type}:{meeting_id}:{bot_id}:"
+        f"{occurrence_digest or 'legacy'}:{generation if generation is not None else 'none'}:"
+        f"stop={int(stop_recording)}:cleanup={int(cleanup_session)}:"
+        f"ended={int(mark_meeting_ended)}"
+    )
+    return store_verified_external_webhook(
+        provider="zoom",
+        provider_event_id=provider_event_id,
+        event_type=event_type,
+        payload={"event": event_type, "teardown_intent": intent},
+        now=now,
+        _next_attempt_at=now + recovery_delay,
+    )
+
+
+def complete_zoom_teardown_intent(delivery_id: str) -> bool:
+    """Atomically retire a pending teardown intent after confirmed success."""
+
+    completed_at = datetime.now(UTC)
+    with get_session() as session:
+        delivery = session.exec(
+            select(ExternalWebhookDelivery)
+            .where(ExternalWebhookDelivery.id == _delivery_id(delivery_id))
+            .with_for_update()
+        ).one_or_none()
+        if delivery is None or delivery.event_type not in ZOOM_TEARDOWN_EVENTS:
+            return False
+        if delivery.state == "completed":
+            return True
+        # A reconciler that already owns the delivery must complete its own
+        # fenced claim; the direct worker may not overwrite that lease.
+        if delivery.state not in {"pending", "retry_wait"}:
+            return False
+        delivery.state = "completed"
+        delivery.processed_at = completed_at
+        delivery.encrypted_payload = None
+        delivery.payload_purged_at = completed_at
+        delivery.lease_expires_at = None
+        delivery.wakeup_after = None
+        delivery.last_error_code = None
+        session.add(delivery)
+        session.commit()
+        return True
 
 
 def store_legacy_queued_webhook(
@@ -433,6 +567,11 @@ def _dispatch(claim: ClaimedDelivery, payload: dict[str, Any]) -> None:
         recall_webhooks.dispatch(event_type=claim.event_type, payload=payload)
         return
     if claim.provider == "zoom":
+        if claim.event_type in ZOOM_TEARDOWN_EVENTS:
+            from app.jobs import merge_window
+
+            merge_window.reconcile_teardown_intent(claim.event_type, payload)
+            return
         from app.services import zoom_webhooks
 
         zoom_webhooks.dispatch(

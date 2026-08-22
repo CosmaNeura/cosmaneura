@@ -79,18 +79,13 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
         return
 
     redis = get_redis()
-    # Recording-scoped keys (new per-patient flow) take precedence over the
-    # bot-scoped legacy keys.  These bindings remain the known Phase 2
-    # durability gap; absence must retry, never silently complete the inbox.
-    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id") or _rget(
-        redis, f"recall:bot:{bot_id}:doctor_id"
-    )
-    appointment_id = _rget(
-        redis, f"recall:recording:{recording_id}:appointment_id"
-    ) or _rget(redis, f"recall:bot:{bot_id}:appointment_id")
-    patient_id = _rget(redis, f"recall:recording:{recording_id}:patient_id") or _rget(
-        redis, f"recall:bot:{bot_id}:patient_id"
-    )
+    # A bot can span more than one provider recording, so bot-scoped tenant
+    # keys are not encounter authority.  Require the exact recording ID that
+    # _start_appointment_session bound; an old/discarded segment ID must fail
+    # closed instead of inheriting a prior patient's chart from the bot.
+    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id")
+    appointment_id = _rget(redis, f"recall:recording:{recording_id}:appointment_id")
+    patient_id = _rget(redis, f"recall:recording:{recording_id}:patient_id")
     if not doctor_id or not appointment_id or not patient_id:
         log.warning(
             "recall transcript tenant mapping unavailable",

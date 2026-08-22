@@ -4,6 +4,7 @@ from starlette_context import context
 
 from app import log
 from app.routes.admin import SESSION_KEY_LOGIN_AS_USER
+from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor, DoctorRole
 
@@ -26,21 +27,27 @@ def login_as(request: Request):
         login_as_doctor = Doctor.get(clerk_id=login_as_clerk_id)
 
         if not login_as_doctor:
-            log.error("user not found", clerk_id=login_as_clerk_id)
+            log.error(
+                "login-as user not found",
+                event_code="login_as_user_not_found",
+                clerk_ref=provider_log_ref(f"clerk-user:{login_as_clerk_id}"),
+            )
             return
 
+        doctor_ref = provider_log_ref(f"doctor:{login_as_doctor.id}")
+        admin_ref = provider_log_ref(f"doctor:{admin_user.id}")
         log.info(
-            "logging in as user",
-            clerk_id=login_as_doctor.clerk_id,
-            doctor_id=login_as_doctor.id,
-            admin_id=admin_user.id,
+            "admin login-as activated",
+            event_code="login_as_activated",
+            doctor_ref=doctor_ref,
+            admin_ref=admin_ref,
         )
 
         request.state.admin_user = admin_user
         request.state.doctor = login_as_doctor
 
-        context["doctor"] = login_as_doctor
-        context["admin_user"] = admin_user
+        context["doctor_ref"] = doctor_ref
+        context["admin_ref"] = admin_ref
 
-        sentry_sdk.set_extra("admin_id", admin_user.id)
-        sentry_sdk.set_user({"id": login_as_doctor.id, "email": login_as_doctor.email})
+        sentry_sdk.set_extra("admin_ref", admin_ref)
+        sentry_sdk.set_user({"id": doctor_ref})
