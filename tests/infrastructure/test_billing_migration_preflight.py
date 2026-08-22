@@ -237,6 +237,7 @@ def test_production_preflight_is_an_execution_override_before_alembic() -> None:
     assert '--container-name "$migration_container_name"' in override
     assert '--image "$PRODUCTION_TAG"' in override
     assert "--command /opt/venv/bin/python" in override
+    assert '--env-vars "DATABASE_URL=secretref:$DATABASE_SECRET_NAME"' in override
     assert "Billing migration preflight blocked schema migration" in override
     assert "return 1" in override
 
@@ -270,6 +271,7 @@ def test_staging_preflight_runs_after_job_creation_before_alembic() -> None:
     assert '--container-name "$migration_container_name"' in override
     assert '--image "$STAGING_TAG"' in override
     assert "--command /opt/venv/bin/python" in override
+    assert '--env-vars "DATABASE_URL=secretref:database-url"' in override
     assert "Billing migration preflight blocked schema migration" in override
     assert "return 1" in override
 

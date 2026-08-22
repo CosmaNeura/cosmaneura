@@ -231,7 +231,9 @@ run_migrations() {
 		return 1
 	fi
 
-	# Override only this execution. The reviewed job template retains its
+	# Override only this execution. Azure replaces the container definition when
+	# an execution override is supplied, so explicitly restore the selected
+	# DATABASE_URL secret reference. The reviewed job template retains its
 	# Alembic arguments, but no schema mutation may start until the aggregate-only
 	# duplicate check succeeds against the exact image and database secret.
 	local preflight_execution
@@ -241,6 +243,7 @@ run_migrations() {
 		--image "$PRODUCTION_TAG" \
 		--command /opt/venv/bin/python \
 		--args /app/scripts/billing_migration_preflight.py \
+		--env-vars "DATABASE_URL=secretref:$DATABASE_SECRET_NAME" \
 		--query "name" -o tsv); then
 		echo "Billing migration preflight failed to start."
 		return 1
