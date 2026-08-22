@@ -45,6 +45,27 @@ locals {
     data.external.database_url_live_guard.result["result"] == "verified",
     false,
   )
+
+  stripe_integration_enabled_text = lower(try(data.external.secrets.result["STRIPE_INTEGRATION_ENABLED"], "false"))
+  stripe_billing_enabled_text     = lower(try(data.external.secrets.result["STRIPE_BILLING_ENABLED"], "false"))
+  stripe_integration_enabled      = local.stripe_integration_enabled_text == "true"
+  stripe_billing_enabled          = local.stripe_billing_enabled_text == "true"
+  stripe_configuration_valid = (
+    contains(["true", "false"], local.stripe_integration_enabled_text) &&
+    contains(["true", "false"], local.stripe_billing_enabled_text) &&
+    lower(try(data.external.secrets.result["STRIPE_LIVE_MODE"], "")) == "true" &&
+    (!local.stripe_billing_enabled || local.stripe_integration_enabled) &&
+    (!local.stripe_integration_enabled || (
+      (
+        startswith(trimspace(try(data.external.secrets.result["STRIPE_SECRET_KEY"], "")), "sk_live_") ||
+        startswith(trimspace(try(data.external.secrets.result["STRIPE_SECRET_KEY"], "")), "rk_live_")
+      ) &&
+      startswith(trimspace(try(data.external.secrets.result["STRIPE_WEBHOOK_SECRET"], "")), "whsec_") &&
+      startswith(trimspace(try(data.external.secrets.result["STRIPE_ACCOUNT_ID"], "")), "acct_") &&
+      startswith(trimspace(try(data.external.secrets.result["STRIPE_PRICE_ID"], "")), "price_") &&
+      trimspace(try(data.external.secrets.result["STRIPE_API_VERSION"], "")) != ""
+    ))
+  )
 }
 
 terraform {
@@ -534,7 +555,7 @@ resource "azurerm_container_app" "app" {
       args = [data.external.procfile.result["api"]]
 
       dynamic "env" {
-        for_each = var.python_public_vars
+        for_each = setunion(var.python_public_vars, var.python_billing_public_vars)
 
         content {
           name  = env.key
@@ -546,6 +567,8 @@ resource "azurerm_container_app" "app" {
         for_each = setunion(
           var.python_secret_vars,
           var.python_api_only_secret_vars,
+          local.stripe_integration_enabled ? var.python_billing_secret_vars : toset([]),
+          local.stripe_integration_enabled ? var.python_billing_api_only_secret_vars : toset([]),
         )
 
         content {
@@ -595,6 +618,8 @@ resource "azurerm_container_app" "app" {
     for_each = setunion(
       var.python_secret_vars,
       var.python_api_only_secret_vars,
+      local.stripe_integration_enabled ? var.python_billing_secret_vars : toset([]),
+      local.stripe_integration_enabled ? var.python_billing_api_only_secret_vars : toset([]),
     )
 
     content {
@@ -642,6 +667,11 @@ resource "azurerm_container_app" "app" {
     precondition {
       condition     = local.database_url_live_guard_valid
       error_message = "live DATABASE_URL state must already match the source-controlled selector"
+    }
+
+    precondition {
+      condition     = local.stripe_configuration_valid
+      error_message = "Stripe integration/acquisition flags and required configuration are inconsistent"
     }
 
     ignore_changes = [
@@ -857,7 +887,7 @@ resource "azurerm_container_app" "worker" {
       args = [data.external.procfile.result["worker"]]
 
       dynamic "env" {
-        for_each = var.python_public_vars
+        for_each = setunion(var.python_public_vars, var.python_billing_public_vars)
 
         content {
           name  = env.key
@@ -866,7 +896,10 @@ resource "azurerm_container_app" "worker" {
       }
 
       dynamic "env" {
-        for_each = var.python_secret_vars
+        for_each = setunion(
+          var.python_secret_vars,
+          local.stripe_integration_enabled ? var.python_billing_secret_vars : toset([]),
+        )
 
         content {
           name        = env.key
@@ -881,7 +914,10 @@ resource "azurerm_container_app" "worker" {
   }
 
   dynamic "secret" {
-    for_each = var.python_secret_vars
+    for_each = setunion(
+      var.python_secret_vars,
+      local.stripe_integration_enabled ? var.python_billing_secret_vars : toset([]),
+    )
 
     content {
       name  = replace(lower(secret.key), "_", "-")
@@ -928,6 +964,11 @@ resource "azurerm_container_app" "worker" {
     precondition {
       condition     = local.database_url_live_guard_valid
       error_message = "live DATABASE_URL state must already match the source-controlled selector"
+    }
+
+    precondition {
+      condition     = local.stripe_configuration_valid
+      error_message = "Stripe integration/acquisition flags and required configuration are inconsistent"
     }
 
     ignore_changes = [

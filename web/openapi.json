@@ -812,6 +812,88 @@
         ]
       }
     },
+    "/internal/v1/practice/organization-access": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Organization Access Opportunity",
+        "description": "Return an exact-roster opportunity without disclosing its access code.",
+        "operationId": "organization_access_opportunity",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/OrganizationAccessOpportunityResponse"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Organization Access Opportunity Internal V1 Practice Organization Access Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/organization-access/claim": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Claim Organization Access",
+        "description": "Claim exact roster access; this is not a personal BAA attestation.",
+        "operationId": "claim_organization_access",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimOrganizationAccessBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeStatus"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/baa/current": {
       "get": {
         "tags": [
@@ -1021,6 +1103,100 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/billing/checkout": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Billing Checkout",
+        "description": "Start a Stripe Checkout subscription for the practice.\n\nExempt only from the entitlement portion of the practice gate: a practice\nwhose trial lapsed must still be able to pay, while BAA and attestation\nrequirements remain in force.",
+        "operationId": "create_billing_checkout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingCheckoutBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingSessionUrl"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/billing/portal": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Billing Portal",
+        "description": "Open the Stripe customer portal (card changes, invoices, cancellation).\n\nAlso entitlement-exempt: a lapsed practice manages its billing from here.",
+        "operationId": "create_billing_portal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BillingPortalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BillingSessionUrl"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
               }
             }
           }
@@ -2282,6 +2458,68 @@
           "html"
         ],
         "title": "BaaDocument"
+      },
+      "BillingCheckoutBody": {
+        "properties": {
+          "success_path": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Success Path",
+            "default": "/settings"
+          },
+          "cancel_path": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Cancel Path",
+            "default": "/settings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingCheckoutBody"
+      },
+      "BillingPortalBody": {
+        "properties": {
+          "return_path": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Return Path",
+            "default": "/settings"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BillingPortalBody"
+      },
+      "BillingSessionUrl": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "BillingSessionUrl"
+      },
+      "ClaimOrganizationAccessBody": {
+        "properties": {
+          "access_code": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 4,
+            "title": "Access Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "access_code"
+        ],
+        "title": "ClaimOrganizationAccessBody"
       },
       "ConfidenceBand": {
         "type": "string",
@@ -3981,6 +4219,25 @@
         "title": "OpenSandboxRecord",
         "description": "Opaque, short-lived record grant; never a vendor patient identifier."
       },
+      "OrganizationAccessOpportunityResponse": {
+        "properties": {
+          "organization_name": {
+            "type": "string",
+            "title": "Organization Name"
+          },
+          "email_domain": {
+            "type": "string",
+            "title": "Email Domain"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "organization_name",
+          "email_domain"
+        ],
+        "title": "OrganizationAccessOpportunityResponse"
+      },
       "Patient": {
         "properties": {
           "id": {
@@ -4167,7 +4424,14 @@
             "title": "Legal Name"
           },
           "join_code": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Join Code"
           },
           "email_domain": {
@@ -4194,6 +4458,25 @@
             "type": "boolean",
             "title": "Attested"
           },
+          "access_authorized": {
+            "type": "boolean",
+            "title": "Access Authorized"
+          },
+          "authorization_basis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorization Basis"
+          },
+          "access_revoked": {
+            "type": "boolean",
+            "title": "Access Revoked"
+          },
           "trial_ends_at": {
             "anyOf": [
               {
@@ -4210,9 +4493,68 @@
             "type": "boolean",
             "title": "Billing Exempt"
           },
+          "billing_exempt_until": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Exempt Until"
+          },
+          "billing_exempt_active": {
+            "type": "boolean",
+            "title": "Billing Exempt Active"
+          },
+          "billing_enabled": {
+            "type": "boolean",
+            "title": "Billing Enabled"
+          },
+          "billing_management_enabled": {
+            "type": "boolean",
+            "title": "Billing Management Enabled"
+          },
+          "billing_portal_available": {
+            "type": "boolean",
+            "title": "Billing Portal Available"
+          },
+          "billing_checkout_resumable": {
+            "type": "boolean",
+            "title": "Billing Checkout Resumable"
+          },
+          "billing_subscription_manageable": {
+            "type": "boolean",
+            "title": "Billing Subscription Manageable"
+          },
+          "billing_checkout_available_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Billing Checkout Available At"
+          },
           "entitled": {
             "type": "boolean",
             "title": "Entitled"
+          },
+          "subscription_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Status"
           }
         },
         "additionalProperties": false,
@@ -4226,9 +4568,21 @@
           "baa_accepted",
           "role",
           "attested",
+          "access_authorized",
+          "authorization_basis",
+          "access_revoked",
           "trial_ends_at",
           "billing_exempt",
-          "entitled"
+          "billing_exempt_until",
+          "billing_exempt_active",
+          "billing_enabled",
+          "billing_management_enabled",
+          "billing_portal_available",
+          "billing_checkout_resumable",
+          "billing_subscription_manageable",
+          "billing_checkout_available_at",
+          "entitled",
+          "subscription_status"
         ],
         "title": "PracticeStatus"
       },

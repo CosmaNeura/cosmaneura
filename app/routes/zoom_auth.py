@@ -72,11 +72,17 @@ def zoom_oauth_callback(
 
     assert code and state, "code and state are required"
 
+    doctor = Doctor.get(clerk_id=state)
+    if doctor is None or doctor.deleted_at is not None:
+        log.warning("zoom oauth callback rejected: doctor unavailable")
+        return RedirectResponse(
+            url=f"{ZOOM_SUCCESS_REDIRECT}?zoom_error=account_disabled",
+            status_code=status.HTTP_302_FOUND,
+        )
+
     tokens = _exchange_code_for_tokens(code)
     zoom_user_id = _get_zoom_user_id(tokens["access_token"])
     log.info("zoom oauth user identified", zoom_user_id=zoom_user_id)
-    doctor = Doctor.get(clerk_id=state)
-    assert doctor, f"no doctor found for clerk_id={state}"
 
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=tokens["expires_in"])

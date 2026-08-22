@@ -67,7 +67,7 @@ function PracticeSettings({
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
       <h3>Practice</h3>
-      <PracticeJoinPanel practice={practice} />
+      <PracticeJoinPanel practice={practice} showBillingActions />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
           <p className="font-semibold">Legal / Agreements</p>

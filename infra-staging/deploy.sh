@@ -39,9 +39,13 @@ CRITICAL_CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker"
 # configured.
 AUXILIARY_CONTAINERS=""
 API_CONTAINER="cosmaneura-staging-app"
+WORKER_CONTAINER="cosmaneura-staging-worker"
 GRANT_SECRET_ENV_NAME="SOVEREIGN_RECORD_GRANT_SECRET"
 GRANT_SECRET_RESOURCE_NAME="sovereign-record-grant-secret"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
+# Staging intentionally co-locates beat with its worker, but this command is
+# source-owned so a deploy cannot silently preserve stale Azure arguments.
+STAGING_WORKER_COMMAND="$(yq -r '.worker' "$SCRIPT_DIR/../Procfile") --beat --scheduler redbeat.RedBeatScheduler"
 
 # Check for Git SHA input and validate it exists in repo
 if [[ -z "$GIT_SHA" ]]; then
@@ -138,6 +142,44 @@ if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
 	exit 1
 fi
 
+STRIPE_INTEGRATION_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_INTEGRATION_ENABLED // "false"')
+STRIPE_BILLING_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_BILLING_ENABLED // "false"')
+for flag in "$STRIPE_INTEGRATION_ENABLED" "$STRIPE_BILLING_ENABLED"; do
+	if [[ "$flag" != "true" && "$flag" != "false" ]]; then
+		echo "Stripe rollout flags must be true or false."
+		exit 1
+	fi
+done
+if [[ "$STRIPE_BILLING_ENABLED" == "true" && "$STRIPE_INTEGRATION_ENABLED" != "true" ]]; then
+	echo "Stripe acquisition cannot be enabled while integration maintenance is disabled."
+	exit 1
+fi
+if [[ "$(echo "$ENV_JSON" | jq -r '.STRIPE_LIVE_MODE // empty')" != "false" ]]; then
+	echo "Staging Stripe mode must remain explicitly false, even while disabled."
+	exit 1
+fi
+if [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]; then
+	for var in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_ACCOUNT_ID STRIPE_PRICE_ID STRIPE_API_VERSION; do
+		if [[ -z "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" ]]; then
+			echo "$var is required when Stripe integration is enabled."
+			exit 1
+		fi
+	done
+	if [[ "$(echo "$ENV_JSON" | jq -r '.STRIPE_SECRET_KEY // empty')" != sk_test_* && \
+		"$(echo "$ENV_JSON" | jq -r '.STRIPE_SECRET_KEY // empty')" != rk_test_* ]]; then
+		echo "Staging Stripe key must be a test-mode secret or restricted key."
+		exit 1
+	fi
+	for spec in "STRIPE_WEBHOOK_SECRET:whsec_" "STRIPE_ACCOUNT_ID:acct_" "STRIPE_PRICE_ID:price_"; do
+		var=${spec%%:*}
+		prefix=${spec#*:}
+		if [[ "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" != "$prefix"* ]]; then
+			echo "$var has an invalid shape."
+			exit 1
+		fi
+	done
+fi
+
 # Must match variables.tf python_secret_vars
 COMMON_SECRET_VARS=(
 	DATABASE_URL REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
@@ -156,6 +198,19 @@ API_ONLY_SECRET_VARS=(
 	SOVEREIGN_RECORD_GRANT_SECRET
 )
 
+BILLING_SECRET_VARS=(
+	STRIPE_SECRET_KEY
+)
+
+BILLING_API_ONLY_SECRET_VARS=(
+	STRIPE_WEBHOOK_SECRET
+)
+
+BILLING_PUBLIC_VARS=(
+	STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_ACCOUNT_ID
+	STRIPE_PRICE_ID STRIPE_API_VERSION STRIPE_LIVE_MODE
+)
+
 # Must match variables.tf python_public_vars
 PUBLIC_VARS=(
 	PYTHON_ENV
@@ -171,6 +226,43 @@ PUBLIC_VARS=(
 	AUTHORITY_KERNEL_ENABLED AUTHORITY_CLERK_ISSUER MOUNT_CONTEXT_TOKEN_TTL_SECONDS
 	MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS
 )
+
+wait_for_migration_job_execution() {
+	local execution_name=$1
+	local phase=$2
+	if [[ -z "$execution_name" ]]; then
+		echo "$phase failed to start."
+		return 1
+	fi
+
+	echo "$phase execution started: $execution_name"
+	local attempts=0
+	local max_attempts=60 # 5 minutes
+
+	while [[ $attempts -lt $max_attempts ]]; do
+		local exec_status
+		exec_status=$(az containerapp job execution show \
+			-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+			--job-execution-name "$execution_name" \
+			--query "properties.status" -o tsv 2>/dev/null)
+
+		case "$exec_status" in
+		Succeeded)
+			echo "$phase completed successfully."
+			return 0 ;;
+		Failed|Stopped)
+			echo "$phase failed with status: $exec_status"
+			return 1 ;;
+		*)
+			echo "  $phase status=$exec_status (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++)) ;;
+		esac
+	done
+
+	echo "$phase timed out after $((max_attempts * 5)) seconds."
+	return 1
+}
 
 run_migrations() {
 	echo "Running database migrations with image $STAGING_TAG..."
@@ -221,51 +313,65 @@ run_migrations() {
 		echo "Failed to configure migration job."
 		return 1
 	fi
-
-	local execution_name
-	execution_name=$(az containerapp job start \
+	local migration_container_name
+	if ! migration_container_name=$(az containerapp job show \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-		--query "name" -o tsv)
-
-	if [[ -z "$execution_name" ]]; then
-		echo "Failed to start migration job."
+		--query "properties.template.containers[].name" -o tsv); then
+		echo "Failed to inspect the migration job container template."
+		return 1
+	fi
+	if [[ "$migration_container_name" != "$MIGRATION_JOB" ]]; then
+		echo "Migration job must contain exactly one source-owned container."
 		return 1
 	fi
 
-	echo "Migration job execution started: $execution_name"
+	# Run the aggregate-only gate as an execution override. Azure replaces the
+	# container definition when an override is supplied, so explicitly restore
+	# the DATABASE_URL secret reference. The job template remains Alembic-owned,
+	# so a successful preflight is followed by a plain start while any failure
+	# leaves the schema untouched.
+	local preflight_execution
+	if ! preflight_execution=$(az containerapp job start \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--container-name "$migration_container_name" \
+		--image "$STAGING_TAG" \
+		--command /opt/venv/bin/python \
+		--args /app/scripts/billing_migration_preflight.py \
+		--env-vars "DATABASE_URL=secretref:database-url" \
+		--query "name" -o tsv); then
+		echo "Billing migration preflight failed to start."
+		return 1
+	fi
+	if ! wait_for_migration_job_execution \
+		"$preflight_execution" "Billing migration preflight"; then
+		echo "Billing migration preflight blocked schema migration."
+		return 1
+	fi
 
-	local attempts=0
-	local max_attempts=60  # 5 minutes
-
-	while [[ $attempts -lt $max_attempts ]]; do
-		local exec_status
-		exec_status=$(az containerapp job execution show \
-			-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-			--job-execution-name "$execution_name" \
-			--query "properties.status" -o tsv 2>/dev/null)
-
-		case "$exec_status" in
-			Succeeded)
-				echo "Migrations completed successfully."
-				return 0 ;;
-			Failed|Stopped)
-				echo "Migration job failed with status: $exec_status"
-				return 1 ;;
-			*)
-				echo "  migration status=$exec_status (attempt $((attempts + 1))/$max_attempts)"
-				sleep 5
-				((attempts++)) ;;
-		esac
-	done
-
-	echo "Migration job timed out after $((max_attempts * 5)) seconds."
-	return 1
+	local execution_name
+	if ! execution_name=$(az containerapp job start \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--query "name" -o tsv); then
+		echo "Failed to start migration job."
+		return 1
+	fi
+	wait_for_migration_job_execution "$execution_name" "Migrations"
 }
 
 record_grants_enabled_for() {
 	local container_name=$1
 	[[ "$container_name" == "$API_CONTAINER" && \
 		"$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" ]]
+}
+
+billing_workload_for() {
+	local container_name=$1
+	[[ "$container_name" == "$API_CONTAINER" || "$container_name" == "$WORKER_CONTAINER" ]]
+}
+
+billing_integration_enabled_for() {
+	local container_name=$1
+	billing_workload_for "$container_name" && [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]
 }
 
 initiate_deployment() {
@@ -278,8 +384,18 @@ initiate_deployment() {
 	local secrets_args=()
 	local env_args=()
 	local container_secret_vars=("${COMMON_SECRET_VARS[@]}")
+	local container_public_vars=("${PUBLIC_VARS[@]}")
 	if record_grants_enabled_for "$container_name"; then
 		container_secret_vars+=("${API_ONLY_SECRET_VARS[@]}")
+	fi
+	if billing_workload_for "$container_name"; then
+		container_public_vars+=("${BILLING_PUBLIC_VARS[@]}")
+	fi
+	if billing_integration_enabled_for "$container_name"; then
+		container_secret_vars+=("${BILLING_SECRET_VARS[@]}")
+		if [[ "$container_name" == "$API_CONTAINER" ]]; then
+			container_secret_vars+=("${BILLING_API_ONLY_SECRET_VARS[@]}")
+		fi
 	fi
 
 	for var in "${container_secret_vars[@]}"; do
@@ -292,7 +408,7 @@ initiate_deployment() {
 		env_args+=("${var}=secretref:${secret_name}")
 	done
 
-	for var in "${PUBLIC_VARS[@]}"; do
+	for var in "${container_public_vars[@]}"; do
 		local value
 		value=$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")
 		[[ -n "$value" ]] && env_args+=("${var}=${value}")
@@ -316,8 +432,24 @@ initiate_deployment() {
 		--revision-suffix "$REVISION_STRING"
 		--set-env-vars "${env_args[@]}"
 	)
+	if [[ "$container_name" == "$WORKER_CONTAINER" ]]; then
+		update_args+=(--args "$STAGING_WORKER_COMMAND")
+	fi
+	local remove_env_vars=()
 	if ! record_grants_enabled_for "$container_name"; then
-		update_args+=(--remove-env-vars "$GRANT_SECRET_ENV_NAME")
+		remove_env_vars+=("$GRANT_SECRET_ENV_NAME")
+	fi
+	if ! billing_integration_enabled_for "$container_name"; then
+		remove_env_vars+=(STRIPE_SECRET_KEY)
+	fi
+	if [[ "$container_name" != "$API_CONTAINER" || "$STRIPE_INTEGRATION_ENABLED" != "true" ]]; then
+		remove_env_vars+=(STRIPE_WEBHOOK_SECRET)
+	fi
+	if ! billing_workload_for "$container_name"; then
+		remove_env_vars+=("${BILLING_PUBLIC_VARS[@]}")
+	fi
+	if [[ ${#remove_env_vars[@]} -gt 0 ]]; then
+		update_args+=(--remove-env-vars "${remove_env_vars[@]}")
 	fi
 	az containerapp update -n "$container_name" -g "$RESOURCE_GROUP" \
 		"${update_args[@]}"
@@ -329,6 +461,27 @@ initiate_deployment() {
 
 	echo "Deployment initiated for $container_name."
 	return 0
+}
+
+remove_unowned_billing_secrets() {
+	local container_name=$1
+	local remove_names=()
+	if ! billing_integration_enabled_for "$container_name"; then
+		remove_names+=(stripe-secret-key)
+	fi
+	if [[ "$container_name" != "$API_CONTAINER" || "$STRIPE_INTEGRATION_ENABLED" != "true" ]]; then
+		remove_names+=(stripe-webhook-secret)
+	fi
+	for secret_name in "${remove_names[@]}"; do
+		local secret_count
+		secret_count=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+			--query "properties.configuration.secrets[?name=='$secret_name'] | length(@)" \
+			-o tsv) || return 1
+		if [[ "$secret_count" != "0" ]]; then
+			az containerapp secret remove -n "$container_name" -g "$RESOURCE_GROUP" \
+				--secret-names "$secret_name" || return 1
+		fi
+	done
 }
 
 remove_disabled_record_grant_secret() {
@@ -447,6 +600,14 @@ if [[ -n "$AUXILIARY_FAILURES" ]]; then
 	echo "::warning::Auxiliary container(s) did not come up:$AUXILIARY_FAILURES"
 	echo "Staging itself is healthy — these are operator tools and do not block promotion."
 fi
+
+for container in $CRITICAL_CONTAINERS $AUXILIARY_CONTAINERS; do
+	remove_unowned_billing_secrets "$container"
+	if [[ $? -ne 0 ]]; then
+		echo "Failed to reconcile Stripe secret scope for $container."
+		exit 1
+	fi
+done
 
 # A false gate is a real revocation, not merely a refusal to add the key on the
 # next revision. Remove any stale app-level secret after the new revisions no

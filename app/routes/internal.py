@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, cast
 
+import httpx
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,9 +25,16 @@ import app.jobs.fetch_drug_reference as fetch_drug_reference_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
+import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
+from app import log
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
+from app.configuration.stripe import (
+    stripe_billing_configured,
+    stripe_runtime_configured,
+    stripe_webhook_configured,
+)
 from app.services import lab_ranges as lab_ranges_service
 from app.services.biomarkers import (
     BY_KEY as BIOMARKERS_BY_KEY,
@@ -38,8 +46,18 @@ from app.services.biomarkers import (
 from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
+from app.services.clerk_identity import verified_primary_email
 from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
 from app.services.nutrient_depletion import depletions_for
+from app.services.organization_access import (
+    OrganizationAccessError,
+    claim_roster_access,
+    doctor_has_managed_roster_assignment,
+    find_access_opportunity,
+    lock_roster_enrollment_email,
+    member_access_in_force,
+    member_authorization_basis,
+)
 from app.services.reference_links import (
     PROVIDER_RESOURCE_DIRECTORY,
     ResourceLink,
@@ -59,7 +77,7 @@ from app.utils.email_domain import (
     is_mcd_email,
 )
 
-from activemodel.session_manager import aglobal_session
+from activemodel.session_manager import aglobal_session, get_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
@@ -103,6 +121,7 @@ from app.models.practice import (
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
+from sqlmodel import select
 
 from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
@@ -659,7 +678,7 @@ def _practice_ready(doctor: Doctor) -> bool:
     if not member:
         return False
     practice = Practice.get(id=member.practice_id)
-    return bool(practice and practice.baa_in_force() and member.attested_at)
+    return bool(practice and practice.baa_in_force() and member_access_in_force(member))
 
 
 def _practice_payload(
@@ -667,33 +686,65 @@ def _practice_payload(
 ) -> "PracticeStatus | None":
     if not practice or not member:
         return None
+    authorization_basis = member_authorization_basis(member)
     return PracticeStatus(
         legal_name=practice.legal_name,
-        join_code=practice.join_code,
+        # Organization-managed practices use the exact roster + organization
+        # code flow. Never disclose their legacy reusable practice join code.
+        join_code=None if practice.organization_id is not None else practice.join_code,
         email_domain=practice.email_domain,
         origin_channel=practice.origin_channel,
         pastoral_pack=practice.pastoral_pack,
         baa_accepted=practice.baa_in_force(),
         role=member.role,
         attested=member.attested_at is not None,
+        access_authorized=authorization_basis is not None,
+        authorization_basis=authorization_basis,
+        access_revoked=member.access_revoked_at is not None,
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
+        billing_exempt_until=practice.billing_exempt_until,
+        billing_exempt_active=practice.billing_exemption_active(),
+        billing_enabled=stripe_billing_configured(),
+        billing_management_enabled=stripe_runtime_configured(),
+        billing_portal_available=practice.stripe_customer_id is not None,
+        billing_checkout_resumable=(
+            stripe_webhook_configured()
+            and stripe_billing.has_resumable_checkout(practice)
+        ),
+        billing_subscription_manageable=stripe_billing.has_nonterminal_subscription(
+            practice
+        ),
+        billing_checkout_available_at=stripe_billing.checkout_deferred_until(practice),
         entitled=practice.entitled(),
+        subscription_status=practice.subscription_status,
     )
 
 
 class PracticeStatus(BaseModel, extra="forbid"):
     legal_name: str
-    join_code: str
+    join_code: str | None
     email_domain: str
     origin_channel: str
     pastoral_pack: bool
     baa_accepted: bool
     role: str
     attested: bool
+    access_authorized: bool
+    authorization_basis: str | None
+    access_revoked: bool
     trial_ends_at: datetime | None
     billing_exempt: bool
+    billing_exempt_until: datetime | None
+    billing_exempt_active: bool
+    billing_enabled: bool
+    billing_management_enabled: bool
+    billing_portal_available: bool
+    billing_checkout_resumable: bool
+    billing_subscription_manageable: bool
+    billing_checkout_available_at: datetime | None
     entitled: bool
+    subscription_status: str | None
 
 
 class JoinMismatch(BaseModel, extra="forbid"):
@@ -717,6 +768,106 @@ def practice_status(request: Request) -> PracticeStatus | None:
     return _practice_payload(practice, member)
 
 
+class OrganizationAccessOpportunityResponse(BaseModel, extra="forbid"):
+    organization_name: str
+    email_domain: str
+
+
+@internal_api_app.get(
+    "/practice/organization-access",
+    name="organization_access_opportunity",
+)
+def organization_access_opportunity(
+    request: Request,
+) -> OrganizationAccessOpportunityResponse | None:
+    """Return an exact-roster opportunity without disclosing its access code."""
+
+    doctor: Doctor = request.state.doctor
+    # Admin login-as is intentionally unsupported for self-service enrollment.
+    # The authenticated Clerk subject must be the rostered doctor.
+    if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
+        return None
+    primary_email = verified_primary_email(doctor.clerk_id)
+    if primary_email is None or primary_email != (doctor.email or "").strip().lower():
+        return None
+    opportunity = find_access_opportunity(doctor)
+    if opportunity is None:
+        return None
+    member = _membership_for(doctor)
+    if member is not None and (
+        member.access_revoked_at is not None
+        or member.practice_id != opportunity.practice.id
+        or member.organization_roster_approval_id is not None
+    ):
+        return None
+    return OrganizationAccessOpportunityResponse(
+        organization_name=opportunity.organization.legal_name,
+        email_domain=opportunity.organization.email_domain,
+    )
+
+
+class ClaimOrganizationAccessBody(BaseModel, extra="forbid"):
+    access_code: str = Field(min_length=4, max_length=32)
+
+
+def _consume_organization_access_attempt(doctor: Doctor) -> None:
+    """Bound online code guesses per authenticated account."""
+
+    key_id = hashlib.sha256(str(doctor.id).encode("ascii")).hexdigest()
+    key = f"organization-access-attempt:{key_id}"
+    redis = get_redis()
+    # MULTI/EXEC prevents a process/network failure from leaving an INCR key
+    # without a TTL. Refreshing the TTL makes this an eight-attempt sliding
+    # window and avoids a permanent lockout key.
+    pipe = redis.pipeline(transaction=True)
+    pipe.incr(key)
+    pipe.expire(key, 15 * 60)
+    attempts, _ = pipe.execute()
+    attempts = int(attempts)
+    if attempts > 8:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many organization access attempts. Try again later.",
+        )
+
+
+@internal_api_app.post(
+    "/practice/organization-access/claim",
+    name="claim_organization_access",
+)
+def claim_organization_access(
+    request: Request, data: ClaimOrganizationAccessBody
+) -> PracticeStatus:
+    """Claim exact roster access; this is not a personal BAA attestation."""
+
+    doctor: Doctor = request.state.doctor
+    if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access could not be verified.",
+        )
+    _consume_organization_access_attempt(doctor)
+    primary_email = verified_primary_email(doctor.clerk_id)
+    if primary_email is None or primary_email != (doctor.email or "").strip().lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access could not be verified.",
+        )
+    try:
+        practice, member = claim_roster_access(
+            doctor,
+            supplied_code=data.access_code,
+        )
+    except OrganizationAccessError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Organization access could not be verified.",
+        ) from exc
+    payload = _practice_payload(practice, member)
+    assert payload
+    return payload
+
+
 class CreatePracticeBody(BaseModel, extra="forbid"):
     legal_name: str = Field(min_length=3, max_length=160)
     npi: str | None = Field(default=None, max_length=10)
@@ -737,6 +888,12 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
         assert payload
         return payload
 
+    if doctor_has_managed_roster_assignment(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account has organization-managed access. Use that enrollment path.",
+        )
+
     domain = extract_email_domain(doctor.email)
     if not domain:
         raise HTTPException(
@@ -756,29 +913,75 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
         else:
             email_domain = MCD_EMAIL_DOMAIN
 
-    join_code = _make_join_code()
-    for _ in range(5):
-        if Practice.get(join_code=join_code) is None:
-            break
-        join_code = _make_join_code()
-
     npi = "".join(ch for ch in (data.npi or "") if ch.isdigit())[:10] or None
-    practice = Practice(
-        legal_name=data.legal_name.strip(),
-        npi=npi,
-        city=(data.city or "").strip() or None,
-        region=(data.region or "").strip() or None,
-        is_solo=data.is_solo,
-        join_code=join_code,
-        email_domain=email_domain,
-        origin_channel=channel,
-        pastoral_pack=data.pastoral_pack,
-    ).save()
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role=PracticeRole.owner.value,
-    ).save()
+    normalized_email = (doctor.email or "").strip().lower()
+    with get_session() as session:
+        lock_roster_enrollment_email(session, normalized_email)
+        locked_doctor = session.exec(
+            select(Doctor).where(Doctor.id == doctor.id).with_for_update()
+        ).one()
+        if (locked_doctor.email or "").strip().lower() != normalized_email:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The account email changed during enrollment. Please retry.",
+            )
+        existing = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == locked_doctor.id)
+            .with_for_update()
+        ).one_or_none()
+        if existing is not None:
+            session.commit()
+            session.refresh(existing)
+            existing_practice = Practice.get(id=existing.practice_id)
+            payload = _practice_payload(existing_practice, existing)
+            assert payload
+            return payload
+        if doctor_has_managed_roster_assignment(
+            locked_doctor,
+            session=session,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This account has organization-managed access. "
+                    "Use that enrollment path."
+                ),
+            )
+
+        join_code = _make_join_code()
+        for _ in range(5):
+            if (
+                session.exec(
+                    select(Practice).where(Practice.join_code == join_code)
+                ).first()
+                is None
+            ):
+                break
+            join_code = _make_join_code()
+
+        practice = Practice(
+            legal_name=data.legal_name.strip(),
+            npi=npi,
+            city=(data.city or "").strip() or None,
+            region=(data.region or "").strip() or None,
+            is_solo=data.is_solo,
+            join_code=join_code,
+            email_domain=email_domain,
+            origin_channel=channel,
+            pastoral_pack=data.pastoral_pack,
+        )
+        session.add(practice)
+        session.flush()
+        member = PracticeMember(
+            practice_id=practice.id,
+            doctor_id=locked_doctor.id,
+            role=PracticeRole.owner.value,
+        )
+        session.add(member)
+        session.commit()
+        session.refresh(practice)
+        session.refresh(member)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -829,43 +1032,69 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the practice owner can accept the BAA.",
         )
-    practice = Practice.get(id=member.practice_id)
-    assert practice
-
     version = _current_baa_version()
-    # idempotent per (practice, version): re-accepting the same version is a
-    # no-op that returns the existing record's state
-    existing = BaaAcceptance.get(practice_id=practice.id, baa_version_id=version.id)
-    if existing is None:
-        accepted_at = datetime.now(timezone.utc)
-        BaaAcceptance(
-            practice_id=practice.id,
-            baa_version_id=version.id,
-            covered_entity_legal_name=practice.legal_name,
-            accepted_by_doctor_id=doctor.id,
-            accepted_by_name=data.signature_name.strip(),
-            accepted_by_title=data.signature_title.strip(),
-            accepted_by_email=doctor.email or "",
-            accepted_at_utc=accepted_at,
-            ip_address=_client_ip(request),
-            user_agent=(request.headers.get("user-agent") or "")[:512] or None,
-            content_sha256=version.sha256,
-        ).save()
+    # Serialize acceptance per practice. The legal execution record, its gate
+    # mirror, promised trial, and owner attestation commit atomically. Retrying
+    # an execution that predates this invariant repairs mirrors from the
+    # original acceptance timestamp instead of creating a second record.
+    with get_session() as session:
+        practice = session.exec(
+            select(Practice).where(Practice.id == member.practice_id).with_for_update()
+        ).one()
+        if practice.organization_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This organization-managed practice uses its negotiated BAA; "
+                    "personal clickwrap acceptance is unavailable."
+                ),
+            )
+        locked_member = session.exec(
+            select(PracticeMember).where(PracticeMember.id == member.id)
+        ).one()
+        acceptance = session.exec(
+            select(BaaAcceptance).where(
+                BaaAcceptance.practice_id == practice.id,
+                BaaAcceptance.baa_version_id == version.id,
+            )
+        ).one_or_none()
+        if acceptance is None:
+            accepted_at = datetime.now(timezone.utc)
+            acceptance = BaaAcceptance(
+                practice_id=practice.id,
+                baa_version_id=version.id,
+                covered_entity_legal_name=practice.legal_name,
+                accepted_by_doctor_id=doctor.id,
+                accepted_by_name=data.signature_name.strip(),
+                accepted_by_title=data.signature_title.strip(),
+                accepted_by_email=doctor.email or "",
+                accepted_at_utc=accepted_at,
+                ip_address=_client_ip(request),
+                user_agent=(request.headers.get("user-agent") or "")[:512] or None,
+                content_sha256=version.sha256,
+            )
+            session.add(acceptance)
+        else:
+            accepted_at = acceptance.accepted_at_utc
 
         practice.baa_version = f"{version.doc_id} v{version.version}"
         practice.baa_accepted_at = accepted_at
-        practice.baa_accepted_by_doctor_id = doctor.id
-        practice.baa_signature_name = data.signature_name.strip()
-        practice.baa_signature_title = data.signature_title.strip()
-        # entitlement begins at the legal moment: the BAA is in force, the
-        # trial runs, and billing is invited later (ADR 0017)
-        if not practice.billing_exempt and practice.trial_ends_at is None:
-            practice.trial_ends_at = datetime.now(timezone.utc) + TRIAL_LENGTH
-        practice.save()
+        practice.baa_accepted_by_doctor_id = acceptance.accepted_by_doctor_id
+        practice.baa_signature_name = acceptance.accepted_by_name
+        practice.baa_signature_title = acceptance.accepted_by_title
+        if practice.trial_ends_at is None:
+            practice.trial_ends_at = accepted_at + TRIAL_LENGTH
 
-    member.attested_at = datetime.now(timezone.utc)
-    member.attestation_name = data.signature_name.strip()
-    member.save()
+        locked_member.attested_at = locked_member.attested_at or accepted_at
+        locked_member.attestation_name = (
+            locked_member.attestation_name or acceptance.accepted_by_name
+        )
+        session.add(practice)
+        session.add(locked_member)
+        session.commit()
+        session.refresh(practice)
+        session.refresh(locked_member)
+        member = locked_member
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -916,9 +1145,11 @@ class JoinCodeBody(BaseModel, extra="forbid"):
 @internal_api_app.post("/practice/lookup", name="lookup_practice")
 def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
     doctor: Doctor = request.state.doctor
+    if doctor_has_managed_roster_assignment(doctor):
+        return PracticeLookupResult()
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
-    if not practice:
+    if not practice or practice.organization_id is not None:
         return PracticeLookupResult()
     if not email_matches_domain(doctor.email, practice.email_domain):
         return PracticeLookupResult(
@@ -938,9 +1169,28 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             baa_accepted=practice.baa_in_force(),
             role=PracticeRole.workforce.value,
             attested=False,
+            access_authorized=False,
+            authorization_basis=None,
+            access_revoked=False,
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,
+            billing_exempt_until=practice.billing_exempt_until,
+            billing_exempt_active=practice.billing_exemption_active(),
+            billing_enabled=stripe_billing_configured(),
+            billing_management_enabled=stripe_runtime_configured(),
+            billing_portal_available=practice.stripe_customer_id is not None,
+            billing_checkout_resumable=(
+                stripe_webhook_configured()
+                and stripe_billing.has_resumable_checkout(practice)
+            ),
+            billing_subscription_manageable=(
+                stripe_billing.has_nonterminal_subscription(practice)
+            ),
+            billing_checkout_available_at=stripe_billing.checkout_deferred_until(
+                practice
+            ),
             entitled=practice.entitled(),
+            subscription_status=practice.subscription_status,
         )
     )
 
@@ -966,33 +1216,97 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
+    if doctor_has_managed_roster_assignment(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account has organization-managed access. Use that enrollment path.",
+        )
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
-    if not practice:
+    if not practice or practice.organization_id is not None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No practice matches that join code.",
         )
-    if not email_matches_domain(doctor.email, practice.email_domain):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=(
-                f"{practice.legal_name} is for @{practice.email_domain} inboxes. "
-                "Start your own Cosmas practice instead."
-            ),
+    with get_session() as session:
+        # Serialize against organization conversion. A lookup that began while
+        # this was a standalone practice must not complete a legacy join after
+        # the practice becomes roster-managed.
+        locked_practice = session.exec(
+            select(Practice).where(Practice.id == practice.id).with_for_update()
+        ).one()
+        normalized_email = (doctor.email or "").strip().lower()
+        lock_roster_enrollment_email(session, normalized_email)
+        locked_doctor = session.exec(
+            select(Doctor).where(Doctor.id == doctor.id).with_for_update()
+        ).one()
+        if (locked_doctor.email or "").strip().lower() != normalized_email:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The account email changed during enrollment. Please retry.",
+            )
+        if doctor_has_managed_roster_assignment(
+            locked_doctor,
+            session=session,
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This account has organization-managed access. "
+                    "Use that enrollment path."
+                ),
+            )
+        existing = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == locked_doctor.id)
+            .with_for_update()
+        ).one_or_none()
+        if existing is not None:
+            session.commit()
+            session.refresh(existing)
+            existing_practice = (
+                locked_practice
+                if existing.practice_id == locked_practice.id
+                else Practice.get(id=existing.practice_id)
+            )
+            payload = _practice_payload(existing_practice, existing)
+            assert payload
+            return payload
+        if locked_practice.organization_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No practice matches that join code.",
+            )
+        if not email_matches_domain(locked_doctor.email, locked_practice.email_domain):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"{locked_practice.legal_name} is for "
+                    f"@{locked_practice.email_domain} inboxes. "
+                    "Start your own Cosmas practice instead."
+                ),
+            )
+        if not locked_practice.baa_in_force():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
+            )
+        member = PracticeMember(
+            practice_id=locked_practice.id,
+            doctor_id=locked_doctor.id,
+            role=PracticeRole.workforce.value,
+            attested_at=datetime.now(timezone.utc),
+            attestation_name=data.attestation_name.strip(),
         )
-    if not practice.baa_in_force():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
-        )
-    member = PracticeMember(
-        practice_id=practice.id,
-        doctor_id=doctor.id,
-        role=PracticeRole.workforce.value,
-        attested_at=datetime.now(timezone.utc),
-        attestation_name=data.attestation_name.strip(),
-    ).save()
+        session.add(member)
+        session.commit()
+        session.refresh(locked_practice)
+        session.refresh(member)
+        practice = locked_practice
+    # Persist the desired $89/clinician quantity and return immediately. The
+    # 15-minute reconciler performs all Stripe I/O; onboarding must never wait
+    # through multiple external 20-second timeouts.
+    stripe_billing.mark_quantity_sync_required(practice)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -1006,7 +1320,11 @@ def complete_onboarding(request: Request) -> None:
     member = _membership_for(doctor)
     if member:
         practice = Practice.get(id=member.practice_id)
-        if not practice or not practice.baa_in_force() or not member.attested_at:
+        if (
+            not practice
+            or not practice.baa_in_force()
+            or not member_access_in_force(member)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
@@ -1018,6 +1336,223 @@ def complete_onboarding(request: Request) -> None:
         )
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
     doctor.save()
+
+
+class BillingCheckoutBody(BaseModel, extra="forbid"):
+    success_path: str = Field(default="/settings", max_length=200)
+    cancel_path: str = Field(default="/settings", max_length=200)
+
+
+class BillingPortalBody(BaseModel, extra="forbid"):
+    return_path: str = Field(default="/settings", max_length=200)
+
+
+class BillingSessionUrl(BaseModel, extra="forbid"):
+    url: str
+
+
+def _owner_practice_for_billing(doctor: Doctor) -> Practice:
+    member = _membership_for(doctor)
+    if not member or member.role != PracticeRole.owner.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the practice owner can manage billing.",
+        )
+    practice = Practice.get(id=member.practice_id)
+    assert practice
+    return practice
+
+
+def _validated_web_origin(request: Request) -> str:
+    """Stripe redirect targets always point back at one of our own origins;
+    the client only ever chooses the path."""
+    from .middleware import allowed_hosts
+
+    allowed = allowed_hosts(True)
+    origin = request.headers.get("origin")
+    if origin and origin in allowed:
+        return origin
+    referer = request.headers.get("referer") or ""
+    for candidate in allowed:
+        if referer == candidate or referer.startswith(f"{candidate}/"):
+            return candidate
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Billing requires a recognized web origin.",
+    )
+
+
+def _safe_redirect_path(path: str) -> str:
+    if not path.startswith("/") or path.startswith("//"):
+        return "/settings"
+    return path
+
+
+@internal_api_app.post("/practice/billing/checkout", name="create_billing_checkout")
+def create_billing_checkout(
+    request: Request, data: BillingCheckoutBody
+) -> BillingSessionUrl:
+    """Start a Stripe Checkout subscription for the practice.
+
+    Exempt only from the entitlement portion of the practice gate: a practice
+    whose trial lapsed must still be able to pay, while BAA and attestation
+    requirements remain in force.
+    """
+    doctor: Doctor = request.state.doctor
+    practice = _owner_practice_for_billing(doctor)
+
+    resumable = stripe_billing.has_resumable_checkout(practice)
+    if not stripe_billing_configured() and not (
+        resumable and stripe_webhook_configured()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        )
+    try:
+        stripe_billing.refresh_subscription_state(practice)
+    except stripe_billing.StripeStateConflict as exc:
+        log.warning(
+            "stripe subscription changed repeatedly before checkout",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The current Stripe subscription is changing. Try again shortly.",
+        ) from exc
+    except (httpx.HTTPError, stripe_billing.StripeStateInvalid) as exc:
+        log.warning(
+            "stripe subscription refresh failed before checkout",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="The current Stripe subscription could not be verified.",
+        ) from exc
+    resumable = stripe_billing.has_resumable_checkout(practice)
+    if stripe_billing.has_nonterminal_subscription(practice) and not resumable:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This practice already has a Stripe subscription. Use the billing "
+                "portal to update payment or resume service."
+            ),
+        )
+
+    origin = _validated_web_origin(request)
+    try:
+        url = stripe_billing.create_checkout_session(
+            practice,
+            customer_email=doctor.email,
+            success_url=f"{origin}{_safe_redirect_path(data.success_path)}",
+            cancel_url=f"{origin}{_safe_redirect_path(data.cancel_path)}",
+        )
+    except stripe_billing.StripeNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        ) from exc
+    except stripe_billing.StripeTrialCarryoverDeferred as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Checkout opens when the current trial ends at "
+                f"{exc.available_at.isoformat()}; no trial time will be shortened."
+            ),
+        ) from exc
+    except stripe_billing.StripeCheckoutAlreadyCompleted as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The previous Checkout completed and its subscription was recovered. "
+                "Use the billing portal to manage it."
+            ),
+        ) from exc
+    except stripe_billing.StripeStateConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The current Stripe subscription is changing. Try again shortly.",
+        ) from exc
+    except stripe_billing.StripeStateInvalid as exc:
+        log.error(
+            "stripe checkout state validation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Stripe returned an invalid billing state.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        log.warning(
+            "stripe checkout session creation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Stripe rejected the checkout request. Try again shortly.",
+        ) from exc
+    return BillingSessionUrl(url=url)
+
+
+@internal_api_app.post("/practice/billing/portal", name="create_billing_portal")
+def create_billing_portal(
+    request: Request, data: BillingPortalBody
+) -> BillingSessionUrl:
+    """Open the Stripe customer portal (card changes, invoices, cancellation).
+
+    Also entitlement-exempt: a lapsed practice manages its billing from here.
+    """
+    doctor: Doctor = request.state.doctor
+    practice = _owner_practice_for_billing(doctor)
+
+    # Acquisition can be paused without stranding existing customers.
+    if not stripe_runtime_configured():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        )
+    if not practice.stripe_customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No billing account exists for this practice yet.",
+        )
+
+    origin = _validated_web_origin(request)
+    try:
+        url = stripe_billing.create_portal_session(
+            practice,
+            return_url=f"{origin}{_safe_redirect_path(data.return_path)}",
+        )
+    except stripe_billing.StripeNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Billing is not configured in this environment.",
+        ) from exc
+    except stripe_billing.StripeStateInvalid as exc:
+        log.error(
+            "stripe portal state validation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Stripe returned an invalid billing state.",
+        ) from exc
+    except httpx.HTTPError as exc:
+        log.warning(
+            "stripe portal session creation failed",
+            practice_id=str(practice.id),
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Stripe rejected the billing portal request. Try again shortly.",
+        ) from exc
+    return BillingSessionUrl(url=url)
 
 
 class ZoomMeetingResponse(BaseModel, extra="forbid"):

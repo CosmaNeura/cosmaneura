@@ -49,6 +49,31 @@ variable "python_api_only_secret_vars" {
   ]
 }
 
+variable "python_billing_secret_vars" {
+  description = "Stripe secret ENV vars exposed only to API and worker"
+  type        = set(string)
+  default = [
+    "STRIPE_SECRET_KEY",
+  ]
+}
+
+variable "python_billing_api_only_secret_vars" {
+  description = "Stripe secret ENV vars exposed only to the API"
+  type        = set(string)
+  default = [
+    "STRIPE_WEBHOOK_SECRET",
+  ]
+}
+
+variable "python_billing_public_vars" {
+  description = "Non-secret Stripe configuration exposed only to API and worker"
+  type        = set(string)
+  default = [
+    "STRIPE_INTEGRATION_ENABLED", "STRIPE_BILLING_ENABLED", "STRIPE_ACCOUNT_ID",
+    "STRIPE_PRICE_ID", "STRIPE_API_VERSION", "STRIPE_LIVE_MODE",
+  ]
+}
+
 
 # container configuration which does not need to be secret
 variable "python_public_vars" {

@@ -12,9 +12,14 @@ def perform(doctor_id: str) -> None:
     """Fetch upcoming Zoom meetings for a doctor and upsert into the DB."""
     doctor = Doctor.get(id=doctor_id)
 
-    if not doctor or not zoom_service.get_zoom_integration(doctor):
+    if (
+        not doctor
+        or doctor.deleted_at is not None
+        or not zoom_service.get_zoom_integration(doctor)
+    ):
         log.info(
-            "skipping zoom sync: no doctor or zoom integration", doctor_id=doctor_id
+            "skipping zoom sync: doctor unavailable or no zoom integration",
+            doctor_id=doctor_id,
         )
         return
 

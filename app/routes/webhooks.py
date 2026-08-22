@@ -5,12 +5,16 @@ import time
 from datetime import timedelta
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
+import app.jobs.stripe_events
 import app.jobs.webhooks
+import app.services.stripe_billing as stripe_billing
 from app import log
+from app.configuration import stripe as stripe_config
 from app.configuration.redis import get_redis
 from app.configuration.zoom import ZOOM_SECRET_TOKEN
 
@@ -90,13 +94,29 @@ def _stable_event_id(
     return f"{provider}:{digest}"
 
 
+def _webhook_dedupe_key(provider: str, event_id: str) -> str:
+    return f"webhook:{provider}:{event_id}"
+
+
 def _already_processed(provider: str, event_id: str) -> bool:
-    key = f"webhook:{provider}:{event_id}"
     redis = get_redis()
 
-    # 48h is enough for provider retries while keeping keyspace bounded.
-    inserted = redis.set(key, "1", nx=True, ex=timedelta(hours=48))
+    # Stripe retries live-mode deliveries for up to three days. Redis is only
+    # a cache for Stripe (the DB receipt is authoritative), but keep it longer
+    # than that retry window to avoid needless remote refreshes.
+    inserted = redis.set(
+        _webhook_dedupe_key(provider, event_id), "1", nx=True, ex=timedelta(days=7)
+    )
     return inserted is None
+
+
+def _already_processed_probe(provider: str, event_id: str) -> bool:
+    "check without marking — for handlers that mark only after success"
+    return bool(get_redis().exists(_webhook_dedupe_key(provider, event_id)))
+
+
+def _mark_processed(provider: str, event_id: str) -> None:
+    get_redis().set(_webhook_dedupe_key(provider, event_id), "1", ex=timedelta(days=7))
 
 
 async def _queue_webhook(
@@ -165,3 +185,84 @@ async def zoom_webhook(request: Request):
 @webhook_api_app.post("/recall")
 async def recall_webhook(request: Request) -> WebhookAck:
     return await _queue_webhook(provider="recall", request=request)
+
+
+@webhook_api_app.post("/stripe")
+async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Mirror verified Stripe subscription events onto the practice.
+
+    Entitlement lives on the platform (ADR 0017); Stripe events only set the
+    mirrored ``subscription_status``/ids. Unverifiable events are never
+    accepted: 503 with no secret configured, 401 on a bad signature.
+    """
+    raw_body = await request.body()
+
+    if not stripe_config.stripe_webhook_configured():
+        log.warning("stripe webhook received while billing rollout is not ready")
+        return JSONResponse(
+            {"status": "billing webhook not configured"}, status_code=503
+        )
+
+    if not stripe_billing.verify_webhook_signature(
+        raw_body, request.headers.get("stripe-signature")
+    ):
+        log.warning("stripe webhook signature verification failed")
+        return JSONResponse({"status": "invalid signature"}, status_code=401)
+
+    try:
+        event = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return JSONResponse({"status": "invalid JSON"}, status_code=400)
+    event_id = str(event.get("id") or "")
+    event_type = str(event.get("type") or "unknown")
+
+    # Persist the signed envelope before acknowledging it. Stripe HTTP calls
+    # happen in Celery; a one-minute DB sweep recovers any broker publish loss.
+    try:
+        inbox_id, duplicate = await run_in_threadpool(
+            stripe_billing.enqueue_stripe_event, event
+        )
+    except stripe_billing.StripeStateInvalid as exc:
+        log.error(
+            "stripe webhook state validation failed",
+            event_id=event_id,
+            event_type=event_type,
+            error=str(exc),
+        )
+        return JSONResponse({"status": "invalid Stripe state"}, status_code=400)
+    except Exception:
+        log.warning(
+            "stripe webhook could not persist its durable inbox record",
+            event_id=event_id,
+            event_type=event_type,
+            exc_info=True,
+        )
+        return JSONResponse(
+            {"status": "Stripe inbox temporarily unavailable"}, status_code=503
+        )
+
+    if inbox_id is not None and not duplicate:
+        background_tasks.add_task(_publish_stripe_inbox, str(inbox_id), event_id)
+
+    log.info(
+        "stripe webhook durably accepted",
+        event_id=event_id,
+        event_type=event_type,
+        inbox_id=str(inbox_id) if inbox_id is not None else None,
+        duplicate=duplicate,
+    )
+    return WebhookAck(status="ok", duplicate=duplicate)
+
+
+def _publish_stripe_inbox(inbox_id: str, event_id: str) -> None:
+    """Best-effort post-response publish; the DB sweep is authoritative."""
+
+    try:
+        app.jobs.stripe_events.process.delay(inbox_id)
+    except Exception:
+        log.warning(
+            "stripe event persisted but immediate worker publish failed; sweep will retry",
+            event_id=event_id,
+            inbox_id=inbox_id,
+            exc_info=True,
+        )

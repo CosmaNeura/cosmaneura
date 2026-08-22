@@ -87,7 +87,7 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert 'echo "Failed to configure secrets for $container_name."' in deployment
     assert "return 1" in deployment[secret_set:app_update]
 
-    assert '--remove-env-vars "$GRANT_SECRET_ENV_NAME"' in deploy
+    assert 'remove_env_vars+=("$GRANT_SECRET_ENV_NAME")' in deploy
     assert "az containerapp secret remove" in deploy
     assert '--secret-names "$GRANT_SECRET_RESOURCE_NAME"' in deploy
 

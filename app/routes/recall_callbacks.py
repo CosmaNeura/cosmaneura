@@ -47,8 +47,8 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
 
     doctor_id = raw.decode() if isinstance(raw, bytes) else raw
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
-    if not doctor:
-        log.warning("recall zak callback: doctor not found", doctor_id=doctor_id)
+    if not doctor or doctor.deleted_at is not None:
+        log.warning("recall zak callback: doctor unavailable", doctor_id=doctor_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
 
     integration = zoom_service.get_zoom_integration(doctor)
