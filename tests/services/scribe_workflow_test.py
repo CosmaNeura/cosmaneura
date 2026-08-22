@@ -130,7 +130,9 @@ async def test_client_creates_session_without_scheduling_source() -> None:
             "patient_id",
             "consent_record_id",
             "modality",
+            "ingest_mode",
         }
+        assert body["ingest_mode"] == "chunk_upload"
         return httpx.Response(
             201,
             json={
@@ -159,6 +161,52 @@ async def test_client_creates_session_without_scheduling_source() -> None:
         )
 
     assert result.id == session_id
+
+
+@pytest.mark.asyncio
+async def test_client_sends_external_async_transcript_mode_explicitly() -> None:
+    tenant_id = uuid4()
+    credential = StaticCredential()
+    consent_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["ingest_mode"] == "external_async_transcript"
+        return httpx.Response(
+            201,
+            json={
+                **body,
+                "id": str(uuid4()),
+                "status": "created",
+                "created_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="https://scribe.internal.example",
+        transport=httpx.MockTransport(handler),
+    ) as http_client:
+        client = HttpScribeWorkflowClient(
+            base_url="https://scribe.internal.example",
+            scope="api://scribe-api/.default",
+            timeout_seconds=5,
+            credential=credential,
+            client=http_client,
+        )
+        result = await client.create_session(
+            tenant_id,
+            SessionCreate(
+                appointment_id="appointment_01kzy09rxaepjt63rb0pv1256p",
+                practitioner_id="doctor_01kzy09rx9emh9n9q0p0e6neam",
+                patient_id="patient_01kzy09rxben2txt3pfy34bn6h",
+                consent_record_id=consent_id,
+                modality="virtual",
+                ingest_mode="external_async_transcript",
+            ),
+            idempotency_key="session-external-mode-1000",
+        )
+
+    assert result.ingest_mode == "external_async_transcript"
 
 
 @pytest.mark.asyncio

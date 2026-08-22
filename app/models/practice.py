@@ -105,6 +105,14 @@ class PracticeMember(
 ):
     """One Cosmas account belongs to at most one practice."""
 
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "practice_id",
+            "doctor_id",
+            name="uq_practice_member_practice_doctor_capture",
+        ),
+    )
+
     practice_id: TypeIDType = Practice.foreign_key()
     practice: Practice = Relationship()
 

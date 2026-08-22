@@ -26,6 +26,11 @@ from app.models.doctor import Doctor
 
 from .environments import is_production
 from .routes.chat import chat_api_app
+from .routes.desktop_capture_auth import (
+    desktop_capture_browser_app,
+    desktop_capture_token_app,
+)
+from .routes.desktop_capture_operations import desktop_capture_operations_app
 from .routes.internal import internal_api_app
 from .routes.middleware import add_middleware
 from .routes.service import service_api_app
@@ -65,7 +70,10 @@ api_app = FastAPI(
     default_response_class=ORJSONSortedResponse,
 )
 
+internal_api_app.include_router(desktop_capture_browser_app)
 api_app.include_router(internal_api_app)
+api_app.include_router(desktop_capture_token_app)
+api_app.include_router(desktop_capture_operations_app)
 # Workload-only routes intentionally stay out of the browser client schema.
 api_app.include_router(service_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
@@ -81,7 +89,9 @@ add_middleware(api_app)
 async def safe_request_validation_handler(
     request: Request, exc: RequestValidationError
 ):
-    if request.url.path.startswith("/service/v1/"):
+    if request.url.path.startswith(
+        ("/service/v1/", "/desktop/v1/", "/internal/v1/desktop-capture/")
+    ):
         # FastAPI's default 422 body includes rejected input. Service payloads
         # can contain PHI, so return only a generic contract error here.
         return JSONResponse(

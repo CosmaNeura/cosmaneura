@@ -13,9 +13,33 @@ send a tenant or scheduling provider in the body. The practice tenant UUID is a 
 argument and travels in `X-Tenant-ID` after the platform has resolved it from authenticated server
 context.
 
-The client is deliberately not connected to a staff route yet. The current platform has provider
-ownership but not the canonical practice-tenancy model required by the architecture. Enabling a
-human workflow before that mapping exists would incorrectly treat a doctor record as a practice.
+The client is connected only to the authenticated desktop-capture launch route. That route accepts
+a bounded, fresh all-party consent attestation for the virtual-visit pilot; it does not accept
+tenant, clinician, patient, appointment, consent-record, or capture-session authority in its body.
+The server resolves those identifiers through the canonical appointment and attested practice
+membership. The practice TypeID's UUID is the Scribe tenant UUID.
+
+Before calling Scribe, the platform durably reserves an `awaiting_consent` capture session, an
+exclusive appointment source lease, and an attempt-fenced operation. A competing launch key cannot
+reach Scribe. A stale same-key attempt may reclaim the reservation and safely reuse the same
+domain-separated Scribe idempotency keys; stale completions cannot overwrite the newer attempt.
+Scribe sessions are explicitly created with `ingest_mode=external_async_transcript`. Deterministic
+preparation failures close the lease only with never-started proof. Ambiguous outcomes retain an
+uncertain session and lease, plus any bounded observed Scribe identifiers, for reconciliation.
+
+If a launch ticket expires before PKCE begins, a new browser idempotency key may replace the
+attempt only when the server proves that the original ready session has the exact same consent
+binding and no authorization code, desktop token, segment, start operation, or external resource
+ever existed. The old lease is first closed with durable never-started proof; only then may a new
+session be reserved and sent to Scribe. A changed attestation or any evidence of start remains a
+conflict.
+
+Stale or ambiguous pre-Scribe reservations are recoverable by replaying the exact request with the
+same browser idempotency key after its attempt lease expires. The server intentionally does not
+persist the raw attestation or browser key, so the scheduled maintenance worker does not recreate
+these Scribe POSTs. If the client never retries, the fenced reservation remains visible for health
+monitoring and manual review rather than being guessed closed. Pilot clients must retain and retry
+the same launch request until they receive a terminal response.
 
 ## Passwordless configuration
 
@@ -70,7 +94,8 @@ workload clone, DNS change, or cutover is approved by that design.
    role returns 403 using synthetic data only.
 5. Run one synthetic consent/session request from the platform Container App and verify tenant
    isolation.
-6. Add the canonical practice mapping and staff-facing workflow, then enable the platform client.
+6. Verify the canonical practice mapping and staff-facing desktop workflow with synthetic data,
+   then enable the platform client only through the reviewed release gate.
 
 Rollback disables the platform feature flag first. Never fall back to an unauthenticated call or a
 long-lived credential.

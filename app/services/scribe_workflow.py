@@ -67,6 +67,7 @@ class SessionCreate(BaseModel):
     patient_id: str = Field(min_length=1, max_length=128)
     consent_record_id: UUID
     modality: Literal["in_person", "virtual", "phone"]
+    ingest_mode: Literal["chunk_upload", "external_async_transcript"] = "chunk_upload"
 
 
 class CaptureSession(SessionCreate):

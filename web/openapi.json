@@ -1081,6 +1081,125 @@
           }
         }
       }
+    },
+    "/internal/v1/desktop-capture/appointments/{appointment_id}/launch": {
+      "post": {
+        "tags": [
+          "private",
+          "desktop-capture"
+        ],
+        "summary": "Create Desktop Capture Launch",
+        "description": "Create one server-derived capture session and its short launch ticket.",
+        "operationId": "create_desktop_capture_launch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "appointment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Appointment Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 255,
+              "pattern": "^[A-Za-z0-9._~-]+$",
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaptureConsentAttestationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchTicketResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/desktop-capture/authorize": {
+      "post": {
+        "tags": [
+          "private",
+          "desktop-capture"
+        ],
+        "summary": "Authorize Desktop Capture Launch",
+        "description": "Bind a launch ticket to the same clinician and Electron PKCE proof.",
+        "operationId": "authorize_desktop_capture_launch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeLaunchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationCodeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1340,6 +1459,19 @@
             "title": "Appointment Date",
             "description": "date of the appointment"
           },
+          "cancelled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cancelled At",
+            "description": "Server-recorded cancellation time; capture launch fails closed when set."
+          },
           "appointment_name": {
             "anyOf": [
               {
@@ -1386,6 +1518,75 @@
         ],
         "title": "Appointment",
         "description": "Represents an appointment with a patient from accuity"
+      },
+      "AuthorizationCodeResponse": {
+        "properties": {
+          "authorization_code": {
+            "type": "string",
+            "title": "Authorization Code"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          },
+          "redirect_uri": {
+            "type": "string",
+            "title": "Redirect Uri"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "authorization_code",
+          "expires_at",
+          "redirect_uri"
+        ],
+        "title": "AuthorizationCodeResponse"
+      },
+      "AuthorizeLaunchRequest": {
+        "properties": {
+          "launch_ticket": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 43,
+            "title": "Launch Ticket"
+          },
+          "code_challenge": {
+            "type": "string",
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Code Challenge"
+          },
+          "code_challenge_method": {
+            "type": "string",
+            "const": "S256",
+            "title": "Code Challenge Method"
+          },
+          "redirect_uri": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Redirect Uri"
+          },
+          "installation_thumbprint": {
+            "type": "string",
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Installation Thumbprint"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "launch_ticket",
+          "code_challenge",
+          "code_challenge_method",
+          "redirect_uri",
+          "installation_thumbprint"
+        ],
+        "title": "AuthorizeLaunchRequest"
       },
       "BaaAcceptanceRecord": {
         "properties": {
@@ -1460,6 +1661,57 @@
           "html"
         ],
         "title": "BaaDocument"
+      },
+      "CaptureConsentAttestationRequest": {
+        "properties": {
+          "modality": {
+            "type": "string",
+            "const": "virtual",
+            "title": "Modality"
+          },
+          "participant_regions": {
+            "items": {
+              "type": "string",
+              "maxLength": 5,
+              "minLength": 2,
+              "pattern": "^(?:[A-Z]{2}|US-[A-Z]{2})$"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "minItems": 1,
+            "uniqueItems": true,
+            "title": "Participant Regions"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "pre_visit_form",
+              "verbal_attestation",
+              "phone_ivr"
+            ],
+            "title": "Method"
+          },
+          "all_parties_consented": {
+            "type": "boolean",
+            "title": "All Parties Consented"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Granted At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "modality",
+          "participant_regions",
+          "method",
+          "all_parties_consented",
+          "granted_at"
+        ],
+        "title": "CaptureConsentAttestationRequest",
+        "description": "No identity, encounter, tenant, or evidence IDs are accepted here."
       },
       "ConfidenceBand": {
         "type": "string",
@@ -2217,6 +2469,25 @@
           "checks"
         ],
         "title": "JoinPracticeBody"
+      },
+      "LaunchTicketResponse": {
+        "properties": {
+          "launch_ticket": {
+            "type": "string",
+            "title": "Launch Ticket"
+          },
+          "expires_at": {
+            "type": "string",
+            "title": "Expires At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "launch_ticket",
+          "expires_at"
+        ],
+        "title": "LaunchTicketResponse"
       },
       "NoteDetail": {
         "properties": {

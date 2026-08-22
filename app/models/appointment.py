@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import computed_field
 
+import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
@@ -29,6 +30,14 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     Represents an appointment with a patient from accuity
     """
 
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "id",
+            "doctor_id",
+            name="uq_appointment_id_doctor_id_capture",
+        ),
+    )
+
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
 
@@ -46,6 +55,12 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
 
     appointment_date: datetime
     "date of the appointment"
+
+    cancelled_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    "Server-recorded cancellation time; capture launch fails closed when set."
 
     def is_expired(self) -> bool:
         """

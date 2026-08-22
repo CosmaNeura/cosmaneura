@@ -561,6 +561,13 @@ celery_app.conf.beat_schedule = {
         "task": "app.jobs.external_webhooks.reconcile",
         "schedule": 30.0,
     },
+    # Recovers only pre-committed ambiguous desktop capture creates. Provider
+    # lookup is independently gated from new capture creation so incident
+    # rollback can leave recovery and overdue-cleanup visibility running.
+    "capture_reconciliation": {
+        "task": "app.jobs.capture_reconciliation.perform",
+        "schedule": 60.0,
+    },
 }
 
 # Import crontab at the top of the file
