@@ -13,6 +13,7 @@ export type PracticeStatus = {
   access_authorized: boolean
   authorization_basis: string | null
   access_revoked: boolean
+  pilot_access_grant_active: boolean
   trial_ends_at: string | null
   billing_exempt: boolean
   billing_exempt_until: string | null

@@ -14,23 +14,41 @@ from app.engagement.service import (
     reconstruct_patient_text,
     score_patient_text,
 )
+from app.services.doctor_access import doctor_access_in_force
+from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.doctor import Doctor
 from app.models.engagement_role import ConfidenceBand, EngagementRole
 from app.models.intake.intake import Intake
 
 
 def perform(transcript_id: str | TypeIDType):
-    log.info("starting engagement scoring", transcript_id=transcript_id)
+    log.info(
+        "starting engagement scoring",
+        transcript_ref=provider_log_ref(str(transcript_id)),
+    )
 
     transcript = AIVisitTranscript.get(id=transcript_id)
     assert transcript
 
+    doctor = Doctor.get(id=transcript.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "engagement scoring skipped: access unavailable",
+            event_code="engagement_scoring_access_not_in_force",
+            transcript_ref=provider_log_ref(str(transcript_id)),
+        )
+        return
+
     # Idempotency: one role per transcript. Celery retries / duplicate triggers
     # hit this guard (ai_transcript_id is unique).
     if EngagementRole.get(ai_transcript_id=transcript.id):
-        log.info("transcript already scored, skipping", transcript_id=transcript_id)
+        log.info(
+            "transcript already scored, skipping",
+            transcript_ref=provider_log_ref(str(transcript_id)),
+        )
         return
 
     patient_text = reconstruct_patient_text(transcript.transcript_data)
@@ -52,7 +70,7 @@ def perform(transcript_id: str | TypeIDType):
     if result is None:
         log.info(
             "too little patient speech to score, skipping",
-            transcript_id=transcript_id,
+            transcript_ref=provider_log_ref(str(transcript_id)),
             words=len(patient_text.split()),
         )
         return
@@ -66,7 +84,7 @@ def perform(transcript_id: str | TypeIDType):
 
     log.info(
         "saving engagement role",
-        transcript_id=transcript_id,
+        transcript_ref=provider_log_ref(str(transcript_id)),
         role=role.role_key,
         confidence=role.confidence,
         band=role.confidence_band.value,
@@ -106,5 +124,5 @@ perform_celery = celery_app.task(perform)
 
 
 def queue(*args, **kwargs):
-    log.info("queuing engagement scoring job", args=args, kwargs=kwargs)
+    log.info("queuing engagement scoring job")
     perform_celery.delay(*args, **kwargs)

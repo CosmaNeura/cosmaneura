@@ -1,0 +1,71 @@
+name: Pull Request Checks
+
+# This workflow executes pull-request code and therefore receives no secrets,
+# cloud identity, write-capable token, or production-state access.
+on:
+  pull_request: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Public, deliberately non-routable Clerk test identifier. Frontend module
+  # initialization requires the publishable-key shape; PR code receives no
+  # Clerk credential or secret expression.
+  VITE_CLERK_PUBLIC_KEY: pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk
+  DATABASE_HOST: localhost
+  REDIS_HOST: localhost
+  SMTP_HOST: localhost
+  COLUMNS: 120
+
+jobs:
+  app:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+      - uses: iloveitaly/github-action-localias@b6ed1f2decb4bc1d4e0e55e7113f61c86a3a004d # master 2026-08-21
+        with:
+          chrome: true
+      - run: just up --fast
+      - run: just py_setup
+      - run: just py_lint
+      - run: just db_migrate
+      - run: just db_lint
+      - id: py_test
+        run: just py_test
+      - name: Upload test artifacts
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results
+          path: |
+            ${{ env.TEST_RESULTS_DIRECTORY }}
+            ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
+
+  web:
+    name: Frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+      - run: just js_setup
+      - name: Generate OpenAPI client
+        run: cd web && pnpm run openapi
+      - run: just js_lint
+      - run: just js_test

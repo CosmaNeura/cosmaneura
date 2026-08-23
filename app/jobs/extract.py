@@ -9,6 +9,7 @@ import io
 import json
 import os
 import uuid
+from collections.abc import Sized
 from textwrap import dedent
 
 import PIL.Image
@@ -24,13 +25,22 @@ from app.configuration.azure import (
     AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.doctor_access import doctor_access_in_force
+from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
+from app.models.doctor import Doctor
 from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 
 from .anonymize import deidentify
+
+_MAX_LOG_COUNT = 10_000
+
+
+def _bounded_count(items: Sized) -> int:
+    return min(len(items), _MAX_LOG_COUNT)
 
 
 def perform(doctor_note_file_id: str | TypeID | TypeIDType):
@@ -40,11 +50,24 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
     If a schema for the note type already exists, we currently do NOT extract additional fields from the note.
     """
 
-    log.info("extracting note", note_id=doctor_note_file_id)
+    note_ref = provider_log_ref(f"note-file:{doctor_note_file_id}")
+    log.info(
+        "clinical note extraction started",
+        event_code="note_extraction_started",
+        note_ref=note_ref,
+    )
 
     note = DoctorNoteFile.one(id=doctor_note_file_id)
-
-    log.local(doctor_id=note.doctor_id)
+    doctor_ref = provider_log_ref(f"doctor:{note.doctor_id}")
+    doctor = Doctor.get(id=note.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "clinical note extraction skipped: access unavailable",
+            event_code="note_extraction_access_not_in_force",
+            note_ref=note_ref,
+            doctor_ref=doctor_ref,
+        )
+        return
 
     note_pages = download_note(note)
 
@@ -60,15 +83,24 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
 
     if schema.is_new():
         instructions = explain_note_fields(note_fields)
-        log.info("extracted note instructions", instructions=instructions)
+        log.info(
+            "clinical note schema extracted",
+            event_code="note_schema_extracted",
+            note_ref=note_ref,
+            doctor_ref=doctor_ref,
+            field_count=_bounded_count(instructions),
+        )
 
         schema.fields = instructions
         schema.save()
 
     log.debug(
-        "extracting note content",
-        schema_id=schema.id,
-        note_fields=note_fields,
+        "clinical note content extraction started",
+        event_code="note_content_extraction_started",
+        note_ref=note_ref,
+        doctor_ref=doctor_ref,
+        schema_ref=provider_log_ref(f"note-schema:{schema.id}"),
+        field_count=_bounded_count(note_fields),
     )
 
     content = extract_note_content(note_pages, note_fields)
@@ -80,7 +112,14 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
         field_examples=content,
     )
 
-    log.info("extracted note content", note_example_id=example.id)
+    log.info(
+        "clinical note extraction completed",
+        event_code="note_extraction_completed",
+        note_ref=note_ref,
+        doctor_ref=doctor_ref,
+        example_ref=provider_log_ref(f"note-example:{example.id}"),
+        field_count=_bounded_count(content),
+    )
 
 
 perform_celery = celery_app.task(perform)

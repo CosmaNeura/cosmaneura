@@ -16,10 +16,9 @@ admin sets ``negotiated_baa_on_file``).
 
 from fastapi import HTTPException, Request, status
 
-from app.services.organization_access import member_access_in_force
+from app.services.doctor_access import resolve_doctor_access
 
 from app.models.doctor import Doctor, DoctorRole
-from app.models.practice import Practice, PracticeMember
 
 EXEMPT_ROUTE_NAMES = {
     # settings back the onboarding wizard and hold no patient data
@@ -65,29 +64,26 @@ def require_practice_in_force(request: Request) -> None:
     if doctor.role == DoctorRole.admin:
         return
 
-    member = PracticeMember.get(doctor_id=doctor.id)
-    if member is None:
+    decision = resolve_doctor_access(
+        doctor,
+        require_entitlement=route_name not in ENTITLEMENT_EXEMPT_ROUTE_NAMES,
+    )
+    if decision.allowed:
+        return
+
+    if decision.denial_reason == "entitlement_not_in_force":
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail="This practice's free trial has ended. Add billing to continue using Cosmas.",
+        )
+
+    if decision.denial_reason == "practice_membership_required":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Name or join a practice and accept the BAA before using Cosmas.",
         )
 
-    practice = Practice.get(id=member.practice_id)
-    if (
-        practice is None
-        or not practice.baa_in_force()
-        or not member_access_in_force(member)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
-        )
-
-    if route_name in ENTITLEMENT_EXEMPT_ROUTE_NAMES:
-        return
-
-    if not practice.entitled():
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail="This practice's free trial has ended. Add billing to continue using Cosmas.",
-        )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
+    )

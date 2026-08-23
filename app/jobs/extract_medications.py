@@ -19,10 +19,13 @@ from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
+from app.services.doctor_access import doctor_access_in_force
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.rxnorm import normalize_drug_name
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript
+from app.models.doctor import Doctor
 from app.models.patient_medication import (
     MedicationKind,
     MedicationSource,
@@ -102,11 +105,21 @@ def extract_from_text(transcript_text: str) -> list[dict]:
 
 
 def perform(transcript_id: str | TypeID | TypeIDType):
-    log.info("extracting medications", transcript_id=transcript_id)
+    transcript_ref = provider_log_ref(f"transcript:{transcript_id}")
+    log.info("extracting medications", transcript_ref=transcript_ref)
 
     transcript = AIVisitTranscript.get(id=transcript_id)
     if transcript is None:
         log.warning("transcript not found for medication extraction")
+        return
+
+    doctor = Doctor.get(id=transcript.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "medication extraction skipped: access unavailable",
+            event_code="medication_extraction_access_not_in_force",
+            transcript_ref=transcript_ref,
+        )
         return
 
     # idempotent: skip if we already extracted from this appointment's transcript
@@ -115,7 +128,9 @@ def perform(transcript_id: str | TypeID | TypeIDType):
         & (PatientMedication.source == MedicationSource.transcript)
     ).count()
     if existing:
-        log.info("medications already extracted, skipping", transcript_id=transcript_id)
+        log.info(
+            "medications already extracted, skipping", transcript_ref=transcript_ref
+        )
         return
 
     transcript_text = "\n".join(
@@ -167,7 +182,7 @@ def perform(transcript_id: str | TypeID | TypeIDType):
 
     log.info(
         "extracted medications",
-        transcript_id=transcript_id,
+        transcript_ref=transcript_ref,
         count=created,
     )
 

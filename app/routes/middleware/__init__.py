@@ -6,12 +6,11 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import Response
-from structlog_config import fastapi_access_logger
 
 from app import log
 from app.environments import is_development
 
-from . import logging_context
+from . import access_logging, logging_context
 
 SESSION_SECRET_KEY = config("SESSION_SECRET_KEY", cast=str)
 
@@ -89,7 +88,7 @@ def add_middleware(app: FastAPI):
     """
 
     # replace the default fastapi logger with something nicer
-    fastapi_access_logger.add_middleware(app)
+    access_logging.add_middleware(app)
 
     # this adds `context`, which access logs require
     logging_context.add_middleware(app)

@@ -1,10 +1,13 @@
 # pyright: reportAttributeAccessIssue=false, reportOptionalMemberAccess=false
 
+import json
 import os
 import re
+from unittest.mock import patch
 
 import pytest
 from flexmock import flexmock
+from structlog.testing import capture_logs
 
 from app import log
 from app.jobs.extract import perform
@@ -26,6 +29,11 @@ requires_live_llm = pytest.mark.skipif(
         "requires live Azure OpenAI access; set RUN_LIVE_LLM_TESTS=true and Azure OpenAI env vars"
     ),
 )
+
+
+@pytest.fixture(autouse=True)
+def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr("app.jobs.extract.doctor_access_in_force", lambda _doctor: True)
 
 
 class AssertionTracker:
@@ -467,6 +475,45 @@ def test_no_duplicates_on_failure():
 
     assert schema_count == schema_count_after
     assert example_count == example_count_after
+
+
+def test_extraction_logs_only_pseudonymous_references_and_counts():
+    """Clinical note fields, instructions, and examples must stay out of logs."""
+    doctor_note_file = DoctorNoteFileFactory.build(
+        note_type="Private Note Type Sentinel",
+        azure_file_name="https://private.example/clinical-note-sentinel.pdf",
+    ).save()
+    fields = ["Private Clinical Field Sentinel"]
+    instructions = {
+        "Private Clinical Field Sentinel": "Private Clinical Instruction Sentinel"
+    }
+    content = {
+        "Private Clinical Field Sentinel": "Deidentified Clinical Output Sentinel"
+    }
+
+    with (
+        patch("app.jobs.extract.download_note", return_value=["private-page-sentinel"]),
+        patch("app.jobs.extract.extract_note_fields", return_value=fields),
+        patch("app.jobs.extract.explain_note_fields", return_value=instructions),
+        patch("app.jobs.extract.extract_note_content", return_value=content),
+        capture_logs() as logs,
+    ):
+        perform(doctor_note_file.id)
+
+    serialized = json.dumps(logs, sort_keys=True)
+    for private_value in (
+        str(doctor_note_file.id),
+        str(doctor_note_file.doctor_id),
+        "Private Note Type Sentinel",
+        "clinical-note-sentinel.pdf",
+        "private-page-sentinel",
+        "Private Clinical Field Sentinel",
+        "Private Clinical Instruction Sentinel",
+        "Deidentified Clinical Output Sentinel",
+    ):
+        assert private_value not in serialized
+    assert "hmac:" in serialized
+    assert any(entry.get("event_code") == "note_extraction_completed" for entry in logs)
 
 
 def test_multiple_examples_per_note():

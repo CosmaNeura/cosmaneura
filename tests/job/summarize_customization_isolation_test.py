@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+import pytest
+
 from app.jobs import summarize
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -9,6 +11,11 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.note_type_customization import NoteTypeCustomization
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
+
+
+@pytest.fixture(autouse=True)
+def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr(summarize, "doctor_access_in_force", lambda _doctor: True)
 
 
 def _saved_transcript(doctor_id, appointment_id, patient_id) -> AIVisitTranscript:

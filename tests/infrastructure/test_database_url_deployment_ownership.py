@@ -85,10 +85,10 @@ def test_live_guard_makes_selector_adoption_only() -> None:
 
 
 def test_terraform_plan_uses_only_required_host_package() -> None:
-    workflow = _read(".github/workflows/infra_plan.yml")
+    workflow = _read(".github/workflows/infra_production_plan.yml")
     setup = workflow[
         workflow.index("      - uses: ./.github/actions/common-setup") : workflow.index(
-            "      - uses: azure/login@v3"
+            "      - uses: azure/login@"
         )
     ]
 

@@ -34,7 +34,10 @@ def _authed_doctor() -> Doctor:
 
 def _provision_roster_access(doctor: Doctor) -> tuple[Practice, str]:
     assert doctor.email
-    domain = doctor.email.rsplit("@", 1)[1].lower()
+    local_part = doctor.email.rsplit("@", 1)[0]
+    domain = f"route-{secrets.token_hex(5)}.example.test"
+    doctor.email = f"{local_part}@{domain}"
+    doctor.save()
     now = datetime.now(timezone.utc)
     practice = Practice(
         legal_name="Route Test Pilot Organization",
@@ -212,12 +215,67 @@ def test_organization_linked_owner_cannot_create_clickwrap_acceptance(
     )
 
     assert response.status_code == status.HTTP_409_CONFLICT
-    assert "negotiated BAA" in response.json()["detail"]
+    assert "existing BAA" in response.json()["detail"]
     assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 0
     practice.refresh()
     member.refresh()
     assert practice.baa_accepted_at is None
     assert member.attested_at is None
+
+
+def test_existing_member_must_claim_roster_before_legacy_enrollment_returns_access(
+    bare_authenticated_client: TestClient,
+    monkeypatch,
+):
+    doctor = _authed_doctor()
+    practice, code = _provision_roster_access(doctor)
+    existing_member = PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="owner",
+    ).save()
+    assert doctor.email
+    monkeypatch.setattr(internal, "verified_primary_email", lambda _id: doctor.email)
+    _isolate_online_attempt_counter(monkeypatch)
+
+    create_response = bare_authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Should Not Be Created",
+            "is_solo": True,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+    assert create_response.status_code == status.HTTP_409_CONFLICT
+
+    join_response = bare_authenticated_client.post(
+        api_app.url_path_for("join_practice"),
+        json={
+            "join_code": practice.join_code,
+            "attestation_name": "Existing Owner",
+            "checks": ["workforce", "not-party", "direction", "phi"],
+        },
+    )
+    assert join_response.status_code == status.HTTP_409_CONFLICT
+
+    history_response = bare_authenticated_client.get(
+        api_app.url_path_for("practice_baa_acceptances")
+    )
+    assert history_response.status_code == status.HTTP_403_FORBIDDEN
+
+    claim_response = bare_authenticated_client.post(
+        api_app.url_path_for("claim_organization_access"),
+        json={"access_code": code},
+    )
+    assert claim_response.status_code == status.HTTP_200_OK
+    existing_member.refresh()
+    assert existing_member.role == "owner"
+    assert existing_member.organization_roster_approval_id is not None
+    history_after_claim = bare_authenticated_client.get(
+        api_app.url_path_for("practice_baa_acceptances")
+    )
+    assert history_after_claim.status_code == status.HTTP_200_OK
 
 
 def test_rostered_identity_cannot_escape_into_legacy_create_or_join(

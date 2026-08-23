@@ -12,6 +12,8 @@ from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
+from app.services.doctor_access import doctor_access_in_force
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.patient_context import days_since, latest_note_for_patient
 from app.services.terminology import terminology_terms
 
@@ -48,18 +50,28 @@ def perform(intake_id: str | TypeID | TypeIDType):
     """
     Generate intake questions for a patient of a doctor.
     """
-    log.info("generating intake summary", intake_id=intake_id)
+    intake_ref = provider_log_ref(str(intake_id))
+    log.info("generating intake summary", intake_ref=intake_ref)
 
     intake = Intake.one(id=intake_id)
+    doctor = Doctor.get(id=intake.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "intake summarization skipped: access unavailable",
+            event_code="intake_summarization_access_not_in_force",
+            intake_ref=intake_ref,
+        )
+        return
 
     if intake.summary:
         log.info(
-            "intake summary already exists, skipping generation", intake_id=intake_id
+            "intake summary already exists, skipping generation",
+            intake_ref=intake_ref,
         )
         return
 
     if not intake.cleaned_external_intake_data:
-        log.error("summarize_intake: intake data not prepared", intake_id=intake_id)
+        log.error("summarize_intake: intake data not prepared", intake_ref=intake_ref)
         raise ValueError("intake data not prepared")
 
     missing_answers = all(
@@ -68,7 +80,8 @@ def perform(intake_id: str | TypeID | TypeIDType):
 
     if missing_answers:
         log.error(
-            "summarize_intake: intake questions not answered", intake_id=intake_id
+            "summarize_intake: intake questions not answered",
+            intake_ref=intake_ref,
         )
         raise ValueError("intake questions not answered")
 
@@ -78,7 +91,7 @@ def perform(intake_id: str | TypeID | TypeIDType):
     intake.summary = summary
     intake.save()
 
-    log.info("generated intake summary", intake_id=intake_id)
+    log.info("generated intake summary", intake_ref=intake_ref)
 
 
 perform_celery = celery_app.task(perform)
@@ -184,7 +197,10 @@ def generate_intake_summary(intake: Intake) -> str | None:
     summary = response.choices[0].message.content
 
     if not summary or len(summary.strip()) < 50:
-        log.error("openai failed to generate intake summary", intake_id=intake.id)
+        log.error(
+            "openai failed to generate intake summary",
+            intake_ref=provider_log_ref(str(intake.id)),
+        )
         return None
 
     return summary.strip()

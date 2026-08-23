@@ -4,6 +4,7 @@ import httpx
 
 from app import log
 from app.configuration.recall import RECALL_API_BASE, RECALL_API_KEY
+from app.services.external_webhook_inbox import provider_log_ref
 
 # Defensive timeout for every outbound Recall API call. Today (2026-05-19)
 # the worker hung because some external HTTP request never returned, which
@@ -14,6 +15,10 @@ _HTTPX_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 # Transcript downloads can be larger blobs; allow more read time without
 # loosening the per-API-call envelope above.
 _HTTPX_DOWNLOAD_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
+RECORDING_RETENTION_HOURS = 6
+START_RECORDING_CONFIG = {
+    "retention": {"type": "timed", "hours": RECORDING_RETENTION_HOURS}
+}
 
 # Bot status codes that mean the bot is present in the call and able to
 # accept a start_recording command. See Recall.ai docs for the full list.
@@ -82,9 +87,11 @@ def create_bot(
     meeting_url: str,
     zak_url: str,
     bot_name: str = BOT_NAME,
-    manual_recording: bool = False,
+    manual_recording: bool = True,
     metadata: dict | None = None,
 ) -> dict:
+    if not manual_recording:
+        raise ValueError("Recall bots must use explicit manual recording control")
     payload = {
         "meeting_url": meeting_url,
         "bot_name": bot_name,
@@ -100,9 +107,11 @@ def create_bot(
             "require_recording_permission": True,
             "request_recording_permission_on_host_join": True,
         },
+        # Official Recall recording-control contract: null keeps creation in
+        # manual mode.  The full config, including retention, is supplied to
+        # POST start_recording because that endpoint overrides this value.
+        "recording_config": None,
     }
-    if manual_recording:
-        payload["recording_config"] = None
     if metadata is not None:
         payload["metadata"] = metadata
 
@@ -119,13 +128,15 @@ def create_bot(
             log.error(
                 "recall api error",
                 status=response.status_code,
-                body=response.text,
-                payload=payload,
             )
         response.raise_for_status()
         data = response.json()
 
-    log.info("recall bot created", bot_id=data.get("id"), meeting_url=meeting_url)
+    log.info(
+        "recall bot created",
+        bot_ref=provider_log_ref(data.get("id")),
+        manual_recording=True,
+    )
     return data
 
 
@@ -198,21 +209,25 @@ def _wait_until_bot_ready(
         except httpx.HTTPError as exc:
             log.warning(
                 "recall get_bot transient error while waiting for ready",
-                bot_id=bot_id,
-                error=str(exc),
+                bot_ref=provider_log_ref(bot_id),
+                error_type=type(exc).__name__,
             )
             time.sleep(poll_interval)
             continue
 
         status = _current_bot_status(bot)
         if status != last_status:
-            log.info("recall bot status", bot_id=bot_id, status=status)
+            log.info(
+                "recall bot status",
+                bot_ref=provider_log_ref(bot_id),
+                status=status,
+            )
             last_status = status
 
         if status in _BOT_TERMINAL_STATUSES:
             log.warning(
                 "recall bot reached terminal state before becoming ready",
-                bot_id=bot_id,
+                bot_ref=provider_log_ref(bot_id),
                 status=status,
             )
             return status
@@ -222,9 +237,9 @@ def _wait_until_bot_ready(
             if sub_code != _TRANSIENT_PERMISSION_DENIED_SUB_CODE:
                 log.warning(
                     "recall bot recording permission denied by host",
-                    bot_id=bot_id,
+                    bot_ref=provider_log_ref(bot_id),
                     status=status,
-                    sub_code=sub_code,
+                    permission_denied=True,
                 )
                 return status
             # Transient phase of the Zoom consent handshake. Keep waiting for
@@ -232,8 +247,8 @@ def _wait_until_bot_ready(
             # aborting a bot that is already sitting in the call.
             log.info(
                 "recall bot in transient recording-permission phase, waiting",
-                bot_id=bot_id,
-                sub_code=sub_code,
+                bot_ref=provider_log_ref(bot_id),
+                transient_permission_phase=True,
             )
             time.sleep(min(poll_interval, _PERMISSION_PHASE_POLL_INTERVAL))
             continue
@@ -250,7 +265,7 @@ def _wait_until_bot_ready(
 
     log.warning(
         "recall bot did not become ready before timeout",
-        bot_id=bot_id,
+        bot_ref=provider_log_ref(bot_id),
         last_status=last_status,
         timeout_seconds=timeout_seconds,
     )
@@ -268,35 +283,36 @@ def start_recording(bot_id: str, wait_for_ready: bool = True) -> dict:
         if status not in _BOT_READY_STATUSES:
             log.warning(
                 "recall start_recording aborted: bot never reached ready state",
-                bot_id=bot_id,
+                bot_ref=provider_log_ref(bot_id),
                 status=status,
             )
             return {}
         if status == "in_call_recording":
             log.info(
                 "recall bot already recording, skipping start_recording",
-                bot_id=bot_id,
+                bot_ref=provider_log_ref(bot_id),
             )
             return {}
 
     with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
             f"{RECALL_API_BASE}/bot/{bot_id}/start_recording/",
+            json=START_RECORDING_CONFIG,
             headers={"Authorization": f"Token {RECALL_API_KEY}"},
         )
         if not response.is_success:
             log.error(
                 "recall start_recording error",
-                bot_id=bot_id,
+                bot_ref=provider_log_ref(bot_id),
                 status=response.status_code,
-                body=response.text,
             )
         response.raise_for_status()
         data = response.json()
     log.info(
         "recall recording started",
-        bot_id=bot_id,
-        recording_id=data.get("id"),
+        bot_ref=provider_log_ref(bot_id),
+        recording_ref=provider_log_ref(data.get("id")),
+        retention_hours=RECORDING_RETENTION_HOURS,
     )
     return data
 
@@ -321,12 +337,11 @@ def send_chat_message(bot_id: str, message: str, to: str = "everyone") -> None:
         if not response.is_success:
             log.error(
                 "recall send_chat_message error",
-                bot_id=bot_id,
+                bot_ref=provider_log_ref(bot_id),
                 status=response.status_code,
-                body=response.text,
             )
         response.raise_for_status()
-    log.info("recall chat message sent", bot_id=bot_id, to=to)
+    log.info("recall chat message sent", bot_ref=provider_log_ref(bot_id))
 
 
 def stop_recording(bot_id: str) -> None:
@@ -341,18 +356,16 @@ def stop_recording(bot_id: str) -> None:
         # participant_left and meeting.ended both trying to stop the same recording.
         log.info(
             "recall stop_recording skipped, bot not recording",
-            bot_id=bot_id,
-            body=response.text,
+            bot_ref=provider_log_ref(bot_id),
         )
         return
     if not response.is_success:
         log.error(
             "recall stop_recording error",
             status=response.status_code,
-            body=response.text,
         )
     response.raise_for_status()
-    log.info("recall recording stopped", bot_id=bot_id)
+    log.info("recall recording stopped", bot_ref=provider_log_ref(bot_id))
 
 
 def create_async_transcript(recording_id: str, language_code: str = "auto") -> dict:
@@ -370,14 +383,13 @@ def create_async_transcript(recording_id: str, language_code: str = "auto") -> d
             log.error(
                 "recall create_transcript error",
                 status=response.status_code,
-                body=response.text,
             )
         response.raise_for_status()
         data = response.json()
     log.info(
         "recall async transcript created",
-        recording_id=recording_id,
-        transcript_id=data.get("id"),
+        recording_ref=provider_log_ref(recording_id),
+        transcript_ref=provider_log_ref(data.get("id")),
     )
     return data
 
@@ -393,7 +405,6 @@ def get_transcript(transcript_id: str) -> dict:
             log.error(
                 "recall get_transcript error",
                 status=response.status_code,
-                body=response.text,
             )
         response.raise_for_status()
     return response.json()
@@ -419,16 +430,14 @@ def leave_call(bot_id: str) -> None:
     if response.status_code == httpx.codes.BAD_REQUEST:
         log.info(
             "recall leave_call skipped, bot already done",
-            bot_id=bot_id,
-            body=response.text,
+            bot_ref=provider_log_ref(bot_id),
         )
         return
     if not response.is_success:
         log.error(
             "recall leave_call error",
-            bot_id=bot_id,
+            bot_ref=provider_log_ref(bot_id),
             status=response.status_code,
-            body=response.text,
         )
     response.raise_for_status()
-    log.info("recall bot instructed to leave call", bot_id=bot_id)
+    log.info("recall bot instructed to leave call", bot_ref=provider_log_ref(bot_id))

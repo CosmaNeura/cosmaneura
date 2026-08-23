@@ -60,23 +60,14 @@ class AppointmentRequest(BaseModel):
         """
         - Validate that at least one doctor identifier is provided
         - Validate that the appointment date is not in the future
-        - Validate that we can locate the doctor by uuid provided
+        - Leave doctor resolution to the authenticated API route
         """
 
         if not (self.doctor_email or self.doctor_id):
             raise ValueError("Either doctor_email or doctor_id must be provided")
 
-        if self.doctor_email:
-            # TODO we should scope the doctor by domain associated with this doctor API
-            self.doctor = Doctor.get(email=self.doctor_email)
-
         if self.doctor_id:
             raise NotImplementedError("doctor_id not implemented yet")
-
-        if not self.doctor:
-            raise ValueError(
-                "Doctor not found by email, make sure they have signed in to Cosmaneura"
-            )
 
         # error out if the doctor doesn't have any intake form uploaded
 
@@ -117,9 +108,15 @@ def perform(appointment_request: AppointmentRequest) -> AppointmentResponse:
     # validation.
     assert appointment_request.doctor
 
-    # let's see if we can find the appointment by the external ID
+    doctor_id = appointment_request.doctor.id
+
+    # External IDs are tenant-local. Never return another API user's intake
+    # when two upstream systems happen to reuse the same identifier.
     if appointment_request.id and (
-        appointment := Appointment.get(external_id=appointment_request.id)
+        appointment := Appointment.get(
+            external_id=appointment_request.id,
+            doctor_id=doctor_id,
+        )
     ):
         intake = Intake.one(appointment_id=appointment.id)
 
@@ -127,8 +124,6 @@ def perform(appointment_request: AppointmentRequest) -> AppointmentResponse:
         log.warning("found existing appointment, but update API not implemented")
 
         return AppointmentResponse(url=intake.public_url, id=intake.id)
-
-    doctor_id = appointment_request.doctor.id
 
     # TODO obviously, this will fail in many edge cases, but let's start simple
     # Try to find existing patient by name and date of birth

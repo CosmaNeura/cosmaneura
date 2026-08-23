@@ -27,6 +27,7 @@ import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
+import app.services.zoom_oauth_state as zoom_oauth_state
 from app import log
 from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
@@ -47,6 +48,7 @@ from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
 from app.services.clerk_identity import verified_primary_email
+from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
 from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
 from app.services.nutrient_depletion import depletions_for
 from app.services.organization_access import (
@@ -54,6 +56,7 @@ from app.services.organization_access import (
     claim_roster_access,
     doctor_has_managed_roster_assignment,
     find_access_opportunity,
+    lock_provider_practice_domain,
     lock_roster_enrollment_email,
     member_access_in_force,
     member_authorization_basis,
@@ -104,6 +107,7 @@ from app.models.note_type_customization import (
     SubjectiveSource,
     default_customization,
 )
+from app.models.organization_access import ProviderOrganization
 from app.models.patient import Patient
 from app.models.patient_medication import (
     MedicationKind,
@@ -119,6 +123,7 @@ from app.models.practice import (
     PracticeRole,
 )
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 from sqlmodel import select
@@ -508,6 +513,7 @@ class SettingsData(BaseModel, extra="forbid"):
 @internal_api_app.get("/settings")
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
+    access_decision = resolve_doctor_access(doctor, require_entitlement=False)
 
     zoom_integration = DoctorVideoIntegration.get(
         doctor_id=doctor.id, provider=VideoProvider.zoom
@@ -547,8 +553,14 @@ def settings_data(request: Request) -> SettingsData:
         zoom_connected=zoom_integration is not None,
         zoom_revoked=zoom_revoked,
         email=doctor.email,
-        onboarding_completed=doctor.onboarding_completed_at is not None,
-        practice_ready=_practice_ready(doctor),
+        onboarding_completed=(
+            doctor.onboarding_completed_at is not None
+            or (
+                access_decision.allowed
+                and access_decision.authorization_basis == "pilot_grant"
+            )
+        ),
+        practice_ready=_practice_ready(doctor, decision=access_decision),
         is_admin=doctor.role == DoctorRole.admin,
         note_customizations=note_customizations,
         has_natmed_subscription=doctor.has_natmed_subscription,
@@ -618,10 +630,21 @@ class ZoomAuthUrlResponse(BaseModel, extra="forbid"):
 
 
 @internal_api_app.get("/zoom-auth-url", name="zoom_auth_url")
-def zoom_auth_url(request: Request) -> ZoomAuthUrlResponse:
+def zoom_auth_url(request: Request, response: Response) -> ZoomAuthUrlResponse:
     doctor: Doctor = request.state.doctor
-    base = str(request.base_url).rstrip("/")
-    url = f"{base}/external/v1/zoom-oauth-start?state={doctor.clerk_id}"
+    issued = zoom_oauth_state.issue_zoom_oauth_state(str(doctor.id))
+    response.set_cookie(
+        key=zoom_oauth_state.ZOOM_OAUTH_BINDING_COOKIE,
+        value=issued.browser_binding,
+        max_age=zoom_oauth_state.ZOOM_OAUTH_STATE_TTL_SECONDS,
+        path=zoom_oauth_state.ZOOM_OAUTH_BINDING_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
+    url = str(
+        request.url_for("zoom_oauth_start").include_query_params(state=issued.state)
+    )
     return ZoomAuthUrlResponse(url=url)
 
 
@@ -673,12 +696,16 @@ def _membership_for(doctor: Doctor) -> PracticeMember | None:
     return PracticeMember.get(doctor_id=doctor.id)
 
 
-def _practice_ready(doctor: Doctor) -> bool:
-    member = _membership_for(doctor)
-    if not member:
-        return False
-    practice = Practice.get(id=member.practice_id)
-    return bool(practice and practice.baa_in_force() and member_access_in_force(member))
+def _practice_ready(
+    doctor: Doctor,
+    *,
+    decision: DoctorAccessDecision | None = None,
+) -> bool:
+    effective = decision or resolve_doctor_access(
+        doctor,
+        require_entitlement=False,
+    )
+    return effective.allowed
 
 
 def _practice_payload(
@@ -687,11 +714,23 @@ def _practice_payload(
     if not practice or not member:
         return None
     authorization_basis = member_authorization_basis(member)
+    doctor = Doctor.get(id=member.doctor_id)
+    access_decision = resolve_doctor_access(doctor) if doctor is not None else None
+    pilot_access_grant_active = bool(
+        access_decision
+        and access_decision.allowed
+        and access_decision.authorization_basis == "pilot_grant"
+    )
     return PracticeStatus(
         legal_name=practice.legal_name,
-        # Organization-managed practices use the exact roster + organization
-        # code flow. Never disclose their legacy reusable practice join code.
-        join_code=None if practice.organization_id is not None else practice.join_code,
+        # Administratively reserved and organization-managed practices use the
+        # exact roster + organization code flow. Never disclose their dormant
+        # legacy reusable practice join code.
+        join_code=(
+            None
+            if practice.organization_id is not None or practice.negotiated_baa_required
+            else practice.join_code
+        ),
         email_domain=practice.email_domain,
         origin_channel=practice.origin_channel,
         pastoral_pack=practice.pastoral_pack,
@@ -701,6 +740,7 @@ def _practice_payload(
         access_authorized=authorization_basis is not None,
         authorization_basis=authorization_basis,
         access_revoked=member.access_revoked_at is not None,
+        pilot_access_grant_active=pilot_access_grant_active,
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
         billing_exempt_until=practice.billing_exempt_until,
@@ -733,6 +773,7 @@ class PracticeStatus(BaseModel, extra="forbid"):
     access_authorized: bool
     authorization_basis: str | None
     access_revoked: bool
+    pilot_access_grant_active: bool
     trial_ends_at: datetime | None
     billing_exempt: bool
     billing_exempt_until: datetime | None
@@ -884,6 +925,18 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
     existing = _membership_for(doctor)
     if existing:
         practice = Practice.get(id=existing.practice_id)
+        if (
+            practice is not None
+            and practice.organization_id is not None
+            and existing.organization_roster_approval_id is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This account has organization-managed access. "
+                    "Use that enrollment path."
+                ),
+            )
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
@@ -917,6 +970,26 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
     normalized_email = (doctor.email or "").strip().lower()
     with get_session() as session:
         lock_roster_enrollment_email(session, normalized_email)
+        lock_provider_practice_domain(session, email_domain)
+        reserved_organization = session.exec(
+            select(ProviderOrganization).where(
+                ProviderOrganization.email_domain == email_domain
+            )
+        ).first()
+        reserved_practice = session.exec(
+            select(Practice).where(
+                func.lower(Practice.email_domain) == email_domain,
+                Practice.negotiated_baa_required == True,  # noqa: E712
+            )
+        ).first()
+        if reserved_organization is not None or reserved_practice is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This email domain uses organization-managed access. "
+                    "Use that enrollment path."
+                ),
+            )
         locked_doctor = session.exec(
             select(Doctor).where(Doctor.id == doctor.id).with_for_update()
         ).one()
@@ -1041,11 +1114,11 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         practice = session.exec(
             select(Practice).where(Practice.id == member.practice_id).with_for_update()
         ).one()
-        if practice.organization_id is not None:
+        if practice.organization_id is not None or practice.negotiated_baa_required:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
-                    "This organization-managed practice uses its negotiated BAA; "
+                    "This practice uses its organization's existing BAA; "
                     "personal clickwrap acceptance is unavailable."
                 ),
             )
@@ -1117,6 +1190,13 @@ def practice_baa_acceptances(request: Request) -> list[BaaAcceptanceRecord]:
     member = _membership_for(doctor)
     if not member:
         return []
+    practice = Practice.get(id=member.practice_id)
+    if practice is not None and practice.organization_id is not None:
+        if not member_access_in_force(member):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Organization access must be claimed before viewing records.",
+            )
     records = cast(
         list[BaaAcceptance],
         BaaAcceptance.where(BaaAcceptance.practice_id == member.practice_id)
@@ -1149,7 +1229,11 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
         return PracticeLookupResult()
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
-    if not practice or practice.organization_id is not None:
+    if (
+        not practice
+        or practice.organization_id is not None
+        or practice.negotiated_baa_required
+    ):
         return PracticeLookupResult()
     if not email_matches_domain(doctor.email, practice.email_domain):
         return PracticeLookupResult(
@@ -1172,6 +1256,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             access_authorized=False,
             authorization_basis=None,
             access_revoked=False,
+            pilot_access_grant_active=False,
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,
             billing_exempt_until=practice.billing_exempt_until,
@@ -1213,6 +1298,20 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
     existing = _membership_for(doctor)
     if existing:
         practice = Practice.get(id=existing.practice_id)
+        if practice and (
+            practice.negotiated_baa_required
+            or (
+                practice.organization_id is not None
+                and existing.organization_roster_approval_id is None
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This practice uses organization-managed enrollment. "
+                    "Use that enrollment path."
+                ),
+            )
         payload = _practice_payload(practice, existing)
         assert payload
         return payload
@@ -1223,7 +1322,11 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         )
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
-    if not practice or practice.organization_id is not None:
+    if (
+        not practice
+        or practice.organization_id is not None
+        or practice.negotiated_baa_required
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No practice matches that join code.",
@@ -1272,7 +1375,10 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             payload = _practice_payload(existing_practice, existing)
             assert payload
             return payload
-        if locked_practice.organization_id is not None:
+        if (
+            locked_practice.organization_id is not None
+            or locked_practice.negotiated_baa_required
+        ):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No practice matches that join code.",
@@ -1317,22 +1423,19 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
 )
 def complete_onboarding(request: Request) -> None:
     doctor: Doctor = request.state.doctor
-    member = _membership_for(doctor)
-    if member:
-        practice = Practice.get(id=member.practice_id)
-        if (
-            not practice
-            or not practice.baa_in_force()
-            or not member_access_in_force(member)
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
-            )
-    elif doctor.onboarding_completed_at is None:
+    decision = resolve_doctor_access(doctor, require_entitlement=False)
+    if (
+        not decision.allowed
+        and decision.denial_reason == "practice_membership_required"
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Name or join a practice and accept the BAA before using Cosmas.",
+        )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
         )
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
     doctor.save()
@@ -1400,6 +1503,22 @@ def create_billing_checkout(
     """
     doctor: Doctor = request.state.doctor
     practice = _owner_practice_for_billing(doctor)
+
+    access_decision = resolve_doctor_access(doctor)
+    if access_decision.allowed and access_decision.authorization_basis == "pilot_grant":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Legacy pilot access does not require a new subscription. "
+                "Use the billing portal to manage an existing subscription."
+            ),
+        )
+
+    if practice.organization_id is not None and practice.billing_exemption_active():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Billing for this practice is managed by its organization.",
+        )
 
     resumable = stripe_billing.has_resumable_checkout(practice)
     if not stripe_billing_configured() and not (

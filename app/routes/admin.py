@@ -16,7 +16,9 @@ from starlette import status
 from typeid import TypeID
 
 from app import log
+from app.services import external_webhook_inbox
 from app.services import usage as usage_service
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.usage import (
     DailyVolumeRow,
     DoctorUsageRow,
@@ -34,7 +36,8 @@ SESSION_KEY_LOGIN_AS_USER = "login_as_user"
 def require_admin(request: Request):
     "Protect routes that require admin access"
 
-    if (admin_user := request.state.doctor) and admin_user.role != DoctorRole.admin:
+    admin_user = getattr(request.state, "doctor", None)
+    if admin_user is None or admin_user.role != DoctorRole.admin:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
 
@@ -89,7 +92,10 @@ def login_as_user(request: Request, user_id: Annotated[str, Path()]):
         Doctor.role != DoctorRole.admin, Doctor.clerk_id == user_id
     ).one()
 
-    log.info("login_as_user", login_as_user=login_as_user)
+    log.info(
+        "login_as_user",
+        user_ref=provider_log_ref(str(cast(Any, login_as_user).id)),
+    )
 
     request.session[SESSION_KEY_LOGIN_AS_USER] = login_as_user.clerk_id  # type: ignore
     return
@@ -101,6 +107,21 @@ class UsageResponse(BasePydanticModel):
     daily_volume: list[DailyVolumeRow]
     pending_uploads: list[PendingUploadRow]
     time_to_note: list[TimeToNoteRow]
+
+
+class WebhookInboxHealthResponse(BasePydanticModel):
+    pending: int
+    processing: int
+    retry_wait: int
+    completed: int
+    dead_letter: int
+    oldest_actionable_age_seconds: float | None
+    uncertain_operations: int
+    failed_operations: int
+
+
+class WebhookRedriveResponse(BasePydanticModel):
+    status: str
 
 
 @admin_api_app.get("/usage")
@@ -115,6 +136,34 @@ def usage_dashboard() -> UsageResponse:
         pending_uploads=usage_service.pending_uploads(),
         time_to_note=usage_service.time_to_note(),
     )
+
+
+@admin_api_app.get("/webhook-inbox/health", include_in_schema=False)
+def webhook_inbox_health() -> WebhookInboxHealthResponse:
+    """Metadata-only health view; encrypted payloads are never returned."""
+
+    return WebhookInboxHealthResponse(**external_webhook_inbox.inbox_health())
+
+
+@admin_api_app.post(
+    "/webhook-inbox/{delivery_id}/redrive",
+    include_in_schema=False,
+)
+def webhook_inbox_redrive(
+    delivery_id: Annotated[str, Path()],
+) -> WebhookRedriveResponse:
+    """Redrive an unexpired dead letter without exposing its provider payload."""
+
+    try:
+        accepted = external_webhook_inbox.redrive_delivery(delivery_id)
+    except Exception:
+        accepted = False
+    if not accepted:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Delivery cannot be redriven.",
+        )
+    return WebhookRedriveResponse(status="accepted")
 
 
 class BaaAcceptanceExportRow(BasePydanticModel):

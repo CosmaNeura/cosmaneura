@@ -19,6 +19,7 @@ from .practice import Practice
 
 
 class PracticeAccessAction(str, Enum):
+    provider_practice_bootstrapped = "provider_practice_bootstrapped"
     billing_exemption_set = "billing_exemption_set"
     billing_exemption_cleared = "billing_exemption_cleared"
     negotiated_baa_recorded = "negotiated_baa_recorded"
@@ -41,6 +42,15 @@ class PracticeAccessAudit(
         sa.CheckConstraint(
             "evidence_sha256 IS NULL OR char_length(evidence_sha256) = 64",
             name="ck_practice_access_audit_evidence_sha256_length",
+        ),
+        sa.Index(
+            "uq_practice_access_audit_provider_bootstrap_ref",
+            "document_reference",
+            unique=True,
+            postgresql_where=sa.text(
+                "action = 'provider_practice_bootstrapped' "
+                "AND document_reference IS NOT NULL"
+            ),
         ),
     )
 

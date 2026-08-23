@@ -1,5 +1,7 @@
 from typing import cast
 
+import pytest
+
 import app.jobs.extract_labs as job
 from app.jobs.extract_labs import perform, persist_results
 
@@ -7,6 +9,11 @@ from app.models.lab_panel import LabPanel, LabPanelSource, LabPanelStatus
 from app.models.lab_result import LabResult
 
 from tests.factories import DoctorFactory, PatientFactory
+
+
+@pytest.fixture(autouse=True)
+def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr(job, "doctor_access_in_force", lambda _doctor: True)
 
 
 def _pending_upload_panel(doctor, patient) -> LabPanel:

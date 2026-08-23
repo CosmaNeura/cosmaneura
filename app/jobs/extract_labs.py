@@ -31,8 +31,11 @@ from app.configuration.azure import (
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
 from app.services.biomarkers import default_unit, normalize_biomarker
+from app.services.doctor_access import doctor_access_in_force
+from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
+from app.models.doctor import Doctor
 from app.models.lab_panel import LabPanel, LabPanelStatus
 from app.models.lab_result import LabResult
 
@@ -134,15 +137,25 @@ def persist_results(panel: LabPanel, raw_results: list[dict]) -> int:
 
 
 def perform(lab_panel_id: str | TypeID | TypeIDType):
-    log.info("extracting labs", lab_panel_id=lab_panel_id)
+    panel_ref = provider_log_ref(f"lab-panel:{lab_panel_id}")
+    log.info("extracting labs", panel_ref=panel_ref)
 
     panel = LabPanel.get(id=lab_panel_id)
     if panel is None:
         log.warning("lab panel not found for extraction")
         return
 
+    doctor = Doctor.get(id=panel.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "lab extraction skipped: access unavailable",
+            event_code="lab_extraction_access_not_in_force",
+            panel_ref=panel_ref,
+        )
+        return
+
     if panel.status == LabPanelStatus.completed:
-        log.info("lab panel already completed, skipping", lab_panel_id=lab_panel_id)
+        log.info("lab panel already completed, skipping", panel_ref=panel_ref)
         return
 
     # Offline/test: no Azure blob and no multimodal model available. Complete
@@ -151,7 +164,7 @@ def perform(lab_panel_id: str | TypeID | TypeIDType):
     if should_use_test_openai_fallback():
         panel.status = LabPanelStatus.completed
         panel.save()
-        log.info("lab extraction skipped (offline)", lab_panel_id=lab_panel_id)
+        log.info("lab extraction skipped (offline)", panel_ref=panel_ref)
         return
 
     try:
@@ -161,14 +174,18 @@ def perform(lab_panel_id: str | TypeID | TypeIDType):
         panel.status = LabPanelStatus.failed
         panel.save()
         # IDs/type only — never lab content
-        log.error("lab extraction failed", lab_panel_id=lab_panel_id, error=str(e))
+        log.error(
+            "lab extraction failed",
+            panel_ref=panel_ref,
+            error_type=type(e).__name__,
+        )
         return
 
     count = persist_results(panel, raw_results)
     panel.status = LabPanelStatus.completed
     panel.save()
 
-    log.info("extracted labs", lab_panel_id=lab_panel_id, count=count)
+    log.info("extracted labs", panel_ref=panel_ref, count=count)
 
 
 perform_celery = celery_app.task(perform)
