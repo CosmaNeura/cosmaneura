@@ -58,8 +58,14 @@ def test_user_list(client: TestClient):
     assert "current_user" in user_state
     # seed data creates more users
     assert len(user_state["users"]) >= users_to_create
-    assert user_state["users"][-1]["email"] == "test2@example.com"
-    assert user_state["users"][-1]["clerk_id"] == "user_2"
+
+    # assert on membership rather than position. What this test cares about is
+    # that the users it created come back; where they land in the list is a
+    # property of the route's ORDER BY and should not break this test.
+    returned = {(user["email"], user["clerk_id"]) for user in user_state["users"]}
+
+    for i in range(users_to_create):
+        assert (f"test{i}@example.com", f"user_{i}") in returned
 
 
 def test_login_as_authorized_good_credentials(client: TestClient):

@@ -21,6 +21,7 @@ from app.environments import is_testing
 # False) can never be impersonated even if a header leaked.
 _TEST_BEARER_PREFIX = "test:"
 _TEST_CLERK_ID_PREFIX = "user_test_"
+TEST_CLERK_ISSUER = "https://test.clerk.invalid"
 
 
 class AuthenticateClerkRequest:
@@ -70,7 +71,8 @@ class AuthenticateClerkRequest:
             test_clerk_id = token[len(_TEST_BEARER_PREFIX) :]
             log.warning("auth bypass active (PYTHON_ENV=test)", clerk_id=test_clerk_id)
             bypass_state = RequestState(
-                status=AuthStatus.SIGNED_IN, payload={"sub": test_clerk_id}
+                status=AuthStatus.SIGNED_IN,
+                payload={"iss": TEST_CLERK_ISSUER, "sub": test_clerk_id},
             )
             request.state.auth_state = bypass_state
             return bypass_state

@@ -58,6 +58,12 @@ def test_open_tofu_owns_both_database_secrets_and_selected_reference() -> None:
         if resource == "app":
             assert "var.python_secret_vars," in block
             assert "var.python_api_only_secret_vars," in block
+        elif resource == "worker":
+            # Billing maintenance adds one conditional secret set to the
+            # worker's two legacy DATABASE_URL-bearing blocks. Both still
+            # include the complete common secret set.
+            assert block.count("var.python_secret_vars,") == 2
+            assert block.count("var.python_billing_secret_vars") == 2
         else:
             assert block.count("for_each = var.python_secret_vars") == 2
 

@@ -1,7 +1,7 @@
 """add durable external webhook inbox
 
 Revision ID: dc296f605553
-Revises: bfd0ced59a81
+Revises: ab25569de9c6
 Create Date: 2026-08-21 10:00:00.000000
 """
 
@@ -13,7 +13,7 @@ from alembic import op
 
 
 revision: str = "dc296f605553"
-down_revision: Union[str, None] = "bfd0ced59a81"
+down_revision: Union[str, None] = "ab25569de9c6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

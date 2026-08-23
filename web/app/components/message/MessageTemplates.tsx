@@ -6,6 +6,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import { useTerminology } from "~/utils/terminology"
 
 interface MessageTemplatesProps {
   isSOAPOpen?: boolean
@@ -32,6 +33,7 @@ export function MessageTemplates({
   isTranscriptOpen,
   setIsTranscriptOpen,
 }: MessageTemplatesProps) {
+  const t = useTerminology()
   return (
     <div className="space-y-4">
       <Collapsible open={isSOAPOpen} onOpenChange={setIsSOAPOpen}>
@@ -64,14 +66,14 @@ export function MessageTemplates({
                 }`}
               />
               <span className="ml-2 text-xl font-semibold">
-                New Patient Visit
+                New {t.patientTitle} Visit
               </span>
             </Button>
           </CollapsibleTrigger>
         </div>
         <CollapsibleContent className="mt-3">
           <div className="text-left text-sm">
-            Template content for new patient visit
+            Template content for new {t.patient} visit
           </div>
         </CollapsibleContent>
       </Collapsible>

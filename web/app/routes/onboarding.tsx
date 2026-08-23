@@ -49,10 +49,13 @@ import { MCD_EMAIL_DOMAIN, isMcdEmail } from "~/lib/email-domain"
 import {
   type BaaDocument,
   type JoinMismatch,
+  type OrganizationAccessOpportunity,
   type PracticeStatus,
   acceptPracticeBaa,
+  claimOrganizationAccess,
   createPractice,
   getBaaCurrent,
+  getOrganizationAccessOpportunity,
   getPractice,
   joinPractice,
   lookupPractice,
@@ -75,7 +78,10 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const { data } = await settingsData()
   invariant(data, "settings data failed to load")
 
-  const practice = await getPractice()
+  const [practice, organizationAccess] = await Promise.all([
+    getPractice(),
+    getOrganizationAccessOpportunity(),
+  ])
 
   // Only leave onboarding when the practice BAA is in force too: doctors who
   // predate practices are onboarding_completed but still owe the (counsel-
@@ -90,7 +96,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     new URL(request.url).searchParams.get("channel"),
   )
 
-  return { ...data, email, channel, practice }
+  return { ...data, email, channel, practice, organizationAccess }
 }
 
 export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
@@ -115,7 +121,14 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-5 py-10">
-        {practiceReady(practice) ? (
+        {practice?.access_revoked ? (
+          <OrganizationAccessRevoked practice={practice} />
+        ) : !practiceReady(practice) && loaderData.organizationAccess ? (
+          <OrganizationAccessFlow
+            opportunity={loaderData.organizationAccess}
+            onboardingCompleted={loaderData.onboarding_completed}
+          />
+        ) : practiceReady(practice) ? (
           <OptionalSetup
             biography={loaderData.biography}
             zoomEnabled={zoomEnabled}
@@ -130,6 +143,111 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           />
         )}
       </main>
+    </div>
+  )
+}
+
+export function OrganizationAccessFlow({
+  opportunity,
+  onboardingCompleted,
+}: {
+  opportunity: OrganizationAccessOpportunity
+  onboardingCompleted: boolean
+}) {
+  const [accessCode, setAccessCode] = useState("")
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  async function onClaim(e: React.FormEvent) {
+    e.preventDefault()
+    const code = accessCode.trim()
+    if (!code) return
+
+    setBusy(true)
+    setError(null)
+    try {
+      const practice = await claimOrganizationAccess(code)
+      if (!practiceReady(practice)) {
+        throw new Error("Organization access is not active yet.")
+      }
+      if (!onboardingCompleted) await completeOnboarding()
+      window.location.href = href("/notes")
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not activate organization access",
+      )
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="max-w-xl">
+      <StepKicker n="01" label="Organization access" />
+      <DisplayTitle>Join {opportunity.organization_name}</DisplayTitle>
+      <p className="text-muted-foreground mt-4 leading-relaxed">
+        Your verified @{opportunity.email_domain} account is eligible. Enter the
+        access code provided by your organization to continue to your Cosmas
+        dashboard.
+      </p>
+      <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
+        Your organization already has its agreement with Cosmaneura on file; you
+        are not being asked to sign or certify that agreement.
+      </p>
+      <form onSubmit={(e) => void onClaim(e)} className="mt-8 grid gap-4">
+        <Field
+          label="Organization access code"
+          htmlFor="organization-access-code"
+        >
+          <Input
+            id="organization-access-code"
+            type="password"
+            value={accessCode}
+            onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
+            autoCapitalize="characters"
+            autoComplete="off"
+            spellCheck={false}
+            data-sentry-mask
+            data-ph-no-capture
+            aria-describedby={error ? "organization-access-error" : undefined}
+          />
+        </Field>
+        <Button type="submit" size="lg" disabled={!accessCode.trim() || busy}>
+          {busy ? (
+            <>
+              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+              Activating…
+            </>
+          ) : (
+            "Continue to Cosmas"
+          )}
+        </Button>
+      </form>
+      {error ? (
+        <p
+          id="organization-access-error"
+          role="alert"
+          className="text-destructive mt-4 text-sm"
+        >
+          {error}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function OrganizationAccessRevoked({ practice }: { practice: PracticeStatus }) {
+  return (
+    <div className="max-w-xl">
+      <StepKicker n="01" label="Organization access" />
+      <DisplayTitle>Access is no longer active</DisplayTitle>
+      <p className="text-muted-foreground mt-4 leading-relaxed">
+        Your access to {practice.legal_name} has been removed. Your existing
+        records have not been deleted. Contact your organization administrator
+        or Cosmaneura support if this should be reviewed.
+      </p>
     </div>
   )
 }
@@ -703,7 +821,7 @@ function WorkforceFlow({
   }
 
   async function onJoin() {
-    if (!found) return
+    if (!found?.join_code) return
     setBusy(true)
     setError(null)
     try {

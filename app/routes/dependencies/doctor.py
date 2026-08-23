@@ -5,7 +5,7 @@ from fastapi import HTTPException, Request, status
 from starlette_context import context
 
 from app import log
-from app.configuration.clerk import clerk
+from app.services.clerk_identity import verified_primary_email
 from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor
@@ -13,9 +13,7 @@ from app.models.doctor import Doctor
 
 def _fetch_clerk_email(clerk_id: str) -> str | None:
     try:
-        clerk_user = clerk.users.get(user_id=clerk_id)
-        if clerk_user and clerk_user.email_addresses:
-            return clerk_user.email_addresses[0].email_address
+        return verified_primary_email(clerk_id)
     except Exception:
         log.warning(
             "clerk email lookup failed",

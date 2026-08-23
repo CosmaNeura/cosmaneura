@@ -117,10 +117,10 @@ def zoom_oauth_callback(
         return _authorization_error_response()
 
     doctor = Doctor.get(id=doctor_id)
-    if doctor is None:
+    if doctor is None or doctor.deleted_at is not None:
         log.warning(
             "zoom oauth callback rejected",
-            event_code="zoom_oauth_doctor_not_found",
+            event_code="zoom_oauth_doctor_unavailable",
         )
         return _clear_browser_binding(_authorization_error_response())
 

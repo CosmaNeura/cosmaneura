@@ -20,18 +20,14 @@ def perform(doctor_id: str) -> None:
     doctor = Doctor.get(id=doctor_id)
     doctor_ref = provider_log_ref(f"doctor:{doctor_id}")
 
-    if not doctor:
+    if (
+        not doctor
+        or doctor.deleted_at is not None
+        or not zoom_service.get_zoom_integration(doctor)
+    ):
         log.info(
             "zoom meeting sync skipped",
-            event_code="zoom_sync_doctor_not_found",
-            doctor_ref=doctor_ref,
-        )
-        return
-
-    if not zoom_service.get_zoom_integration(doctor):
-        log.info(
-            "zoom meeting sync skipped",
-            event_code="zoom_sync_integration_missing",
+            event_code="zoom_sync_doctor_unavailable_or_integration_missing",
             doctor_ref=doctor_ref,
         )
         return

@@ -1,15 +1,21 @@
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
+import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
 from app.server import api_app
+from app.services import stripe_billing
 from app.utils.email_domain import extract_email_domain
 
+from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_SHA256, BaaAcceptance
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
+from sqlalchemy import delete, update
+from sqlalchemy.exc import DBAPIError
+from sqlmodel import SQLModel
 
 from tests.routes.utils import get_clerk_dev_user
 
@@ -158,6 +164,80 @@ def test_baa_acceptance_writes_append_only_record(
     assert acceptance_count() == 1
 
 
+def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    _accept_baa(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    member = PracticeMember.get(doctor_id=doctor.id)
+    assert member
+    acceptance = cast(
+        BaaAcceptance,
+        BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).one(),
+    )
+    original_accepted_at = acceptance.accepted_at_utc
+
+    # Simulate the historical partial-commit failure: legal evidence exists,
+    # but the denormalized gate/trial and owner attestation are absent.
+    practice.baa_version = None
+    practice.baa_accepted_at = None
+    practice.baa_accepted_by_doctor_id = None
+    practice.baa_signature_name = None
+    practice.baa_signature_title = None
+    practice.trial_ends_at = None
+    practice.save()
+    member.attested_at = None
+    member.attestation_name = None
+    member.save()
+
+    _accept_baa(bare_authenticated_client)
+    practice.refresh()
+    member.refresh()
+    assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 1
+    assert practice.baa_accepted_at == original_accepted_at
+    assert practice.trial_ends_at == original_accepted_at + timedelta(days=14)
+    assert practice.baa_in_force()
+    assert member.attested_at == original_accepted_at
+    assert member.attestation_name == acceptance.accepted_by_name
+
+
+def test_baa_acceptance_has_database_idempotency_constraint():
+    table = SQLModel.metadata.tables["baa_acceptance"]
+    constraints = {constraint.name for constraint in table.constraints}
+    assert "baa_acceptance_practice_version_key" in constraints
+
+
+def test_baa_acceptance_database_rejects_update_and_delete(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    _accept_baa(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    acceptance = cast(
+        BaaAcceptance,
+        BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).one(),
+    )
+    table = SQLModel.metadata.tables["baa_acceptance"]
+
+    with get_session() as session:
+        savepoint = session.begin_nested()
+        with pytest.raises(DBAPIError, match="append-only"):
+            session.execute(
+                update(table)
+                .where(table.c.id == acceptance.id)
+                .values(accepted_by_name="Mutation forbidden")
+            )
+        savepoint.rollback()
+
+        savepoint = session.begin_nested()
+        with pytest.raises(DBAPIError, match="append-only"):
+            session.execute(delete(table).where(table.c.id == acceptance.id))
+        savepoint.rollback()
+
+
 def test_join_requires_matching_email_domain(bare_authenticated_client: TestClient):
     doctor = _authed_doctor()
     Practice(
@@ -190,6 +270,48 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
         },
     )
     assert joined.status_code == status.HTTP_403_FORBIDDEN
+
+
+def test_join_persists_quantity_repair_without_waiting_for_stripe(
+    bare_authenticated_client: TestClient,
+    monkeypatch,
+):
+    doctor = _authed_doctor()
+    domain = extract_email_domain(doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Fast Join Practice, PLLC",
+        join_code="FASTJOIN",
+        email_domain=domain,
+        origin_channel="direct",
+        pastoral_pack=False,
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version="CN-BAA-CUST-CW v2.2",
+        stripe_customer_id="cus_fast_join",
+        stripe_subscription_id="sub_fast_join",
+        subscription_status="active",
+    ).save()
+
+    def forbidden_remote_sync(*_args, **_kwargs):
+        raise AssertionError("join route must not perform Stripe network I/O")
+
+    monkeypatch.setattr(
+        stripe_billing, "sync_subscription_quantity", forbidden_remote_sync
+    )
+    joined = bare_authenticated_client.post(
+        api_app.url_path_for("join_practice"),
+        json={
+            "join_code": "FASTJOIN",
+            "attestation_name": "Pat Clinician",
+            "checks": ["workforce", "not-party", "direction", "phi"],
+        },
+    )
+
+    assert joined.status_code == status.HTTP_200_OK, joined.text
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target == 1
 
 
 def test_mcd_channel_without_mcd_email_coerces_to_catholic(
@@ -258,6 +380,21 @@ def test_baa_acceptance_starts_trial_and_opens_the_gate(
     assert opened.status_code == status.HTTP_200_OK
 
 
+def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    practice.billing_exempt = True
+    practice.billing_exempt_until = datetime.now(timezone.utc) - timedelta(days=1)
+    practice.save()
+
+    body = _accept_baa(bare_authenticated_client)
+    assert body["trial_ends_at"] is not None
+    assert body["entitled"] is True
+
+
 def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
     bare_authenticated_client: TestClient,
 ):
@@ -320,3 +457,33 @@ def test_negotiated_baa_on_file_satisfies_the_gate(
 
     done = bare_authenticated_client.post(api_app.url_path_for("complete_onboarding"))
     assert done.status_code == status.HTTP_200_OK
+
+
+def test_future_negotiated_baa_does_not_open_phi_gate(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    practice.negotiated_baa_on_file = True
+    practice.negotiated_baa_effective_date = datetime.now(timezone.utc) + timedelta(
+        days=1
+    )
+    practice.negotiated_baa_reference = "CN-BAA-CUST future-effective"
+    practice.billing_exempt = True
+    practice.save()
+
+    member = PracticeMember.get(doctor_id=doctor.id)
+    assert member
+    member.attested_at = datetime.now(timezone.utc)
+    member.save()
+
+    blocked = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+    assert blocked.status_code == status.HTTP_403_FORBIDDEN
+
+    practice.negotiated_baa_effective_date = datetime.now(timezone.utc) - timedelta(
+        seconds=1
+    )
+    practice.save()
+    opened = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+    assert opened.status_code == status.HTTP_200_OK

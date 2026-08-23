@@ -78,7 +78,7 @@ def test_clerk_lookup_failure_omits_identifier_and_exception_details() -> None:
 
     with (
         patch(
-            "app.routes.dependencies.doctor.clerk.users.get",
+            "app.routes.dependencies.doctor.verified_primary_email",
             side_effect=RuntimeError(provider_error),
         ),
         capture_logs() as logs,

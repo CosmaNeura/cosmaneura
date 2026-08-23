@@ -3,16 +3,28 @@ import { requireEnv } from "~/utils/environment"
 
 export type PracticeStatus = {
   legal_name: string
-  join_code: string
+  join_code: string | null
   email_domain: string
   origin_channel: string
   pastoral_pack: boolean
   baa_accepted: boolean
   role: string
   attested: boolean
+  access_authorized: boolean
+  authorization_basis: string | null
+  access_revoked: boolean
   trial_ends_at: string | null
   billing_exempt: boolean
+  billing_exempt_until: string | null
+  billing_exempt_active: boolean
+  billing_enabled: boolean
+  billing_management_enabled: boolean
+  billing_portal_available: boolean
+  billing_checkout_resumable: boolean
+  billing_subscription_manageable: boolean
+  billing_checkout_available_at: string | null
   entitled: boolean
+  subscription_status: string | null
 }
 
 export type JoinMismatch = {
@@ -24,6 +36,11 @@ export type JoinMismatch = {
 export type PracticeLookupResult = {
   practice: PracticeStatus | null
   mismatch: JoinMismatch | null
+}
+
+export type OrganizationAccessOpportunity = {
+  organization_name: string
+  email_domain: string
 }
 
 async function authHeaders(): Promise<HeadersInit> {
@@ -85,6 +102,22 @@ export function getPractice() {
   return practiceRequest<PracticeStatus | null>("/practice")
 }
 
+export function getOrganizationAccessOpportunity() {
+  return practiceRequest<OrganizationAccessOpportunity | null>(
+    "/practice/organization-access",
+  )
+}
+
+export function claimOrganizationAccess(accessCode: string) {
+  return practiceRequest<PracticeStatus>(
+    "/practice/organization-access/claim",
+    {
+      method: "POST",
+      body: JSON.stringify({ access_code: accessCode }),
+    },
+  )
+}
+
 export function createPractice(body: {
   legal_name: string
   npi?: string | null
@@ -132,7 +165,11 @@ export function joinPractice(body: {
 export function practiceReady(
   practice: PracticeStatus | null | undefined,
 ): practice is PracticeStatus {
-  return Boolean(practice?.baa_accepted && practice.attested)
+  return Boolean(
+    practice?.baa_accepted &&
+      practice.access_authorized &&
+      !practice.access_revoked,
+  )
 }
 
 export type BaaDocument = {
@@ -158,4 +195,23 @@ export function getBaaCurrent() {
 
 export function getBaaAcceptances() {
   return practiceRequest<BaaAcceptanceRecord[]>("/practice/baa/acceptances")
+}
+
+// Both billing endpoints return a Stripe-hosted URL to send the browser to.
+// They stay reachable after the trial lapses (the 402 gate exempts them).
+export function createBillingCheckout() {
+  return practiceRequest<{ url: string }>("/practice/billing/checkout", {
+    method: "POST",
+    body: JSON.stringify({
+      success_path: "/settings?billing=success",
+      cancel_path: "/settings?billing=cancelled",
+    }),
+  })
+}
+
+export function createBillingPortal() {
+  return practiceRequest<{ url: string }>("/practice/billing/portal", {
+    method: "POST",
+    body: JSON.stringify({ return_path: "/settings" }),
+  })
 }

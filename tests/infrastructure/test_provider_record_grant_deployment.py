@@ -67,6 +67,11 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert api_only.count(GRANT_SECRET) == 1
 
     deploy = _read("infra-staging/deploy.sh")
+    control_default = (
+        'ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"'
+    )
+    assert deploy.index(control_default) < deploy.index("if ! ENV_JSON=")
+    assert ".ENABLE_SOVEREIGN_RECORD_GRANTS" not in deploy
     assert GRANT_SECRET not in _shell_array(deploy, "COMMON_SECRET_VARS")
     # Recall's always-configured API-only secret is separate from the optional
     # record-grant capability, which is appended only behind its feature gate.
@@ -173,3 +178,15 @@ def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> 
     assert documentation.count("repo:CosmaNeura/cosmaneura:environment:production") >= 3
     assert "repo:CosmaNeura/cosmaneura:environment:staging" in documentation
     assert "staging-scoped Azure identity" in documentation
+
+
+def test_terraform_plan_installs_only_required_host_package() -> None:
+    workflow = _read(".github/workflows/infra_plan.yml")
+    assert "./.github/actions/common-setup" not in workflow
+    assert "apt-packages:" not in workflow
+    assert (
+        "opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f" in workflow
+    )
+    assert "libnss3-tools" not in workflow
+    assert "poppler-utils" not in workflow
+    assert "ffmpeg" not in workflow

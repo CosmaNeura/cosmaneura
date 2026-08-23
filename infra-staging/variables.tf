@@ -50,6 +50,31 @@ variable "python_api_only_secret_vars" {
   ]
 }
 
+variable "python_billing_secret_vars" {
+  description = "Stripe secret ENV vars exposed only to API and worker"
+  type        = set(string)
+  default = [
+    "STRIPE_SECRET_KEY",
+  ]
+}
+
+variable "python_billing_api_only_secret_vars" {
+  description = "Stripe secret ENV vars exposed only to the API"
+  type        = set(string)
+  default = [
+    "STRIPE_WEBHOOK_SECRET",
+  ]
+}
+
+variable "python_billing_public_vars" {
+  description = "Non-secret Stripe configuration exposed only to API and worker"
+  type        = set(string)
+  default = [
+    "STRIPE_INTEGRATION_ENABLED", "STRIPE_BILLING_ENABLED", "STRIPE_ACCOUNT_ID",
+    "STRIPE_PRICE_ID", "STRIPE_API_VERSION", "STRIPE_LIVE_MODE",
+  ]
+}
+
 
 # container configuration which does not need to be secret
 variable "python_public_vars" {
@@ -70,6 +95,10 @@ variable "python_public_vars" {
     # app-only Entra authentication for the feature-flagged Scribe workload route
     "SCRIBE_HANDOFF_ENABLED", "ENTRA_TENANT_ID", "SCRIBE_API_AUDIENCE",
     "SCRIBE_CALLER_CLIENT_ID", "SCRIBE_RECONCILER_CALLER_CLIENT_ID",
+    # provider-first Agent API; exact one-provider allowlist excludes public
+    "AGENT_API_ENABLED", "AGENT_API_AUDIENCE", "AGENT_API_SOVEREIGN_CLIENT_IDS",
+    "AUTHORITY_KERNEL_ENABLED", "AUTHORITY_CLERK_ISSUER", "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
+    "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS", "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
     "DURABLE_WEBHOOK_INBOX_ENABLED"
   ]
 }
