@@ -1,0 +1,6 @@
+packages:
+  - "."
+
+confirmModulesPurge: false
+allowBuilds:
+  esbuild: true

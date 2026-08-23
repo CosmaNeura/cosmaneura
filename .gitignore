@@ -36,3 +36,12 @@ infra-staging/terraform.tfstate*
 .worktrees/
 
 docs/superporwers
+
+# Tauri desktop companion build products and local environment overrides
+/desktop/node_modules/
+/desktop/dist/
+/desktop/src/generated/
+/desktop/src-tauri/gen/
+/desktop/src-tauri/target/
+/desktop/.env*
+!/desktop/.env.example

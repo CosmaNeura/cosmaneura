@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Cosmas Capture",
+  "version": "0.1.0",
+  "identifier": "com.cosmaneura.capture",
+  "build": {
+    "beforeDevCommand": "corepack pnpm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "corepack pnpm run build",
+    "frontendDist": "../dist",
+    "removeUnusedCommands": true
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Cosmas Capture",
+        "width": 1040,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 620,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "capabilities": ["main-window"],
+      "csp": {
+        "default-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "font-src": "'self'",
+        "img-src": "'self' data:",
+        "object-src": "'none'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost http://127.0.0.1:1420 ws://127.0.0.1:1420",
+        "font-src": "'self'",
+        "img-src": "'self' data:",
+        "object-src": "'none'",
+        "script-src": "'self' 'unsafe-eval'",
+        "style-src": "'self' 'unsafe-inline'"
+      },
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Medical",
+    "copyright": "Copyright © CosmaNeura",
+    "icon": [
+      "../../web/public/cosmas-icon-512.png",
+      "../../web/public/cosmas.ico"
+    ],
+    "targets": "all",
+    "shortDescription": "Consent-gated virtual visit audio capture",
+    "longDescription": "Cosmas companion for clinician-authorized microphone and system-audio capture during virtual visits."
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["cosmaneura-capture"]
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Minimal renderer permissions; network and credentials remain in Rust.",
+  "windows": ["main"],
+  "platforms": ["macOS", "windows"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
