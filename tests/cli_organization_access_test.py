@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 import typer
+from click import unstyle
 from typer.testing import CliRunner
 
 from app.cli import (
@@ -29,6 +30,11 @@ from app.models.organization_access import (
 from app.models.practice import Practice, PracticeMember
 from app.models.practice_access_audit import PracticeAccessAction, PracticeAccessAudit
 from sqlalchemy.exc import SQLAlchemyError
+
+
+def _normalized_cli_output(output: str) -> str:
+    lines = (line.strip().strip("│").strip() for line in unstyle(output).splitlines())
+    return " ".join(" ".join(lines).split())
 
 
 def _private_manifest(tmp_path, payload, *, name="roster.json"):
@@ -519,10 +525,11 @@ def test_access_code_cli_retains_secret_for_ambiguous_single_and_rotation(
         ],
     )
 
+    configured_output = _normalized_cli_output(configured.output)
     assert configured.exit_code != 0
-    assert "outcome is ambiguous" in configured.output
-    assert "output file was retained" in configured.output
-    assert "Verify database state" in configured.output
+    assert "outcome is ambiguous" in configured_output
+    assert "output file was retained" in configured_output
+    assert "Verify database state" in configured_output
     assert sensitive_value not in configured.output
     assert configure_code_path.is_file()
     assert configure_code_path.stat().st_mode & 0o777 == 0o600
@@ -567,10 +574,11 @@ def test_access_code_cli_retains_secret_for_ambiguous_single_and_rotation(
         ],
     )
 
+    rotated_output = _normalized_cli_output(rotated.output)
     assert rotated.exit_code != 0
-    assert "outcome is ambiguous" in rotated.output
-    assert "output file was retained" in rotated.output
-    assert "Verify database state" in rotated.output
+    assert "outcome is ambiguous" in rotated_output
+    assert "output file was retained" in rotated_output
+    assert "Verify database state" in rotated_output
     assert sensitive_value not in rotated.output
     assert rotation_code_path.is_file()
     assert rotation_code_path.stat().st_mode & 0o777 == 0o600
@@ -691,7 +699,7 @@ def test_multi_practice_configuration_cli_dry_run_then_atomic_apply(
         ],
     )
     assert missing_plan.exit_code != 0
-    assert "--confirm-plan-sha256" in missing_plan.output
+    assert "--confirm-plan-sha256" in _normalized_cli_output(missing_plan.output)
     assert not missing_plan_code_path.exists()
 
     changed_reason_command = list(command)
@@ -772,10 +780,11 @@ def test_multi_practice_configuration_cli_dry_run_then_atomic_apply(
             "--apply",
         ],
     )
+    ambiguous_output = _normalized_cli_output(ambiguous.output)
     assert ambiguous.exit_code != 0
-    assert "outcome is ambiguous" in ambiguous.output
-    assert "output file was retained" in ambiguous.output
-    assert "Verify database state" in ambiguous.output
+    assert "outcome is ambiguous" in ambiguous_output
+    assert "output file was retained" in ambiguous_output
+    assert "Verify database state" in ambiguous_output
     assert sensitive_value not in ambiguous.output
     assert ambiguous_code_path.is_file()
     assert ambiguous_code_path.stat().st_mode & 0o777 == 0o600
