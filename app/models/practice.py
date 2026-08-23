@@ -36,6 +36,22 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
             "organization_id",
             name="uq_practice_id_organization_id",
         ),
+        sa.ForeignKeyConstraint(
+            ["organization_id", "email_domain"],
+            ["provider_organization.id", "provider_organization.email_domain"],
+            name="fk_practice_organization_domain",
+        ),
+        sa.CheckConstraint(
+            "NOT negotiated_baa_required OR ("
+            "baa_version IS NULL "
+            "AND baa_accepted_at IS NULL "
+            "AND baa_accepted_by_doctor_id IS NULL "
+            "AND baa_signature_name IS NULL "
+            "AND baa_signature_title IS NULL "
+            "AND trial_ends_at IS NULL)",
+            name="ck_practice_negotiated_baa_required_no_clickwrap",
+        ),
+        sa.Index("practice_organization_id_idx", "organization_id"),
     )
 
     legal_name: str
@@ -135,6 +151,8 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
 
     negotiated_baa_on_file: bool = False
     "Enterprise fallback: a countersigned CN-BAA-CUST is on file instead of clickwrap."
+    negotiated_baa_required: bool = False
+    "Fail-closed administrative marker: this practice may never use clickwrap BAA."
     negotiated_baa_effective_date: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
@@ -191,6 +209,25 @@ class PracticeMember(
     """One Cosmas account belongs to at most one practice."""
 
     __table_args__ = (
+        sa.ForeignKeyConstraint(
+            [
+                "organization_roster_approval_id",
+                "practice_id",
+                "doctor_id",
+            ],
+            [
+                "organization_roster_approval.id",
+                "organization_roster_approval.target_practice_id",
+                "organization_roster_approval.claimed_doctor_id",
+            ],
+            name="fk_practice_member_organization_claim_binding",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.CheckConstraint(
+            "role IN ('owner', 'workforce')",
+            name="ck_practice_member_role",
+        ),
         sa.CheckConstraint(
             "(organization_roster_approval_id IS NULL "
             "AND organization_authorized_at IS NULL) OR "

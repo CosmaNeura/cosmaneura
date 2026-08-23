@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
-
-from app.utils.email_domain import email_matches_domain
 
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
@@ -54,6 +53,15 @@ class OrganizationAccessOpportunity:
 @dataclass(frozen=True)
 class RosterApprovalInput:
     email: str
+    expires_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class RosterAssignmentInput:
+    """One schema-v2 roster identity and its explicit practice destination."""
+
+    email: str
+    target_practice_id: Any
     expires_at: datetime | None = None
 
 
@@ -146,6 +154,34 @@ def configure_provider_organization(
         locked_practice = session.exec(
             select(Practice).where(Practice.id == practice.id).with_for_update()
         ).one()
+        lock_provider_practice_domain(session, normalized_domain)
+        domain_practice_ids = {
+            str(practice_id)
+            for practice_id in session.exec(
+                select(col(Practice.id)).where(
+                    func.lower(func.btrim(col(Practice.email_domain)))
+                    == normalized_domain
+                )
+            ).all()
+        }
+        if domain_practice_ids != {str(locked_practice.id)}:
+            raise OrganizationAccessError(
+                "single-practice setup requires exactly one practice for the domain"
+            )
+        if (
+            session.exec(
+                select(ProviderOrganization).where(
+                    or_(
+                        col(ProviderOrganization.slug) == normalized_slug,
+                        col(ProviderOrganization.email_domain) == normalized_domain,
+                    )
+                )
+            ).first()
+            is not None
+        ):
+            raise OrganizationAccessError(
+                "organization slug or email domain is already configured"
+            )
         if locked_practice.organization_id is not None:
             raise OrganizationAccessError(
                 "practice became linked to an organization during setup"
@@ -171,6 +207,632 @@ def configure_provider_organization(
     return organization, code, audit
 
 
+def _normalize_multi_practice_plan_inputs(
+    assignments: list[RosterAssignmentInput],
+    *,
+    legal_name: str,
+    slug: str,
+    email_domain: str,
+    operator_ref: str,
+    reason: str,
+    source_ref: str,
+    source_sha256: str,
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    tuple[tuple[str, str, datetime | None], ...],
+    str,
+]:
+    """Normalize every mutation input represented by the canonical plan."""
+
+    operator = _required(operator_ref, field="operator_ref", limit=255)
+    explanation = _required(reason, field="reason", limit=512)
+    name = _required(legal_name, field="legal_name", limit=160)
+    source = _required(source_ref, field="source_ref", limit=255)
+    normalized_slug = slug.strip().lower()
+    normalized_domain = email_domain.strip().lower().lstrip("@")
+    digest = source_sha256.strip().lower()
+    if (
+        not normalized_slug
+        or len(normalized_slug) > 64
+        or any(
+            ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in normalized_slug
+        )
+    ):
+        raise OrganizationAccessError(
+            "slug must be 1 to 64 lowercase letters, numbers, or hyphens"
+        )
+    if (
+        not normalized_domain
+        or len(normalized_domain) > 253
+        or "@" in normalized_domain
+        or "." not in normalized_domain
+    ):
+        raise OrganizationAccessError("a valid organization email domain is required")
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise OrganizationAccessError("source_sha256 must be a 64-character hex digest")
+    if not assignments:
+        raise OrganizationAccessError("roster must contain at least one assignment")
+
+    normalized_assignments: list[tuple[str, str, datetime | None]] = []
+    seen_emails: set[str] = set()
+    for assignment in assignments:
+        email = normalize_email(assignment.email)
+        target_practice_id = str(assignment.target_practice_id)
+        if email in seen_emails:
+            raise OrganizationAccessError("roster contains a duplicate email")
+        if not email_matches_exact_domain(email, normalized_domain):
+            raise OrganizationAccessError(
+                "one or more roster accounts do not match the organization domain"
+            )
+        if assignment.expires_at is not None:
+            raise OrganizationAccessError(
+                "scheduled roster expiry is not supported; use explicit offboarding"
+            )
+        seen_emails.add(email)
+        normalized_assignments.append(
+            (email, target_practice_id, assignment.expires_at)
+        )
+
+    return (
+        operator,
+        explanation,
+        name,
+        normalized_slug,
+        normalized_domain,
+        source,
+        tuple(sorted(normalized_assignments)),
+        digest,
+    )
+
+
+def _multi_practice_plan_sha256_from_normalized(
+    *,
+    operator_ref: str,
+    reason: str,
+    legal_name: str,
+    organization_slug: str,
+    email_domain: str,
+    source_ref: str,
+    assignments: tuple[tuple[str, str, datetime | None], ...],
+    roster_sha256: str,
+) -> str:
+    payload = {
+        "action": "configure_provider_organization_with_roster",
+        "email_domain": email_domain,
+        "fixed_configuration": {
+            "access_code_version": 1,
+            "organization_status": "active",
+        },
+        "legal_name": legal_name,
+        "manifest_schema_version": 2,
+        "members": [
+            {"email": email, "target_practice_id": target_practice_id}
+            for email, target_practice_id, _ in assignments
+        ],
+        "operator_ref": operator_ref,
+        "organization_slug": organization_slug,
+        "plan_schema_version": 1,
+        "reason": reason,
+        "roster_sha256": roster_sha256,
+        "source_ref": source_ref,
+    }
+    canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def provider_organization_with_roster_plan_sha256(
+    assignments: list[RosterAssignmentInput],
+    *,
+    organization_slug: str,
+    email_domain: str,
+    legal_name: str,
+    operator_ref: str,
+    reason: str,
+    source_ref: str,
+    roster_sha256: str,
+) -> str:
+    """Return the canonical digest for one normalized multi-practice mutation."""
+
+    (
+        operator,
+        explanation,
+        name,
+        normalized_slug,
+        normalized_domain,
+        source,
+        rows,
+        digest,
+    ) = _normalize_multi_practice_plan_inputs(
+        assignments,
+        legal_name=legal_name,
+        slug=organization_slug,
+        email_domain=email_domain,
+        operator_ref=operator_ref,
+        reason=reason,
+        source_ref=source_ref,
+        source_sha256=roster_sha256,
+    )
+    return _multi_practice_plan_sha256_from_normalized(
+        operator_ref=operator,
+        reason=explanation,
+        legal_name=name,
+        organization_slug=normalized_slug,
+        email_domain=normalized_domain,
+        source_ref=source,
+        assignments=rows,
+        roster_sha256=digest,
+    )
+
+
+def _normalize_multi_practice_configuration(
+    practices: list[Practice],
+    assignments: list[RosterAssignmentInput],
+    *,
+    legal_name: str,
+    slug: str,
+    email_domain: str,
+    operator_ref: str,
+    reason: str,
+    source_ref: str,
+    source_sha256: str,
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    str,
+    str,
+    tuple[Any, ...],
+    tuple[tuple[str, str, datetime | None], ...],
+    str,
+]:
+    """Normalize the complete immutable input to a multi-practice cutover."""
+
+    (
+        operator,
+        explanation,
+        name,
+        normalized_slug,
+        normalized_domain,
+        source,
+        normalized_assignments,
+        digest,
+    ) = _normalize_multi_practice_plan_inputs(
+        assignments,
+        legal_name=legal_name,
+        slug=slug,
+        email_domain=email_domain,
+        operator_ref=operator_ref,
+        reason=reason,
+        source_ref=source_ref,
+        source_sha256=source_sha256,
+    )
+    if len(practices) < 2:
+        raise OrganizationAccessError(
+            "multi-practice configuration requires at least two practices"
+        )
+    practice_ids = tuple(sorted((practice.id for practice in practices), key=str))
+    selected = {str(practice_id) for practice_id in practice_ids}
+    if len(selected) != len(practice_ids):
+        raise OrganizationAccessError("target practices must be unique")
+    if any(
+        target_practice_id not in selected
+        for _, target_practice_id, _ in normalized_assignments
+    ):
+        raise OrganizationAccessError(
+            "roster assignment targets a practice outside this configuration"
+        )
+    return (
+        operator,
+        explanation,
+        name,
+        normalized_slug,
+        normalized_domain,
+        source,
+        practice_ids,
+        normalized_assignments,
+        digest,
+    )
+
+
+def _lock_and_validate_multi_practice_configuration(
+    session: Session,
+    *,
+    practice_ids: tuple[Any, ...],
+    assignments: tuple[tuple[str, str, datetime | None], ...],
+    slug: str,
+    email_domain: str,
+    now: datetime,
+) -> tuple[Practice, ...]:
+    """Lock and revalidate every mutable authorization input before cutover."""
+
+    locked_practices: list[Practice] = []
+    for practice_id in practice_ids:
+        practice = session.exec(
+            select(Practice).where(Practice.id == practice_id).with_for_update()
+        ).one_or_none()
+        if practice is None:
+            raise OrganizationAccessError("target practice no longer exists")
+        locked_practices.append(practice)
+
+    for email, _, _ in assignments:
+        lock_roster_enrollment_email(session, email)
+    # Self-service practice creation takes its email lock before this domain
+    # lock. Taking the same order prevents a cutover/create deadlock; the
+    # complete same-domain practice-set check below detects whichever won.
+    lock_provider_practice_domain(session, email_domain)
+
+    all_domain_practice_ids = {
+        str(practice_id)
+        for practice_id in session.exec(
+            select(col(Practice.id)).where(
+                func.lower(func.btrim(col(Practice.email_domain))) == email_domain
+            )
+        ).all()
+    }
+    if all_domain_practice_ids != {str(practice_id) for practice_id in practice_ids}:
+        raise OrganizationAccessError(
+            "all existing practices for the organization domain must be included"
+        )
+
+    active_domain_doctors = cast(
+        list[Doctor],
+        list(
+            session.exec(
+                select(Doctor)
+                .where(
+                    Doctor.deleted_at == None,  # noqa: E711
+                    func.split_part(func.lower(func.btrim(col(Doctor.email))), "@", 2)
+                    == email_domain,
+                )
+                .order_by(cast(Any, Doctor.id))
+                .with_for_update()
+            ).all()
+        ),
+    )
+    assigned_emails = {email for email, _, _ in assignments}
+    active_domain_emails: set[str] = set()
+    for doctor in active_domain_doctors:
+        try:
+            active_domain_emails.add(normalize_email(doctor.email or ""))
+        except OrganizationAccessError as exc:
+            raise OrganizationAccessError(
+                "an active organization-domain account has an invalid email"
+            ) from exc
+    if not active_domain_emails.issubset(assigned_emails):
+        raise OrganizationAccessError(
+            "every active organization-domain account requires an explicit roster "
+            "assignment"
+        )
+
+    existing_organization = session.exec(
+        select(ProviderOrganization)
+        .where(
+            or_(
+                col(ProviderOrganization.slug) == slug,
+                col(ProviderOrganization.email_domain) == email_domain,
+            )
+        )
+        .with_for_update()
+    ).first()
+    if existing_organization is not None:
+        raise OrganizationAccessError(
+            "organization slug or email domain is already configured"
+        )
+
+    assignment_target_by_email = {
+        email: target_practice_id for email, target_practice_id, _ in assignments
+    }
+    for practice in locked_practices:
+        if practice.organization_id is not None:
+            raise OrganizationAccessError(
+                "target practice is already linked to an organization"
+            )
+        # The composite organization/domain foreign key requires exact stored
+        # normalization; silently changing a tenant domain is out of scope.
+        if practice.email_domain != email_domain:
+            raise OrganizationAccessError(
+                "organization domain must exactly match every target practice domain"
+            )
+        _require_pilot_organization_prerequisites(practice, at=now)
+
+    locked_members: list[PracticeMember] = []
+    for practice_id in practice_ids:
+        locked_members.extend(
+            cast(
+                list[PracticeMember],
+                list(
+                    session.exec(
+                        select(PracticeMember)
+                        .where(
+                            PracticeMember.practice_id == practice_id,
+                            PracticeMember.access_revoked_at == None,  # noqa: E711
+                        )
+                        .order_by(cast(Any, PracticeMember.doctor_id))
+                        .with_for_update()
+                    ).all()
+                ),
+            )
+        )
+
+    members_by_doctor_id = {str(member.doctor_id): member for member in locked_members}
+    for email, target_practice_id, _ in assignments:
+        existing_approval = session.exec(
+            select(OrganizationRosterApproval)
+            .where(
+                OrganizationRosterApproval.approved_email == email,
+                OrganizationRosterApproval.revoked_at == None,  # noqa: E711
+            )
+            .with_for_update()
+        ).one_or_none()
+        if existing_approval is not None:
+            raise OrganizationAccessError(
+                "roster account already has an active organization assignment"
+            )
+
+        doctor = session.exec(
+            select(Doctor)
+            .where(func.lower(col(Doctor.email)) == email)
+            .with_for_update()
+        ).one_or_none()
+        if doctor is None:
+            continue
+        if doctor.deleted_at is not None:
+            raise OrganizationAccessError("roster account is already offboarded")
+        member = members_by_doctor_id.get(str(doctor.id))
+        if member is None:
+            member = session.exec(
+                select(PracticeMember)
+                .where(PracticeMember.doctor_id == doctor.id)
+                .with_for_update()
+            ).one_or_none()
+        if member is not None and str(member.practice_id) != target_practice_id:
+            raise OrganizationAccessError(
+                "roster account belongs to a different target practice"
+            )
+        if member is not None and member.access_revoked_at is not None:
+            raise OrganizationAccessError("roster account has revoked practice access")
+
+    owners_by_practice = {str(practice_id): 0 for practice_id in practice_ids}
+    for member in locked_members:
+        doctor = session.exec(
+            select(Doctor).where(Doctor.id == member.doctor_id).with_for_update()
+        ).one_or_none()
+        if doctor is None or doctor.deleted_at is not None:
+            raise OrganizationAccessError(
+                "an active practice member has no active account"
+            )
+        email = normalize_email(doctor.email or "")
+        target_practice_id = assignment_target_by_email.get(email)
+        if target_practice_id != str(member.practice_id):
+            raise OrganizationAccessError(
+                "every active practice member must retain its current target practice"
+            )
+        if member.role == PracticeRole.owner.value:
+            owners_by_practice[str(member.practice_id)] += 1
+
+    if any(count == 0 for count in owners_by_practice.values()):
+        raise OrganizationAccessError(
+            "every target practice must retain at least one existing owner"
+        )
+
+    return tuple(locked_practices)
+
+
+def validate_provider_organization_with_roster(
+    practices: list[Practice],
+    assignments: list[RosterAssignmentInput],
+    *,
+    legal_name: str,
+    slug: str,
+    email_domain: str,
+    operator_ref: str,
+    reason: str,
+    source_ref: str,
+    source_sha256: str,
+    now: datetime | None = None,
+) -> None:
+    """Run the apply validations under locks without changing persistent state."""
+
+    normalized = _normalize_multi_practice_configuration(
+        practices,
+        assignments,
+        legal_name=legal_name,
+        slug=slug,
+        email_domain=email_domain,
+        operator_ref=operator_ref,
+        reason=reason,
+        source_ref=source_ref,
+        source_sha256=source_sha256,
+    )
+    _, _, _, normalized_slug, normalized_domain, _, practice_ids, rows, _ = normalized
+    with get_session() as session:
+        _lock_and_validate_multi_practice_configuration(
+            session,
+            practice_ids=practice_ids,
+            assignments=rows,
+            slug=normalized_slug,
+            email_domain=normalized_domain,
+            now=now or datetime.now(timezone.utc),
+        )
+        session.rollback()
+
+
+def configure_provider_organization_with_roster(
+    practices: list[Practice],
+    assignments: list[RosterAssignmentInput],
+    *,
+    legal_name: str,
+    slug: str,
+    email_domain: str,
+    operator_ref: str,
+    reason: str,
+    source_ref: str,
+    source_sha256: str,
+    plan_sha256: str,
+    access_code: str | None = None,
+    now: datetime | None = None,
+) -> tuple[
+    ProviderOrganization,
+    str,
+    RosterImportResult,
+    tuple[PracticeAccessAudit, ...],
+]:
+    """Atomically create one organization, link all practices, and import v2 rows."""
+
+    normalized = _normalize_multi_practice_configuration(
+        practices,
+        assignments,
+        legal_name=legal_name,
+        slug=slug,
+        email_domain=email_domain,
+        operator_ref=operator_ref,
+        reason=reason,
+        source_ref=source_ref,
+        source_sha256=source_sha256,
+    )
+    (
+        operator,
+        explanation,
+        name,
+        normalized_slug,
+        normalized_domain,
+        source,
+        practice_ids,
+        rows,
+        digest,
+    ) = normalized
+    confirmed_plan_digest = plan_sha256.strip().lower()
+    if len(confirmed_plan_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in confirmed_plan_digest
+    ):
+        raise OrganizationAccessError("plan_sha256 must be a 64-character hex digest")
+    expected_plan_digest = _multi_practice_plan_sha256_from_normalized(
+        operator_ref=operator,
+        reason=explanation,
+        legal_name=name,
+        organization_slug=normalized_slug,
+        email_domain=normalized_domain,
+        source_ref=source,
+        assignments=rows,
+        roster_sha256=digest,
+    )
+    if not hmac.compare_digest(confirmed_plan_digest, expected_plan_digest):
+        raise OrganizationAccessError(
+            "confirmed plan_sha256 does not match the normalized mutation plan"
+        )
+    current = now or datetime.now(timezone.utc)
+    code = _issued_access_code(access_code)
+    salt = secrets.token_bytes(ACCESS_CODE_SALT_BYTES)
+    organization = ProviderOrganization(
+        legal_name=name,
+        slug=normalized_slug,
+        email_domain=normalized_domain,
+        status="active",
+        access_code_salt=salt.hex(),
+        access_code_digest=_access_code_digest(code, salt),
+        access_code_version=1,
+        access_code_created_at=current,
+    )
+    configuration_audits: list[PracticeAccessAudit] = []
+    approval_ids: list[str] = []
+    with get_session() as session:
+        locked_practices = _lock_and_validate_multi_practice_configuration(
+            session,
+            practice_ids=practice_ids,
+            assignments=rows,
+            slug=normalized_slug,
+            email_domain=normalized_domain,
+            now=current,
+        )
+        practice_by_id = {str(practice.id): practice for practice in locked_practices}
+        session.add(organization)
+        session.flush()
+
+        for practice in locked_practices:
+            practice.organization_id = organization.id
+            session.add(practice)
+            audit = PracticeAccessAudit(
+                practice_id=practice.id,
+                action=PracticeAccessAction.provider_organization_configured.value,
+                operator_ref=operator,
+                reason=explanation,
+                effective_at=current,
+                document_reference=str(organization.id),
+                evidence_sha256=expected_plan_digest,
+            )
+            configuration_audits.append(audit)
+            session.add(audit)
+        session.flush()
+
+        practices_with_assignments: set[str] = set()
+        for email, target_practice_id, expires_at in rows:
+            target_practice = practice_by_id[target_practice_id]
+            prior_approval = session.exec(
+                select(OrganizationRosterApproval)
+                .where(
+                    OrganizationRosterApproval.organization_id == organization.id,
+                    OrganizationRosterApproval.target_practice_id == target_practice.id,
+                    OrganizationRosterApproval.approved_email == email,
+                )
+                .with_for_update()
+            ).first()
+            if prior_approval is not None:
+                if prior_approval.revoked_at is not None:
+                    raise OrganizationAccessError(
+                        "a roster approval was previously revoked; an explicit "
+                        "reauthorization workflow is required"
+                    )
+                raise OrganizationAccessError(
+                    "roster account already has an active organization assignment"
+                )
+            approval = OrganizationRosterApproval(
+                organization_id=organization.id,
+                target_practice_id=target_practice.id,
+                approved_email=email,
+                approved_at=current,
+                approved_by_ref=operator,
+                source_ref=source,
+                source_sha256=digest,
+                expires_at=expires_at,
+            )
+            session.add(approval)
+            session.flush()
+            approval_ids.append(str(approval.id))
+            practices_with_assignments.add(target_practice_id)
+
+        for practice_id in sorted(practices_with_assignments):
+            session.add(
+                PracticeAccessAudit(
+                    practice_id=practice_by_id[practice_id].id,
+                    action=PracticeAccessAction.organization_roster_imported.value,
+                    operator_ref=operator,
+                    reason=explanation,
+                    effective_at=current,
+                    document_reference=source,
+                    evidence_sha256=digest,
+                )
+            )
+        session.commit()
+        session.refresh(organization)
+        for audit in configuration_audits:
+            session.refresh(audit)
+
+    for practice in practices:
+        practice.refresh()
+    return (
+        organization,
+        code,
+        RosterImportResult(len(approval_ids), 0, tuple(approval_ids)),
+        tuple(configuration_audits),
+    )
+
+
 def normalize_email(value: str) -> str:
     normalized = value.strip().lower()
     if not normalized or len(normalized) > 320 or normalized.count("@") != 1:
@@ -179,6 +841,27 @@ def normalize_email(value: str) -> str:
     if not local or not domain or "." not in domain:
         raise OrganizationAccessError("a valid email address is required")
     return normalized
+
+
+def email_matches_exact_domain(
+    email: str | None,
+    required_domain: str | None,
+) -> bool:
+    """Match one normalized mailbox to the exact managed organization domain."""
+
+    try:
+        normalized_email = normalize_email(email or "")
+    except OrganizationAccessError:
+        return False
+    normalized_domain = (required_domain or "").strip().lower().lstrip("@")
+    if (
+        not normalized_domain
+        or len(normalized_domain) > 253
+        or "@" in normalized_domain
+        or "." not in normalized_domain
+    ):
+        return False
+    return normalized_email.rsplit("@", 1)[1] == normalized_domain
 
 
 def normalize_access_code(value: str) -> str:
@@ -275,6 +958,31 @@ def lock_roster_enrollment_email(session: Session, email: str) -> None:
     session.exec(select(func.pg_advisory_xact_lock(lock_key))).one()
 
 
+def lock_provider_practice_domain(session: Session, domain: str) -> None:
+    """Serialize administrative bootstrap and self-service practice creation.
+
+    The bootstrap path is intentionally limited to domains with no existing
+    practice.  A transaction-scoped advisory lock makes that zero-practice
+    assertion safe against concurrent web enrollment without persisting the
+    domain (or a derived identifier) in a separate coordination table.
+    """
+
+    normalized = domain.strip().lower().lstrip("@")
+    if (
+        not normalized
+        or len(normalized) > 253
+        or "@" in normalized
+        or "." not in normalized
+    ):
+        raise OrganizationAccessError("a valid email domain is required")
+    lock_key = int.from_bytes(
+        hashlib.sha256(f"provider-practice:{normalized}".encode()).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+    session.exec(select(func.pg_advisory_xact_lock(lock_key))).one()
+
+
 def email_has_managed_roster_assignment(
     email: str,
     *,
@@ -349,11 +1057,21 @@ def member_authorization_basis(
         or approval.target_practice_id != member.practice_id
     ):
         return None
+    doctor = Doctor.get(id=member.doctor_id)
+    if doctor is None or doctor.deleted_at is not None or not doctor.email:
+        return None
+    try:
+        current_email = normalize_email(doctor.email)
+    except OrganizationAccessError:
+        return None
+    if current_email != approval.approved_email:
+        return None
     organization = ProviderOrganization.get(id=approval.organization_id)
     if (
         organization is None
         or organization.status != "active"
         or practice.organization_id != organization.id
+        or not email_matches_exact_domain(current_email, organization.email_domain)
         or not practice.negotiated_baa_in_force(at=at)
     ):
         return None
@@ -395,8 +1113,8 @@ def find_access_opportunity(
         or organization.status != "active"
         or practice is None
         or practice.organization_id != organization.id
-        or not email_matches_domain(email, organization.email_domain)
-        or not email_matches_domain(email, practice.email_domain)
+        or not email_matches_exact_domain(email, organization.email_domain)
+        or not email_matches_exact_domain(email, practice.email_domain)
         or not practice.negotiated_baa_in_force(at=current)
         or not practice.entitled(at=current)
     ):
@@ -407,51 +1125,85 @@ def find_access_opportunity(
 def rotate_access_code(
     organization: ProviderOrganization,
     *,
-    practice: Practice,
     operator_ref: str,
     reason: str,
     access_code: str | None = None,
     now: datetime | None = None,
-) -> tuple[str, PracticeAccessAudit]:
-    """Rotate an organization code and display the plaintext exactly once."""
+) -> tuple[str, tuple[PracticeAccessAudit, ...]]:
+    """Rotate one shared organization code and audit every linked practice."""
 
     operator = _required(operator_ref, field="operator_ref", limit=255)
     explanation = _required(reason, field="reason", limit=512)
-    if practice.organization_id != organization.id:
-        raise OrganizationAccessError("practice is not linked to this organization")
     current = now or datetime.now(timezone.utc)
     with get_session() as session:
-        locked_practice = session.exec(
-            select(Practice).where(Practice.id == practice.id).with_for_update()
-        ).one()
+        practice_ids = tuple(
+            session.exec(
+                select(col(Practice.id))
+                .where(Practice.organization_id == organization.id)
+                .order_by(cast(Any, Practice.id))
+            ).all()
+        )
+        if not practice_ids:
+            raise OrganizationAccessError(
+                "organization has no linked practices to audit"
+            )
+        locked_practices = tuple(
+            session.exec(
+                select(Practice).where(Practice.id == practice_id).with_for_update()
+            ).one()
+            for practice_id in practice_ids
+        )
         locked_organization = session.exec(
             select(ProviderOrganization)
             .where(ProviderOrganization.id == organization.id)
             .with_for_update()
-        ).one()
-        if locked_practice.organization_id != locked_organization.id:
-            raise OrganizationAccessError("practice is not linked to this organization")
+        ).one_or_none()
+        if locked_organization is None:
+            raise OrganizationAccessError("organization no longer exists")
+        current_practice_ids = tuple(
+            session.exec(
+                select(col(Practice.id))
+                .where(Practice.organization_id == locked_organization.id)
+                .order_by(cast(Any, Practice.id))
+            ).all()
+        )
+        if current_practice_ids != practice_ids:
+            raise OrganizationAccessError(
+                "organization practice set changed during rotation; retry"
+            )
+        if any(
+            practice.organization_id != locked_organization.id
+            for practice in locked_practices
+        ):
+            raise OrganizationAccessError(
+                "organization practice set changed during rotation; retry"
+            )
         code = _issued_access_code(access_code)
         salt = secrets.token_bytes(ACCESS_CODE_SALT_BYTES)
         locked_organization.access_code_salt = salt.hex()
         locked_organization.access_code_digest = _access_code_digest(code, salt)
         locked_organization.access_code_version += 1
         locked_organization.access_code_created_at = current
-        audit = PracticeAccessAudit(
-            practice_id=locked_practice.id,
-            action=PracticeAccessAction.organization_code_rotated.value,
-            operator_ref=operator,
-            reason=explanation,
-            effective_at=current,
-            document_reference=str(locked_organization.id),
+        audits = tuple(
+            PracticeAccessAudit(
+                practice_id=practice.id,
+                action=PracticeAccessAction.organization_code_rotated.value,
+                operator_ref=operator,
+                reason=explanation,
+                effective_at=current,
+                document_reference=str(locked_organization.id),
+            )
+            for practice in locked_practices
         )
         session.add(locked_organization)
-        session.add(audit)
+        for audit in audits:
+            session.add(audit)
         session.commit()
         session.refresh(locked_organization)
-        session.refresh(audit)
+        for audit in audits:
+            session.refresh(audit)
     organization.refresh()
-    return code, audit
+    return code, audits
 
 
 def import_roster_approvals(
@@ -495,7 +1247,7 @@ def import_roster_approvals(
         email = normalize_email(entry.email)
         if email in seen:
             raise OrganizationAccessError(f"duplicate roster email: {email}")
-        if not email_matches_domain(email, organization.email_domain):
+        if not email_matches_exact_domain(email, organization.email_domain):
             raise OrganizationAccessError(
                 f"roster email does not match @{organization.email_domain}: {email}"
             )
@@ -533,6 +1285,22 @@ def import_roster_approvals(
         for email, _ in sorted(normalized):
             lock_roster_enrollment_email(session, email)
         for email, expires_at in normalized:
+            prior_revoked = session.exec(
+                select(OrganizationRosterApproval)
+                .where(
+                    OrganizationRosterApproval.organization_id
+                    == locked_organization.id,
+                    OrganizationRosterApproval.target_practice_id == locked_practice.id,
+                    OrganizationRosterApproval.approved_email == email,
+                    OrganizationRosterApproval.revoked_at != None,  # noqa: E711
+                )
+                .with_for_update()
+            ).first()
+            if prior_revoked is not None:
+                raise OrganizationAccessError(
+                    "a roster approval was previously revoked; an explicit "
+                    "reauthorization workflow is required"
+                )
             existing = session.exec(
                 select(OrganizationRosterApproval)
                 .where(
@@ -672,7 +1440,9 @@ def claim_roster_access(
             or practice.organization_id != organization.id
             or organization.status != "active"
             or not organization_code_matches(organization, supplied_code)
-            or not email_matches_domain(locked_doctor.email, organization.email_domain)
+            or not email_matches_exact_domain(
+                locked_doctor.email, organization.email_domain
+            )
             or not practice.negotiated_baa_in_force(at=current)
             or not practice.entitled(at=current)
         ):
@@ -806,6 +1576,7 @@ def revoke_roster_access(
             select(OrganizationRosterApproval)
             .where(
                 OrganizationRosterApproval.organization_id == locked_organization.id,
+                OrganizationRosterApproval.target_practice_id == locked_practice.id,
                 OrganizationRosterApproval.approved_email == email,
                 OrganizationRosterApproval.revoked_at == None,  # noqa: E711
             )
@@ -817,12 +1588,13 @@ def revoke_roster_access(
                 .where(
                     OrganizationRosterApproval.organization_id
                     == locked_organization.id,
+                    OrganizationRosterApproval.target_practice_id == locked_practice.id,
                     OrganizationRosterApproval.approved_email == email,
                 )
                 .order_by(cast(Any, OrganizationRosterApproval.created_at).desc())
                 .with_for_update()
             ).first()
-        if approval is None or approval.target_practice_id != locked_practice.id:
+        if approval is None:
             raise OrganizationAccessError(
                 "no organization-roster approval matches this practice and email"
             )
@@ -854,6 +1626,49 @@ def revoke_roster_access(
             if member is None:
                 raise OrganizationAccessError(
                     "claimed roster approval has no matching practice member"
+                )
+
+        if (
+            approval.revoked_at is None
+            and member is not None
+            and member.role == PracticeRole.owner.value
+        ):
+            other_active_owner = session.exec(
+                select(PracticeMember)
+                .join(
+                    OrganizationRosterApproval,
+                    col(OrganizationRosterApproval.id)
+                    == col(PracticeMember.organization_roster_approval_id),
+                )
+                .join(Doctor, col(Doctor.id) == col(PracticeMember.doctor_id))
+                .where(
+                    PracticeMember.practice_id == locked_practice.id,
+                    PracticeMember.id != member.id,
+                    PracticeMember.role == PracticeRole.owner.value,
+                    PracticeMember.access_revoked_at == None,  # noqa: E711
+                    PracticeMember.organization_authorized_at != None,  # noqa: E711
+                    OrganizationRosterApproval.organization_id
+                    == locked_organization.id,
+                    OrganizationRosterApproval.target_practice_id == locked_practice.id,
+                    OrganizationRosterApproval.claimed_doctor_id
+                    == PracticeMember.doctor_id,
+                    OrganizationRosterApproval.revoked_at == None,  # noqa: E711
+                    func.lower(func.btrim(col(Doctor.email)))
+                    == col(OrganizationRosterApproval.approved_email),
+                    func.split_part(func.lower(func.btrim(col(Doctor.email))), "@", 2)
+                    == locked_organization.email_domain,
+                    or_(
+                        col(OrganizationRosterApproval.expires_at).is_(None),
+                        col(OrganizationRosterApproval.expires_at) > current,
+                    ),
+                    Doctor.deleted_at == None,  # noqa: E711
+                )
+                .with_for_update()
+            ).first()
+            if other_active_owner is None:
+                raise OrganizationAccessError(
+                    "cannot offboard the last active practice owner; "
+                    "transfer ownership first"
                 )
 
         if approval.revoked_at is not None:

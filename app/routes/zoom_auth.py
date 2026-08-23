@@ -19,6 +19,7 @@ from app.configuration.zoom import (
     ZOOM_SUCCESS_REDIRECT,
 )
 from app.services import zoom_oauth_state
+from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor
@@ -121,6 +122,12 @@ def zoom_oauth_callback(
         log.warning(
             "zoom oauth callback rejected",
             event_code="zoom_oauth_doctor_unavailable",
+        )
+        return _clear_browser_binding(_authorization_error_response())
+    if not doctor_access_in_force(doctor):
+        log.warning(
+            "zoom oauth callback rejected",
+            event_code="zoom_oauth_access_not_in_force",
         )
         return _clear_browser_binding(_authorization_error_response())
 

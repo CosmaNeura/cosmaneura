@@ -20,6 +20,7 @@ from app.models.doctor_video_integration import (
 )
 
 from tests.factories import DoctorFactory
+from tests.routes.utils import provision_practice_in_force
 
 
 @pytest.fixture
@@ -40,6 +41,7 @@ def fresh_redis():
 @pytest.fixture
 def doctor_with_zoom():
     doctor = DoctorFactory.build().save()
+    provision_practice_in_force(doctor)
     DoctorVideoIntegration(
         doctor_id=doctor.id,
         provider=VideoProvider.zoom,
@@ -97,6 +99,41 @@ def test_doctor_without_zoom_integration_returns_404(
     response = client.get(f"/external/v1/recall/zak/{token}")
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert fresh_redis.get(zak_token_redis_key(token)) is None
+
+
+def test_revoked_doctor_access_returns_404_without_fetching_zak(
+    client: TestClient,
+    fresh_redis,
+    doctor_with_zoom,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.models.practice import PracticeMember
+
+    member = PracticeMember.get(doctor_id=doctor_with_zoom.id)
+    assert member is not None
+    member.access_revoked_at = datetime.now(timezone.utc)
+    member.access_revoked_by_ref = "test-suite"
+    member.access_revocation_reason = "Test offboarding"
+    member.access_records_retain_until = datetime.now(timezone.utc) + timedelta(
+        days=365 * 8
+    )
+    member.save()
+
+    calls: list[object] = []
+
+    def _unexpected_get_zak(doctor):
+        calls.append(doctor.id)
+        return "must-not-be-returned"
+
+    monkeypatch.setattr(zoom_service, "get_zak_token", _unexpected_get_zak)
+    token = "token-revoked-doctor"
+    fresh_redis.set(zak_token_redis_key(token), str(doctor_with_zoom.id))
+
+    response = client.get(f"/external/v1/recall/zak/{token}")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert calls == []
     assert fresh_redis.get(zak_token_redis_key(token)) is None
 
 

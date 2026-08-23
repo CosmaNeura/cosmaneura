@@ -1,9 +1,12 @@
+import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from polyfactory import BaseFactory
 from typeid import TypeID
 
 import app.commands.intake.chat
+import app.jobs.intake.summarize
+import app.routes.chat
 
 from tests.factories import (
     EXAMPLE_INTAKE_QUESTIONS,
@@ -14,6 +17,16 @@ from tests.factories import (
 )
 from tests.integration.server import api_app
 from tests.routes.utils import assert_status
+
+
+@pytest.fixture(autouse=True)
+def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr(app.routes.chat, "doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        app.jobs.intake.summarize,
+        "doctor_access_in_force",
+        lambda _doctor: True,
+    )
 
 
 def test_invalid_intake_uuid(client: TestClient):
@@ -27,6 +40,31 @@ def test_uuid_cannot_be_found(client: TestClient):
 
     response = client.get(api_app.url_path_for("get_last_question", intake_id=fake_id))
     assert_status(response, status.HTTP_404_NOT_FOUND)
+
+
+def test_revoked_doctor_makes_public_intake_unavailable(
+    client: TestClient,
+    monkeypatch,
+):
+    intake = SimpleIncompleteIntakeFactory.build().save()
+    initial_questions = intake.intake_questions
+    monkeypatch.setattr(
+        app.routes.chat, "doctor_access_in_force", lambda _doctor: False
+    )
+
+    get_response = client.get(
+        api_app.url_path_for("get_last_question", intake_id=intake.id)
+    )
+    post_response = client.post(
+        api_app.url_path_for("get_next_question", intake_id=intake.id),
+        json={"answer": "private answer must not be persisted"},
+    )
+
+    assert get_response.status_code == status.HTTP_404_NOT_FOUND
+    assert post_response.status_code == status.HTTP_404_NOT_FOUND
+    intake.refresh()
+    assert intake.intake_questions == initial_questions
+    assert intake.summary is None
 
 
 def test_intake_expired(client: TestClient):

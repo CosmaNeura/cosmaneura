@@ -680,6 +680,19 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     ]
 
 
+def test_build_push_braces_registry_image_before_tags_for_zsh() -> None:
+    build_recipe = _read("just/build.just")
+    build_push = build_recipe[
+        build_recipe.index("build_push:") : build_recipe.index(
+            "\n# dump json output", build_recipe.index("build_push:")
+        )
+    ]
+
+    assert build_push.count('"${registry_image}:{{GIT_SHA}}"') == 2
+    assert build_push.count('"${registry_image}:latest"') == 2
+    assert '"$registry_image:' not in build_push
+
+
 def test_onepassword_cli_installer_is_exact_and_checksum_verified(
     tmp_path: Path,
 ) -> None:
@@ -840,6 +853,12 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
         assert "GH_TOKEN:" not in build_step
         assert "JAVASCRIPT_BUILD_ENV_JSON:" in build_step
         assert "${{ secrets." not in build_step
+    # common-setup exports the CI/test direnv environment to GITHUB_ENV, so
+    # each protected build step must override PYTHON_ENV at step scope.
+    assert "PYTHON_ENV: production" in production_build
+    assert "PYTHON_ENV: staging" not in production_build
+    assert "PYTHON_ENV: staging" in staging_build
+    assert "PYTHON_ENV: production" not in staging_build
 
     assert production_deploy.index("Resolve production frontend") < (
         production_deploy.index("uses: docker/login-action@")

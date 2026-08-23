@@ -23,6 +23,11 @@ class ProviderOrganization(
     """An organization above one or more practice-level access tenants."""
 
     __table_args__ = (
+        sa.UniqueConstraint(
+            "id",
+            "email_domain",
+            name="uq_provider_organization_id_email_domain",
+        ),
         sa.CheckConstraint(
             "status IN ('active', 'suspended')",
             name="ck_provider_organization_status",
@@ -77,6 +82,12 @@ class OrganizationRosterApproval(
     """
 
     __table_args__ = (
+        sa.UniqueConstraint(
+            "id",
+            "target_practice_id",
+            "claimed_doctor_id",
+            name="uq_org_roster_approval_claim_binding",
+        ),
         sa.ForeignKeyConstraint(
             ["target_practice_id", "organization_id"],
             ["practice.id", "practice.organization_id"],

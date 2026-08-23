@@ -114,6 +114,18 @@ def import_scribe_transcript(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Encounter not found.",
         ) from exc
+    except app.commands.scribe_transcript.DoctorAccessNotInForceError as exc:
+        log.warning(
+            "scribe transcript delivery rejected",
+            action="scribe_handoff.delivery_rejected",
+            error_class="doctor_access_not_in_force",
+            actual_caller_client_id=principal.client_id,
+            logical_producer=LOGICAL_SCRIBE_PRODUCER,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Encounter access is not active.",
+        ) from exc
     except app.commands.scribe_transcript.TranscriptConflictError as exc:
         log.warning(
             "scribe transcript delivery rejected",

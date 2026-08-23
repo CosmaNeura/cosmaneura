@@ -22,6 +22,16 @@ export function billingActionKind(
   practice: PracticeStatus,
   now = new Date(),
 ): BillingActionKind {
+  // A grandfather grant replaces acquisition billing for this exact account,
+  // while an existing subscription must remain visible for maintenance.
+  if (practice.pilot_access_grant_active) {
+    if (practice.billing_subscription_manageable) {
+      return practice.billing_management_enabled
+        ? "portal"
+        : "portal-unavailable"
+    }
+    return "none"
+  }
   // Existing charges must always stay visible/manageable. A comp or a paused
   // acquisition rollout cannot hide the portal for an existing subscription.
   if (practice.billing_checkout_resumable) return "checkout"
@@ -164,7 +174,11 @@ export function PracticeJoinPanel({
       <p className="text-muted-foreground mt-1 text-sm">
         Workforce must sign in from @{practice.email_domain}
       </p>
-      {practice.baa_accepted ? (
+      {practice.pilot_access_grant_active ? (
+        <p className="mt-1 text-sm">
+          Grandfathered pilot access is active for this account.
+        </p>
+      ) : practice.baa_accepted ? (
         <p className="mt-1 text-sm">
           Cosmaneura Inc BAA is in force
           {practice.pastoral_pack ? " · pastoral pack on" : ""}.
@@ -174,7 +188,18 @@ export function PracticeJoinPanel({
           BAA is not in force yet. Patient information stays locked.
         </p>
       )}
-      {practice.billing_subscription_manageable ? (
+      {practice.pilot_access_grant_active &&
+      practice.billing_subscription_manageable ? (
+        <p className="mt-1 text-sm">
+          Subscription {practice.subscription_status ?? "requires attention"}.
+          Your pilot access does not require billing, but this existing
+          subscription remains active until it is managed or canceled.
+        </p>
+      ) : practice.pilot_access_grant_active ? (
+        <p className="text-muted-foreground mt-1 text-sm">
+          Legacy pilot access — no billing required.
+        </p>
+      ) : practice.billing_subscription_manageable ? (
         <p className="mt-1 text-sm">
           Subscription {practice.subscription_status ?? "requires attention"}.
           {practice.billing_exempt_active
@@ -218,13 +243,15 @@ export function PracticeJoinPanel({
         </div>
       ) : null}
       <p className="text-muted-foreground mt-2 text-xs">
-        {isOwner
-          ? practice.join_code
-            ? "Share this code with clinicians on the same work-email domain. They attest under this BAA — they do not sign a second agreement."
-            : "Workforce access is managed through the organization’s approved roster."
-          : practice.authorization_basis === "organization_roster"
-            ? "Your access is authorized through the organization’s approved roster under this BAA; you did not personally attest to it."
-            : "You attested under this practice’s Cosmaneura Inc BAA."}
+        {practice.pilot_access_grant_active
+          ? "Your account is authorized through the approved legacy pilot cohort; no personal BAA attestation is required."
+          : isOwner
+            ? practice.join_code
+              ? "Share this code with clinicians on the same work-email domain. They attest under this BAA — they do not sign a second agreement."
+              : "Workforce access is managed through the organization’s approved roster."
+            : practice.authorization_basis === "organization_roster"
+              ? "Your access is authorized through the organization’s approved roster under this BAA; you did not personally attest to it."
+              : "You attested under this practice’s Cosmaneura Inc BAA."}
       </p>
     </div>
   )

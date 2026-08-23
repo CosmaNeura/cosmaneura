@@ -16,6 +16,7 @@ from starlette import status
 from app import log
 from app.configuration.redis import get_redis
 from app.services import zoom as zoom_service
+from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor
@@ -70,9 +71,9 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
 
     doctor_id = raw.decode() if isinstance(raw, bytes) else cast(str, raw)
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
-    if not doctor or doctor.deleted_at is not None:
+    if not doctor or not doctor_access_in_force(doctor):
         log.warning(
-            "recall zak callback: doctor unavailable",
+            "recall zak callback: access unavailable",
             doctor_ref=provider_log_ref(doctor_id),
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)

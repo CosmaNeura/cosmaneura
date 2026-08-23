@@ -2,6 +2,7 @@ import time
 
 from app import log
 from app.jobs.intake.summarize import queue as queue_intake_summarization
+from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.intake.intake import Intake, IntakeSchemaQuestion
 
@@ -22,7 +23,10 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
     current_question = intake.next_unanswered_question()
     if not current_question:
         # This should never happen.
-        log.error("no current question", intake_id=intake.id)
+        log.error(
+            "no current question",
+            intake_ref=provider_log_ref(str(intake.id)),
+        )
         return None
 
     if not user_chat_input:
@@ -44,7 +48,10 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
     if next_question := intake.next_unanswered_question():
         return next_question
     else:
-        log.info("queueing intake summarization", intake_id=intake.id)
+        log.info(
+            "queueing intake summarization",
+            intake_ref=provider_log_ref(str(intake.id)),
+        )
         queue_intake_summarization(intake.id)
         return None
 

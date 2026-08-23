@@ -1,6 +1,9 @@
 from datetime import datetime
 from typing import cast
 
+import pytest
+
+import app.jobs.extract_medications as job
 from app.jobs.extract_medications import perform
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -11,6 +14,11 @@ from app.models.patient_medication import (
 )
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
+
+
+@pytest.fixture(autouse=True)
+def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr(job, "doctor_access_in_force", lambda _doctor: True)
 
 
 def _transcript(doctor, patient, lines: list[tuple[str, str]]) -> AIVisitTranscript:

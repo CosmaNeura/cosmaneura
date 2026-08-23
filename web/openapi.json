@@ -4477,6 +4477,10 @@
             "type": "boolean",
             "title": "Access Revoked"
           },
+          "pilot_access_grant_active": {
+            "type": "boolean",
+            "title": "Pilot Access Grant Active"
+          },
           "trial_ends_at": {
             "anyOf": [
               {
@@ -4571,6 +4575,7 @@
           "access_authorized",
           "authorization_basis",
           "access_revoked",
+          "pilot_access_grant_active",
           "trial_ends_at",
           "billing_exempt",
           "billing_exempt_until",

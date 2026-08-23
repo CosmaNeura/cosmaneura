@@ -2,6 +2,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+from fastapi import HTTPException, status
 from starlette.requests import Request
 from starlette_context import context, request_cycle_context
 from structlog.testing import capture_logs
@@ -70,6 +72,23 @@ def test_doctor_dependency_keeps_raw_identity_out_of_context_and_sentry() -> Non
     assert context_snapshot["doctor_ref"].startswith("hmac:")
     assert "doctor-private-sentinel" not in json.dumps(context_snapshot)
     set_user.assert_called_once_with({"id": context_snapshot["doctor_ref"]})
+
+
+def test_doctor_dependency_blocks_grandfather_tombstone_before_upsert() -> None:
+    request = _request(clerk_id="user_revoked_before_first_login")
+
+    with (
+        patch(
+            "app.routes.dependencies.doctor.revoked_pilot_access_grant",
+            return_value=object(),
+        ),
+        patch("app.routes.dependencies.doctor.Doctor.upsert") as upsert,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        inject_doctor_record(request)
+
+    assert exc_info.value.status_code == status.HTTP_410_GONE
+    upsert.assert_not_called()
 
 
 def test_clerk_lookup_failure_omits_identifier_and_exception_details() -> None:
@@ -182,6 +201,7 @@ def test_api_auth_context_and_sentry_use_only_pseudonymous_reference() -> None:
     with (
         request_cycle_context({}),
         patch("app.routes.api.Doctor.get", return_value=api_user),
+        patch("app.routes.api.doctor_access_in_force", return_value=True),
         patch("app.routes.api.sentry_sdk.set_user") as set_user,
         patch("app.routes.api.sentry_sdk.set_extra") as set_extra,
     ):

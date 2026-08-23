@@ -74,6 +74,14 @@ import { SiZoom } from "react-icons/si"
 type Path = "undecided" | "owner" | "workforce"
 type OptionalStep = "choice" | "bio" | "notes" | "zoom" | "allset"
 
+export function canLeaveOnboarding(data: {
+  onboarding_completed: boolean
+  is_admin: boolean
+  practice_ready: boolean
+}) {
+  return data.onboarding_completed && (data.is_admin || data.practice_ready)
+}
+
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const { data } = await settingsData()
   invariant(data, "settings data failed to load")
@@ -83,10 +91,9 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     getOrganizationAccessOpportunity(),
   ])
 
-  // Only leave onboarding when the practice BAA is in force too: doctors who
-  // predate practices are onboarding_completed but still owe the (counsel-
-  // approved) BAA before Cosmas will process PHI.
-  if (data.onboarding_completed && (data.is_admin || practiceReady(practice))) {
+  // The server's effective access decision includes exact-account grants. Do
+  // not recompute authorization from the factual practice payload here.
+  if (canLeaveOnboarding(data)) {
     throw redirect(href("/notes"))
   }
 

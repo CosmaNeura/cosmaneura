@@ -80,7 +80,14 @@ def clean_redis():
 
 
 @pytest.fixture
-def doctor_with_zoom():
+def allow_doctor_access(monkeypatch):
+    from app.services import zoom_webhooks
+
+    monkeypatch.setattr(zoom_webhooks, "doctor_access_in_force", lambda _doctor: True)
+
+
+@pytest.fixture
+def doctor_with_zoom(allow_doctor_access):
     doctor = DoctorFactory.build().save()
     DoctorVideoIntegration(
         doctor_id=doctor.id,
@@ -266,6 +273,24 @@ def test_meeting_started_does_not_create_bot(
     assert clean_redis.get(_key("bot_id")) is None
     assert clean_redis.get(_key("doctor_id")) is not None
     assert clean_redis.get(_key("host_id")).decode() == HOST_ID
+
+
+def test_meeting_started_denied_access_does_not_register_or_dispatch(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom_webhooks
+
+    monkeypatch.setattr(zoom_webhooks, "doctor_access_in_force", lambda _doctor: False)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert clean_redis.get(_key("doctor_id")) is None
+    assert clean_redis.get(_key("host_id")) is None
+    assert mock_recall["create_bot"] == []
 
 
 def test_meeting_started_retains_unreleased_prior_bot(
@@ -2062,6 +2087,7 @@ def test_staging_blocks_bot_for_non_allowlisted_doctor(
     clean_redis,
     mock_recall,
     mock_zoom,
+    allow_doctor_access,
     monkeypatch,
 ):
     """In staging, a doctor whose email is not in the staging allowlist must
@@ -2088,6 +2114,7 @@ def test_staging_allows_bot_for_allowlisted_doctor(
     clean_redis,
     mock_recall,
     mock_zoom,
+    allow_doctor_access,
     monkeypatch,
 ):
     """The dedicated staging test account (zoom-reviewer@) is allowlisted, so
@@ -2122,6 +2149,7 @@ def test_prod_allows_allowlisted_doctor(
     clean_redis,
     mock_recall,
     mock_zoom,
+    allow_doctor_access,
     monkeypatch,
 ):
     """In production, an email on the prod allowlist gets a bot."""
@@ -2139,6 +2167,7 @@ def test_prod_blocks_non_allowlisted_doctor(
     clean_redis,
     mock_recall,
     mock_zoom,
+    allow_doctor_access,
     monkeypatch,
 ):
     """In production, an email NOT on the prod allowlist never gets a bot."""
@@ -2157,6 +2186,7 @@ def test_prod_blocks_staging_test_account(
     clean_redis,
     mock_recall,
     mock_zoom,
+    allow_doctor_access,
     monkeypatch,
 ):
     """The staging test account (zoom-reviewer@) must NOT get a bot in

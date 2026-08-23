@@ -26,10 +26,12 @@ from app.configuration.azure import (
     AZURE_UPLOADS_CONTAINER_NAME,
 )
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+from app.models.doctor import Doctor
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.visit_audio_file import VisitAudioFile
 
@@ -60,6 +62,16 @@ def perform(visit_audio_file_id: str | TypeIDType):
     doctor_ref = provider_log_ref(str(visit_audio_file.doctor_id))
     sentry_sdk.set_user({"id": doctor_ref})
     log.local(doctor_ref=doctor_ref)
+
+    doctor = Doctor.get(id=visit_audio_file.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "transcription skipped: access unavailable",
+            event_code="transcription_access_not_in_force",
+            audio_ref=provider_log_ref(str(visit_audio_file.id)),
+            doctor_ref=doctor_ref,
+        )
+        return
 
     existing_transcript = AIVisitTranscript.get(
         doctor_id=visit_audio_file.doctor_id,

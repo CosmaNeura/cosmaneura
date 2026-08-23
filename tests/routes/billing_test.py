@@ -16,8 +16,15 @@ import app.configuration.stripe as stripe_config
 import app.jobs.stripe_events
 import app.services.stripe_billing as stripe_billing
 from app.server import api_app
+from app.services.organization_access import (
+    RosterApprovalInput,
+    claim_roster_access,
+    configure_provider_organization,
+    import_roster_approvals,
+)
 
 from app.models.doctor import Doctor
+from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
 from app.models.stripe_event_inbox import StripeEventInbox
 
@@ -306,6 +313,94 @@ def test_billing_is_owner_only(authenticated_client: TestClient):
         headers={"origin": VALID_ORIGIN},
     )
     assert response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_active_organization_billing_exemption_blocks_checkout(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    doctor = _dev_doctor()
+    practice = _own_practice(doctor)
+    domain = f"billing-{secrets.token_hex(5)}.example.test"
+    doctor.email = f"billing-owner@{domain}"
+    doctor.save()
+    practice.email_domain = domain
+    now = datetime.now(timezone.utc)
+    practice.negotiated_baa_on_file = True
+    practice.negotiated_baa_effective_date = now - timedelta(days=1)
+    practice.negotiated_baa_reference = "test://billing-managed-baa"
+    practice.billing_exempt = True
+    practice.billing_exempt_until = None
+    practice.save()
+    _, code, _ = configure_provider_organization(
+        practice,
+        legal_name="Billing Managed Organization",
+        slug=f"billing-managed-{secrets.token_hex(4)}",
+        email_domain=practice.email_domain,
+        operator_ref="test-billing-managed",
+        reason="Test organization-managed billing guard",
+        now=now,
+    )
+    import_roster_approvals(
+        practice,
+        [RosterApprovalInput(email=doctor.email or "")],
+        operator_ref="test-billing-managed",
+        reason="Authorize billing guard test owner",
+        source_ref="test://billing-managed-roster",
+        source_sha256="8" * 64,
+        now=now,
+    )
+    claim_roster_access(doctor, supplied_code=code, now=now)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "managed by its organization" in response.json()["detail"]
+    assert route_stripe.calls == []
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_active_pilot_grant_blocks_new_checkout_without_hiding_portal(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+    monkeypatch,
+):
+    doctor = _dev_doctor()
+    practice = _own_practice(doctor)
+    _lapse(practice)
+    email = (doctor.email or "").strip().lower()
+    PilotAccessGrandfatherGrant(
+        clerk_id=doctor.clerk_id,
+        doctor_id_snapshot=doctor.id,
+        practice_id_snapshot=practice.id,
+        email_snapshot=email,
+        email_sha256=hashlib.sha256(email.encode()).hexdigest(),
+        source_ref="test:billing-route",
+        source_sha256="a" * 64,
+        grant_plan_sha256="b" * 64,
+        granted_by_ref="test-suite",
+        grant_reason="Test pilot billing bypass",
+        granted_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    ).save()
+    monkeypatch.setattr(
+        "app.routes.dependencies.doctor._fetch_clerk_email",
+        lambda _clerk_id: email,
+    )
+
+    checkout = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert checkout.status_code == status.HTTP_409_CONFLICT
+    assert "does not require a new subscription" in checkout.json()["detail"]
+    assert route_stripe.calls == []
 
 
 @pytest.mark.usefixtures("stripe_configured")
