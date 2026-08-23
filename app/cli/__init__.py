@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import typer
 from fastapi.routing import APIRoute
@@ -527,7 +527,12 @@ def _utc_date(value: str) -> datetime:
 
 @app.command("set-billing-exempt")
 def set_billing_exempt(
-    join_code: str = typer.Option(..., help="The practice's join code."),
+    join_code: str | None = typer.Option(
+        None, help="Legacy practice join code; mutually exclusive with --practice-id."
+    ),
+    practice_id: str | None = typer.Option(
+        None, help="Stable practice TypeID; preferred for administrative workflows."
+    ),
     until: str | None = typer.Option(
         None,
         help="Last included day of the comp (YYYY-MM-DD, UTC). Omit for indefinite.",
@@ -546,7 +551,10 @@ def set_billing_exempt(
     )
 
     with global_session():
-        practice = _practice_by_join_code(join_code)
+        practice = _practice_by_selector(
+            practice_id=practice_id,
+            join_code=join_code,
+        )
         if clear and until:
             raise typer.BadParameter("--until cannot be combined with --clear")
         # An inclusive calendar date becomes the following midnight as an
@@ -570,7 +578,12 @@ def set_billing_exempt(
 
 @app.command("set-negotiated-baa")
 def set_negotiated_baa(
-    join_code: str = typer.Option(..., help="The practice's join code."),
+    join_code: str | None = typer.Option(
+        None, help="Legacy practice join code; mutually exclusive with --practice-id."
+    ),
+    practice_id: str | None = typer.Option(
+        None, help="Stable practice TypeID; preferred for administrative workflows."
+    ),
     reference: str = typer.Option(
         ..., help="Document reference for the countersigned instrument."
     ),
@@ -598,7 +611,10 @@ def set_negotiated_baa(
     )
 
     with global_session():
-        practice = _practice_by_join_code(join_code)
+        practice = _practice_by_selector(
+            practice_id=practice_id,
+            join_code=join_code,
+        )
         effective_at = _utc_date(effective) if effective else datetime.now(timezone.utc)
         try:
             audit = record_negotiated_baa(
@@ -627,6 +643,19 @@ def _practice_by_id(practice_id: str):
         typer.echo("No practice has the supplied id.", err=True)
         raise typer.Exit(1)
     return practice
+
+
+def _practice_by_selector(
+    *,
+    practice_id: str | None,
+    join_code: str | None,
+):
+    if bool(practice_id) == bool(join_code):
+        raise typer.BadParameter("supply exactly one of --practice-id or --join-code")
+    if practice_id:
+        return _practice_by_id(practice_id)
+    assert join_code is not None
+    return _practice_by_join_code(join_code)
 
 
 def _doctor_by_id(doctor_id: str):
@@ -704,6 +733,7 @@ def configure_provider_organization_command(
     )
 
     from app.models.organization_access import ProviderOrganization
+    from app.models.practice import Practice
 
     normalized_name = legal_name.strip()
     normalized_slug = slug.strip().lower()
@@ -729,6 +759,17 @@ def configure_provider_organization_command(
         if normalized_domain != practice.email_domain.strip().lower():
             raise typer.BadParameter(
                 "email-domain must exactly match the target practice domain"
+            )
+        same_domain_ids = {
+            str(item.id)
+            for item in cast(
+                list[Practice],
+                list(Practice.where(Practice.email_domain == normalized_domain).all()),
+            )
+        }
+        if same_domain_ids != {str(practice.id)}:
+            raise typer.BadParameter(
+                "single-practice setup requires exactly one practice for the domain"
             )
         if practice.organization_id is not None:
             raise typer.BadParameter("practice is already linked to an organization")
@@ -776,11 +817,15 @@ def configure_provider_organization_command(
                 reason=reason,
                 access_code=access_code,
             )
-        except Exception as exc:
+        except OrganizationAccessError as exc:
             Path(access_code_output).unlink(missing_ok=True)
-            if isinstance(exc, OrganizationAccessError):
-                raise typer.BadParameter(str(exc)) from exc
-            raise
+            raise typer.BadParameter(str(exc)) from None
+        except Exception:
+            raise typer.BadParameter(
+                "organization configuration outcome is ambiguous; the access-code "
+                "output file was retained. Verify database state before retrying "
+                "or rotating the organization code"
+            ) from None
         typer.echo(
             "Provider organization configured: "
             f"organization_id={organization.id} practice_id={practice.id} "
@@ -792,7 +837,6 @@ def configure_provider_organization_command(
 @app.command("rotate-organization-code")
 def rotate_organization_code_command(
     organization_slug: str = typer.Option(..., help="Organization slug."),
-    practice_id: str = typer.Option(..., help="Stable target practice TypeID."),
     operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
     reason: str = typer.Option(..., help="Reason for the privileged change."),
     access_code_output: str | None = typer.Option(
@@ -808,18 +852,27 @@ def rotate_organization_code_command(
         rotate_access_code,
     )
 
+    from app.models.practice import Practice
+
     _validate_operator_change(operator_ref, reason)
     with global_session():
-        practice = _practice_by_id(practice_id)
         provider_organization = _organization_by_slug(organization_slug)
-        if practice.organization_id != provider_organization.id:
-            raise typer.BadParameter(
-                "target practice is not linked to the supplied organization"
-            )
+        linked_practices = cast(
+            list[Practice],
+            list(
+                Practice.where(
+                    Practice.organization_id == provider_organization.id
+                ).all()
+            ),
+        )
+        if not linked_practices:
+            raise typer.BadParameter("organization has no linked practices")
+        linked_ids = sorted(str(practice.id) for practice in linked_practices)
         if not apply:
             typer.echo(
                 "DRY RUN: organization access code can be rotated "
-                f"for organization_id={provider_organization.id}; "
+                f"for organization_id={provider_organization.id} "
+                f"practices={','.join(linked_ids)}; "
                 "no access code was generated."
             )
             return
@@ -833,38 +886,223 @@ def rotate_organization_code_command(
         access_code = generate_access_code()
         _write_new_private_secret(access_code_output, access_code)
         try:
-            access_code, audit = rotate_access_code(
+            access_code, audits = rotate_access_code(
                 provider_organization,
-                practice=practice,
                 operator_ref=operator_ref,
                 reason=reason,
                 access_code=access_code,
             )
-        except Exception as exc:
+        except OrganizationAccessError as exc:
             Path(access_code_output).unlink(missing_ok=True)
-            if isinstance(exc, OrganizationAccessError):
-                raise typer.BadParameter(str(exc)) from exc
-            raise
+            raise typer.BadParameter(str(exc)) from None
+        except Exception:
+            raise typer.BadParameter(
+                "organization code rotation outcome is ambiguous; the access-code "
+                "output file was retained. Verify database state before retrying "
+                "or rotating again"
+            ) from None
         typer.echo(
             "Organization access code rotated: "
-            f"organization_id={provider_organization.id} audit={audit.id}."
+            f"organization_id={provider_organization.id} "
+            f"practices={','.join(linked_ids)} "
+            f"audits={','.join(sorted(str(audit.id) for audit in audits))}."
         )
         typer.echo("One-time access code written to the private output file.")
 
 
-def _read_roster_manifest(path_value: str):
-    """Read a private JSON manifest and return entries plus its raw-file digest."""
+def _multi_practice_configuration_plan_sha256(
+    assignments: list[Any],
+    *,
+    organization_slug: str,
+    email_domain: str,
+    legal_name: str,
+    operator_ref: str,
+    reason: str,
+    source_ref: str,
+    roster_sha256: str,
+) -> str:
+    """Hash the canonical, complete mutation plan without exposing identities."""
 
-    import hashlib
-    import os
-    import stat
+    from app.services.organization_access import (
+        provider_organization_with_roster_plan_sha256,
+    )
+
+    return provider_organization_with_roster_plan_sha256(
+        assignments,
+        organization_slug=organization_slug,
+        email_domain=email_domain,
+        legal_name=legal_name,
+        operator_ref=operator_ref,
+        reason=reason,
+        source_ref=source_ref,
+        roster_sha256=roster_sha256,
+    )
+
+
+@app.command("configure-provider-organization-with-roster")
+def configure_provider_organization_with_roster_command(
+    manifest: str = typer.Option(
+        ..., help="Private schema-version-2 multi-practice roster."
+    ),
+    legal_name: str = typer.Option(..., help="Organization's legal name."),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged cutover."),
+    source_ref: str = typer.Option(
+        ..., help="Stable reference for the approved roster."
+    ),
+    confirm_roster_sha256: str | None = typer.Option(
+        None,
+        "--confirm-roster-sha256",
+        help="Raw manifest SHA-256 printed by dry-run; required with --apply.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Canonical plan SHA-256 printed by dry-run; required with --apply.",
+    ),
+    access_code_output: str | None = typer.Option(
+        None,
+        help="New 0600 file receiving the shared code; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the atomic cutover."),
+) -> None:
+    """Atomically link multiple practices and import their explicit roster."""
+
     from pathlib import Path
 
     from app.services.organization_access import (
         OrganizationAccessError,
-        RosterApprovalInput,
-        normalize_email,
+        configure_provider_organization_with_roster,
+        generate_access_code,
+        validate_provider_organization_with_roster,
     )
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    assignments, slug, domain, source_sha256 = _read_multi_practice_roster_manifest(
+        manifest
+    )
+    _validate_operator_change(operator_ref, reason)
+    normalized_name = legal_name.strip()
+    if not normalized_name or len(normalized_name) > 160:
+        raise typer.BadParameter("legal-name must contain 1 to 160 characters")
+    source = source_ref.strip()
+    if not source or len(source) > 255:
+        raise typer.BadParameter("source-ref must contain 1 to 255 characters")
+    practice_ids = sorted({str(item.target_practice_id) for item in assignments})
+    assignment_counts = {
+        practice_id: sum(
+            str(assignment.target_practice_id) == practice_id
+            for assignment in assignments
+        )
+        for practice_id in practice_ids
+    }
+    assignment_counts_output = ",".join(
+        f"{practice_id}:{assignment_counts[practice_id]}"
+        for practice_id in practice_ids
+    )
+    plan_sha256 = _multi_practice_configuration_plan_sha256(
+        assignments,
+        organization_slug=slug,
+        email_domain=domain,
+        legal_name=normalized_name,
+        operator_ref=operator_ref,
+        reason=reason,
+        source_ref=source,
+        roster_sha256=source_sha256,
+    )
+
+    with global_session():
+        try:
+            practices = [_practice_by_id(practice_id) for practice_id in practice_ids]
+            validate_provider_organization_with_roster(
+                practices,
+                assignments,
+                legal_name=normalized_name,
+                slug=slug,
+                email_domain=domain,
+                operator_ref=operator_ref,
+                reason=reason,
+                source_ref=source,
+                source_sha256=source_sha256,
+            )
+        except OrganizationAccessError:
+            # Multi-practice validation errors can contain an address. Keep the
+            # operational output aggregate-only even on failure.
+            raise typer.BadParameter(
+                "multi-practice roster validation failed; no identities were printed"
+            ) from None
+        except SQLAlchemyError:
+            raise typer.BadParameter(
+                "multi-practice database validation failed; no identities were printed"
+            ) from None
+
+        if not apply:
+            typer.echo(
+                "DRY RUN: atomic multi-practice organization cutover is valid; "
+                f"practices={','.join(practice_ids)} members={len(assignments)} "
+                f"assignments_by_practice={assignment_counts_output} "
+                f"roster_sha256={source_sha256} plan_sha256={plan_sha256}."
+            )
+            return
+        confirmed_plan_sha256 = (confirm_plan_sha256 or "").strip().lower()
+        if (
+            confirm_roster_sha256 or ""
+        ).strip().lower() != source_sha256 or confirmed_plan_sha256 != plan_sha256:
+            raise typer.BadParameter(
+                "--apply requires --confirm-roster-sha256 and "
+                "--confirm-plan-sha256 matching the dry-run digests"
+            )
+        if not access_code_output:
+            raise typer.BadParameter("--apply requires --access-code-output")
+
+        access_code = generate_access_code()
+        _write_new_private_secret(access_code_output, access_code)
+        try:
+            organization, _, roster_result, audits = (
+                configure_provider_organization_with_roster(
+                    practices,
+                    assignments,
+                    legal_name=normalized_name,
+                    slug=slug,
+                    email_domain=domain,
+                    operator_ref=operator_ref,
+                    reason=reason,
+                    source_ref=source,
+                    source_sha256=source_sha256,
+                    plan_sha256=confirmed_plan_sha256,
+                    access_code=access_code,
+                )
+            )
+        except OrganizationAccessError:
+            Path(access_code_output).unlink(missing_ok=True)
+            raise typer.BadParameter(
+                "multi-practice cutover failed; no identities were printed"
+            ) from None
+        except Exception:
+            raise typer.BadParameter(
+                "multi-practice cutover outcome is ambiguous; the access-code "
+                "output file was retained. Verify database state before retrying "
+                "or rotating the organization code; no identities were printed"
+            ) from None
+        typer.echo(
+            "Atomic multi-practice organization cutover applied: "
+            f"organization_id={organization.id} "
+            f"practices={','.join(practice_ids)} "
+            f"created={roster_result.created} unchanged={roster_result.unchanged} "
+            f"created_by_practice={assignment_counts_output} "
+            f"audits={len(audits)} roster_sha256={source_sha256} "
+            f"plan_sha256={plan_sha256}."
+        )
+        typer.echo("Shared organization code written to the private output file.")
+
+
+def _read_private_json_manifest(path_value: str):
+    """Read one bounded 0600 JSON object without following symbolic links."""
+
+    import os
+    import stat
+    from pathlib import Path
 
     path = Path(path_value)
     if path.is_symlink():
@@ -890,6 +1128,23 @@ def _read_roster_manifest(path_value: str):
         payload = json.loads(raw.decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise typer.BadParameter("manifest must be valid UTF-8 JSON") from exc
+    if not isinstance(payload, dict):
+        raise typer.BadParameter("manifest must be a JSON object")
+    return payload, raw
+
+
+def _read_roster_manifest(path_value: str):
+    """Read a private JSON manifest and return entries plus its raw-file digest."""
+
+    import hashlib
+
+    from app.services.organization_access import (
+        OrganizationAccessError,
+        RosterApprovalInput,
+        normalize_email,
+    )
+
+    payload, raw = _read_private_json_manifest(path_value)
     if not isinstance(payload, dict) or set(payload) != {"schema_version", "members"}:
         raise typer.BadParameter(
             "manifest must contain exactly schema_version and members"
@@ -920,6 +1175,216 @@ def _read_roster_manifest(path_value: str):
     return entries, hashlib.sha256(raw).hexdigest()
 
 
+def _read_multi_practice_roster_manifest(path_value: str):
+    """Read an exact v2 roster with an explicit target for every identity."""
+
+    import hashlib
+
+    from app.services.organization_access import (
+        OrganizationAccessError,
+        RosterAssignmentInput,
+        normalize_email,
+    )
+
+    payload, raw = _read_private_json_manifest(path_value)
+    expected_keys = {
+        "schema_version",
+        "organization_slug",
+        "email_domain",
+        "members",
+    }
+    if set(payload) != expected_keys:
+        raise typer.BadParameter(
+            "v2 manifest must contain exactly schema_version, organization_slug, "
+            "email_domain, and members"
+        )
+    if payload["schema_version"] != 2 or isinstance(payload["schema_version"], bool):
+        raise typer.BadParameter("manifest schema_version must be 2")
+    if not isinstance(payload["organization_slug"], str):
+        raise typer.BadParameter("organization_slug must be a string")
+    slug = payload["organization_slug"].strip().lower()
+    if (
+        not slug
+        or len(slug) > 64
+        or slug != payload["organization_slug"]
+        or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-" for ch in slug)
+    ):
+        raise typer.BadParameter("organization_slug is not normalized or valid")
+    if not isinstance(payload["email_domain"], str):
+        raise typer.BadParameter("email_domain must be a string")
+    domain = payload["email_domain"].strip().lower().lstrip("@")
+    if (
+        not domain
+        or len(domain) > 253
+        or domain != payload["email_domain"]
+        or "@" in domain
+        or "." not in domain
+    ):
+        raise typer.BadParameter("email_domain is not normalized or valid")
+    members = payload["members"]
+    if not isinstance(members, list) or not members:
+        raise typer.BadParameter("manifest members must be a non-empty list")
+
+    assignments = []
+    normalized_emails: set[str] = set()
+    target_ids: set[str] = set()
+    for member in members:
+        if not isinstance(member, dict) or set(member) != {
+            "email",
+            "target_practice_id",
+        }:
+            raise typer.BadParameter(
+                "each v2 member must contain exactly email and target_practice_id"
+            )
+        if not isinstance(member["email"], str) or not isinstance(
+            member["target_practice_id"], str
+        ):
+            raise typer.BadParameter("v2 member values must be strings")
+        try:
+            email = normalize_email(member["email"])
+        except OrganizationAccessError as exc:
+            raise typer.BadParameter("manifest contains an invalid email") from exc
+        if email != member["email"]:
+            raise typer.BadParameter("manifest emails must already be normalized")
+        if email in normalized_emails:
+            raise typer.BadParameter("manifest contains a duplicate email")
+        normalized_emails.add(email)
+        target_id = _typeid(member["target_practice_id"], "practice")
+        target_ids.add(str(target_id))
+        assignments.append(
+            RosterAssignmentInput(
+                email=email,
+                target_practice_id=target_id,
+            )
+        )
+    if len(target_ids) < 2:
+        raise typer.BadParameter(
+            "multi-practice manifest must target at least two practices"
+        )
+    return assignments, slug, domain, hashlib.sha256(raw).hexdigest()
+
+
+@app.command("bootstrap-provider-practice")
+def bootstrap_provider_practice_command(
+    manifest: str = typer.Option(..., help="Private schema-version-1 JSON roster."),
+    owner_doctor_id: str = typer.Option(
+        ..., help="Existing Doctor TypeID for the explicitly designated owner."
+    ),
+    legal_name: str = typer.Option(..., help="Covered entity's legal name."),
+    email_domain: str = typer.Option(..., help="Exact approved email domain."),
+    bootstrap_ref: str = typer.Option(
+        ..., help="Stable unique reference used for idempotent retries."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged bootstrap."),
+    confirm_roster_sha256: str | None = typer.Option(
+        None,
+        "--confirm-roster-sha256",
+        help="Raw roster digest printed by dry-run; required with --apply.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Canonical plan digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Create a closed practice shell and one owner; dry-run by default.
+
+    This command never records a BAA, grants entitlement, imports roster
+    authorization, calls Stripe, or prints an email address or join code.
+    """
+
+    from app.services.clerk_identity import verified_primary_email
+    from app.services.practice_bootstrap import (
+        ProviderPracticeBootstrapError,
+        bootstrap_provider_practice,
+        plan_provider_practice_bootstrap,
+    )
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    entries, roster_sha256 = _read_roster_manifest(manifest)
+    owner_id = _typeid(owner_doctor_id, "doctor")
+    # Always prompt so the confirming address is absent from shell history,
+    # process listings, audit rows, and normal command output.
+    owner_email = typer.prompt("Exact owner account email", hide_input=True)
+    try:
+        with global_session():
+            owner = _doctor_by_id(owner_doctor_id)
+            live_primary_email = verified_primary_email(owner.clerk_id)
+            plan = plan_provider_practice_bootstrap(
+                entries=entries,
+                roster_sha256=roster_sha256,
+                owner_doctor_id=owner_id,
+                owner_email_confirmation=owner_email,
+                verified_primary_email=live_primary_email,
+                legal_name=legal_name,
+                email_domain=email_domain,
+                bootstrap_ref=bootstrap_ref,
+                operator_ref=operator_ref,
+                reason=reason,
+            )
+            if not apply:
+                state = "already applied" if plan.already_applied else "valid"
+                typer.echo(
+                    "DRY RUN: provider practice bootstrap "
+                    f"{state}; owner_doctor_id={plan.owner_doctor_id} "
+                    f"members={plan.roster_member_count} "
+                    f"roster_sha256={plan.roster_sha256} "
+                    f"plan_sha256={plan.plan_sha256}."
+                )
+                if plan.already_applied:
+                    typer.echo(
+                        "Existing bootstrap evidence: "
+                        f"practice_id={plan.practice_id} member_id={plan.member_id} "
+                        f"audit={plan.audit_id}."
+                    )
+                return
+            if not confirm_roster_sha256 or not confirm_plan_sha256:
+                raise typer.BadParameter(
+                    "--apply requires --confirm-roster-sha256 and --confirm-plan-sha256"
+                )
+            result = bootstrap_provider_practice(
+                entries=entries,
+                roster_sha256=roster_sha256,
+                owner_doctor_id=owner_id,
+                owner_email_confirmation=owner_email,
+                verified_primary_email=live_primary_email,
+                legal_name=legal_name,
+                email_domain=email_domain,
+                bootstrap_ref=bootstrap_ref,
+                operator_ref=operator_ref,
+                reason=reason,
+                confirm_roster_sha256=confirm_roster_sha256,
+                confirm_plan_sha256=confirm_plan_sha256,
+            )
+            state = "already applied" if result.already_applied else "applied"
+            typer.echo(
+                "Provider practice bootstrap "
+                f"{state}: practice_id={result.practice.id} "
+                f"owner_member_id={result.owner_member.id} audit={result.audit.id} "
+                f"roster_sha256={result.roster_sha256} "
+                f"plan_sha256={result.plan_sha256}."
+            )
+            typer.echo(
+                "Practice remains closed until negotiated BAA, entitlement, "
+                "organization roster, and code claim are all in force."
+            )
+    except ProviderPracticeBootstrapError as exc:
+        raise typer.BadParameter(str(exc)) from None
+    except SQLAlchemyError:
+        if apply:
+            raise typer.BadParameter(
+                "provider practice bootstrap outcome is ambiguous; verify database "
+                "state before retrying; no identities were printed"
+            ) from None
+        raise typer.BadParameter(
+            "provider practice bootstrap database validation failed; no identities "
+            "were printed"
+        ) from None
+
+
 @app.command("import-organization-roster")
 def import_organization_roster_command(
     manifest: str = typer.Option(..., help="Private schema-version-1 JSON roster."),
@@ -938,8 +1403,10 @@ def import_organization_roster_command(
 ) -> None:
     """Validate or import exact-email roster approvals without printing emails."""
 
-    from app.services.organization_access import import_roster_approvals
-    from app.utils.email_domain import email_matches_domain
+    from app.services.organization_access import (
+        email_matches_exact_domain,
+        import_roster_approvals,
+    )
 
     from app.models.organization_access import ProviderOrganization
 
@@ -959,7 +1426,7 @@ def import_organization_roster_command(
         if not practice.billing_exemption_active():
             raise typer.BadParameter("an active billing exemption is required")
         if any(
-            not email_matches_domain(entry.email, organization.email_domain)
+            not email_matches_exact_domain(entry.email, organization.email_domain)
             for entry in entries
         ):
             raise typer.BadParameter(
@@ -987,11 +1454,11 @@ def import_organization_roster_command(
                 source_ref=source_ref,
                 source_sha256=source_sha256,
             )
-        except Exception as exc:
+        except Exception:
             # Service and database errors can include an address; do not echo them.
             raise typer.BadParameter(
                 "roster import failed validation; no email addresses were printed"
-            ) from exc
+            ) from None
         typer.echo(
             "Roster import applied: "
             f"practice_id={practice.id} created={result.created} "
@@ -1104,6 +1571,7 @@ def revoke_organization_roster_access_command(
                 OrganizationRosterApproval.where(
                     OrganizationRosterApproval.organization_id
                     == practice.organization_id,
+                    OrganizationRosterApproval.target_practice_id == practice.id,
                     OrganizationRosterApproval.approved_email == email,
                 ).all()
             ),

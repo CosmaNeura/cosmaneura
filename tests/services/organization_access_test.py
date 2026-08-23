@@ -9,19 +9,27 @@ import pytest
 from app.services.organization_access import (
     OrganizationAccessError,
     RosterApprovalInput,
+    RosterAssignmentInput,
     claim_roster_access,
     configure_provider_organization,
+    configure_provider_organization_with_roster,
     find_access_opportunity,
     import_roster_approvals,
     member_access_in_force,
     member_authorization_basis,
     offboard_member,
+    provider_organization_with_roster_plan_sha256,
     revoke_roster_access,
+    rotate_access_code,
+    validate_provider_organization_with_roster,
 )
 
 from app.models.baa import BaaAcceptance
 from app.models.doctor import Doctor
-from app.models.organization_access import OrganizationRosterApproval
+from app.models.organization_access import (
+    OrganizationRosterApproval,
+    ProviderOrganization,
+)
 from app.models.practice import Practice, PracticeMember
 from app.models.practice_access_audit import (
     PracticeAccessAction,
@@ -81,6 +89,20 @@ def _approve(
         source_sha256=source_sha256,
         now=now,
     )
+
+
+def _unlinked_pilot_practice(domain: str, label: str, *, now: datetime) -> Practice:
+    return Practice(
+        legal_name=f"{label} Pilot Practice",
+        join_code=f"M{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+        negotiated_baa_on_file=True,
+        negotiated_baa_effective_date=now - timedelta(days=1),
+        negotiated_baa_reference=f"executed-baa:{domain}",
+        billing_exempt=True,
+    ).save()
 
 
 @pytest.mark.parametrize(
@@ -167,6 +189,29 @@ def test_organization_configuration_rejects_parallel_stripe_billing(
 
     practice.refresh()
     assert practice.organization_id is None
+
+
+def test_single_practice_configuration_refuses_a_sibling_domain_practice():
+    now = datetime(2026, 8, 22, 14, 30, tzinfo=timezone.utc)
+    domain = f"multi-required-{secrets.token_hex(4)}.example.com"
+    first = _unlinked_pilot_practice(domain, "First", now=now)
+    second = _unlinked_pilot_practice(domain, "Second", now=now)
+
+    with pytest.raises(OrganizationAccessError, match="exactly one practice"):
+        configure_provider_organization(
+            first,
+            legal_name="Multi Required Organization",
+            slug=f"multi-required-{secrets.token_hex(5)}",
+            email_domain=domain,
+            operator_ref="test-operator",
+            reason="Require atomic multi-practice setup",
+            now=now,
+        )
+
+    first.refresh()
+    second.refresh()
+    assert first.organization_id is None
+    assert second.organization_id is None
 
 
 def test_exact_roster_and_code_claim_without_personal_baa_attestation():
@@ -258,7 +303,7 @@ def test_roster_import_rejects_account_attached_to_another_practice():
     unrelated_practice = Practice(
         legal_name="Existing Unrelated Practice",
         join_code=f"X{secrets.token_hex(4).upper()[:7]}",
-        email_domain=domain,
+        email_domain=f"unrelated-{secrets.token_hex(4)}.example.com",
         origin_channel="direct",
         is_solo=True,
     ).save()
@@ -308,6 +353,8 @@ def test_wrong_code_unrostered_email_and_wrong_domain_are_denied():
 
     with pytest.raises(OrganizationAccessError, match="does not match"):
         _approve(practice, "outsider@wrong.example.com", now=now)
+    with pytest.raises(OrganizationAccessError, match="does not match"):
+        _approve(practice, f"outsider@sub.{domain}", now=now)
     assert PracticeMember.get(doctor_id=unrostered.id) is None
 
 
@@ -393,6 +440,26 @@ def test_existing_same_practice_member_claim_preserves_role_and_attestation():
         )
         == "organization_roster"
     )
+
+
+def test_claimed_roster_access_fails_closed_after_doctor_email_changes():
+    now = datetime(2026, 8, 22, 16, 30, tzinfo=timezone.utc)
+    domain = f"pilot-{secrets.token_hex(4)}.example.com"
+    doctor = _doctor(f"original@{domain}")
+    practice, code = _configured_practice(domain, now=now)
+    _approve(practice, doctor.email or "", now=now)
+    _, member = claim_roster_access(
+        doctor,
+        supplied_code=code,
+        now=now + timedelta(seconds=1),
+    )
+    assert member_access_in_force(member, at=now + timedelta(seconds=1))
+
+    doctor.email = f"changed@{domain}"
+    doctor.save()
+
+    assert member_authorization_basis(member, at=now + timedelta(seconds=2)) is None
+    assert not member_access_in_force(member, at=now + timedelta(seconds=2))
 
 
 def test_offboarding_revokes_access_and_retains_authorization_records_for_seven_years():
@@ -512,3 +579,457 @@ def test_unclaimed_roster_approval_can_be_revoked_retained_and_retried():
         ).count()
         == 1
     )
+
+    with pytest.raises(OrganizationAccessError, match="explicit reauthorization"):
+        _approve(
+            practice,
+            doctor.email or "",
+            now=revoked_at + timedelta(days=2),
+        )
+    persisted_approvals = cast(
+        list[OrganizationRosterApproval],
+        list(
+            OrganizationRosterApproval.where(
+                OrganizationRosterApproval.organization_id == practice.organization_id,
+                OrganizationRosterApproval.target_practice_id == practice.id,
+                OrganizationRosterApproval.approved_email == doctor.email,
+            ).all()
+        ),
+    )
+    assert len(persisted_approvals) == 1
+    assert persisted_approvals[0].id == approval.id
+    assert persisted_approvals[0].revoked_at == revoked_at
+
+
+def test_multi_practice_configuration_is_atomic_and_routes_explicit_assignments():
+    now = datetime(2028, 3, 1, 10, 0, tzinfo=timezone.utc)
+    domain = f"multi-{secrets.token_hex(4)}.example.com"
+    first = _unlinked_pilot_practice(domain, "First", now=now)
+    second = _unlinked_pilot_practice(domain, "Second", now=now)
+    first_owner = _doctor(f"first.owner@{domain}")
+    second_owner = _doctor(f"second.owner@{domain}")
+    new_workforce = _doctor(f"new.workforce@{domain}")
+    historical_attestation = now - timedelta(days=90)
+    first_owner_member = PracticeMember(
+        practice_id=first.id,
+        doctor_id=first_owner.id,
+        role="owner",
+        attested_at=historical_attestation,
+        attestation_name="First Historical Owner",
+    ).save()
+    second_owner_member = PracticeMember(
+        practice_id=second.id,
+        doctor_id=second_owner.id,
+        role="owner",
+        attested_at=historical_attestation,
+        attestation_name="Second Historical Owner",
+    ).save()
+    assignments = [
+        RosterAssignmentInput(first_owner.email or "", first.id),
+        RosterAssignmentInput(second_owner.email or "", second.id),
+        RosterAssignmentInput(new_workforce.email or "", second.id),
+    ]
+    slug = f"multi-{secrets.token_hex(5)}"
+
+    validate_provider_organization_with_roster(
+        [second, first],
+        assignments,
+        legal_name="Multi Practice Provider",
+        slug=slug,
+        email_domain=domain,
+        operator_ref="ticket-MULTI-PLAN",
+        reason="Validate the complete multi-practice cutover",
+        source_ref="test://multi-practice-roster-v2",
+        source_sha256="d" * 64,
+        now=now,
+    )
+    first.refresh()
+    second.refresh()
+    assert first.organization_id is None
+    assert second.organization_id is None
+    assert ProviderOrganization.get(slug=slug) is None
+
+    plan_sha256 = provider_organization_with_roster_plan_sha256(
+        assignments,
+        organization_slug=slug,
+        email_domain=domain,
+        legal_name="Multi Practice Provider",
+        operator_ref="ticket-MULTI-APPLY",
+        reason="Apply the complete multi-practice cutover",
+        source_ref="test://multi-practice-roster-v2",
+        roster_sha256="d" * 64,
+    )
+    for rejected_plan, message in (
+        ("not-a-digest", "64-character hex"),
+        ("0" * 64, "does not match"),
+    ):
+        with pytest.raises(OrganizationAccessError, match=message):
+            configure_provider_organization_with_roster(
+                [second, first],
+                assignments,
+                legal_name="Multi Practice Provider",
+                slug=slug,
+                email_domain=domain,
+                operator_ref="ticket-MULTI-APPLY",
+                reason="Apply the complete multi-practice cutover",
+                source_ref="test://multi-practice-roster-v2",
+                source_sha256="d" * 64,
+                plan_sha256=rejected_plan,
+                now=now,
+            )
+        assert ProviderOrganization.get(slug=slug) is None
+
+    organization, code, roster, configuration_audits = (
+        configure_provider_organization_with_roster(
+            [second, first],
+            assignments,
+            legal_name="Multi Practice Provider",
+            slug=slug,
+            email_domain=domain,
+            operator_ref="ticket-MULTI-APPLY",
+            reason="Apply the complete multi-practice cutover",
+            source_ref="test://multi-practice-roster-v2",
+            source_sha256="d" * 64,
+            plan_sha256=plan_sha256,
+            now=now,
+        )
+    )
+
+    first.refresh()
+    second.refresh()
+    assert first.organization_id == second.organization_id == organization.id
+    assert roster.created == 3
+    assert roster.unchanged == 0
+    assert len(roster.approval_ids) == 3
+    assert {audit.practice_id for audit in configuration_audits} == {
+        first.id,
+        second.id,
+    }
+    assert all(
+        audit.action == PracticeAccessAction.provider_organization_configured.value
+        for audit in configuration_audits
+    )
+    assert all(audit.evidence_sha256 == plan_sha256 for audit in configuration_audits)
+    approvals = cast(
+        list[OrganizationRosterApproval],
+        list(
+            OrganizationRosterApproval.where(
+                OrganizationRosterApproval.organization_id == organization.id
+            ).all()
+        ),
+    )
+    targets = {
+        approval.approved_email: approval.target_practice_id for approval in approvals
+    }
+    assert targets == {
+        first_owner.email: first.id,
+        second_owner.email: second.id,
+        new_workforce.email: second.id,
+    }
+    for practice in (first, second):
+        assert (
+            PracticeAccessAudit.where(
+                PracticeAccessAudit.practice_id == practice.id,
+                PracticeAccessAudit.action
+                == PracticeAccessAction.organization_roster_imported.value,
+                PracticeAccessAudit.evidence_sha256 == "d" * 64,
+            ).count()
+            == 1
+        )
+
+    claimed_first, first_member = claim_roster_access(
+        first_owner,
+        supplied_code=code,
+        now=now + timedelta(seconds=1),
+    )
+    claimed_second, second_member = claim_roster_access(
+        second_owner,
+        supplied_code=code,
+        now=now + timedelta(seconds=1),
+    )
+    assert claimed_first.id == first.id
+    assert claimed_second.id == second.id
+    assert first_member.id == first_owner_member.id
+    assert second_member.id == second_owner_member.id
+    assert first_member.role == second_member.role == "owner"
+    assert first_member.attested_at == historical_attestation
+    assert second_member.attested_at == historical_attestation
+
+    rotated_code, rotation_audits = rotate_access_code(
+        organization,
+        operator_ref="ticket-MULTI-ROTATE",
+        reason="Rotate the shared enrollment secret",
+        now=now + timedelta(seconds=2),
+    )
+    assert rotated_code != code
+    assert {audit.practice_id for audit in rotation_audits} == {
+        first.id,
+        second.id,
+    }
+    with pytest.raises(OrganizationAccessError, match="not available"):
+        claim_roster_access(
+            new_workforce,
+            supplied_code=code,
+            now=now + timedelta(seconds=3),
+        )
+    claimed_workforce_practice, workforce_member = claim_roster_access(
+        new_workforce,
+        supplied_code=rotated_code,
+        now=now + timedelta(seconds=3),
+    )
+    assert claimed_workforce_practice.id == second.id
+    assert workforce_member.role == "workforce"
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["omitted-member", "cross-target-member", "omitted-unattached-account"],
+)
+def test_multi_practice_configuration_rolls_back_incomplete_or_moved_members(failure):
+    now = datetime(2028, 3, 1, 11, 0, tzinfo=timezone.utc)
+    domain = f"multi-invalid-{secrets.token_hex(4)}.example.com"
+    first = _unlinked_pilot_practice(domain, "First", now=now)
+    second = _unlinked_pilot_practice(domain, "Second", now=now)
+    first_owner = _doctor(f"first.owner@{domain}")
+    second_owner = _doctor(f"second.owner@{domain}")
+    PracticeMember(
+        practice_id=first.id,
+        doctor_id=first_owner.id,
+        role="owner",
+    ).save()
+    PracticeMember(
+        practice_id=second.id,
+        doctor_id=second_owner.id,
+        role="owner",
+    ).save()
+    assignments = [
+        RosterAssignmentInput(first_owner.email or "", first.id),
+        RosterAssignmentInput(second_owner.email or "", second.id),
+    ]
+    if failure == "omitted-member":
+        assignments.pop()
+    elif failure == "cross-target-member":
+        assignments[0] = RosterAssignmentInput(first_owner.email or "", second.id)
+    else:
+        _doctor(f"omitted.unattached@{domain}")
+    slug = f"multi-invalid-{secrets.token_hex(5)}"
+    plan_sha256 = provider_organization_with_roster_plan_sha256(
+        assignments,
+        organization_slug=slug,
+        email_domain=domain,
+        legal_name="Invalid Multi Practice Provider",
+        operator_ref="ticket-MULTI-INVALID",
+        reason="Prove invalid placement is atomic",
+        source_ref="test://invalid-multi-practice-roster-v2",
+        roster_sha256="e" * 64,
+    )
+
+    with pytest.raises(
+        OrganizationAccessError,
+        match=(
+            "current target practice|different target practice|owner|"
+            "active organization-domain account"
+        ),
+    ):
+        configure_provider_organization_with_roster(
+            [first, second],
+            assignments,
+            legal_name="Invalid Multi Practice Provider",
+            slug=slug,
+            email_domain=domain,
+            operator_ref="ticket-MULTI-INVALID",
+            reason="Prove invalid placement is atomic",
+            source_ref="test://invalid-multi-practice-roster-v2",
+            source_sha256="e" * 64,
+            plan_sha256=plan_sha256,
+            now=now,
+        )
+
+    first.refresh()
+    second.refresh()
+    assert first.organization_id is None
+    assert second.organization_id is None
+    assert ProviderOrganization.get(slug=slug) is None
+    assert (
+        OrganizationRosterApproval.where(
+            OrganizationRosterApproval.source_sha256 == "e" * 64
+        ).count()
+        == 0
+    )
+
+
+def test_revocation_retry_is_scoped_to_the_requested_sibling_practice():
+    now = datetime(2028, 3, 1, 12, 0, tzinfo=timezone.utc)
+    domain = f"multi-revoke-{secrets.token_hex(4)}.example.com"
+    first = _unlinked_pilot_practice(domain, "First", now=now)
+    second = _unlinked_pilot_practice(domain, "Second", now=now)
+    first_owner = _doctor(f"first.owner@{domain}")
+    second_owner = _doctor(f"second.owner@{domain}")
+    PracticeMember(
+        practice_id=first.id,
+        doctor_id=first_owner.id,
+        role="owner",
+    ).save()
+    PracticeMember(
+        practice_id=second.id,
+        doctor_id=second_owner.id,
+        role="owner",
+    ).save()
+    transfer_email = f"transfer@{domain}"
+    assignments = [
+        RosterAssignmentInput(first_owner.email or "", first.id),
+        RosterAssignmentInput(second_owner.email or "", second.id),
+        RosterAssignmentInput(transfer_email, first.id),
+    ]
+    slug = f"multi-revoke-{secrets.token_hex(5)}"
+    plan_sha256 = provider_organization_with_roster_plan_sha256(
+        assignments,
+        organization_slug=slug,
+        email_domain=domain,
+        legal_name="Multi Revoke Provider",
+        operator_ref="ticket-MULTI-REVOKE",
+        reason="Prepare a sibling-practice revocation test",
+        source_ref="test://multi-revoke-roster-v2",
+        roster_sha256="f" * 64,
+    )
+    organization, _, _, _ = configure_provider_organization_with_roster(
+        [first, second],
+        assignments,
+        legal_name="Multi Revoke Provider",
+        slug=slug,
+        email_domain=domain,
+        operator_ref="ticket-MULTI-REVOKE",
+        reason="Prepare a sibling-practice revocation test",
+        source_ref="test://multi-revoke-roster-v2",
+        source_sha256="f" * 64,
+        plan_sha256=plan_sha256,
+        now=now,
+    )
+    first_revocation = revoke_roster_access(
+        first,
+        transfer_email,
+        operator_ref="ticket-TRANSFER-FIRST",
+        reason="Remove unclaimed first-practice assignment",
+        now=now + timedelta(seconds=1),
+    )
+    second_import = import_roster_approvals(
+        second,
+        [RosterApprovalInput(email=transfer_email)],
+        operator_ref="ticket-TRANSFER-SECOND",
+        reason="Explicitly reassign after revocation",
+        source_ref="test://multi-revoke-second-v1",
+        source_sha256="1" * 64,
+        now=now + timedelta(seconds=2),
+    )
+    assert second_import.created == 1
+
+    retry = revoke_roster_access(
+        first,
+        transfer_email,
+        operator_ref="ticket-TRANSFER-FIRST",
+        reason="Remove unclaimed first-practice assignment",
+        now=now + timedelta(seconds=3),
+    )
+    assert retry.approval.id == first_revocation.approval.id
+    active_second = OrganizationRosterApproval.get(id=second_import.approval_ids[0])
+    assert active_second is not None
+    assert active_second.organization_id == organization.id
+    assert active_second.target_practice_id == second.id
+    assert active_second.revoked_at is None
+
+    from typer.testing import CliRunner
+
+    from app.cli import app
+
+    dry_run = CliRunner().invoke(
+        app,
+        [
+            "revoke-organization-roster-access",
+            "--practice-id",
+            str(first.id),
+            "--approved-email",
+            transfer_email,
+            "--operator-ref",
+            "ticket-TRANSFER-DRY-RUN",
+            "--reason",
+            "Verify dry-run stays in the selected practice",
+        ],
+    )
+    assert dry_run.exit_code == 0, dry_run.output
+    assert "already revoked" in dry_run.output
+    assert str(first_revocation.approval.id) in dry_run.output
+    assert str(active_second.id) not in dry_run.output
+
+
+def test_offboarding_last_owner_requires_an_authorized_successor():
+    now = datetime(2028, 3, 1, 13, 0, tzinfo=timezone.utc)
+    domain = f"last-owner-{secrets.token_hex(4)}.example.com"
+    owner = _doctor(f"owner@{domain}")
+    practice, code = _configured_practice(domain, now=now)
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=owner.id,
+        role="owner",
+    ).save()
+    _approve(practice, owner.email or "", now=now)
+    _, owner_member = claim_roster_access(
+        owner,
+        supplied_code=code,
+        now=now + timedelta(seconds=1),
+    )
+
+    with pytest.raises(OrganizationAccessError, match="last active practice owner"):
+        offboard_member(
+            practice,
+            owner,
+            operator_ref="ticket-LAST-OWNER",
+            reason="Attempt owner offboarding without a successor",
+            now=now + timedelta(seconds=2),
+        )
+    owner_member.refresh()
+    owner.refresh()
+    assert owner_member.access_revoked_at is None
+    assert owner.deleted_at is None
+
+    successor = _doctor(f"successor@{domain}")
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=successor.id,
+        role="owner",
+    ).save()
+    _approve(
+        practice,
+        successor.email or "",
+        now=now + timedelta(seconds=3),
+        source_sha256="2" * 64,
+    )
+    claim_roster_access(
+        successor,
+        supplied_code=code,
+        now=now + timedelta(seconds=4),
+    )
+    original_successor_email = successor.email
+    successor.email = f"changed@{domain}"
+    successor.save()
+
+    with pytest.raises(OrganizationAccessError, match="last active practice owner"):
+        offboard_member(
+            practice,
+            owner,
+            operator_ref="ticket-LAST-OWNER",
+            reason="Reject a successor whose current email no longer matches",
+            now=now + timedelta(seconds=5),
+        )
+    owner_member.refresh()
+    assert owner_member.access_revoked_at is None
+
+    successor.email = original_successor_email
+    successor.save()
+    revoked_member, _, _ = offboard_member(
+        practice,
+        owner,
+        operator_ref="ticket-LAST-OWNER",
+        reason="Offboard after an authorized successor exists",
+        now=now + timedelta(seconds=6),
+    )
+    assert revoked_member.access_revoked_at == now + timedelta(seconds=6)

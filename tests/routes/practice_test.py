@@ -1,3 +1,4 @@
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import cast
 
@@ -12,6 +13,7 @@ from app.utils.email_domain import extract_email_domain
 from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_SHA256, BaaAcceptance
 from app.models.doctor import Doctor
+from app.models.organization_access import ProviderOrganization
 from app.models.practice import Practice, PracticeMember
 from sqlalchemy import delete, update
 from sqlalchemy.exc import DBAPIError
@@ -98,6 +100,51 @@ def test_create_practice_stamps_email_domain(bare_authenticated_client: TestClie
     assert body["join_code"]
 
 
+@pytest.mark.parametrize("reservation", ["bootstrap", "organization"])
+def test_organization_reserved_domain_blocks_independent_practice_creation(
+    bare_authenticated_client: TestClient,
+    reservation: str,
+):
+    doctor = _authed_doctor()
+    domain = extract_email_domain(doctor.email)
+    assert domain
+    if reservation == "bootstrap":
+        Practice(
+            legal_name="Administratively Bootstrapped Practice",
+            join_code=f"G{secrets.token_hex(4).upper()[:7]}",
+            email_domain=domain,
+            origin_channel="direct",
+            negotiated_baa_required=True,
+        ).save()
+    else:
+        ProviderOrganization(
+            legal_name="Reserved Provider Organization",
+            slug=f"reserved-{secrets.token_hex(4)}",
+            email_domain=domain,
+            status="active",
+            access_code_salt="a" * 32,
+            access_code_digest=secrets.token_hex(32),
+            access_code_version=1,
+            access_code_created_at=datetime.now(timezone.utc),
+        ).save()
+    before = Practice.where(Practice.email_domain == domain).count()
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Unauthorized Sibling Practice",
+            "is_solo": True,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "organization-managed" in response.json()["detail"]
+    assert Practice.where(Practice.email_domain == domain).count() == before
+    assert PracticeMember.get(doctor_id=doctor.id) is None
+
+
 def test_owner_baa_then_complete(bare_authenticated_client: TestClient):
     doctor = _authed_doctor()
     _create_practice(bare_authenticated_client)
@@ -130,6 +177,58 @@ def test_baa_acceptance_requires_checkbox(bare_authenticated_client: TestClient)
         },
     )
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    created = _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    practice.negotiated_baa_required = True
+    practice.save()
+
+    status_response = bare_authenticated_client.get(
+        api_app.url_path_for("practice_status")
+    )
+    assert status_response.status_code == status.HTTP_200_OK
+    assert status_response.json()["join_code"] is None
+
+    clickwrap = bare_authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json={
+            "signature_name": "Pat Owner",
+            "signature_title": "Physician / owner",
+            "checks": ["baa"],
+        },
+    )
+    assert clickwrap.status_code == status.HTTP_409_CONFLICT
+
+    lookup = bare_authenticated_client.post(
+        api_app.url_path_for("lookup_practice"),
+        json={"join_code": created["join_code"]},
+    )
+    assert lookup.status_code == status.HTTP_200_OK
+    assert lookup.json() == {"practice": None, "mismatch": None}
+
+    join = bare_authenticated_client.post(
+        api_app.url_path_for("join_practice"),
+        json={
+            "join_code": created["join_code"],
+            "attestation_name": "Pat Owner",
+            "checks": ["workforce", "not-party", "direction", "phi"],
+        },
+    )
+    assert join.status_code == status.HTTP_409_CONFLICT
+
+    practice.refresh()
+    assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 0
+    assert practice.baa_version is None
+    assert practice.baa_accepted_at is None
+    assert practice.baa_accepted_by_doctor_id is None
+    assert practice.baa_signature_name is None
+    assert practice.baa_signature_title is None
+    assert practice.trial_ends_at is None
 
 
 def test_baa_acceptance_writes_append_only_record(
