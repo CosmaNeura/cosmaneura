@@ -680,6 +680,19 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     ]
 
 
+def test_build_push_braces_registry_image_before_tags_for_zsh() -> None:
+    build_recipe = _read("just/build.just")
+    build_push = build_recipe[
+        build_recipe.index("build_push:") : build_recipe.index(
+            "\n# dump json output", build_recipe.index("build_push:")
+        )
+    ]
+
+    assert build_push.count('"${registry_image}:{{GIT_SHA}}"') == 2
+    assert build_push.count('"${registry_image}:latest"') == 2
+    assert '"$registry_image:' not in build_push
+
+
 def test_onepassword_cli_installer_is_exact_and_checksum_verified(
     tmp_path: Path,
 ) -> None:
