@@ -209,7 +209,7 @@ export function PracticeJoinPanel({
       {isOwner && showBillingActions ? (
         <BillingActions practice={practice} />
       ) : null}
-      {isOwner ? (
+      {isOwner && practice.join_code ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
           <code className="bg-muted rounded-md px-3 py-1.5 font-mono text-lg tracking-[0.2em]">
             {practice.join_code}
@@ -219,8 +219,12 @@ export function PracticeJoinPanel({
       ) : null}
       <p className="text-muted-foreground mt-2 text-xs">
         {isOwner
-          ? "Share this code with clinicians on the same work-email domain. They attest under this BAA — they do not sign a second agreement."
-          : "You attested under this practice’s Cosmaneura Inc BAA."}
+          ? practice.join_code
+            ? "Share this code with clinicians on the same work-email domain. They attest under this BAA — they do not sign a second agreement."
+            : "Workforce access is managed through the organization’s approved roster."
+          : practice.authorization_basis === "organization_roster"
+            ? "Your access is authorized through the organization’s approved roster under this BAA; you did not personally attest to it."
+            : "You attested under this practice’s Cosmaneura Inc BAA."}
       </p>
     </div>
   )

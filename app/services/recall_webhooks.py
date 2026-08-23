@@ -7,6 +7,7 @@ from app.configuration.redis import get_redis
 from app.services import recall as recall_service
 
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+from app.models.doctor import Doctor
 
 
 def _rget(redis, key: str) -> str | None:
@@ -18,6 +19,20 @@ def handle_recording_done(payload: dict[str, Any]):
     data = payload.get("data", {})
     bot_id = data.get("bot", {}).get("id")
     recording_id = data.get("recording", {}).get("id")
+
+    redis = get_redis()
+    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id") or _rget(
+        redis, f"recall:bot:{bot_id}:doctor_id"
+    )
+    doctor = Doctor.get(id=doctor_id) if doctor_id else None
+    if doctor is None or doctor.deleted_at is not None:
+        log.warning(
+            "recall recording ignored: doctor unavailable",
+            bot_id=bot_id,
+            recording_id=recording_id,
+            doctor_id=doctor_id,
+        )
+        return
 
     log.info(
         "recall recording done — kicking off async transcript",
@@ -60,6 +75,16 @@ def handle_transcript_done(payload: dict[str, Any]):
             doctor_id=doctor_id,
             appointment_id=appointment_id,
             patient_id=patient_id,
+        )
+        return
+
+    doctor = Doctor.get(id=doctor_id)
+    if doctor is None or doctor.deleted_at is not None:
+        log.warning(
+            "recall transcript ignored: doctor unavailable",
+            bot_id=bot_id,
+            recording_id=recording_id,
+            doctor_id=doctor_id,
         )
         return
 

@@ -30,6 +30,14 @@ class PracticeRole(str, Enum):
 class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     """Covered entity. The BAA principal for Cosmas — not the individual clinician."""
 
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "id",
+            "organization_id",
+            name="uq_practice_id_organization_id",
+        ),
+    )
+
     legal_name: str
     npi: str | None = None
     city: str | None = None
@@ -38,6 +46,11 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     join_code: str = Field(unique=True, index=True)
     email_domain: str
     "Workforce must sign in from this domain (or a subdomain) to join."
+    organization_id: TypeIDType | None = Field(
+        default=None,
+        sa_type=TypeIDType("provider_organization"),  # type: ignore
+        foreign_key="provider_organization.id",
+    )
 
     origin_channel: str = Field(default="direct")
     pastoral_pack: bool = False
@@ -129,6 +142,17 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     negotiated_baa_reference: str | None = None
     "Document reference for the negotiated instrument (internal-admin set)."
 
+    def negotiated_baa_in_force(self, *, at: datetime | None = None) -> bool:
+        """Whether the negotiated instrument itself is effective now."""
+
+        now = at or datetime.now(timezone.utc)
+        return bool(
+            self.negotiated_baa_on_file
+            and self.negotiated_baa_reference
+            and self.negotiated_baa_effective_date
+            and self.negotiated_baa_effective_date <= now
+        )
+
     def baa_in_force(self, *, at: datetime | None = None) -> bool:
         """Clickwrap acceptance recorded, or an effective negotiated edition.
 
@@ -139,13 +163,7 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
 
         if self.baa_accepted_at is not None:
             return True
-        now = at or datetime.now(timezone.utc)
-        return bool(
-            self.negotiated_baa_on_file
-            and self.negotiated_baa_reference
-            and self.negotiated_baa_effective_date
-            and self.negotiated_baa_effective_date <= now
-        )
+        return self.negotiated_baa_in_force(at=at)
 
     def billing_exemption_active(self, *, at: datetime | None = None) -> bool:
         """Whether the configured comp is an entitlement source right now."""
@@ -172,6 +190,32 @@ class PracticeMember(
 ):
     """One Cosmas account belongs to at most one practice."""
 
+    __table_args__ = (
+        sa.CheckConstraint(
+            "(organization_roster_approval_id IS NULL "
+            "AND organization_authorized_at IS NULL) OR "
+            "(organization_roster_approval_id IS NOT NULL "
+            "AND organization_authorized_at IS NOT NULL)",
+            name="ck_practice_member_organization_authorization_complete",
+        ),
+        sa.CheckConstraint(
+            "(access_revoked_at IS NULL AND access_revoked_by_ref IS NULL "
+            "AND access_revocation_reason IS NULL "
+            "AND access_records_retain_until IS NULL) OR "
+            "(access_revoked_at IS NOT NULL "
+            "AND access_revoked_by_ref IS NOT NULL "
+            "AND access_revocation_reason IS NOT NULL "
+            "AND access_records_retain_until IS NOT NULL "
+            "AND access_records_retain_until >= "
+            "access_revoked_at + interval '7 years')",
+            name="ck_practice_member_revocation_complete",
+        ),
+        sa.Index(
+            "practice_member_access_records_retain_until_idx",
+            "access_records_retain_until",
+        ),
+    )
+
     practice_id: TypeIDType = Practice.foreign_key()
     practice: Practice = Relationship()
 
@@ -184,3 +228,30 @@ class PracticeMember(
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
     attestation_name: str | None = None
+
+    organization_roster_approval_id: TypeIDType | None = Field(
+        default=None,
+        sa_column=Column(
+            TypeIDType("organization_roster_approval"),
+            sa.ForeignKey("organization_roster_approval.id"),
+            nullable=True,
+            unique=True,
+        ),
+    )
+    organization_authorized_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    access_revoked_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    access_revoked_by_ref: str | None = Field(default=None, max_length=255)
+    access_revocation_reason: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=512), nullable=True),
+    )
+    access_records_retain_until: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )

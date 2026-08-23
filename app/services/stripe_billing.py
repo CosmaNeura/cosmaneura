@@ -23,10 +23,14 @@ from app import log
 from app.configuration import stripe as stripe_config
 
 from activemodel.session_manager import SessionManager, get_session
+from app.models.organization_access import (
+    OrganizationRosterApproval,
+    ProviderOrganization,
+)
 from app.models.practice import ENTITLED_SUBSCRIPTION_STATUSES, Practice, PracticeMember
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -550,15 +554,7 @@ def _apply_authoritative_subscription(
             if clear_checkout:
                 _clear_checkout_session(row, advance=True)
 
-            count = session.exec(
-                select(func.count())
-                .select_from(PracticeMember)
-                .where(
-                    PracticeMember.practice_id == row.id,
-                    col(PracticeMember.attested_at).is_not(None),
-                )
-            ).one()
-            target = max(1, int(count))
+            target = _authorized_member_count(session, row)
             item = _subscription_item(subscription)
             quantity_sync_required = (
                 mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
@@ -589,11 +585,55 @@ def _apply_authoritative_subscription(
 
 
 def attested_member_count(practice: Practice) -> int:
-    members = PracticeMember.where(
-        PracticeMember.practice_id == practice.id,
-        PracticeMember.attested_at != None,  # noqa: E711
-    ).all()
-    return max(1, len(list(members)))
+    # The historical function name remains part of the billing service API,
+    # but an explicitly roster-authorized organization member is a real seat
+    # even though we correctly leave their personal ``attested_at`` null.
+    with get_session() as session:
+        return _authorized_member_count(session, practice)
+
+
+def _authorized_member_count(session: Session, practice: Practice) -> int:
+    """Count live attestation or exact-roster authorization bases consistently."""
+
+    current = datetime.now(timezone.utc)
+    authorization_bases: list[Any] = [
+        and_(
+            col(PracticeMember.organization_authorized_at).is_not(None),
+            col(OrganizationRosterApproval.revoked_at).is_(None),
+            or_(
+                col(OrganizationRosterApproval.expires_at).is_(None),
+                col(OrganizationRosterApproval.expires_at) > current,
+            ),
+            col(OrganizationRosterApproval.claimed_doctor_id)
+            == col(PracticeMember.doctor_id),
+            col(OrganizationRosterApproval.target_practice_id)
+            == col(PracticeMember.practice_id),
+            col(OrganizationRosterApproval.organization_id) == practice.organization_id,
+            col(ProviderOrganization.status) == "active",
+        )
+    ]
+    if practice.organization_id is None:
+        authorization_bases.append(col(PracticeMember.attested_at).is_not(None))
+    count = session.exec(
+        select(func.count())
+        .select_from(PracticeMember)
+        .outerjoin(
+            OrganizationRosterApproval,
+            col(OrganizationRosterApproval.id)
+            == col(PracticeMember.organization_roster_approval_id),
+        )
+        .outerjoin(
+            ProviderOrganization,
+            col(ProviderOrganization.id)
+            == col(OrganizationRosterApproval.organization_id),
+        )
+        .where(
+            PracticeMember.practice_id == practice.id,
+            col(PracticeMember.access_revoked_at).is_(None),
+            or_(*authorization_bases),
+        )
+    ).one()
+    return max(1, int(count))
 
 
 def checkout_deferred_until(
@@ -922,15 +962,7 @@ def _quantity_sync_snapshot(
             session.add(row)
             session.commit()
             return None
-        count = session.exec(
-            select(func.count())
-            .select_from(PracticeMember)
-            .where(
-                PracticeMember.practice_id == row.id,
-                col(PracticeMember.attested_at).is_not(None),
-            )
-        ).one()
-        target = max(1, int(count))
+        target = _authorized_member_count(session, row)
         if (
             force_new_version
             or not row.stripe_quantity_sync_required

@@ -12,8 +12,16 @@ import pytest
 
 import app.configuration.stripe as stripe_config
 from app.services import stripe_billing
+from app.services.organization_access import (
+    RosterApprovalInput,
+    claim_roster_access,
+    configure_provider_organization,
+    import_roster_approvals,
+    revoke_roster_access,
+)
 
 from activemodel.session_manager import global_session
+from app.models.doctor import Doctor
 from app.models.practice import Practice
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
@@ -130,6 +138,55 @@ def _practice() -> Practice:
         email_domain="example.com",
         origin_channel="direct",
     ).save()
+
+
+def _organization_practice(domain: str, *, now: datetime) -> tuple[Practice, str]:
+    practice = Practice(
+        legal_name=f"{domain} Billing Test Practice",
+        join_code=f"O{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+        negotiated_baa_on_file=True,
+        negotiated_baa_effective_date=now - timedelta(days=1),
+        negotiated_baa_reference=f"executed-baa:{domain}",
+        billing_exempt=True,
+    ).save()
+    _, code, _ = configure_provider_organization(
+        practice,
+        legal_name=f"{domain} Provider Organization",
+        slug=f"billing-test-{secrets.token_hex(5)}",
+        email_domain=domain,
+        operator_ref="stripe-billing-test",
+        reason="Configure an organization billing test tenant",
+        now=now,
+    )
+    return practice, code
+
+
+def _organization_doctor(email: str) -> Doctor:
+    return Doctor(
+        clerk_id=f"user_stripe_org_{secrets.token_hex(8)}",
+        email=email,
+        biography="",
+    ).save()
+
+
+def _import_organization_roster(
+    practice: Practice,
+    emails: list[str],
+    *,
+    now: datetime,
+) -> None:
+    import_roster_approvals(
+        practice,
+        [RosterApprovalInput(email=email) for email in emails],
+        operator_ref="stripe-billing-test",
+        reason="Approve organization seats for billing tests",
+        source_ref="test://stripe-billing-roster",
+        source_sha256="b" * 64,
+        now=now,
+    )
 
 
 def _subscription(
@@ -1071,6 +1128,85 @@ def test_archived_expected_price_allows_maintenance_but_blocks_new_checkout(
             cancel_url="https://app.example/settings",
             now=NOW,
         )
+
+
+def test_organization_seat_count_only_includes_live_claimed_roster_members():
+    domain = f"seat-count-{secrets.token_hex(4)}.example.com"
+    practice, code = _organization_practice(domain, now=NOW)
+    claimed = [_organization_doctor(f"claimed-{index}@{domain}") for index in range(3)]
+    unclaimed = _organization_doctor(f"unclaimed@{domain}")
+    _import_organization_roster(
+        practice,
+        [doctor.email or "" for doctor in [*claimed, unclaimed]],
+        now=NOW,
+    )
+
+    claimed_members = [
+        claim_roster_access(
+            doctor,
+            supplied_code=code,
+            now=NOW + timedelta(seconds=index + 1),
+        )[1]
+        for index, doctor in enumerate(claimed)
+    ]
+    revoke_roster_access(
+        practice,
+        claimed[-1].email or "",
+        operator_ref="stripe-billing-test",
+        reason="Exclude the revoked organization seat",
+        now=NOW + timedelta(seconds=10),
+    )
+
+    assert all(member.attested_at is None for member in claimed_members)
+    assert stripe_billing.attested_member_count(practice) == 2
+
+
+def test_organization_claim_and_revoke_mark_quantity_reconciliation():
+    domain = f"seat-sync-{secrets.token_hex(4)}.example.com"
+    practice, code = _organization_practice(domain, now=NOW)
+    doctors = [
+        _organization_doctor(f"clinician-{index}@{domain}") for index in range(2)
+    ]
+    _import_organization_roster(
+        practice,
+        [doctor.email or "" for doctor in doctors],
+        now=NOW,
+    )
+    practice.stripe_customer_id = "cus_org_seat_sync"
+    practice.stripe_subscription_id = "sub_org_seat_sync"
+    practice.subscription_status = "active"
+    practice.save()
+
+    _, first_member = claim_roster_access(
+        doctors[0], supplied_code=code, now=NOW + timedelta(seconds=1)
+    )
+    practice.refresh()
+    first_version = practice.stripe_quantity_sync_version
+    assert first_member.attested_at is None
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_target == 1
+    assert first_version > 0
+
+    claim_roster_access(doctors[1], supplied_code=code, now=NOW + timedelta(seconds=2))
+    practice.refresh()
+    second_version = practice.stripe_quantity_sync_version
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_target == 2
+    assert second_version > first_version
+
+    revoked = revoke_roster_access(
+        practice,
+        doctors[1].email or "",
+        operator_ref="stripe-billing-test",
+        reason="Remove the organization seat from billing",
+        now=NOW + timedelta(seconds=3),
+    )
+    practice.refresh()
+    assert revoked.member is not None
+    assert revoked.member.access_revoked_at is not None
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_target == 1
+    assert practice.stripe_quantity_sync_version > second_version
 
 
 def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStripe):

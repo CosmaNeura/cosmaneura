@@ -22,6 +22,11 @@ class PracticeAccessAction(str, Enum):
     billing_exemption_set = "billing_exemption_set"
     billing_exemption_cleared = "billing_exemption_cleared"
     negotiated_baa_recorded = "negotiated_baa_recorded"
+    provider_organization_configured = "provider_organization_configured"
+    organization_code_rotated = "organization_code_rotated"
+    organization_roster_imported = "organization_roster_imported"
+    organization_access_granted = "organization_access_granted"
+    organization_access_revoked = "organization_access_revoked"
 
 
 class PracticeAccessAudit(
@@ -31,6 +36,13 @@ class PracticeAccessAudit(
     table=True,
 ):
     """Append-only operator evidence for an access-affecting practice change."""
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "evidence_sha256 IS NULL OR char_length(evidence_sha256) = 64",
+            name="ck_practice_access_audit_evidence_sha256_length",
+        ),
+    )
 
     practice_id: TypeIDType = Practice.foreign_key()
     action: str = Field(index=True, max_length=64)
@@ -49,4 +61,8 @@ class PracticeAccessAudit(
     document_reference: str | None = Field(
         default=None,
         sa_column=Column(sa.String(length=255), nullable=True),
+    )
+    evidence_sha256: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
     )
