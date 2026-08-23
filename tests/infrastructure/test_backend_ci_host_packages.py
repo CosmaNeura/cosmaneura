@@ -12,9 +12,10 @@ def test_backend_ci_installs_only_default_suite_host_dependencies() -> None:
     backend = workflow[workflow.index("  app:\n") : workflow.index("  web:\n")]
     setup = backend[
         backend.index("      - uses: ./.github/actions/common-setup") : backend.index(
-            "      - uses: iloveitaly/github-action-localias@master"
+            "      - uses: iloveitaly/github-action-localias@"
         )
     ]
+    assert "iloveitaly/github-action-localias@master" not in backend
     apt_package_lines = [
         line.strip()
         for line in setup.splitlines()

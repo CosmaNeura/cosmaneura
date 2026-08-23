@@ -6,6 +6,7 @@ from starlette_context import context
 
 from app import log
 from app.services.clerk_identity import verified_primary_email
+from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor
 
@@ -15,7 +16,9 @@ def _fetch_clerk_email(clerk_id: str) -> str | None:
         return verified_primary_email(clerk_id)
     except Exception:
         log.warning(
-            "failed to fetch email from clerk", clerk_id=clerk_id, exc_info=True
+            "clerk email lookup failed",
+            event_code="clerk_email_lookup_failed",
+            clerk_ref=provider_log_ref(f"clerk-user:{clerk_id}"),
         )
     return None
 
@@ -43,6 +46,7 @@ def inject_doctor_record(request: Request):
     doctor.save()
 
     request.state.doctor = doctor
-    context["doctor"] = doctor
+    doctor_ref = provider_log_ref(f"doctor:{doctor.id}")
+    context["doctor_ref"] = doctor_ref
 
-    sentry_sdk.set_user({"id": doctor.id, "email": doctor.email})
+    sentry_sdk.set_user({"id": doctor_ref})

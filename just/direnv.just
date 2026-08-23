@@ -14,8 +14,8 @@
 jq_script := """
 with_entries(
 	select((
-		(.key | startswith("DIRENV_") | not)
-		and (.key | IN("VIRTUAL_ENV", "VENV_ACTIVE", "UV_ACTIVE", "PATH", "OP_SERVICE_ACCOUNT_TOKEN") | not)
+			(.key | startswith("DIRENV_") | not)
+			and (.key | IN("VIRTUAL_ENV", "VENV_ACTIVE", "UV_ACTIVE", "PATH", "OP_SERVICE_ACCOUNT_TOKEN", "RECALL_WEBHOOK_SECRET_INPUT", "DURABLE_WEBHOOK_INBOX_ENABLED_INPUT") | not)
 	))
 )
 """
@@ -29,23 +29,24 @@ with_entries(
 	# without a clear env (env -i), any variables set in your shell (via ~/.exports or similar) will *not* be included
 	# in `direnv export`. I originally discovered this because PYTHON* vars were not being exported because they were set
 	# globally. To work around this we clear the environment, outside of the PATH + HOME required for direnv configuration.
-	# OP_SERVICE_ACCOUNT_TOKEN is also included since on CI this is effectively global state that enables 1p access.
-	# When run on your local machine, 1p global state may be persisted elsewhere, so this would be a noop.
-	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" op daemon -d
-	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
+	# Service-account requests are direct and explicitly non-caching; a
+	# background credential broker could outlive the credential-bearing CI step.
+	env -i HOME="$HOME" PATH="$PATH" OP_CACHE=false \
+		OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
 		ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-false}" \
 		ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}" \
 		ENABLE_STAGING_PILOT_ZOOM_SKIP="${ENABLE_STAGING_PILOT_ZOOM_SKIP:-false}" \
+		RECALL_WEBHOOK_SECRET_INPUT="${RECALL_WEBHOOK_SECRET:-}" \
+		DURABLE_WEBHOOK_INBOX_ENABLED_INPUT="${DURABLE_WEBHOOK_INBOX_ENABLED:-false}" \
 		RENDER_DIRENV="{{target}}" \
 		direnv export json | jq -r '{{jq_script}}'
 
-	# TODO the `op daemon -d` hack above is to workaround a op bug:
-	# https://1password-devs.slack.com/archives/C03NJV34SSC/p1733771530356779
-	# https://github.com/direnv/direnv/issues/662
-
 # JSON dump of the test environment secrets, used for local pytest runs (direnv.py for more details)
 @direnv_export_ci:
-	env -i HOME="$HOME" PATH="$PATH" OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
+	env -i HOME="$HOME" PATH="$PATH" OP_CACHE=false \
+		OP_SERVICE_ACCOUNT_TOKEN="${OP_SERVICE_ACCOUNT_TOKEN:-}" \
+		RECALL_WEBHOOK_SECRET_INPUT="${RECALL_WEBHOOK_SECRET:-}" \
+		DURABLE_WEBHOOK_INBOX_ENABLED_INPUT="${DURABLE_WEBHOOK_INBOX_ENABLED:-false}" \
 		CI=true direnv export json | jq -r '{{jq_script}}'
 
 # export env variables for a particular file in a format docker can consume

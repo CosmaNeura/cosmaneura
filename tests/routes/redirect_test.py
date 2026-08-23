@@ -15,6 +15,9 @@ def test_https_redirection():
         api_app, base_url=base_server_url("http"), follow_redirects=False
     )
 
-    response = client.get(api_app.url_path_for("javascript_index"))
+    # The SPA route is intentionally absent when a local frontend build does
+    # not exist. Exercise an always-mounted route so this transport policy
+    # test does not depend on generated assets.
+    response = client.get(api_app.url_path_for("healthcheck"))
 
     assert response.status_code == status.HTTP_200_OK

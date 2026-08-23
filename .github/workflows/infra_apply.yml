@@ -1,29 +1,30 @@
 name: Terraform Apply
 
-# Runs `tofu apply` against production whenever a merge to master changes
-# infrastructure code. The matching infra_plan.yml shows reviewers
-# exactly what this workflow will do BEFORE they approve the merge.
-#
-# Manual fallback: workflow_dispatch lets someone re-run apply without
-# pushing a new commit (useful for retrying after a transient Azure API
-# failure, or for the first apply after this workflow lands).
+# Production apply is deliberately manual. Pull requests receive secretless
+# validation and a provider-mocked static plan. A trusted operator must then
+# run infra_production_plan.yml on the exact current master commit and supply
+# that successful run ID and immutable attestation digest here. This workflow
+# independently recomputes a saved plan and applies it only when its canonical
+# digest, configuration, provider lock, and state identity exactly match the
+# reviewed attestation. The sensitive plan binary never leaves its runner.
 #
 # DO NOT REMOVE THE CONCURRENCY GROUP. Two parallel applies racing on
 # the same state file can corrupt it.
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - 'infra/**'
-      - '.env.production.backend'
-      - '.github/workflows/infra_apply.yml'
-      - 'Procfile'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      production_plan_run_id:
+        type: string
+        description: "Successful Terraform Production Plan run for the exact current master commit"
+        required: true
+      production_plan_artifact_digest:
+        type: string
+        description: "sha256: digest shown by the reviewed production-plan run"
+        required: true
 
 permissions:
   contents: read
-  id-token: write
 
 # Serialize applies. cancel-in-progress: false means a queued apply
 # waits for the current one to finish instead of being killed — losing
@@ -37,58 +38,266 @@ concurrency:
 jobs:
   apply:
     name: Terraform Apply
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     env:
-      OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+      # Activation is source-reviewed. Keep this identical to
+      # infra_production_plan.yml; a protected environment variable cannot
+      # pre-arm the cutover.
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       ARM_USE_OIDC: "true"
       ARM_USE_AZUREAD: "true"
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact-current-master production plan evidence
+        id: plan_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCTION_PLAN_ARTIFACT_DIGEST: ${{ inputs.production_plan_artifact_digest }}
+          PRODUCTION_PLAN_RUN_ID: ${{ inputs.production_plan_run_id }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PRODUCTION_PLAN_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "The production plan run ID must be numeric." >&2
+            exit 1
+          fi
+          if [[ ! "$PRODUCTION_PLAN_ARTIFACT_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "The production plan artifact digest must be a SHA-256 digest." >&2
+            exit 1
+          fi
+
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "This apply is not running from the current master commit." >&2
+            exit 1
+          fi
+
+          mapfile -t plan_run < <(
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCTION_PLAN_RUN_ID" \
+              --jq '[.name, .path, .event, .status, .conclusion, .head_branch, .head_sha, .run_attempt] | .[]'
+          )
+          if [[ "${plan_run[0]:-}" != "Terraform Production Plan" || \
+                "${plan_run[1]:-}" != ".github/workflows/infra_production_plan.yml" || \
+                "${plan_run[2]:-}" != "workflow_dispatch" || \
+                "${plan_run[3]:-}" != "completed" || \
+                "${plan_run[4]:-}" != "success" || \
+                "${plan_run[5]:-}" != "master" || \
+                "${plan_run[6]:-}" != "$TARGET_SHA" || \
+                ! "${plan_run[7]:-}" =~ ^[0-9]+$ ]]; then
+            echo "The supplied run is not a successful protected production plan for the exact current master commit." >&2
+            exit 1
+          fi
+
+          artifact_name="terraform-production-plan-attestation-${PRODUCTION_PLAN_RUN_ID}-${plan_run[7]}-${TARGET_SHA}"
+          artifacts=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCTION_PLAN_RUN_ID/artifacts?per_page=100")
+          artifact_count=$(jq -r --arg name "$artifact_name" \
+            '[.artifacts[] | select(.name == $name and .expired == false)] | length' \
+            <<<"$artifacts")
+          if [[ "$artifact_count" != "1" ]]; then
+            echo "The production plan run must contain exactly one live attestation artifact with the expected name." >&2
+            exit 1
+          fi
+          artifact_digest=$(jq -er --arg name "$artifact_name" \
+            '.artifacts[] | select(.name == $name and .expired == false) | .digest' \
+            <<<"$artifacts")
+          if [[ "$artifact_digest" != "$PRODUCTION_PLAN_ARTIFACT_DIGEST" ]]; then
+            echo "The protected attestation artifact digest does not match the reviewed digest." >&2
+            exit 1
+          fi
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "artifact_digest=$PRODUCTION_PLAN_ARTIFACT_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "run_id=$PRODUCTION_PLAN_RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=${plan_run[7]}" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact immutable reviewed-plan attestation
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ steps.plan_evidence.outputs.artifact_name }}
+          path: infra/reviewed-attestation
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.production_plan_run_id }}
+
+      - name: Validate attestation identity and shape
+        working-directory: infra
+        env:
+          ARTIFACT_NAME: ${{ steps.plan_evidence.outputs.artifact_name }}
+          PRODUCTION_PLAN_RUN_ID: ${{ inputs.production_plan_run_id }}
+          PRODUCTION_PLAN_RUN_ATTEMPT: ${{ steps.plan_evidence.outputs.run_attempt }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          metadata=reviewed-attestation/plan-attestation.json
+          if [[ ! -f "$metadata" || -L "$metadata" ]]; then
+            echo "The reviewed plan attestation is missing or unsafe." >&2
+            exit 1
+          fi
+          if [[ "$(find reviewed-attestation -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" != "1" ]]; then
+            echo "The reviewed plan artifact contains unexpected files." >&2
+            exit 1
+          fi
+          jq -e \
+            --arg artifact_name "$ARTIFACT_NAME" \
+            --arg head_sha "$TARGET_SHA" \
+            --arg run_attempt "$PRODUCTION_PLAN_RUN_ATTEMPT" \
+            --arg run_id "$PRODUCTION_PLAN_RUN_ID" \
+            '(.schema_version == 1) and
+             (.workflow_name == "Terraform Production Plan") and
+             (.workflow_path == ".github/workflows/infra_production_plan.yml") and
+             (.artifact_name == $artifact_name) and
+             (.run_id == $run_id) and
+             (.run_attempt == $run_attempt) and
+             (.head_branch == "master") and
+             (.head_sha == $head_sha) and
+             (.canonical_plan_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+             (.configuration_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+             (.provider_lock_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+             (.state_lineage | type == "string" and length > 0) and
+             (.state_serial | type == "number" and . >= 0)' \
+            "$metadata" >/dev/null
 
       # main.tf data sources shell out to `just direnv_export`; the
       # common-setup action installs mise + just + direnv + 1Password CLI.
       - uses: ./.github/actions/common-setup
         timeout-minutes: 5
+        with:
+          apt-packages: zsh
 
-      - uses: azure/login@v3
+      - uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - uses: opentofu/setup-opentofu@v1
+      - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1
         with:
+          tofu_version: 1.12.5
           tofu_wrapper: false
 
       - name: tofu init
         working-directory: infra
-        run: tofu init -input=false
+        run: tofu init -input=false -lockfile=readonly
 
-      - name: tofu plan (sanity check before apply)
+      - name: Recreate and verify exact reviewed plan
         working-directory: infra
-        # Re-running plan immediately before apply catches state drift
-        # that happened between the PR's plan run and the merge. If a
-        # human applied something out-of-band, this shows it in the
-        # apply log.
-        run: tofu plan -no-color -input=false -out=tfplan.bin
+        env:
+          # Limit long-lived credentials to the one step that must resolve the
+          # production configuration. They are absent from setup and apply.
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+          RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          metadata=reviewed-attestation/plan-attestation.json
 
-      - name: tofu apply
+          configuration_sha256=$(
+            git -C .. ls-files -z -- \
+              infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+              Justfile just Procfile .github/actions \
+              .github/workflows/infra_production_plan.yml \
+              .github/workflows/infra_apply.yml \
+              .github/workflows/build_and_publish.yml |
+              LC_ALL=C sort -z |
+              xargs -0 -I{} sha256sum "../{}" |
+              sha256sum |
+              awk '{print $1}'
+          )
+          provider_lock_sha256=$(sha256sum .terraform.lock.hcl | awk '{print $1}')
+          state_identity=$(tofu state pull | jq -cS '{lineage, serial}')
+          state_lineage=$(jq -er '.lineage | select(type == "string" and length > 0)' <<<"$state_identity")
+          state_serial=$(jq -er '.serial | select(type == "number" and . >= 0)' <<<"$state_identity")
+
+          [[ "$configuration_sha256" == "$(jq -er '.configuration_sha256' "$metadata")" ]] || {
+            echo "Production configuration changed after the reviewed plan." >&2
+            exit 1
+          }
+          [[ "$provider_lock_sha256" == "$(jq -er '.provider_lock_sha256' "$metadata")" ]] || {
+            echo "The provider dependency lock changed after the reviewed plan." >&2
+            exit 1
+          }
+          [[ "$state_lineage" == "$(jq -er '.state_lineage' "$metadata")" ]] || {
+            echo "The production state lineage does not match the reviewed plan." >&2
+            exit 1
+          }
+          [[ "$state_serial" == "$(jq -er '.state_serial' "$metadata")" ]] || {
+            echo "The production state advanced after the reviewed plan." >&2
+            exit 1
+          }
+
+          tofu plan -no-color -input=false -out=tfplan.bin
+          canonical_plan_sha256=$(tofu show -json tfplan.bin |
+            jq -cS 'del(.timestamp)' |
+            sha256sum |
+            awk '{print $1}')
+          if [[ "$canonical_plan_sha256" != "$(jq -er '.canonical_plan_sha256' "$metadata")" ]]; then
+            echo "The freshly saved plan does not exactly match the reviewed canonical plan." >&2
+            exit 1
+          fi
+          echo "Verified canonical reviewed-plan SHA-256: \`$canonical_plan_sha256\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Reverify current master and apply
         working-directory: infra
-        run: tofu apply -input=false -auto-approve tfplan.bin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced after verification; refusing to apply a stale commit." >&2
+            exit 1
+          fi
+          tofu apply -input=false -auto-approve tfplan.bin
 
       - name: Summarize apply
         if: always()
         working-directory: infra
+        env:
+          APPLY_COMMIT: ${{ github.sha }}
+          APPLY_JOB_STATUS: ${{ job.status }}
+          ATTESTATION_DIGEST: ${{ steps.plan_evidence.outputs.artifact_digest }}
+          REVIEWED_PLAN_RUN_ID: ${{ steps.plan_evidence.outputs.run_id }}
+          TRIGGER_EVENT: ${{ github.event_name }}
+          TRIGGER_REF: ${{ github.ref }}
         run: |
           {
-            echo "## Terraform Apply"
-            echo ''
-            echo "Job status: ${{ job.status }}"
-            echo "Commit: ${{ github.sha }}"
-            echo "Triggered by: ${{ github.event_name }} on ${{ github.ref }}"
-          } >> $GITHUB_STEP_SUMMARY
+            printf '%s\n' "## Terraform Apply"
+            printf '%s\n' ''
+            printf '%s\n' "Job status: $APPLY_JOB_STATUS"
+            printf '%s\n' "Commit: $APPLY_COMMIT"
+            printf '%s\n' "Reviewed plan run: $REVIEWED_PLAN_RUN_ID"
+            printf '%s\n' "Attestation digest: $ATTESTATION_DIGEST"
+            printf '%s\n' "Triggered by: $TRIGGER_EVENT on $TRIGGER_REF"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove sensitive local plan material
+        if: always()
+        run: rm -rf infra/tfplan.bin infra/reviewed-attestation

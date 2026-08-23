@@ -114,7 +114,9 @@ def test_staging_deploy_owns_and_revokes_exact_stripe_scope() -> None:
     assert "stripe-secret-key" in deploy
     assert "stripe-webhook-secret" in deploy
     assert "STAGING_WORKER_COMMAND=" in deploy
-    assert "--beat --scheduler redbeat.RedBeatScheduler" in deploy
+    assert "SCHEDULER_COMMAND=" in deploy
+    assert "--beat --scheduler redbeat.RedBeatScheduler" not in deploy
     assert 'update_args+=(--args "$STAGING_WORKER_COMMAND")' in deploy
+    assert 'update_args+=(--args "$SCHEDULER_COMMAND")' in deploy
     assert "Staging Stripe mode must remain explicitly false" in deploy
     assert "rk_test_" in deploy

@@ -5,6 +5,7 @@ from activemodel.mixins import PydanticJSONMixin, TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.doctor_note_schema import DoctorNoteSchema
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSON
 from sqlmodel import Field, Relationship
 
@@ -28,6 +29,14 @@ class AIVisitNote(
 
     We use soft deletion so we have a clear idea of when the note was deleted.
     """
+
+    __table_args__ = (
+        UniqueConstraint(
+            "appointment_id",
+            "doctor_note_schema_id",
+            name="uq_ai_visit_note_appointment_schema",
+        ),
+    )
 
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
