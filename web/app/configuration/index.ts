@@ -1,4 +1,5 @@
 // should be imported *first* before any other application logic
+import "./bootstrap-desktop-capture"
 import withClerkProvider from "./clerk"
 import "./client"
 import "./logging"

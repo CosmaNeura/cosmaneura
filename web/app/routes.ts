@@ -10,6 +10,8 @@ export default [
   route("/sign-up/*", "routes/sign-up.tsx"),
   route("/onboarding", "routes/onboarding.tsx"),
   layout("layouts/authenticated.tsx", [
+    route("/desktop-capture", "routes/desktop-capture.tsx"),
+    route("/desktop-capture/connect", "routes/desktop-capture-connect.tsx"),
     ...prefix("intake", [
       layout("layouts/intake.tsx", [
         index("routes/intake/index.tsx"),

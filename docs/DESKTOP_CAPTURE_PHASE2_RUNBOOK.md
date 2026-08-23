@@ -16,6 +16,9 @@ Phase 2 may merge only as dormant backend capability. It provides:
 - server-side Scribe consent/session preparation for
   `external_async_transcript` ingest;
 - short-lived PKCE launch and authorization-code exchange;
+- scheduling-source-neutral provider pages for encounter selection, consent
+  attestation, and the browser-to-Tauri handoff;
+- pre-telemetry removal and one-time browser consumption of launch material;
 - a hash-only, revocable desktop session bearer with a hard six-hour maximum;
 - a one-use provider upload capability with a hard five-minute maximum;
 - bounded reconciliation of ambiguous provider creates and count-only health
@@ -72,10 +75,10 @@ released.
 Do not enable desktop capture for patient traffic until all of the following
 are reviewed and evidenced:
 
-1. Generate and check in a dedicated `/desktop/v1` contract, then wire the
-   Tauri core process to the exact tested wire shapes.
-   Prove possession of the installation key bound by the launch thumbprint, or
-   remove that field rather than treating an unproved thumbprint as authority.
+1. Keep the checked-in `/desktop/v1` contract and Tauri core wire shapes in
+   lockstep. Prove possession of the installation key bound by the launch
+   thumbprint, or remove that field rather than treating an unproved thumbprint
+   as authority.
 2. Wire the real provider dependency only in a separately reviewed change;
    keep create and recovery switches independent.
 3. Implement durable provider-callback-to-session/segment mapping and deploy
@@ -105,7 +108,9 @@ Never release a lease solely because a heartbeat or token expired.
 `contracts/desktop-v1.openapi.json` is the only generated wire contract for the
 Tauri companion. It contains the token exchange and capture lifecycle routes
 mounted under `/desktop/v1`; it deliberately excludes the authenticated browser
-launch routes under `/internal/v1/desktop-capture`.
+launch routes under `/internal/v1/desktop-capture`. Those routes are consumed
+only by the authenticated `/desktop-capture` and `/desktop-capture/connect`
+provider pages; launch and PKCE material is never added to this native contract.
 
 Regenerate the artifact after changing a desktop route or its Pydantic model:
 
