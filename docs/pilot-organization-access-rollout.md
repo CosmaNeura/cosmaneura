@@ -24,7 +24,9 @@ local file locations into this file, a ticket, CI output, or a shared log.
 | --- | --- | --- |
 | MyCatholicDoctor fully executed MSA with BAA exhibit | `81f8e4bce9818050c0d7fe78c8e441677c3ab97f2111d45699d481c7163b8b16` | `2026-02-23` |
 | Fiat BAA | `4cd7f20f63a61cc6fbc74ce4e58e9fac6653836cb9bff81eabb300b5321ce4f4` | Executed and in force as of `2026-08-22`, recorded prospectively by explicit operator direction; do not infer an earlier date from the source PDF |
-| Original account export | `9aef6c23b4f571417d963dd5a60a2b45f79ec26264d236d30fea895a645b3733` | 47 rows; 34 target identities; input only and never imported directly |
+| Original account export | `9aef6c23b4f571417d963dd5a60a2b45f79ec26264d236d30fea895a645b3733` | 47 grandfather targets; 34 are also organization-roster targets; input only and never imported directly |
+| Production grandfather identity-pair digest | `bbea35ff5cbca10a3e6eab7a6505def2b4b60b3e07032ac66e706412f981ae7d` | 47 live, verified, unlocked, unbanned Clerk accounts; independently matches the supplied export |
+| Staging grandfather identity-pair digest | `ba2f98bc36e3482c80f118ef848665f903cb1511e78db66ffbc388c36317c37b` | 6 live, verified, unlocked, unbanned staging Clerk accounts; separate non-production cohort |
 | Sanitized MyCatholicDoctor roster v1 | `6c88b50619a66cd0c344a6f08cc2e182c976728b01d7ab38d38a93b73dfd0549` | 31 exact approved identities; source list only, not the multi-practice activation artifact |
 | Sanitized Fiat roster v1 | `3204e7fd8264da1c4db7a7bb4ba9b5fad7dc4ddce75b5124249228880f4f6205` | 3 exact approved identities |
 
@@ -486,6 +488,138 @@ the target comes only from the reviewed v2 mapping, never from the code.
   Verify this automatically or in staging, not by exhausting attempts in
   production.
 
+## Legacy pilot grandfather access
+
+The grandfather grant is a fixed, per-Clerk-account authorization basis for
+the approved whole-instance legacy cohort: 47 production accounts and the
+separately reviewed six-account staging instance. It bypasses personal BAA
+clickwrap, individual billing, and organization roster/code enrollment after
+the application authorization gate recognizes it. Grandfathered accounts do
+not enter an organization code and need not have a roster approval. The roster
+and code remain mandatory for non-granted or newly added organization accounts.
+A grant does not create or move a practice membership, change a Doctor role, or
+alter any practice BAA or billing field.
+
+The source digest must be the environment-specific, previously reviewed
+canonical SHA-256 of the sorted
+`Clerk subject<TAB>normalized primary email<LF>` pairs returned by live Clerk.
+Production refuses any count other than 47; staging refuses any count other
+than six. Do not reuse one environment's digest in the other. Do not place the
+roster, email addresses, or Clerk subjects in the
+repository, command output, tickets, or logs. First run the read-only
+validation:
+
+```bash
+python -m app.cli grant-pilot-access \
+  --source-ref "$CLERK_COHORT_SOURCE_REF" \
+  --source-sha256 "$CLERK_COHORT_SHA256" \
+  --operator-ref "$CHANGE_REF" \
+  --reason "$GRANDFATHER_REASON"
+```
+
+Require the environment's exact account count, the expected source digest, the expected existing-Doctor
+and pre-login counts, and `state=deployable` (or `already applied` on an exact
+retry). Record the printed plan digest, then apply the unchanged live cohort:
+
+```bash
+python -m app.cli grant-pilot-access \
+  --source-ref "$CLERK_COHORT_SOURCE_REF" \
+  --source-sha256 "$CLERK_COHORT_SHA256" \
+  --operator-ref "$CHANGE_REF" \
+  --reason "$GRANDFATHER_REASON" \
+  --confirm-plan-sha256 "$GRANDFATHER_PLAN_SHA256" \
+  --apply
+```
+
+The apply is one transaction and an exact retry is a no-op. Any live Clerk
+count/digest drift, existing Doctor/email mismatch, partial prior apply,
+conflicting grant, or revoked grant fails the complete operation. Verify only
+aggregate evidence afterward:
+
+```bash
+python -m app.cli audit-pilot-access
+```
+
+### Runtime identity and offboarding boundary
+
+Clerk-backed identity freshness and database access state serve different
+purposes. For an active grandfather grant, each Clerk-authenticated request
+retrieves the account's current primary email from Clerk, requires its
+verification status to be exactly `verified`, and compares it with both the
+grant and the persisted Doctor. A mismatch or unavailable Clerk lookup fails
+that request closed. Organization-roster enrollment performs the same live
+verified-primary-email check when a provider claims a roster row.
+
+Background jobs, signed Zoom/Recall webhooks, API-key requests, scribe imports,
+and bearer-link public intake do not call Clerk. At each entry point they use
+the shared database authorization decision: a live Doctor, no revocation
+tombstone, no revoked membership, and a still-matching persisted
+Clerk-subject/email grant or active organization membership. This deliberate
+boundary avoids making durable webhook and clinical pipelines depend on a
+remote identity lookup. It also means that changing, unverifying, locking,
+banning, or deleting an identity only in Clerk is not an all-channel
+offboarding action. The nightly Clerk email synchronization is reconciliation,
+not a revocation control, and does not replace the steps below.
+
+For immediate all-channel offboarding, apply the matching database revocation
+(`revoke-pilot-access` for a grandfather grant or
+`revoke-organization-roster-access` for a roster identity), verify the Doctor
+is disabled and the grant or membership tombstone is present, and then disable
+the Clerk identity as a separate identity-provider action. Stop any already
+running request, bot, or job through the incident procedure; entry-point checks
+cannot cancel work that passed authorization before the revocation committed.
+Disable or revoke the provider's Zoom/Recall integration too when the incident
+requires stopping upstream capture. Do not rely on a Clerk-only change to stop
+database-authorized background processing.
+
+### Grandfather smoke test
+
+Test grandfather access separately from organization enrollment with one
+approved account in each environment:
+
+1. Confirm the current Clerk subject and explicitly verified primary email
+   still match the approved cohort entry.
+2. Sign in and require direct dashboard access without a personal BAA prompt,
+   organization-code prompt, roster claim, Checkout, or subscription setup.
+3. Require the access response to identify `pilot_grant` as the authorization
+   basis while leaving the Doctor role, practice membership, practice BAA, and
+   billing fields unchanged.
+4. Sign out and back in, then confirm the same result and access to one existing
+   non-destructive product view. Record only status, timestamps, counts, and
+   pseudonymous references.
+
+Do not test revocation against any of the six approved staging cohort accounts
+unless the owner explicitly identifies one as disposable. Use a separately
+approved non-human fixture for a destructive revocation smoke test; otherwise
+defer that test rather than damaging the reviewed cohort.
+
+To revoke one grant, retrieve the stable Clerk subject and exact approved email
+from the controlled source. The command prompts privately for both so neither
+identity enters process arguments. Preview and record its plan digest before
+applying:
+
+```bash
+python -m app.cli revoke-pilot-access \
+  --operator-ref "$CHANGE_REF" \
+  --reason "$REVOCATION_REASON"
+
+python -m app.cli revoke-pilot-access \
+  --operator-ref "$CHANGE_REF" \
+  --reason "$REVOCATION_REASON" \
+  --confirm-plan-sha256 "$REVOCATION_PLAN_SHA256" \
+  --apply
+```
+
+Revocation soft-disables an existing Doctor and retains a Clerk-subject
+tombstone for an account that has not logged in. It never deletes clinical or
+content records. The seven-year database hold applies to the authorization
+evidence only; it does not establish a new retention period for clinical
+artifacts or override the separate raw-transcript minimization policy.
+The pilot revocation command refuses platform administrators. Transfer or
+remove that administrative role through the separately controlled admin
+lifecycle before offboarding the account; never use this command to risk the
+last administrative access path.
+
 ## Smoke tests
 
 Complete the automated suite and staging smoke before production data changes.
@@ -538,9 +672,11 @@ telemetry.
 
 ## Explicit revocation test
 
-This test is mandatory in staging. In production, run it only with a controlled
-non-human identity supplied for that purpose; never revoke a real pilot merely
-to test the workflow.
+Run this test in staging only when the owner has explicitly approved a
+disposable non-human identity for it. None of the six current approved staging
+cohort accounts is disposable by default. In production, likewise run it only
+with a controlled non-human identity supplied for that purpose; never revoke a
+real pilot merely to test the workflow.
 
 1. Import and, for the claimed case, enroll the controlled identity.
 2. Run the revocation command without `--apply`. Omit `--approved-email` so the
@@ -607,6 +743,12 @@ history.
 - To stop future enrollment without disabling current rostered members, rotate
   the organization code and withhold the replacement.
 - To disable one claimed or unclaimed identity, use the revocation flow above.
+- Applying the first legacy-pilot grandfather grant is the rollback boundary
+  for that feature. Apply grants only after the new application image and
+  migrations are healthy. Once any grant exists, do not downgrade the grant
+  migration or deploy an image that predates the shared pilot-access gate;
+  both actions would strand authorized users or destroy required evidence.
+  Preserve the table and roll forward with a reviewed corrective image.
 - To disable all roster-derived access, set the provider organization's status
   to `suspended` only through a reviewed, recorded administrative database
   change. There is no general-purpose suspension CLI in this release. Verify
@@ -628,10 +770,18 @@ authorization evidence. Offboarding does not delete clinical rows, but this
 feature does not declare every clinical artifact subject to a new seven-year
 retention policy.
 
-Raw transcript minimization remains separate and unchanged: raw transcript
-content is removed after 14 days under the existing transcript-cleanup policy,
-with its de-identified derivative handled by that policy. Never disable or
-extend that minimization job to satisfy this access-evidence hold.
+Raw transcript minimization remains separate and unchanged. At 03:00 UTC each
+day, the cleanup sweep queues raw transcripts whose `created_at` is strictly
+older than 14 days. Each queued task stores the de-identified derivative before
+clearing the raw transcript content and setting its deletion timestamp; failed
+de-identification is retried and the next daily sweep finds any remaining raw
+row again. The 14-day value is therefore the eligibility threshold for an
+asynchronous cleanup process, not a guarantee of deletion at the exact
+14-day timestamp. Monitor the Celery beat/Sentry task signals and an aggregate
+count of overdue, non-deleted transcripts, and investigate any nonzero backlog.
+Never disable or extend this minimization path to satisfy the access-evidence
+hold; Doctor offboarding and its seven-year authorization-evidence hold do not
+prevent transcript cleanup.
 
 ## Deferred document organization
 

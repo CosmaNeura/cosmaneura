@@ -5,11 +5,9 @@ import pytest
 
 from activemodel.session_manager import get_session
 from app.models.organization_access import (
-    OrganizationRosterApproval,
     ProviderOrganization,
 )
-from app.models.practice import Practice, PracticeMember
-from app.models.practice_access_audit import PracticeAccessAudit
+from app.models.practice import Practice
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import SQLModel
 
@@ -72,9 +70,9 @@ def test_practice_organization_domain_database_constraint_rejects_mismatch():
 def test_bootstrap_guard_model_metadata_matches_database_migration():
     practice_table = SQLModel.metadata.tables["practice"]
     organization_table = SQLModel.metadata.tables["provider_organization"]
-    roster_table = OrganizationRosterApproval.__table__
-    member_table = PracticeMember.__table__
-    audit_table = PracticeAccessAudit.__table__
+    roster_table = SQLModel.metadata.tables["organization_roster_approval"]
+    member_table = SQLModel.metadata.tables["practice_member"]
+    audit_table = SQLModel.metadata.tables["practice_access_audit"]
 
     assert {constraint.name for constraint in practice_table.constraints}.issuperset(
         {

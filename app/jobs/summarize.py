@@ -11,6 +11,7 @@ from typing import Any, cast
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.terminology import (
     DEFAULT_TERMS,
@@ -46,6 +47,15 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
 
     trigger = AIVisitTranscript.get(id=transcript_id)
     assert trigger
+
+    doctor = Doctor.get(id=trigger.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "summarization skipped: access unavailable",
+            event_code="summarization_access_not_in_force",
+            transcript_ref=provider_log_ref(str(transcript_id)),
+        )
+        return
 
     schema = DoctorNoteSchema.get(id=schema_id)
     assert schema

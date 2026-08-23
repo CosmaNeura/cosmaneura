@@ -13,7 +13,7 @@ from tests.factories import (
     DoctorFactory,
     PastAppointmentRequestFactory,
 )
-from tests.routes.utils import assert_status
+from tests.routes.utils import assert_status, provision_practice_in_force
 
 
 def test_intake_creation(client: TestClient, sync_celery):
@@ -27,6 +27,7 @@ def test_intake_creation(client: TestClient, sync_celery):
     user = DoctorFactory.build(email=request_json["doctor_email"])
     user.generate_api_key()
     user.save()
+    provision_practice_in_force(user)
 
     response = client.post(
         api_app.url_path_for("create_intake"),
@@ -71,7 +72,7 @@ def test_intake_creation(client: TestClient, sync_celery):
     assert Intake.count() == initial_intake_count + 1
 
 
-def test_intake_without_doctor_email(client: TestClient):
+def test_intake_cannot_target_a_different_doctor_email(client: TestClient):
     # factory_use_contruct=True skips validations
     request = AppointmentRequestFactory.build(factory_use_construct=True)
 
@@ -81,8 +82,10 @@ def test_intake_without_doctor_email(client: TestClient):
     user = DoctorFactory.build()
     user.generate_api_key()
     user.save()
+    provision_practice_in_force(user)
 
     # we are intentionally not creating an intake schema since we should fail before then
+    initial_intake_count = Intake.count()
 
     response = client.post(
         api_app.url_path_for("create_intake"),
@@ -90,11 +93,8 @@ def test_intake_without_doctor_email(client: TestClient):
         json=request.model_dump(mode="json"),
     )
 
-    assert_status(response, status.HTTP_422_UNPROCESSABLE_ENTITY)
-
-    data = response.json()
-    assert "detail" in data
-    assert any("Doctor not found" in err.get("msg", "") for err in data["detail"])
+    assert_status(response, status.HTTP_403_FORBIDDEN)
+    assert Intake.count() == initial_intake_count
 
 
 def test_intake_without_doctor_id(client: TestClient):
@@ -103,6 +103,7 @@ def test_intake_without_doctor_id(client: TestClient):
     user = DoctorFactory.build()
     user.generate_api_key()
     user.save()
+    provision_practice_in_force(user)
 
     assert not user.deleted_at
 
@@ -128,6 +129,7 @@ def test_intake_with_past_date(client: TestClient):
     user = DoctorFactory.build(email=request.doctor_email)
     user.generate_api_key()
     user.save()
+    provision_practice_in_force(user)
 
     response = client.post(
         api_app.url_path_for("create_intake"),

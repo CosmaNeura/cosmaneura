@@ -23,6 +23,11 @@ from tests.factories import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr(summarize, "doctor_access_in_force", lambda _doctor: True)
+
+
 def _make_transcript(
     doctor_id,
     appointment_id,

@@ -15,8 +15,14 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from app.environments import is_staging
+from app.services.clerk_cohort import (
+    ClerkCohortIdentity,
+    canonical_clerk_email_pair_sha256,
+)
+
 from activemodel.session_manager import get_session
-from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor
+from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor, DoctorRole
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import PracticeMember
 from sqlalchemy import func, or_
@@ -24,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 PILOT_ACCESS_GRANDFATHER_REQUIRED_ACCOUNT_COUNT = 47
+PILOT_ACCESS_GRANDFATHER_STAGING_ACCOUNT_COUNT = 6
 PILOT_ACCESS_GRANDFATHER_RETENTION_YEARS = 7
 
 
@@ -45,6 +52,16 @@ class GrandfatherGrantBatchResult:
     plan_sha256: str
     created_count: int
     unchanged_count: int
+
+
+@dataclass(frozen=True)
+class GrandfatherGrantPlan:
+    plan_sha256: str
+    account_count: int
+    existing_doctor_count: int
+    prelogin_account_count: int
+    already_granted_count: int
+    already_applied: bool
 
 
 @dataclass(frozen=True)
@@ -115,12 +132,22 @@ def _email_sha256(email: str) -> str:
     return hashlib.sha256(email.encode("utf-8")).hexdigest()
 
 
+def required_pilot_access_grandfather_account_count() -> int:
+    """Return the reviewed whole-instance cohort size for this environment."""
+
+    if is_staging():
+        return PILOT_ACCESS_GRANDFATHER_STAGING_ACCOUNT_COUNT
+    return PILOT_ACCESS_GRANDFATHER_REQUIRED_ACCOUNT_COUNT
+
+
 def _normalized_grant_entries(
     entries: list[GrandfatherGrantInput],
 ) -> tuple[tuple[str, str, str], ...]:
-    if len(entries) != PILOT_ACCESS_GRANDFATHER_REQUIRED_ACCOUNT_COUNT:
+    required_count = required_pilot_access_grandfather_account_count()
+    if len(entries) != required_count:
         raise PilotAccessGrandfatherError(
-            "the grandfather plan must contain exactly 47 matched Clerk accounts"
+            "the grandfather plan does not contain the reviewed account count "
+            "for this environment"
         )
     normalized: list[tuple[str, str, str]] = []
     clerk_ids: set[str] = set()
@@ -164,7 +191,7 @@ def pilot_access_grant_plan_sha256(
     operator_ref: str,
     reason: str,
 ) -> str:
-    """Hash the complete 47-account authorization plan without exposing email."""
+    """Hash the complete environment-bound plan without exposing email."""
 
     source = _required(source_ref, field="source_ref", limit=255)
     source_digest = _confirmed_sha256(source_sha256, field="source_sha256")
@@ -222,13 +249,26 @@ def _doctor_and_practice_snapshot(
     session: Session,
     *,
     clerk_id: str,
-    expected_email_sha256: str,
+    expected_email: str,
+    lock: bool,
 ) -> tuple[Doctor | None, Any | None]:
+    email_owner_statement = select(Doctor).where(
+        func.lower(func.btrim(Doctor.email)) == expected_email
+    )
+    if lock:
+        email_owner_statement = email_owner_statement.with_for_update()
+    email_owners = session.exec(email_owner_statement).all()
+    if any(owner.clerk_id != clerk_id for owner in email_owners):
+        raise PilotAccessGrandfatherError(
+            "one or more roster emails belong to a different existing account"
+        )
+
+    statement = select(Doctor).where(Doctor.clerk_id == clerk_id)
+    if lock:
+        statement = statement.with_for_update()
     doctor = cast(
         Doctor | None,
-        session.exec(
-            select(Doctor).where(Doctor.clerk_id == clerk_id).with_for_update()
-        ).one_or_none(),
+        session.exec(statement).one_or_none(),
     )
     if doctor is None:
         return None, None
@@ -242,24 +282,34 @@ def _doctor_and_practice_snapshot(
         raise PilotAccessGrandfatherError(
             "one or more existing accounts are inactive or no longer match the Clerk roster"
         ) from exc
-    if not hmac.compare_digest(_email_sha256(stored_email), expected_email_sha256):
+    if not hmac.compare_digest(
+        _email_sha256(stored_email), _email_sha256(expected_email)
+    ):
         raise PilotAccessGrandfatherError(
             "one or more existing accounts are inactive or no longer match the Clerk roster"
         )
     member = session.exec(
         select(PracticeMember).where(PracticeMember.doctor_id == doctor.id)
     ).one_or_none()
+    if member is not None and member.access_revoked_at is not None:
+        raise PilotAccessGrandfatherError(
+            "one or more existing accounts have a prior access revocation"
+        )
     return doctor, member.practice_id if member is not None else None
 
 
 def _existing_grants_by_clerk(
-    session: Session, clerk_ids: tuple[str, ...]
+    session: Session,
+    clerk_ids: tuple[str, ...],
+    *,
+    lock: bool,
 ) -> dict[str, list[PilotAccessGrandfatherGrant]]:
-    rows = session.exec(
-        select(PilotAccessGrandfatherGrant)
-        .where(col(PilotAccessGrandfatherGrant.clerk_id).in_(clerk_ids))
-        .with_for_update()
-    ).all()
+    statement = select(PilotAccessGrandfatherGrant).where(
+        col(PilotAccessGrandfatherGrant.clerk_id).in_(clerk_ids)
+    )
+    if lock:
+        statement = statement.with_for_update()
+    rows = session.exec(statement).all()
     grouped = {clerk_id: [] for clerk_id in clerk_ids}
     for row in rows:
         grouped[row.clerk_id].append(row)
@@ -305,6 +355,121 @@ def _grant_matches_exact_plan(
     )
 
 
+def _assess_grant_plan(
+    session: Session,
+    *,
+    normalized: tuple[tuple[str, str, str], ...],
+    source_ref: str,
+    source_sha256: str,
+    operator_ref: str,
+    reason: str,
+    plan_sha256: str,
+    lock: bool,
+) -> tuple[
+    dict[str, tuple[Doctor | None, Any | None]],
+    list[PilotAccessGrandfatherGrant],
+]:
+    clerk_ids = tuple(row[0] for row in normalized)
+    if lock:
+        for clerk_id in clerk_ids:
+            _lock_clerk_subject(session, clerk_id)
+
+    snapshots: dict[str, tuple[Doctor | None, Any | None]] = {}
+    for clerk_id, email, _ in normalized:
+        snapshots[clerk_id] = _doctor_and_practice_snapshot(
+            session,
+            clerk_id=clerk_id,
+            expected_email=email,
+            lock=lock,
+        )
+
+    existing = _existing_grants_by_clerk(session, clerk_ids, lock=lock)
+    exact: list[PilotAccessGrandfatherGrant] = []
+    has_no_history = True
+    for clerk_id, email, email_sha256 in normalized:
+        history = existing[clerk_id]
+        if history:
+            has_no_history = False
+        matches = [
+            grant
+            for grant in history
+            if _grant_matches_exact_plan(
+                grant,
+                email=email,
+                email_sha256=email_sha256,
+                source_ref=source_ref,
+                source_sha256=source_sha256,
+                operator_ref=operator_ref,
+                reason=reason,
+                plan_sha256=plan_sha256,
+            )
+        ]
+        if len(matches) == 1:
+            exact.append(matches[0])
+
+    if len(exact) != len(normalized) and (exact or not has_no_history):
+        raise PilotAccessGrandfatherError(
+            "the grandfather cohort has partial, revoked, or conflicting prior state"
+        )
+    return snapshots, exact
+
+
+def plan_pilot_access_grants(
+    entries: list[GrandfatherGrantInput],
+    *,
+    source_ref: str,
+    source_sha256: str,
+    operator_ref: str,
+    reason: str,
+) -> GrandfatherGrantPlan:
+    """Validate live database compatibility for a no-write grant preview."""
+
+    source = _required(source_ref, field="source_ref", limit=255)
+    source_digest = _confirmed_sha256(source_sha256, field="source_sha256")
+    operator = _required(operator_ref, field="operator_ref", limit=255)
+    explanation = _required(reason, field="reason", limit=512)
+    normalized = _normalized_grant_entries(entries)
+    actual_source_digest = canonical_clerk_email_pair_sha256(
+        tuple(
+            ClerkCohortIdentity(clerk_id=clerk_id, email=email)
+            for clerk_id, email, _ in normalized
+        )
+    )
+    if not hmac.compare_digest(actual_source_digest, source_digest):
+        raise PilotAccessGrandfatherError(
+            "source digest does not match the normalized Clerk identity cohort"
+        )
+    plan_sha256 = pilot_access_grant_plan_sha256(
+        entries,
+        source_ref=source,
+        source_sha256=source_digest,
+        operator_ref=operator,
+        reason=explanation,
+    )
+    with get_session() as session:
+        snapshots, exact = _assess_grant_plan(
+            session,
+            normalized=normalized,
+            source_ref=source,
+            source_sha256=source_digest,
+            operator_ref=operator,
+            reason=explanation,
+            plan_sha256=plan_sha256,
+            lock=False,
+        )
+    existing_doctor_count = sum(
+        1 for doctor, _ in snapshots.values() if doctor is not None
+    )
+    return GrandfatherGrantPlan(
+        plan_sha256=plan_sha256,
+        account_count=len(normalized),
+        existing_doctor_count=existing_doctor_count,
+        prelogin_account_count=len(normalized) - existing_doctor_count,
+        already_granted_count=len(exact),
+        already_applied=len(exact) == len(normalized),
+    )
+
+
 def grant_pilot_access_grants(
     entries: list[GrandfatherGrantInput],
     *,
@@ -315,7 +480,7 @@ def grant_pilot_access_grants(
     confirm_plan_sha256: str,
     now: datetime | None = None,
 ) -> GrandfatherGrantBatchResult:
-    """Atomically apply the exact reviewed 47-account Clerk plan.
+    """Atomically apply the exact reviewed Clerk plan for this environment.
 
     An exact retry returns the original rows. Any partial, revoked, or
     differently sourced prior state refuses the entire operation.
@@ -326,7 +491,7 @@ def grant_pilot_access_grants(
     operator = _required(operator_ref, field="operator_ref", limit=255)
     explanation = _required(reason, field="reason", limit=512)
     normalized = _normalized_grant_entries(entries)
-    plan_sha256 = pilot_access_grant_plan_sha256(
+    plan = plan_pilot_access_grants(
         entries,
         source_ref=source,
         source_sha256=source_digest,
@@ -334,59 +499,30 @@ def grant_pilot_access_grants(
         reason=explanation,
     )
     confirmed = _confirmed_sha256(confirm_plan_sha256, field="confirm_plan_sha256")
-    if not hmac.compare_digest(confirmed, plan_sha256):
+    if not hmac.compare_digest(confirmed, plan.plan_sha256):
         raise PilotAccessGrandfatherError(
             "confirmed plan digest does not match the normalized grant plan"
         )
     current = _aware(now)
-    clerk_ids = tuple(row[0] for row in normalized)
 
     with get_session() as session:
-        for clerk_id in clerk_ids:
-            _lock_clerk_subject(session, clerk_id)
-
-        snapshots: dict[str, tuple[Doctor | None, Any | None]] = {}
-        for clerk_id, _, email_sha256 in normalized:
-            snapshots[clerk_id] = _doctor_and_practice_snapshot(
-                session,
-                clerk_id=clerk_id,
-                expected_email_sha256=email_sha256,
-            )
-
-        existing = _existing_grants_by_clerk(session, clerk_ids)
-        exact: list[PilotAccessGrandfatherGrant] = []
-        has_no_history = True
-        for clerk_id, email, email_sha256 in normalized:
-            history = existing[clerk_id]
-            if history:
-                has_no_history = False
-            matches = [
-                grant
-                for grant in history
-                if _grant_matches_exact_plan(
-                    grant,
-                    email=email,
-                    email_sha256=email_sha256,
-                    source_ref=source,
-                    source_sha256=source_digest,
-                    operator_ref=operator,
-                    reason=explanation,
-                    plan_sha256=plan_sha256,
-                )
-            ]
-            if len(matches) == 1:
-                exact.append(matches[0])
+        snapshots, exact = _assess_grant_plan(
+            session,
+            normalized=normalized,
+            source_ref=source,
+            source_sha256=source_digest,
+            operator_ref=operator,
+            reason=explanation,
+            plan_sha256=plan.plan_sha256,
+            lock=True,
+        )
 
         if len(exact) == len(normalized):
             return GrandfatherGrantBatchResult(
                 grants=tuple(exact),
-                plan_sha256=plan_sha256,
+                plan_sha256=plan.plan_sha256,
                 created_count=0,
                 unchanged_count=len(exact),
-            )
-        if exact or not has_no_history:
-            raise PilotAccessGrandfatherError(
-                "the grandfather cohort has partial, revoked, or conflicting prior state"
             )
 
         grants: list[PilotAccessGrandfatherGrant] = []
@@ -400,7 +536,7 @@ def grant_pilot_access_grants(
                 email_sha256=email_sha256,
                 source_ref=source,
                 source_sha256=source_digest,
-                grant_plan_sha256=plan_sha256,
+                grant_plan_sha256=plan.plan_sha256,
                 granted_by_ref=operator,
                 grant_reason=explanation,
                 granted_at=current,
@@ -418,7 +554,7 @@ def grant_pilot_access_grants(
             session.refresh(grant)
         return GrandfatherGrantBatchResult(
             grants=tuple(grants),
-            plan_sha256=plan_sha256,
+            plan_sha256=plan.plan_sha256,
             created_count=len(grants),
             unchanged_count=0,
         )
@@ -464,7 +600,14 @@ def revoke_pilot_access_grants(
         for clerk_id in normalized:
             _lock_clerk_subject(session, clerk_id)
         doctors = _existing_doctors_by_clerk(session, normalized)
-        existing = _existing_grants_by_clerk(session, normalized)
+        if any(
+            doctor.role == DoctorRole.admin and doctor.deleted_at is None
+            for doctor in doctors.values()
+        ):
+            raise PilotAccessGrandfatherError(
+                "platform administrators cannot be disabled through pilot revocation"
+            )
+        existing = _existing_grants_by_clerk(session, normalized, lock=True)
 
         active: list[PilotAccessGrandfatherGrant] = []
         exact_revoked: list[PilotAccessGrandfatherGrant] = []

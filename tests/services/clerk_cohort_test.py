@@ -68,17 +68,21 @@ def test_resolver_paginates_normalizes_hashes_and_returns_minimal_records(monkey
         _user("user_2", "SECOND@example.com"),
     ]
     fake_users = _install_users(monkeypatch, users)
-    expected_sha256 = clerk_cohort.canonical_email_set_sha256(
-        ["first@example.com", "second@example.com", "third@example.com"]
+    expected_pair_sha256 = clerk_cohort.canonical_clerk_email_pair_sha256(
+        [
+            clerk_cohort.ClerkCohortIdentity("user_3", "third@example.com"),
+            clerk_cohort.ClerkCohortIdentity("user_1", "first@example.com"),
+            clerk_cohort.ClerkCohortIdentity("user_2", "second@example.com"),
+        ]
     )
     assert (
-        expected_sha256
-        == "6436bdacacc0b97a51a23b972f7c20afdcfc12e199bc971ab1bd0ad27e1f3453"
+        expected_pair_sha256
+        == "f8928c6783764ba1ba3d84d6289f9844f9e54c28d02e65d3d42812646d460d4e"
     )
 
     result = clerk_cohort.resolve_live_clerk_cohort(
         expected_count=3,
-        expected_sha256=expected_sha256,
+        expected_pair_sha256=expected_pair_sha256,
     )
 
     assert result == (
@@ -129,24 +133,26 @@ def test_resolver_rejects_ineligible_or_ambiguous_identities(
     with pytest.raises(clerk_cohort.ClerkCohortError, match=message):
         clerk_cohort.resolve_live_clerk_cohort(
             expected_count=len(users),
-            expected_sha256="0" * 64,
+            expected_pair_sha256="0" * 64,
         )
 
 
 def test_resolver_requires_exact_count_and_digest(monkeypatch):
     users = [_user("user_1", "one@example.com")]
     _install_users(monkeypatch, users)
-    correct_digest = clerk_cohort.canonical_email_set_sha256(["one@example.com"])
+    correct_digest = clerk_cohort.canonical_clerk_email_pair_sha256(
+        [clerk_cohort.ClerkCohortIdentity("user_1", "one@example.com")]
+    )
 
     with pytest.raises(clerk_cohort.ClerkCohortError, match="count does not match"):
         clerk_cohort.resolve_live_clerk_cohort(
             expected_count=2,
-            expected_sha256=correct_digest,
+            expected_pair_sha256=correct_digest,
         )
     with pytest.raises(clerk_cohort.ClerkCohortError, match="digest does not match"):
         clerk_cohort.resolve_live_clerk_cohort(
             expected_count=1,
-            expected_sha256="0" * 64,
+            expected_pair_sha256="0" * 64,
         )
 
 
@@ -161,7 +167,7 @@ def test_resolver_sanitizes_clerk_failures(monkeypatch):
     with pytest.raises(clerk_cohort.ClerkCohortError) as exc_info:
         clerk_cohort.resolve_live_clerk_cohort(
             expected_count=47,
-            expected_sha256="0" * 64,
+            expected_pair_sha256="0" * 64,
         )
 
     assert str(exc_info.value) == "live Clerk cohort retrieval failed"
@@ -169,7 +175,7 @@ def test_resolver_sanitizes_clerk_failures(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("expected_count", "expected_sha256", "message"),
+    ("expected_count", "expected_pair_sha256", "message"),
     [
         (0, "0" * 64, "positive integer"),
         (True, "0" * 64, "positive integer"),
@@ -180,7 +186,7 @@ def test_resolver_sanitizes_clerk_failures(monkeypatch):
 def test_resolver_rejects_invalid_expectations_before_calling_clerk(
     monkeypatch,
     expected_count,
-    expected_sha256,
+    expected_pair_sha256,
     message,
 ):
     fake_users = _install_users(monkeypatch, [])
@@ -188,7 +194,7 @@ def test_resolver_rejects_invalid_expectations_before_calling_clerk(
     with pytest.raises(clerk_cohort.ClerkCohortError, match=message):
         clerk_cohort.resolve_live_clerk_cohort(
             expected_count=expected_count,
-            expected_sha256=expected_sha256,
+            expected_pair_sha256=expected_pair_sha256,
         )
 
     assert fake_users.requests == []

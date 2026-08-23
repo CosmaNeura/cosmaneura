@@ -30,13 +30,14 @@ from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.patient import Patient
+from app.models.practice import PracticeMember
 from app.models.scribe_transcript_delivery import (
     LOGICAL_SCRIBE_PRODUCER,
     ScribeTranscriptDelivery,
 )
 from sqlalchemy.exc import IntegrityError
 
-from tests.routes.utils import get_clerk_dev_user
+from tests.routes.utils import get_clerk_dev_user, provision_practice_in_force
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 SCRIBE_CLIENT_ID = "22222222-2222-2222-2222-222222222222"
@@ -102,6 +103,7 @@ def scribe_client(client: TestClient):
 def _appointment() -> Appointment:
     _, _, clerk_user = get_clerk_dev_user()
     doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    provision_practice_in_force(doctor)
     patient = Patient(
         doctor_id=doctor.id,
         name="Scribe Import Patient",
@@ -192,6 +194,51 @@ def test_scribe_transcript_delivery_is_idempotent_and_queues_pipeline_once(
     )
     assert queued_notes == [AIVisitTranscript.one(first.json()["transcript_id"]).id]
     assert queued_scores == queued_notes
+
+
+def test_scribe_transcript_delivery_denies_revoked_doctor_without_writes(
+    scribe_client: TestClient,
+    monkeypatch,
+) -> None:
+    appointment = _appointment()
+    member = PracticeMember.get(doctor_id=appointment.doctor_id)
+    assert member is not None
+    now = datetime.now(UTC)
+    member.access_revoked_at = now
+    member.access_revoked_by_ref = "test-suite"
+    member.access_revocation_reason = "Test offboarding"
+    member.access_records_retain_until = now + timedelta(days=365 * 8)
+    member.save()
+    monkeypatch.setattr(
+        app.jobs.transcribe,
+        "queue_schema_transcription",
+        lambda _transcript: (_ for _ in ()).throw(
+            AssertionError("revoked delivery must not dispatch notes")
+        ),
+    )
+    monkeypatch.setattr(
+        app.jobs.score_engagement,
+        "queue",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("revoked delivery must not dispatch scoring")
+        ),
+    )
+
+    response = scribe_client.post(
+        api_app.url_path_for("import_scribe_transcript"),
+        headers=_headers(idempotency_key="scribe-revoked-1000"),
+        json=_payload(appointment),
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json() == {"detail": "Encounter access is not active."}
+    assert (
+        AIVisitTranscript.where(
+            AIVisitTranscript.appointment_id == appointment.id
+        ).count()
+        == 0
+    )
+    assert ScribeTranscriptDelivery.get(appointment_id=appointment.id) is None
 
 
 def test_scribe_transcript_delivery_deduplicates_across_physical_callers(

@@ -46,6 +46,34 @@ def canonical_email_set_sha256(emails: list[str] | tuple[str, ...]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def canonical_clerk_email_pair_sha256(
+    identities: list[ClerkCohortIdentity] | tuple[ClerkCohortIdentity, ...],
+) -> str:
+    """Hash exact Clerk subjects and normalized emails as sorted TSV lines."""
+
+    normalized_pairs: list[tuple[str, str]] = []
+    seen_clerk_ids: set[str] = set()
+    seen_emails: set[str] = set()
+    for identity in identities:
+        clerk_id = identity.clerk_id.strip()
+        if not clerk_id or clerk_id in seen_clerk_ids:
+            raise ClerkCohortError(
+                "live Clerk cohort contains duplicate or invalid Clerk identities"
+            )
+        email = _normalize_email(identity.email)
+        if email in seen_emails:
+            raise ClerkCohortError(
+                "live Clerk cohort contains duplicate primary emails"
+            )
+        seen_clerk_ids.add(clerk_id)
+        seen_emails.add(email)
+        normalized_pairs.append((clerk_id, email))
+    canonical = "".join(
+        f"{clerk_id}\t{email}\n" for clerk_id, email in sorted(normalized_pairs)
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _verified_primary_email(user: Any) -> str:
     primary_id = getattr(user, "primary_email_address_id", None)
     addresses = getattr(user, "email_addresses", None)
@@ -72,7 +100,7 @@ def _verified_primary_email(user: Any) -> str:
 def resolve_live_clerk_cohort(
     *,
     expected_count: int,
-    expected_sha256: str,
+    expected_pair_sha256: str,
 ) -> tuple[ClerkCohortIdentity, ...]:
     """Return the exact eligible Clerk cohort only when count and digest match.
 
@@ -84,13 +112,13 @@ def resolve_live_clerk_cohort(
         raise ClerkCohortError("expected_count must be a positive integer")
     if expected_count <= 0:
         raise ClerkCohortError("expected_count must be a positive integer")
-    if not isinstance(expected_sha256, str):
-        raise ClerkCohortError("expected_sha256 must be a 64-character hex digest")
-    digest = expected_sha256.strip().lower()
+    if not isinstance(expected_pair_sha256, str):
+        raise ClerkCohortError("expected_pair_sha256 must be a 64-character hex digest")
+    digest = expected_pair_sha256.strip().lower()
     if len(digest) != 64 or any(
         character not in "0123456789abcdef" for character in digest
     ):
-        raise ClerkCohortError("expected_sha256 must be a 64-character hex digest")
+        raise ClerkCohortError("expected_pair_sha256 must be a 64-character hex digest")
 
     identities: list[ClerkCohortIdentity] = []
     seen_clerk_ids: set[str] = set()
@@ -144,7 +172,7 @@ def resolve_live_clerk_cohort(
         raise ClerkCohortError(
             "live Clerk cohort count does not match the approved cohort"
         )
-    actual_digest = canonical_email_set_sha256(tuple(seen_emails))
+    actual_digest = canonical_clerk_email_pair_sha256(tuple(identities))
     if not hmac.compare_digest(actual_digest, digest):
         raise ClerkCohortError(
             "live Clerk cohort digest does not match the approved cohort"

@@ -12,6 +12,8 @@ from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
+from app.services.doctor_access import doctor_access_in_force
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.patient_context import days_since, latest_note_for_patient
 from app.services.terminology import terminology_terms
 
@@ -93,22 +95,30 @@ def perform(intake_id: str | TypeID | TypeIDType):
     """
     Generate intake questions for a patient of a doctor.
     """
-    log.local(intake_id=intake_id)
-    log.info("generating intake questions")
+    intake_ref = provider_log_ref(str(intake_id))
+    log.info("generating intake questions", intake_ref=intake_ref)
 
     intake = Intake.one(id=intake_id)
-    doctor = Doctor.one(id=intake.doctor_id)
+    doctor = Doctor.get(id=intake.doctor_id)
+    if doctor is None or not doctor_access_in_force(doctor):
+        log.info(
+            "intake question generation skipped: access unavailable",
+            event_code="intake_question_generation_access_not_in_force",
+            intake_ref=intake_ref,
+        )
+        return
 
     intake_data = intake.cleaned_external_intake_data
     if intake_data is None:
-        log.info("cleaning intake information", intake_id=intake_id)
+        log.info("cleaning intake information", intake_ref=intake_ref)
         intake_data = extract_intake_data(intake, doctor)
         intake.cleaned_external_intake_data = intake_data
         intake.save()
 
     if intake.intake_questions:
         log.info(
-            "intake questions already exist, skipping generation", intake_id=intake_id
+            "intake questions already exist, skipping generation",
+            intake_ref=intake_ref,
         )
         return
 
@@ -118,7 +128,11 @@ def perform(intake_id: str | TypeID | TypeIDType):
     intake.intake_questions = questions
     intake.save()
 
-    log.info(f"generated {len(questions)} intake questions", intake_id=intake_id)
+    log.info(
+        "generated intake questions",
+        intake_ref=intake_ref,
+        count=len(questions),
+    )
 
 
 perform_celery = celery_app.task(perform)

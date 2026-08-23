@@ -13,6 +13,7 @@ from typeid.errors import TypeIDException
 import app.commands.intake.chat
 import app.commands.intake.create
 from app.commands.intake.create import AppointmentRequest, AppointmentResponse
+from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import API_KEY_PREFIX, Doctor
@@ -48,6 +49,12 @@ def authenticate_api_request_middleware(
             status_code=status.HTTP_410_GONE, detail="Your API access has been disabled"
         )
 
+    if not doctor_access_in_force(api_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API access is not active",
+        )
+
     request.state.api_user = api_user
 
     api_user_ref = provider_log_ref(f"doctor:{api_user.id}")
@@ -70,4 +77,14 @@ def external_api_ping():
 
 @external_api_app.post("/intake")
 def create_intake(request: Request, data: AppointmentRequest) -> AppointmentResponse:
+    api_user: Doctor = request.state.api_user
+    requested_email = str(data.doctor_email or "").strip().lower()
+    authenticated_email = (api_user.email or "").strip().lower()
+    if not requested_email or requested_email != authenticated_email:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The API key may create intake records only for its own account",
+        )
+    # The API key, not a caller-controlled lookup, is the authoritative target.
+    data.doctor = api_user
     return app.commands.intake.create.perform(data)

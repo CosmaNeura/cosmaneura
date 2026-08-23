@@ -7,6 +7,7 @@ from app import log
 from app.configuration.redis import get_redis
 from app.services import recall as recall_service
 from app.services import recall_webhook_operations
+from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import (
     PermanentWebhookError,
     RetryableWebhookError,
@@ -45,13 +46,14 @@ def handle_recording_done(payload: dict[str, Any]) -> None:
         )
         raise RetryableWebhookError("tenant_mapping_unavailable")
     doctor = Doctor.get(id=doctor_id) if doctor_id else None
-    if doctor is None or doctor.deleted_at is not None:
+    if doctor is None or not doctor_access_in_force(doctor):
         log.warning(
-            "recall recording ignored: doctor unavailable",
+            "recall recording ignored: access unavailable",
+            event_code="recall_recording_access_not_in_force",
             recording_ref=provider_log_ref(recording_id),
             doctor_ref=provider_log_ref(doctor_id),
         )
-        raise PermanentWebhookError("doctor_unavailable")
+        return
 
     # Do not commit an external-operation fence until tenant authority is
     # available. A missing transient Redis mapping must remain safely
@@ -93,6 +95,14 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
     recall_webhook_operations.confirm_transcript_creation(recording_id)
     replay = recall_webhook_operations.find_ingested_transcript(transcript_id)
     if replay is not None:
+        doctor = Doctor.get(id=replay.transcript.doctor_id)
+        if doctor is None or not doctor_access_in_force(doctor):
+            log.warning(
+                "recall transcript replay ignored: access unavailable",
+                event_code="recall_transcript_access_not_in_force",
+                transcript_ref=provider_log_ref(transcript_id),
+            )
+            return
         recall_webhook_operations.dispatch_pipeline(replay.operation_id)
         log.info(
             "recall transcript replayed from durable receipt",
@@ -117,14 +127,15 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
         raise RetryableWebhookError("tenant_mapping_unavailable")
 
     doctor = Doctor.get(id=doctor_id)
-    if doctor is None or doctor.deleted_at is not None:
+    if doctor is None or not doctor_access_in_force(doctor):
         log.warning(
-            "recall transcript ignored: doctor unavailable",
+            "recall transcript ignored: access unavailable",
+            event_code="recall_transcript_access_not_in_force",
             bot_ref=provider_log_ref(bot_id),
             recording_ref=provider_log_ref(recording_id),
             doctor_ref=provider_log_ref(doctor_id),
         )
-        raise PermanentWebhookError("doctor_unavailable")
+        return
 
     transcript_meta = recall_service.get_transcript(transcript_id)
     transcript_data = transcript_meta.get("data")

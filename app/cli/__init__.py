@@ -1385,6 +1385,373 @@ def bootstrap_provider_practice_command(
         ) from None
 
 
+@app.command("grant-pilot-access")
+def grant_pilot_access_command(
+    source_ref: str = typer.Option(
+        ..., help="Opaque reference for the approved Clerk cohort export."
+    ),
+    source_sha256: str = typer.Option(
+        ...,
+        "--source-sha256",
+        help=(
+            "Canonical Clerk-subject and normalized-email pair digest of the "
+            "approved whole-instance cohort for this environment."
+        ),
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the grandfather access grant."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Canonical plan digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Grant the exact verified environment cohort; dry-run by default."""
+
+    from app.services.clerk_cohort import resolve_live_clerk_cohort
+    from app.services.pilot_access_grandfather import (
+        GrandfatherGrantInput,
+        grant_pilot_access_grants,
+        plan_pilot_access_grants,
+        required_pilot_access_grandfather_account_count,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    try:
+        expected_count = required_pilot_access_grandfather_account_count()
+        identities = resolve_live_clerk_cohort(
+            expected_count=expected_count,
+            expected_pair_sha256=source_sha256,
+        )
+        entries = [
+            GrandfatherGrantInput(
+                clerk_id=identity.clerk_id,
+                email=identity.email,
+            )
+            for identity in identities
+        ]
+        plan = plan_pilot_access_grants(
+            entries,
+            source_ref=source_ref,
+            source_sha256=source_sha256,
+            operator_ref=operator_ref,
+            reason=reason,
+        )
+        if not apply:
+            state = "already applied" if plan.already_applied else "deployable"
+            typer.echo(
+                "DRY RUN: pilot access grandfather plan; "
+                f"state={state} accounts={plan.account_count} "
+                f"existing_doctors={plan.existing_doctor_count} "
+                f"prelogin_accounts={plan.prelogin_account_count} "
+                f"already_granted={plan.already_granted_count} "
+                f"source_sha256={source_sha256.strip().lower()} "
+                f"plan_sha256={plan.plan_sha256}."
+            )
+            return
+        result = grant_pilot_access_grants(
+            entries,
+            source_ref=source_ref,
+            source_sha256=source_sha256,
+            operator_ref=operator_ref,
+            reason=reason,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"pilot access grant {outcome}; verify aggregate database state; "
+            "no identities were printed"
+        ) from None
+
+    state = "already applied" if result.created_count == 0 else "applied"
+    typer.echo(
+        "Pilot access grandfather grant "
+        f"{state}: accounts={len(result.grants)} created={result.created_count} "
+        f"unchanged={result.unchanged_count} "
+        f"source_sha256={source_sha256.strip().lower()} "
+        f"plan_sha256={result.plan_sha256}."
+    )
+
+
+@app.command("revoke-pilot-access")
+def revoke_pilot_access_command(
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged revocation."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Canonical plan digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the revocation."),
+) -> None:
+    """Revoke one grandfather grant; identity inputs are prompted privately."""
+
+    import hashlib
+    import hmac
+
+    from app.services.organization_access import normalize_email
+    from app.services.pilot_access_grandfather import (
+        pilot_access_revoke_plan_sha256,
+        revoke_pilot_access_grants,
+    )
+
+    from app.models.doctor import Doctor, DoctorRole
+    from app.models.pilot_access_grandfather_grant import (
+        PilotAccessGrandfatherGrant,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    clerk_id = typer.prompt("Exact Clerk subject", hide_input=True)
+    confirmed_email = typer.prompt("Exact account email", hide_input=True)
+    try:
+        email = normalize_email(confirmed_email)
+        plan_sha256 = pilot_access_revoke_plan_sha256(
+            [clerk_id],
+            operator_ref=operator_ref,
+            reason=reason,
+        )
+        with global_session():
+            grants = cast(
+                list[PilotAccessGrandfatherGrant],
+                list(
+                    PilotAccessGrandfatherGrant.where(
+                        PilotAccessGrandfatherGrant.clerk_id == clerk_id.strip()
+                    ).all()
+                ),
+            )
+            doctor = Doctor.get(clerk_id=clerk_id.strip())
+        active = [grant for grant in grants if grant.revoked_at is None]
+        target = (
+            active[0]
+            if len(active) == 1
+            else max(
+                (grant for grant in grants if grant.revoked_at is not None),
+                key=lambda grant: cast(datetime, grant.revoked_at),
+                default=None,
+            )
+        )
+        email_sha256 = hashlib.sha256(email.encode("utf-8")).hexdigest()
+        if (
+            target is None
+            or len(active) > 1
+            or target.email_snapshot != email
+            or not hmac.compare_digest(target.email_sha256, email_sha256)
+        ):
+            raise ValueError("grant confirmation failed")
+        if target.revoked_at is not None and (
+            target.revoked_by_ref != operator_ref.strip()
+            or target.revocation_reason != reason.strip()
+            or target.revocation_plan_sha256 is None
+            or not hmac.compare_digest(
+                target.revocation_plan_sha256,
+                plan_sha256,
+            )
+        ):
+            raise ValueError("revocation plan conflicts with retained evidence")
+        if (
+            doctor is not None
+            and doctor.role == DoctorRole.admin
+            and doctor.deleted_at is None
+        ):
+            raise ValueError("platform administrators require a separate lifecycle")
+        if not apply:
+            state = "already revoked" if target.revoked_at is not None else "revocable"
+            typer.echo(
+                "DRY RUN: pilot access grant "
+                f"state={state}; accounts=1 plan_sha256={plan_sha256}; "
+                "no clinical or content records will be deleted."
+            )
+            return
+        result = revoke_pilot_access_grants(
+            [clerk_id],
+            operator_ref=operator_ref,
+            reason=reason,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"pilot access revocation {outcome}; verify aggregate database state; "
+            "no identities were printed"
+        ) from None
+
+    retain_until = result.grants[0].retain_until
+    state = "already revoked" if result.revoked_count == 0 else "revoked"
+    typer.echo(
+        f"Pilot access grant {state}: "
+        f"accounts=1 revoked={result.revoked_count} "
+        f"unchanged={result.unchanged_count} "
+        f"retain_until={retain_until.isoformat() if retain_until else 'missing'} "
+        f"plan_sha256={result.plan_sha256}; no clinical or content records "
+        "were deleted."
+    )
+
+
+@app.command("audit-pilot-access")
+def audit_pilot_access_command() -> None:
+    """Report only aggregate state and digests for grandfather access."""
+
+    import hashlib
+    import hmac
+
+    from app.services.clerk_cohort import (
+        ClerkCohortError,
+        ClerkCohortIdentity,
+        canonical_clerk_email_pair_sha256,
+    )
+    from app.services.pilot_access_grandfather import (
+        GrandfatherGrantInput,
+        pilot_access_grant_plan_sha256,
+        required_pilot_access_grandfather_account_count,
+    )
+
+    from app.models.pilot_access_grandfather_grant import (
+        PilotAccessGrandfatherGrant,
+    )
+
+    try:
+        with global_session():
+            grants = cast(
+                list[PilotAccessGrandfatherGrant],
+                list(PilotAccessGrandfatherGrant.all()),
+            )
+        active_count = sum(grant.revoked_at is None for grant in grants)
+        revoked_count = len(grants) - active_count
+        doctor_snapshot_count = sum(
+            grant.doctor_id_snapshot is not None for grant in grants
+        )
+        integrity_error_count = sum(
+            not hmac.compare_digest(
+                grant.email_sha256,
+                hashlib.sha256(grant.email_snapshot.encode("utf-8")).hexdigest(),
+            )
+            for grant in grants
+        )
+        source_digests: dict[str, int] = {}
+        grant_plan_digests: dict[str, int] = {}
+        revocation_plan_digests: dict[str, int] = {}
+        for grant in grants:
+            source_digests[grant.source_sha256] = (
+                source_digests.get(grant.source_sha256, 0) + 1
+            )
+            grant_plan_digests[grant.grant_plan_sha256] = (
+                grant_plan_digests.get(grant.grant_plan_sha256, 0) + 1
+            )
+            if grant.revocation_plan_sha256:
+                revocation_plan_digests[grant.revocation_plan_sha256] = (
+                    revocation_plan_digests.get(grant.revocation_plan_sha256, 0) + 1
+                )
+        try:
+            canonical_source_sha256 = canonical_clerk_email_pair_sha256(
+                tuple(
+                    ClerkCohortIdentity(
+                        clerk_id=grant.clerk_id,
+                        email=grant.email_snapshot,
+                    )
+                    for grant in grants
+                )
+            )
+        except ClerkCohortError:
+            canonical_source_sha256 = None
+    except Exception:
+        raise typer.BadParameter(
+            "pilot access audit failed; no identities were printed"
+        ) from None
+
+    source_digest_matches = bool(
+        canonical_source_sha256
+        and len(source_digests) == 1
+        and next(iter(source_digests)) == canonical_source_sha256
+        and next(iter(source_digests.values())) == len(grants)
+    )
+    source_refs = {grant.source_ref for grant in grants}
+    operator_refs = {grant.granted_by_ref for grant in grants}
+    grant_reasons = {grant.grant_reason for grant in grants}
+    recomputed_plan_sha256: str | None = None
+    if (
+        len(source_refs) == 1
+        and len(source_digests) == 1
+        and len(operator_refs) == 1
+        and len(grant_reasons) == 1
+    ):
+        try:
+            recomputed_plan_sha256 = pilot_access_grant_plan_sha256(
+                [
+                    GrandfatherGrantInput(
+                        clerk_id=grant.clerk_id,
+                        email=grant.email_snapshot,
+                    )
+                    for grant in grants
+                ],
+                source_ref=next(iter(source_refs)),
+                source_sha256=next(iter(source_digests)),
+                operator_ref=next(iter(operator_refs)),
+                reason=next(iter(grant_reasons)),
+            )
+        except Exception:
+            recomputed_plan_sha256 = None
+    plan_digest_matches = bool(
+        recomputed_plan_sha256
+        and len(grant_plan_digests) == 1
+        and next(iter(grant_plan_digests.values())) == len(grants)
+        and hmac.compare_digest(
+            next(iter(grant_plan_digests)),
+            recomputed_plan_sha256,
+        )
+    )
+    cohort_integrity_valid = bool(
+        len(grants) == required_pilot_access_grandfather_account_count()
+        and integrity_error_count == 0
+        and source_digest_matches
+        and plan_digest_matches
+    )
+    if not grants:
+        lifecycle_state = "empty"
+    elif not cohort_integrity_valid:
+        lifecycle_state = "invalid"
+    elif active_count and revoked_count:
+        lifecycle_state = "mixed"
+    elif active_count:
+        lifecycle_state = "active"
+    else:
+        lifecycle_state = "revoked"
+    typer.echo(
+        json.dumps(
+            {
+                "active_count": active_count,
+                "canonical_source_sha256": canonical_source_sha256,
+                "cohort_integrity_valid": cohort_integrity_valid,
+                "doctor_snapshot_count": doctor_snapshot_count,
+                "grant_plan_digests": [
+                    {"count": count, "sha256": digest}
+                    for digest, count in sorted(grant_plan_digests.items())
+                ],
+                "integrity_error_count": integrity_error_count,
+                "prelogin_snapshot_count": len(grants) - doctor_snapshot_count,
+                "revocation_plan_digests": [
+                    {"count": count, "sha256": digest}
+                    for digest, count in sorted(revocation_plan_digests.items())
+                ],
+                "revoked_count": revoked_count,
+                "source_digests": [
+                    {"count": count, "sha256": digest}
+                    for digest, count in sorted(source_digests.items())
+                ],
+                "state": lifecycle_state,
+                "total_count": len(grants),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    )
+    if not cohort_integrity_valid:
+        raise typer.Exit(code=1)
+
+
 @app.command("import-organization-roster")
 def import_organization_roster_command(
     manifest: str = typer.Option(..., help="Private schema-version-1 JSON roster."),

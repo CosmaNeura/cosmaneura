@@ -34,7 +34,10 @@ def _authed_doctor() -> Doctor:
 
 def _provision_roster_access(doctor: Doctor) -> tuple[Practice, str]:
     assert doctor.email
-    domain = doctor.email.rsplit("@", 1)[1].lower()
+    local_part = doctor.email.rsplit("@", 1)[0]
+    domain = f"route-{secrets.token_hex(5)}.example.test"
+    doctor.email = f"{local_part}@{domain}"
+    doctor.save()
     now = datetime.now(timezone.utc)
     practice = Practice(
         legal_name="Route Test Pilot Organization",

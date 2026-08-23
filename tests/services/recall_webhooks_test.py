@@ -44,6 +44,11 @@ def _allow_recording_mapping(monkeypatch, recording_id: str) -> None:
         "get",
         lambda **_kwargs: SimpleNamespace(deleted_at=None),
     )
+    monkeypatch.setattr(
+        recall_webhooks,
+        "doctor_access_in_force",
+        lambda _doctor: True,
+    )
 
 
 def test_recording_done_creates_transcript_once(monkeypatch) -> None:
@@ -88,6 +93,32 @@ def test_ambiguous_create_failure_is_not_retried(monkeypatch) -> None:
     )
     assert receipt is not None
     assert receipt.state == "uncertain"
+
+
+def test_recording_done_denied_access_skips_provider_and_receipt(monkeypatch) -> None:
+    recording_id = "recording-access-denied-private"
+    _allow_recording_mapping(monkeypatch, recording_id)
+    monkeypatch.setattr(
+        recall_webhooks,
+        "doctor_access_in_force",
+        lambda _doctor: False,
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        recall_webhooks.recall_service,
+        "create_async_transcript",
+        lambda provider_recording_id: calls.append(provider_recording_id),
+    )
+
+    recall_webhooks.handle_recording_done(_recording_payload(recording_id))
+
+    assert calls == []
+    receipt = ExternalWebhookOperation.get(
+        provider_resource_digest=recall_webhooks.recall_webhook_operations._resource_digest(
+            recording_id
+        )
+    )
+    assert receipt is None
 
 
 def test_recording_done_missing_tenant_mapping_does_not_reserve_operation(

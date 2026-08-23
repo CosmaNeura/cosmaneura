@@ -165,10 +165,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint(
             "id", name=op.f("pilot_access_grandfather_grant_pkey")
         ),
-        comment=(
-            "Durable per-Clerk-account evidence for legacy pilot access; "
-            "Doctor and practice identifiers are grant-time audit snapshots only."
-        ),
+        comment="One revocable legacy access grant and its retained audit evidence.",
     )
     op.create_index(
         "uq_pilot_access_grant_active_clerk",
@@ -253,6 +250,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Serialize the emptiness check with writers. Without this lock, a grant
+    # could commit after SELECT count(*) but before DROP TABLE acquires its DDL
+    # lock, destroying evidence that the downgrade promised to retain.
+    op.execute(
+        "LOCK TABLE pilot_access_grandfather_grant IN ACCESS EXCLUSIVE MODE"
+    )
     populated = op.get_bind().execute(
         sa.text("SELECT count(*) FROM pilot_access_grandfather_grant")
     ).scalar_one()

@@ -48,6 +48,7 @@ from app.services.biomarkers import (
     display_name as biomarker_display_name,
 )
 from app.services.clerk_identity import verified_primary_email
+from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
 from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
 from app.services.nutrient_depletion import depletions_for
 from app.services.organization_access import (
@@ -512,6 +513,7 @@ class SettingsData(BaseModel, extra="forbid"):
 @internal_api_app.get("/settings")
 def settings_data(request: Request) -> SettingsData:
     doctor: Doctor = request.state.doctor
+    access_decision = resolve_doctor_access(doctor, require_entitlement=False)
 
     zoom_integration = DoctorVideoIntegration.get(
         doctor_id=doctor.id, provider=VideoProvider.zoom
@@ -551,8 +553,14 @@ def settings_data(request: Request) -> SettingsData:
         zoom_connected=zoom_integration is not None,
         zoom_revoked=zoom_revoked,
         email=doctor.email,
-        onboarding_completed=doctor.onboarding_completed_at is not None,
-        practice_ready=_practice_ready(doctor),
+        onboarding_completed=(
+            doctor.onboarding_completed_at is not None
+            or (
+                access_decision.allowed
+                and access_decision.authorization_basis == "pilot_grant"
+            )
+        ),
+        practice_ready=_practice_ready(doctor, decision=access_decision),
         is_admin=doctor.role == DoctorRole.admin,
         note_customizations=note_customizations,
         has_natmed_subscription=doctor.has_natmed_subscription,
@@ -688,12 +696,16 @@ def _membership_for(doctor: Doctor) -> PracticeMember | None:
     return PracticeMember.get(doctor_id=doctor.id)
 
 
-def _practice_ready(doctor: Doctor) -> bool:
-    member = _membership_for(doctor)
-    if not member:
-        return False
-    practice = Practice.get(id=member.practice_id)
-    return bool(practice and practice.baa_in_force() and member_access_in_force(member))
+def _practice_ready(
+    doctor: Doctor,
+    *,
+    decision: DoctorAccessDecision | None = None,
+) -> bool:
+    effective = decision or resolve_doctor_access(
+        doctor,
+        require_entitlement=False,
+    )
+    return effective.allowed
 
 
 def _practice_payload(
@@ -702,6 +714,13 @@ def _practice_payload(
     if not practice or not member:
         return None
     authorization_basis = member_authorization_basis(member)
+    doctor = Doctor.get(id=member.doctor_id)
+    access_decision = resolve_doctor_access(doctor) if doctor is not None else None
+    pilot_access_grant_active = bool(
+        access_decision
+        and access_decision.allowed
+        and access_decision.authorization_basis == "pilot_grant"
+    )
     return PracticeStatus(
         legal_name=practice.legal_name,
         # Administratively reserved and organization-managed practices use the
@@ -709,8 +728,7 @@ def _practice_payload(
         # legacy reusable practice join code.
         join_code=(
             None
-            if practice.organization_id is not None
-            or practice.negotiated_baa_required
+            if practice.organization_id is not None or practice.negotiated_baa_required
             else practice.join_code
         ),
         email_domain=practice.email_domain,
@@ -722,6 +740,7 @@ def _practice_payload(
         access_authorized=authorization_basis is not None,
         authorization_basis=authorization_basis,
         access_revoked=member.access_revoked_at is not None,
+        pilot_access_grant_active=pilot_access_grant_active,
         trial_ends_at=practice.trial_ends_at,
         billing_exempt=practice.billing_exempt,
         billing_exempt_until=practice.billing_exempt_until,
@@ -754,6 +773,7 @@ class PracticeStatus(BaseModel, extra="forbid"):
     access_authorized: bool
     authorization_basis: str | None
     access_revoked: bool
+    pilot_access_grant_active: bool
     trial_ends_at: datetime | None
     billing_exempt: bool
     billing_exempt_until: datetime | None
@@ -1236,6 +1256,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             access_authorized=False,
             authorization_basis=None,
             access_revoked=False,
+            pilot_access_grant_active=False,
             trial_ends_at=practice.trial_ends_at,
             billing_exempt=practice.billing_exempt,
             billing_exempt_until=practice.billing_exempt_until,
@@ -1402,22 +1423,19 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
 )
 def complete_onboarding(request: Request) -> None:
     doctor: Doctor = request.state.doctor
-    member = _membership_for(doctor)
-    if member:
-        practice = Practice.get(id=member.practice_id)
-        if (
-            not practice
-            or not practice.baa_in_force()
-            or not member_access_in_force(member)
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
-            )
-    elif doctor.onboarding_completed_at is None:
+    decision = resolve_doctor_access(doctor, require_entitlement=False)
+    if (
+        not decision.allowed
+        and decision.denial_reason == "practice_membership_required"
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Name or join a practice and accept the BAA before using Cosmas.",
+        )
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
         )
     doctor.onboarding_completed_at = datetime.now(timezone.utc)
     doctor.save()
@@ -1485,6 +1503,16 @@ def create_billing_checkout(
     """
     doctor: Doctor = request.state.doctor
     practice = _owner_practice_for_billing(doctor)
+
+    access_decision = resolve_doctor_access(doctor)
+    if access_decision.allowed and access_decision.authorization_basis == "pilot_grant":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Legacy pilot access does not require a new subscription. "
+                "Use the billing portal to manage an existing subscription."
+            ),
+        )
 
     if practice.organization_id is not None and practice.billing_exemption_active():
         raise HTTPException(

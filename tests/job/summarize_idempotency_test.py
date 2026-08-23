@@ -25,6 +25,11 @@ from sqlalchemy.exc import IntegrityError
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
 
+@pytest.fixture(autouse=True)
+def _allow_doctor_access(monkeypatch):
+    monkeypatch.setattr(summarize, "doctor_access_in_force", lambda _doctor: True)
+
+
 @contextmanager
 def _committed_visit() -> Iterator[
     tuple[Doctor, Patient, Appointment, DoctorNoteSchema, AIVisitTranscript]

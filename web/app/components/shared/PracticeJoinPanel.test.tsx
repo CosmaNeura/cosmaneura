@@ -20,6 +20,7 @@ function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
     access_authorized: true,
     authorization_basis: "workforce_attestation",
     access_revoked: false,
+    pilot_access_grant_active: false,
     trial_ends_at: "2026-08-25T20:00:00Z",
     billing_exempt: false,
     billing_exempt_until: null,
@@ -57,6 +58,52 @@ describe("PracticeJoinPanel billing recovery", () => {
     expect(
       screen.getByRole("button", { name: /reactivate cosmas/i }),
     ).toBeInTheDocument()
+  })
+
+  it("shows truthful pilot access and suppresses BAA and checkout prompts", () => {
+    const grandfathered = practice({
+      baa_accepted: false,
+      access_authorized: false,
+      authorization_basis: null,
+      pilot_access_grant_active: true,
+      entitled: false,
+      trial_ends_at: "2026-08-19T20:00:00Z",
+    })
+
+    expect(billingActionKind(grandfathered, NOW)).toBe("none")
+    render(<PracticeJoinPanel practice={grandfathered} showBillingActions />)
+    expect(
+      screen.getByText(/grandfathered pilot access is active/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/no billing required/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/no personal BAA attestation is required/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/BAA is not in force yet/i),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: /reactivate cosmas/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it("keeps an existing pilot subscription visible and manageable", () => {
+    const grandfathered = practice({
+      pilot_access_grant_active: true,
+      billing_subscription_manageable: true,
+      billing_portal_available: true,
+      subscription_status: "active",
+    })
+
+    expect(billingActionKind(grandfathered, NOW)).toBe("portal")
+    render(<PracticeJoinPanel practice={grandfathered} showBillingActions />)
+    expect(
+      screen.getByText(/existing subscription remains active/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: /manage billing/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/no billing required/i)).not.toBeInTheDocument()
   })
 
   it("sends past-due and paused subscriptions to the portal", () => {

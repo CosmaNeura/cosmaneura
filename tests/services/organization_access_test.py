@@ -24,6 +24,7 @@ from app.services.organization_access import (
     validate_provider_organization_with_roster,
 )
 
+from activemodel.session_manager import get_session
 from app.models.baa import BaaAcceptance
 from app.models.doctor import Doctor
 from app.models.organization_access import (
@@ -35,6 +36,8 @@ from app.models.practice_access_audit import (
     PracticeAccessAction,
     PracticeAccessAudit,
 )
+from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 
 def _doctor(email: str) -> Doctor:
@@ -523,6 +526,82 @@ def test_offboarding_revokes_access_and_retains_authorization_records_for_seven_
         ).count()
         == 1
     )
+
+
+def test_database_guards_revoked_organization_access_evidence_for_seven_years():
+    approved_at = datetime(2028, 2, 1, 9, 0, tzinfo=timezone.utc)
+    revoked_at = datetime(2028, 2, 2, 9, 0, tzinfo=timezone.utc)
+    domain = f"pilot-{secrets.token_hex(4)}.example.com"
+    doctor = _doctor(f"retained@{domain}")
+    practice, code = _configured_practice(domain, now=approved_at)
+    _approve(practice, doctor.email or "", now=approved_at)
+    _, member = claim_roster_access(
+        doctor,
+        supplied_code=code,
+        now=approved_at + timedelta(minutes=1),
+    )
+    approval_id = member.organization_roster_approval_id
+    assert approval_id is not None
+
+    active_delete_statements = (
+        (
+            "DELETE FROM organization_roster_approval WHERE id = :row_id",
+            approval_id.uuid,
+            "organization roster approval evidence is still retained",
+        ),
+        (
+            "DELETE FROM practice_member WHERE id = :row_id",
+            member.id.uuid,
+            "organization membership evidence is still retained",
+        ),
+    )
+    for statement, row_id, expected_error in active_delete_statements:
+        with get_session() as session:
+            savepoint = session.begin_nested()
+            with pytest.raises(DBAPIError, match=expected_error):
+                session.execute(text(statement), params={"row_id": row_id})
+            savepoint.rollback()
+
+    offboard_member(
+        practice,
+        doctor,
+        operator_ref="ticket-RETAIN-GUARD",
+        reason="Exercise database retention guard",
+        now=revoked_at,
+    )
+
+    blocked_statements = (
+        (
+            "UPDATE organization_roster_approval "
+            "SET source_ref = 'changed' WHERE id = :row_id",
+            approval_id.uuid,
+            "revoked organization roster approval evidence is immutable",
+        ),
+        (
+            "DELETE FROM organization_roster_approval WHERE id = :row_id",
+            approval_id.uuid,
+            "organization roster approval evidence is still retained",
+        ),
+        (
+            "UPDATE practice_member SET role = 'owner' WHERE id = :row_id",
+            member.id.uuid,
+            "revoked organization membership evidence is immutable",
+        ),
+        (
+            "DELETE FROM practice_member WHERE id = :row_id",
+            member.id.uuid,
+            "organization membership evidence is still retained",
+        ),
+    )
+    for statement, row_id, expected_error in blocked_statements:
+        with get_session() as session:
+            savepoint = session.begin_nested()
+            with pytest.raises(DBAPIError, match=expected_error):
+                session.execute(text(statement), params={"row_id": row_id})
+            savepoint.rollback()
+
+    assert OrganizationRosterApproval.get(id=approval_id) is not None
+    assert PracticeMember.get(id=member.id) is not None
 
 
 def test_unclaimed_roster_approval_can_be_revoked_retained_and_retried():
