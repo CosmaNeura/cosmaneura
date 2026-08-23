@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from app.server import api_app
 
 from activemodel.session_manager import get_engine
+from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
@@ -114,6 +115,74 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["id"] == str(appointment.id)
     assert result["appointment"]["patient_id"] == str(patient.id)
     assert result["appointment"]["doctor_id"] == str(doctor.id)
+
+
+def test_note_detail_returns_only_current_note_version(
+    authenticated_client: TestClient,
+):
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    patient = Patient(
+        doctor_id=doctor.id,
+        name="Synthetic Version Patient",
+        date_of_birth=datetime.now(),
+    ).save()
+    appointment = Appointment(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_date=datetime.now(),
+        external_id=None,
+    ).save()
+    transcript = AIVisitTranscript(
+        doctor_id=doctor.id,
+        patient_id=patient.id,
+        appointment_id=appointment.id,
+        duration=1,
+        transcript_data=[],
+    ).save()
+    schema = DoctorNoteSchemaFactory.build(doctor_id=doctor.id).save()
+    historical = AIVisitNote(
+        doctor_id=doctor.id,
+        appointment_id=appointment.id,
+        ai_transcript_id=transcript.id,
+        doctor_note_schema_id=schema.id,
+        note={"Plan": "superseded synthetic route sentinel"},
+        superseded_at=datetime.now(UTC),
+        supersession_reason="migration:a81c9d7e4f20",
+    ).save()
+    current = AIVisitNote(
+        doctor_id=doctor.id,
+        appointment_id=appointment.id,
+        ai_transcript_id=transcript.id,
+        doctor_note_schema_id=schema.id,
+        note={"Plan": "current synthetic route sentinel"},
+    ).save()
+
+    response = authenticated_client.get(
+        api_app.url_path_for("note_detail", appointment_id=appointment.id)
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    rendered = response.text
+    result = response.json()
+    assert [note["id"] for note in result["notes"]] == [str(current.id)]
+    assert {
+        "superseded_at",
+        "supersession_reason",
+        "restore_frontier_transcript_id",
+    }.isdisjoint(result["notes"][0])
+    assert str(historical.id) not in rendered
+    assert "superseded synthetic route sentinel" not in rendered
+
+
+def test_visit_note_version_metadata_is_not_in_public_openapi_schema() -> None:
+    schema = api_app.openapi()["components"]["schemas"]["AIVisitNote"]
+
+    assert {
+        "superseded_at",
+        "supersession_reason",
+        "restore_frontier_transcript_id",
+    }.isdisjoint(schema["properties"])
 
 
 def test_note_detail_deleted_transcript(authenticated_client: TestClient):
