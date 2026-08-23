@@ -2,7 +2,7 @@
 
 The dashboard and system browser authenticate a real clinician through the
 normal Clerk boundary. The desktop client receives only random or keyed-opaque
-bearers plus the provider-neutral grant consumed by its Electron main process.
+bearers plus the provider-neutral grant consumed by its Tauri core process.
 No patient data, meeting data, or provider credential enters this protocol.
 """
 

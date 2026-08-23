@@ -2,8 +2,8 @@
 
 Start and heartbeat requests re-resolve their bearer against current server
 authority. Stop is a bounded safety exception that accepts only an exact issued
-bearer/session/lease/capability binding and can only narrow state. The Electron
-process supplies no tenant, actor, consent, lease, or provider authority in the
+bearer/session/lease/capability binding and can only narrow state. The Tauri
+core supplies no tenant, actor, consent, lease, or provider authority in the
 body.
 """
 
@@ -30,6 +30,7 @@ from app.configuration.desktop_capture import (
     DesktopCaptureSettings,
     get_desktop_capture_settings,
 )
+from app.routes.desktop_capture_contract import desktop_error_responses
 from app.services.capture_coordination import (
     DESKTOP_SOURCE,
     CaptureCoordinationConflict,
@@ -207,6 +208,7 @@ def _idempotency_key(request: Request) -> str:
 @desktop_capture_operations_app.post(
     "/capture-sessions/{capture_session_id}/segments/start-authorizations",
     response_model=StartAuthorityDecisionResponse,
+    responses=desktop_error_responses(401, 403, 409, 422, 503),
 )
 def authorize_desktop_capture_segment_start(
     request: Request,
@@ -368,6 +370,7 @@ def _lifecycle_response(
 @desktop_capture_operations_app.post(
     "/capture-sessions/{capture_session_id}/heartbeats",
     response_model=CaptureLifecycleDecisionResponse,
+    responses=desktop_error_responses(401, 403, 409, 422, 503),
 )
 def record_desktop_capture_heartbeat(
     request: Request,
@@ -409,6 +412,7 @@ def record_desktop_capture_heartbeat(
 @desktop_capture_operations_app.post(
     "/capture-sessions/{capture_session_id}/stop-requests",
     response_model=CaptureLifecycleDecisionResponse,
+    responses=desktop_error_responses(401, 403, 409, 422, 503),
 )
 def request_desktop_capture_stop(
     request: Request,

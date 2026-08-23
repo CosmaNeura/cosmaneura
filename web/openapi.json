@@ -2158,7 +2158,7 @@
           "desktop-capture"
         ],
         "summary": "Authorize Desktop Capture Launch",
-        "description": "Bind a launch ticket to the same clinician and Electron PKCE proof.",
+        "description": "Bind a launch ticket to the same clinician and Tauri PKCE proof.",
         "operationId": "authorize_desktop_capture_launch",
         "requestBody": {
           "content": {

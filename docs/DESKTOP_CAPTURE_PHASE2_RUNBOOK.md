@@ -73,7 +73,7 @@ Do not enable desktop capture for patient traffic until all of the following
 are reviewed and evidenced:
 
 1. Generate and check in a dedicated `/desktop/v1` contract, then wire the
-   Electron main process to the exact tested wire shapes.
+   Tauri core process to the exact tested wire shapes.
    Prove possession of the installation key bound by the launch thumbprint, or
    remove that field rather than treating an unproved thumbprint as authority.
 2. Wire the real provider dependency only in a separately reviewed change;
@@ -86,7 +86,7 @@ are reviewed and evidenced:
 5. Resolve ambiguous Scribe preparation and provider-create outcomes through
    provider-supported lookup or reviewed operator reconciliation. Never replay
    a create blindly.
-6. Keep the Electron local stop fail-safe independent from backend reachability;
+6. Keep the Tauri local stop fail-safe independent from backend reachability;
    backend stop is evidence and coordination, not the sole audio-stop control.
 7. Provision protected settings and credentials, apply the scheduler as a
    singleton, and prove value-free health/alerting before enabling any tenant.
@@ -99,6 +99,27 @@ are reviewed and evidenced:
 Rollback disables new launch and provider create first. It must leave stop,
 callback processing, reconciliation, cleanup, and retained evidence running.
 Never release a lease solely because a heartbeat or token expired.
+
+## Generated desktop contract
+
+`contracts/desktop-v1.openapi.json` is the only generated wire contract for the
+Tauri companion. It contains the token exchange and capture lifecycle routes
+mounted under `/desktop/v1`; it deliberately excludes the authenticated browser
+launch routes under `/internal/v1/desktop-capture`.
+
+Regenerate the artifact after changing a desktop route or its Pydantic model:
+
+```bash
+just desktop-openapi
+```
+
+Verify that the checked-in artifact is current without changing it:
+
+```bash
+just desktop-openapi-check
+```
+
+The Python snapshot test runs the same comparison in the normal test suite.
 
 ## Deferred product decision: scratchpad
 
