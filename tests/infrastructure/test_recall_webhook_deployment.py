@@ -570,7 +570,46 @@ def test_production_plan_uploads_only_nonsecret_immutable_attestation() -> None:
     assert "0 | 2) ;;" in plan_step
     assert "OpenTofu plan returned an unexpected exit status." in plan_step
     assert 'if [ "$plan_exit" -eq 1 ]' not in plan_step
-    assert "jq -cS 'del(.timestamp)'" in plan_workflow
+    canonical_filter = (
+        "del(.timestamp) | .relevant_attributes |= "
+        "((. // []) | sort_by(.resource, .attribute))"
+    )
+    canonical_command = f"jq -cS '{canonical_filter}'"
+    assert canonical_command in plan_workflow
+    assert canonical_command in _read(".github/workflows/infra_apply.yml")
+
+    plan_a = {
+        "timestamp": "first",
+        "resource_changes": [{"address": "example.stable"}],
+        "relevant_attributes": [
+            {"resource": "example.same", "attribute": ["a.b"]},
+            {"resource": "example.same", "attribute": ["a", "b"]},
+            {"resource": "example.same", "attribute": [0]},
+            {"resource": "example.same", "attribute": ["0"]},
+        ],
+    }
+    plan_b = {
+        **plan_a,
+        "timestamp": "second",
+        "relevant_attributes": list(reversed(plan_a["relevant_attributes"])),
+    }
+
+    def canonicalize(plan: dict[str, object]) -> str:
+        return subprocess.run(
+            ["jq", "-cS", canonical_filter],
+            check=True,
+            capture_output=True,
+            input=json.dumps(plan),
+            text=True,
+        ).stdout
+
+    assert canonicalize(plan_a) == canonicalize(plan_b)
+    assert canonicalize(plan_a) != canonicalize(
+        {**plan_a, "resource_changes": [{"address": "example.changed"}]}
+    )
+    assert canonicalize({"timestamp": "first"}) == canonicalize(
+        {"timestamp": "second", "relevant_attributes": None}
+    )
     assert "configuration_sha256" in plan_workflow
     assert "provider_lock_sha256" in plan_workflow
     assert "tofu_version: 1.12.5" in plan_workflow
