@@ -94,6 +94,14 @@ _js_generate-openapi:
 	# generated route types can dependend on the openapi spec, so we need to regenerate it
 	{{_pnpm}} exec react-router typegen
 
+# generate the provider-neutral contract consumed by the native desktop client
+desktop-openapi *flags:
+	LOG_LEVEL=error uv run python -m app.cli desktop-openapi {{flags}}
+
+# verify the checked-in desktop contract without modifying it
+desktop-openapi-check:
+	just desktop-openapi --check
+
 # TODO watch js files
 # react-router typegen
 # full build for py e2e tests

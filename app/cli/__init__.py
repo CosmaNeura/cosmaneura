@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import cast
 
 import typer
@@ -69,6 +70,41 @@ def dump_openapi(app_target: str = "api_app"):
     openapi = generate_openapi_schema(target_app)
 
     typer.echo(json.dumps(openapi))
+
+
+@app.command("desktop-openapi")
+def desktop_openapi(
+    output: Path = typer.Option(
+        Path("contracts/desktop-v1.openapi.json"),
+        "--output",
+        help="Path for the generated desktop OpenAPI contract.",
+    ),
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Fail if the checked-in contract differs; do not write it.",
+    ),
+) -> None:
+    """Generate or verify the dedicated native desktop API contract."""
+
+    from app.server import api_app
+    from app.utils.desktop_openapi import render_desktop_openapi_schema
+
+    rendered = render_desktop_openapi_schema(api_app)
+    if check:
+        if not output.is_file() or output.read_text() != rendered:
+            typer.echo(
+                f"Desktop OpenAPI contract is stale: {output}. "
+                "Run `just desktop-openapi`.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        typer.echo(f"Desktop OpenAPI contract is current: {output}")
+        return
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(rendered)
+    typer.echo(f"Wrote desktop OpenAPI contract: {output}", err=True)
 
 
 @app.command()
