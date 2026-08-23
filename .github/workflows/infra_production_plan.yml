@@ -133,8 +133,10 @@ jobs:
           set -euo pipefail
           umask 077
 
+          # OpenTofu emits this set-like metadata array in nondeterministic
+          # order. Sort only that array; every substantive plan field remains.
           canonical_plan_sha256=$(tofu show -json tfplan.bin |
-            jq -cS 'del(.timestamp)' |
+            jq -cS 'del(.timestamp) | .relevant_attributes |= ((. // []) | sort_by(.resource, .attribute))' |
             sha256sum |
             awk '{print $1}')
           configuration_sha256=$(

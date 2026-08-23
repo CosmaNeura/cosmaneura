@@ -251,8 +251,10 @@ jobs:
           }
 
           tofu plan -no-color -input=false -out=tfplan.bin
+          # Keep this normalization identical to the protected plan workflow.
+          # OpenTofu does not guarantee relevant_attributes array order.
           canonical_plan_sha256=$(tofu show -json tfplan.bin |
-            jq -cS 'del(.timestamp)' |
+            jq -cS 'del(.timestamp) | .relevant_attributes |= ((. // []) | sort_by(.resource, .attribute))' |
             sha256sum |
             awk '{print $1}')
           if [[ "$canonical_plan_sha256" != "$(jq -er '.canonical_plan_sha256' "$metadata")" ]]; then
