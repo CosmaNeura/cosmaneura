@@ -840,6 +840,12 @@ def test_protected_build_resolves_locally_then_drops_credential_capabilities() -
         assert "GH_TOKEN:" not in build_step
         assert "JAVASCRIPT_BUILD_ENV_JSON:" in build_step
         assert "${{ secrets." not in build_step
+    # common-setup exports the CI/test direnv environment to GITHUB_ENV, so
+    # each protected build step must override PYTHON_ENV at step scope.
+    assert "PYTHON_ENV: production" in production_build
+    assert "PYTHON_ENV: staging" not in production_build
+    assert "PYTHON_ENV: staging" in staging_build
+    assert "PYTHON_ENV: production" not in staging_build
 
     assert production_deploy.index("Resolve production frontend") < (
         production_deploy.index("uses: docker/login-action@")

@@ -443,6 +443,7 @@ jobs:
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/staging-frontend-build.json
+          PYTHON_ENV: staging
       - name: Remove resolved staging frontend configuration
         if: always()
         env:
