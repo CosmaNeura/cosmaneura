@@ -283,7 +283,7 @@
     "securitySchemes": {
       "desktopBearer": {
         "bearerFormat": "opaque",
-        "description": "Short-lived opaque desktop session bearer. Keep it in the Tauri core process and never expose it to the webview.",
+        "description": "Short-lived opaque desktop session bearer. Keep it in the desktop main process and never expose it to the renderer.",
         "scheme": "bearer",
         "type": "http"
       }

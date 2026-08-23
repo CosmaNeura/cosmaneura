@@ -215,7 +215,7 @@ def _stop_url(reference: AuthorizedCaptureSessionReference) -> str:
     )
 
 
-def test_start_authorization_returns_exact_tauri_contract_and_no_store_headers(
+def test_start_authorization_returns_exact_desktop_contract_and_no_store_headers(
     authenticated_client: TestClient,
 ) -> None:
     settings = _settings()

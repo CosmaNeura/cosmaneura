@@ -28,8 +28,8 @@ def _apply_desktop_auth_contract(schema: dict[str, Any]) -> None:
         "scheme": "bearer",
         "bearerFormat": "opaque",
         "description": (
-            "Short-lived opaque desktop session bearer. Keep it in the Tauri "
-            "core process and never expose it to the webview."
+            "Short-lived opaque desktop session bearer. Keep it in the desktop "
+            "main process and never expose it to the renderer."
         ),
     }
 
@@ -69,7 +69,7 @@ def _apply_desktop_auth_contract(schema: dict[str, Any]) -> None:
 
 
 def generate_desktop_openapi_schema(app: FastAPI) -> dict[str, Any]:
-    """Generate the exact public contract exposed to the Tauri companion."""
+    """Generate the exact public contract exposed to the desktop companion."""
 
     simplify_operation_ids(app)
     routes = [

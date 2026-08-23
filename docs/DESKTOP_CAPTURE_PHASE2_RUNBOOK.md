@@ -17,7 +17,7 @@ Phase 2 may merge only as dormant backend capability. It provides:
   `external_async_transcript` ingest;
 - short-lived PKCE launch and authorization-code exchange;
 - scheduling-source-neutral provider pages for encounter selection, consent
-  attestation, and the browser-to-Tauri handoff;
+  attestation, and the browser-to-desktop handoff;
 - pre-telemetry removal and one-time browser consumption of launch material;
 - a hash-only, revocable desktop session bearer with a hard six-hour maximum;
 - a one-use provider upload capability with a hard five-minute maximum;
@@ -75,8 +75,8 @@ released.
 Do not enable desktop capture for patient traffic until all of the following
 are reviewed and evidenced:
 
-1. Keep the checked-in `/desktop/v1` contract and Tauri core wire shapes in
-   lockstep. Prove possession of the installation key bound by the launch
+1. Keep the checked-in `/desktop/v1` contract and desktop main-process wire
+   shapes in lockstep. Prove possession of the installation key bound by the launch
    thumbprint, or remove that field rather than treating an unproved thumbprint
    as authority.
 2. Wire the real provider dependency only in a separately reviewed change;
@@ -89,7 +89,7 @@ are reviewed and evidenced:
 5. Resolve ambiguous Scribe preparation and provider-create outcomes through
    provider-supported lookup or reviewed operator reconciliation. Never replay
    a create blindly.
-6. Keep the Tauri local stop fail-safe independent from backend reachability;
+6. Keep the Electron local stop fail-safe independent from backend reachability;
    backend stop is evidence and coordination, not the sole audio-stop control.
 7. Provision protected settings and credentials, apply the scheduler as a
    singleton, and prove value-free health/alerting before enabling any tenant.
@@ -106,7 +106,7 @@ Never release a lease solely because a heartbeat or token expired.
 ## Generated desktop contract
 
 `contracts/desktop-v1.openapi.json` is the only generated wire contract for the
-Tauri companion. It contains the token exchange and capture lifecycle routes
+desktop companion. It contains the token exchange and capture lifecycle routes
 mounted under `/desktop/v1`; it deliberately excludes the authenticated browser
 launch routes under `/internal/v1/desktop-capture`. Those routes are consumed
 only by the authenticated `/desktop-capture` and `/desktop-capture/connect`
@@ -125,6 +125,19 @@ just desktop-openapi-check
 ```
 
 The Python snapshot test runs the same comparison in the normal test suite.
+
+## Desktop delivery framework
+
+Electron is the only active desktop delivery framework through 2028-08-23. Its
+main process owns PKCE, desktop bearer and capability storage, `/desktop/v1`
+calls, the capture-provider adapter, and the local stop fail-safe. The sandboxed
+renderer is presentation-only and receives neither credentials nor raw capture
+capabilities.
+
+Tauri remains on the long-term roadmap for a wholly owned vertical stack after
+CosmaNeura owns the native capture engine. It is retained as architecture
+research, not as a parallel delivery target during this 24-month Electron
+horizon. The canonical decision is ADR 0019 in `cosmaneura-architecture`.
 
 ## Deferred product decision: scratchpad
 

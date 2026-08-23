@@ -2,9 +2,9 @@
 
 Start and heartbeat requests re-resolve their bearer against current server
 authority. Stop is a bounded safety exception that accepts only an exact issued
-bearer/session/lease/capability binding and can only narrow state. The Tauri
-core supplies no tenant, actor, consent, lease, or provider authority in the
-body.
+bearer/session/lease/capability binding and can only narrow state. The desktop
+main process supplies no tenant, actor, consent, lease, or provider authority in
+the body.
 """
 
 from __future__ import annotations

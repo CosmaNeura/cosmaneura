@@ -226,7 +226,7 @@ def authorize_desktop_capture_launch(
     clinician: Annotated[RealClinicianContext, Depends(require_real_clinician)],
     settings: Annotated[DesktopCaptureSettings, Depends(get_desktop_capture_settings)],
 ) -> AuthorizationCodeResponse:
-    """Bind a launch ticket to the same clinician and Tauri PKCE proof."""
+    """Bind a launch ticket to the same clinician and desktop PKCE proof."""
 
     try:
         issued = authorize_launch_ticket(

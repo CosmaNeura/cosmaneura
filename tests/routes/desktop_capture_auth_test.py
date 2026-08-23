@@ -145,7 +145,7 @@ def _launch_url(reference: AuthorizedCaptureSessionReference) -> str:
     )
 
 
-def test_browser_launch_and_pkce_exchange_return_exact_tauri_grant(
+def test_browser_launch_and_pkce_exchange_return_exact_desktop_grant(
     authenticated_client: TestClient,
 ):
     reference = _ready_reference()

@@ -48,8 +48,8 @@ def test_desktop_openapi_models_core_only_bearer_and_required_idempotency() -> N
         "scheme": "bearer",
         "bearerFormat": "opaque",
         "description": (
-            "Short-lived opaque desktop session bearer. Keep it in the Tauri "
-            "core process and never expose it to the webview."
+            "Short-lived opaque desktop session bearer. Keep it in the desktop "
+            "main process and never expose it to the renderer."
         ),
     }
     for path, path_item in schema["paths"].items():
@@ -87,8 +87,9 @@ def test_desktop_openapi_documents_value_free_error_shape() -> None:
         }
 
 
-def test_desktop_openapi_uses_tauri_boundary_language() -> None:
+def test_desktop_openapi_uses_framework_neutral_boundary_language() -> None:
     rendered = json.dumps(generate_desktop_openapi_schema(api_app))
 
     assert "Electron" not in rendered
-    assert "Tauri" in rendered
+    assert "Tauri" not in rendered
+    assert "desktop main process" in rendered
