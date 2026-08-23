@@ -190,10 +190,10 @@ build_push: _production_build_assertions
 	# Only the deployable Python image is published. The JS builder image stays on
 	# the ephemeral hosted runner and is never used as a remote cache artifact.
 	@registry_image="$(just _validated_registry_host)/cosmaneura/cosmaneura"; \
-		docker tag "{{PYTHON_IMAGE_TAG}}" "$registry_image:{{GIT_SHA}}"; \
-		docker push "$registry_image:{{GIT_SHA}}"; \
-		docker tag "{{PYTHON_IMAGE_TAG}}" "$registry_image:latest"; \
-		docker push "$registry_image:latest"
+		docker tag "{{PYTHON_IMAGE_TAG}}" "${registry_image}:{{GIT_SHA}}"; \
+		docker push "${registry_image}:{{GIT_SHA}}"; \
+		docker tag "{{PYTHON_IMAGE_TAG}}" "${registry_image}:latest"; \
+		docker push "${registry_image}:latest"
 
 # dump json output of the built image, ex: j build_inspect '.Config.Env'
 build_inspect *flags:
