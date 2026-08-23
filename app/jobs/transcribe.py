@@ -26,6 +26,7 @@ from app.configuration.azure import (
     AZURE_UPLOADS_CONTAINER_NAME,
 )
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -48,13 +49,17 @@ def perform(visit_audio_file_id: str | TypeIDType):
     Perform transcription via assembly of visit audio or video file.
     """
 
-    log.info("starting transcription job", visit_audio_file_id=visit_audio_file_id)
+    log.info(
+        "starting transcription job",
+        audio_ref=provider_log_ref(str(visit_audio_file_id)),
+    )
     visit_audio_file = VisitAudioFile.get(id=visit_audio_file_id)
     assert visit_audio_file
 
     # TODO extract out to helper
-    sentry_sdk.set_user({"id": visit_audio_file.doctor_id})
-    log.local(doctor_id=visit_audio_file.doctor_id)
+    doctor_ref = provider_log_ref(str(visit_audio_file.doctor_id))
+    sentry_sdk.set_user({"id": doctor_ref})
+    log.local(doctor_ref=doctor_ref)
 
     existing_transcript = AIVisitTranscript.get(
         doctor_id=visit_audio_file.doctor_id,
@@ -93,7 +98,7 @@ perform_celery = celery_app.task(perform)
 
 # TODO we lose the typing with this approach... is there a better way?
 def queue(*args, **kwargs):
-    log.info("queuing transcription", args=args, kwargs=kwargs)
+    log.info("queuing transcription")
     perform_celery.delay(*args, **kwargs)
 
 
@@ -106,7 +111,10 @@ def queue_schema_transcription(transcript: AIVisitTranscript):
     ).all()
 
     if not note_schemas:
-        log.warning("no note schemas found for doctor", doctor_id=transcript.doctor_id)
+        log.warning(
+            "no note schemas found for doctor",
+            doctor_ref=provider_log_ref(str(transcript.doctor_id)),
+        )
         return
 
     for schema in cast(list[DoctorNoteSchema], note_schemas):
@@ -128,7 +136,7 @@ def download_blob(visit: VisitAudioFile) -> str:
         blob=filename,
     )
 
-    log.info("blob download starting", temp_path=temp_download_path)
+    log.info("blob download starting")
 
     # TODO Set a timeout, this seems to hang.
     download_stream = blob_client.download_blob(max_concurrency=8)
@@ -137,7 +145,7 @@ def download_blob(visit: VisitAudioFile) -> str:
         for chunk in download_stream.chunks():
             file.write(chunk)
 
-    log.info("blob download complete", temp_path=temp_download_path)
+    log.info("blob download complete")
 
     return temp_download_path
 
@@ -151,7 +159,7 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
     try:
         temp_download_path = download_blob(visit)
 
-        log.info("extracting audio from video", output_path=temp_audio_path)
+        log.info("extracting audio from video")
         extract_audio_from_video(
             video_path=temp_download_path,
             format=format,
@@ -162,7 +170,7 @@ def extract_audio_to_temp(visit: VisitAudioFile, format: str) -> str:
 
     finally:
         if temp_download_path and os.path.exists(temp_download_path):
-            log.info("cleaning up temp download file", path=temp_download_path)
+            log.info("cleaning up temp download file")
             os.remove(temp_download_path)
 
 
@@ -187,7 +195,7 @@ def extract_audio_from_video(
 
 # Function to transcribe and concatenate results
 def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
-    log.info("starting audio transcription", file_name=visit_audio_file.azure_file_name)
+    log.info("starting audio transcription")
     audio_file = ""
 
     try:
@@ -203,23 +211,21 @@ def transcribe_audio(visit_audio_file: VisitAudioFile) -> TranscriptionResult:
         transcriber = assembly.Transcriber()
         config = assembly.TranscriptionConfig(speaker_labels=True, speakers_expected=2)
 
-        log.info("transcribing audio", audio_file=audio_file)
+        log.info("transcribing audio")
         transcript = transcriber.transcribe(audio_file, config)
-    except Exception as e:
-        log.error("transcription failed", audio_file=audio_file, error=e)
-        raise ValueError(f"Transcription failed: {e}")
+    except Exception as exc:
+        log.error("transcription failed", error_type=type(exc).__name__)
+        raise ValueError("Transcription failed") from exc
     else:
         if (
             transcript.status == assembly.TranscriptStatus.error
             or transcript.utterances is None
         ):
-            log.error(
-                "transcription failed", audio_file=audio_file, error=transcript.error
-            )
-            raise ValueError(f"Transcription failed: {transcript.error}")
+            log.error("transcription failed", provider_status="error")
+            raise ValueError("Transcription failed")
     finally:
         if audio_file and os.path.exists(audio_file):
-            log.info("cleaning up audio file", path=audio_file)
+            log.info("cleaning up audio file")
             os.remove(audio_file)
 
     # AssemblyAI labels speakers "A"/"B"; map those onto Doctor/Patient. Shared
@@ -272,14 +278,14 @@ def label_speakers(entries: list[TranscriptEntry]) -> list[TranscriptEntry]:
     synthetic_by_raw = {raw: chr(ord("A") + i) for i, raw in enumerate(raw_labels)}
     raw_by_synthetic = {syn: raw for raw, syn in synthetic_by_raw.items()}
 
-    log.info("identifying speakers", raw_labels=raw_labels)
+    log.info("identifying speakers", speaker_count=len(raw_labels))
     sample = "\n".join(
         f"{synthetic_by_raw[e.speaker]}: {e.content}" for e in entries[:10]
     )
     classification = identify_doctor_from_transcript(sample)
     doctor_synthetic = extract_doctor_classification(classification)
     if doctor_synthetic is None:
-        log.error("speaker identification failed", classification=classification)
+        log.error("speaker identification failed")
         raise ValueError("Could not extract doctor classification from reasoning.")
 
     doctor_raw = raw_by_synthetic.get(doctor_synthetic)

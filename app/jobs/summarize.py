@@ -11,6 +11,7 @@ from typing import Any, cast
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.terminology import (
     DEFAULT_TERMS,
     Terms,
@@ -18,6 +19,7 @@ from app.services.terminology import (
     transcript_label_note,
 )
 
+from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -32,10 +34,15 @@ from app.models.note_type_customization import (
     PronounStyle,
     SubjectiveSource,
 )
+from sqlmodel import select
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
-    log.info("starting summarization", transcript_id=transcript_id, schema_id=schema_id)
+    log.info(
+        "starting summarization",
+        transcript_ref=provider_log_ref(str(transcript_id)),
+        schema_ref=provider_log_ref(str(schema_id)),
+    )
 
     trigger = AIVisitTranscript.get(id=transcript_id)
     assert trigger
@@ -51,9 +58,13 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
         list[AIVisitTranscript],
         list(
             AIVisitTranscript.where(
-                AIVisitTranscript.appointment_id == trigger.appointment_id
+                AIVisitTranscript.appointment_id == trigger.appointment_id,
+                cast(Any, AIVisitTranscript.deleted_at).is_(None),
             )
-            .order_by(cast(Any, AIVisitTranscript.created_at).asc())
+            .order_by(
+                cast(Any, AIVisitTranscript.created_at).asc(),
+                cast(Any, AIVisitTranscript.id).asc(),
+            )
             .all()
         ),
     )
@@ -70,8 +81,8 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     if existing_note and existing_note.ai_transcript_id == latest.id:
         log.info(
             "note already reflects latest transcript, skipping summarization",
-            appointment_id=str(trigger.appointment_id),
-            schema_id=schema_id,
+            appointment_ref=provider_log_ref(str(trigger.appointment_id)),
+            schema_ref=provider_log_ref(str(schema_id)),
         )
         return
 
@@ -106,36 +117,118 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     log.info("augmenting clinical note")
     note = augment_clinical_note(original=note, transcript=merged)
 
-    appointment = Appointment.one(trigger.appointment_id)
-
     # CC == cheif complaint.
     appointment_name = note.get("CC", "General Appointment")
 
     # TODO unclear if we definitely want the intake appointment name to always override the appointment_name above
     # intake will not always exist, but if it does, let's pull the appointment name
-    intake = Intake.get(appointment_id=appointment.id)
+    intake = Intake.get(appointment_id=trigger.appointment_id)
     if intake and intake.cleaned_external_intake_data:
         data = intake.cleaned_external_intake_data
         appointment_name = f"{data.appointment_type} -- {data.reason_for_visit}"
 
-    appointment.appointment_name = appointment_name
-    # TODO can we add an appointment summary here? Maybe a separate openai call?
-    appointment.save()
-
-    # Replace any stale note for this (appointment, schema). We hard-delete
-    # because AIVisitNote has no soft-deletion mixin and the previous note
-    # was generated from a now-incomplete subset of segments.
-    if existing_note:
-        existing_note.delete()
-
-    log.info("saving visit note")
-    AIVisitNote(
-        doctor_id=trigger.doctor_id,
-        appointment_id=trigger.appointment_id,
-        ai_transcript_id=latest.id,
-        doctor_note_schema_id=schema.id,
+    _finalize_generated_note(
+        trigger=trigger,
+        schema=schema,
+        generated_through_transcript_id=latest.id,
         note=note,
-    ).save()
+        appointment_name=appointment_name,
+    )
+
+
+def _finalize_generated_note(
+    *,
+    trigger: AIVisitTranscript,
+    schema: DoctorNoteSchema,
+    generated_through_transcript_id: TypeIDType,
+    note: dict[str, str],
+    appointment_name: str,
+) -> bool:
+    """Commit a generated note only while its transcript snapshot is current.
+
+    The appointment row is the shared serialization lock for transcript ingest
+    and note finalization.  Recall transcript ingest takes the same lock before
+    inserting a new segment, so a worker cannot validate an old snapshot while
+    a newer segment is being committed.  The database unique constraint on
+    ``(appointment_id, doctor_note_schema_id)`` is the final duplicate guard for
+    broker redelivery and concurrent workers.
+
+    Returns ``True`` when a new note was committed and ``False`` when another
+    worker already committed this snapshot or this worker generated from a
+    snapshot that is no longer current.
+    """
+
+    with get_session() as session:
+        appointment = session.exec(
+            select(Appointment)
+            .where(Appointment.id == trigger.appointment_id)
+            .with_for_update()
+        ).one()
+        current_latest = session.exec(
+            select(AIVisitTranscript)
+            .where(
+                AIVisitTranscript.appointment_id == trigger.appointment_id,
+                cast(Any, AIVisitTranscript.deleted_at).is_(None),
+            )
+            .order_by(
+                cast(Any, AIVisitTranscript.created_at).desc(),
+                cast(Any, AIVisitTranscript.id).desc(),
+            )
+            .limit(1)
+        ).one_or_none()
+        existing_note = session.exec(
+            select(AIVisitNote).where(
+                AIVisitNote.appointment_id == trigger.appointment_id,
+                AIVisitNote.doctor_note_schema_id == schema.id,
+            )
+        ).one_or_none()
+
+        if (
+            current_latest is None
+            or current_latest.id != generated_through_transcript_id
+        ):
+            log.info(
+                "stale visit note generation skipped",
+                appointment_ref=provider_log_ref(str(trigger.appointment_id)),
+                schema_ref=provider_log_ref(str(schema.id)),
+            )
+            return False
+
+        if (
+            existing_note is not None
+            and existing_note.ai_transcript_id == generated_through_transcript_id
+        ):
+            log.info(
+                "visit note generation already committed",
+                appointment_ref=provider_log_ref(str(trigger.appointment_id)),
+                schema_ref=provider_log_ref(str(schema.id)),
+            )
+            return False
+
+        # Keep the existing replace-on-new-segment behavior, including a fresh
+        # note id, but perform the delete and insert in one locked transaction.
+        if existing_note is not None:
+            session.delete(existing_note)
+            session.flush()
+
+        log.info(
+            "saving visit note",
+            appointment_ref=provider_log_ref(str(trigger.appointment_id)),
+            schema_ref=provider_log_ref(str(schema.id)),
+        )
+        session.add(
+            AIVisitNote(
+                doctor_id=trigger.doctor_id,
+                appointment_id=trigger.appointment_id,
+                ai_transcript_id=generated_through_transcript_id,
+                doctor_note_schema_id=schema.id,
+                note=note,
+            )
+        )
+        appointment.appointment_name = appointment_name
+        session.add(appointment)
+        session.commit()
+        return True
 
 
 def _merge_transcripts(
@@ -177,7 +270,7 @@ perform_celery = celery_app.task(perform)
 
 
 def queue(*args, **kwargs):
-    log.info("queuing summarization job", args=args, kwargs=kwargs)
+    log.info("queuing summarization job")
     perform_celery.delay(*args, **kwargs)
 
 

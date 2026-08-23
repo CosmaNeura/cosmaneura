@@ -20,32 +20,58 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCE_GROUP="cosmaneura-staging"
 ENVIRONMENT_NAME="cosmaneura-staging-app-environment"
 MIGRATION_JOB="cosmaneura-staging-migrate"
-# Containers whose health gates the deploy: if one of these does not come up,
-# staging is genuinely broken and the deploy must fail.
-CRITICAL_CONTAINERS="cosmaneura-staging-app cosmaneura-staging-worker"
-
-# Auxiliary containers: still deployed and still checked, but a failure is
-# reported instead of fatal. Empty on purpose — see below.
-#
-# staging used to deploy cosmaneura-staging-app-jmon (Flower, the Celery
-# job-monitor UI) here. It was removed rather than merely demoted, because its
-# health check could never have passed: the azurerm_container_app "job-monitor"
-# block in main.tf is entirely commented out, FLOWER_PORT included, so Flower
-# has nothing to bind to. The container that still answers in Azure is drift —
-# Terraform does not manage it. Deploying it meant pushing an image to an
-# unmanaged container and then waiting on a probe with no possible outcome.
-#
-# Production is unaffected: infra/ still deploys its own jmon, and that one is
-# configured.
-AUXILIARY_CONTAINERS=""
+BACKEND_CONTAINERS="cosmaneura-staging-worker cosmaneura-staging-scheduler"
 API_CONTAINER="cosmaneura-staging-app"
+CRITICAL_CONTAINERS="$BACKEND_CONTAINERS $API_CONTAINER"
 WORKER_CONTAINER="cosmaneura-staging-worker"
+CONTAINERS="$BACKEND_CONTAINERS $API_CONTAINER"
+SCHEDULER_CONTAINER="cosmaneura-staging-scheduler"
 GRANT_SECRET_ENV_NAME="SOVEREIGN_RECORD_GRANT_SECRET"
 GRANT_SECRET_RESOURCE_NAME="sovereign-record-grant-secret"
+RECALL_SECRET_ENV_NAME="RECALL_WEBHOOK_SECRET"
+RECALL_SECRET_RESOURCE_NAME="recall-webhook-secret"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
-# Staging intentionally co-locates beat with its worker, but this command is
-# source-owned so a deploy cannot silently preserve stale Azure arguments.
-STAGING_WORKER_COMMAND="$(yq -r '.worker' "$SCRIPT_DIR/../Procfile") --beat --scheduler redbeat.RedBeatScheduler"
+STAGING_WORKER_COMMAND=$(yq -r '.worker' "$SCRIPT_DIR/../Procfile")
+SCHEDULER_COMMAND=$(yq -r '.scheduler // ""' "$SCRIPT_DIR/../Procfile")
+
+# Preserve explicit deployment controls before direnv renders the secret
+# bundle. `direnv export` emits a delta, so values inherited unchanged by the
+# rendered environment may be absent from its JSON output.
+ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-false}"
+ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"
+
+if [[ "$ENABLE_PROVIDER_V7" != "true" && "$ENABLE_PROVIDER_V7" != "false" ]]; then
+	echo "ENABLE_PROVIDER_V7 must be true or false."
+	exit 1
+fi
+
+# Resolve protected configuration before invoking git, Docker, Azure, or any
+# other provider-facing subprocess. Keep the resolved JSON in this shell only,
+# then drop the ambient capabilities immediately. ENV_JSON is deliberately not
+# exported, so child processes receive only values passed to them explicitly.
+if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
+	echo "Failed to load staging deployment configuration."
+	exit 1
+fi
+unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
+
+# Keep the provider-v7 runtime gates synchronized even when the inherited
+# control was omitted from direnv's delta.
+if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
+	--arg enabled "$ENABLE_PROVIDER_V7" \
+	'. + {
+		AUTHORITY_KERNEL_ENABLED: $enabled,
+		AGENT_API_ENABLED: $enabled
+	}'); then
+	echo "Failed to reconcile provider V7 staging configuration."
+	exit 1
+fi
+
+if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" && \
+	"$ENABLE_SOVEREIGN_RECORD_GRANTS" != "false" ]]; then
+	echo "ENABLE_SOVEREIGN_RECORD_GRANTS must be true or false."
+	exit 1
+fi
 
 # Check for Git SHA input and validate it exists in repo
 if [[ -z "$GIT_SHA" ]]; then
@@ -100,42 +126,6 @@ REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
 
 echo "Revision string: $REVISION_STRING"
 
-# Preserve explicit deployment controls before direnv renders the secret
-# bundle. `direnv export` emits a delta, so values inherited unchanged by the
-# rendered environment are intentionally absent from its JSON output.
-ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-false}"
-ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"
-
-if [[ "$ENABLE_PROVIDER_V7" != "true" && "$ENABLE_PROVIDER_V7" != "false" ]]; then
-	echo "ENABLE_PROVIDER_V7 must be true or false."
-	exit 1
-fi
-
-# Read all staging secrets from 1Password once (same mechanism as tofu uses for production).
-# Must stay in sync with variables.tf python_secret_vars / python_public_vars.
-if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then
-	echo "Failed to load staging deployment configuration."
-	exit 1
-fi
-
-# The preserved control may be absent from direnv's delta when it is inherited.
-# Reconcile the two runtime gates explicitly so a true staging activation can
-# neither be lost nor split into a partially enabled backend.
-if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
-	--arg enabled "$ENABLE_PROVIDER_V7" \
-	'. + {
-		AUTHORITY_KERNEL_ENABLED: $enabled,
-		AGENT_API_ENABLED: $enabled
-	}'); then
-	echo "Failed to reconcile provider V7 staging configuration."
-	exit 1
-fi
-
-if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" && \
-	"$ENABLE_SOVEREIGN_RECORD_GRANTS" != "false" ]]; then
-	echo "ENABLE_SOVEREIGN_RECORD_GRANTS must be true or false."
-	exit 1
-fi
 if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
 	-z "$(echo "$ENV_JSON" | jq -r '.SOVEREIGN_RECORD_GRANT_SECRET // empty')" ]]; then
 	echo "Staging record grants were enabled without a configured key."
@@ -180,6 +170,42 @@ if [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]; then
 	done
 fi
 
+if ! RECALL_WEBHOOK_SECRET_INPUT=$(printf '%s' "$ENV_JSON" |
+	jq -er '.RECALL_WEBHOOK_SECRET | select(type == "string")'); then
+	echo "Staging Recall webhook signing credential is invalid."
+	exit 1
+fi
+if ! RECALL_WEBHOOK_SECRET="$RECALL_WEBHOOK_SECRET_INPUT" \
+	python "$SCRIPT_DIR/../infra/api_only_secret_live_guard.py" \
+	--validate-signing-secret-only; then
+	echo "Staging Recall webhook signing credential is invalid."
+	exit 1
+fi
+unset RECALL_WEBHOOK_SECRET_INPUT
+
+DURABLE_WEBHOOK_INBOX_ENABLED=$(
+	echo "$ENV_JSON" | jq -r '.DURABLE_WEBHOOK_INBOX_ENABLED // "false"'
+)
+if [[ "$DURABLE_WEBHOOK_INBOX_ENABLED" != "true" && \
+	"$DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+	echo "DURABLE_WEBHOOK_INBOX_ENABLED must be true or false."
+	exit 1
+fi
+
+if [[ -z "$SCHEDULER_COMMAND" ]]; then
+	echo "Procfile scheduler command is missing."
+	exit 1
+fi
+
+# Recovery is a deployment prerequisite, not a best-effort extra. Fail before
+# migrations or any Container App mutation when a required workload is absent.
+for container in $CONTAINERS; do
+	if ! az containerapp show -n "$container" -g "$RESOURCE_GROUP" &>/dev/null; then
+		echo "Required staging container $container is missing; apply infrastructure first."
+		exit 1
+	fi
+done
+
 # Must match variables.tf python_secret_vars
 COMMON_SECRET_VARS=(
 	DATABASE_URL REDIS_URL SESSION_SECRET_KEY ENCRYPTION_KEY
@@ -195,7 +221,7 @@ COMMON_SECRET_VARS=(
 # Capability-bearing secrets that only the HTTP API may receive. Never append
 # these to the migration, worker, scheduler, or job-monitor environments.
 API_ONLY_SECRET_VARS=(
-	SOVEREIGN_RECORD_GRANT_SECRET
+	RECALL_WEBHOOK_SECRET
 )
 
 BILLING_SECRET_VARS=(
@@ -225,6 +251,7 @@ PUBLIC_VARS=(
 	AGENT_API_ENABLED AGENT_API_AUDIENCE AGENT_API_SOVEREIGN_CLIENT_IDS
 	AUTHORITY_KERNEL_ENABLED AUTHORITY_CLERK_ISSUER MOUNT_CONTEXT_TOKEN_TTL_SECONDS
 	MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS
+	DURABLE_WEBHOOK_INBOX_ENABLED
 )
 
 wait_for_migration_job_execution() {
@@ -385,8 +412,11 @@ initiate_deployment() {
 	local env_args=()
 	local container_secret_vars=("${COMMON_SECRET_VARS[@]}")
 	local container_public_vars=("${PUBLIC_VARS[@]}")
-	if record_grants_enabled_for "$container_name"; then
+	if [[ "$container_name" == "$API_CONTAINER" ]]; then
 		container_secret_vars+=("${API_ONLY_SECRET_VARS[@]}")
+	fi
+	if record_grants_enabled_for "$container_name"; then
+		container_secret_vars+=(SOVEREIGN_RECORD_GRANT_SECRET)
 	fi
 	if billing_workload_for "$container_name"; then
 		container_public_vars+=("${BILLING_PUBLIC_VARS[@]}")
@@ -435,9 +465,15 @@ initiate_deployment() {
 	if [[ "$container_name" == "$WORKER_CONTAINER" ]]; then
 		update_args+=(--args "$STAGING_WORKER_COMMAND")
 	fi
+	if [[ "$container_name" == "$SCHEDULER_CONTAINER" ]]; then
+		update_args+=(--args "$SCHEDULER_COMMAND")
+	fi
 	local remove_env_vars=()
 	if ! record_grants_enabled_for "$container_name"; then
 		remove_env_vars+=("$GRANT_SECRET_ENV_NAME")
+	fi
+	if [[ "$container_name" != "$API_CONTAINER" ]]; then
+		remove_env_vars+=("$RECALL_SECRET_ENV_NAME")
 	fi
 	if ! billing_integration_enabled_for "$container_name"; then
 		remove_env_vars+=(STRIPE_SECRET_KEY)
@@ -500,6 +536,21 @@ remove_disabled_record_grant_secret() {
 	fi
 }
 
+remove_disallowed_recall_secret() {
+	local container_name=$1
+	if [[ "$container_name" == "$API_CONTAINER" ]]; then
+		return 0
+	fi
+	local secret_count
+	secret_count=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+		--query "properties.configuration.secrets[?name=='$RECALL_SECRET_RESOURCE_NAME'] | length(@)" \
+		-o tsv) || return 1
+	if [[ "$secret_count" != "0" ]]; then
+		az containerapp secret remove -n "$container_name" -g "$RESOURCE_GROUP" \
+			--secret-names "$RECALL_SECRET_RESOURCE_NAME"
+	fi
+}
+
 # Function to check deployment status
 check_deployment() {
 	local container_name=$1
@@ -530,7 +581,16 @@ check_deployment() {
 		fi
 
 		# Validate all conditions
-		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && "$running_state" == "Running" ]]; then
+		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && ( "$running_state" == "Running" || "$running_state" == "RunningAtMaxScale" ) ]]; then
+			if [[ "$container_name" == "$SCHEDULER_CONTAINER" ]]; then
+				local live_scheduler_command
+				live_scheduler_command=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+					--query "properties.template.containers[0].args[0]" -o tsv)
+				if [[ "$live_scheduler_command" != "$SCHEDULER_COMMAND" ]]; then
+					echo "Scheduler command does not match the checked-in Procfile."
+					return 1
+				fi
+			fi
 			echo "$container_name deployment is successful."
 			return 0
 		fi
@@ -552,31 +612,13 @@ if [[ $? -ne 0 ]]; then
 	exit 1
 fi
 
-# Deploy the containers that gate the release first — a failure to even start
-# one of these is fatal.
-for container in $CRITICAL_CONTAINERS; do
+# Deploy and verify recovery workloads before making the new API revision live.
+for container in $BACKEND_CONTAINERS; do
 	initiate_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment initiation failed for $container. Exiting."
 		exit 1
 	fi
-done
-
-# Auxiliary containers: attempt the update, but never block on it. Anything that
-# fails here is skipped in the health check below, since there is nothing new to
-# check for.
-AUXILIARY_TO_CHECK=""
-for container in $AUXILIARY_CONTAINERS; do
-	initiate_deployment "$container" "$GIT_SHA"
-	if [[ $? -ne 0 ]]; then
-		echo "::warning::Could not start deployment for auxiliary container $container — skipping its health check."
-	else
-		AUXILIARY_TO_CHECK="$AUXILIARY_TO_CHECK $container"
-	fi
-done
-
-# Critical containers gate the deploy.
-for container in $CRITICAL_CONTAINERS; do
 	check_deployment "$container" "$GIT_SHA"
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
@@ -584,24 +626,10 @@ for container in $CRITICAL_CONTAINERS; do
 	fi
 done
 
-# Auxiliary containers are reported, never fatal. Given a shorter budget since
-# the result cannot change the outcome.
-AUXILIARY_FAILURES=""
-for container in $AUXILIARY_TO_CHECK; do
-	check_deployment "$container" "$GIT_SHA" 12 # 12 * 5s = 1 minute
-	if [[ $? -ne 0 ]]; then
-		AUXILIARY_FAILURES="$AUXILIARY_FAILURES $container"
-	fi
-done
+initiate_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
+check_deployment "$API_CONTAINER" "$GIT_SHA" || exit 1
 
-if [[ -n "$AUXILIARY_FAILURES" ]]; then
-	# GitHub surfaces ::warning:: in the run summary, so this stays visible
-	# without turning the deploy red.
-	echo "::warning::Auxiliary container(s) did not come up:$AUXILIARY_FAILURES"
-	echo "Staging itself is healthy — these are operator tools and do not block promotion."
-fi
-
-for container in $CRITICAL_CONTAINERS $AUXILIARY_CONTAINERS; do
+for container in $CRITICAL_CONTAINERS; do
 	remove_unowned_billing_secrets "$container"
 	if [[ $? -ne 0 ]]; then
 		echo "Failed to reconcile Stripe secret scope for $container."
@@ -612,10 +640,15 @@ done
 # A false gate is a real revocation, not merely a refusal to add the key on the
 # next revision. Remove any stale app-level secret after the new revisions no
 # longer reference it.
-for container in $CRITICAL_CONTAINERS $AUXILIARY_CONTAINERS; do
+for container in $CRITICAL_CONTAINERS; do
 	remove_disabled_record_grant_secret "$container"
 	if [[ $? -ne 0 ]]; then
 		echo "Failed to reconcile record-grant scope for $container."
+		exit 1
+	fi
+	remove_disallowed_recall_secret "$container"
+	if [[ $? -ne 0 ]]; then
+		echo "Failed to reconcile Recall signing-secret scope for $container."
 		exit 1
 	fi
 done

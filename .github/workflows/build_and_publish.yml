@@ -12,32 +12,33 @@ on:
       terraform_apply_run_id:
         type: string
         description: "Successful Terraform Apply run that authorizes a held production deploy"
-        required: false
+        required: true
+      provider_signed_recall_callback_verified:
+        type: boolean
+        description: "Attest that a real provider-signed non-PHI Recall callback passed immediately before production deploy"
+        required: true
+        default: false
   push:
     branches: [master, staging]
-  pull_request: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # A newer master run must not cancel an in-flight production deployment:
   # cancellation releases the deploy job's cross-workflow mutex while Azure
-  # may still be reconciling revisions. PR and staging runs remain cancellable.
+  # may still be reconciling revisions. Staging runs remain cancellable.
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
+# Long-lived credentials are scoped to the protected deploy jobs below. Pull
+# requests run in the separate, entirely secretless pull_request_checks.yml.
+permissions:
+  contents: read
+
 env:
-  # run `just secrets_ci_grant-github-actions` to set
-  OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
-  VITE_POSTHOG_KEY: ${{ secrets.VITE_POSTHOG_KEY || secrets.POSTHOG_KEY }}
-  VITE_POSTHOG_HOST: ${{ secrets.VITE_POSTHOG_HOST || secrets.POSTHOG_HOST }}
-  CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
-
-  # for the gh-cli
-  GH_TOKEN: ${{ github.token }}
-
-  # required otherwise github api calls are rate limited
-  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # Public, deliberately non-routable test identifier for the secretless
+  # Backend/Frontend verification jobs. Protected deploy jobs override it
+  # with their environment-scoped publishable key.
+  VITE_CLERK_PUBLIC_KEY: pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk
 
   # a important design goal is to avoid custom configuration in CI. This enables tests to be run in a CI-like environment
   # locally, making it easy to replicate CI issues. This is one of the few CI-specific configuration changes since
@@ -57,9 +58,10 @@ jobs:
     outputs:
       production_infra_changed: ${{ steps.classify.outputs.production_infra_changed }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Hold app deployment when production infrastructure changes
         id: classify
         env:
@@ -73,7 +75,11 @@ jobs:
               # workflow manually on master after Terraform Apply is green.
               production_infra_changed=true
             elif ! git diff --quiet "$BEFORE_SHA" "$CURRENT_SHA" -- \
-              infra .env.production.backend .github/workflows/infra_apply.yml Procfile; then
+              infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+              Justfile just Procfile .github/actions \
+              .github/workflows/infra_apply.yml \
+              .github/workflows/infra_production_plan.yml \
+              .github/workflows/build_and_publish.yml; then
               production_infra_changed=true
             fi
           fi
@@ -90,9 +96,10 @@ jobs:
     timeout-minutes: 20
     steps:
       # fetch-depth: 0 so `db_lint` can diff new migrations against origin/master
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
@@ -102,7 +109,7 @@ jobs:
           # prerequisites; omitting them avoids ffmpeg's large apt dependency
           # tree and the Azure mirror stalls it has triggered.
           apt-packages: zsh libnss3-tools
-      - uses: iloveitaly/github-action-localias@master
+      - uses: iloveitaly/github-action-localias@b6ed1f2decb4bc1d4e0e55e7113f61c86a3a004d # master 2026-08-21
         with:
           chrome: true
       - run: just up --fast
@@ -125,7 +132,7 @@ jobs:
 
       # NOTE one important problem with `detached` is if something fails, the github environment does seem to get wiped
       # for instance GITHUB_ENV, seems to be cleared out.
-      - uses: mxschmitt/action-tmate@v3
+      - uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
         with: { detached: true }
 
@@ -134,7 +141,7 @@ jobs:
         # that py_test no longer has continue-on-error). Artifacts upload
         # whenever any earlier step fails, including py_lint or py_test.
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           # playwright traces, screenshots, logs, etc
           # traces and pngs allow us to debug e2e test failures
@@ -149,7 +156,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
       - run: just js_setup
@@ -179,26 +188,46 @@ jobs:
       }}
     environment: production
     env:
-      VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
-      CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
     permissions:
       actions: read
       contents: read
       # TODO why exactly do we need id-token here?
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - name: Require provider-signed callback gate for manual production deploy
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          PROVIDER_CALLBACK_VERIFIED: ${{ inputs.provider_signed_recall_callback_verified }}
+        run: |
+          if [[ "$PROVIDER_CALLBACK_VERIFIED" != "true" ]]; then
+            echo "A real provider-signed non-PHI Recall callback must pass before production deploy." >&2
+            exit 1
+          fi
       - name: Verify successful applicable Terraform Apply
         env:
+          GH_TOKEN: ${{ github.token }}
           TERRAFORM_APPLY_RUN_ID: ${{ inputs.terraform_apply_run_id }}
           TARGET_SHA: ${{ github.sha }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
             TERRAFORM_APPLY_RUN_ID=$(
               gh api \
-                "repos/$GITHUB_REPOSITORY/actions/workflows/infra_apply.yml/runs?branch=master&status=success&per_page=1" \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/infra_apply.yml/runs?branch=master&event=workflow_dispatch&status=success&per_page=1" \
                 --jq '.workflow_runs[0].id // empty'
             )
           fi
@@ -217,8 +246,7 @@ jobs:
             echo "The supplied run is not a successful Terraform Apply on master." >&2
             exit 1
           fi
-          if [[ "${apply_run[3]:-}" != "push" && \
-                "${apply_run[3]:-}" != "workflow_dispatch" ]]; then
+          if [[ "${apply_run[3]:-}" != "workflow_dispatch" ]]; then
             echo "The supplied Terraform Apply run has an invalid trigger." >&2
             exit 1
           fi
@@ -229,7 +257,11 @@ jobs:
             exit 1
           fi
           if ! git diff --quiet "$apply_sha" "$TARGET_SHA" -- \
-            infra .env.production.backend .github/workflows/infra_apply.yml Procfile; then
+            infra .env .env.production.backend .env.production.frontend .envrc .tool-versions \
+            Justfile just Procfile .github/actions \
+            .github/workflows/infra_apply.yml \
+            .github/workflows/infra_production_plan.yml \
+            .github/workflows/build_and_publish.yml; then
             echo "Production infrastructure changed after the supplied Terraform Apply." >&2
             exit 1
           fi
@@ -240,27 +272,89 @@ jobs:
           # are baked into the image, not needed on the host (only zsh, for `just`)
           apt-packages: zsh
 
+      # This verified tool install runs before registry authentication and
+      # before any production secret is bound to a build/deploy step.
+      - uses: ./.github/actions/install-nixpacks
+
+      - name: Resolve production frontend build configuration
+        env:
+          FRONTEND_ENV_SOURCE: .env.production.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV,
+              OPENAPI_JSON_PATH,
+              VITE_CLERK_PUBLIC_KEY,
+              VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST,
+              VITE_POSTHOG_KEY,
+              VITE_PYTHON_URL,
+              VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_CLERK_TEMPLATE,
+              VITE_SOVEREIGN_PROVIDER_URL
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) then . else error("frontend build configuration is incomplete") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+
       # NOTE registry/Azure vars resolve at step level so the environment scope
       # is active during evaluation — job-level env blocks miss environment vars
-      - uses: docker/login-action@v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
           password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-      - run: just build
+      - name: Build production images from resolved public configuration
+        run: just build
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
           PYTHON_ENV: production
+      - name: Remove resolved production frontend configuration
+        if: always()
+        env:
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/production-frontend-build.json
+        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+      - name: Reverify current master before publishing production images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced during the build; refusing to publish stale images." >&2
+            exit 1
+          fi
       - run: just build_push
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           PYTHON_ENV: production
 
-      - uses: azure/login@v3
+      - uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Reverify current master before production deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$TARGET_SHA" ]]; then
+            echo "Master advanced before deployment; refusing to mutate Azure from a stale commit." >&2
+            exit 1
+          fi
 
       - name: Deploy to Azure
         env:
@@ -268,6 +362,8 @@ jobs:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
           CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
           CONTAINER_REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_PRODUCTION_SERVICE_ACCOUNT_TOKEN }}
+          RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
         run: |
           cd infra && bash deploy.sh ${{ github.sha }}
 
@@ -279,23 +375,29 @@ jobs:
     if: ${{ github.ref == 'refs/heads/staging' && github.event_name == 'push' }}
     environment: staging
     env:
-      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
-      CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
-      CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
-      VITE_CLERK_PUBLIC_KEY: ${{ secrets.VITE_CLERK_PUBLIC_KEY || secrets.CLERK_PUBLISHABLE_KEY }}
-      CLERK_PRIVATE_KEY: ${{ secrets.CLERK_PRIVATE_KEY }}
       ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
       ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
       ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+      DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
       PYTHON_ENV: staging
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - name: Reject unreviewed durable webhook activation
+        env:
+          PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED: ${{ vars.DURABLE_WEBHOOK_INBOX_ENABLED }}
+        run: |
+          if [[ -n "${PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED:-}" && \
+                "$PROTECTED_DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
+            echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false; activation requires a reviewed workflow change."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
@@ -303,20 +405,66 @@ jobs:
           # are baked into the image, not needed on the host (only zsh, for `just`)
           apt-packages: zsh
 
-      - uses: docker/login-action@v4
-        with:
-          registry: ${{ env.CONTAINER_REGISTRY_HOST }}
-          username: ${{ env.CONTAINER_REGISTRY_USERNAME }}
-          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
-      - run: just build
-      - run: just build_push
+      # Keep the verified download ahead of registry login and secret-bearing
+      # build steps, matching production.
+      - uses: ./.github/actions/install-nixpacks
 
-      - uses: azure/login@v3
+      - name: Resolve staging frontend build configuration
+        env:
+          FRONTEND_ENV_SOURCE: .env.staging.frontend
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/staging-frontend-build.json
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN }}
+        run: |
+          set -euo pipefail
+          umask 077
+          just direnv_export "$FRONTEND_ENV_SOURCE" |
+            jq -ce '{
+              NODE_ENV,
+              OPENAPI_JSON_PATH,
+              VITE_CLERK_PUBLIC_KEY,
+              VITE_INTAKE_CHAT_DOMAIN,
+              VITE_POSTHOG_HOST,
+              VITE_POSTHOG_KEY,
+              VITE_PYTHON_URL,
+              VITE_SENTRY_DSN,
+              VITE_SOVEREIGN_CLERK_TEMPLATE,
+              VITE_SOVEREIGN_PROVIDER_URL
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) then . else error("frontend build configuration is incomplete") end' \
+            > "$JAVASCRIPT_BUILD_ENV_JSON"
+          chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          registry: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          username: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          password: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+      - name: Build staging images from resolved public configuration
+        run: just build
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/staging-frontend-build.json
+      - name: Remove resolved staging frontend configuration
+        if: always()
+        env:
+          JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/staging-frontend-build.json
+        run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+      - run: just build_push
+        env:
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+
+      - uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy to Azure Staging
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
+          CONTAINER_REGISTRY_PASSWORD: ${{ secrets.CONTAINER_REGISTRY_PASSWORD }}
+          CONTAINER_REGISTRY_USERNAME: ${{ vars.CONTAINER_REGISTRY_USERNAME || secrets.CONTAINER_REGISTRY_USERNAME }}
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_STAGING_SERVICE_ACCOUNT_TOKEN }}
+          RECALL_WEBHOOK_SECRET: ${{ secrets.RECALL_WEBHOOK_SECRET }}
         run: |
           cd infra-staging && bash deploy.sh ${{ github.sha }}

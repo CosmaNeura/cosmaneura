@@ -10,23 +10,21 @@
 
 GIT_DIRTY := `if [ -n "$(git status --porcelain)" ]; then echo "-dirty"; fi`
 GIT_SHA := `git rev-parse HEAD` + GIT_DIRTY
-# We need to escape double quotes in commit messages.
-GIT_DESCRIPTION := `git log -1 --format=%s | sed 's/"/\\"/g'`
 BUILD_CREATED_AT := `date -u +%FT%TZ`
 NIXPACKS_BUILD_METADATA := (
 	'-e BUILD_COMMIT="' + GIT_SHA + '" ' +
-	'-e BUILD_DESCRIPTION="' + GIT_DESCRIPTION + '" ' +
 	'-e BUILD_CREATED_AT="' + BUILD_CREATED_AT + '" '
 )
 
+# Resolve 1Password references in the shell command substitutions, then strip
+# the 1Password and GitHub credentials before the pinned third-party builder is
+# executed. Runtime values are still passed explicitly as build parameters.
 # NOTE production secrets are *not* included in the image, they are set on deploy
+NIXPACKS_CREDENTIAL_BARRIER := "env -u OP_SERVICE_ACCOUNT_TOKEN -u OP_SOCK -u OP_CONNECT_TOKEN -u GH_TOKEN -u GITHUB_TOKEN -u SENTRY_AUTH_TOKEN -u SENTRY_ORG -u SENTRY_PROJECT OP_CACHE=false"
 PYTHON_NIXPACKS_BUILD_CMD := "nixpacks build ." + \
 	" --name " + PYTHON_IMAGE_TAG + \
 	" " + NIXPACKS_BUILD_METADATA + \
-	" --env PYTHON_ENV=" + env("PYTHON_ENV", "production") + \
 	" --platform=linux/amd64" + \
-	" $(just direnv_export_docker '" + SHARED_ENV_FILE +"' --params)" + \
-	" --inline-cache --cache-from " + PYTHON_PRODUCTION_IMAGE_NAME + ":latest" + \
 	" --label org.opencontainers.image.revision='" + GIT_SHA + "'" + \
 	" --label org.opencontainers.image.created='" + BUILD_CREATED_AT + "'" + \
 	' --label org.opencontainers.image.source="$(just _repo_url)"' + \
@@ -37,14 +35,15 @@ PYTHON_NIXPACKS_BUILD_CMD := "nixpacks build ." + \
 # for this reason, we need to emulate the production environment, then build the assets statically.
 # Also, we can't just mount /app/build/server with -v since the build process removes the entire /app/build directory.
 # Some ENV var are set for us, like NODE_ENV: https://nixpacks.com/docs/providers/node#environment-variables
+# The protected container build intentionally disables Sentry release upload.
+# Until a proven BuildKit secret path exists, release credentials must never
+# enter Docker arguments, image metadata, layers, or a remote cache image.
 JAVASCRIPT_NIXPACKS_BUILD_CMD := "nixpacks build " + WEB_DIR + " " + \
 	" --name " + JAVASCRIPT_IMAGE_TAG + " " + \
 	" " + NIXPACKS_BUILD_METADATA + \
 	" --platform=linux/amd64 " + \
 	" --env VITE_BUILD_COMMIT=" + GIT_SHA + " " + \
-	" --cache-from " + JAVASCRIPT_PRODUCTION_IMAGE_NAME + ":latest --inline-cache" + \
-	" $(just direnv_export_docker '" + JAVASCRIPT_SECRETS_FILE + "' --params) " + \
-	" $(just direnv_export_docker '" + SHARED_ENV_FILE + "' --params) " + \
+	" --env CI=true " + \
 	" --label org.opencontainers.image.description=\"Used for building javascript assets, not for deployment\""
 
 # .env file without any secrets that should exist on all environments
@@ -57,6 +56,44 @@ PYTHON_PRODUCTION_ENV_FILE := ".env.production.backend"
 JAVASCRIPT_SECRETS_FILE := env("JAVASCRIPT_SECRETS_FILE", ".env.production.frontend")
 JAVASCRIPT_BUILD_ENV := if JAVASCRIPT_SECRETS_FILE == ".env.staging.frontend" { "staging" } else { "production" }
 
+# CI resolves only the allowlisted public frontend values in a dedicated
+# credential-bearing step and gives the build the path to that 0600 JSON file.
+# Local builds retain the direct, non-caching 1Password resolution path.
+@_javascript_build_env_args:
+	if [ -n "${JAVASCRIPT_BUILD_ENV_JSON:-}" ]; then \
+		[ -f "$JAVASCRIPT_BUILD_ENV_JSON" ] || { \
+			echo "Resolved frontend build configuration is unavailable." >&2; \
+			exit 1; \
+		}; \
+		build_env_json=$(cat "$JAVASCRIPT_BUILD_ENV_JSON"); \
+	else \
+		build_env_json=$(just direnv_export "{{JAVASCRIPT_SECRETS_FILE}}" | \
+			jq -ce '{NODE_ENV, OPENAPI_JSON_PATH, VITE_CLERK_PUBLIC_KEY, VITE_INTAKE_CHAT_DOMAIN, VITE_POSTHOG_HOST, VITE_POSTHOG_KEY, VITE_PYTHON_URL, VITE_SENTRY_DSN, VITE_SOVEREIGN_CLERK_TEMPLATE, VITE_SOVEREIGN_PROVIDER_URL}'); \
+	fi; \
+	printf '%s\n' "$build_env_json" | \
+		jq -je 'if keys == ["NODE_ENV", "OPENAPI_JSON_PATH", "VITE_CLERK_PUBLIC_KEY", "VITE_INTAKE_CHAT_DOMAIN", "VITE_POSTHOG_HOST", "VITE_POSTHOG_KEY", "VITE_PYTHON_URL", "VITE_SENTRY_DSN", "VITE_SOVEREIGN_CLERK_TEMPLATE", "VITE_SOVEREIGN_PROVIDER_URL"] and all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) then to_entries[] | "--env\u0000", (.key + "=" + .value), "\u0000" else error("invalid frontend build configuration") end' || { \
+			echo "Resolved frontend build configuration has an invalid shape." >&2; \
+			exit 1; \
+		}
+
+# Emit NUL-delimited argv records. The consumer uses xargs -0, so values are
+# never reparsed as shell source even if they contain spaces or metacharacters.
+@_shared_build_env_args:
+	just direnv_export "{{SHARED_ENV_FILE}}" | \
+		jq -je 'if type == "object" and all(keys[]; test("^[A-Z][A-Z0-9_]*$")) and all(.[]; . == null or (type == "string" and (contains("\u0000") | not))) then to_entries[] | select(.value != null) | "--env\u0000", (.key + "=" + .value), "\u0000" else error("invalid shared build configuration") end'
+
+@_python_nixpacks_env_args:
+	just _shared_build_env_args
+	case "${PYTHON_ENV:-production}" in \
+		production | staging) printf '%s\0%s\0' --env "PYTHON_ENV=${PYTHON_ENV:-production}" ;; \
+		*) echo "PYTHON_ENV must be production or staging." >&2; exit 1 ;; \
+	esac; \
+	printf '%s\0%s\0%s\0' --inline-cache --cache-from "$(just _validated_registry_host)/cosmaneura/cosmaneura:latest"
+
+@_javascript_nixpacks_env_args:
+	just _shared_build_env_args
+	just _javascript_build_env_args
+
 # by default, the py image name is pulled from the project name
 PYTHON_IMAGE_NAME := PROJECT_NAME
 PYTHON_IMAGE_TAG := PYTHON_IMAGE_NAME + ":" + GIT_SHA
@@ -65,9 +102,15 @@ PYTHON_IMAGE_TAG := PYTHON_IMAGE_NAME + ":" + GIT_SHA
 JAVASCRIPT_IMAGE_NAME := PYTHON_IMAGE_NAME + "-javascript"
 JAVASCRIPT_IMAGE_TAG := JAVASCRIPT_IMAGE_NAME + ":" + GIT_SHA
 
-CONTAINER_REGISTRY_HOST_SANITIZED := `echo "${CONTAINER_REGISTRY_HOST:-cosmaneuraprodregistry.azurecr.io}" | sed -E 's#^https?://##; s#/$##'`
-PYTHON_PRODUCTION_IMAGE_NAME := CONTAINER_REGISTRY_HOST_SANITIZED + "/cosmaneura/cosmaneura"
-JAVASCRIPT_PRODUCTION_IMAGE_NAME := PYTHON_PRODUCTION_IMAGE_NAME + "-javascript"
+@_validated_registry_host:
+	registry_host="${CONTAINER_REGISTRY_HOST:-cosmaneuraprodregistry.azurecr.io}"; \
+	registry_host="${registry_host#http://}"; \
+	registry_host="${registry_host#https://}"; \
+	registry_host="${registry_host%/}"; \
+	case "$registry_host" in \
+		"" | *[!A-Za-z0-9.-]*) echo "Container registry host has an invalid shape." >&2; exit 1 ;; \
+	esac; \
+	printf '%s' "$registry_host"
 
 [script]
 _production_build_assertions:
@@ -98,7 +141,7 @@ build_javascript: _production_build_assertions
 	@just _banner_echo "Building JavaScript Assets in Container..."
 	rm -rf "{{JAVASCRIPT_PRODUCTION_BUILD_DIR}}" || true
 
-	{{JAVASCRIPT_NIXPACKS_BUILD_CMD}}
+	@just _javascript_nixpacks_env_args | xargs -0 {{NIXPACKS_CREDENTIAL_BARRIER}} {{JAVASCRIPT_NIXPACKS_BUILD_CMD}}
 
 	@just _banner_echo "Extracting JavaScript Assets from Container..."
 
@@ -109,18 +152,22 @@ build_javascript: _production_build_assertions
 
 # dump nixpacks-generated Dockerfile for manual build and production debugging
 build_javascript_dump:
-	{{JAVASCRIPT_NIXPACKS_BUILD_CMD}} --out web
+	@just _javascript_nixpacks_env_args | xargs -0 {{NIXPACKS_CREDENTIAL_BARRIER}} {{JAVASCRIPT_NIXPACKS_BUILD_CMD}} --out web
 
-# support non-macos installations for github actions
+# CI installs the reviewed, checksum-verified Nixpacks release before any
+# registry login or secret-bearing build step. Local developers install it
+# through their package manager.
 _build_requirements:
-	@if ! which nixpacks > /dev/null; then \
-		echo "nixpacks is not installed. Installing...."; \
-		{{ if os() == "macos" { "brew install nixpacks" } else { "curl -sSL https://nixpacks.com/install.sh | bash" } }}; \
+	@if ! command -v nixpacks > /dev/null 2>&1; then \
+		echo "nixpacks is required; CI must run the pinned installer action first." >&2; \
+		exit 1; \
 	fi
 
 # url of the repo on github for build metadata
 @_repo_url:
-	if command -v gh >/dev/null 2>&1; then \
+	if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then \
+		printf '%s/%s' "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY"; \
+	elif command -v gh >/dev/null 2>&1; then \
 		gh repo view --json url --jq ".url" | tr -d " \n"; \
 	else \
 		git remote get-url origin | sed -E 's#git@github.com:#https://github.com/#; s#\.git$##' | tr -d " \n"; \
@@ -137,18 +184,16 @@ _build_requirements:
 # build the docker container using nixpacks
 build: _build_requirements _production_build_assertions build_javascript
 	@just _banner_echo "Building Python Image..."
-	{{PYTHON_NIXPACKS_BUILD_CMD}}
+	@just _python_nixpacks_env_args | xargs -0 {{NIXPACKS_CREDENTIAL_BARRIER}} {{PYTHON_NIXPACKS_BUILD_CMD}}
 
 build_push: _production_build_assertions
-	# JS image is not used in prod, but is used for nixpacks caching, so we push to the registry
-	docker tag {{PYTHON_IMAGE_TAG}} {{PYTHON_PRODUCTION_IMAGE_NAME}}:{{GIT_SHA}}
-	docker push {{PYTHON_PRODUCTION_IMAGE_NAME}}:{{GIT_SHA}}
-
-	docker tag {{PYTHON_IMAGE_TAG}} {{PYTHON_PRODUCTION_IMAGE_NAME}}:latest
-	docker push {{PYTHON_PRODUCTION_IMAGE_NAME}}:latest
-
-	docker tag {{JAVASCRIPT_IMAGE_TAG}} {{JAVASCRIPT_PRODUCTION_IMAGE_NAME}}:latest
-	docker push {{JAVASCRIPT_PRODUCTION_IMAGE_NAME}}:latest
+	# Only the deployable Python image is published. The JS builder image stays on
+	# the ephemeral hosted runner and is never used as a remote cache artifact.
+	@registry_image="$(just _validated_registry_host)/cosmaneura/cosmaneura"; \
+		docker tag "{{PYTHON_IMAGE_TAG}}" "$registry_image:{{GIT_SHA}}"; \
+		docker push "$registry_image:{{GIT_SHA}}"; \
+		docker tag "{{PYTHON_IMAGE_TAG}}" "$registry_image:latest"; \
+		docker push "$registry_image:latest"
 
 # dump json output of the built image, ex: j build_inspect '.Config.Env'
 build_inspect *flags:
@@ -161,7 +206,7 @@ build_dive: (_brew_check_and_install "dive")
 
 # dump nixpacks-generated Dockerfile for manual build and production debugging
 build_dump:
-	{{PYTHON_NIXPACKS_BUILD_CMD}} --out .
+	@just _python_nixpacks_env_args | xargs -0 {{NIXPACKS_CREDENTIAL_BARRIER}} {{PYTHON_NIXPACKS_BUILD_CMD}} --out .
 
 # clear out nixpacks and other artifacts specific to production containers
 build_clean:

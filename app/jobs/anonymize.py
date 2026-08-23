@@ -15,10 +15,17 @@ from app.configuration.azure import (
     AZURE_DEID_ENDPOINT,
     AZURE_DEID_TENANT_ID,
 )
+from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.ai_visit_transcript_non_phi import AIVisitTranscriptNonPHI
+
+_MAX_LOG_COUNT = 100_000
+
+
+def _transcript_ref(transcript_id: object) -> str:
+    return provider_log_ref(f"transcript:{transcript_id}")
 
 
 def perform(transcript_id: str | TypeIDType) -> None:
@@ -31,15 +38,17 @@ def perform(transcript_id: str | TypeIDType) -> None:
     transcript = AIVisitTranscript.get(id=transcript_id)
     if not transcript or transcript.deleted_at:
         log.info(
-            "transcript already deleted, skipping",
-            transcript_id=str(transcript_id),
+            "transcript deidentification skipped",
+            event_code="transcript_already_deleted",
+            transcript_ref=_transcript_ref(transcript_id),
         )
         return
 
     log.info(
-        "deidentifying transcript for deletion",
-        transcript_id=str(transcript_id),
-        entries=len(transcript.transcript_data),
+        "transcript deidentification started",
+        event_code="transcript_deidentification_started",
+        transcript_ref=_transcript_ref(transcript_id),
+        entry_count=min(len(transcript.transcript_data), _MAX_LOG_COUNT),
     )
 
     deidentified_entries = [
@@ -63,7 +72,11 @@ perform_celery = celery_app.task(name="app.jobs.anonymize.perform")(perform)
 
 
 def queue(transcript_id: str | TypeIDType) -> None:
-    log.info("queuing transcript deletion", transcript_id=str(transcript_id))
+    log.info(
+        "transcript deidentification queued",
+        event_code="transcript_deidentification_queued",
+        transcript_ref=_transcript_ref(transcript_id),
+    )
     perform_celery.delay(transcript_id)
 
 
@@ -83,7 +96,10 @@ def deidentify(phi_text: str) -> str:
         client_secret=AZURE_DEID_CLIENT_SECRET,
     )
 
-    log.info("running deid request")
+    log.info(
+        "deidentification provider request started",
+        event_code="deidentification_request_started",
+    )
 
     # The supported API versions are: 2024-11-15, 2025-07-15-preview
     # Using the stable version 2024-11-15
@@ -96,11 +112,18 @@ def deidentify(phi_text: str) -> str:
     try:
         result = client.deidentify(body)
         assert result.output_text
-    except Exception as e:
-        # Note that we're deliberately not logging the text here, as it is PHI.
-        log.error("error deidentifying text", error=str(e))
+    except Exception:
+        # Exception messages from provider SDKs can contain request bodies or
+        # URLs. Keep the event useful for alerting without serializing either.
+        log.error(
+            "deidentification provider request failed",
+            event_code="deidentification_request_failed",
+        )
         raise
 
-    log.debug("deid Text", output=result.output_text)
+    log.info(
+        "deidentification provider request completed",
+        event_code="deidentification_request_completed",
+    )
 
     return result.output_text

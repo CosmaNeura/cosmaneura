@@ -13,6 +13,7 @@ from typeid.errors import TypeIDException
 import app.commands.intake.chat
 import app.commands.intake.create
 from app.commands.intake.create import AppointmentRequest, AppointmentResponse
+from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import API_KEY_PREFIX, Doctor
 
@@ -49,9 +50,10 @@ def authenticate_api_request_middleware(
 
     request.state.api_user = api_user
 
-    context["api_user"] = api_user
+    api_user_ref = provider_log_ref(f"doctor:{api_user.id}")
+    context["api_user_ref"] = api_user_ref
 
-    sentry_sdk.set_user({"id": api_user.id, "email": api_user.email})
+    sentry_sdk.set_user({"id": api_user_ref})
     sentry_sdk.set_extra("api_user", True)
 
 

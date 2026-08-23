@@ -1,6 +1,7 @@
 # app/services/zoom.py
 import base64
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 import httpx
 
@@ -11,6 +12,7 @@ from app.configuration.zoom import (
     ZOOM_CLIENT_SECRET,
     ZOOM_OAUTH_TOKEN_URL,
 )
+from app.services.external_webhook_inbox import provider_log_ref
 
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
@@ -25,6 +27,16 @@ _TOKEN_EXPIRY_BUFFER = timedelta(minutes=5)
 # is enough for the doctor to come back from a weekend off and still see
 # the alert; if they never come back, the flag self-cleans.
 _REVOKED_FLAG_TTL = timedelta(days=7)
+
+ZoomOperation = Literal[
+    "delete_meeting",
+    "get_meeting",
+    "get_user_meetings",
+    "get_user_profile",
+    "get_zak_token",
+    "refresh_token",
+    "revoke_token",
+]
 
 
 def zoom_revoked_redis_key(doctor_id: str) -> str:
@@ -87,15 +99,28 @@ def _get_doctor_token(
         if error_code == "invalid_grant":
             log.warning(
                 "zoom refresh returned invalid_grant; removing integration",
-                doctor_id=str(integration.doctor_id),
+                doctor_ref=provider_log_ref(str(integration.doctor_id)),
+                operation="refresh_token",
+                status="failed",
+                provider_status=response.status_code,
+                error_type="invalid_grant",
             )
             doctor_id = str(integration.doctor_id)
             integration.delete()
             get_redis().set(
                 zoom_revoked_redis_key(doctor_id), "1", ex=_REVOKED_FLAG_TTL
             )
-            raise ZoomIntegrationInvalid(f"doctor {doctor_id} revoked Zoom OAuth")
+            raise ZoomIntegrationInvalid("Zoom OAuth grant was revoked")
 
+    if not response.is_success:
+        log.warning(
+            "zoom token refresh failed",
+            doctor_ref=provider_log_ref(str(integration.doctor_id)),
+            operation="refresh_token",
+            status="failed",
+            provider_status=response.status_code,
+            error_type="provider_http_error",
+        )
     response.raise_for_status()
     data = response.json()
 
@@ -104,7 +129,13 @@ def _get_doctor_token(
     integration.token_expires_at = now + timedelta(seconds=data["expires_in"])
     integration.save()
 
-    log.info("zoom token refreshed", doctor_id=str(integration.doctor_id))
+    log.info(
+        "zoom token refreshed",
+        doctor_ref=provider_log_ref(str(integration.doctor_id)),
+        operation="refresh_token",
+        status="succeeded",
+        provider_status=response.status_code,
+    )
     return integration.access_token
 
 
@@ -113,6 +144,7 @@ def _zoom_request(
     path: str,
     *,
     integration: DoctorVideoIntegration,
+    operation: ZoomOperation,
     params: dict | None = None,
 ) -> httpx.Response:
     """Make an authenticated Zoom API request, retrying once on 401 with a fresh token."""
@@ -127,7 +159,14 @@ def _zoom_request(
         )
 
     if response.status_code == httpx.codes.UNAUTHORIZED:
-        log.info("zoom token rejected, refreshing", path=path)
+        log.info(
+            "zoom token rejected, refreshing",
+            doctor_ref=provider_log_ref(str(integration.doctor_id)),
+            operation=operation,
+            status="retrying",
+            provider_status=response.status_code,
+            error_type="unauthorized",
+        )
         token = _get_doctor_token(integration, force=True)
         with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
             response = client.request(
@@ -137,6 +176,15 @@ def _zoom_request(
                 headers={"Authorization": f"Bearer {token}"},
             )
 
+    if not response.is_success:
+        log.warning(
+            "zoom provider request failed",
+            doctor_ref=provider_log_ref(str(integration.doctor_id)),
+            operation=operation,
+            status="failed",
+            provider_status=response.status_code,
+            error_type="provider_http_error",
+        )
     return response
 
 
@@ -144,9 +192,12 @@ def _zoom_get(
     path: str,
     *,
     integration: DoctorVideoIntegration,
+    operation: ZoomOperation,
     params: dict | None = None,
 ) -> dict:
-    response = _zoom_request("GET", path, integration=integration, params=params)
+    response = _zoom_request(
+        "GET", path, integration=integration, operation=operation, params=params
+    )
     response.raise_for_status()
     return response.json()
 
@@ -157,7 +208,7 @@ def revoke_token(doctor: Doctor) -> None:
     Errors from Zoom are logged but do not raise — the token may already be invalid.
     """
     integration = get_zoom_integration(doctor)
-    assert integration, f"doctor {doctor.id} has no zoom integration"
+    assert integration, "doctor has no zoom integration"
 
     with httpx.Client(timeout=_HTTPX_TIMEOUT) as client:
         response = client.post(
@@ -169,33 +220,52 @@ def revoke_token(doctor: Doctor) -> None:
     if not response.is_success:
         log.warning(
             "zoom token revoke returned error",
-            status=response.status_code,
-            body=response.text,
+            doctor_ref=provider_log_ref(str(doctor.id)),
+            operation="revoke_token",
+            status="failed",
+            provider_status=response.status_code,
+            error_type="provider_http_error",
         )
     else:
-        log.info("zoom token revoked", doctor_id=str(doctor.id))
+        log.info(
+            "zoom token revoked",
+            doctor_ref=provider_log_ref(str(doctor.id)),
+            operation="revoke_token",
+            status="succeeded",
+            provider_status=response.status_code,
+        )
 
     integration.delete()
 
 
 def get_zak_token(doctor: Doctor) -> str:
     integration = get_zoom_integration(doctor)
-    assert integration, f"doctor {doctor.id} has no zoom integration"
+    assert integration, "doctor has no zoom integration"
 
     data = _zoom_get(
         f"/users/{integration.provider_user_id}/token",
         integration=integration,
+        operation="get_zak_token",
         params={"type": "zak"},
     )
-    log.info("zoom zak token obtained", doctor_id=str(doctor.id))
+    log.info(
+        "zoom zak token obtained",
+        doctor_ref=provider_log_ref(str(doctor.id)),
+        operation="get_zak_token",
+        status="succeeded",
+    )
     return data["token"]
 
 
 def get_user_display_name(doctor: Doctor) -> str:
     integration = get_zoom_integration(doctor)
-    assert integration, f"doctor {doctor.id} has no zoom integration"
+    assert integration, "doctor has no zoom integration"
 
-    data = _zoom_get(f"/users/{integration.provider_user_id}", integration=integration)
+    data = _zoom_get(
+        f"/users/{integration.provider_user_id}",
+        integration=integration,
+        operation="get_user_profile",
+    )
     return (
         f"{data.get('first_name', '')} {data.get('last_name', '')}".strip()
         or data.get("email", "")
@@ -204,25 +274,32 @@ def get_user_display_name(doctor: Doctor) -> str:
 
 def get_meeting_join_url(doctor: Doctor, meeting_id: str) -> str:
     integration = get_zoom_integration(doctor)
-    assert integration, f"doctor {doctor.id} has no zoom integration"
+    assert integration, "doctor has no zoom integration"
 
-    data = _zoom_get(f"/meetings/{meeting_id}", integration=integration)
+    data = _zoom_get(
+        f"/meetings/{meeting_id}",
+        integration=integration,
+        operation="get_meeting",
+    )
     return data["join_url"]
 
 
 def get_user_meetings(doctor: Doctor) -> list[dict]:
     """Fetch upcoming scheduled meetings for the authenticated doctor from Zoom API."""
     integration = get_zoom_integration(doctor)
-    assert integration, f"doctor {doctor.id} has no zoom integration"
+    assert integration, "doctor has no zoom integration"
 
     data = _zoom_get(
         f"/users/{integration.provider_user_id}/meetings",
         integration=integration,
+        operation="get_user_meetings",
         params={"type": "upcoming", "page_size": "100"},
     )
     log.info(
         "zoom meetings fetched",
-        doctor_id=str(doctor.id),
+        doctor_ref=provider_log_ref(str(doctor.id)),
+        operation="get_user_meetings",
+        status="succeeded",
         count=len(data.get("meetings", [])),
     )
     return data.get("meetings", [])
@@ -231,14 +308,20 @@ def get_user_meetings(doctor: Doctor) -> list[dict]:
 def delete_meeting(doctor: Doctor, zoom_meeting_id: str) -> None:
     """Cancel a Zoom meeting by ID."""
     integration = get_zoom_integration(doctor)
-    assert integration, f"doctor {doctor.id} has no zoom integration"
+    assert integration, "doctor has no zoom integration"
 
     response = _zoom_request(
-        "DELETE", f"/meetings/{zoom_meeting_id}", integration=integration
+        "DELETE",
+        f"/meetings/{zoom_meeting_id}",
+        integration=integration,
+        operation="delete_meeting",
     )
     response.raise_for_status()
     log.info(
         "zoom meeting deleted",
-        doctor_id=str(doctor.id),
-        zoom_meeting_id=zoom_meeting_id,
+        doctor_ref=provider_log_ref(str(doctor.id)),
+        meeting_ref=provider_log_ref(zoom_meeting_id),
+        operation="delete_meeting",
+        status="succeeded",
+        provider_status=response.status_code,
     )
