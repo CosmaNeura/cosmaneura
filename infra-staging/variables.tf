@@ -23,7 +23,7 @@ variable "python_secret_vars" {
   type        = set(string)
   default = [
     "DATABASE_URL", "REDIS_URL",
-    "SESSION_SECRET_KEY",
+    "SESSION_SECRET_KEY", "ENCRYPTION_KEY",
     "CLERK_PRIVATE_KEY",
     "SENTRY_DSN", "ASSEMBLY_API_KEY", "SMTP_URL",
     # azure openai secret
@@ -46,6 +46,7 @@ variable "python_api_only_secret_vars" {
   type        = set(string)
   default = [
     "SOVEREIGN_RECORD_GRANT_SECRET",
+    "RECALL_WEBHOOK_SECRET",
   ]
 }
 
@@ -97,7 +98,8 @@ variable "python_public_vars" {
     # provider-first Agent API; exact one-provider allowlist excludes public
     "AGENT_API_ENABLED", "AGENT_API_AUDIENCE", "AGENT_API_SOVEREIGN_CLIENT_IDS",
     "AUTHORITY_KERNEL_ENABLED", "AUTHORITY_CLERK_ISSUER", "MOUNT_CONTEXT_TOKEN_TTL_SECONDS",
-    "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS", "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS"
+    "MOUNT_CONTEXT_TOKEN_REFRESH_AFTER_SECONDS", "MOUNT_CONTEXT_SESSION_MAX_AGE_SECONDS",
+    "DURABLE_WEBHOOK_INBOX_ENABLED"
   ]
 }
 

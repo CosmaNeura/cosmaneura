@@ -625,6 +625,79 @@ resource "azurerm_container_app_environment" "main" {
   # tags = var.tags
 # }
 
+# Celery beat is a required part of the durable webhook boundary.  Keeping it
+# as a single, source-controlled Container App prevents a broker publish crash
+# from stranding a committed inbox row indefinitely.
+resource "azurerm_container_app" "scheduler" {
+  resource_group_name          = azurerm_resource_group.main.name
+  name                         = "${azurerm_resource_group.main.name}-scheduler"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  revision_mode                = "Single"
+
+  template {
+    min_replicas = 1
+    max_replicas = 1
+
+    custom_scale_rule {
+      name             = "scheduler-cpu"
+      custom_rule_type = "cpu"
+      metadata = {
+        type  = "Utilization"
+        value = "80"
+      }
+    }
+
+    container {
+      name   = "${local.base_name}-app-scheduler"
+      image  = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
+      args   = [data.external.procfile.result["scheduler"]]
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      dynamic "env" {
+        for_each = var.python_public_vars
+        content {
+          name  = env.key
+          value = data.external.secrets.result[env.key]
+        }
+      }
+
+      dynamic "env" {
+        for_each = var.python_secret_vars
+        content {
+          name        = env.key
+          secret_name = replace(lower(env.key), "_", "-")
+        }
+      }
+    }
+  }
+
+  dynamic "secret" {
+    for_each = var.python_secret_vars
+    content {
+      name  = replace(lower(secret.key), "_", "-")
+      value = data.external.secrets.result[secret.key]
+    }
+  }
+
+  registry {
+    server               = azurerm_container_registry.main.login_server
+    username             = azurerm_container_registry.main.admin_username
+    password_secret_name = "registry-secret"
+  }
+
+  secret {
+    name  = "registry-secret"
+    value = azurerm_container_registry.main.admin_password
+  }
+
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
+
+  tags = var.tags
+}
+
 # resource "azurerm_container_app" "worker" {
   # resource_group_name = azurerm_resource_group.main.name
   # # NOTE location is determined automatically by the resource group
@@ -989,9 +1062,13 @@ resource "azurerm_federated_identity_credential" "ghactions" {
   audience = ["api://AzureADTokenExchange"]
   issuer   = "https://token.actions.githubusercontent.com"
 
-  # TODO understand how these are constructed
-  # NOTE the casing here is very important, without the exact casing, this will fail
-  subject = "repo:CosmaNeura/cosmaneura:ref:refs/heads/master"
+  # Desired state: bind Azure trust to the protected staging environment. The
+  # live identity already has an environment-subject credential under another
+  # name, so it must be imported/adopted or deliberately renamed under the
+  # reviewed reconciliation hold in infra/README.md before an apply. Applying
+  # this resource directly can collide with the existing issuer/subject pair.
+  # NOTE the casing here is very important; an exact mismatch fails auth.
+  subject = "repo:CosmaNeura/cosmaneura:environment:staging"
 }
 
 # push new containers to ACR

@@ -73,11 +73,14 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert deploy.index(control_default) < deploy.index("if ! ENV_JSON=")
     assert ".ENABLE_SOVEREIGN_RECORD_GRANTS" not in deploy
     assert GRANT_SECRET not in _shell_array(deploy, "COMMON_SECRET_VARS")
-    assert _shell_array(deploy, "API_ONLY_SECRET_VARS").count(GRANT_SECRET) == 1
+    # Recall's always-configured API-only secret is separate from the optional
+    # record-grant capability, which is appended only behind its feature gate.
+    assert GRANT_SECRET not in _shell_array(deploy, "API_ONLY_SECRET_VARS")
     assert 'API_CONTAINER="cosmaneura-staging-app"' in deploy
     assert '"$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true"' in deploy
     assert 'container_secret_vars+=("${API_ONLY_SECRET_VARS[@]}")' in deploy
     assert deploy.count("${API_ONLY_SECRET_VARS[@]}") == 1
+    assert "container_secret_vars+=(SOVEREIGN_RECORD_GRANT_SECRET)" in deploy
     assert "API_ONLY_SECRET_VARS" not in _shell_function(deploy, "run_migrations")
 
     deployment = _shell_function(deploy, "initiate_deployment")
@@ -88,6 +91,7 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     assert "return 1" in deployment[secret_set:app_update]
 
     assert 'remove_env_vars+=("$GRANT_SECRET_ENV_NAME")' in deploy
+    assert '--remove-env-vars "${remove_env_vars[@]}"' in deploy
     assert "az containerapp secret remove" in deploy
     assert '--secret-names "$GRANT_SECRET_RESOURCE_NAME"' in deploy
 
@@ -108,26 +112,36 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     )
 
 
-def test_infrastructure_push_holds_automatic_application_deploy() -> None:
+def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> None:
     workflow = _read(".github/workflows/build_and_publish.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
     plan_workflow = _read(".github/workflows/infra_plan.yml")
+    production_plan_workflow = _read(".github/workflows/infra_production_plan.yml")
 
     assert "production_infra_changed" in workflow
     protected_paths = (
-        "infra .env.production.backend .github/workflows/infra_apply.yml Procfile"
+        "infra .env .env.production.backend .env.production.frontend .envrc "
+        ".tool-versions"
     )
     assert workflow.count(protected_paths) == 2
+    assert workflow.count("Justfile just Procfile .github/actions") == 2
+    assert workflow.count(".github/workflows/infra_apply.yml") >= 2
+    assert workflow.count(".github/workflows/infra_production_plan.yml") >= 2
+    assert workflow.count(".github/workflows/build_and_publish.yml") >= 2
     assert "needs: [web, app, deployment-scope]" in workflow
     assert (
         "needs.deployment-scope.outputs.production_infra_changed != 'true'" in workflow
     )
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "terraform_apply_run_id" in workflow
+    assert "provider_signed_recall_callback_verified" in workflow
+    assert "Require provider-signed callback gate" in workflow
+    assert "real provider-signed non-PHI Recall callback" in workflow
     assert "actions: read" in workflow
     assert "gh api" in workflow
     assert "actions/workflows/infra_apply.yml/runs?" in workflow
     assert '"${apply_run[1]:-}" != ".github/workflows/infra_apply.yml"' in workflow
+    assert '"${apply_run[3]:-}" != "workflow_dispatch"' in workflow
     assert "The supplied run is not a successful Terraform Apply" in workflow
     assert 'git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"' in workflow
     assert 'git diff --quiet "$apply_sha" "$TARGET_SHA" --' in workflow
@@ -136,37 +150,43 @@ def test_infrastructure_push_holds_automatic_application_deploy() -> None:
     assert workflow.count("cancel-in-progress: false") == 1
     assert apply_workflow.count("group: cosmaneura-production-container-apps") == 1
     assert "cancel-in-progress: false" in apply_workflow
-    assert "      - '.env.production.backend'" in apply_workflow
+    apply_trigger = apply_workflow[: apply_workflow.index("permissions:\n")]
+    assert "  push:" not in apply_trigger
+    assert "  workflow_dispatch:" in apply_trigger
+    assert "production_plan_run_id:" in apply_trigger
+    assert "production_plan_artifact_digest:" in apply_trigger
 
-    assert "  issues: write" in plan_workflow
+    assert "      - '.env'" in plan_workflow
     assert "      - '.env.production.backend'" in plan_workflow
-    plan_step = plan_workflow[
-        plan_workflow.index("      - name: tofu plan") : plan_workflow.index(
-            "      - name: Post plan as PR comment"
-        )
-    ]
-    comment_step = plan_workflow[
-        plan_workflow.index("      - name: Post plan as PR comment") :
-    ]
-    assert "continue-on-error" not in plan_step
-    assert "continue-on-error: true" in comment_step
+    assert "      - '.env.production.frontend'" in plan_workflow
+    workflow_scope = plan_workflow[: plan_workflow.index("jobs:\n")]
+    assert "permissions:\n  contents: read" in workflow_scope
+    assert "issues: write" not in plan_workflow
+    assert "pull-requests: write" not in plan_workflow
+    assert "Post plan as PR comment" not in plan_workflow
+    assert "Terraform PR checks (secretless)" in plan_workflow
+    assert "This does not read or diff production state." in plan_workflow
+    assert "environment: production" in production_plan_workflow
+    assert "group: cosmaneura-production-container-apps" in production_plan_workflow
 
     documentation = _read("infra/README.md")
-    assert "Wait for **Terraform Apply**" in documentation
+    assert "Terraform Production Plan" in documentation
+    assert "production_plan_run_id" in documentation
+    assert "production_plan_artifact_digest" in documentation
     assert "`terraform_apply_run_id`" in documentation
+    assert "`provider_signed_recall_callback_verified`" in documentation
+    assert documentation.count("repo:CosmaNeura/cosmaneura:environment:production") >= 3
+    assert "repo:CosmaNeura/cosmaneura:environment:staging" in documentation
+    assert "staging-scoped Azure identity" in documentation
 
 
 def test_terraform_plan_installs_only_required_host_package() -> None:
     workflow = _read(".github/workflows/infra_plan.yml")
-    setup = workflow[
-        workflow.index("      - uses: ./.github/actions/common-setup") : workflow.index(
-            "      - uses: azure/login@v3"
-        )
-    ]
-
-    assert "timeout-minutes: 5" in setup
-    assert "        with:" in setup
-    assert "          apt-packages: zsh" in setup
-    assert "libnss3-tools" not in setup
-    assert "poppler-utils" not in setup
-    assert "ffmpeg" not in setup
+    assert "./.github/actions/common-setup" not in workflow
+    assert "apt-packages:" not in workflow
+    assert (
+        "opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f" in workflow
+    )
+    assert "libnss3-tools" not in workflow
+    assert "poppler-utils" not in workflow
+    assert "ffmpeg" not in workflow
