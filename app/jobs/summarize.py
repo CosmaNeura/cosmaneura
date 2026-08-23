@@ -12,6 +12,12 @@ from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.services.external_webhook_inbox import provider_log_ref
+from app.services.terminology import (
+    DEFAULT_TERMS,
+    Terms,
+    terminology_terms,
+    transcript_label_note,
+)
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -268,30 +274,32 @@ def queue(*args, **kwargs):
     perform_celery.delay(*args, **kwargs)
 
 
-def _pronoun_instruction(style: PronounStyle) -> str:
+def _pronoun_instruction(style: PronounStyle, t: Terms = DEFAULT_TERMS) -> str:
     if style == PronounStyle.infer_from_transcript:
-        return 'Pronouns: When the transcript reveals the patient\'s pronouns -- via self-identification, the doctor\'s use of "she/her" or "he/him" when referring to the patient, or other unambiguous context -- the note MUST use those pronouns when referring to the patient. Do not default to "the patient" everywhere when pronouns are clear from the transcript. Use "they/them" ONLY when no pronoun usage is evident anywhere in the transcript. This overrides any clinical convention of defaulting to "the patient" -- mix in the patient\'s actual pronouns when they are known, even if the example note\'s style differs on this point.'
+        return f'Pronouns: When the transcript reveals the {t.patient}\'s pronouns -- via self-identification, the {t.provider}\'s use of "she/her" or "he/him" when referring to the {t.patient}, or other unambiguous context -- the note MUST use those pronouns when referring to the {t.patient}. Do not default to "the {t.patient}" everywhere when pronouns are clear from the transcript. Use "they/them" ONLY when no pronoun usage is evident anywhere in the transcript. This overrides any clinical convention of defaulting to "the {t.patient}" -- mix in the {t.patient}\'s actual pronouns when they are known, even if the example note\'s style differs on this point.'
     return (
-        'Pronouns: refer to the patient as "the patient"; do not infer pronouns from '
+        f'Pronouns: refer to the {t.patient} as "the {t.patient}"; do not infer pronouns from '
         "the transcript."
     )
 
 
-def _subjective_instruction(source: SubjectiveSource) -> str:
+def _subjective_instruction(source: SubjectiveSource, t: Terms = DEFAULT_TERMS) -> str:
     if source == SubjectiveSource.patient_only:
-        return 'Subjective section: source ONLY from lines spoken by the patient (lines beginning with "Patient:" in the transcript above). The doctor\'s interpretations, diagnostic impressions, follow-up questions, and clinical observations belong in the Assessment or Objective sections, never in Subjective. Phrasings like "the patient reports X" or "the patient denies Y" are acceptable as long as X and Y themselves came from a Patient: line.'
+        return f'Subjective section: source ONLY from lines spoken by the {t.patient} (lines beginning with "Patient:" in the transcript above). The {t.provider}\'s interpretations, diagnostic impressions, follow-up questions, and clinical observations belong in the Assessment or Objective sections, never in Subjective. Phrasings like "the {t.patient} reports X" or "the {t.patient} denies Y" are acceptable as long as X and Y themselves came from a Patient: line.'
     return (
-        "Subjective section: capture the patient's narrative. You may incorporate "
-        "history elicited by the doctor's questions, framed as the patient's report "
-        '(e.g. "the patient reports X"). Keep diagnostic impressions and clinical '
+        f"Subjective section: capture the {t.patient}'s narrative. You may incorporate "
+        f"history elicited by the {t.provider}'s questions, framed as the {t.patient}'s report "
+        f'(e.g. "the {t.patient} reports X"). Keep diagnostic impressions and clinical '
         "observations in the Assessment or Objective sections."
     )
 
 
-def _ordered_instructions(c: NoteTypeCustomization) -> list[str]:
+def _ordered_instructions(
+    c: NoteTypeCustomization, t: Terms = DEFAULT_TERMS
+) -> list[str]:
     out: list[str] = []
     out.append(
-        "Keep in mind your BIO and the kind of visit that the patient is coming in for. This will determine what information is most important to include in your note."
+        f"Keep in mind your BIO and the kind of visit that the {t.patient} is coming in for. This will determine what information is most important to include in your note."
     )
     out.append(
         "Carefully review the transcript and extract all relevant medical information."
@@ -299,13 +307,13 @@ def _ordered_instructions(c: NoteTypeCustomization) -> list[str]:
     grouping_lines = [
         "Organize the information into the appropriate sections of the clinical note schema.",
         "  - Within each section, you should group information based on condition.",
-        "  - E.g. if the patient discusses diabetes and hypertension, and 3 steps in the plan relate to diabetes and 2 steps relate to hypertension, the plan should list the 3 diabetes steps, THEN the 2 hyptertension steps.",
-        "  - Sort based on importance of the condition. If hypertension is the patient's main concern, it should be listed first.",
+        f"  - E.g. if the {t.patient} discusses diabetes and hypertension, and 3 steps in the plan relate to diabetes and 2 steps relate to hypertension, the plan should list the 3 diabetes steps, THEN the 2 hyptertension steps.",
+        f"  - Sort based on importance of the condition. If hypertension is the {t.patient}'s main concern, it should be listed first.",
         "  - Be consistent with the order of conditions across fields. I.e. if anxiety is covered first in the plan, it should also be covered first in the assessment, subjective, and objective sections.",
     ]
     if c.plan_ordering == PlanOrdering.patient_then_doctor:
         grouping_lines.append(
-            "  - In the Plan section specifically, within each condition's bullets, list patient-actionable items (e.g. medications to take, lifestyle changes, symptoms to monitor, follow-ups the patient must initiate) before doctor-actionable items (e.g. labs to order, referrals to send, follow-up calls the doctor must place). This makes it easier for the patient to scan their own to-dos."
+            f"  - In the Plan section specifically, within each condition's bullets, list {t.patient}-actionable items (e.g. medications to take, lifestyle changes, symptoms to monitor, follow-ups the {t.patient} must initiate) before {t.provider}-actionable items (e.g. labs to order, referrals to send, follow-up calls the {t.provider} must place). This makes it easier for the {t.patient} to scan their own to-dos."
         )
     grouping_lines.append(
         '  - Do not create subsections within the fields for the conditions. Prefer "flat" lists of items unless absolutely necessary.'
@@ -316,30 +324,30 @@ def _ordered_instructions(c: NoteTypeCustomization) -> list[str]:
         "Avoid including any irrelevant personal details or small talk from the transcript."
     )
     out.append(
-        'If certain information is not provided in the transcript, leave that section blank or write "Not mentioned in transcript" as appropriate. E.g. if the patient does not mention respiratory problems, do NOT assume that they do not have them.'
+        f'If certain information is not provided in the transcript, leave that section blank or write "Not mentioned in transcript" as appropriate. E.g. if the {t.patient} does not mention respiratory problems, do NOT assume that they do not have them.'
     )
     out.append(
         "Ensure that all information in the clinical note is directly based on the content of the transcript. Do not add any speculative or assumed information."
     )
-    out.append(_pronoun_instruction(c.pronoun_style))
-    out.append(_subjective_instruction(c.subjective_source))
+    out.append(_pronoun_instruction(c.pronoun_style, t))
+    out.append(_subjective_instruction(c.subjective_source, t))
     if c.flag_new_medications:
         out.append(
-            'Medications section: when this section exists in the schema, list both medications the patient is already taking (from "Patient:" lines) AND medications the doctor is prescribing or initiating during this visit. Tag newly-prescribed items inline with "(new this visit)" so they can be distinguished from the patient\'s existing medication list at a glance. Do not put newly-prescribed meds only in the Plan section -- the Medications section should reflect the post-visit medication list as a whole, with new additions flagged.'
+            f'Medications section: when this section exists in the schema, list both medications the {t.patient} is already taking (from "Patient:" lines) AND medications the {t.provider} is prescribing or initiating during this visit. Tag newly-prescribed items inline with "(new this visit)" so they can be distinguished from the {t.patient}\'s existing medication list at a glance. Do not put newly-prescribed meds only in the Plan section -- the Medications section should reflect the post-visit medication list as a whole, with new additions flagged.'
         )
     if c.require_plan_reason:
         out.append(
-            'Plan section bullets MUST include the reason for each action -- the "why" -- using "for X" or "to X" phrasing. For example: "Order MRI to rule out disc pathology" rather than "Order MRI"; "Continue metformin for ongoing diabetes management" rather than just "Continue metformin"; "Avoid heavy lifting to prevent re-injury" rather than just "Avoid heavy lifting"; "Follow up in two weeks to reassess back pain and review MRI results" rather than just "Follow up in two weeks" or "Follow up if symptoms worsen". This applies to EVERY Plan bullet, no exceptions -- including follow-up bullets, monitoring bullets, and continue-current-treatment bullets. A trigger condition (e.g. "if symptoms worsen") is NOT a reason; the bullet must state the PURPOSE of the action (e.g. "to monitor for new neurological symptoms"). When the transcript does not explicitly state the reason, infer it from the clinical context (the patient\'s complaint, the assessment, the medication\'s indication). Do not invent reasons unrelated to the visit.'
+            f'Plan section bullets MUST include the reason for each action -- the "why" -- using "for X" or "to X" phrasing. For example: "Order MRI to rule out disc pathology" rather than "Order MRI"; "Continue metformin for ongoing diabetes management" rather than just "Continue metformin"; "Avoid heavy lifting to prevent re-injury" rather than just "Avoid heavy lifting"; "Follow up in two weeks to reassess back pain and review MRI results" rather than just "Follow up in two weeks" or "Follow up if symptoms worsen". This applies to EVERY Plan bullet, no exceptions -- including follow-up bullets, monitoring bullets, and continue-current-treatment bullets. A trigger condition (e.g. "if symptoms worsen") is NOT a reason; the bullet must state the PURPOSE of the action (e.g. "to monitor for new neurological symptoms"). When the transcript does not explicitly state the reason, infer it from the clinical context (the {t.patient}\'s complaint, the assessment, the medication\'s indication). Do not invent reasons unrelated to the visit.'
         )
     if c.ros_distinct_from_subjective:
         out.append(
-            'Review of Systems (ROS) section: when the schema includes a "Review of Systems" field (or similarly-named system-by-system survey field like "ROS"), populate it with the doctor\'s system-by-system findings from targeted questions asked during the visit -- both positives and pertinent negatives, organised by body system (HEENT, Respiratory, Cardiovascular, GI, GU, Musculoskeletal, Neuro, Skin, Psych, Constitutional, etc.). When the schema has BOTH a Subjective AND a Review of Systems field, divide the patient information between them with NO overlap: Subjective gets the patient\'s chief complaint and initial narrative (what brought them in, in their own words); Review of Systems gets the responses to the doctor\'s follow-up "any chest pain? any nausea? any headaches?" survey. Subjective should not list the ROS pertinent negatives; those belong only in Review of Systems. If the doctor did not ask explicit ROS questions, write "Not performed" or "Deferred" in the ROS section; do not pad ROS by restating Subjective.'
+            f'Review of Systems (ROS) section: when the schema includes a "Review of Systems" field (or similarly-named system-by-system survey field like "ROS"), populate it with the {t.provider}\'s system-by-system findings from targeted questions asked during the visit -- both positives and pertinent negatives, organised by body system (HEENT, Respiratory, Cardiovascular, GI, GU, Musculoskeletal, Neuro, Skin, Psych, Constitutional, etc.). When the schema has BOTH a Subjective AND a Review of Systems field, divide the {t.patient} information between them with NO overlap: Subjective gets the {t.patient}\'s chief complaint and initial narrative (what brought them in, in their own words); Review of Systems gets the responses to the {t.provider}\'s follow-up "any chest pain? any nausea? any headaches?" survey. Subjective should not list the ROS pertinent negatives; those belong only in Review of Systems. If the {t.provider} did not ask explicit ROS questions, write "Not performed" or "Deferred" in the ROS section; do not pad ROS by restating Subjective.'
         )
     out.append(
         "Ensure all action items are included in the relevant sections of the note. But do not repeat yourself -- if a section already mentions the action item, don't mention it again."
     )
     out.append(
-        "Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT patient."
+        f"Imitate the style and conventions that you see in the example note.  But do NOT include any of the information from the example in the note you write. This is an example taken from a DIFFERENT {t.patient}."
     )
     out.append(
         "Respond only in JSON format with the schema above. JSON property values should be valid markdown. If you include a markdown list, each item in the list should be followed by a newline character."
@@ -348,9 +356,9 @@ def _ordered_instructions(c: NoteTypeCustomization) -> list[str]:
     return out
 
 
-def _instruction_block(c: NoteTypeCustomization) -> str:
+def _instruction_block(c: NoteTypeCustomization, t: Terms = DEFAULT_TERMS) -> str:
     return "\n".join(
-        f"{i + 1}. {text}" for i, text in enumerate(_ordered_instructions(c))
+        f"{i + 1}. {text}" for i, text in enumerate(_ordered_instructions(c, t))
     )
 
 
@@ -370,12 +378,13 @@ def build_structured_prompt(
         [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
     )
 
-    action_items = extract_action_items(transcript)
-
     # TODO:
     #  - give access to intake information
 
     doctor = Doctor.one(transcript.doctor_id)
+    t = terminology_terms(doctor)
+
+    action_items = extract_action_items(transcript, t)
     maybe_doctor_bio = "You are a medical professional.\n"
     if doctor and doctor.biography:
         maybe_doctor_bio = dedent(f"""
@@ -391,11 +400,13 @@ def build_structured_prompt(
     # leading spaces, reproducing origin/master's rendered output byte-for-byte
     # (dedent() is a no-op there because interpolated transcript/schema text
     # injects column-0 lines that zero the common prefix).
-    indented_block = textwrap.indent(_instruction_block(c), "        ")
+    indented_block = textwrap.indent(_instruction_block(c, t), "        ")
     prompt = dedent(f"""
         {maybe_doctor_bio}
 
-        You need to write a clinical note for a medical appointment that you just had with a patient. Your goal is to accurately summarize the key information from the appointment in a structured, professional format.
+        You need to write a clinical note for a medical appointment that you just had with a {
+        t.patient
+    }. Your goal is to accurately summarize the key information from the appointment in a structured, professional format.
 
         Here is the transcript from the appointment:
 
@@ -430,6 +441,9 @@ def build_structured_prompt(
 
 {indented_block}
     """)
+    label_note = transcript_label_note(t)
+    if label_note:
+        prompt += "\n\n" + label_note
     if c.custom_instructions:
         prompt += (
             "\n\nAdditional provider instructions:\n" + c.custom_instructions.strip()
@@ -437,31 +451,33 @@ def build_structured_prompt(
     return prompt
 
 
-def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
+def build_action_item_prompt(
+    transcript: AIVisitTranscript, t: Terms = DEFAULT_TERMS
+) -> str:
     transcript_text = "\n".join(
         [f"{u.speaker}: {u.content}" for u in transcript.transcript_data]
     )
     return dedent(f"""
-    You are a doctor reviewing the transcript of a patient visit that you conducted.
-    You are looking for the actions you told the patient you would take as a result of this visit.
-    You are also looking for actions that you told the patient to take.
+    You are a {t.provider} reviewing the transcript of a {t.patient} visit that you conducted.
+    You are looking for the actions you told the {t.patient} you would take as a result of this visit.
+    You are also looking for actions that you told the {t.patient} to take.
 
     Actions for you might include (but not be limited to):
       - ordering labs
       - prescribing medications
       - scheduling follow-up appointments
       - writing referrals
-      - consulting with other doctors
-      - calling the patient to discuss lab results
+      - consulting with other {t.provider}s
+      - calling the {t.patient} to discuss lab results
       - requesting records from other providers
-      - sending educational information to the patient
+      - sending educational information to the {t.patient}
 
-    Actions for the patient might include (but not be limited to):
+    Actions for the {t.patient} might include (but not be limited to):
       - taking medications
       - making lifestyle changes
       - monitoring for specific symptoms
       - looking out for changes in symptoms
-      - consulting with other doctors/specialists
+      - consulting with other {t.provider}s/specialists
       - calling back with questions
 
     Please extract all such action items from the transcript.
@@ -474,8 +490,10 @@ def build_action_item_prompt(transcript: AIVisitTranscript) -> str:
     """)
 
 
-def extract_action_items(transcript: AIVisitTranscript) -> str:
-    prompt = build_action_item_prompt(transcript)
+def extract_action_items(
+    transcript: AIVisitTranscript, t: Terms = DEFAULT_TERMS
+) -> str:
+    prompt = build_action_item_prompt(transcript, t)
     response = openai.chat.completions.create(
         model=DEFAULT_MULTI_MODAL_MODEL,
         messages=[{"role": "system", "content": prompt}],
@@ -535,8 +553,9 @@ def augment_clinical_note(
             break
 
     if plan_key:
+        t = terminology_terms(Doctor.get(id=transcript.doctor_id))
         original[plan_key] += "\n\n" + dedent(f"""
-        Greater than {math.floor((transcript.duration or 0) / 60)} minutes was spent in patient care, including review of prior records, consultation with other providers, and documentation.
+        Greater than {math.floor((transcript.duration or 0) / 60)} minutes was spent in {t.patient} care, including review of prior records, consultation with other providers, and documentation.
         """)
 
         original[plan_key] += "\n\n" + "This note was generated with AI assistance."

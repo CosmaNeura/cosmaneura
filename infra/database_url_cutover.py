@@ -268,7 +268,8 @@ class ArmClient:
 
         Required and unrelated secrets are retained byte-for-byte.  Existing
         Key Vault-reference secrets are never silently converted to inline
-        values, and an ETag protects against concurrent configuration updates.
+        values, and an ETag protects actual configuration updates.  A
+        required-name-only check performs no mutation and needs no ETag.
         """
 
         required = required_names or set()
@@ -281,10 +282,13 @@ class ArmClient:
             raise CutoverError("database secret reconciliation is invalid")
         if required.intersection(replacements):
             raise CutoverError("refusing to replace a required rollback secret")
-        resource = self.get_resource(resource_id)
-        etag = resource.get("etag")
-        if not isinstance(etag, str) or not etag:
-            raise CutoverError("resource ETag is missing")
+        etag: str | None = None
+        if replacements:
+            resource = self.get_resource(resource_id)
+            resource_etag = resource.get("etag")
+            if not isinstance(resource_etag, str) or not resource_etag:
+                raise CutoverError("resource ETag is missing")
+            etag = resource_etag
         current = self.list_secrets(resource_id)
         by_name = {entry["name"]: entry for entry in current}
         if len(by_name) != len(current):
@@ -314,6 +318,8 @@ class ArmClient:
                 changed = True
         if not changed:
             return
+        if etag is None:
+            raise CutoverError("resource ETag is missing")
 
         expected_names = {entry["name"] for entry in updated}
         self.request(
@@ -673,7 +679,16 @@ def update_database_reference(
         subscription_id=subscription_id,
         resource_group=resource_group,
     )
-    _, container_name = database_secret_reference(current)
+    current_secret, container_name = database_secret_reference(current)
+    if current_secret == secret_name:
+        if secret_name not in configured_secret_names(current):
+            raise CutoverError("selected database secret is missing")
+        if not workload.revisioned:
+            return None
+        latest_revision = current.get("properties", {}).get("latestRevisionName")
+        if not isinstance(latest_revision, str) or not latest_revision:
+            raise CutoverError("workload latest revision is missing")
+        return latest_revision
     arguments = [
         *workload.cli_group,
         "update",

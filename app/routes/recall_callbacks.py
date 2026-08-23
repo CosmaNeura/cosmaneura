@@ -70,9 +70,9 @@ def recall_zak_callback(token: str) -> PlainTextResponse:
 
     doctor_id = raw.decode() if isinstance(raw, bytes) else cast(str, raw)
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
-    if not doctor:
+    if not doctor or doctor.deleted_at is not None:
         log.warning(
-            "recall zak callback: doctor not found",
+            "recall zak callback: doctor unavailable",
             doctor_ref=provider_log_ref(doctor_id),
         )
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)

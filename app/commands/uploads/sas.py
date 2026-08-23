@@ -20,6 +20,9 @@ from app.configuration.azure import (
 class UploadType(Enum):
     VISIT = AZURE_UPLOADS_CONTAINER_NAME
     EXAMPLE_NOTE = AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
+    # lab PDFs are PHI, so they share the PHI-capable visit container,
+    # never the de-identified example-notes container
+    LAB = AZURE_UPLOADS_CONTAINER_NAME
 
 
 def perform(upload_type: UploadType) -> str:

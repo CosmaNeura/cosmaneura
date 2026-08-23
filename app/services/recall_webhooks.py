@@ -14,6 +14,7 @@ from app.services.external_webhook_inbox import (
 )
 
 from app.models.ai_visit_transcript import TranscriptEntry
+from app.models.doctor import Doctor
 
 
 def _rget(redis, key: str) -> str | None:
@@ -34,8 +35,29 @@ def handle_recording_done(payload: dict[str, Any]) -> None:
     if not isinstance(data, dict):
         raise PermanentWebhookError()
     recording_id = _required_id(data, "recording")
-    reservation = recall_webhook_operations.reserve_transcript_creation(recording_id)
 
+    redis = get_redis()
+    doctor_id = _rget(redis, f"recall:recording:{recording_id}:doctor_id")
+    if not doctor_id:
+        log.warning(
+            "recall recording tenant mapping unavailable",
+            recording_ref=provider_log_ref(recording_id),
+        )
+        raise RetryableWebhookError("tenant_mapping_unavailable")
+    doctor = Doctor.get(id=doctor_id) if doctor_id else None
+    if doctor is None or doctor.deleted_at is not None:
+        log.warning(
+            "recall recording ignored: doctor unavailable",
+            recording_ref=provider_log_ref(recording_id),
+            doctor_ref=provider_log_ref(doctor_id),
+        )
+        raise PermanentWebhookError("doctor_unavailable")
+
+    # Do not commit an external-operation fence until tenant authority is
+    # available. A missing transient Redis mapping must remain safely
+    # retryable instead of converting the recording to an uncertain outcome
+    # before any provider call was attempted.
+    reservation = recall_webhook_operations.reserve_transcript_creation(recording_id)
     log.info(
         "recall recording done",
         recording_ref=provider_log_ref(recording_id),
@@ -93,6 +115,16 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
             recording_ref=provider_log_ref(recording_id),
         )
         raise RetryableWebhookError("tenant_mapping_unavailable")
+
+    doctor = Doctor.get(id=doctor_id)
+    if doctor is None or doctor.deleted_at is not None:
+        log.warning(
+            "recall transcript ignored: doctor unavailable",
+            bot_ref=provider_log_ref(bot_id),
+            recording_ref=provider_log_ref(recording_id),
+            doctor_ref=provider_log_ref(doctor_id),
+        )
+        raise PermanentWebhookError("doctor_unavailable")
 
     transcript_meta = recall_service.get_transcript(transcript_id)
     transcript_data = transcript_meta.get("data")

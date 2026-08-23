@@ -3,7 +3,6 @@ Summarize all the intake data for a given appointment.
 """
 
 import json
-import os
 from textwrap import dedent
 from typing import cast
 
@@ -12,20 +11,15 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.environments import should_use_test_openai_fallback
 from app.services.patient_context import days_since, latest_note_for_patient
+from app.services.terminology import terminology_terms
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 from app.models.patient import Patient
-
-
-def should_use_test_openai_fallback() -> bool:
-    return os.environ.get("PYTHON_ENV") == "test" and not (
-        os.environ.get("AZURE_OPENAI_API_KEY")
-        and os.environ.get("AZURE_OPENAI_ENDPOINT")
-    )
 
 
 def _local_generate_intake_summary(intake: Intake) -> str:
@@ -97,6 +91,7 @@ def queue(*args, **kwargs):
 
 def generate_prompt(intake: Intake) -> str:
     doctor = Doctor.one(id=intake.doctor_id)
+    t = terminology_terms(doctor)
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
@@ -111,7 +106,7 @@ def generate_prompt(intake: Intake) -> str:
     if last_note is not None:
         last_appt = Appointment.one(id=last_note.appointment_id)
         last_visit_section = dedent(f"""
-        This particular patient has seen you before. Here is the clinical note from their last visit, which was {days_since(last_appt.appointment_date)} days ago:
+        This particular {t.patient} has seen you before. Here is the clinical note from their last visit, which was {days_since(last_appt.appointment_date)} days ago:
 
         <CLINICAL_NOTE>
         {json.dumps(last_note.note, indent=2)}
@@ -126,20 +121,20 @@ def generate_prompt(intake: Intake) -> str:
     assert cleaned_intake_data is not None
 
     return dedent(f"""
-    You are a doctor with the following bio:
+    You are a {t.provider} with the following bio:
 
     <BIO>
     {doctor.biography}
     </BIO>
 
-    A patient is coming in for an appointment with you.
-    Your office has collected some information from the patient during intake to help you prepare.
+    A {t.patient} is coming in for an appointment with you.
+    Your office has collected some information from the {t.patient} during intake to help you prepare.
 
     <INTAKE>
     {json.dumps(cast(dict, cleaned_intake_data.dict()), indent=2)}
     </INTAKE>
 
-    The patient was asked some follow up questions, here are the questions and answers:
+    The {t.patient} was asked some follow up questions, here are the questions and answers:
 
     <FOLLOW_UP>
     {json.dumps(follow_up_questions, indent=2)}
@@ -150,15 +145,15 @@ def generate_prompt(intake: Intake) -> str:
     # Here are your instructions:
 
     1. Summarize the INTAKE and FOLLOW_UP information.
-      - Your goal is to produce a summary that will quickly prepare YOU for the patient's visit.
+      - Your goal is to produce a summary that will quickly prepare YOU for the {t.patient}'s visit.
       - You will be reading the summary immediately before you begin the appointment.
 
-    2. Keep in mind your BIO and the kind of visit that the patient is coming in for.
+    2. Keep in mind your BIO and the kind of visit that the {t.patient} is coming in for.
       - This will determine what information is most important to include in your summary.
 
     3. Be *specific*. Do not exclude any important details from the INTAKE or FOLLOW_UP.
-      - e.g. If the patient is coming in for diabetes care and they mentioned that their average glucose level is 178, make sure that value is included in your summary.
-      - e.g. If the patient is coming in for a dermatology visit and they mention having poison ivy, make sure that is included in your summary.
+      - e.g. If the {t.patient} is coming in for diabetes care and they mentioned that their average glucose level is 178, make sure that value is included in your summary.
+      - e.g. If the {t.patient} is coming in for a dermatology visit and they mention having poison ivy, make sure that is included in your summary.
 
     4. Use markdown formatting (especially lists) to make your summary easy to read at a glance.
       - Do not include any sections or headings in your output.

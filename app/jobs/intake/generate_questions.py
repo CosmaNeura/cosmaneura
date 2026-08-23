@@ -3,7 +3,6 @@ Generate intake questions for a patient of a doctor.
 """
 
 import json
-import os
 from textwrap import dedent
 from typing import Any, cast
 
@@ -12,20 +11,15 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
+from app.environments import should_use_test_openai_fallback
 from app.services.patient_context import days_since, latest_note_for_patient
+from app.services.terminology import terminology_terms
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.patient import Patient
-
-
-def should_use_test_openai_fallback() -> bool:
-    return os.environ.get("PYTHON_ENV") == "test" and not (
-        os.environ.get("AZURE_OPENAI_API_KEY")
-        and os.environ.get("AZURE_OPENAI_ENDPOINT")
-    )
 
 
 def _find_intake_value(intake_data: dict[str, Any], field_name: str) -> str | None:
@@ -136,14 +130,15 @@ def queue(*args, **kwargs):
 
 
 def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
+    t = terminology_terms(doctor)
     return dedent(f"""
-        You are a doctor that is about to see a patient. Here is your bio:
+        You are a {t.provider} that is about to see a {t.patient}. Here is your bio:
 
         <BIO>
         {doctor.biography}
         </BIO>
 
-        I'm going to give you the INTAKE information for the patient. It is structured as JSON.
+        I'm going to give you the INTAKE information for the {t.patient}. It is structured as JSON.
 
         <INTAKE>
         {json.dumps(intake.external_intake_data, indent=2)}
@@ -153,12 +148,12 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
 
         1. Extract the appointment type and (if available) its category from the INTAKE.
 
-        2. Extract the patient's main reason for the visit from the INTAKE.
+        2. Extract the {t.patient}'s main reason for the visit from the INTAKE.
         - If not present, say "Not provided"
 
         3. Extract any additional information from INTAKE that is relevant to your preparation for this appointment.
-        - Keep in mind the type of doctor you are (see your BIO), the appointment type, and the patient's main reason for the visit.
-        - Examples of relevant information include: patient vitals, measurements, past medical history, family history, etc.
+        - Keep in mind the type of {t.provider} you are (see your BIO), the appointment type, and the {t.patient}'s main reason for the visit.
+        - Examples of relevant information include: {t.patient} vitals, measurements, past medical history, family history, etc.
         - Do NOT extract administrative information like name, DOB, insurance, doctor name, appointment date, addresses, or payment info.
         - Do NOT comment on information that is missing or not present, only on what information is there.
         - Do NOT include any information already extracted in other steps.
@@ -169,8 +164,8 @@ def extraction_prompt(intake: Intake, doctor: Doctor) -> str:
         {{
           appointment_type: string
           appointment_category: string | null
-          reason: string // The patient's main reason for the visit
-          additional_info: string // Additional info relevant to the doctor's preparation
+          reason: string // The {t.patient}'s main reason for the visit
+          additional_info: string // Additional info relevant to the {t.provider}'s preparation
         }}
         </SCHEMA>
     """)
@@ -201,6 +196,7 @@ def extract_intake_data(intake: Intake, doctor: Doctor) -> ExternalIntakeData:
 
 
 def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
+    t = terminology_terms(doctor)
     appointment = Appointment.one(id=intake.appointment_id)
     patient = Patient.one(id=appointment.patient_id)
 
@@ -216,7 +212,7 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
     if last_note is not None:
         last_appt = Appointment.one(id=last_note.appointment_id)
         last_visit_section = dedent(f"""
-        The patient has seen you before. Here is the clinical note from their last visit, which was {days_since(last_appt.appointment_date)} days ago:
+        The {t.patient} has seen you before. Here is the clinical note from their last visit, which was {days_since(last_appt.appointment_date)} days ago:
 
         <CLINICAL_NOTE>
         {json.dumps(last_note.note, indent=2)}
@@ -229,14 +225,14 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
     # See https://arxiv.org/html/2408.02442v3.
 
     return dedent(f"""
-    You are a doctor with the following bio:
+    You are a {t.provider} with the following bio:
 
     <BIO>
     {doctor.biography}
     </BIO>
 
-    A patient is coming in for an appointment with you.
-    The patient has filled out a preliminary intake form with the following information:
+    A {t.patient} is coming in for an appointment with you.
+    The {t.patient} has filled out a preliminary intake form with the following information:
 
     <INTAKE>
     {json.dumps(intake_data, indent=2)}
@@ -246,14 +242,14 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
 
     Here are your instructions:
     1. Examine the INTAKE information and determine:
-      - What is the patient's chief complaint?
-      - What type of appointment is the patient coming in for?
-    2. If present, review the most recent CLINICAL_NOTE for this patient.
-      - Does the patient's chief complaint relate to their previous visit?
+      - What is the {t.patient}'s chief complaint?
+      - What type of appointment is the {t.patient} coming in for?
+    2. If present, review the most recent CLINICAL_NOTE for this {t.patient}.
+      - Does the {t.patient}'s chief complaint relate to their previous visit?
       - If no CLINICAL_NOTE is present, ignore this step.
-    3. Review your bio and think about why this patient, with this chief complaint, would come to see you.
-    4. Think about what additional information you need to help the patient with their chief complaint.
-    5. Generate questions to get the information you need from the patient.
+    3. Review your bio and think about why this {t.patient}, with this chief complaint, would come to see you.
+    4. Think about what additional information you need to help the {t.patient} with their chief complaint.
+    5. Generate questions to get the information you need from the {t.patient}.
       - Generate at least 3 questions, not more than 10, and not 5.
       - Ask as few questions as possible to get the information you need.
       - Questions will be collected as free-form text, but you may ask multiple-choice questions.
@@ -261,14 +257,14 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
       - Do NOT ask questions that are already answered in the INTAKE form.
       - Do NOT ask questions that request the same information in different ways, e.g. "What is your pain level?" and "How much does it hurt?"
       - Do NOT ask administrative questions like "What is your name?" or "What is your date of birth?"
-      - Questions may NOT include PII like the patient's name, address, DOB, phone number, email address, or any PII about you, the doctor.
+      - Questions may NOT include PII like the {t.patient}'s name, address, DOB, phone number, email address, or any PII about you, the {t.provider}.
     6. Respond only in JSON format with the following SCHEMA:
 
     interface Question {{
       // The order that the question should be asked in. Lower numbers are asked
       // first. The 1st question will have order=0, the 2nd order=1, and so on.
       order: int
-      // The question to ask the patient.
+      // The question to ask the {t.patient}.
       question: str
       // What information would an answer to this question have to include in
       // order for it to constitute a full answer to the question?
@@ -277,18 +273,18 @@ def generate_questions_prompt(intake: Intake, doctor: Doctor) -> str:
 
     <SCHEMA>
     {{
-      // The patient's chief complaint, as extracted from the INTAKE form.
+      // The {t.patient}'s chief complaint, as extracted from the INTAKE form.
       chief_complaint: str
 
-      // The type of appointment the patient is coming in for, as extracted from
+      // The type of appointment the {t.patient} is coming in for, as extracted from
       // the INTAKE form.
       appointment_type: str
 
-      // How the patient's chief complaint relates to their previous visit
+      // How the {t.patient}'s chief complaint relates to their previous visit
       // CLINICAL_NOTE (if they had one).
       relation_to_previous_visit: str | null
 
-      // The questions to ask the patient.
+      // The questions to ask the {t.patient}.
       questions: Question[]
     }}
     </SCHEMA>

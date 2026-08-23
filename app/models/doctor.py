@@ -72,6 +72,8 @@ class Doctor(
     biography: str | None
     "what type of doctor is this, what specialist, what they focus on, etc. Used for the intake process."
 
+    has_natmed_subscription: bool = Field(default=False)
+    "provider records they have a NatMed Pro subscription; enables NatMed deep links in the resource panel"
     terminology: Terminology = Field(default=Terminology.doctor_patient)
     "which provider/patient role labels this doctor sees and generates content with"
 

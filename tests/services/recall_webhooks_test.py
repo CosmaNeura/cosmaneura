@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from structlog.testing import capture_logs
@@ -30,8 +31,24 @@ def _transcript_payload() -> dict:
     }
 
 
+def _allow_recording_mapping(monkeypatch, recording_id: str) -> None:
+    class FakeRedis:
+        def get(self, key):
+            if key == f"recall:recording:{recording_id}:doctor_id":
+                return b"doctor-authorized"
+            return None
+
+    monkeypatch.setattr(recall_webhooks, "get_redis", lambda: FakeRedis())
+    monkeypatch.setattr(
+        recall_webhooks.Doctor,
+        "get",
+        lambda **_kwargs: SimpleNamespace(deleted_at=None),
+    )
+
+
 def test_recording_done_creates_transcript_once(monkeypatch) -> None:
     calls: list[str] = []
+    _allow_recording_mapping(monkeypatch, "recording-once-private")
     monkeypatch.setattr(
         recall_webhooks.recall_service,
         "create_async_transcript",
@@ -47,6 +64,7 @@ def test_recording_done_creates_transcript_once(monkeypatch) -> None:
 
 def test_ambiguous_create_failure_is_not_retried(monkeypatch) -> None:
     calls: list[str] = []
+    _allow_recording_mapping(monkeypatch, "recording-ambiguous-private")
 
     def fail(recording_id: str) -> None:
         calls.append(recording_id)
@@ -70,6 +88,35 @@ def test_ambiguous_create_failure_is_not_retried(monkeypatch) -> None:
     )
     assert receipt is not None
     assert receipt.state == "uncertain"
+
+
+def test_recording_done_missing_tenant_mapping_does_not_reserve_operation(
+    monkeypatch,
+) -> None:
+    class FakeRedis:
+        def get(self, _key):
+            return None
+
+    recording_id = "recording-mapping-retry-private"
+    monkeypatch.setattr(recall_webhooks, "get_redis", lambda: FakeRedis())
+    monkeypatch.setattr(
+        recall_webhooks.recall_service,
+        "create_async_transcript",
+        lambda _recording_id: (_ for _ in ()).throw(
+            AssertionError("provider must not be called without tenant authority")
+        ),
+    )
+
+    with pytest.raises(RetryableWebhookError) as error:
+        recall_webhooks.handle_recording_done(_recording_payload(recording_id))
+
+    assert error.value.code == "tenant_mapping_unavailable"
+    receipt = ExternalWebhookOperation.get(
+        provider_resource_digest=recall_webhooks.recall_webhook_operations._resource_digest(
+            recording_id
+        )
+    )
+    assert receipt is None
 
 
 def test_transcript_done_retries_when_redis_tenant_binding_is_missing(

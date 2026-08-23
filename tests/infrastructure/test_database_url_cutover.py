@@ -209,6 +209,61 @@ def test_revision_verification_rejects_a_concurrent_latest_revision(
         )
 
 
+def test_reference_update_skips_already_selected_nonrevisioned_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = cutover.WORKLOADS[-1]
+    assert not migration.revisioned
+    resource = _workload_resource("database-url")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(arguments: tuple[str, ...] | list[str]) -> str:
+        calls.append(tuple(arguments))
+        return json.dumps(resource)
+
+    monkeypatch.setattr(cutover, "_run_az", fake_run)
+
+    assert (
+        cutover.update_database_reference(
+            migration,
+            subscription_id="00000000-0000-0000-0000-000000000000",
+            resource_group="cosmaneura-prod",
+            secret_name="database-url",
+            revision_suffix="unused",
+        )
+        is None
+    )
+    assert len(calls) == 1
+    assert "show" in calls[0]
+    assert "update" not in calls[0]
+
+
+def test_reference_update_requires_selected_secret_on_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migration = cutover.WORKLOADS[-1]
+    resource = _workload_resource("database-url")
+    resource["properties"]["configuration"]["secrets"] = [{"name": "database-url-v2"}]
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(arguments: tuple[str, ...] | list[str]) -> str:
+        calls.append(tuple(arguments))
+        return json.dumps(resource)
+
+    monkeypatch.setattr(cutover, "_run_az", fake_run)
+
+    with pytest.raises(cutover.CutoverError, match="selected database secret"):
+        cutover.update_database_reference(
+            migration,
+            subscription_id="00000000-0000-0000-0000-000000000000",
+            resource_group="cosmaneura-prod",
+            secret_name="database-url",
+            revision_suffix="unused",
+        )
+    assert len(calls) == 1
+    assert "update" not in calls[0]
+
+
 def test_all_workload_cli_calls_pin_the_confirmed_subscription(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -372,6 +427,67 @@ def test_arm_reconcile_updates_named_values_and_preserves_unrelated() -> None:
         {"name": "unrelated", "value": "keep-value"},
         {"name": "database-url-v2", "value": replacements["database-url-v2"]},
     ]
+
+
+def test_arm_reconcile_required_only_needs_no_etag_or_mutation() -> None:
+    requests: list[Any] = []
+
+    def opener(request: Any, *, timeout: int) -> FakeResponse:
+        requests.append(request)
+        return FakeResponse(
+            {
+                "value": [
+                    {"name": "database-url", "value": "old-rollback-value"},
+                    {"name": "unrelated", "value": "keep-value"},
+                ]
+            }
+        )
+
+    arm = cutover.ArmClient("opaque-token", opener=opener)
+    arm.reconcile_secret_values(
+        "/subscriptions/test/resourceGroups/test/providers/Microsoft.App/jobs/test",
+        replacements={},
+        required_names={"database-url"},
+    )
+
+    assert [request.method for request in requests] == ["POST"]
+    assert "/listSecrets?" in requests[0].full_url
+
+
+def test_arm_reconcile_required_only_fails_when_rollback_secret_is_missing() -> None:
+    requests: list[Any] = []
+
+    def opener(request: Any, *, timeout: int) -> FakeResponse:
+        requests.append(request)
+        return FakeResponse({"value": [{"name": "unrelated", "value": "keep-value"}]})
+
+    arm = cutover.ArmClient("opaque-token", opener=opener)
+    with pytest.raises(cutover.CutoverError, match="rollback secret is missing"):
+        arm.reconcile_secret_values(
+            "/subscriptions/test/resourceGroups/test/providers/Microsoft.App/jobs/test",
+            replacements={},
+            required_names={"database-url"},
+        )
+
+    assert [request.method for request in requests] == ["POST"]
+
+
+def test_arm_reconcile_mutation_still_requires_etag() -> None:
+    requests: list[Any] = []
+
+    def opener(request: Any, *, timeout: int) -> FakeResponse:
+        requests.append(request)
+        return FakeResponse({"etag": None})
+
+    arm = cutover.ArmClient("opaque-token", opener=opener)
+    with pytest.raises(cutover.CutoverError, match="ETag is missing"):
+        arm.reconcile_secret_values(
+            "/subscriptions/test/resourceGroups/test/providers/Microsoft.App/jobs/test",
+            replacements={"database-url-v2": "application-value"},
+            required_names={"database-url"},
+        )
+
+    assert [request.method for request in requests] == ["GET"]
 
 
 class FakeArm:

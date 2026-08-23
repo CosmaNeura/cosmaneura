@@ -11,7 +11,9 @@ import type { Route } from "./+types/settings"
 import { AppSidebar } from "@/components/app-sidebar"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
+import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
+import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
@@ -43,6 +45,9 @@ import {
   getBaaAcceptances,
   getPractice,
 } from "~/lib/practice-api"
+import { isReferenceToolkitEnabled } from "~/utils/reference-toolkit-feature"
+import { useTerminology } from "~/utils/terminology"
+import { isTerminologyEnabled } from "~/utils/terminology-feature"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { useUser } from "@clerk/clerk-react"
@@ -62,7 +67,7 @@ function PracticeSettings({
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
       <h3>Practice</h3>
-      <PracticeJoinPanel practice={practice} />
+      <PracticeJoinPanel practice={practice} showBillingActions />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
           <p className="font-semibold">Legal / Agreements</p>
@@ -261,6 +266,7 @@ function NoteCustomization({
 }
 
 function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
+  const t = useTerminology()
   const formSchema = z.object({
     //   image: z
     //     .instanceof(File),
@@ -338,9 +344,9 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
             <p className="text-muted-foreground text-left text-sm">
               Upload high quality examples of the different types of notes that
               you use. These examples will be used to generate future notes for
-              your patients, so make sure they are a great representation of the
-              structure and quality of note that you want to see from your
-              personalized AI!
+              your {t.patientPlural}, so make sure they are a great
+              representation of the structure and quality of note that you want
+              to see from your personalized AI!
             </p>
             <p className="text-muted-foreground text-left text-sm">
               For example: if you use the telehealth SOAP note, pick a
@@ -367,7 +373,8 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
               <div className="flex flex-col gap-1 font-semibold">
                 <p>{file.name}</p>
                 <p className="text-muted-foreground text-xs">
-                  Press the upload button below to add the example patient note
+                  Press the upload button below to add the example {t.patient}{" "}
+                  note
                 </p>
               </div>
             )}
@@ -417,6 +424,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
 }
 
 function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
+  const t = useTerminology()
   const revalidator = useRevalidator()
   const [connecting, setConnecting] = useState(false)
   const [disconnecting, setDisconnecting] = useState(false)
@@ -513,7 +521,7 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
             </p>
             <p className="mb-2">
               <strong>
-                Patient consent is your responsibility as the provider.
+                {t.patientTitle} consent is your responsibility as the provider.
               </strong>{" "}
               The Cosmas AI Note-Taker bot will appear as a participant and
               announce that the meeting is being recorded; you must still obtain
@@ -583,7 +591,59 @@ export const meta: MetaFunction = () => {
   ]
 }
 
+function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
+  const [enabled, setEnabled] = useState(hasSubscription)
+  const [saving, setSaving] = useState(false)
+  const revalidator = useRevalidator()
+
+  async function toggle(next: boolean) {
+    setEnabled(next)
+    setSaving(true)
+    const { error } = await updateSettingsData({
+      body: { biography: null, has_natmed_subscription: next },
+    })
+    setSaving(false)
+    if (error) {
+      setEnabled(!next)
+      toast({ title: "Could not update", variant: "destructive" })
+      return
+    }
+    toast({ title: "Saved" })
+    revalidator.revalidate()
+  }
+
+  return (
+    <section className="prose-headings prose w-1/2 space-y-4">
+      <h3>NatMed Pro connection</h3>
+      <p className="text-muted-foreground text-sm">
+        If you have a NatMed Pro (Natural Medicines) subscription, turn this on
+        to add its interaction checker and nutrient-depletion lookups as
+        one-click links next to each patient&apos;s medications. Cosmas links
+        you into your own NatMed session — it never copies or stores their
+        content.
+      </p>
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={saving}
+          onChange={(e) => toggle(e.target.checked)}
+        />
+        I have a NatMed Pro subscription
+      </label>
+    </section>
+  )
+}
+
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
+  const { user } = useUser()
+  const referenceToolkitEnabled = isReferenceToolkitEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
+  const terminologyEnabled = isTerminologyEnabled(
+    user?.primaryEmailAddress?.emailAddress,
+  )
+
   return (
     <SidebarProvider
       // eliminate the message sidebar
@@ -601,12 +661,24 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
             acceptances={loaderData.baa_acceptances}
           />
           <BiographyInput biography={loaderData.biography} />
+          {terminologyEnabled && (
+            <TerminologySettings
+              terminology={loaderData.terminology}
+              biography={loaderData.biography}
+            />
+          )}
           <NoteUpload noteSchemas={loaderData.notes_schema} />
           <NoteCustomization
             noteSchemas={loaderData.notes_schema}
             customizations={loaderData.note_customizations}
           />
           <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+          {referenceToolkitEnabled && (
+            <NatMedConnection
+              hasSubscription={loaderData.has_natmed_subscription}
+            />
+          )}
+          {referenceToolkitEnabled && <LabRangeSettings />}
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

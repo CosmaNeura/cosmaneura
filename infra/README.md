@@ -1,5 +1,53 @@
 # Infrastructure
 
+## Provider-first Agent API role reconciliation
+
+`infra/scripts/reconcile-agent-api-role.sh` is read-only by default. It verifies
+the exact staging provider UAI, preserves `Scribe.Transcript.Write`, and reports
+whether `AgentApi.Access` and its provider assignment exist. The public UAI is
+deliberately outside this activation.
+
+```bash
+infra/scripts/reconcile-agent-api-role.sh --status
+infra/scripts/reconcile-agent-api-role.sh --apply --confirm-staging
+infra/scripts/reconcile-agent-api-role.sh --revoke --confirm-staging
+```
+
+`--apply` idempotently creates the application role when absent and assigns it
+only to the pinned provider staging UAI. `--revoke` removes only that assignment;
+it retains the disabled-by-no-assignment role definition and leaves the existing
+Scribe role unchanged. Run `--status` after either operation and retain its
+value-free output with the staging change record.
+
+Microsoft Graph does not expose an ETag for this application in the staging
+tenant. Before its narrow `appRoles` PATCH, the script therefore takes an
+immediate second complete role snapshot and refuses on any drift; it then
+verifies the exact complete postcondition. This minimizes but cannot eliminate
+the non-atomic interval, so do not run concurrent application-role changes
+during reconciliation.
+
+## V7 incomplete-turn reconciliation
+
+The status command reports only counts, states, and opaque interaction refs:
+
+```bash
+python -m app.cli authority-ingestion-status --older-than-minutes 15
+```
+
+Accepted canonical turns without a final phase are reconciled one exact turn
+at a time. The command is staging-only and dry-run by default. Mutation needs
+both explicit flags and writes only the fixed safe `unavailable` final,
+idempotency receipt, and platform-authoritative audit fact; it never sweeps or
+prints conversation content.
+
+```bash
+python -m app.cli reconcile-stale-canonical-turn \
+  --turn-ref conversation_turn_<opaque> --older-than-minutes 15
+python -m app.cli reconcile-stale-canonical-turn \
+  --turn-ref conversation_turn_<opaque> --older-than-minutes 15 \
+  --apply --confirm-staging-only
+```
+
 OpenTofu / Terraform configuration for the cosmaneura production environment.
 State lives in the `cosmaneuratfstate` Azure storage account (see
 `local.tfstate` in `main.tf`).
@@ -303,3 +351,6 @@ deploy_parallel_network_smoke_job      = false
 They are documented in [`../docs/EAST_US_DATA_PATH_PLAN.md`](../docs/EAST_US_DATA_PATH_PLAN.md).
 The bridge does not disable current public endpoints, rotate credentials, or clone a production
 workload.
+
+Provider-only V7 staging pilot boundaries and operator checks are documented in
+[`../docs/V7_PROVIDER_STAGING_PILOT.md`](../docs/V7_PROVIDER_STAGING_PILOT.md).

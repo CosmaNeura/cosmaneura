@@ -144,6 +144,43 @@ COMMON_SECRET_VARS=(
 	ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET ZOOM_SECRET_TOKEN
 )
 
+wait_for_migration_job_execution() {
+	local execution_name=$1
+	local phase=$2
+	if [[ -z "$execution_name" ]]; then
+		echo "$phase failed to start."
+		return 1
+	fi
+
+	echo "$phase execution started: $execution_name"
+	local attempts=0
+	local max_attempts=60 # 5 minutes
+
+	while [[ $attempts -lt $max_attempts ]]; do
+		local exec_status
+		exec_status=$(az containerapp job execution show \
+			-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+			--job-execution-name "$execution_name" \
+			--query "properties.status" -o tsv 2>/dev/null)
+
+		case "$exec_status" in
+		Succeeded)
+			echo "$phase completed successfully."
+			return 0 ;;
+		Failed|Stopped)
+			echo "$phase failed with status: $exec_status"
+			return 1 ;;
+		*)
+			echo "  $phase status=$exec_status (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++)) ;;
+		esac
+	done
+
+	echo "$phase timed out after $((max_attempts * 5)) seconds."
+	return 1
+}
+
 run_migrations() {
 	echo "Running database migrations with image $PRODUCTION_TAG..."
 
@@ -167,6 +204,17 @@ run_migrations() {
 
 	if ! az containerapp job show -n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" &>/dev/null; then
 		echo "Migration job is missing; provision and review it before deploying."
+		return 1
+	fi
+	local migration_container_name
+	if ! migration_container_name=$(az containerapp job show \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--query "properties.template.containers[].name" -o tsv); then
+		echo "Failed to inspect the migration job container template."
+		return 1
+	fi
+	if [[ "$migration_container_name" != "$MIGRATION_JOB" ]]; then
+		echo "Migration job must contain exactly one source-owned container."
 		return 1
 	fi
 
@@ -211,44 +259,37 @@ run_migrations() {
 		return 1
 	fi
 
-	local execution_name
-	execution_name=$(az containerapp job start \
+	# Override only this execution. Azure replaces the container definition when
+	# an execution override is supplied, so explicitly restore the selected
+	# DATABASE_URL secret reference. The reviewed job template retains its
+	# Alembic arguments, but no schema mutation may start until the aggregate-only
+	# duplicate check succeeds against the exact image and database secret.
+	local preflight_execution
+	if ! preflight_execution=$(az containerapp job start \
 		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-		--query "name" -o tsv)
-
-	if [[ -z "$execution_name" ]]; then
-		echo "Failed to start migration job."
+		--container-name "$migration_container_name" \
+		--image "$PRODUCTION_TAG" \
+		--command /opt/venv/bin/python \
+		--args /app/scripts/billing_migration_preflight.py \
+		--env-vars "DATABASE_URL=secretref:$DATABASE_SECRET_NAME" \
+		--query "name" -o tsv); then
+		echo "Billing migration preflight failed to start."
+		return 1
+	fi
+	if ! wait_for_migration_job_execution \
+		"$preflight_execution" "Billing migration preflight"; then
+		echo "Billing migration preflight blocked schema migration."
 		return 1
 	fi
 
-	echo "Migration job execution started: $execution_name"
-
-	local attempts=0
-	local max_attempts=60  # 5 minutes
-
-	while [[ $attempts -lt $max_attempts ]]; do
-		local exec_status
-		exec_status=$(az containerapp job execution show \
-			-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-			--job-execution-name "$execution_name" \
-			--query "properties.status" -o tsv 2>/dev/null)
-
-		case "$exec_status" in
-			Succeeded)
-				echo "Migrations completed successfully."
-				return 0 ;;
-			Failed|Stopped)
-				echo "Migration job failed with status: $exec_status"
-				return 1 ;;
-			*)
-				echo "  migration status=$exec_status (attempt $((attempts + 1))/$max_attempts)"
-				sleep 5
-				((attempts++)) ;;
-		esac
-	done
-
-	echo "Migration job timed out after $((max_attempts * 5)) seconds."
-	return 1
+	local execution_name
+	if ! execution_name=$(az containerapp job start \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--query "name" -o tsv); then
+		echo "Failed to start migration job."
+		return 1
+	fi
+	wait_for_migration_job_execution "$execution_name" "Migrations"
 }
 
 initiate_deployment() {
