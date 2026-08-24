@@ -105,6 +105,12 @@ def test_intake_completed(client: TestClient):
 
 
 def test_intake_processing(client: TestClient):
+    """An intake whose questions have not been generated yet reports "processing".
+
+    This used to report "in_progress", which is what a *ready* question reports
+    -- so nothing downstream could tell the two apart and the patient page's
+    waiting screen was unreachable.
+    """
     intake = SimpleIncompleteIntakeFactory.build().save()
 
     intake.intake_questions = []
@@ -118,7 +124,9 @@ def test_intake_processing(client: TestClient):
     )
 
     assert_status(response)
-    assert response.json()["status"] == "in_progress"
+    body = response.json()
+    assert body["status"] == "processing"
+    assert body["question"] is None
 
 
 def test_last_question(client: TestClient):
@@ -170,9 +178,15 @@ def test_terminal_question(client: TestClient, sync_celery):
         api_app.url_path_for("get_last_question", intake_id=intake.id)
     )
     assert_status(response)
-    next_question = response.json()["question"]
+    body = response.json()
+    # `question` is an object now, carrying the helper text, kind and choices the
+    # patient page needs to render it.
+    next_question = body["question"]
+    assert next_question["question"]
+    assert body["progress"] == {"answered": 0, "total": len(intake.intake_questions)}
 
     while next_question:
+        answered_text = next_question["question"]
         answer = BaseFactory.__faker__.sentence()
         response = client.post(
             api_app.url_path_for("get_next_question", intake_id=intake.id),
@@ -184,9 +198,9 @@ def test_terminal_question(client: TestClient, sync_celery):
 
         intake.refresh()
 
-        # Find the intake question that matches next_question
+        # Find the intake question we just answered
         intake_question = next(
-            (q for q in intake.intake_questions if q.question == next_question), None
+            (q for q in intake.intake_questions if q.question == answered_text), None
         )
         assert intake_question
         assert intake_question.answer == answer
@@ -195,11 +209,17 @@ def test_terminal_question(client: TestClient, sync_celery):
         next_question = response["question"]
 
         if next_question:
-            assert response["status"] == "processing"
+            # A question is waiting. That is not the same state as questions
+            # still being generated, so it is no longer reported as "processing".
+            assert response["status"] == "in_progress"
             assert intake.summary is None
         else:
             assert response["status"] == "completed"
             assert len(intake.unanswered_questions()) == 0
+            assert response["progress"] == {
+                "answered": len(intake.intake_questions),
+                "total": len(intake.intake_questions),
+            }
             break
 
     intake.refresh()
