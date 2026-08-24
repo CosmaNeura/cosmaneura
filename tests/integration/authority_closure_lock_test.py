@@ -9,7 +9,7 @@ import psycopg
 import pytest
 
 from app.configuration.authority import AuthorityKernelSettings
-from app.services.authority import exchange_context_token
+from app.services.authority import AuthorityRequestDeniedError, exchange_context_token
 
 from app.models.authority import (
     AuthorityActor,
@@ -18,10 +18,11 @@ from app.models.authority import (
     AuthorityPersonBinding,
     AuthorityTenant,
     AuthorityTenantMembership,
+    MountContextSession,
 )
 
 
-def test_exchange_locks_identity_until_token_session_is_committed():
+def test_exchange_waits_for_identity_lock_and_denies_after_closure_revokes():
     database_url = os.environ.get("TEST_DATABASE_URL")
     if not database_url:
         pytest.skip("requires the PostgreSQL test database URL")
@@ -77,7 +78,15 @@ def test_exchange_locks_identity_until_token_session_is_committed():
             )
             with pytest.raises(TimeoutError):
                 future.result(timeout=0.2)
+            blocker.execute(
+                "UPDATE authority_actor_external_identity "
+                "SET revoked_at = %s WHERE id = %s",
+                (datetime(2026, 8, 24, 12, 0, tzinfo=UTC), identity.id.uuid),
+            )
             blocker.commit()
-            issued = future.result(timeout=5)
+            with pytest.raises(AuthorityRequestDeniedError):
+                future.result(timeout=5)
 
-    assert issued.context_token
+    assert (
+        MountContextSession.where(MountContextSession.actor_id == actor.id).count() == 0
+    )

@@ -131,6 +131,7 @@ class _ReceiptCounts:
     pilot_grants: int
     roster_approvals: int
     authority_identities: int
+    mount_sessions: int
     video_integrations: int
 
 
@@ -144,12 +145,13 @@ def _receipt_reference(
     pilot_grants: int,
     roster_approvals: int,
     authority_identities: int,
+    mount_sessions: int,
     video_integrations: int,
 ) -> str:
     return (
         f"{_receipt_prefix(doctor_id)}"
         f"p={pilot_grants}:r={roster_approvals}:"
-        f"a={authority_identities}:v={video_integrations}"
+        f"a={authority_identities}:m={mount_sessions}:v={video_integrations}"
     )
 
 
@@ -171,6 +173,7 @@ def _receipt_counts(
             pilot_grants=fields["p"],
             roster_approvals=fields["r"],
             authority_identities=fields["a"],
+            mount_sessions=fields["m"],
             video_integrations=fields["v"],
         )
     except (KeyError, TypeError, ValueError):
@@ -178,10 +181,11 @@ def _receipt_counts(
             "account closure audit state is invalid"
         ) from None
     if (
-        set(fields) != {"p", "r", "a", "v"}
+        set(fields) != {"p", "r", "a", "m", "v"}
         or counts.pilot_grants not in (0, 1)
         or counts.roster_approvals not in (0, 1)
         or counts.authority_identities not in (0, 1)
+        or counts.mount_sessions < 0
         or counts.video_integrations < 0
     ):
         raise DoctorAccountClosureError("account closure audit state is invalid")
@@ -519,29 +523,47 @@ def _validate_applied_state(
         actor = session.get(AuthorityActor, event.actor_id)
         if actor is None or actor.status != "revoked":
             raise DoctorAccountClosureError("authority account closure is incomplete")
+        membership = session.exec(
+            select(AuthorityTenantMembership).where(
+                AuthorityTenantMembership.actor_id == actor.id,
+                AuthorityTenantMembership.tenant_id == event.tenant_id,
+            )
+        ).one_or_none()
         if (
-            session.exec(
-                select(AuthorityTenantMembership).where(
-                    AuthorityTenantMembership.actor_id == actor.id,
-                    AuthorityTenantMembership.status == "active",
-                )
-            ).first()
-            is not None
+            membership is None
+            or membership.membership_kind != "provider"
+            or membership.status != "revoked"
         ):
             raise DoctorAccountClosureError(
                 "authority membership closure is incomplete"
             )
-        if (
+        actor_sessions = list(
             session.exec(
                 select(MountContextSession).where(
-                    MountContextSession.actor_id == actor.id,
-                    MountContextSession.status == "active",
-                    col(MountContextSession.revoked_at).is_(None),
+                    MountContextSession.actor_id == actor.id
                 )
-            ).first()
-            is not None
+            ).all()
+        )
+        if any(
+            item.status == "active" or item.revoked_at is None
+            for item in actor_sessions
         ):
             raise DoctorAccountClosureError("authority session closure is incomplete")
+        closure_sessions = [
+            item
+            for item in actor_sessions
+            if item.status == "revoked"
+            and item.revoked_at == receipt.effective_at
+            and item.tenant_id == event.tenant_id
+        ]
+        if len(closure_sessions) != counts.mount_sessions:
+            raise DoctorAccountClosureError(
+                "authority session closure evidence is incomplete"
+            )
+    elif counts.mount_sessions:
+        raise DoctorAccountClosureError(
+            "authority session closure evidence is incomplete"
+        )
     return receipt.expires_at
 
 
@@ -653,7 +675,7 @@ def _evaluate(
                 pilot_grant_count=counts.pilot_grants,
                 organization_approval_count=counts.roster_approvals,
                 authority_identity_count=counts.authority_identities,
-                active_mount_session_count=0,
+                active_mount_session_count=counts.mount_sessions,
                 video_integration_count=counts.video_integrations,
                 stripe_follow_up_required=bool(practice.stripe_subscription_id),
                 already_applied=True,
@@ -921,6 +943,11 @@ def close_doctor_account(
                     pilot_grants=len(evaluated.pilot_grants),
                     roster_approvals=int(evaluated.roster_approval is not None),
                     authority_identities=int(evaluated.authority_scope is not None),
+                    mount_sessions=(
+                        len(evaluated.authority_scope.sessions)
+                        if evaluated.authority_scope is not None
+                        else 0
+                    ),
                     video_integrations=len(evaluated.video_integrations),
                 ),
                 evidence_sha256=evaluated.plan.plan_sha256,

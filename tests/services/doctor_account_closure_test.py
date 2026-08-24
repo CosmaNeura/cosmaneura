@@ -356,7 +356,9 @@ def test_closure_retry_refuses_missing_grant_evidence():
         reason=reason,
         effective_at=closed_at,
         expires_at=retain_until,
-        document_reference=(f"doctor-account-closure:{doctor.id}:p=1:r=0:a=0:v=0"),
+        document_reference=(
+            f"doctor-account-closure:{doctor.id}:p=1:r=0:a=0:m=0:v=0"
+        ),
         evidence_sha256="e" * 64,
     ).save()
 
@@ -483,6 +485,27 @@ def test_closure_revokes_governed_authority_without_deleting_history(monkeypatch
     assert membership.status == "revoked"
     assert mount.status == "revoked"
     assert mount.revoked_at is not None
+
+    retry_plan = plan_doctor_account_closure(**args)
+    assert retry_plan.already_applied is True
+    assert retry_plan.active_mount_session_count == 1
+
+    membership.status = "suspended"
+    membership.save()
+    with pytest.raises(
+        DoctorAccountClosureError, match="authority membership closure is incomplete"
+    ):
+        plan_doctor_account_closure(**args)
+    membership.status = "revoked"
+    membership.save()
+
+    mount.revoked_at = datetime(2026, 8, 24, 14, 1, tzinfo=UTC)
+    mount.save()
+    with pytest.raises(
+        DoctorAccountClosureError,
+        match="authority session closure evidence is incomplete",
+    ):
+        plan_doctor_account_closure(**args)
 
 
 def test_closure_cli_is_dry_run_first_and_does_not_print_identity_values():
