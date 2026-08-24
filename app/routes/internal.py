@@ -50,13 +50,17 @@ from app.services.biomarkers import (
 )
 from app.services.clerk_identity import verified_primary_email
 from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
+from app.services.managed_organization_access import (
+    ManagedOrganizationAccessState,
+    resolve_managed_organization_access,
+    uses_managed_organization_path,
+)
 from app.services.nutrient_depletion import DISCLAIMER as DEPLETION_DISCLAIMER
 from app.services.nutrient_depletion import depletions_for
 from app.services.organization_access import (
     OrganizationAccessError,
     claim_roster_access,
     doctor_has_managed_roster_assignment,
-    find_access_opportunity,
     lock_provider_practice_domain,
     lock_roster_enrollment_email,
     member_access_in_force,
@@ -923,8 +927,9 @@ def practice_status(request: Request) -> PracticeStatus | None:
     return _practice_payload(practice, member)
 
 
-class OrganizationAccessOpportunityResponse(BaseModel, extra="forbid"):
-    organization_name: str
+class ManagedOrganizationAccessResponse(BaseModel, extra="forbid"):
+    state: ManagedOrganizationAccessState
+    organization_name: str | None
     email_domain: str
 
 
@@ -934,30 +939,28 @@ class OrganizationAccessOpportunityResponse(BaseModel, extra="forbid"):
 )
 def organization_access_opportunity(
     request: Request,
-) -> OrganizationAccessOpportunityResponse | None:
-    """Return an exact-roster opportunity without disclosing its access code."""
+) -> ManagedOrganizationAccessResponse | None:
+    """Return sanitized managed routing state without disclosing authority."""
 
     doctor: Doctor = request.state.doctor
     # Support view-as is intentionally unsupported for self-service enrollment.
     # The authenticated Clerk subject must be the rostered doctor.
-    if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
+    authenticated_subject = request.state.auth_state.payload.get("sub")
+    primary_email = (
+        verified_primary_email(doctor.clerk_id)
+        if authenticated_subject == doctor.clerk_id
+        else None
+    )
+    disposition = resolve_managed_organization_access(
+        doctor,
+        verified_primary_email=primary_email,
+    )
+    if disposition is None:
         return None
-    primary_email = verified_primary_email(doctor.clerk_id)
-    if primary_email is None or primary_email != (doctor.email or "").strip().lower():
-        return None
-    opportunity = find_access_opportunity(doctor)
-    if opportunity is None:
-        return None
-    member = _membership_for(doctor)
-    if member is not None and (
-        member.access_revoked_at is not None
-        or member.practice_id != opportunity.practice.id
-        or member.organization_roster_approval_id is not None
-    ):
-        return None
-    return OrganizationAccessOpportunityResponse(
-        organization_name=opportunity.organization.legal_name,
-        email_domain=opportunity.organization.email_domain,
+    return ManagedOrganizationAccessResponse(
+        state=disposition.state,
+        organization_name=disposition.organization_name,
+        email_domain=disposition.email_domain,
     )
 
 
@@ -1056,6 +1059,14 @@ class CreatePracticeBody(BaseModel, extra="forbid"):
 @internal_api_app.post("/practice", name="create_practice")
 def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatus:
     doctor: Doctor = request.state.doctor
+    if uses_managed_organization_path(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
     existing = _membership_for(doctor)
     if existing:
         practice = Practice.get(id=existing.practice_id)
@@ -1241,12 +1252,20 @@ class AcceptBaaBody(BaseModel, extra="forbid"):
 
 @internal_api_app.post("/practice/baa", name="accept_practice_baa")
 def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus:
+    doctor: Doctor = request.state.doctor
+    if uses_managed_organization_path(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses an existing BAA already managed by "
+                "Cosmaneura. Contact support if access is not ready."
+            ),
+        )
     if "baa" not in data.checks:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The BAA acceptance box must be checked.",
         )
-    doctor: Doctor = request.state.doctor
     member = _membership_for(doctor)
     if not member or member.role != PracticeRole.owner.value:
         raise HTTPException(
@@ -1391,7 +1410,9 @@ def _consume_legacy_join_attempt(doctor: Doctor) -> None:
 def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
     doctor: Doctor = request.state.doctor
     _consume_legacy_join_attempt(doctor)
-    if doctor_has_managed_roster_assignment(doctor):
+    if uses_managed_organization_path(doctor) or doctor_has_managed_roster_assignment(
+        doctor
+    ):
         return PracticeLookupResult()
     verified_email = _verified_legacy_enrollment_email(doctor)
     code = _normalize_join_code(data.join_code)
@@ -1457,13 +1478,21 @@ class JoinPracticeBody(BaseModel, extra="forbid"):
 
 @internal_api_app.post("/practice/join", name="join_practice")
 def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
+    doctor: Doctor = request.state.doctor
+    if uses_managed_organization_path(doctor):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
     required = {"workforce", "not-party", "direction", "phi"}
     if not required.issubset(set(data.checks)):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="All workforce acknowledgements are required.",
         )
-    doctor: Doctor = request.state.doctor
     _consume_legacy_join_attempt(doctor)
     existing = _membership_for(doctor)
     if existing:

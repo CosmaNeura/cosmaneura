@@ -188,13 +188,20 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
       <main className="mx-auto max-w-5xl px-5 py-10">
         {!onboardingData ? (
           <AccountRecoveryRequired />
-        ) : practice?.access_revoked ? (
-          <OrganizationAccessRevoked practice={practice} />
-        ) : !practiceReady(practice) && onboardingData.organizationAccess ? (
+        ) : onboardingData.organizationAccess?.state === "claim" ? (
           <OrganizationAccessFlow
             opportunity={onboardingData.organizationAccess}
             onboardingCompleted={onboardingData.onboarding_completed}
           />
+        ) : onboardingData.organizationAccess?.state === "pending" ||
+          onboardingData.organizationAccess?.state === "support" ||
+          (onboardingData.organizationAccess?.state === "ready" &&
+            !practiceReady(practice)) ? (
+          <ManagedOrganizationAccessNotice
+            disposition={onboardingData.organizationAccess}
+          />
+        ) : practice?.access_revoked ? (
+          <OrganizationAccessRevoked practice={practice} />
         ) : practiceReady(practice) ? (
           <OptionalSetup
             biography={onboardingData.biography}
@@ -269,7 +276,9 @@ export function OrganizationAccessFlow({
   return (
     <div className="max-w-xl">
       <StepKicker n="01" label="Organization access" />
-      <DisplayTitle>Join {opportunity.organization_name}</DisplayTitle>
+      <DisplayTitle>
+        Join {opportunity.organization_name ?? "your organization"}
+      </DisplayTitle>
       <p className="text-muted-foreground mt-4 leading-relaxed">
         Your verified @{opportunity.email_domain} account is eligible. Enter the
         access code provided by your organization to continue to your Cosmas
@@ -317,6 +326,40 @@ export function OrganizationAccessFlow({
           {error}
         </p>
       ) : null}
+    </div>
+  )
+}
+
+export function ManagedOrganizationAccessNotice({
+  disposition,
+}: {
+  disposition: OrganizationAccessOpportunity
+}) {
+  const pending = disposition.state === "pending"
+
+  return (
+    <div className="max-w-xl">
+      <StepKicker n="01" label="Organization access" />
+      <DisplayTitle>
+        {pending
+          ? "Your organization is setting up access"
+          : "We need to review your organization access"}
+      </DisplayTitle>
+      <p className="text-muted-foreground mt-4 leading-relaxed">
+        {pending
+          ? "We recognized this as an organization-managed work account, but your individual roster access is not ready yet."
+          : "We could not safely match this sign-in to one active organization assignment. Your records remain safe, and no new agreement is required from you here."}
+      </p>
+      <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
+        An email domain identifies the correct setup path, but does not grant
+        patient access by itself. Ask your organization administrator to confirm
+        your roster assignment, or contact Cosmaneura support.
+      </p>
+      <Button asChild size="lg" className="mt-8">
+        <a href="mailto:info@cosmaneura.com?subject=Organization%20access%20review">
+          Contact support
+        </a>
+      </Button>
     </div>
   )
 }

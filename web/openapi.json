@@ -890,7 +890,7 @@
           "private"
         ],
         "summary": "Organization Access Opportunity",
-        "description": "Return an exact-roster opportunity without disclosing its access code.",
+        "description": "Return sanitized managed routing state without disclosing authority.",
         "operationId": "organization_access_opportunity",
         "responses": {
           "200": {
@@ -900,7 +900,7 @@
                 "schema": {
                   "anyOf": [
                     {
-                      "$ref": "#/components/schemas/OrganizationAccessOpportunityResponse"
+                      "$ref": "#/components/schemas/ManagedOrganizationAccessResponse"
                     },
                     {
                       "type": "null"
@@ -3896,6 +3896,43 @@
         ],
         "title": "LabUploadComplete"
       },
+      "ManagedOrganizationAccessResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "claim",
+              "pending",
+              "support"
+            ],
+            "title": "State"
+          },
+          "organization_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Name"
+          },
+          "email_domain": {
+            "type": "string",
+            "title": "Email Domain"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "organization_name",
+          "email_domain"
+        ],
+        "title": "ManagedOrganizationAccessResponse"
+      },
       "ManualLabResult": {
         "properties": {
           "name": {
@@ -4331,25 +4368,6 @@
         ],
         "title": "OpenSandboxRecord",
         "description": "Opaque, short-lived record grant; never a vendor patient identifier."
-      },
-      "OrganizationAccessOpportunityResponse": {
-        "properties": {
-          "organization_name": {
-            "type": "string",
-            "title": "Organization Name"
-          },
-          "email_domain": {
-            "type": "string",
-            "title": "Email Domain"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "organization_name",
-          "email_domain"
-        ],
-        "title": "OrganizationAccessOpportunityResponse"
       },
       "Patient": {
         "properties": {

@@ -3,6 +3,7 @@ import { vi } from "vitest"
 
 import {
   AccountRecoveryRequired,
+  ManagedOrganizationAccessNotice,
   OrganizationAccessFlow,
   PracticeForm,
   canLeaveOnboarding,
@@ -14,6 +15,7 @@ describe("OrganizationAccessFlow", () => {
     render(
       <OrganizationAccessFlow
         opportunity={{
+          state: "claim",
           organization_name: "Test Organization",
           email_domain: "example.com",
         }}
@@ -25,6 +27,61 @@ describe("OrganizationAccessFlow", () => {
     expect(input).toHaveAttribute("type", "password")
     expect(input).toHaveAttribute("data-sentry-mask")
     expect(input).toHaveAttribute("data-ph-no-capture")
+  })
+
+  it("keeps unprovisioned managed users out of self-service and BAA flows", () => {
+    render(
+      <ManagedOrganizationAccessNotice
+        disposition={{
+          state: "pending",
+          organization_name: null,
+          email_domain: "mycatholicdoctor.com",
+        }}
+      />,
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "Your organization is setting up access",
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/does not grant patient access/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("link", { name: /contact support/i }),
+    ).toHaveAttribute(
+      "href",
+      expect.stringContaining("Organization%20access%20review"),
+    )
+    expect(
+      screen.queryByRole("button", { name: /Continue to the BAA/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/start your own practice/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it("uses one sanitized support state for unsafe managed assignments", () => {
+    render(
+      <ManagedOrganizationAccessNotice
+        disposition={{
+          state: "support",
+          organization_name: null,
+          email_domain: "fiathealth.org",
+        }}
+      />,
+    )
+
+    expect(
+      screen.getByRole("heading", {
+        name: "We need to review your organization access",
+      }),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/records remain safe/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/no new agreement is required/i),
+    ).toBeInTheDocument()
   })
 
   it("uses the server access decision instead of requiring a practice payload", () => {

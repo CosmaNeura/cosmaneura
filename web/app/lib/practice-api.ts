@@ -41,7 +41,8 @@ export type PracticeLookupResult = {
 }
 
 export type OrganizationAccessOpportunity = {
-  organization_name: string
+  state: "ready" | "claim" | "pending" | "support"
+  organization_name: string | null
   email_domain: string
 }
 

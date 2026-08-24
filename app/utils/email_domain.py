@@ -1,6 +1,19 @@
 """Practice work-email domain matching for workforce join."""
 
 MCD_EMAIL_DOMAIN = "mycatholicdoctor.com"
+FIAT_EMAIL_DOMAIN = "fiathealth.org"
+
+# These domains identify accounts that belong on the administratively managed
+# organization path.  A match is discovery only: it must never grant access.
+# Authorization still requires Clerk verification, one exact roster row, an
+# active organization and practice, an in-force negotiated BAA, entitlement,
+# and the organization's access code.
+MANAGED_PROVIDER_EMAIL_DOMAINS = frozenset(
+    {
+        FIAT_EMAIL_DOMAIN,
+        MCD_EMAIL_DOMAIN,
+    }
+)
 
 # Consumer mailbox providers are not an organizational boundary. Keep this
 # list deliberately explicit: a custom domain hosted by any of these providers
