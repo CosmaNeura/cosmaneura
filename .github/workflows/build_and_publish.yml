@@ -23,10 +23,10 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # A newer master run must not cancel an in-flight production deployment:
-  # cancellation releases the deploy job's cross-workflow mutex while Azure
-  # may still be reconciling revisions. Staging runs remain cancellable.
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+  # Neither release branch may cancel an in-flight run: migrations or Azure
+  # revision reconciliation can outlive GitHub's cancellation signal. Queue a
+  # newer push behind the current release instead of creating partial state.
+  cancel-in-progress: false
 
 # Long-lived credentials are scoped to the protected deploy jobs below. Pull
 # requests run in the separate, entirely secretless pull_request_checks.yml.
@@ -170,7 +170,7 @@ jobs:
   deploy:
     name: 🚀 Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     concurrency:
       group: cosmaneura-production-container-apps
       cancel-in-progress: false
@@ -294,7 +294,6 @@ jobs:
               VITE_POSTHOG_KEY,
               VITE_PYTHON_URL,
               VITE_SENTRY_DSN,
-              VITE_SOVEREIGN_CLERK_TEMPLATE,
               VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false",
               VITE_SOVEREIGN_PROVIDER_URL
             } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
@@ -371,7 +370,7 @@ jobs:
   deploy-staging:
     name: 🚀 Deploy Staging
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     needs: [web, app]
     if: ${{ github.ref == 'refs/heads/staging' && github.event_name == 'push' }}
     environment: staging
@@ -428,7 +427,6 @@ jobs:
               VITE_POSTHOG_KEY,
               VITE_PYTHON_URL,
               VITE_SENTRY_DSN,
-              VITE_SOVEREIGN_CLERK_TEMPLATE,
               VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED,
               VITE_SOVEREIGN_PROVIDER_URL
             } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \

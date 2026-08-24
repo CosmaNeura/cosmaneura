@@ -8,7 +8,7 @@ import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { CopyButton } from "~/components/shared/CopyButton"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
-import { Intake, intakeDetail } from "~/configuration/client"
+import { intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
 import { useTerminology } from "~/utils/terminology"
 
@@ -82,7 +82,7 @@ function IntakeHeader({
   )
 }
 
-function EmptyState({ intake }: { intake: Intake }) {
+function EmptyState({ intake }: { intake: { public_url: string | null } }) {
   const t = useTerminology()
   return (
     <div className="mb-4">
@@ -91,12 +91,20 @@ function EmptyState({ intake }: { intake: Intake }) {
         If you'd like to resend their intake URL, you can find it below.
         <br />
         <br />
-        <div className="flex items-center gap-2">
-          <a target="_blank" href={intake.public_url} className="text-blue-500">
-            {intake.public_url}
-          </a>
-          <CopyButton text={intake.public_url} />
-        </div>
+        {intake.public_url ? (
+          <div className="flex items-center gap-2">
+            <a
+              target="_blank"
+              href={intake.public_url}
+              data-ph-no-capture=""
+              data-sentry-block=""
+              className="text-blue-500"
+            >
+              {intake.public_url}
+            </a>
+            <CopyButton text={intake.public_url} />
+          </div>
+        ) : null}
       </div>
     </div>
   )

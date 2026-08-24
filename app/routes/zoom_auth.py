@@ -18,12 +18,19 @@ from app.configuration.zoom import (
     ZOOM_REDIRECT_URI,
     ZOOM_SUCCESS_REDIRECT,
 )
+from app.routes.dependencies.view_as import (
+    deny_view_as_browser_activity,
+    view_as_browser_session_present,
+)
 from app.services import zoom_oauth_state
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
+from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
+from app.models.view_as import ViewAsSession
+from sqlmodel import select
 
 ZOOM_AUTHORIZE_URL = "https://zoom.us/oauth/authorize"
 ZOOM_API_ME_URL = "https://api.zoom.us/v2/users/me"
@@ -60,8 +67,9 @@ def _clear_browser_binding(response: RedirectResponse) -> RedirectResponse:
 
 
 @zoom_auth_app.get("/zoom-oauth-start", name="zoom_oauth_start")
-def zoom_oauth_start(state: str | None = None) -> RedirectResponse:
+def zoom_oauth_start(request: Request, state: str | None = None) -> RedirectResponse:
     """Redirect only an issued, unexpired OAuth attempt to Zoom."""
+    deny_view_as_browser_activity(request)
     try:
         state_is_issued = zoom_oauth_state.is_issued_zoom_oauth_state(state)
     except RedisError:
@@ -101,6 +109,12 @@ def zoom_oauth_callback(
     error: str | None = None,
 ) -> RedirectResponse:
     """Handle Zoom's redirect after the doctor authorizes the app."""
+    if view_as_browser_session_present(request):
+        log.warning(
+            "zoom oauth callback rejected",
+            event_code="zoom_oauth_view_as_blocked",
+        )
+        return _clear_browser_binding(_authorization_error_response())
     browser_binding = request.cookies.get(zoom_oauth_state.ZOOM_OAUTH_BINDING_COOKIE)
     try:
         doctor_id = zoom_oauth_state.consume_zoom_oauth_state(state, browser_binding)
@@ -144,6 +158,24 @@ def zoom_oauth_callback(
         )
         return _clear_browser_binding(_authorization_error_response())
 
+    # Avoid an unnecessary provider exchange when support view is already
+    # active. This is only an early-out; the locked check below remains the
+    # authoritative race-safe mutation gate.
+    with get_session() as session:
+        unended_view_as = session.exec(
+            select(ViewAsSession).where(
+                ViewAsSession.actor_doctor_id == doctor.id,
+                ViewAsSession.ended_at == None,  # noqa: E711
+            )
+        ).first()
+    if unended_view_as is not None:
+        log.warning(
+            "zoom oauth callback rejected",
+            event_code="zoom_oauth_view_as_blocked",
+            doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
+        )
+        return _clear_browser_binding(_authorization_error_response())
+
     tokens = _exchange_code_for_tokens(code)
     zoom_user_id = _get_zoom_user_id(tokens["access_token"])
     log.info(
@@ -154,15 +186,69 @@ def zoom_oauth_callback(
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=tokens["expires_in"])
 
-    integration = DoctorVideoIntegration.find_or_initialize_by(
-        doctor_id=doctor.id,
-        provider=VideoProvider.zoom,
-    )
-    integration.provider_user_id = zoom_user_id
-    integration.access_token = tokens["access_token"]
-    integration.refresh_token = tokens["refresh_token"]
-    integration.token_expires_at = expires_at
-    integration.save()
+    # Serialize the credential write against administrative account closure.
+    # The provider exchange occurs first, but no returned credential is stored
+    # if closure acquired the Doctor lock while that request was in flight.
+    with get_session() as session:
+        locked_doctor = session.exec(
+            select(Doctor)
+            .where(Doctor.id == doctor.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+        if locked_doctor is None or locked_doctor.deleted_at is not None:
+            session.rollback()
+            log.warning(
+                "zoom oauth callback rejected",
+                event_code="zoom_oauth_doctor_unavailable_after_exchange",
+                doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
+            )
+            return _clear_browser_binding(_authorization_error_response())
+        # The OAuth callback is public and can arrive without the signed app
+        # session cookie. Serialize with begin_view_as on the Doctor row, then
+        # refuse the credential mutation whenever any support-view session is
+        # still unended. The operator can exit/reconcile view-as and restart
+        # OAuth; provider credentials are never written under ambiguous state.
+        unended_view_as = session.exec(
+            select(ViewAsSession)
+            .where(
+                ViewAsSession.actor_doctor_id == locked_doctor.id,
+                ViewAsSession.ended_at == None,  # noqa: E711
+            )
+            .with_for_update()
+        ).first()
+        if unended_view_as is not None:
+            session.rollback()
+            log.warning(
+                "zoom oauth callback rejected",
+                event_code="zoom_oauth_view_as_blocked_after_exchange",
+                doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
+            )
+            return _clear_browser_binding(_authorization_error_response())
+        integration = session.exec(
+            select(DoctorVideoIntegration)
+            .where(
+                DoctorVideoIntegration.doctor_id == locked_doctor.id,
+                DoctorVideoIntegration.provider == VideoProvider.zoom,
+            )
+            .with_for_update()
+        ).one_or_none()
+        if integration is None:
+            integration = DoctorVideoIntegration(
+                doctor_id=locked_doctor.id,
+                provider=VideoProvider.zoom,
+                provider_user_id=zoom_user_id,
+                access_token=tokens["access_token"],
+                refresh_token=tokens["refresh_token"],
+                token_expires_at=expires_at,
+            )
+        else:
+            integration.provider_user_id = zoom_user_id
+            integration.access_token = tokens["access_token"]
+            integration.refresh_token = tokens["refresh_token"]
+            integration.token_expires_at = expires_at
+        session.add(integration)
+        session.commit()
 
     log.info(
         "zoom oauth connected",

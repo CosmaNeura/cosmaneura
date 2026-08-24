@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTROL = "ENABLE_PROVIDER_V7"
 BACKEND_FLAGS = ("AUTHORITY_KERNEL_ENABLED", "AGENT_API_ENABLED")
 FRONTEND_FLAG = "VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED"
-CLERK_ISSUER = "https://resolved-emu-53.clerk.accounts.dev"
 PROVIDER_ORIGIN = (
     "https://cosmaneura-sovereign-staging-app.happygrass-736dc5a6."
     "northcentralus.azurecontainerapps.io"
@@ -25,7 +24,6 @@ FRONTEND_BUILD_KEYS = (
     "VITE_POSTHOG_KEY",
     "VITE_PYTHON_URL",
     "VITE_SENTRY_DSN",
-    "VITE_SOVEREIGN_CLERK_TEMPLATE",
     FRONTEND_FLAG,
     "VITE_SOVEREIGN_PROVIDER_URL",
 )
@@ -46,8 +44,14 @@ def _frontend_resolve_step(job: str, environment: str) -> str:
 
 
 def _shell_array(source: str, name: str) -> str:
-    start = source.index(f"{name}=(")
+    start = source.index(f"\n{name}=(") + 1
     end = source.index("\n)", start)
+    return source[start : end + 2]
+
+
+def _hcl_variable(source: str, name: str) -> str:
+    start = source.index(f'variable "{name}"')
+    end = source.index("\n}\n", start)
     return source[start : end + 2]
 
 
@@ -67,6 +71,12 @@ def _run_deploy_control(value: str | None) -> subprocess.CompletedProcess[str]:
         'if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend); then',
         "if ! ENV_JSON='{}'; then",
     )
+    # This helper isolates the provider-v7 flag reconciliation. Capability
+    # identity validation has its own executable tests and requires a complete
+    # resolved Clerk configuration rather than this helper's `{}` stub.
+    preflight_start = script.index("if ! printf '%s' \"$ENV_JSON\" |")
+    preflight_end = script.index("unset OP_SERVICE_ACCOUNT_TOKEN", preflight_start)
+    script = script[:preflight_start] + script[preflight_end:]
     script += '\nprintf "%s\\n" "$ENV_JSON"\n'
     environment = os.environ.copy()
     if value is None:
@@ -172,6 +182,17 @@ def test_frontend_workflow_resolvers_include_authority_flag_without_control_leak
     assert exact_boolean_check in production_resolve
     assert exact_boolean_check in staging_resolve
     assert CONTROL not in production_resolve
+    assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in workflow
+
+
+def test_frontend_environment_files_remove_legacy_clerk_token_template() -> None:
+    for path in (
+        ".env.production.frontend",
+        ".env.staging.frontend",
+        ".env.dev.local-example",
+        "just/build.just",
+    ):
+        assert "VITE_SOVEREIGN_CLERK_TEMPLATE" not in _read(path)
 
 
 def test_frontend_build_allowlist_preserves_true_and_false_values(
@@ -257,11 +278,13 @@ def test_true_switch_executably_injects_both_backend_gates() -> None:
     assert frontend_result.stdout.strip() == "true"
 
 
-def test_staging_contract_pins_exact_issuer_and_provider_origin() -> None:
+def test_staging_contract_derives_issuer_and_pins_provider_origin() -> None:
     backend = _read(".env.staging.backend")
     frontend = _read(".env.staging.frontend")
 
-    assert f"export AUTHORITY_CLERK_ISSUER={CLERK_ISSUER}" in backend
+    assert "CLERK_DEPLOYMENT_PUBLISHABLE_KEY='op://" in backend
+    assert 'export AUTHORITY_CLERK_ISSUER="$(' in backend
+    assert "--environment staging --derive-issuer" in backend
     provider_setting = (
         'export VITE_SOVEREIGN_PROVIDER_URL="'
         f"${{VITE_SOVEREIGN_PROVIDER_URL:-{PROVIDER_ORIGIN}}}"
@@ -270,6 +293,16 @@ def test_staging_contract_pins_exact_issuer_and_provider_origin() -> None:
     assert provider_setting in frontend
     for flag in BACKEND_FLAGS:
         assert f'export {flag}="$ENABLE_PROVIDER_V7"' in backend
+
+
+def test_platform_api_origin_is_explicitly_propagated_in_both_environments() -> None:
+    staging_deploy = _read("infra-staging/deploy.sh")
+    staging_variables = _read("infra-staging/variables.tf")
+    production_variables = _read("infra/variables.tf")
+
+    assert "API_BASE_URL" in _shell_array(staging_deploy, "PUBLIC_VARS")
+    assert '"API_BASE_URL"' in _hcl_variable(staging_variables, "python_public_vars")
+    assert '"API_BASE_URL"' in _hcl_variable(production_variables, "python_public_vars")
 
 
 def test_staging_activation_remains_provider_only() -> None:

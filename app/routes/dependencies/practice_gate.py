@@ -18,7 +18,7 @@ from fastapi import HTTPException, Request, status
 
 from app.services.doctor_access import resolve_doctor_access
 
-from app.models.doctor import Doctor, DoctorRole
+from app.models.doctor import Doctor
 
 EXEMPT_ROUTE_NAMES = {
     # settings back the onboarding wizard and hold no patient data
@@ -34,6 +34,13 @@ EXEMPT_ROUTE_NAMES = {
     "claim_organization_access",
     "baa_current",
     "practice_baa_acceptances",
+    # support view-as control plane; begin/targets enforce the independent
+    # environment-scoped capability and status/end must remain reachable to
+    # clear stale sessions even when the actor has no customer practice
+    "view_as_status",
+    "view_as_targets",
+    "begin_view_as",
+    "end_view_as",
     # enforces its own practice/BAA rules
     "complete_onboarding",
 }
@@ -61,9 +68,6 @@ def require_practice_in_force(request: Request) -> None:
         return
 
     doctor: Doctor = request.state.doctor
-    if doctor.role == DoctorRole.admin:
-        return
-
     decision = resolve_doctor_access(
         doctor,
         require_entitlement=route_name not in ENTITLEMENT_EXEMPT_ROUTE_NAMES,

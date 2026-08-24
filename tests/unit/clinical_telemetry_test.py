@@ -11,18 +11,19 @@ TARGETS = (
     ROOT / "app/routes/zoom_auth.py",
     ROOT / "app/jobs/sync_zoom_meetings.py",
     ROOT / "app/routes/dependencies/doctor.py",
-    ROOT / "app/routes/dependencies/login_as.py",
+    ROOT / "app/routes/dependencies/view_as.py",
 )
 CONTEXT_TARGETS = (
     ROOT / "app/routes/api.py",
     ROOT / "app/routes/dependencies/doctor.py",
-    ROOT / "app/routes/dependencies/login_as.py",
+    ROOT / "app/routes/dependencies/view_as.py",
 )
 
 SAFE_LOG_FIELDS = {
     "count",
     "conflicting_doctor_ref",
     "admin_ref",
+    "actor_ref",
     "clerk_ref",
     "doctor_ref",
     "email_ref",
@@ -41,6 +42,8 @@ SAFE_LOG_FIELDS = {
     "skipped_no_start_time",
     "synced",
     "transcript_ref",
+    "target_ref",
+    "view_as_actor_ref",
     "zoom_user_ref",
 }
 

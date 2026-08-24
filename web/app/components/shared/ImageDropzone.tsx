@@ -6,6 +6,11 @@ import {
   useDropzone,
 } from "@/components/ui/dropzone"
 
+export const EXAMPLE_NOTE_MAX_FILE_SIZE = 10 * 1024 * 1024
+export const EXAMPLE_NOTE_ACCEPT = {
+  "application/pdf": [".pdf"],
+}
+
 export function ImageDropzone({
   children,
   onDropFile,
@@ -29,11 +34,8 @@ export function ImageDropzone({
       }
     },
     validation: {
-      accept: {
-        "image/*": [".png", ".jpg", ".jpeg", ".pdf"],
-      },
-      // 10mb
-      maxSize: 10 * 1024 * 1024,
+      accept: EXAMPLE_NOTE_ACCEPT,
+      maxSize: EXAMPLE_NOTE_MAX_FILE_SIZE,
       maxFiles: 1,
     },
     shiftOnMaxFiles: true,

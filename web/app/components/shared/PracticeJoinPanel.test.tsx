@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { createBillingCheckout } from "~/lib/practice-api"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 import { PracticeJoinPanel, billingActionKind } from "./PracticeJoinPanel"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
+
+vi.mock("~/lib/practice-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/practice-api")>()),
+  createBillingCheckout: vi.fn(),
+}))
 
 const NOW = new Date("2026-08-20T20:00:00Z")
 
@@ -42,6 +48,30 @@ describe("PracticeJoinPanel billing recovery", () => {
     expect(billingActionKind(practice({ billing_enabled: false }), NOW)).toBe(
       "none",
     )
+  })
+
+  it("shows an honest recovery state when a lapsed owner cannot check out", () => {
+    const expired = practice({ billing_enabled: false, entitled: false })
+    expect(billingActionKind(expired, NOW)).toBe("checkout-unavailable")
+    render(<PracticeJoinPanel practice={expired} showBillingActions />)
+    expect(screen.getByText(/practice access is paused/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", {
+        name: /reactivation temporarily unavailable/i,
+      }),
+    ).toBeDisabled()
+    expect(screen.getByText(/records remain stored/i)).toBeInTheDocument()
+  })
+
+  it("tells lapsed workforce to contact the owner without exposing billing controls", () => {
+    render(
+      <PracticeJoinPanel
+        practice={practice({ role: "workforce", entitled: false })}
+        showBillingActions
+      />,
+    )
+    expect(screen.getByText(/contact your practice owner/i)).toBeInTheDocument()
+    expect(screen.queryByRole("button")).not.toBeInTheDocument()
   })
 
   it("lets an expired timed comp reactivate instead of hiding billing", () => {
@@ -208,24 +238,46 @@ describe("PracticeJoinPanel billing recovery", () => {
     ).toBeDisabled()
   })
 
-  it("defers checkout during the final 48 hours with truthful copy", () => {
-    const deferred = practice({
-      billing_checkout_available_at: "2026-08-21T20:00:00Z",
-    })
-    expect(billingActionKind(deferred, NOW)).toBe("deferred")
+  it("keeps checkout open during the final 48 hours with truthful copy", () => {
+    const shortTrial = practice({ trial_ends_at: "2026-08-22T19:00:00Z" })
+    expect(billingActionKind(shortTrial, NOW)).toBe("checkout")
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     try {
-      render(<PracticeJoinPanel practice={deferred} showBillingActions />)
+      render(<PracticeJoinPanel practice={shortTrial} showBillingActions />)
       expect(
-        screen.getByRole("button", { name: /checkout opens when trial ends/i }),
-      ).toBeDisabled()
+        screen.getByRole("button", { name: /add payment now/i }),
+      ).toBeEnabled()
       expect(
-        screen.getByText(/preserve every remaining trial hour/i),
+        screen.getByText(/trial is extended—never shortened/i),
       ).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("carries the interrupted route into Checkout", () => {
+    vi.mocked(createBillingCheckout).mockReturnValue(new Promise(() => {}))
+    render(
+      <PracticeJoinPanel
+        practice={practice()}
+        showBillingActions
+        billingReturnTo="/schedule?view=week#today"
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /add payment now/i }))
+
+    expect(createBillingCheckout).toHaveBeenCalledWith(
+      "/schedule?view=week#today",
+    )
+  })
+
+  it("honors the legacy defer signal during a mixed-version rollout", () => {
+    const legacyResponse = practice({
+      billing_checkout_available_at: "2026-08-21T20:00:00Z",
+    })
+    expect(billingActionKind(legacyResponse, NOW)).toBe("deferred")
   })
 
   it("describes roster authorization without claiming personal attestation", () => {
@@ -250,5 +302,14 @@ describe("PracticeJoinPanel billing recovery", () => {
     expect(
       screen.queryByText(/you attested under this practice/i),
     ).not.toBeInTheDocument()
+  })
+
+  it("does not offer reusable enrollment when no join code is available", () => {
+    render(<PracticeJoinPanel practice={practice({ join_code: null })} />)
+
+    expect(
+      screen.getByText(/does not accept reusable join-code enrollment/i),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("TESTCODE")).not.toBeInTheDocument()
   })
 })

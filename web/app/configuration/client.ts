@@ -1,4 +1,5 @@
 // the autogen'd client from the python's openapi.json is configured here
+import { internalApiFetch } from "~/lib/billing-recovery"
 import { isDevelopment, requireEnv } from "~/utils/environment"
 
 import * as Sentry from "@sentry/react"
@@ -26,6 +27,7 @@ if (
 // TODO I don't know if the auth function will be rerun multiple times...
 client.setConfig({
   baseUrl: VITE_PYTHON_URL,
+  fetch: internalApiFetch,
   // same-origin is default, this is required in development since different API & FE server domains are used
   // https://github.com/hey-api/openapi-ts/issues/769#issuecomment-2222735798
   credentials: isDevelopment() ? "include" : "same-origin",
@@ -38,16 +40,11 @@ client.setConfig({
     const token = await client.session.getToken()
     invariant(token, "token should exist")
 
-    // at this point, some sort of authenticated route is being called, so there is user information
-    // it is possible for other actions to occur before this, but they should be inconsequential and
-    // it would be challenging to inject `getClient` at just the right point, this is a natural place
-    // to set the user context. However, this is not a perfect solution, as it uses the frontend user
-    // authentication which can be different in the case of an admin who is logged in as a particular user.
+    // Keep error correlation pseudonymous. Email and display names are not
+    // needed for diagnostics and must not be copied into telemetry. During
+    // view-as this remains the authenticated actor's Clerk ID, never the target.
     Sentry.setUser({
       id: client.user.id,
-      // username + email are picked up by the feedback widget if we include thems
-      username: client.user.username ?? undefined,
-      email: client.user.primaryEmailAddress?.emailAddress ?? undefined,
     })
 
     return token

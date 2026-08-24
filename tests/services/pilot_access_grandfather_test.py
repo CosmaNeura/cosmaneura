@@ -19,10 +19,16 @@ from app.services.pilot_access_grandfather import (
 from app.models.doctor import Doctor, DoctorRole
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
+from app.models.superadmin_capability import (
+    SuperadminCapabilityEnvironment,
+    SuperadminCapabilityGrant,
+    SuperadminCapabilityKind,
+)
 
 SOURCE_REF = "clerk-export:legacy-pilot-2026-08-23"
 GRANT_OPERATOR = "change:legacy-pilot-grant"
 GRANT_REASON = "Preserve approved legacy pilot access"
+SUPERADMIN_ISSUER = "https://staging.example.clerk.accounts.dev"
 
 
 def _entries(label: str) -> list[GrandfatherGrantInput]:
@@ -66,6 +72,36 @@ def _source_sha256(entries: list[GrandfatherGrantInput]) -> str:
         for entry in sorted(entries, key=lambda item: item.clerk_id.strip())
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _grant_superadmin_capability(monkeypatch, doctor: Doctor) -> None:
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.staging,
+    )
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_clerk_issuer",
+        lambda: SUPERADMIN_ISSUER,
+    )
+    assert doctor.email is not None
+    SuperadminCapabilityGrant(
+        environment=SuperadminCapabilityEnvironment.staging,
+        capability_kind=SuperadminCapabilityKind.platform_admin,
+        clerk_issuer=SUPERADMIN_ISSUER,
+        clerk_subject=doctor.clerk_id,
+        doctor_id=doctor.id,
+        issuer_sha256=hashlib.sha256(SUPERADMIN_ISSUER.encode()).hexdigest(),
+        subject_sha256=hashlib.sha256(doctor.clerk_id.encode()).hexdigest(),
+        verified_primary_email_sha256=hashlib.sha256(
+            doctor.email.strip().lower().encode()
+        ).hexdigest(),
+        source_ref="controlled:pilot-revocation-test",
+        source_sha256="c" * 64,
+        grant_plan_sha256="d" * 64,
+        granted_by_ref="ticket:pilot-revocation-test",
+        grant_reason_code="reviewed_test_grant",
+        granted_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    ).save()
 
 
 def test_grant_records_all_47_clerk_accounts_without_mutating_tenant_state():
@@ -438,7 +474,7 @@ def test_revoke_missing_grant_does_not_partially_revoke():
     assert revoked_pilot_access_grant(entries[0].clerk_id) is None
 
 
-def test_revoke_refuses_to_disable_a_platform_administrator():
+def test_revoke_does_not_treat_legacy_admin_role_as_authority():
     entries = _entries("admin-revoke")
     doctor = Doctor(
         clerk_id=entries[0].clerk_id,
@@ -453,11 +489,41 @@ def test_revoke_refuses_to_disable_a_platform_administrator():
         reason="Test protected administrator",
     )
 
-    with pytest.raises(PilotAccessGrandfatherError, match="administrators"):
+    result = revoke_pilot_access_grants(
+        [entries[0].clerk_id],
+        operator_ref="change:pilot-admin-offboard",
+        reason="Test protected administrator",
+        confirm_plan_sha256=plan_sha256,
+    )
+
+    doctor.refresh()
+    grant = PilotAccessGrandfatherGrant.get(clerk_id=entries[0].clerk_id)
+    assert result.revoked_count == 1
+    assert doctor.deleted_at is not None
+    assert grant is not None
+    assert grant.revoked_at is not None
+
+
+def test_revoke_refuses_an_exact_active_superadmin_capability(monkeypatch):
+    entries = _entries("capability-revoke")
+    doctor = Doctor(
+        clerk_id=entries[0].clerk_id,
+        email=entries[0].email,
+        biography="",
+    ).save()
+    _grant(entries)
+    _grant_superadmin_capability(monkeypatch, doctor)
+    plan_sha256 = pilot_access_revoke_plan_sha256(
+        [entries[0].clerk_id],
+        operator_ref="change:pilot-capability-offboard",
+        reason="Test protected capability",
+    )
+
+    with pytest.raises(PilotAccessGrandfatherError, match="capabilities"):
         revoke_pilot_access_grants(
             [entries[0].clerk_id],
-            operator_ref="change:pilot-admin-offboard",
-            reason="Test protected administrator",
+            operator_ref="change:pilot-capability-offboard",
+            reason="Test protected capability",
             confirm_plan_sha256=plan_sha256,
         )
 

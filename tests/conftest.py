@@ -45,8 +45,19 @@ from .log import log
 _APPEND_ONLY_TEST_TRIGGERS = {
     "ai_visit_note": "ai_visit_note_reject_delete",
     "ai_visit_note_version_audit": "ai_visit_note_version_audit_reject_mutation",
+    "authority_audit_event": "authority_audit_event_append_only",
     "baa_acceptance": "baa_acceptance_reject_mutation",
     "practice_access_audit": "practice_access_audit_reject_mutation",
+    "superadmin_capability_audit": "superadmin_capability_audit_reject_mutation",
+    "superadmin_capability_grant": "superadmin_capability_grant_guard_mutation",
+    "view_as_audit_event": "view_as_audit_event_append_only",
+    "view_as_session": "view_as_session_guard_mutation",
+    "pilot_access_continuity_amendment": (
+        "pilot_access_continuity_amendment_reject_mutation"
+    ),
+    "pilot_access_continuity_amendment_identity": (
+        "pilot_access_continuity_amendment_identity_reject_mutation"
+    ),
 }
 
 
@@ -55,7 +66,7 @@ def database_reset_truncate_for_tests() -> None:
 
     The application role cannot mutate legal/audit evidence. Test databases
     are owned by the test runner, so their cleanup temporarily disables only
-    the four named mutation triggers and always restores them. This keeps the
+    the named mutation triggers and always restores them. This keeps the
     real triggers enabled while every test executes, including the explicit
     UPDATE/DELETE rejection regressions.
     """

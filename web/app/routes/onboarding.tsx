@@ -7,6 +7,8 @@ import { ArrowRight, Building2, UserRound } from "lucide-react"
 
 import type { Route } from "./+types/onboarding"
 
+import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
+import { ViewAsRouteGuard } from "~/components/ViewAsRouteGuard"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
@@ -28,13 +30,11 @@ import { ScrollArea } from "~/components/ui/scroll-area"
 import { getClient } from "~/configuration/clerk"
 import {
   completeOnboarding,
-  generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
-  uploadExampleNote,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
-import { uploadFileToAzure } from "~/lib/azure-upload"
+import { isAccountRecoveryRequired } from "~/lib/account-recovery"
 import {
   BAA_DOC_ID,
   BAA_PDF_URL,
@@ -44,8 +44,19 @@ import {
   baaAuthorityLine,
   baaCheckboxLabel,
 } from "~/lib/baa"
+import { internalApiFetch } from "~/lib/billing-recovery"
 import { type Channel, resolveChannel } from "~/lib/channel"
-import { MCD_EMAIL_DOMAIN, isMcdEmail } from "~/lib/email-domain"
+import {
+  MCD_EMAIL_DOMAIN,
+  extractEmailDomain,
+  isMcdEmail,
+  isPublicEmailDomain,
+} from "~/lib/email-domain"
+import {
+  exampleNoteUploadErrorCopy,
+  submitExampleNote,
+} from "~/lib/example-note-upload"
+import { isValidNpi } from "~/lib/npi"
 import {
   type BaaDocument,
   type JoinMismatch,
@@ -62,10 +73,10 @@ import {
   practiceReady,
 } from "~/lib/practice-api"
 import { cn } from "~/lib/utils"
+import { checkViewAsStatus } from "~/lib/view-as-api"
 import { requireEnv } from "~/utils/environment"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
-import { UserButton } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { motion } from "motion/react"
@@ -79,11 +90,28 @@ export function canLeaveOnboarding(data: {
   is_admin: boolean
   practice_ready: boolean
 }) {
-  return data.onboarding_completed && (data.is_admin || data.practice_ready)
+  return data.onboarding_completed && data.practice_ready
 }
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
-  const { data } = await settingsData()
+  const viewAsCheck = await checkViewAsStatus()
+  if (viewAsCheck.state !== "ready") {
+    return { viewAsCheck }
+  }
+  if (viewAsCheck.status.active && viewAsCheck.status.diagnostic_code) {
+    return {
+      accountRecoveryRequired: false as const,
+      viewAsCheck,
+    }
+  }
+
+  const { data, error, response } = await settingsData()
+  if (!data && isAccountRecoveryRequired(error, response?.status)) {
+    return {
+      accountRecoveryRequired: true as const,
+      viewAsCheck,
+    }
+  }
   invariant(data, "settings data failed to load")
 
   const [practice, organizationAccess] = await Promise.all([
@@ -103,41 +131,65 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     new URL(request.url).searchParams.get("channel"),
   )
 
-  return { ...data, email, channel, practice, organizationAccess }
+  return {
+    accountRecoveryRequired: false as const,
+    viewAsCheck,
+    ...data,
+    email,
+    channel,
+    practice,
+    organizationAccess,
+  }
 }
 
 export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
+  const onboardingData =
+    "practice" in loaderData && !loaderData.accountRecoveryRequired
+      ? loaderData
+      : null
   const [practice, setPractice] = useState<PracticeStatus | null>(
-    loaderData.practice,
+    onboardingData?.practice ?? null,
   )
-  const zoomEnabled = isZoomEnabled(loaderData.email)
+  const zoomEnabled = isZoomEnabled(onboardingData?.email ?? null)
 
   return (
-    <div className="bg-background min-h-screen">
+    <ViewAsRouteGuard
+      check={loaderData.viewAsCheck}
+      className="bg-background min-h-screen"
+    >
       <header className="border-b">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5">
           <BrandLogo variant="dark" size="sm" />
           <div className="flex items-center gap-3">
-            {loaderData.email ? (
+            {onboardingData?.email ? (
               <span className="text-muted-foreground hidden text-sm sm:inline">
-                {loaderData.email}
+                {onboardingData.email}
               </span>
             ) : null}
-            <UserButton />
+            <ViewAsAccountControl />
           </div>
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-5 py-10">
-        {practice?.access_revoked ? (
-          <OrganizationAccessRevoked practice={practice} />
-        ) : !practiceReady(practice) && loaderData.organizationAccess ? (
+        {!onboardingData ? (
+          <AccountRecoveryRequired />
+        ) : onboardingData.organizationAccess?.state === "claim" ? (
           <OrganizationAccessFlow
-            opportunity={loaderData.organizationAccess}
-            onboardingCompleted={loaderData.onboarding_completed}
+            opportunity={onboardingData.organizationAccess}
+            onboardingCompleted={onboardingData.onboarding_completed}
           />
+        ) : onboardingData.organizationAccess?.state === "pending" ||
+          onboardingData.organizationAccess?.state === "support" ||
+          (onboardingData.organizationAccess?.state === "ready" &&
+            !practiceReady(practice)) ? (
+          <ManagedOrganizationAccessNotice
+            disposition={onboardingData.organizationAccess}
+          />
+        ) : practice?.access_revoked ? (
+          <OrganizationAccessRevoked practice={practice} />
         ) : practiceReady(practice) ? (
           <OptionalSetup
-            biography={loaderData.biography}
+            biography={onboardingData.biography}
             zoomEnabled={zoomEnabled}
             practice={practice}
           />
@@ -145,11 +197,27 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           <PracticeFlow
             practice={practice}
             onPractice={setPractice}
-            channel={loaderData.channel}
-            email={loaderData.email}
+            channel={onboardingData.channel}
+            email={onboardingData.email}
           />
         )}
       </main>
+    </ViewAsRouteGuard>
+  )
+}
+
+export function AccountRecoveryRequired() {
+  return (
+    <div className="max-w-xl">
+      <StepKicker n="01" label="Account recovery" />
+      <DisplayTitle>Your records are safe</DisplayTitle>
+      <p className="text-muted-foreground mt-4 leading-relaxed">
+        This email is linked to a previous sign-in. Contact Cosmaneura support
+        so we can securely reconnect this sign-in to your existing account.
+      </p>
+      <Button asChild size="lg" className="mt-8">
+        <a href="mailto:info@cosmaneura.com">Contact support</a>
+      </Button>
     </div>
   )
 }
@@ -193,7 +261,9 @@ export function OrganizationAccessFlow({
   return (
     <div className="max-w-xl">
       <StepKicker n="01" label="Organization access" />
-      <DisplayTitle>Join {opportunity.organization_name}</DisplayTitle>
+      <DisplayTitle>
+        Join {opportunity.organization_name ?? "your organization"}
+      </DisplayTitle>
       <p className="text-muted-foreground mt-4 leading-relaxed">
         Your verified @{opportunity.email_domain} account is eligible. Enter the
         access code provided by your organization to continue to your Cosmas
@@ -241,6 +311,40 @@ export function OrganizationAccessFlow({
           {error}
         </p>
       ) : null}
+    </div>
+  )
+}
+
+export function ManagedOrganizationAccessNotice({
+  disposition,
+}: {
+  disposition: OrganizationAccessOpportunity
+}) {
+  const pending = disposition.state === "pending"
+
+  return (
+    <div className="max-w-xl">
+      <StepKicker n="01" label="Organization access" />
+      <DisplayTitle>
+        {pending
+          ? "Your organization is setting up access"
+          : "We need to review your organization access"}
+      </DisplayTitle>
+      <p className="text-muted-foreground mt-4 leading-relaxed">
+        {pending
+          ? "We recognized this as an organization-managed work account, but your individual roster access is not ready yet."
+          : "We could not safely match this sign-in to one active organization assignment. Your records remain safe, and no new agreement is required from you here."}
+      </p>
+      <p className="text-muted-foreground mt-3 text-sm leading-relaxed">
+        An email domain identifies the correct setup path, but does not grant
+        patient access by itself. Ask your organization administrator to confirm
+        your roster assignment, or contact Cosmaneura support.
+      </p>
+      <Button asChild size="lg" className="mt-8">
+        <a href="mailto:info@cosmaneura.com?subject=Organization%20access%20review">
+          Contact support
+        </a>
+      </Button>
     </div>
   )
 }
@@ -467,7 +571,7 @@ function OwnerFlow({
   )
 }
 
-function PracticeForm({
+export function PracticeForm({
   onPractice,
   onBack,
   channel,
@@ -491,12 +595,29 @@ function PracticeForm({
   const [region, setRegion] = useState("")
   const [npi, setNpi] = useState("")
   const [isSolo, setIsSolo] = useState(formChannel !== "mcd")
-  const [pastoralPack, setPastoralPack] = useState(formChannel !== "direct")
+  const [domainConfirmed, setDomainConfirmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const controllingDomain = mcdOk ? MCD_EMAIL_DOMAIN : extractEmailDomain(email)
+  const publicEmailDomain = isPublicEmailDomain(controllingDomain)
+  const normalizedNpi = npi.trim()
+  const npiError =
+    normalizedNpi && !/^\d{10}$/.test(normalizedNpi)
+      ? "NPI must be exactly 10 digits."
+      : normalizedNpi && !isValidNpi(normalizedNpi)
+        ? "NPI checksum is invalid."
+        : null
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (npiError) {
+      setError(npiError)
+      return
+    }
+    if (!isSolo && !domainConfirmed) {
+      setError(`Confirm @${controllingDomain} before continuing.`)
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -504,10 +625,10 @@ function PracticeForm({
         legal_name: legalName,
         city,
         region,
-        npi,
+        npi: normalizedNpi,
         is_solo: isSolo,
         channel: formChannel,
-        pastoral_pack: pastoralPack,
+        pastoral_pack: false,
       })
       onPractice(next)
     } catch (err) {
@@ -537,20 +658,29 @@ function PracticeForm({
         </div>
       ) : channel === "mcd" && !mcdOk ? (
         <div className="mt-4 rounded-xl border border-[var(--brand-gold)] bg-[var(--brand-cream)] px-4 py-3 text-sm text-[var(--brand-navy-deep)]">
-          This is a Cosmas practice on your email, not an MCD tenant. Pastoral
-          pack can stay on.
+          This is a Cosmas practice on your email, not an MCD tenant. The
+          conscience and pastoral pack will be available soon.
         </div>
       ) : null}
       <StepKicker n="02" label="Covered entity" />
       <DisplayTitle>Name the practice</DisplayTitle>
       <p className="text-muted-foreground mt-3">
-        This legal name appears on the BAA with {COMPANY}. Solo or group — one
-        agreement either way. Workforce will have to sign in from the same email
-        domain as this account.
+        This legal name appears on the BAA with {COMPANY}.{" "}
+        {publicEmailDomain
+          ? "This account can create a solo practice."
+          : "Solo or group — one agreement either way. Workforce will have to sign in from the same email domain as this account."}
         {formChannel === "mcd"
           ? " MyCatholicDoctor is the network. Cosmas is still the product."
           : ""}
       </p>
+      {controllingDomain ? (
+        <div className="bg-card mt-5 rounded-lg border px-4 py-3 text-sm">
+          <span className="font-medium text-[var(--brand-navy-deep)]">
+            @{controllingDomain}
+          </span>{" "}
+          will be the controlling email domain for this practice.
+        </div>
+      ) : null}
       <form onSubmit={(e) => void onSubmit(e)} className="mt-8 grid gap-5">
         <Field label="Legal name of the covered entity" htmlFor="legal">
           <Input
@@ -586,12 +716,17 @@ function PracticeForm({
           <Input
             id="npi"
             inputMode="numeric"
-            maxLength={10}
             value={npi}
-            onChange={(e) =>
-              setNpi(e.target.value.replace(/\D/g, "").slice(0, 10))
-            }
+            onChange={(e) => setNpi(e.target.value)}
+            aria-invalid={Boolean(npiError)}
+            aria-describedby={npiError ? "npi-error" : undefined}
+            placeholder="10 digits"
           />
+          {npiError ? (
+            <p id="npi-error" role="alert" className="text-destructive text-xs">
+              {npiError}
+            </p>
+          ) : null}
         </Field>
         <fieldset className="grid gap-2">
           <legend className="text-sm font-medium">Who practices here?</legend>
@@ -600,35 +735,67 @@ function PracticeForm({
               type="radio"
               className="sr-only"
               checked={isSolo}
-              onChange={() => setIsSolo(true)}
+              onChange={() => {
+                setIsSolo(true)
+                setDomainConfirmed(false)
+              }}
             />
             Solo — I am the only clinician on this BAA
           </label>
-          <label className={choiceClass(!isSolo)}>
+          <label
+            className={cn(
+              choiceClass(!isSolo),
+              publicEmailDomain && "cursor-not-allowed opacity-60",
+            )}
+          >
             <input
               type="radio"
               className="sr-only"
               checked={!isSolo}
+              disabled={publicEmailDomain}
               onChange={() => setIsSolo(false)}
             />
             Group — I will invite workforce under this same BAA
           </label>
+          {publicEmailDomain ? (
+            <p className="text-muted-foreground mt-1 text-xs">
+              Shared email domains such as @{controllingDomain} can create a
+              solo practice. Use a practice-owned work email to invite a group.
+            </p>
+          ) : null}
         </fieldset>
-        <label className="bg-card flex gap-3 rounded-lg border px-4 py-3 text-sm leading-snug">
+        {!isSolo && controllingDomain ? (
+          <label className="bg-card flex gap-3 rounded-lg border px-4 py-3 text-sm leading-snug">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-[var(--brand-navy-deep)]"
+              checked={domainConfirmed}
+              onChange={(e) => setDomainConfirmed(e.target.checked)}
+            />
+            <span>
+              I confirm that @{controllingDomain} is the practice’s work email
+              domain. Clinicians using another domain will not be able to join.
+            </span>
+          </label>
+        ) : null}
+        <label className="bg-muted/40 flex gap-3 rounded-lg border px-4 py-3 text-sm leading-snug">
           <input
             type="checkbox"
+            disabled
             className="mt-0.5 size-4 accent-[var(--brand-navy-deep)]"
-            checked={pastoralPack}
-            onChange={(e) => setPastoralPack(e.target.checked)}
           />
           <span>
-            Enable the conscience and pastoral pack (NFP terminology, parish
-            correspondence under per-event approval). Off by default for
-            practices that are not Catholic.
+            <span className="font-medium">Coming soon:</span> the conscience and
+            pastoral pack, including NFP terminology and parish correspondence
+            under per-event approval.
           </span>
         </label>
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
-        <Button type="submit" disabled={busy} size="lg">
+        <Button
+          type="submit"
+          disabled={busy || Boolean(npiError) || (!isSolo && !domainConfirmed)}
+          size="lg"
+        >
           {busy ? "Saving…" : "Continue to the BAA"}
         </Button>
       </form>
@@ -1108,25 +1275,15 @@ function NotesStep({
   async function onSubmit(values: z.infer<typeof formSchema>) {
     invariant(file, "a file must be selected before submitting")
 
-    const { data: sasSignature } = await generateSignedExampleNoteUploadUrl()
-    invariant(sasSignature, "SAS signature should exist")
+    const uploadResult = await submitExampleNote(file, values.note_type)
 
-    const { stampedFileName, error: uploadError } = await uploadFileToAzure(
-      file,
-      sasSignature,
-    )
-
-    if (uploadError) {
+    if (!uploadResult.ok) {
       toast({
-        title: "Failed to upload note. Please try again.",
+        ...exampleNoteUploadErrorCopy(uploadResult.stage),
         variant: "destructive",
       })
       return
     }
-
-    await uploadExampleNote({
-      query: { file_name: stampedFileName, note_type: values.note_type },
-    })
 
     setFile(null)
     toast({
@@ -1156,7 +1313,7 @@ function NotesStep({
               <div className="flex items-center gap-4 font-semibold">
                 <p>Upload Example Visit Note</p>
                 <p className="text-muted-foreground text-xs">
-                  Click or drag a PDF (under 10MB)
+                  Click or drag a PDF (10MB or smaller)
                 </p>
               </div>
             ) : (
@@ -1235,7 +1392,7 @@ function ZoomStep({
     const clerk = await getClient()
     const token = await clerk!.session!.getToken()
     const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
-    const res = await fetch(`${base}/internal/v1/zoom-auth-url`, {
+    const res = await internalApiFetch(`${base}/internal/v1/zoom-auth-url`, {
       headers: { Authorization: `Bearer ${token}` },
       credentials: "include",
     })

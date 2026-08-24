@@ -6,14 +6,41 @@ from fastapi.testclient import TestClient
 from app.server import api_app
 
 from app.models.appointment import Appointment
+from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
 
 from tests.factories import (
     AppointmentRequestFactory,
     DoctorFactory,
     PastAppointmentRequestFactory,
+    SimpleIncompleteIntakeFactory,
 )
-from tests.routes.utils import assert_status, provision_practice_in_force
+from tests.routes.utils import (
+    assert_status,
+    get_clerk_dev_user,
+    provision_practice_in_force,
+)
+
+
+def test_intake_detail_returns_public_capability_to_owning_provider(
+    authenticated_client: TestClient,
+):
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.get(clerk_id=clerk_user.id)
+    assert doctor is not None
+    intake = SimpleIncompleteIntakeFactory.build(doctor_id=doctor.id).save()
+
+    response = authenticated_client.get(
+        api_app.url_path_for(
+            "intake_detail",
+            appointment_id=str(intake.appointment_id),
+        )
+    )
+
+    assert_status(response)
+    payload = response.json()["intake"]
+    assert payload["id"] == str(intake.id)
+    assert payload["public_url"].endswith(f"/chat/intake/{intake.id}")
 
 
 def test_intake_creation(client: TestClient, sync_celery):

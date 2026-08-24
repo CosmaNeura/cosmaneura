@@ -13,6 +13,7 @@ from typeid.errors import TypeIDException
 import app.commands.intake.chat
 import app.commands.intake.create
 from app.commands.intake.create import AppointmentRequest, AppointmentResponse
+from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
@@ -77,6 +78,7 @@ def external_api_ping():
 
 @external_api_app.post("/intake")
 def create_intake(request: Request, data: AppointmentRequest) -> AppointmentResponse:
+    deny_view_as_browser_activity(request)
     api_user: Doctor = request.state.api_user
     requested_email = str(data.doctor_email or "").strip().lower()
     authenticated_email = (api_user.email or "").strip().lower()

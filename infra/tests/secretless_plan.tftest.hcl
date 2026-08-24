@@ -92,6 +92,7 @@ override_data {
       AZURE_UPLOADS_ACCOUNT_URL                  = "https://example.invalid"
       AZURE_UPLOADS_CONTAINER_NAME               = "uploads"
       AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME = "example-notes"
+      AUTHORITY_CLERK_ISSUER                     = "https://clerk.example.invalid"
       CLERK_PRIVATE_KEY                          = "not-a-secret"
       DATABASE_URL                               = "postgresql://placeholder.invalid/app"
       DATABASE_URL_SECRET_NAME                   = "database-url"

@@ -264,22 +264,6 @@ export const DateTimePicker = forwardRef<HTMLInputElement, DateTimePickerProps>(
       }
     }, [dateTime, setInputValue, dateTimeFormatFunction])
 
-    // when `setDateTime` is called via the originating `FormField` state hook, this is called twice
-    // since setDateTime reference *and* inputValue change. This causes issues if we are attempting
-    useEffect(() => {
-      // if (!inputValue && !dateTime) {
-      //   setDateTime(dateTimeFormatFunction(dateTime))
-      // }
-      // if there's no text input, clear the date
-      // if (!inputValue) setDateTime(undefined)
-
-      console.log("input value", inputValue)
-      console.log("datet time", dateTime)
-
-      // TODO onBlur handles most of this now, but leaving this here in case we introduced an odd bug
-      // if (!isValidDateFormat(inputValue)) setDateTime(undefined)
-    }, [inputValue, dateTime, setDateTime])
-
     useEffect(() => {
       function handleClickOutside(e: MouseEvent) {
         if (

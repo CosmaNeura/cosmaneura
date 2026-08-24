@@ -1,4 +1,5 @@
 import { getClient } from "~/configuration/clerk"
+import { internalApiFetch, safeBillingReturnTo } from "~/lib/billing-recovery"
 import { requireEnv } from "~/utils/environment"
 
 export type PracticeStatus = {
@@ -40,7 +41,8 @@ export type PracticeLookupResult = {
 }
 
 export type OrganizationAccessOpportunity = {
-  organization_name: string
+  state: "ready" | "claim" | "pending" | "support"
+  organization_name: string | null
   email_domain: string
 }
 
@@ -87,7 +89,7 @@ async function practiceRequest<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(`${apiBase()}/internal/v1${path}`, {
+  const res = await internalApiFetch(`${apiBase()}/internal/v1${path}`, {
     ...init,
     headers: { ...(await authHeaders()), ...(init?.headers ?? {}) },
     credentials: "include",
@@ -200,12 +202,39 @@ export function getBaaAcceptances() {
 
 // Both billing endpoints return a Stripe-hosted URL to send the browser to.
 // They stay reachable after the trial lapses (the 402 gate exempts them).
-export function createBillingCheckout() {
+export function billingCheckoutPaths(returnTo?: string | null) {
+  const buildPaths = (safeReturnTo: string) => {
+    const successParams = new URLSearchParams({
+      billing: "success",
+      returnTo: safeReturnTo,
+    })
+    const cancelParams = new URLSearchParams({
+      billing: "cancelled",
+      returnTo: safeReturnTo,
+    })
+    return {
+      successPath: `/settings?${successParams.toString()}`,
+      cancelPath: `/settings?${cancelParams.toString()}`,
+    }
+  }
+
+  const paths = buildPaths(safeBillingReturnTo(returnTo))
+  // The backend intentionally caps Stripe redirect paths at 200 characters.
+  // Preserve normal deep links, but never turn an unusually long current URL
+  // into a failed Checkout request.
+  if (paths.successPath.length <= 200 && paths.cancelPath.length <= 200) {
+    return paths
+  }
+  return buildPaths("/notes")
+}
+
+export function createBillingCheckout(returnTo?: string | null) {
+  const paths = billingCheckoutPaths(returnTo)
   return practiceRequest<{ url: string }>("/practice/billing/checkout", {
     method: "POST",
     body: JSON.stringify({
-      success_path: "/settings?billing=success",
-      cancel_path: "/settings?billing=cancelled",
+      success_path: paths.successPath,
+      cancel_path: paths.cancelPath,
     }),
   })
 }

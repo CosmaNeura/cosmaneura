@@ -20,9 +20,14 @@ from app.services.clerk_cohort import (
     ClerkCohortIdentity,
     canonical_clerk_email_pair_sha256,
 )
+from app.services.pilot_access_lock import lock_pilot_access_lineage
+from app.services.superadmin_capability import (
+    SuperadminCapabilityError,
+    get_active_runtime_superadmin_capability_kinds,
+)
 
 from activemodel.session_manager import get_session
-from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor, DoctorRole
+from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import PracticeMember
 from sqlalchemy import func, or_
@@ -506,6 +511,7 @@ def grant_pilot_access_grants(
     current = _aware(now)
 
     with get_session() as session:
+        lock_pilot_access_lineage(session)
         snapshots, exact = _assess_grant_plan(
             session,
             normalized=normalized,
@@ -597,15 +603,28 @@ def revoke_pilot_access_grants(
     current = _aware(now)
 
     with get_session() as session:
+        lock_pilot_access_lineage(session)
         for clerk_id in normalized:
             _lock_clerk_subject(session, clerk_id)
         doctors = _existing_doctors_by_clerk(session, normalized)
-        if any(
-            doctor.role == DoctorRole.admin and doctor.deleted_at is None
-            for doctor in doctors.values()
-        ):
+        try:
+            protected = any(
+                get_active_runtime_superadmin_capability_kinds(
+                    session,
+                    subject=doctor.clerk_id,
+                    doctor_id=doctor.id,
+                    at=current,
+                    lock_for_update=True,
+                )
+                for doctor in doctors.values()
+            )
+        except SuperadminCapabilityError:
             raise PilotAccessGrandfatherError(
-                "platform administrators cannot be disabled through pilot revocation"
+                "superadmin capability state could not be verified"
+            ) from None
+        if protected:
+            raise PilotAccessGrandfatherError(
+                "active superadmin capabilities must be revoked before pilot access can be revoked"
             )
         existing = _existing_grants_by_clerk(session, normalized, lock=True)
 

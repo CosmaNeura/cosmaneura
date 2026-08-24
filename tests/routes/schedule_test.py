@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import ANY, patch
 
+import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 
@@ -8,9 +9,18 @@ from app.server import api_app
 
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
+from app.models.superadmin_capability import (
+    SuperadminCapabilityEnvironment,
+    SuperadminCapabilityKind,
+)
 from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
-from tests.routes.utils import get_clerk_dev_user
+from tests.routes.utils import (
+    MOCK_CLERK_ISSUER,
+    get_clerk_dev_user,
+    grant_test_superadmin_capability,
+    provision_practice_in_force,
+)
 
 CLERK_DEV_USER_EMAIL = "dev@test.com"
 
@@ -76,7 +86,71 @@ def test_schedule_list_with_zoom(authenticated_client: TestClient):
     data = response.json()
     assert data["zoom_connected"] is True
     assert len(data["meetings"]) == 1
+    assert data["meetings"][0]["join_url"] == "https://zoom.us/j/111222333"
     mock_sync.queue.assert_called_once_with(str(doctor.id))
+
+
+def test_schedule_list_redacts_target_join_url_during_view_as(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def staging_environment():
+        return SuperadminCapabilityEnvironment.staging
+
+    for path in (
+        "app.routes.dependencies.view_as.configured_superadmin_capability_environment",
+        "app.routes.view_as.configured_superadmin_capability_environment",
+        "app.services.superadmin_capability.configured_superadmin_capability_environment",
+    ):
+        monkeypatch.setattr(path, staging_environment)
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_clerk_issuer",
+        lambda: MOCK_CLERK_ISSUER,
+    )
+
+    def current_email(clerk_id: str) -> str | None:
+        doctor = Doctor.get(clerk_id=clerk_id)
+        return doctor.email.strip().lower() if doctor and doctor.email else None
+
+    monkeypatch.setattr("app.services.view_as.verified_primary_email", current_email)
+
+    actor = _get_or_create_doctor()
+    grant_test_superadmin_capability(actor, SuperadminCapabilityKind.view_as)
+    target = Doctor(
+        clerk_id="user_schedule_view_as_target",
+        email="schedule-view-as-target@example.net",
+        biography="",
+    ).save()
+    provision_practice_in_force(target)
+    _create_zoom_integration(target)
+    meeting = _make_meeting(target)
+
+    began = authenticated_client.post(
+        api_app.url_path_for("begin_view_as"),
+        json={"target_doctor_id": str(target.id)},
+    )
+    assert began.status_code == status.HTTP_200_OK, began.text
+    authenticated_client.headers["X-Cosmaneura-View-As-Binding"] = began.json()[
+        "request_binding"
+    ]
+
+    with patch("app.routes.internal.sync_zoom_meetings") as mock_sync:
+        response = authenticated_client.get(api_app.url_path_for("schedule_list"))
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    assert response.json()["meetings"] == [
+        {
+            "id": str(meeting.id),
+            "zoom_meeting_id": "111222333",
+            "topic": "Test Meeting",
+            "start_time": response.json()["meetings"][0]["start_time"],
+            "duration": 30,
+            "join_url": None,
+            "status": "scheduled",
+            "appointment_id": None,
+        }
+    ]
+    mock_sync.queue.assert_not_called()
 
 
 def test_schedule_list_excludes_cancelled(authenticated_client: TestClient):

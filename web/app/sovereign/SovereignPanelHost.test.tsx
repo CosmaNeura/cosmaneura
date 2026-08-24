@@ -9,11 +9,8 @@ import {
 } from "vitest"
 
 import { getClient } from "~/configuration/clerk"
+import { getViewAsStatus } from "~/lib/view-as-api"
 
-import {
-  SOVEREIGN_PANEL_ASSET_PATH,
-  SOVEREIGN_PANEL_INTEGRITY,
-} from "./SovereignPanelAsset"
 import {
   SovereignPanelHost,
   resolveSovereignProviderConfig,
@@ -21,6 +18,18 @@ import {
 import { act, render, waitFor } from "@testing-library/react"
 
 vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
+
+const inactiveViewAs = {
+  request_binding: "inactive" as const,
+  can_view_as: false,
+  active: false,
+  read_only: false,
+  diagnostic_code: null,
+  expires_at: null,
+  actor: null,
+  target: null,
+}
 
 type PanelApi = NonNullable<Window["CosmaNeuraPanel"]>
 type PanelOptions = Parameters<PanelApi["mount"]>[0]
@@ -40,8 +49,9 @@ function signedInClerk() {
     load: async () => {},
     user: { id: "user_provider_test" },
     session: {
-      getToken: vi.fn(async (options?: { template?: string }) =>
-        options?.template ? "provider-oidc-token" : "platform-session-token",
+      getToken: vi.fn(
+        async (options?: { template?: string }): Promise<string> =>
+          options?.template ? "provider-oidc-token" : "platform-session-token",
       ),
     },
     redirectToSignIn: async () => {},
@@ -75,7 +85,8 @@ describe("SovereignPanelHost", () => {
       "VITE_SOVEREIGN_PROVIDER_URL",
       "https://provider-sovereign.example",
     )
-    vi.stubEnv("VITE_SOVEREIGN_CLERK_TEMPLATE", "cosmaneura-sovereign")
+    vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
+    vi.mocked(getViewAsStatus).mockResolvedValue(inactiveViewAs)
   })
 
   afterEach(() => {
@@ -90,16 +101,14 @@ describe("SovereignPanelHost", () => {
     delete window.CosmaNeuraPanel
   })
 
-  it("accepts only an origin-only HTTPS target and a bounded template name", () => {
+  it("accepts only an enabled, origin-only HTTPS authority target", () => {
     expect(
       resolveSovereignProviderConfig({
         VITE_SOVEREIGN_PROVIDER_URL: "https://sovereign.example/",
-        VITE_SOVEREIGN_CLERK_TEMPLATE: "cosmaneura-sovereign",
+        VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "true",
       }),
     ).toEqual({
       origin: "https://sovereign.example",
-      clerkTemplate: "cosmaneura-sovereign",
-      platformAuthorityEnabled: false,
     })
 
     for (const origin of [
@@ -111,16 +120,50 @@ describe("SovereignPanelHost", () => {
       expect(
         resolveSovereignProviderConfig({
           VITE_SOVEREIGN_PROVIDER_URL: origin,
-          VITE_SOVEREIGN_CLERK_TEMPLATE: "cosmaneura-sovereign",
+          VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "true",
         }),
       ).toBeNull()
     }
+    for (const flag of [undefined, "false", "TRUE", true]) {
+      expect(
+        resolveSovereignProviderConfig({
+          VITE_SOVEREIGN_PROVIDER_URL: "https://sovereign.example",
+          VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: flag,
+        }),
+      ).toBeNull()
+    }
+  })
+
+  it("never loads or mounts Sovereign while view-as is active", async () => {
+    vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
+    vi.mocked(getViewAsStatus).mockResolvedValue({
+      ...inactiveViewAs,
+      request_binding:
+        "vab1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as const,
+      can_view_as: true,
+      active: true,
+      read_only: true,
+      expires_at: "2099-08-24T17:15:00Z",
+      actor: {
+        doctor_id: "doctor_actor",
+        email: "actor@example.com",
+      },
+      target: {
+        doctor_id: "doctor_target",
+        email: "target@example.com",
+      },
+    })
+    const appendChild = vi.spyOn(document.head, "appendChild")
+
+    render(<SovereignPanelHost appointmentId="appointment_view_as" />)
+    await waitFor(() => expect(getViewAsStatus).toHaveBeenCalledTimes(1))
+
+    expect(mount).not.toHaveBeenCalled()
     expect(
-      resolveSovereignProviderConfig({
-        VITE_SOVEREIGN_PROVIDER_URL: "https://sovereign.example",
-        VITE_SOVEREIGN_CLERK_TEMPLATE: "bad template",
-      }),
-    ).toBeNull()
+      appendChild.mock.calls.some(
+        ([node]) => node instanceof HTMLScriptElement,
+      ),
+    ).toBe(false)
   })
 
   it("reuses and rotates one appointment-bound mount session when enabled", async () => {
@@ -254,9 +297,10 @@ describe("SovereignPanelHost", () => {
       }),
     )
     expect(clerk.session.getToken).toHaveBeenCalledTimes(1)
-    expect(clerk.session.getToken).not.toHaveBeenCalledWith({
-      template: "cosmaneura-sovereign",
-    })
+    expect(clerk.session.getToken).toHaveBeenCalledWith()
+    expect(
+      clerk.session.getToken.mock.calls.every((args) => args.length === 0),
+    ).toBe(true)
     options.onHumanContact({
       label: "Talk with a person",
       action_id: "human-contact",
@@ -353,80 +397,60 @@ describe("SovereignPanelHost", () => {
     ).toHaveLength(1)
   })
 
-  it("keeps legacy auth default-off from platform authority without a raw clinical bridge", async () => {
+  it("rejects an exchange response that echoes a Clerk-shaped credential", async () => {
+    const clerkToken = `eyJ.${"a".repeat(48)}.${"b".repeat(48)}`
+    const clerk = signedInClerk()
+    clerk.session.getToken.mockResolvedValue(clerkToken)
+    vi.mocked(getClient).mockResolvedValue(clerk)
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json(mountContextResponse(clerkToken))),
+    )
+    mountImplementation = () => ({
+      setRecord: vi.fn(async () => 1),
+      destroy: vi.fn(),
+    })
+    vi.spyOn(document.head, "appendChild").mockImplementation(
+      <T extends Node>(node: T): T => {
+        if (node instanceof HTMLScriptElement) {
+          window.CosmaNeuraPanel = panelApi
+          queueMicrotask(() => node.onload?.call(node, new Event("load")))
+        }
+        return node
+      },
+    )
+
+    render(<SovereignPanelHost appointmentId="appointment_synthetic_echo" />)
+    await waitFor(() => expect(mount).toHaveBeenCalledTimes(1))
+
+    await expect(mount.mock.calls[0][0].getAuthToken()).rejects.toThrow(
+      "Provider authority response is invalid",
+    )
+    expect(clerk.session.getToken).toHaveBeenCalledWith()
+  })
+
+  it("does not load or mount the panel when platform authority is disabled", async () => {
+    vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "false")
     const clerk = signedInClerk()
     vi.mocked(getClient).mockResolvedValue(clerk)
     const fetchMock = vi.fn()
     vi.stubGlobal("fetch", fetchMock)
 
-    const setRecord = vi.fn(async (_recordId: string | null) => 1)
-    const destroy = vi.fn()
-    mountImplementation = () => ({ setRecord, destroy })
     const appendSpy = vi.spyOn(document.head, "appendChild")
-    appendSpy.mockImplementation(<T extends Node>(node: T): T => {
-      if (node instanceof HTMLScriptElement) {
-        window.CosmaNeuraPanel = panelApi
-        queueMicrotask(() => node.onload?.call(node, new Event("load")))
-      }
-      return node
-    })
 
-    const view = render(<SovereignPanelHost appointmentId="appointment_a" />)
-    await waitFor(() => expect(mount).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_a"))
+    render(<SovereignPanelHost appointmentId="appointment_a" />)
+    await act(async () => undefined)
 
-    if (appendSpy.mock.calls.length) {
-      const script = appendSpy.mock.calls[0][0] as HTMLScriptElement
-      expect(script.getAttribute("src")).toBe(SOVEREIGN_PANEL_ASSET_PATH)
-      expect(script.integrity).toBe(SOVEREIGN_PANEL_INTEGRITY)
-      expect(script.crossOrigin).toBe("anonymous")
-    }
-
-    const options = mount.mock.calls[0][0]
-    expect(options.embedVersion).toBe("1.0")
-    expect(options).not.toHaveProperty("fabBottom")
-    expect(options.shiftContent).toBe(true)
-    expect(options).not.toHaveProperty("fabRight")
+    expect(getViewAsStatus).not.toHaveBeenCalled()
+    expect(getClient).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(mount).not.toHaveBeenCalled()
+    expect(
+      appendSpy.mock.calls.some(([node]) => node instanceof HTMLScriptElement),
+    ).toBe(false)
     expect(
       document.querySelector("style[data-sovereign-provider-v7-layer]"),
     ).toBeNull()
-    expect(options).not.toHaveProperty("requireClientTurnId")
-    expect(options).not.toHaveProperty("loadHistory")
-    await expect(options.getAuthToken()).resolves.toBe("provider-oidc-token")
-    expect(clerk.session.getToken).toHaveBeenCalledWith({
-      template: "cosmaneura-sovereign",
-    })
-
-    await expect(options.getContext()).resolves.toEqual({
-      clientId: "appointment_a",
-    })
-    expect(fetchMock).not.toHaveBeenCalled()
-
-    view.rerender(<SovereignPanelHost appointmentId="appointment_b" />)
-    await waitFor(() => expect(mount).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_b"))
-    const optionsB = mount.mock.calls[1][0]
-    await expect(optionsB.getContext()).resolves.toEqual({
-      clientId: "appointment_b",
-    })
-    view.rerender(<SovereignPanelHost appointmentId="appointment_c" />)
-    await waitFor(() => expect(mount).toHaveBeenCalledTimes(3))
-    await waitFor(() => expect(setRecord).toHaveBeenCalledWith("appointment_c"))
-
-    const optionsC = mount.mock.calls[2][0]
-    await expect(optionsC.getContext()).resolves.toEqual({
-      clientId: "appointment_c",
-    })
-    const serializedContext = JSON.stringify(await optionsC.getContext())
-    expect(serializedContext).not.toContain("name")
-    expect(serializedContext).not.toContain("chart")
-    expect(serializedContext).not.toContain("date_of_birth")
-
-    view.unmount()
-    expect(destroy).toHaveBeenCalledTimes(3)
-    expect(
-      setRecord.mock.calls.filter(([value]) => value === null),
-    ).toHaveLength(3)
   })
 
   it("destroys and detaches the panel when the initial record bind fails", async () => {

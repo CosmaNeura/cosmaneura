@@ -53,6 +53,12 @@ if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend);
 	echo "Failed to load staging deployment configuration."
 	exit 1
 fi
+if ! printf '%s' "$ENV_JSON" |
+	python "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
+		--environment staging; then
+	echo "Staging capability identity configuration is not deployable."
+	exit 1
+fi
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 
 # Keep the provider-v7 runtime gates synchronized even when the inherited
@@ -244,7 +250,7 @@ PUBLIC_VARS=(
 	AZURE_OPENAI_ENDPOINT
 	AZURE_UPLOADS_CONTAINER_NAME AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
 	ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
-	RECALL_API_BASE
+	API_BASE_URL RECALL_API_BASE
 	COOKIE_DOMAIN
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID
@@ -566,25 +572,46 @@ check_deployment() {
 	echo "Checking deployment status for $container_name..."
 
 	while [[ $attempts -lt $max_attempts ]]; do
-		# Check provisioning state
-		provisioning_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.provisioningState" -o tsv)
-		current_image=$(az containerapp revision list -n "$container_name" -g "$RESOURCE_GROUP" --query "[0].properties.template.containers[0].image" -o tsv)
-		running_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.runningStatus" -o tsv)
+		# Revision-list order is unspecified. Inspect the exact latest revision
+		# created by the update rather than accepting an arbitrary healthy image.
+		local latest_rev_name revision_json current_image health_state running_state provisioning_state
+		latest_rev_name=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.latestRevisionName" -o tsv)
 
-		# should never be empty, error if so
-		if [[ -z "$provisioning_state" ]] || [[ -z "$current_image" ]] || [[ -z "$running_state" ]]; then
-			echo "Error: Failed to get complete status information for $container_name"
-			echo "Provisioning state: $provisioning_state"
-			echo "Current image: $current_image"
-			echo "Running state: $running_state"
+		if [[ -z "$latest_rev_name" ]]; then
+			echo "  $container_name: could not read latestRevisionName (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+
+		revision_json=$(az containerapp revision show -n "$container_name" -g "$RESOURCE_GROUP" \
+			--revision "$latest_rev_name" \
+			--query "{image:properties.template.containers[0].image,health:properties.healthState,running:properties.runningState,provisioning:properties.provisioningState}" -o json 2>/dev/null)
+
+		current_image=$(echo "$revision_json" | jq -r '.image // empty')
+		health_state=$(echo "$revision_json" | jq -r '.health // empty')
+		running_state=$(echo "$revision_json" | jq -r '.running // empty')
+		provisioning_state=$(echo "$revision_json" | jq -r '.provisioning // empty')
+
+		if [[ "$current_image" != "$expected_image" ]]; then
+			echo "  $container_name: latest revision still $current_image, waiting for $expected_image (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+
+		if [[ "$provisioning_state" == "Failed" || "$running_state" == "Failed" ]]; then
+			echo "$container_name: revision $latest_rev_name failed (provisioning=$provisioning_state, running=$running_state, health=$health_state)"
 			return 1
 		fi
 
-		# Validate all conditions
-		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && ( "$running_state" == "Running" || "$running_state" == "RunningAtMaxScale" ) ]]; then
+		# Healthy is the readiness signal. runningState may be Running for the
+		# API or RunningAtMaxScale for a worker, so do not pin one spelling.
+		if [[ "$health_state" == "Healthy" && "$provisioning_state" == "Provisioned" ]]; then
 			if [[ "$container_name" == "$SCHEDULER_CONTAINER" ]]; then
 				local live_scheduler_command
-				live_scheduler_command=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+				live_scheduler_command=$(az containerapp revision show -n "$container_name" -g "$RESOURCE_GROUP" \
+					--revision "$latest_rev_name" \
 					--query "properties.template.containers[0].args[0]" -o tsv)
 				if [[ "$live_scheduler_command" != "$SCHEDULER_COMMAND" ]]; then
 					echo "Scheduler command does not match the checked-in Procfile."
@@ -595,13 +622,90 @@ check_deployment() {
 			return 0
 		fi
 
-		echo "Retrying deployment status for $container_name in 5 seconds... (Attempt $((attempts + 1))/$max_attempts)"
+		echo "  $container_name: provisioning=$provisioning_state running=$running_state health=$health_state (attempt $((attempts + 1))/$max_attempts)"
 
 		sleep 5
 		((attempts++))
 	done
 
 	echo "Deployment check failed for $container_name after $max_attempts attempts."
+	return 1
+}
+
+wait_for_incompatible_worker_replicas_to_drain() {
+	local container_name=$1
+	local git_sha=$2
+	local expected_image="${STAGING_IMAGE}:${git_sha}"
+	local attempts=0
+	local max_attempts=60 # 5 minutes
+	local active_revisions_mode
+
+	if ! active_revisions_mode=$(az containerapp show \
+		-n "$container_name" -g "$RESOURCE_GROUP" \
+		--query "properties.configuration.activeRevisionsMode" -o tsv); then
+		echo "Failed to read worker revision mode while proving drain completion."
+		return 1
+	fi
+	if [[ "$active_revisions_mode" != "Single" ]]; then
+		echo "Worker drain proof requires Single active revision mode; found '$active_revisions_mode'."
+		return 1
+	fi
+
+	echo "Waiting for worker replicas on older images to drain..."
+
+	while [[ $attempts -lt $max_attempts ]]; do
+		local revisions_json expected_revision_count incompatible_revisions remaining_replicas
+		if ! revisions_json=$(az containerapp revision list \
+			-n "$container_name" -g "$RESOURCE_GROUP" \
+			--query "[].{name:name,image:properties.template.containers[0].image}" \
+			-o json); then
+			echo "Failed to list worker revisions while proving drain completion."
+			return 1
+		fi
+		if ! expected_revision_count=$(printf '%s' "$revisions_json" | jq -r \
+			--arg expected_image "$expected_image" \
+			'if type != "array" then error("revision list was not an array") else [.[] | select(.image == $expected_image)] | length end'); then
+			echo "Failed to prove the expected worker revision is present."
+			return 1
+		fi
+		if [[ ! "$expected_revision_count" =~ ^[0-9]+$ || "$expected_revision_count" -eq 0 ]]; then
+			echo "Expected worker image $expected_image is absent from the revision list; refusing to deploy the API."
+			return 1
+		fi
+		if ! incompatible_revisions=$(printf '%s' "$revisions_json" | jq -r \
+			--arg expected_image "$expected_image" \
+			'if type != "array" then error("revision list was not an array") else .[] | select(.image != $expected_image) | .name end'); then
+			echo "Failed to identify incompatible worker revisions."
+			return 1
+		fi
+
+		remaining_replicas=0
+		for revision_name in $incompatible_revisions; do
+			local replica_count
+			if ! replica_count=$(az containerapp replica list \
+				-n "$container_name" -g "$RESOURCE_GROUP" \
+				--revision "$revision_name" --query "length(@)" -o tsv); then
+				echo "Failed to inspect replicas for worker revision $revision_name."
+				return 1
+			fi
+			if [[ ! "$replica_count" =~ ^[0-9]+$ ]]; then
+				echo "Invalid replica count for worker revision $revision_name."
+				return 1
+			fi
+			remaining_replicas=$((remaining_replicas + replica_count))
+		done
+
+		if [[ "$remaining_replicas" -eq 0 ]]; then
+			echo "All worker replicas on older images have drained."
+			return 0
+		fi
+
+		echo "  $remaining_replicas incompatible worker replica(s) remain (attempt $((attempts + 1))/$max_attempts)"
+		sleep 5
+		((attempts++))
+	done
+
+	echo "Worker drain proof failed after $((max_attempts * 5)) seconds. The API was not deployed."
 	return 1
 }
 
@@ -623,6 +727,9 @@ for container in $BACKEND_CONTAINERS; do
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
 		exit 1
+	fi
+	if [[ "$container" == "$WORKER_CONTAINER" ]]; then
+		wait_for_incompatible_worker_replicas_to_drain "$container" "$GIT_SHA" || exit 1
 	fi
 done
 

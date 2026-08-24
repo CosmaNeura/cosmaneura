@@ -20,11 +20,11 @@ import {
 } from "@/components/ui/sidebar"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
+import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { StatusBadge } from "~/components/shared/StatusBadge"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
-import { UserButton } from "@clerk/clerk-react"
 import { motion } from "motion/react"
 
 // logo icon at the top
@@ -256,7 +256,7 @@ export function IconNavigation() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter>
-        <UserButton />
+        <ViewAsAccountControl />
       </SidebarFooter>
     </Sidebar>
   )

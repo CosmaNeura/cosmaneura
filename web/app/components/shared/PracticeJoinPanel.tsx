@@ -15,12 +15,13 @@ export type BillingActionKind =
   | "none"
   | "portal"
   | "portal-unavailable"
+  | "checkout-unavailable"
   | "deferred"
   | "checkout"
 
 export function billingActionKind(
   practice: PracticeStatus,
-  now = new Date(),
+  _now = new Date(),
 ): BillingActionKind {
   // A grandfather grant replaces acquisition billing for this exact account,
   // while an existing subscription must remain visible for maintenance.
@@ -38,17 +39,28 @@ export function billingActionKind(
   if (practice.billing_subscription_manageable) {
     return practice.billing_management_enabled ? "portal" : "portal-unavailable"
   }
-  if (!practice.billing_enabled || practice.billing_exempt_active) return "none"
+  if (practice.billing_exempt_active) return "none"
+  if (!practice.billing_enabled) {
+    return practice.entitled ? "none" : "checkout-unavailable"
+  }
+  // Kept only for safe mixed-version deployments. The current backend always
+  // returns null because it extends short trials instead of deferring Checkout.
   if (
     practice.billing_checkout_available_at &&
-    new Date(practice.billing_checkout_available_at) > now
+    new Date(practice.billing_checkout_available_at) > _now
   ) {
     return "deferred"
   }
   return "checkout"
 }
 
-function BillingActions({ practice }: { practice: PracticeStatus }) {
+function BillingActions({
+  practice,
+  returnTo,
+}: {
+  practice: PracticeStatus
+  returnTo?: string
+}) {
   const [pending, setPending] = useState(false)
   const action = billingActionKind(practice)
   const showSecondaryPortal =
@@ -96,6 +108,16 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
             your existing subscription has not been hidden or replaced.
           </p>
         </>
+      ) : action === "checkout-unavailable" ? (
+        <>
+          <Button size="sm" disabled>
+            Reactivation temporarily unavailable
+          </Button>
+          <p className="text-muted-foreground mt-1 text-xs">
+            Online billing is not available right now. Please contact support;
+            do not create another practice or account.
+          </p>
+        </>
       ) : action === "deferred" ? (
         <Button size="sm" disabled>
           Checkout opens when trial ends
@@ -105,7 +127,10 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
           size="sm"
           disabled={pending}
           onClick={() =>
-            open(createBillingCheckout, "Could not start checkout")
+            open(
+              () => createBillingCheckout(returnTo),
+              "Could not start checkout",
+            )
           }
         >
           {practice.billing_checkout_resumable
@@ -117,13 +142,13 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
       )}
       {action === "deferred" ? (
         <p className="text-muted-foreground mt-1 text-xs">
-          To preserve every remaining trial hour, checkout becomes available on{" "}
+          Your current trial remains active. Checkout becomes available on{" "}
           {new Date(practice.billing_checkout_available_at!).toLocaleString()}.
         </p>
       ) : action === "checkout" && practice.entitled ? (
         <p className="text-muted-foreground mt-1 text-xs">
-          Checkout carries the exact remaining trial end into Stripe; billing
-          starts only after that timestamp.
+          You keep every remaining trial hour. If Stripe requires more notice,
+          your trial is extended—never shortened—and billing begins afterward.
         </p>
       ) : null}
       {showSecondaryPortal ? (
@@ -159,9 +184,11 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
 export function PracticeJoinPanel({
   practice,
   showBillingActions = false,
+  billingReturnTo,
 }: {
   practice: PracticeStatus
   showBillingActions?: boolean
+  billingReturnTo?: string
 }) {
   const isOwner = practice.role === "owner"
 
@@ -172,7 +199,9 @@ export function PracticeJoinPanel({
       </p>
       <p className="mt-1 text-lg font-semibold">{practice.legal_name}</p>
       <p className="text-muted-foreground mt-1 text-sm">
-        Workforce must sign in from @{practice.email_domain}
+        {practice.join_code
+          ? `Workforce must sign in from @${practice.email_domain}`
+          : `@${practice.email_domain} is the practice email domain`}
       </p>
       {practice.pilot_access_grant_active ? (
         <p className="mt-1 text-sm">
@@ -181,7 +210,7 @@ export function PracticeJoinPanel({
       ) : practice.baa_accepted ? (
         <p className="mt-1 text-sm">
           Cosmaneura Inc BAA is in force
-          {practice.pastoral_pack ? " · pastoral pack on" : ""}.
+          {practice.pastoral_pack ? " · pastoral pack coming soon" : ""}.
         </p>
       ) : (
         <p className="text-destructive mt-1 text-sm">
@@ -231,8 +260,22 @@ export function PracticeJoinPanel({
           .
         </p>
       ) : null}
+      {!practice.pilot_access_grant_active &&
+      practice.baa_accepted &&
+      practice.access_authorized &&
+      !practice.access_revoked &&
+      !practice.entitled ? (
+        <div className="bg-muted/50 mt-3 rounded-md border p-3" role="alert">
+          <p className="text-sm font-semibold">Practice access is paused</p>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {isOwner
+              ? "Billing needs attention before clinical tools can be reopened. Your existing records remain stored and unchanged."
+              : "Please contact your practice owner about billing. Only the owner can restore practice access; your existing records remain stored and unchanged."}
+          </p>
+        </div>
+      ) : null}
       {isOwner && showBillingActions ? (
-        <BillingActions practice={practice} />
+        <BillingActions practice={practice} returnTo={billingReturnTo} />
       ) : null}
       {isOwner && practice.join_code ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -248,7 +291,7 @@ export function PracticeJoinPanel({
           : isOwner
             ? practice.join_code
               ? "Share this code with clinicians on the same work-email domain. They attest under this BAA — they do not sign a second agreement."
-              : "Workforce access is managed through the organization’s approved roster."
+              : "This practice does not accept reusable join-code enrollment."
             : practice.authorization_basis === "organization_roster"
               ? "Your access is authorized through the organization’s approved roster under this BAA; you did not personally attest to it."
               : "You attested under this practice’s Cosmaneura Inc BAA."}

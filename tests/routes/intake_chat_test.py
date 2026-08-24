@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
@@ -8,6 +10,12 @@ import app.commands.intake.chat
 import app.jobs.intake.summarize
 import app.routes.chat
 
+from app.models.doctor import Doctor
+from app.models.superadmin_capability import (
+    SuperadminCapabilityEnvironment,
+    SuperadminCapabilityKind,
+)
+
 from tests.factories import (
     EXAMPLE_INTAKE_QUESTIONS,
     AppointmentFactory,
@@ -16,7 +24,13 @@ from tests.factories import (
     SimpleIncompleteIntakeFactory,
 )
 from tests.integration.server import api_app
-from tests.routes.utils import assert_status
+from tests.routes.utils import (
+    MOCK_CLERK_ISSUER,
+    assert_status,
+    get_clerk_dev_user,
+    grant_test_superadmin_capability,
+    provision_practice_in_force,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -65,6 +79,73 @@ def test_revoked_doctor_makes_public_intake_unavailable(
     intake.refresh()
     assert intake.intake_questions == initial_questions
     assert intake.summary is None
+
+
+def test_active_view_as_cookie_blocks_cross_origin_public_intake_write(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    def staging_environment():
+        return SuperadminCapabilityEnvironment.staging
+
+    for path in (
+        "app.routes.dependencies.view_as.configured_superadmin_capability_environment",
+        "app.routes.view_as.configured_superadmin_capability_environment",
+        "app.services.superadmin_capability.configured_superadmin_capability_environment",
+    ):
+        monkeypatch.setattr(path, staging_environment)
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_clerk_issuer",
+        lambda: MOCK_CLERK_ISSUER,
+    )
+
+    def current_email(clerk_id: str) -> str | None:
+        doctor = Doctor.get(clerk_id=clerk_id)
+        return doctor.email.strip().lower() if doctor and doctor.email else None
+
+    monkeypatch.setattr(
+        "app.services.view_as.verified_primary_email",
+        current_email,
+    )
+
+    _, _, clerk_user = get_clerk_dev_user()
+    actor = Doctor.get(clerk_id=clerk_user.id)
+    assert actor is not None
+    grant_test_superadmin_capability(actor, SuperadminCapabilityKind.view_as)
+
+    target = Doctor(
+        clerk_id="user_public_intake_view_as_target",
+        email="public-intake-view-as-target@example.net",
+        biography="",
+    ).save()
+    provision_practice_in_force(target)
+    intake = SimpleIncompleteIntakeFactory.build(doctor_id=target.id).save()
+    original_questions = [
+        question.model_copy(deep=True) for question in intake.intake_questions
+    ]
+
+    began = authenticated_client.post(
+        api_app.url_path_for("begin_view_as"),
+        json={"target_doctor_id": str(target.id)},
+    )
+    assert began.status_code == status.HTTP_200_OK, began.text
+
+    queued = Mock()
+    monkeypatch.setattr(app.commands.intake.chat, "queue_intake_summarization", queued)
+    response = authenticated_client.post(
+        api_app.url_path_for("get_next_question", intake_id=intake.id),
+        headers={"Origin": "https://chat.cosma.localhost"},
+        json={"answer": "must not be persisted"},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.headers["access-control-allow-origin"] == (
+        "https://chat.cosma.localhost"
+    )
+    intake.refresh()
+    assert intake.intake_questions == original_questions
+    assert intake.summary is None
+    queued.assert_not_called()
 
 
 def test_intake_expired(client: TestClient):

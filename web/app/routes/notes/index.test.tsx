@@ -6,8 +6,14 @@ import { render, screen, waitFor } from "@testing-library/react"
 
 // index.tsx pulls in the generated client (which demands Clerk env config)
 // through the Header import chain; stub it out
-vi.mock("~/configuration/client", () => ({}))
-vi.mock("~/lib/azure-upload", () => ({}))
+vi.mock("~/configuration/client", () => ({
+  generateSignedVisitRecordingUploadUrl: vi.fn(),
+  uploadVisitAudioFile: vi.fn(),
+}))
+vi.mock("~/lib/azure-upload", () => ({
+  VISIT_UPLOAD_MAX_BYTES: 2_000 * 1024 * 1024,
+  uploadToExactAzureUrl: vi.fn(),
+}))
 
 // The terminology hook reads the settings query; serve a therapist_client
 // doctor to prove the label wiring end-to-end.

@@ -1,6 +1,6 @@
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
-import { MetaFunction, useRevalidator } from "react-router"
+import { MetaFunction, useRevalidator, useSearchParams } from "react-router"
 import { z } from "zod"
 
 import { ChevronDown, Upload } from "lucide-react"
@@ -15,6 +15,7 @@ import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
+import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
@@ -29,16 +30,22 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import {
-  generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
-  uploadExampleNote,
   zoomAuthUrl,
   zoomDisconnect,
 } from "~/configuration/client"
+import { queryClient } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
-import { uploadFileToAzure } from "~/lib/azure-upload"
 import { BAA_PDF_URL } from "~/lib/baa"
+import {
+  restrictSettingsToBillingRecovery,
+  safeBillingReturnTo,
+} from "~/lib/billing-recovery"
+import {
+  exampleNoteUploadErrorCopy,
+  submitExampleNote,
+} from "~/lib/example-note-upload"
 import {
   type BaaAcceptanceRecord,
   type PracticeStatus,
@@ -53,21 +60,34 @@ import { isZoomEnabled } from "~/utils/zoom-feature"
 import { useUser } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
+import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
 type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
 
 function PracticeSettings({
   practice,
   acceptances,
+  onPracticeChange,
+  billingReturnTo,
 }: {
   practice: PracticeStatus | null
   acceptances: BaaAcceptanceRecord[]
+  onPracticeChange: (practice: PracticeStatus) => void
+  billingReturnTo: string
 }) {
   if (!practice) return null
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
+      <BillingReturnNotice
+        practice={practice}
+        onPracticeChange={onPracticeChange}
+      />
       <h3>Practice</h3>
-      <PracticeJoinPanel practice={practice} showBillingActions />
+      <PracticeJoinPanel
+        practice={practice}
+        showBillingActions
+        billingReturnTo={billingReturnTo}
+      />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
           <p className="font-semibold">Legal / Agreements</p>
@@ -268,9 +288,6 @@ function NoteCustomization({
 function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   const t = useTerminology()
   const formSchema = z.object({
-    //   image: z
-    //     .instanceof(File),
-    //   // .refine((file) => file.size !== 0, "Please upload an image"),
     note_type: z.string(),
   })
 
@@ -285,28 +302,22 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
       "file should be required, submit should be impossible without a valid file",
     )
 
-    const { data: sasSignature } = await generateSignedExampleNoteUploadUrl()
+    const uploadResult = await submitExampleNote(file, values.note_type)
 
-    invariant(
-      sasSignature,
-      "sasSignature should always exist unless the server fails",
-    )
-
-    const { stampedFileName } = await uploadFileToAzure(file, sasSignature)
-
-    const _internalResponse = await uploadExampleNote({
-      query: {
-        file_name: stampedFileName,
-        note_type: values.note_type,
-      },
-    })
+    if (!uploadResult.ok) {
+      toast({
+        ...exampleNoteUploadErrorCopy(uploadResult.stage),
+        variant: "destructive",
+      })
+      return
+    }
 
     setFile(null)
 
     toast({
       title: "Upload Complete",
       description:
-        "Your intake notes have been uploaded successfully. They will be processed and displayed here in a couple minutes.",
+        "Your example note has been received and will be processed shortly.",
     })
   }
 
@@ -364,7 +375,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 <div className="flex flex-col gap-1">
                   <p>Upload Example Visit Note</p>
                   <p className="text-muted-foreground text-xs">
-                    Click here or drag to select an image smaller than 10MB
+                    Click here or drag to select a PDF (10MB or smaller)
                   </p>
                 </div>
               </div>
@@ -406,7 +417,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
             )}
           />
 
-          <Button disabled={!file} type="submit">
+          <Button disabled={!file || form.formState.isSubmitting} type="submit">
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
@@ -637,6 +648,21 @@ function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
 
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const { user } = useUser()
+  const [searchParams] = useSearchParams()
+  const billingReturnTo = safeBillingReturnTo(searchParams.get("returnTo"))
+  const [practice, setPractice] = useState(loaderData.practice)
+  useEffect(() => setPractice(loaderData.practice), [loaderData.practice])
+  const billingRecoveryOnly = restrictSettingsToBillingRecovery(
+    loaderData.billing_recovery_required,
+    practice?.entitled,
+  )
+  const handlePracticeChange = useCallback((next: PracticeStatus) => {
+    setPractice(next)
+    void queryClient.invalidateQueries({
+      queryKey: settingsDataOptions().queryKey,
+      refetchType: "none",
+    })
+  }, [])
   const referenceToolkitEnabled = isReferenceToolkitEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
@@ -657,28 +683,34 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         </header>
         <InnerScrollableContent>
           <PracticeSettings
-            practice={loaderData.practice}
+            practice={practice}
             acceptances={loaderData.baa_acceptances}
+            onPracticeChange={handlePracticeChange}
+            billingReturnTo={billingReturnTo}
           />
-          <BiographyInput biography={loaderData.biography} />
-          {terminologyEnabled && (
-            <TerminologySettings
-              terminology={loaderData.terminology}
-              biography={loaderData.biography}
-            />
-          )}
-          <NoteUpload noteSchemas={loaderData.notes_schema} />
-          <NoteCustomization
-            noteSchemas={loaderData.notes_schema}
-            customizations={loaderData.note_customizations}
-          />
-          <ZoomConnect zoomConnected={loaderData.zoom_connected} />
-          {referenceToolkitEnabled && (
-            <NatMedConnection
-              hasSubscription={loaderData.has_natmed_subscription}
-            />
-          )}
-          {referenceToolkitEnabled && <LabRangeSettings />}
+          {!billingRecoveryOnly ? (
+            <>
+              <BiographyInput biography={loaderData.biography} />
+              {terminologyEnabled && (
+                <TerminologySettings
+                  terminology={loaderData.terminology}
+                  biography={loaderData.biography}
+                />
+              )}
+              <NoteUpload noteSchemas={loaderData.notes_schema} />
+              <NoteCustomization
+                noteSchemas={loaderData.notes_schema}
+                customizations={loaderData.note_customizations}
+              />
+              <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+              {referenceToolkitEnabled && (
+                <NatMedConnection
+                  hasSubscription={loaderData.has_natmed_subscription}
+                />
+              )}
+              {referenceToolkitEnabled && <LabRangeSettings />}
+            </>
+          ) : null}
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>
