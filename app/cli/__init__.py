@@ -344,6 +344,97 @@ def provision_staging_provider_authority(
     )
 
 
+@app.command("rebind-staging-provider-authority-identity")
+def rebind_staging_provider_authority_identity_command(
+    doctor_id: str = typer.Option(...),
+    appointment_id: str = typer.Option(...),
+    actor_id: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+    reason: str = typer.Option(...),
+    current_clerk_pair_sha256: str = typer.Option(
+        ...,
+        "--current-clerk-pair-sha256",
+        help="Confirmed digest of the one active Clerk subject/email pair.",
+    ),
+    stale_subject_sha256: str = typer.Option(
+        ...,
+        "--stale-subject-sha256",
+        help="Confirmed SHA-256 of the one stale active Clerk subject.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by dry-run; required with --apply.",
+    ),
+    confirm_staging_only: bool = typer.Option(False, "--confirm-staging-only"),
+    confirm_revoke_only_stale_identity: bool = typer.Option(
+        False,
+        "--confirm-revoke-only-stale-identity",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the validated plan."),
+) -> None:
+    """Rebind one reviewed synthetic provider actor to its current Clerk subject."""
+
+    from app.services.authority_identity_rebind import (
+        AuthorityIdentityRebindError,
+        plan_staging_provider_authority_identity_rebind,
+        rebind_staging_provider_authority_identity,
+    )
+
+    try:
+        parsed_doctor_id = _typeid(doctor_id, "doctor")
+        parsed_appointment_id = _typeid(appointment_id, "appointment")
+        parsed_actor_id = _typeid(actor_id, "authority_actor")
+        with global_session():
+            if not apply:
+                plan = plan_staging_provider_authority_identity_rebind(
+                    doctor_id=parsed_doctor_id,
+                    appointment_id=parsed_appointment_id,
+                    actor_id=parsed_actor_id,
+                    operator_ref=operator_ref,
+                    reason=reason,
+                    expected_current_clerk_pair_sha256=current_clerk_pair_sha256,
+                    expected_stale_subject_sha256=stale_subject_sha256,
+                )
+                state = "already-applied" if plan.already_applied else "ready"
+                typer.echo(
+                    "DRY RUN: staging authority identity rebind "
+                    f"state={state} identities={plan.identity_count} "
+                    f"active={plan.active_identity_count} "
+                    f"revoked={plan.revoked_identity_count} "
+                    f"plan_sha256={plan.plan_sha256}; no changes made."
+                )
+                return
+
+            if (
+                not confirm_staging_only
+                or not confirm_revoke_only_stale_identity
+                or confirm_plan_sha256 is None
+            ):
+                raise AuthorityIdentityRebindError(
+                    "apply requires both staging confirmations and the plan digest"
+                )
+            result = rebind_staging_provider_authority_identity(
+                doctor_id=parsed_doctor_id,
+                appointment_id=parsed_appointment_id,
+                actor_id=parsed_actor_id,
+                operator_ref=operator_ref,
+                reason=reason,
+                expected_current_clerk_pair_sha256=current_clerk_pair_sha256,
+                expected_stale_subject_sha256=stale_subject_sha256,
+                confirmed_plan_sha256=confirm_plan_sha256,
+            )
+    except AuthorityIdentityRebindError:
+        typer.echo(
+            "Authority identity rebind refused; no identity values were printed.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    state = "applied" if result.changed else "already applied"
+    typer.echo(f"Authority identity rebind {state}; plan_sha256={result.plan_sha256}.")
+
+
 @app.command("authority-ingestion-status")
 def authority_ingestion_status(
     older_than_minutes: int = typer.Option(15, min=1),
