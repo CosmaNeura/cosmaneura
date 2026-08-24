@@ -362,12 +362,18 @@ def test_audit_cli_reports_only_aggregate_digest_state():
     payload = json.loads(result.output)
     assert payload == {
         "active_count": 46,
+        "amendment_account_count": 0,
+        "amendment_count": 0,
+        "amendment_plan_digests": [],
+        "base_count": 47,
         "canonical_source_sha256": source_sha256,
         "cohort_integrity_valid": True,
         "doctor_snapshot_count": 1,
         "grant_plan_digests": [{"count": 47, "sha256": grant_result.plan_sha256}],
         "integrity_error_count": 0,
+        "lineage_count": 47,
         "prelogin_snapshot_count": 46,
+        "rebind_count": 0,
         "revocation_plan_digests": [{"count": 1, "sha256": revoke_plan_sha256}],
         "revoked_count": 1,
         "source_digests": [{"count": 47, "sha256": source_sha256}],

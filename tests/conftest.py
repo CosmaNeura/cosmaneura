@@ -52,6 +52,12 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "superadmin_capability_grant": "superadmin_capability_grant_guard_mutation",
     "view_as_audit_event": "view_as_audit_event_append_only",
     "view_as_session": "view_as_session_guard_mutation",
+    "pilot_access_continuity_amendment": (
+        "pilot_access_continuity_amendment_reject_mutation"
+    ),
+    "pilot_access_continuity_amendment_identity": (
+        "pilot_access_continuity_amendment_identity_reject_mutation"
+    ),
 }
 
 

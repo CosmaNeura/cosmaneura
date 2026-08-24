@@ -1794,6 +1794,80 @@ def grant_pilot_access_command(
     )
 
 
+@app.command("amend-pilot-continuity")
+def amend_pilot_continuity_command(
+    manifest: str = typer.Option(
+        ...,
+        help=(
+            "Private mode-0600, environment-specific continuity manifest. "
+            "Identity values are never printed."
+        ),
+    ),
+    source_ref: str = typer.Option(
+        ..., help="Opaque reference for the reviewed omission source."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the continuity amendment."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Canonical plan digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed amendment."),
+) -> None:
+    """Add reviewed omissions without changing the fixed base cohort."""
+
+    from app.services.continuity_reconciliation import (
+        apply_continuity_amendment,
+        plan_continuity_amendment,
+        read_private_continuity_manifest,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    try:
+        parsed = read_private_continuity_manifest(manifest)
+        plan = plan_continuity_amendment(
+            parsed,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason=reason,
+        )
+        if not apply:
+            state = "already applied" if plan.already_applied else "deployable"
+            typer.echo(
+                "DRY RUN: pilot continuity amendment; "
+                f"state={state} accounts={plan.account_count} "
+                f"existing_doctors={plan.existing_doctor_count} "
+                f"safe_prelogin={plan.safe_prelogin_count} "
+                f"manifest_sha256={plan.manifest_sha256} "
+                f"plan_sha256={plan.plan_sha256}."
+            )
+            return
+        result = apply_continuity_amendment(
+            parsed,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason=reason,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"pilot continuity amendment {outcome}; verify aggregate database state; "
+            "no identities were printed"
+        ) from None
+
+    state = "already applied" if result.created_count == 0 else "applied"
+    typer.echo(
+        "Pilot continuity amendment "
+        f"{state}: accounts={result.account_count} created={result.created_count} "
+        f"unchanged={result.unchanged_count} "
+        f"manifest_sha256={result.manifest_sha256} "
+        f"plan_sha256={result.plan_sha256}."
+    )
+
+
 @app.command("revoke-pilot-access")
 def revoke_pilot_access_command(
     operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
@@ -1911,162 +1985,18 @@ def revoke_pilot_access_command(
 
 @app.command("audit-pilot-access")
 def audit_pilot_access_command() -> None:
-    """Report only aggregate state and digests for grandfather access."""
+    """Report aggregate base, amendment, revocation, and rebind integrity."""
 
-    import hashlib
-    import hmac
-
-    from app.services.clerk_cohort import (
-        ClerkCohortError,
-        ClerkCohortIdentity,
-        canonical_clerk_email_pair_sha256,
-    )
-    from app.services.pilot_access_grandfather import (
-        GrandfatherGrantInput,
-        pilot_access_grant_plan_sha256,
-        required_pilot_access_grandfather_account_count,
-    )
-
-    from app.models.pilot_access_grandfather_grant import (
-        PilotAccessGrandfatherGrant,
-    )
+    from app.services.pilot_access_audit import audit_pilot_access_state
 
     try:
-        with global_session():
-            grants = cast(
-                list[PilotAccessGrandfatherGrant],
-                list(PilotAccessGrandfatherGrant.all()),
-            )
-        active_count = sum(grant.revoked_at is None for grant in grants)
-        revoked_count = len(grants) - active_count
-        doctor_snapshot_count = sum(
-            grant.doctor_id_snapshot is not None for grant in grants
-        )
-        integrity_error_count = sum(
-            not hmac.compare_digest(
-                grant.email_sha256,
-                hashlib.sha256(grant.email_snapshot.encode("utf-8")).hexdigest(),
-            )
-            for grant in grants
-        )
-        source_digests: dict[str, int] = {}
-        grant_plan_digests: dict[str, int] = {}
-        revocation_plan_digests: dict[str, int] = {}
-        for grant in grants:
-            source_digests[grant.source_sha256] = (
-                source_digests.get(grant.source_sha256, 0) + 1
-            )
-            grant_plan_digests[grant.grant_plan_sha256] = (
-                grant_plan_digests.get(grant.grant_plan_sha256, 0) + 1
-            )
-            if grant.revocation_plan_sha256:
-                revocation_plan_digests[grant.revocation_plan_sha256] = (
-                    revocation_plan_digests.get(grant.revocation_plan_sha256, 0) + 1
-                )
-        try:
-            canonical_source_sha256 = canonical_clerk_email_pair_sha256(
-                tuple(
-                    ClerkCohortIdentity(
-                        clerk_id=grant.clerk_id,
-                        email=grant.email_snapshot,
-                    )
-                    for grant in grants
-                )
-            )
-        except ClerkCohortError:
-            canonical_source_sha256 = None
+        report = audit_pilot_access_state()
     except Exception:
         raise typer.BadParameter(
             "pilot access audit failed; no identities were printed"
         ) from None
-
-    source_digest_matches = bool(
-        canonical_source_sha256
-        and len(source_digests) == 1
-        and next(iter(source_digests)) == canonical_source_sha256
-        and next(iter(source_digests.values())) == len(grants)
-    )
-    source_refs = {grant.source_ref for grant in grants}
-    operator_refs = {grant.granted_by_ref for grant in grants}
-    grant_reasons = {grant.grant_reason for grant in grants}
-    recomputed_plan_sha256: str | None = None
-    if (
-        len(source_refs) == 1
-        and len(source_digests) == 1
-        and len(operator_refs) == 1
-        and len(grant_reasons) == 1
-    ):
-        try:
-            recomputed_plan_sha256 = pilot_access_grant_plan_sha256(
-                [
-                    GrandfatherGrantInput(
-                        clerk_id=grant.clerk_id,
-                        email=grant.email_snapshot,
-                    )
-                    for grant in grants
-                ],
-                source_ref=next(iter(source_refs)),
-                source_sha256=next(iter(source_digests)),
-                operator_ref=next(iter(operator_refs)),
-                reason=next(iter(grant_reasons)),
-            )
-        except Exception:
-            recomputed_plan_sha256 = None
-    plan_digest_matches = bool(
-        recomputed_plan_sha256
-        and len(grant_plan_digests) == 1
-        and next(iter(grant_plan_digests.values())) == len(grants)
-        and hmac.compare_digest(
-            next(iter(grant_plan_digests)),
-            recomputed_plan_sha256,
-        )
-    )
-    cohort_integrity_valid = bool(
-        len(grants) == required_pilot_access_grandfather_account_count()
-        and integrity_error_count == 0
-        and source_digest_matches
-        and plan_digest_matches
-    )
-    if not grants:
-        lifecycle_state = "empty"
-    elif not cohort_integrity_valid:
-        lifecycle_state = "invalid"
-    elif active_count and revoked_count:
-        lifecycle_state = "mixed"
-    elif active_count:
-        lifecycle_state = "active"
-    else:
-        lifecycle_state = "revoked"
-    typer.echo(
-        json.dumps(
-            {
-                "active_count": active_count,
-                "canonical_source_sha256": canonical_source_sha256,
-                "cohort_integrity_valid": cohort_integrity_valid,
-                "doctor_snapshot_count": doctor_snapshot_count,
-                "grant_plan_digests": [
-                    {"count": count, "sha256": digest}
-                    for digest, count in sorted(grant_plan_digests.items())
-                ],
-                "integrity_error_count": integrity_error_count,
-                "prelogin_snapshot_count": len(grants) - doctor_snapshot_count,
-                "revocation_plan_digests": [
-                    {"count": count, "sha256": digest}
-                    for digest, count in sorted(revocation_plan_digests.items())
-                ],
-                "revoked_count": revoked_count,
-                "source_digests": [
-                    {"count": count, "sha256": digest}
-                    for digest, count in sorted(source_digests.items())
-                ],
-                "state": lifecycle_state,
-                "total_count": len(grants),
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    )
-    if not cohort_integrity_valid:
+    typer.echo(json.dumps(report.payload, separators=(",", ":"), sort_keys=True))
+    if not report.valid:
         raise typer.Exit(code=1)
 
 
