@@ -85,12 +85,13 @@ describe("BillingReturnNotice", () => {
     const restored = practice({
       entitled: true,
       subscription_status: "active",
+      billing_subscription_manageable: true,
     })
     const onPracticeChange = renderNotice(
       "/settings?billing=success&returnTo=%2Fschedule",
       restored,
     )
-    expect(screen.getByText(/practice access restored/i)).toBeInTheDocument()
+    expect(screen.getByText(/subscription confirmed/i)).toBeInTheDocument()
     expect(onPracticeChange).toHaveBeenCalledWith(restored)
     expect(
       screen.getByRole("button", { name: /continue to cosmas/i }),
@@ -102,6 +103,7 @@ describe("BillingReturnNotice", () => {
     const restored = practice({
       entitled: true,
       subscription_status: "active",
+      billing_subscription_manageable: true,
     })
     vi.mocked(getPractice).mockResolvedValue(restored)
     const onPracticeChange = renderNotice(
@@ -118,7 +120,42 @@ describe("BillingReturnNotice", () => {
 
     expect(getPractice).toHaveBeenCalledTimes(1)
     expect(onPracticeChange).toHaveBeenCalledWith(restored)
-    expect(screen.getByText(/practice access restored/i)).toBeInTheDocument()
+    expect(screen.getByText(/subscription confirmed/i)).toBeInTheDocument()
+  })
+
+  it("does not mistake an active platform trial for Stripe confirmation", async () => {
+    vi.useFakeTimers()
+    const platformTrial = practice({ entitled: true })
+    const stripeTrial = practice({
+      entitled: true,
+      subscription_status: "trialing",
+      billing_subscription_manageable: true,
+    })
+    vi.mocked(getPractice)
+      .mockResolvedValueOnce(platformTrial)
+      .mockResolvedValueOnce(stripeTrial)
+    const onPracticeChange = renderNotice(
+      "/settings?billing=success",
+      platformTrial,
+    )
+
+    expect(
+      screen.getByText(/confirming your subscription/i),
+    ).toBeInTheDocument()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500)
+    })
+    expect(
+      screen.queryByText(/subscription confirmed/i),
+    ).not.toBeInTheDocument()
+    expect(onPracticeChange).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500)
+    })
+    expect(getPractice).toHaveBeenCalledTimes(2)
+    expect(onPracticeChange).toHaveBeenCalledWith(stripeTrial)
+    expect(screen.getByText(/subscription confirmed/i)).toBeInTheDocument()
   })
 
   it("does not invite a duplicate payment when confirmation is delayed", async () => {

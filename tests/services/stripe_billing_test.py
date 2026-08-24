@@ -332,29 +332,103 @@ def test_checkout_is_idempotent_and_carries_exact_long_trial(remote: FakeStripe)
     _, _, data, idempotency_key = checkout_calls[0]
     assert data
     stripe_trial_end = int(data["subscription_data[trial_end]"])
-    assert datetime.fromtimestamp(stripe_trial_end, tz=timezone.utc) >= (
-        practice.trial_ends_at
-    )
+    carried_trial_end = datetime.fromtimestamp(stripe_trial_end, tz=timezone.utc)
+    assert carried_trial_end >= practice.trial_ends_at
+    assert carried_trial_end < practice.trial_ends_at + timedelta(seconds=1)
     assert idempotency_key and idempotency_key.startswith("cosmas-checkout-")
 
 
-def test_checkout_defers_final_48_hours_instead_of_shortening_trial(
+def test_checkout_extends_final_48_hours_instead_of_shortening_trial(
     remote: FakeStripe,
 ):
     practice = _practice()
     practice.trial_ends_at = NOW + timedelta(hours=47)
     practice.save()
 
-    with pytest.raises(stripe_billing.StripeTrialCarryoverDeferred) as exc:
-        stripe_billing.create_checkout_session(
-            practice,
-            customer_email="owner@example.com",
-            success_url="https://app.example/settings",
-            cancel_url="https://app.example/settings",
-            now=NOW,
-        )
-    assert exc.value.available_at == practice.trial_ends_at
-    assert remote.calls == []
+    assert stripe_billing.checkout_deferred_until(practice, now=NOW) is None
+    checkout_url = stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings",
+        cancel_url="https://app.example/settings",
+        now=NOW,
+    )
+
+    assert checkout_url == "https://checkout.stripe.com/c/pay/test"
+    checkout_call = next(
+        call for call in remote.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    stripe_trial_end = datetime.fromtimestamp(
+        int(checkout_call[2]["subscription_data[trial_end]"]), tz=timezone.utc
+    )
+    assert stripe_trial_end >= practice.trial_ends_at
+    minimum_safe_end = (
+        NOW
+        + stripe_billing.MINIMUM_CHECKOUT_TRIAL_LEAD
+        + stripe_billing.CHECKOUT_TRIAL_LEAD_SAFETY
+    )
+    assert stripe_trial_end >= minimum_safe_end
+    assert stripe_trial_end < minimum_safe_end + timedelta(seconds=1)
+
+
+def test_checkout_remeasures_minimum_trial_lead_after_remote_validation(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    practice.trial_ends_at = NOW + timedelta(hours=47)
+    practice.save()
+    after_validation = NOW + timedelta(minutes=10)
+    now_calls = 0
+
+    class AdvancingDateTime(datetime):
+        @classmethod
+        def now(cls, tz: timezone | None = None) -> datetime:
+            nonlocal now_calls
+            now_calls += 1
+            value = NOW if now_calls == 1 else after_validation
+            return value if tz else value.replace(tzinfo=None)
+
+    monkeypatch.setattr(stripe_billing, "datetime", AdvancingDateTime)
+    stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings",
+        cancel_url="https://app.example/settings",
+    )
+
+    checkout_call = next(
+        call for call in remote.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    stripe_trial_end = datetime.fromtimestamp(
+        int(checkout_call[2]["subscription_data[trial_end]"]), tz=timezone.utc
+    )
+    assert stripe_trial_end >= (
+        after_validation
+        + stripe_billing.MINIMUM_CHECKOUT_TRIAL_LEAD
+        + stripe_billing.CHECKOUT_TRIAL_LEAD_SAFETY
+    )
+
+
+def test_expired_trial_checkout_starts_without_new_stripe_trial(remote: FakeStripe):
+    practice = _practice()
+    practice.trial_ends_at = NOW - timedelta(seconds=1)
+    practice.save()
+
+    stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings",
+        cancel_url="https://app.example/settings",
+        now=NOW,
+    )
+
+    checkout_call = next(
+        call for call in remote.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    assert "subscription_data[trial_end]" not in checkout_call[2]
 
 
 def test_paused_trial_without_card_revokes_then_resumed_restores_entitlement(

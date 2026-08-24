@@ -16,6 +16,14 @@ type BillingReturnState =
   | "confirmed"
   | "delayed"
 
+function stripeSubscriptionConfirmed(practice: PracticeStatus | null) {
+  return Boolean(
+    practice?.billing_subscription_manageable &&
+      (practice.subscription_status === "active" ||
+        practice.subscription_status === "trialing"),
+  )
+}
+
 export function safeBillingReturnTo(value: string | null) {
   if (!value || !value.startsWith("/") || value.startsWith("//")) {
     return "/notes"
@@ -32,7 +40,7 @@ function initialState(
 ): BillingReturnState {
   if (result === "cancelled") return "cancelled"
   if (result !== "success") return "idle"
-  return practice?.entitled ? "confirmed" : "confirming"
+  return stripeSubscriptionConfirmed(practice) ? "confirmed" : "confirming"
 }
 
 export function BillingReturnNotice({
@@ -61,7 +69,7 @@ export function BillingReturnNotice({
       setState("idle")
       return
     }
-    if (practice?.entitled) {
+    if (practice && stripeSubscriptionConfirmed(practice)) {
       onPracticeChange(practice)
       setState("confirmed")
       return
@@ -76,7 +84,7 @@ export function BillingReturnNotice({
       try {
         const refreshed = await getPractice()
         if (cancelled) return
-        if (refreshed?.entitled) {
+        if (refreshed && stripeSubscriptionConfirmed(refreshed)) {
           onPracticeChange(refreshed)
           setState("confirmed")
           return
@@ -100,7 +108,13 @@ export function BillingReturnNotice({
       cancelled = true
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [onPracticeChange, pollRun, practice?.entitled, result])
+  }, [
+    onPracticeChange,
+    pollRun,
+    practice?.billing_subscription_manageable,
+    practice?.subscription_status,
+    result,
+  ])
 
   if (state === "idle") return null
 
@@ -120,9 +134,9 @@ export function BillingReturnNotice({
         </>
       ) : state === "confirmed" ? (
         <>
-          <p className="font-semibold">Practice access restored</p>
+          <p className="font-semibold">Subscription confirmed</p>
           <p className="text-muted-foreground mt-1 text-sm">
-            Stripe confirmed your subscription. Your clinical tools are ready.
+            Stripe confirmed your subscription. Your practice access is ready.
           </p>
           <Button className="mt-3" size="sm" onClick={() => navigate(returnTo)}>
             Continue to Cosmas
@@ -152,8 +166,8 @@ export function BillingReturnNotice({
           <div>
             <p className="font-semibold">Confirming your subscription</p>
             <p className="text-muted-foreground mt-1 text-sm">
-              Checkout finished. We are waiting for Stripe to confirm and
-              restore practice access; this usually takes only a few moments.
+              Checkout finished. We are waiting for Stripe to confirm your
+              subscription; this usually takes only a few moments.
             </p>
           </div>
         </div>

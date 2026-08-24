@@ -439,13 +439,14 @@ def test_past_due_subscription_uses_portal_instead_of_duplicate_checkout(
 
 
 @pytest.mark.usefixtures("stripe_configured")
-def test_final_48_hours_return_truthful_deferred_checkout(
+def test_final_48_hours_checkout_extends_trial_without_charging_early(
     authenticated_client: TestClient,
     route_stripe: RouteStripe,
 ):
     practice = _own_practice(_dev_doctor())
     practice.billing_exempt = False
-    practice.trial_ends_at = datetime.now(timezone.utc) + timedelta(hours=47)
+    requested_at = datetime.now(timezone.utc)
+    practice.trial_ends_at = requested_at + timedelta(hours=47)
     practice.save()
 
     checkout = authenticated_client.post(
@@ -453,9 +454,20 @@ def test_final_48_hours_return_truthful_deferred_checkout(
         json={},
         headers={"origin": VALID_ORIGIN},
     )
-    assert checkout.status_code == status.HTTP_409_CONFLICT
-    assert "no trial time will be shortened" in checkout.json()["detail"]
-    assert not any(call[1] == "/checkout/sessions" for call in route_stripe.calls)
+    assert checkout.status_code == status.HTTP_200_OK
+    checkout_call = next(
+        call for call in route_stripe.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    stripe_trial_end = datetime.fromtimestamp(
+        int(checkout_call[2]["subscription_data[trial_end]"]), tz=timezone.utc
+    )
+    assert stripe_trial_end >= practice.trial_ends_at
+    assert stripe_trial_end >= (
+        requested_at
+        + stripe_billing.MINIMUM_CHECKOUT_TRIAL_LEAD
+        + stripe_billing.CHECKOUT_TRIAL_LEAD_SAFETY
+    )
 
 
 @pytest.mark.usefixtures("stripe_configured")

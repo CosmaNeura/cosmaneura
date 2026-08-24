@@ -37,6 +37,10 @@ from sqlmodel import Session, col, select
 STRIPE_API = "https://api.stripe.com/v1"
 SIGNATURE_TOLERANCE_SECONDS = 5 * 60
 MINIMUM_CHECKOUT_TRIAL_LEAD = timedelta(hours=48)
+# Stripe validates the minimum lead against its own request-processing time.
+# A small buffer prevents an otherwise-valid 48-hour timestamp from falling
+# below that minimum while the Checkout Session request is in flight.
+CHECKOUT_TRIAL_LEAD_SAFETY = timedelta(minutes=5)
 EXPECTED_PRICE_CURRENCY = "usd"
 EXPECTED_PRICE_UNIT_AMOUNT = 8_900
 EXPECTED_PRICE_INTERVAL = "month"
@@ -84,6 +88,8 @@ class StripeSubscriptionContractInvalid(StripeStateInvalid):
 
 
 class StripeTrialCarryoverDeferred(Exception):
+    """Legacy API compatibility for callers that handled the former dead zone."""
+
     def __init__(self, available_at: datetime):
         self.available_at = available_at
         super().__init__(
@@ -639,20 +645,37 @@ def _authorized_member_count(session: Session, practice: Practice) -> int:
 def checkout_deferred_until(
     practice: Practice, *, now: datetime | None = None
 ) -> datetime | None:
-    """Return the trial end when Checkout cannot preserve an exact short trial.
+    """Compatibility signal retained after removal of the Checkout dead zone.
 
-    Stripe Checkout requires ``trial_end`` to be at least 48 hours away. We
-    fail closed during that final window instead of silently charging early or
-    extending the platform's exact trial promise.
+    This field used to expose when Checkout would become available. Checkout
+    is now always available when billing is configured, so existing API clients
+    continue to receive the field as ``null``.
+    """
+
+    del practice, now
+    return None
+
+
+def checkout_trial_end(
+    practice: Practice, *, now: datetime | None = None
+) -> datetime | None:
+    """Return the safe Stripe trial end without shortening platform access.
+
+    Stripe Checkout requires a subscription ``trial_end`` at least 48 hours in
+    the future. A platform trial with more lead time keeps its exact end. A
+    shorter active trial is extended just enough to satisfy Stripe plus a small
+    request-processing buffer. An expired trial has no Stripe trial, so payment
+    can begin immediately without charging before platform entitlement ends.
     """
 
     current = now or datetime.now(timezone.utc)
-    if not practice.trial_ends_at:
+    platform_trial_end = practice.trial_ends_at
+    if not platform_trial_end or platform_trial_end <= current:
         return None
-    remaining = practice.trial_ends_at - current
-    if timedelta(0) < remaining <= MINIMUM_CHECKOUT_TRIAL_LEAD:
-        return practice.trial_ends_at
-    return None
+    minimum_safe_end = (
+        current + MINIMUM_CHECKOUT_TRIAL_LEAD + CHECKOUT_TRIAL_LEAD_SAFETY
+    )
+    return max(platform_trial_end, minimum_safe_end)
 
 
 def has_nonterminal_subscription(practice: Practice) -> bool:
@@ -842,9 +865,9 @@ def create_checkout_session(
     """Get or create one idempotent hosted Checkout Session for the practice."""
 
     current = now or datetime.now(timezone.utc)
-    # A previously-created exact session is not a new sale. Revalidate and
+    # A previously-created session is not a new sale. Revalidate and
     # return it before applying new-session trial/active-price gates, otherwise
-    # the final 48h or a later price archive would strand payment completion.
+    # a later price archive would strand payment completion.
     if practice.stripe_checkout_session_id:
         _validate_runtime_configuration()
         recovered_url = _recover_checkout_session(practice, current=current)
@@ -864,16 +887,11 @@ def create_checkout_session(
     if not stripe_config.stripe_billing_configured():
         raise StripeNotConfigured
 
-    deferred_until = checkout_deferred_until(practice, now=current)
-    if deferred_until:
-        raise StripeTrialCarryoverDeferred(deferred_until)
     _validate_runtime_configuration(require_active_price=True)
     if now is None:
-        deferred_until = checkout_deferred_until(
-            practice, now=datetime.now(timezone.utc)
-        )
-        if deferred_until:
-            raise StripeTrialCarryoverDeferred(deferred_until)
+        # Re-read the clock after remote validation so the minimum Stripe lead
+        # is measured from as near as practical to Checkout Session creation.
+        current = datetime.now(timezone.utc)
 
     data: dict[str, Any] = {
         "mode": "subscription",
@@ -891,9 +909,10 @@ def create_checkout_session(
     elif customer_email:
         data["customer_email"] = customer_email
 
-    if practice.trial_ends_at and practice.trial_ends_at > current:
+    stripe_trial_end = checkout_trial_end(practice, now=current)
+    if stripe_trial_end:
         data["subscription_data[trial_end]"] = str(
-            math.ceil(practice.trial_ends_at.timestamp())
+            math.ceil(stripe_trial_end.timestamp())
         )
         data[
             "subscription_data[trial_settings][end_behavior][missing_payment_method]"

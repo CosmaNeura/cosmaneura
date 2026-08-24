@@ -232,24 +232,29 @@ describe("PracticeJoinPanel billing recovery", () => {
     ).toBeDisabled()
   })
 
-  it("defers checkout during the final 48 hours with truthful copy", () => {
-    const deferred = practice({
-      billing_checkout_available_at: "2026-08-21T20:00:00Z",
-    })
-    expect(billingActionKind(deferred, NOW)).toBe("deferred")
+  it("keeps checkout open during the final 48 hours with truthful copy", () => {
+    const shortTrial = practice({ trial_ends_at: "2026-08-22T19:00:00Z" })
+    expect(billingActionKind(shortTrial, NOW)).toBe("checkout")
     vi.useFakeTimers()
     vi.setSystemTime(NOW)
     try {
-      render(<PracticeJoinPanel practice={deferred} showBillingActions />)
+      render(<PracticeJoinPanel practice={shortTrial} showBillingActions />)
       expect(
-        screen.getByRole("button", { name: /checkout opens when trial ends/i }),
-      ).toBeDisabled()
+        screen.getByRole("button", { name: /add payment now/i }),
+      ).toBeEnabled()
       expect(
-        screen.getByText(/preserve every remaining trial hour/i),
+        screen.getByText(/trial is extended—never shortened/i),
       ).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("honors the legacy defer signal during a mixed-version rollout", () => {
+    const legacyResponse = practice({
+      billing_checkout_available_at: "2026-08-21T20:00:00Z",
+    })
+    expect(billingActionKind(legacyResponse, NOW)).toBe("deferred")
   })
 
   it("describes roster authorization without claiming personal attestation", () => {

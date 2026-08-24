@@ -21,7 +21,7 @@ export type BillingActionKind =
 
 export function billingActionKind(
   practice: PracticeStatus,
-  now = new Date(),
+  _now = new Date(),
 ): BillingActionKind {
   // A grandfather grant replaces acquisition billing for this exact account,
   // while an existing subscription must remain visible for maintenance.
@@ -43,9 +43,11 @@ export function billingActionKind(
   if (!practice.billing_enabled) {
     return practice.entitled ? "none" : "checkout-unavailable"
   }
+  // Kept only for safe mixed-version deployments. The current backend always
+  // returns null because it extends short trials instead of deferring Checkout.
   if (
     practice.billing_checkout_available_at &&
-    new Date(practice.billing_checkout_available_at) > now
+    new Date(practice.billing_checkout_available_at) > _now
   ) {
     return "deferred"
   }
@@ -131,13 +133,13 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
       )}
       {action === "deferred" ? (
         <p className="text-muted-foreground mt-1 text-xs">
-          To preserve every remaining trial hour, checkout becomes available on{" "}
+          Your current trial remains active. Checkout becomes available on{" "}
           {new Date(practice.billing_checkout_available_at!).toLocaleString()}.
         </p>
       ) : action === "checkout" && practice.entitled ? (
         <p className="text-muted-foreground mt-1 text-xs">
-          Checkout carries the exact remaining trial end into Stripe; billing
-          starts only after that timestamp.
+          You keep every remaining trial hour. If Stripe requires more notice,
+          your trial is extended—never shortened—and billing begins afterward.
         </p>
       ) : null}
       {showSecondaryPortal ? (
