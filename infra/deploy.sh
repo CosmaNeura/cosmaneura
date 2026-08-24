@@ -14,6 +14,7 @@
 GIT_SHA="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"
 
 # TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
@@ -52,42 +53,30 @@ if ! git rev-parse --quiet --verify "$GIT_SHA^{commit}" >/dev/null; then
 	exit 1
 fi
 
+# Convert potential short SHA to full SHA
+GIT_SHA=$(git rev-parse "$GIT_SHA")
+PRODUCTION_TAG="$PRODUCTION_IMAGE:$GIT_SHA"
+
+if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
+	exit 1
+fi
+if ! validate_deploy_revision_suffix "$REVISION_STRING" \
+	$WORKER_SCHEDULER_CONTAINERS "$API_CONTAINER" "$JMON_CONTAINER"; then
+	exit 1
+fi
+
+echo "Revision string: $REVISION_STRING"
+
 echo "Azure Acccount Information:"
 az account show
 
 echo "All Available Containers:"
 az containerapp list --query "[].name"
 
-# Convert potential short SHA to full SHA
-GIT_SHA=$(git rev-parse "$GIT_SHA")
-PRODUCTION_TAG="$PRODUCTION_IMAGE:$GIT_SHA"
-
 if ! docker manifest inspect "$PRODUCTION_TAG" >/dev/null 2>&1; then
 	echo "Error: Image $PRODUCTION_TAG does not exist"
 	exit 1
 fi
-
-# Function to generate a revision string for the Git SHA
-gen_string_for_sha() {
-	local sha="$1"
-	local sys_date count short_sha
-
-	sys_date=$(date +%Y-%m-%d)
-	count=$(git rev-list --count "$sha")
-	short_sha=$(echo "$sha" | cut -c1-7)
-
-	echo "${sys_date}-v${count}-${short_sha}"
-}
-
-# Generate the revision string
-# Note that if you attempt to deploy the same image twice, the revision string will be the same
-# and probably cause deployment errors, so you'll need to manually adjust this.
-#
-# Also, long application names can limit your revision string:
-# 'A revision name must consist of lower case alphanumeric characters or '-', start with an alphabetic character, and end with an alphanumeric character. The length of the revision name must not be more than a combined 54 characters with the container app name.'
-REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
-
-echo "Revision string: $REVISION_STRING"
 
 DATABASE_SECRET_NAME=$(printf '%s' "$ENV_JSON" | jq -er '.DATABASE_URL_SECRET_NAME')
 DATABASE_URL_V2_ENABLED=$(printf '%s' "$ENV_JSON" | jq -er '.DATABASE_URL_V2_ENABLED')
@@ -149,6 +138,16 @@ COMMON_SECRET_VARS=(
 	AZURE_DEID_TENANT_ID AZURE_DEID_CLIENT_ID AZURE_DEID_CLIENT_SECRET AZURE_DEID_ENDPOINT
 	RECALL_API_KEY
 	ZOOM_CLIENT_ID ZOOM_CLIENT_SECRET ZOOM_SECRET_TOKEN
+)
+
+# The production migration job predates Terraform ownership. Keep its legacy
+# public configuration allowlist explicit while rejecting API-only, billing,
+# authority, and any other unexpected capabilities before Alembic can run.
+MIGRATION_PUBLIC_VARS=(
+	LOG_LEVEL EMAIL_FROM_ADDRESS PORT ALLOWED_HOST_LIST INTAKE_CHAT_DOMAIN
+	AZURE_OPENAI_ENDPOINT
+	AZURE_UPLOADS_CONTAINER_NAME AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
+	ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
 )
 
 wait_for_migration_job_execution() {
@@ -263,6 +262,30 @@ run_migrations() {
 			--selected-secret-name "$DATABASE_SECRET_NAME" \
 			--reconcile-migration-secrets-stdin; then
 		echo "Failed to reconcile migration database secrets."
+		return 1
+	fi
+
+	# A plain job start executes this persistent template. Query only the fields
+	# needed for the contract (never values), then require the exact reviewed
+	# image, Alembic arguments, database secret reference, and env-name scope.
+	local migration_template secret_env_names public_env_names
+	if ! migration_template=$(az containerapp job show \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--query 'properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}}' \
+		-o json); then
+		echo "Failed to inspect the migration job execution template."
+		return 1
+	fi
+	secret_env_names=$(IFS=,; echo "DATABASE_URL,${COMMON_SECRET_VARS[*]}")
+	public_env_names=$(IFS=,; echo "${MIGRATION_PUBLIC_VARS[*]}")
+	if ! printf '%s' "$migration_template" |
+		python "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
+			--expected-name "$MIGRATION_JOB" \
+			--expected-image "$PRODUCTION_TAG" \
+			--database-secret-name "$DATABASE_SECRET_NAME" \
+			--secret-env-names "$secret_env_names" \
+			--public-env-names "$public_env_names"; then
+		echo "Migration job template is not approved for schema mutation."
 		return 1
 	fi
 
