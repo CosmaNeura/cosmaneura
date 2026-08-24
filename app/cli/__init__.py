@@ -520,6 +520,100 @@ def rebind_doctor_clerk_identity_command(
     )
 
 
+@app.command("close-provider-account")
+def close_provider_account_command(
+    doctor_id: str = typer.Option(
+        ..., help="Stable Doctor TypeID for the provider account to disable."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged closure."),
+    confirm_email: str | None = typer.Option(
+        None,
+        help=(
+            "Exact account email confirmation. Omit to enter it privately and keep "
+            "it out of shell history."
+        ),
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Disable a provider account while retaining records for at least 7 years.
+
+    This command never deletes the Clerk identity, clinical records, BAA
+    acceptances, or audit history. A bound Stripe subscription is not canceled;
+    its billing follow-up is reported explicitly.
+    """
+
+    import hmac
+
+    from app.services.doctor_account_closure import (
+        DoctorAccountClosureError,
+        close_doctor_account,
+        plan_doctor_account_closure,
+    )
+
+    _validate_operator_change(operator_ref, reason)
+    entered_email = confirm_email or typer.prompt(
+        "Exact account email", hide_input=True
+    )
+    try:
+        parsed_doctor_id = _typeid(doctor_id, "doctor")
+        with global_session():
+            doctor = _doctor_by_id(doctor_id)
+            stored_email = (doctor.email or "").strip().lower()
+            supplied_email = entered_email.strip().lower()
+            if not stored_email or not hmac.compare_digest(
+                stored_email, supplied_email
+            ):
+                raise DoctorAccountClosureError(
+                    "email confirmation does not match the provider account"
+                )
+            plan = plan_doctor_account_closure(
+                doctor_id=parsed_doctor_id,
+                operator_ref=operator_ref,
+                reason=reason,
+            )
+            if not apply:
+                state = "already applied" if plan.already_applied else "ready"
+                typer.echo(
+                    "DRY RUN: provider account closure "
+                    f"state={state} doctor_id={plan.doctor_id} "
+                    f"practice_id={plan.practice_id} member_id={plan.member_id} "
+                    f"role={plan.member_role} pilot_grants={plan.pilot_grant_count} "
+                    f"roster_approvals={plan.organization_approval_count} "
+                    f"authority_identities={plan.authority_identity_count} "
+                    f"active_mount_sessions={plan.active_mount_session_count} "
+                    f"stripe_follow_up={plan.stripe_follow_up_required} "
+                    f"plan_sha256={plan.plan_sha256}; no changes made."
+                )
+                return
+            if confirm_plan_sha256 is None:
+                raise DoctorAccountClosureError(
+                    "--apply requires --confirm-plan-sha256"
+                )
+            result = close_doctor_account(
+                doctor_id=parsed_doctor_id,
+                operator_ref=operator_ref,
+                reason=reason,
+                confirmed_plan_sha256=confirm_plan_sha256,
+            )
+    except DoctorAccountClosureError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+    state = "applied" if result.changed else "already applied"
+    typer.echo(
+        f"Provider account closure {state}: doctor_id={result.doctor_id} "
+        f"practice_id={result.practice_id} "
+        f"retain_until={result.retain_until.isoformat()} "
+        f"stripe_follow_up={result.stripe_follow_up_required} "
+        f"plan_sha256={result.plan_sha256}; Clerk and retained records were not deleted."
+    )
+
+
 @app.command("authority-ingestion-status")
 def authority_ingestion_status(
     older_than_minutes: int = typer.Option(15, min=1),
