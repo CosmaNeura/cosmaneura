@@ -38,6 +38,7 @@ VALID_ORIGIN = "https://cosma.localhost"
 class RouteStripe:
     def __init__(self) -> None:
         self.subscriptions: dict[str, dict] = {}
+        self.sessions: dict[str, dict] = {}
         self.price = {
             "id": "price_test_x",
             "active": True,
@@ -72,7 +73,7 @@ class RouteStripe:
             return deepcopy(self.subscriptions[path.rsplit("/", 1)[-1]])
         if path == "/checkout/sessions":
             assert data
-            return {
+            session = {
                 "id": "cs_route_test",
                 "url": "https://checkout.stripe.com/c/pay/route-test",
                 "expires_at": int(
@@ -84,7 +85,21 @@ class RouteStripe:
                 "status": "open",
                 "subscription": None,
                 "payment_method_collection": data["payment_method_collection"],
+                "metadata": {
+                    "checkout_policy": data["metadata[checkout_policy]"],
+                    "practice_id": data["metadata[practice_id]"],
+                },
             }
+            self.sessions[session["id"]] = deepcopy(session)
+            return session
+        if path.startswith("/checkout/sessions/") and path.endswith("/expire"):
+            session_id = path.removesuffix("/expire").rsplit("/", 1)[-1]
+            session = self.sessions[session_id]
+            session["status"] = "expired"
+            session["url"] = None
+            return deepcopy(session)
+        if path.startswith("/checkout/sessions/"):
+            return deepcopy(self.sessions[path.rsplit("/", 1)[-1]])
         if path == "/billing_portal/sessions":
             return {"url": "https://billing.stripe.com/p/session/route-test"}
         raise AssertionError(f"unexpected Stripe request: {method} {path}")
@@ -287,6 +302,101 @@ def test_expired_comp_is_reported_inactive_and_can_reactivate(
     assert checkout.status_code == status.HTTP_200_OK, checkout.text
     assert checkout.json()["url"].startswith("https://checkout.stripe.com/")
     assert any(call[1] == "/checkout/sessions" for call in route_stripe.calls)
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_legacy_incomplete_checkout_returns_retryable_conflict_then_recovers(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+    subscription = _subscription(practice, status_value="incomplete")
+    route_stripe.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "incomplete"
+    practice.stripe_checkout_session_id = "cs_route_legacy_incomplete"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/route-legacy-incomplete"
+    )
+    practice.stripe_checkout_session_expires_at = datetime.now(
+        timezone.utc
+    ) + timedelta(hours=1)
+    practice.save()
+    route_stripe.sessions["cs_route_legacy_incomplete"] = {
+        "id": "cs_route_legacy_incomplete",
+        "url": "https://checkout.stripe.com/c/pay/route-legacy-incomplete",
+        "expires_at": int(
+            (datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()
+        ),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": subscription["id"],
+        "payment_method_collection": "if_required",
+    }
+
+    first = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert first.status_code == status.HTTP_409_CONFLICT
+    assert "still finalizing its incomplete subscription" in first.json()["detail"]
+    practice.refresh()
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.subscription_status == "incomplete"
+    assert route_stripe.sessions["cs_route_legacy_incomplete"]["status"] == "expired"
+    assert not any(call[1] == "/checkout/sessions" for call in route_stripe.calls)
+
+    # Production's isolated billing transaction commits on its own connection.
+    # The test harness deliberately binds all sessions to one rollback-only
+    # connection, so the HTTPException rolls that local cache clear back. The
+    # service-level regression proves the committed transition; mirror it here
+    # to exercise the next complete API request through its authoritative
+    # subscription refresh.
+    practice.stripe_checkout_session_id = None
+    practice.stripe_checkout_session_url = None
+    practice.stripe_checkout_session_expires_at = None
+    practice.stripe_checkout_attempt += 1
+    practice.stripe_checkout_state_version += 1
+    practice.save()
+    route_stripe.calls.clear()
+    still_pending = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert still_pending.status_code == status.HTTP_409_CONFLICT
+    assert (
+        "still finalizing its incomplete subscription" in still_pending.json()["detail"]
+    )
+    assert any(
+        call[1] == f"/subscriptions/{subscription['id']}" for call in route_stripe.calls
+    )
+    assert not any(call[1] == "/checkout/sessions" for call in route_stripe.calls)
+
+    route_stripe.subscriptions[subscription["id"]]["status"] = "incomplete_expired"
+    route_stripe.calls.clear()
+    recovered = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert recovered.status_code == status.HTTP_200_OK, recovered.text
+    assert recovered.json()["url"] == "https://checkout.stripe.com/c/pay/route-test"
+    assert any(
+        call[1] == f"/subscriptions/{subscription['id']}" for call in route_stripe.calls
+    )
+    assert (
+        len([call for call in route_stripe.calls if call[1] == "/checkout/sessions"])
+        == 1
+    )
 
 
 def test_entitlement_exemption_does_not_bypass_baa_or_attestation(

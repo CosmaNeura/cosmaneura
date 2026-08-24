@@ -79,6 +79,10 @@ class FakeStripe:
                 "status": "open",
                 "subscription": None,
                 "payment_method_collection": data["payment_method_collection"],
+                "metadata": {
+                    "checkout_policy": data["metadata[checkout_policy]"],
+                    "practice_id": data["metadata[practice_id]"],
+                },
             }
             self.sessions[session["id"]] = deepcopy(session)
             return session
@@ -904,7 +908,7 @@ def test_incomplete_subscription_resumes_exact_open_checkout_session(
     assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
 
 
-def test_cached_open_checkout_without_subscription_resumes_when_acquisition_is_off(
+def test_cached_open_checkout_with_empty_metadata_resumes_when_acquisition_is_off(
     remote: FakeStripe,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -927,6 +931,7 @@ def test_cached_open_checkout_without_subscription_resumes_when_acquisition_is_o
         "status": "open",
         "subscription": None,
         "payment_method_collection": "always",
+        "metadata": {},
     }
     monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", False)
 
@@ -942,6 +947,7 @@ def test_cached_open_checkout_without_subscription_resumes_when_acquisition_is_o
         == "https://checkout.stripe.com/c/pay/open-without-subscription"
     )
     assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+    assert not any(call[1].endswith("/expire") for call in remote.calls)
 
 
 def test_legacy_open_checkout_is_expired_and_replaced_under_current_policy(
@@ -993,7 +999,15 @@ def test_legacy_open_checkout_is_expired_and_replaced_under_current_policy(
         create_call[2]["payment_method_collection"]
         == stripe_billing.CHECKOUT_PAYMENT_METHOD_COLLECTION
     )
+    assert (
+        create_call[2]["metadata[checkout_policy]"]
+        == stripe_billing.CHECKOUT_IDEMPOTENCY_POLICY_VERSION
+    )
+    assert create_call[2]["metadata[practice_id]"] == str(practice.id)
     assert create_call[3] == stripe_billing._checkout_idempotency_key(practice)
+    legacy_raw = f"cosmas-checkout:{practice.id}:{practice.stripe_checkout_attempt}"
+    legacy_key = f"cosmas-checkout-{hashlib.sha256(legacy_raw.encode()).hexdigest()}"
+    assert create_call[3] != legacy_key
 
 
 def test_legacy_open_checkout_is_retired_but_not_replaced_when_acquisition_is_off(
@@ -1034,6 +1048,72 @@ def test_legacy_open_checkout_is_retired_but_not_replaced_when_acquisition_is_of
     assert practice.stripe_checkout_session_id is None
     assert practice.stripe_checkout_attempt == 1
     assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
+def test_legacy_open_checkout_with_incomplete_subscription_waits_for_terminal_state(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_legacy_incomplete",
+        status="incomplete",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "incomplete"
+    practice.stripe_checkout_session_id = "cs_legacy_incomplete"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/legacy-incomplete"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    remote.sessions["cs_legacy_incomplete"] = {
+        "id": "cs_legacy_incomplete",
+        "url": "https://checkout.stripe.com/c/pay/legacy-incomplete",
+        "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": subscription["id"],
+        "payment_method_collection": "if_required",
+    }
+
+    with pytest.raises(stripe_billing.StripeCheckoutRetirementPending):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert remote.sessions["cs_legacy_incomplete"]["status"] == "expired"
+    assert practice.stripe_checkout_session_id is None
+    assert practice.stripe_checkout_attempt == 1
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.subscription_status == "incomplete"
+    assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+    remote.subscriptions[subscription["id"]]["status"] = "incomplete_expired"
+    stripe_billing.refresh_subscription_state(practice)
+    remote.calls.clear()
+    replacement = stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings",
+        cancel_url="https://app.example/settings",
+        now=NOW,
+    )
+
+    practice.refresh()
+    assert replacement == "https://checkout.stripe.com/c/pay/test"
+    assert practice.stripe_checkout_session_id == "cs_test_idempotent"
+    assert practice.stripe_checkout_attempt == 1
+    assert len([call for call in remote.calls if call[1] == "/checkout/sessions"]) == 1
 
 
 def test_legacy_checkout_completion_race_binds_subscription_without_replacement(
@@ -1145,9 +1225,11 @@ def test_legacy_checkout_ambiguous_expiration_fails_closed_without_replacement(
     assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
 
 
-def test_new_checkout_with_wrong_collection_policy_is_retired_and_not_cached(
+@pytest.mark.parametrize("wrong_policy_component", ["collection", "metadata"])
+def test_new_checkout_with_wrong_policy_is_retired_and_not_cached(
     remote: FakeStripe,
     monkeypatch: pytest.MonkeyPatch,
+    wrong_policy_component: str,
 ):
     practice = _practice()
     original_request = remote.__call__
@@ -1155,8 +1237,16 @@ def test_new_checkout_with_wrong_collection_policy_is_retired_and_not_cached(
     def wrong_policy_request(method, path, data=None, *, idempotency_key=None):
         response = original_request(method, path, data, idempotency_key=idempotency_key)
         if path == "/checkout/sessions":
-            response["payment_method_collection"] = "if_required"
-            remote.sessions[response["id"]]["payment_method_collection"] = "if_required"
+            if wrong_policy_component == "collection":
+                response["payment_method_collection"] = "if_required"
+                remote.sessions[response["id"]]["payment_method_collection"] = (
+                    "if_required"
+                )
+            else:
+                response["metadata"]["checkout_policy"] = "legacy-policy"
+                remote.sessions[response["id"]]["metadata"]["checkout_policy"] = (
+                    "legacy-policy"
+                )
         return response
 
     monkeypatch.setattr(stripe_billing, "_request", wrong_policy_request)

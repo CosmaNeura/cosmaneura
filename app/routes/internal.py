@@ -141,6 +141,12 @@ from .dependencies.practice_gate import require_practice_in_force
 # extract into variable for test import to easily override dependencies
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
 
+CHECKOUT_RETIREMENT_PENDING_DETAIL = (
+    "The previous Checkout attempt was closed safely, but Stripe is still "
+    "finalizing its incomplete subscription. No new subscription was created. "
+    "Try again shortly."
+)
+
 internal_api_app = APIRouter(
     prefix="/internal/v1",
     # TODO unclear what the tags are used for...
@@ -1732,6 +1738,11 @@ def create_billing_checkout(
         ) from exc
     resumable = stripe_billing.has_resumable_checkout(practice)
     if stripe_billing.has_nonterminal_subscription(practice) and not resumable:
+        if practice.subscription_status == "incomplete":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=CHECKOUT_RETIREMENT_PENDING_DETAIL,
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -1768,6 +1779,11 @@ def create_billing_checkout(
                 "The previous Checkout completed and its subscription was recovered. "
                 "Use the billing portal to manage it."
             ),
+        ) from exc
+    except stripe_billing.StripeCheckoutRetirementPending as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=CHECKOUT_RETIREMENT_PENDING_DETAIL,
         ) from exc
     except stripe_billing.StripeStateConflict as exc:
         raise HTTPException(
