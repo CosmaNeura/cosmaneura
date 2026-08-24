@@ -6,8 +6,8 @@ import {
   handleInternalApiResponse,
   isBillingRecoveryRedirectError,
   isInternalApiRequest,
-  restrictSettingsToBillingRecovery,
   resetBillingRecoveryRedirectState,
+  restrictSettingsToBillingRecovery,
   safeBillingReturnTo,
 } from "./billing-recovery"
 

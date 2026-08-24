@@ -50,11 +50,11 @@ import {
   isMcdEmail,
   isPublicEmailDomain,
 } from "~/lib/email-domain"
-import { isValidNpi } from "~/lib/npi"
 import {
   exampleNoteUploadErrorCopy,
   submitExampleNote,
 } from "~/lib/example-note-upload"
+import { isValidNpi } from "~/lib/npi"
 import {
   type BaaDocument,
   type JoinMismatch,
