@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest"
 
+import { createBillingCheckout } from "~/lib/practice-api"
 import type { PracticeStatus } from "~/lib/practice-api"
 
 import { PracticeJoinPanel, billingActionKind } from "./PracticeJoinPanel"
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
+
+vi.mock("~/lib/practice-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/lib/practice-api")>()),
+  createBillingCheckout: vi.fn(),
+}))
 
 const NOW = new Date("2026-08-20T20:00:00Z")
 
@@ -248,6 +254,23 @@ describe("PracticeJoinPanel billing recovery", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it("carries the interrupted route into Checkout", () => {
+    vi.mocked(createBillingCheckout).mockReturnValue(new Promise(() => {}))
+    render(
+      <PracticeJoinPanel
+        practice={practice()}
+        showBillingActions
+        billingReturnTo="/schedule?view=week#today"
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: /add payment now/i }))
+
+    expect(createBillingCheckout).toHaveBeenCalledWith(
+      "/schedule?view=week#today",
+    )
   })
 
   it("honors the legacy defer signal during a mixed-version rollout", () => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
-import { MetaFunction, useRevalidator } from "react-router"
+import { MetaFunction, useRevalidator, useSearchParams } from "react-router"
 import { z } from "zod"
 
 import { ChevronDown, Upload } from "lucide-react"
@@ -41,6 +41,7 @@ import { queryClient } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { BAA_PDF_URL } from "~/lib/baa"
+import { safeBillingReturnTo } from "~/lib/billing-recovery"
 import {
   type BaaAcceptanceRecord,
   type PracticeStatus,
@@ -63,10 +64,12 @@ function PracticeSettings({
   practice,
   acceptances,
   onPracticeChange,
+  billingReturnTo,
 }: {
   practice: PracticeStatus | null
   acceptances: BaaAcceptanceRecord[]
   onPracticeChange: (practice: PracticeStatus) => void
+  billingReturnTo: string
 }) {
   if (!practice) return null
   return (
@@ -76,7 +79,11 @@ function PracticeSettings({
         onPracticeChange={onPracticeChange}
       />
       <h3>Practice</h3>
-      <PracticeJoinPanel practice={practice} showBillingActions />
+      <PracticeJoinPanel
+        practice={practice}
+        showBillingActions
+        billingReturnTo={billingReturnTo}
+      />
       {acceptances.length > 0 ? (
         <div className="not-prose rounded-lg border p-4 text-sm">
           <p className="font-semibold">Legal / Agreements</p>
@@ -663,6 +670,8 @@ function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
 
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const { user } = useUser()
+  const [searchParams] = useSearchParams()
+  const billingReturnTo = safeBillingReturnTo(searchParams.get("returnTo"))
   const [practice, setPractice] = useState(loaderData.practice)
   useEffect(() => setPractice(loaderData.practice), [loaderData.practice])
   const handlePracticeChange = useCallback((next: PracticeStatus) => {
@@ -695,6 +704,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
             practice={practice}
             acceptances={loaderData.baa_acceptances}
             onPracticeChange={handlePracticeChange}
+            billingReturnTo={billingReturnTo}
           />
           <BiographyInput biography={loaderData.biography} />
           {terminologyEnabled && (

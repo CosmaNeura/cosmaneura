@@ -7,6 +7,7 @@ import { SidebarInset } from "@/components/ui/sidebar"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { Icons } from "~/components/icons"
 import { getClient } from "~/configuration/clerk"
+import { internalApiFetch } from "~/lib/billing-recovery"
 import { requireEnv } from "~/utils/environment"
 import { useTerminology } from "~/utils/terminology"
 import { isZoomEnabled } from "~/utils/zoom-feature"
@@ -24,7 +25,7 @@ function ZoomConnectPrompt() {
     const clerk = await getClient()
     const token = await clerk!.session!.getToken()
     const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
-    const res = await fetch(`${base}/internal/v1/zoom-auth-url`, {
+    const res = await internalApiFetch(`${base}/internal/v1/zoom-auth-url`, {
       headers: { Authorization: `Bearer ${token}` },
       credentials: "include",
     })

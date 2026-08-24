@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { type PracticeStatus, practiceReady } from "./practice-api"
+import {
+  type PracticeStatus,
+  billingCheckoutPaths,
+  practiceReady,
+} from "./practice-api"
 
 function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
   return {
@@ -43,5 +47,30 @@ describe("practiceReady", () => {
 
   it("fails closed after organization access is revoked", () => {
     expect(practiceReady(practice({ access_revoked: true }))).toBe(false)
+  })
+})
+
+describe("billingCheckoutPaths", () => {
+  it("carries the validated recovery destination through success and cancel", () => {
+    expect(billingCheckoutPaths("/schedule?view=week#today")).toEqual({
+      successPath:
+        "/settings?billing=success&returnTo=%2Fschedule%3Fview%3Dweek%23today",
+      cancelPath:
+        "/settings?billing=cancelled&returnTo=%2Fschedule%3Fview%3Dweek%23today",
+    })
+  })
+
+  it("falls back to notes for an off-site return destination", () => {
+    expect(billingCheckoutPaths("https://evil.example")).toEqual({
+      successPath: "/settings?billing=success&returnTo=%2Fnotes",
+      cancelPath: "/settings?billing=cancelled&returnTo=%2Fnotes",
+    })
+  })
+
+  it("falls back to notes when an encoded deep link exceeds the API limit", () => {
+    expect(billingCheckoutPaths(`/notes?search=${"x".repeat(300)}`)).toEqual({
+      successPath: "/settings?billing=success&returnTo=%2Fnotes",
+      cancelPath: "/settings?billing=cancelled&returnTo=%2Fnotes",
+    })
   })
 })

@@ -9,8 +9,11 @@ import {
   queryClient,
 } from "~/configuration/tanstack-query"
 import { isAccountRecoveryRequired } from "~/lib/account-recovery"
+import { billingRecoveryLocation } from "~/lib/billing-recovery"
 
 import { settingsDataOptions } from "client/@tanstack/react-query.gen"
+
+export { billingRecoveryLocation } from "~/lib/billing-recovery"
 
 // Guard: the server's effective access decision is authoritative. It includes
 // the normal practice/BAA path and exact-account pilot grants without asking
@@ -53,15 +56,6 @@ export function needsBillingRecovery(
       data.practice_ready &&
       data.billing_recovery_required,
   )
-}
-
-export function billingRecoveryLocation(requestUrl: string) {
-  const current = new URL(requestUrl)
-  const params = new URLSearchParams({
-    billing: "required",
-    returnTo: `${current.pathname}${current.search}`,
-  })
-  return `${href("/settings")}?${params.toString()}`
 }
 
 export function shouldRedirectToBillingRecovery(

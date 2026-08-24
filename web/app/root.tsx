@@ -15,6 +15,7 @@ import { Loader2 } from "lucide-react"
 import type { Route } from "./+types/root"
 
 import { Toaster } from "@/components/ui/toaster"
+import { isBillingRecoveryRedirectError } from "~/lib/billing-recovery"
 
 import "./app.css"
 import PageNotFound from "./components/shared/PageNotFound"
@@ -77,6 +78,15 @@ export function HydrateFallback() {
 export default withProviders(App)
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  if (isBillingRecoveryRedirectError(error)) {
+    return (
+      <main className="container mx-auto p-4 pt-16" role="status">
+        <Loader2 className="text-primary h-6 w-6 animate-spin" />
+        <p className="mt-3">Redirecting to restore practice access…</p>
+      </main>
+    )
+  }
+
   let message = "Oops!"
   let details = "An unexpected error occurred."
   let stack: string | undefined

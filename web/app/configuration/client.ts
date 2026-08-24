@@ -1,4 +1,5 @@
 // the autogen'd client from the python's openapi.json is configured here
+import { internalApiFetch } from "~/lib/billing-recovery"
 import { isDevelopment, requireEnv } from "~/utils/environment"
 
 import * as Sentry from "@sentry/react"
@@ -26,6 +27,7 @@ if (
 // TODO I don't know if the auth function will be rerun multiple times...
 client.setConfig({
   baseUrl: VITE_PYTHON_URL,
+  fetch: internalApiFetch,
   // same-origin is default, this is required in development since different API & FE server domains are used
   // https://github.com/hey-api/openapi-ts/issues/769#issuecomment-2222735798
   credentials: isDevelopment() ? "include" : "same-origin",

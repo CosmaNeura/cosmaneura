@@ -45,6 +45,7 @@ import {
   baaAuthorityLine,
   baaCheckboxLabel,
 } from "~/lib/baa"
+import { internalApiFetch } from "~/lib/billing-recovery"
 import { type Channel, resolveChannel } from "~/lib/channel"
 import {
   MCD_EMAIL_DOMAIN,
@@ -1346,7 +1347,7 @@ function ZoomStep({
     const clerk = await getClient()
     const token = await clerk!.session!.getToken()
     const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
-    const res = await fetch(`${base}/internal/v1/zoom-auth-url`, {
+    const res = await internalApiFetch(`${base}/internal/v1/zoom-auth-url`, {
       headers: { Authorization: `Bearer ${token}` },
       credentials: "include",
     })

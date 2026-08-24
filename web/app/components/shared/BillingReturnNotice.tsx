@@ -4,7 +4,10 @@ import { useNavigate, useSearchParams } from "react-router"
 import { Loader2 } from "lucide-react"
 
 import { Button } from "~/components/ui/button"
+import { safeBillingReturnTo } from "~/lib/billing-recovery"
 import { type PracticeStatus, getPractice } from "~/lib/practice-api"
+
+export { safeBillingReturnTo } from "~/lib/billing-recovery"
 
 const POLL_DELAY_MS = 2_500
 const MAX_POLL_ATTEMPTS = 24
@@ -22,16 +25,6 @@ function stripeSubscriptionConfirmed(practice: PracticeStatus | null) {
       (practice.subscription_status === "active" ||
         practice.subscription_status === "trialing"),
   )
-}
-
-export function safeBillingReturnTo(value: string | null) {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/notes"
-  }
-  const appOrigin = "https://app.cosmaneura.invalid"
-  const target = new URL(value, appOrigin)
-  if (target.origin !== appOrigin) return "/notes"
-  return `${target.pathname}${target.search}${target.hash}`
 }
 
 function initialState(

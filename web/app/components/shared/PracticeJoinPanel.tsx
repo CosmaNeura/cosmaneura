@@ -54,7 +54,13 @@ export function billingActionKind(
   return "checkout"
 }
 
-function BillingActions({ practice }: { practice: PracticeStatus }) {
+function BillingActions({
+  practice,
+  returnTo,
+}: {
+  practice: PracticeStatus
+  returnTo?: string
+}) {
   const [pending, setPending] = useState(false)
   const action = billingActionKind(practice)
   const showSecondaryPortal =
@@ -121,7 +127,10 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
           size="sm"
           disabled={pending}
           onClick={() =>
-            open(createBillingCheckout, "Could not start checkout")
+            open(
+              () => createBillingCheckout(returnTo),
+              "Could not start checkout",
+            )
           }
         >
           {practice.billing_checkout_resumable
@@ -175,9 +184,11 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
 export function PracticeJoinPanel({
   practice,
   showBillingActions = false,
+  billingReturnTo,
 }: {
   practice: PracticeStatus
   showBillingActions?: boolean
+  billingReturnTo?: string
 }) {
   const isOwner = practice.role === "owner"
 
@@ -264,7 +275,7 @@ export function PracticeJoinPanel({
         </div>
       ) : null}
       {isOwner && showBillingActions ? (
-        <BillingActions practice={practice} />
+        <BillingActions practice={practice} returnTo={billingReturnTo} />
       ) : null}
       {isOwner && practice.join_code ? (
         <div className="mt-3 flex flex-wrap items-center gap-3">

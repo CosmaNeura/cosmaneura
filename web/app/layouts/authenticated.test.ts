@@ -39,10 +39,10 @@ describe("authenticated access routing", () => {
     ).toBe(true)
     expect(
       billingRecoveryLocation(
-        "https://app.cosmaneura.com/notes/note_123?tab=soap",
+        "https://app.cosmaneura.com/notes/note_123?tab=soap#assessment",
       ),
     ).toBe(
-      "/settings?billing=required&returnTo=%2Fnotes%2Fnote_123%3Ftab%3Dsoap",
+      "/settings?billing=required&returnTo=%2Fnotes%2Fnote_123%3Ftab%3Dsoap%23assessment",
     )
   })
 
