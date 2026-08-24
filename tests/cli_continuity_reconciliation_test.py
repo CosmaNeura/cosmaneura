@@ -1,7 +1,7 @@
 import json
 import secrets
 
-from click.utils import strip_ansi
+from click._compat import strip_ansi
 from typeid import TypeID
 from typer.testing import CliRunner
 

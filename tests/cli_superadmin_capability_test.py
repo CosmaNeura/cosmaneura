@@ -4,7 +4,7 @@ import secrets
 from pathlib import Path
 from types import SimpleNamespace
 
-from click.utils import strip_ansi
+from click._compat import strip_ansi
 from typer.testing import CliRunner
 
 from app.cli import app
