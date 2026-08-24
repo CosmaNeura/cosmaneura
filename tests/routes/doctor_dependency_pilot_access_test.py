@@ -150,7 +150,7 @@ def test_recreated_identity_gets_recovery_message_without_stealing_email() -> No
     replacement_clerk_id = "user_recreated_identity"
     email = "returning-private@example.test"
     provisional = FakeDoctor(clerk_id=replacement_clerk_id, email="")
-    existing = FakeDoctor(clerk_id="user_deleted_identity", email=email)
+    existing = FakeDoctor(clerk_id="user_deleted_identity", email=email.upper())
     existing.id = "existing-doctor-private-sentinel"
 
     with (
@@ -164,7 +164,10 @@ def test_recreated_identity_gets_recovery_message_without_stealing_email() -> No
             return_value=None,
         ),
         patch("app.routes.dependencies.doctor.Doctor.upsert", return_value=provisional),
-        patch("app.routes.dependencies.doctor.Doctor.get", return_value=existing),
+        patch(
+            "app.routes.dependencies.doctor._doctors_for_normalized_email",
+            return_value=[existing],
+        ),
         patch(
             "app.routes.dependencies.doctor._fetch_clerk_email",
             return_value=email,

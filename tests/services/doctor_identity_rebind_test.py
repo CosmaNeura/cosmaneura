@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 
 import app.services.doctor_identity_rebind as identity_rebind
+from app.configuration.authority import AuthorityKernelSettings
 from app.services.clerk_cohort import ClerkCohortIdentity
 from app.services.doctor_identity_rebind import (
     DoctorIdentityRebindError,
@@ -15,6 +16,12 @@ from app.services.doctor_identity_rebind import (
     resolve_live_rebind_identity,
 )
 
+from app.models.authority import (
+    AuthorityActor,
+    AuthorityActorExternalIdentity,
+    AuthorityTenant,
+    AuthorityTenantMembership,
+)
 from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
@@ -187,6 +194,105 @@ def test_rebind_moves_active_pilot_grant_without_erasing_history():
     assert replacement_grant is not None
     assert replacement_grant.doctor_id_snapshot == doctor.id
     assert replacement_grant.email_snapshot == email
+
+
+def test_rebind_never_reauthorizes_a_previously_revoked_replacement_subject():
+    doctor, _, _, args = _scope()
+    replacement = args["replacement"]
+    revoked_at = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+    PilotAccessGrandfatherGrant(
+        clerk_id=replacement.clerk_id,
+        doctor_id_snapshot=None,
+        practice_id_snapshot=None,
+        email_snapshot=replacement.email,
+        email_sha256=hashlib.sha256(replacement.email.encode()).hexdigest(),
+        source_ref="controlled://pilot-export/revoked-test",
+        source_sha256="a" * 64,
+        grant_plan_sha256="b" * 64,
+        granted_by_ref="change:pilot-import-test",
+        grant_reason="Preserve approved pilot access",
+        granted_at=datetime(2026, 8, 22, 12, 0, tzinfo=UTC),
+        revoked_at=revoked_at,
+        revoked_by_ref="change:pilot-offboarding-test",
+        revocation_reason="Explicit prior offboarding",
+        revocation_plan_sha256="c" * 64,
+        retain_until=revoked_at.replace(year=revoked_at.year + 7),
+    ).save()
+    PilotAccessGrandfatherGrant(
+        clerk_id=args["stale_clerk_id"],
+        doctor_id_snapshot=doctor.id,
+        practice_id_snapshot=None,
+        email_snapshot=replacement.email,
+        email_sha256=hashlib.sha256(replacement.email.encode()).hexdigest(),
+        source_ref="controlled://pilot-export/active-test",
+        source_sha256="d" * 64,
+        grant_plan_sha256="e" * 64,
+        granted_by_ref="change:pilot-import-test",
+        grant_reason="Preserve approved pilot access",
+        granted_at=datetime(2026, 8, 22, 12, 0, tzinfo=UTC),
+    ).save()
+
+    with pytest.raises(
+        DoctorIdentityRebindError,
+        match="pilot authorization has conflicting state",
+    ):
+        plan_doctor_identity_rebind(**args)
+
+
+def test_rebind_only_moves_exact_clerk_issuer_with_valid_provider_tenant(monkeypatch):
+    doctor, _, _, args = _scope()
+    issuer = "https://test-clerk.example"
+    monkeypatch.setattr(
+        identity_rebind,
+        "AUTHORITY_KERNEL_SETTINGS",
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+            clerk_issuer=issuer,
+        ),
+    )
+    tenant = AuthorityTenant(status="active").save()
+    actor = AuthorityActor(actor_kind="human", status="active").save()
+    membership = AuthorityTenantMembership(
+        tenant_id=tenant.id,
+        actor_id=actor.id,
+        membership_kind="provider",
+        status="active",
+    ).save()
+    configured_identity = AuthorityActorExternalIdentity(
+        actor_id=actor.id,
+        issuer=issuer,
+        subject=args["stale_clerk_id"],
+        verified_at=datetime(2026, 8, 22, 12, 0, tzinfo=UTC),
+    ).save()
+    unrelated_actor = AuthorityActor(actor_kind="human", status="active").save()
+    unrelated_identity = AuthorityActorExternalIdentity(
+        actor_id=unrelated_actor.id,
+        issuer="https://other-idp.example",
+        subject=args["stale_clerk_id"],
+        verified_at=datetime(2026, 8, 22, 12, 0, tzinfo=UTC),
+    ).save()
+
+    plan = plan_doctor_identity_rebind(**args)
+
+    assert plan.authority_identity_count == 1
+    rebind_doctor_identity(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 12, 0, tzinfo=UTC),
+    )
+    configured_identity.refresh()
+    unrelated_identity.refresh()
+    assert configured_identity.revoked_at is not None
+    assert unrelated_identity.revoked_at is None
+    replacement_identity = AuthorityActorExternalIdentity.get(
+        issuer=issuer,
+        subject=args["replacement"].clerk_id,
+    )
+    assert replacement_identity is not None
+    assert replacement_identity.actor_id == actor.id
+    assert membership.tenant_id == tenant.id
 
 
 def test_rebind_rejects_wrong_confirmation_digest_without_mutation():

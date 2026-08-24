@@ -1,5 +1,6 @@
 import hmac
 from datetime import datetime, timezone
+from typing import cast
 
 import sentry_sdk
 from fastapi import HTTPException, Request, status
@@ -15,12 +16,26 @@ from app.services.pilot_access_grandfather import (
 
 from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
+from sqlalchemy import func
 
 PILOT_IDENTITY_ERROR = "Your account identity could not be verified"
 ACCOUNT_RECOVERY_REQUIRED = (
     "This email is already linked to a previous sign-in. "
     "Contact support to recover the existing account; no records have been lost."
 )
+
+
+def _doctors_for_normalized_email(email: str) -> list[Doctor]:
+    """Find every logical owner independent of historical email casing."""
+
+    return cast(
+        list[Doctor],
+        list(
+            Doctor.where(
+                func.lower(func.btrim(Doctor.email)) == email.strip().lower()
+            ).all()
+        ),
+    )
 
 
 def _fetch_clerk_email(clerk_id: str) -> str | None:
@@ -107,12 +122,15 @@ def inject_doctor_record(request: Request):
     if not doctor.email:
         email = normalized_live_email or _fetch_clerk_email(clerk_id)
         if email:
-            email_owner = Doctor.get(email=email)
-            if email_owner is not None and email_owner.id != doctor.id:
+            email_owners = _doctors_for_normalized_email(email)
+            conflicting_owners = [
+                owner for owner in email_owners if owner.id != doctor.id
+            ]
+            if conflicting_owners:
                 log.warning(
                     "account identity recovery required",
                     event_code="account_identity_recovery_required",
-                    doctor_ref=provider_log_ref(f"doctor:{email_owner.id}"),
+                    doctor_ref=provider_log_ref(f"doctor:{conflicting_owners[0].id}"),
                     clerk_ref=provider_log_ref(f"clerk-user:{clerk_id}"),
                 )
                 raise HTTPException(

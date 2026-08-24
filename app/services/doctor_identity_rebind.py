@@ -18,12 +18,19 @@ from typing import Any, cast
 
 from clerk_backend_api.models import ClerkErrors
 
+from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.clerk import clerk
 from app.services.clerk_cohort import ClerkCohortIdentity
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
-from app.models.authority import AuthorityActorExternalIdentity, AuthorityAuditEvent
+from app.models.authority import (
+    AuthorityActor,
+    AuthorityActorExternalIdentity,
+    AuthorityAuditEvent,
+    AuthorityTenant,
+    AuthorityTenantMembership,
+)
 from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor, DoctorRole, Terminology
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import PracticeMember
@@ -59,13 +66,20 @@ class DoctorIdentityRebindResult:
 
 
 @dataclass(frozen=True)
+class _AuthorityIdentityScope:
+    identity: AuthorityActorExternalIdentity
+    tenant_id: TypeIDType
+    membership_id: TypeIDType
+
+
+@dataclass(frozen=True)
 class _EvaluatedRebind:
     plan: DoctorIdentityRebindPlan
     doctor: Doctor
     member: PracticeMember
     provisional: Doctor | None
     pilot_grant: PilotAccessGrandfatherGrant | None
-    authority_identities: tuple[AuthorityActorExternalIdentity, ...]
+    authority_scopes: tuple[_AuthorityIdentityScope, ...]
     receipt: PracticeAccessAudit | None
 
 
@@ -233,6 +247,101 @@ def _receipt_ref(doctor_id: TypeIDType, replacement_subject: str) -> str:
     return f"doctor-identity-rebind:{doctor_id}:{_sha256(replacement_subject)[:24]}"
 
 
+def _authority_scopes(
+    session: Session,
+    *,
+    stale_subject: str,
+    replacement_subject: str,
+    lock: bool,
+) -> tuple[_AuthorityIdentityScope, ...]:
+    """Resolve only the configured Clerk issuer and prove its actor tenancy."""
+
+    subject_statement = select(AuthorityActorExternalIdentity).where(
+        col(AuthorityActorExternalIdentity.subject).in_(
+            [stale_subject, replacement_subject]
+        )
+    )
+    if lock:
+        subject_statement = subject_statement.with_for_update()
+    subject_rows = list(session.exec(subject_statement).all())
+    settings = AUTHORITY_KERNEL_SETTINGS
+    if not settings.has_valid_clerk_issuer():
+        if subject_rows:
+            raise DoctorIdentityRebindError(
+                "authority identity state exists but its Clerk issuer is unavailable"
+            )
+        return ()
+
+    issuer_rows = [row for row in subject_rows if row.issuer == settings.clerk_issuer]
+    if any(row.subject == replacement_subject for row in issuer_rows):
+        raise DoctorIdentityRebindError("replacement authority identity already exists")
+    stale_active = [
+        row
+        for row in issuer_rows
+        if row.subject == stale_subject and row.revoked_at is None
+    ]
+    if len(stale_active) > 1:
+        raise DoctorIdentityRebindError("authority identity state is ambiguous")
+    if not stale_active:
+        return ()
+
+    identity = stale_active[0]
+    actor_statement = select(AuthorityActor).where(
+        AuthorityActor.id == identity.actor_id
+    )
+    if lock:
+        actor_statement = actor_statement.with_for_update()
+    actor = session.exec(actor_statement).one_or_none()
+    if actor is None or actor.actor_kind != "human" or actor.status != "active":
+        raise DoctorIdentityRebindError("authority actor state is invalid")
+
+    actor_identities_statement = select(AuthorityActorExternalIdentity).where(
+        AuthorityActorExternalIdentity.actor_id == actor.id
+    )
+    if lock:
+        actor_identities_statement = actor_identities_statement.with_for_update()
+    actor_identities = list(session.exec(actor_identities_statement).all())
+    if any(row.issuer != settings.clerk_issuer for row in actor_identities):
+        raise DoctorIdentityRebindError(
+            "the authority actor has an identity from an unexpected issuer"
+        )
+    active_actor_identities = [
+        row for row in actor_identities if row.revoked_at is None
+    ]
+    if (
+        len(active_actor_identities) != 1
+        or active_actor_identities[0].id != identity.id
+    ):
+        raise DoctorIdentityRebindError("authority identity state is ambiguous")
+
+    membership_statement = select(AuthorityTenantMembership).where(
+        AuthorityTenantMembership.actor_id == actor.id,
+        AuthorityTenantMembership.membership_kind == "provider",
+        AuthorityTenantMembership.status == "active",
+    )
+    if lock:
+        membership_statement = membership_statement.with_for_update()
+    memberships = list(session.exec(membership_statement).all())
+    if len(memberships) != 1:
+        raise DoctorIdentityRebindError("authority tenant scope is ambiguous")
+    membership = memberships[0]
+    tenant_statement = select(AuthorityTenant).where(
+        AuthorityTenant.id == membership.tenant_id
+    )
+    if lock:
+        tenant_statement = tenant_statement.with_for_update()
+    tenant = session.exec(tenant_statement).one_or_none()
+    if tenant is None or tenant.status != "active":
+        raise DoctorIdentityRebindError("authority tenant scope is invalid")
+    return (
+        _AuthorityIdentityScope(
+            identity=identity,
+            tenant_id=tenant.id,
+            membership_id=membership.id,
+        ),
+    )
+
+
 def _plan_sha256(
     *,
     doctor: Doctor,
@@ -241,13 +350,24 @@ def _plan_sha256(
     replacement: ClerkCohortIdentity,
     provisional: Doctor | None,
     pilot_grant: PilotAccessGrandfatherGrant | None,
-    authority_identities: tuple[AuthorityActorExternalIdentity, ...],
+    authority_scopes: tuple[_AuthorityIdentityScope, ...],
     operator_ref: str,
     reason: str,
 ) -> str:
     payload: dict[str, Any] = {
         "action": "doctor_clerk_identity_rebind",
-        "authority_identity_ids": sorted(str(row.id) for row in authority_identities),
+        "authority_scopes": [
+            {
+                "actor_id": str(scope.identity.actor_id),
+                "identity_id": str(scope.identity.id),
+                "issuer_sha256": _sha256(scope.identity.issuer),
+                "membership_id": str(scope.membership_id),
+                "tenant_id": str(scope.tenant_id),
+            }
+            for scope in sorted(
+                authority_scopes, key=lambda item: str(item.identity.id)
+            )
+        ],
         "doctor_id": str(doctor.id),
         "email_sha256": _sha256(replacement.email),
         "member_id": str(member.id),
@@ -343,7 +463,7 @@ def _evaluate(
             member=member,
             provisional=None,
             pilot_grant=None,
-            authority_identities=(),
+            authority_scopes=(),
             receipt=receipt,
         )
     if doctor.clerk_id != stale:
@@ -381,7 +501,6 @@ def _evaluate(
         raise DoctorIdentityRebindError("the retained email ownership is ambiguous")
 
     grant_statement = select(PilotAccessGrandfatherGrant).where(
-        PilotAccessGrandfatherGrant.revoked_at == None,  # noqa: E711
         col(PilotAccessGrandfatherGrant.clerk_id).in_([stale, new_subject]),
     )
     if lock:
@@ -390,10 +509,14 @@ def _evaluate(
         list[PilotAccessGrandfatherGrant], list(session.exec(grant_statement).all())
     )
     new_grants = [grant for grant in grants if grant.clerk_id == new_subject]
-    old_grants = [grant for grant in grants if grant.clerk_id == stale]
-    if new_grants or len(old_grants) > 1:
+    old_active_grants = [
+        grant
+        for grant in grants
+        if grant.clerk_id == stale and grant.revoked_at is None
+    ]
+    if new_grants or len(old_active_grants) > 1:
         raise DoctorIdentityRebindError("pilot authorization has conflicting state")
-    pilot_grant = old_grants[0] if old_grants else None
+    pilot_grant = old_active_grants[0] if old_active_grants else None
     if pilot_grant is not None and (
         pilot_grant.doctor_id_snapshot not in (None, doctor.id)
         or not hmac.compare_digest(pilot_grant.email_snapshot, email)
@@ -403,19 +526,11 @@ def _evaluate(
             "pilot authorization does not match the account"
         )
 
-    authority_statement = select(AuthorityActorExternalIdentity).where(
-        col(AuthorityActorExternalIdentity.subject).in_([stale, new_subject])
-    )
-    if lock:
-        authority_statement = authority_statement.with_for_update()
-    authority_rows = cast(
-        list[AuthorityActorExternalIdentity],
-        list(session.exec(authority_statement).all()),
-    )
-    if any(row.subject == new_subject for row in authority_rows):
-        raise DoctorIdentityRebindError("replacement authority identity already exists")
-    active_authority = tuple(
-        row for row in authority_rows if row.subject == stale and row.revoked_at is None
+    authority_scopes = _authority_scopes(
+        session,
+        stale_subject=stale,
+        replacement_subject=new_subject,
+        lock=lock,
     )
 
     plan_sha256 = _plan_sha256(
@@ -425,7 +540,7 @@ def _evaluate(
         replacement=replacement,
         provisional=provisional,
         pilot_grant=pilot_grant,
-        authority_identities=active_authority,
+        authority_scopes=authority_scopes,
         operator_ref=operator,
         reason=explanation,
     )
@@ -436,14 +551,14 @@ def _evaluate(
             practice_id=member.practice_id,
             provisional_doctor_id=provisional.id if provisional else None,
             pilot_grant_rebound=pilot_grant is not None,
-            authority_identity_count=len(active_authority),
+            authority_identity_count=len(authority_scopes),
             already_applied=False,
         ),
         doctor=doctor,
         member=member,
         provisional=provisional,
         pilot_grant=pilot_grant,
-        authority_identities=active_authority,
+        authority_scopes=authority_scopes,
         receipt=None,
     )
 
@@ -467,15 +582,30 @@ def plan_doctor_identity_rebind(
                 reason=reason,
                 session=cast(Session, managed),
             )
-    return _evaluate(
-        session,
-        doctor_id=doctor_id,
-        stale_clerk_id=stale_clerk_id,
-        replacement=replacement,
-        operator_ref=operator_ref,
-        reason=reason,
-        lock=False,
-    ).plan
+    try:
+        return _evaluate(
+            session,
+            doctor_id=doctor_id,
+            stale_clerk_id=stale_clerk_id,
+            replacement=replacement,
+            operator_ref=operator_ref,
+            reason=reason,
+            lock=False,
+        ).plan
+    except DoctorIdentityRebindError:
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        raise
+    except SQLAlchemyError:
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        raise DoctorIdentityRebindError(
+            "identity recovery database validation failed"
+        ) from None
 
 
 def rebind_doctor_identity(
@@ -573,7 +703,8 @@ def rebind_doctor_identity(
                 )
             )
 
-        for identity in evaluated.authority_identities:
+        for scope in evaluated.authority_scopes:
+            identity = scope.identity
             identity.revoked_at = current
             session.add(identity)
             session.add(
@@ -591,6 +722,7 @@ def rebind_doctor_identity(
                     outcome="accepted",
                     occurred_at=current,
                     recorded_at=current,
+                    tenant_id=scope.tenant_id,
                     actor_id=identity.actor_id,
                     resource_type=IDENTITY_REBIND_RESOURCE_TYPE,
                     resource_ref=f"identity-rebind:{evaluated.plan.plan_sha256}",
