@@ -83,6 +83,7 @@ class RouteStripe:
                 "mode": "subscription",
                 "status": "open",
                 "subscription": None,
+                "payment_method_collection": data["payment_method_collection"],
             }
         if path == "/billing_portal/sessions":
             return {"url": "https://billing.stripe.com/p/session/route-test"}

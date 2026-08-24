@@ -8,6 +8,7 @@ import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone, tzinfo
 
+import httpx
 import pytest
 
 import app.configuration.stripe as stripe_config
@@ -77,9 +78,18 @@ class FakeStripe:
                 "mode": "subscription",
                 "status": "open",
                 "subscription": None,
+                "payment_method_collection": data["payment_method_collection"],
             }
             self.sessions[session["id"]] = deepcopy(session)
             return session
+        if path.startswith("/checkout/sessions/") and path.endswith("/expire"):
+            session_id = path.removesuffix("/expire").rsplit("/", 1)[-1]
+            session = self.sessions[session_id]
+            if session["status"] != "open":
+                raise AssertionError("only open Checkout Sessions can be expired")
+            session["status"] = "expired"
+            session["url"] = None
+            return deepcopy(session)
         if path.startswith("/checkout/sessions/"):
             return deepcopy(self.sessions[path.rsplit("/", 1)[-1]])
         if path == "/billing_portal/sessions":
@@ -878,6 +888,7 @@ def test_incomplete_subscription_resumes_exact_open_checkout_session(
         "mode": "subscription",
         "status": "open",
         "subscription": subscription["id"],
+        "payment_method_collection": "always",
     }
 
     assert (
@@ -915,6 +926,7 @@ def test_cached_open_checkout_without_subscription_resumes_when_acquisition_is_o
         "mode": "subscription",
         "status": "open",
         "subscription": None,
+        "payment_method_collection": "always",
     }
     monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", False)
 
@@ -930,6 +942,240 @@ def test_cached_open_checkout_without_subscription_resumes_when_acquisition_is_o
         == "https://checkout.stripe.com/c/pay/open-without-subscription"
     )
     assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
+def test_legacy_open_checkout_is_expired_and_replaced_under_current_policy(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    practice.stripe_checkout_session_id = "cs_legacy_cardless"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/legacy-cardless"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    remote.sessions["cs_legacy_cardless"] = {
+        "id": "cs_legacy_cardless",
+        "url": "https://checkout.stripe.com/c/pay/legacy-cardless",
+        "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": None,
+        "payment_method_collection": "if_required",
+    }
+
+    url = stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/settings",
+        cancel_url="https://app.example/settings",
+        now=NOW,
+    )
+
+    practice.refresh()
+    assert url == "https://checkout.stripe.com/c/pay/test"
+    assert remote.sessions["cs_legacy_cardless"]["status"] == "expired"
+    assert practice.stripe_checkout_session_id == "cs_test_idempotent"
+    assert practice.stripe_checkout_attempt == 1
+    expire_call = next(
+        call
+        for call in remote.calls
+        if call[1] == "/checkout/sessions/cs_legacy_cardless/expire"
+    )
+    assert expire_call[3] == stripe_billing._checkout_expire_idempotency_key(
+        "cs_legacy_cardless"
+    )
+    create_call = next(call for call in remote.calls if call[1] == "/checkout/sessions")
+    assert create_call[2]
+    assert (
+        create_call[2]["payment_method_collection"]
+        == stripe_billing.CHECKOUT_PAYMENT_METHOD_COLLECTION
+    )
+    assert create_call[3] == stripe_billing._checkout_idempotency_key(practice)
+
+
+def test_legacy_open_checkout_is_retired_but_not_replaced_when_acquisition_is_off(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    practice.stripe_checkout_session_id = "cs_legacy_disabled"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/legacy-disabled"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    remote.sessions["cs_legacy_disabled"] = {
+        "id": "cs_legacy_disabled",
+        "url": "https://checkout.stripe.com/c/pay/legacy-disabled",
+        "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": None,
+        "payment_method_collection": "if_required",
+    }
+    monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", False)
+
+    with pytest.raises(stripe_billing.StripeNotConfigured):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert remote.sessions["cs_legacy_disabled"]["status"] == "expired"
+    assert practice.stripe_checkout_session_id is None
+    assert practice.stripe_checkout_attempt == 1
+    assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
+def test_legacy_checkout_completion_race_binds_subscription_without_replacement(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    practice.stripe_checkout_session_id = "cs_legacy_completed_race"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/legacy-completed-race"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    subscription = _subscription(practice, subscription_id="sub_legacy_race")
+    remote.subscriptions[subscription["id"]] = subscription
+    remote.sessions["cs_legacy_completed_race"] = {
+        "id": "cs_legacy_completed_race",
+        "url": "https://checkout.stripe.com/c/pay/legacy-completed-race",
+        "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": None,
+        "payment_method_collection": "if_required",
+    }
+    original_request = remote.__call__
+
+    def completing_request(method, path, data=None, *, idempotency_key=None):
+        if path == "/checkout/sessions/cs_legacy_completed_race/expire":
+            remote.calls.append((method, path, data, idempotency_key))
+            remote.sessions["cs_legacy_completed_race"].update(
+                status="complete", subscription=subscription["id"], url=None
+            )
+            request = httpx.Request("POST", f"https://api.stripe.com/v1{path}")
+            response = httpx.Response(400, request=request)
+            raise httpx.HTTPStatusError(
+                "Checkout Session is no longer expirable",
+                request=request,
+                response=response,
+            )
+        return original_request(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", completing_request)
+    with pytest.raises(stripe_billing.StripeCheckoutAlreadyCompleted):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.subscription_status == "active"
+    assert practice.stripe_checkout_session_id is None
+    assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
+def test_legacy_checkout_ambiguous_expiration_fails_closed_without_replacement(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    practice.stripe_checkout_session_id = "cs_legacy_expire_ambiguous"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/legacy-expire-ambiguous"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    remote.sessions["cs_legacy_expire_ambiguous"] = {
+        "id": "cs_legacy_expire_ambiguous",
+        "url": "https://checkout.stripe.com/c/pay/legacy-expire-ambiguous",
+        "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": None,
+        "payment_method_collection": "if_required",
+    }
+    original_request = remote.__call__
+
+    def ambiguous_expire_request(method, path, data=None, *, idempotency_key=None):
+        if path == "/checkout/sessions/cs_legacy_expire_ambiguous/expire":
+            remote.calls.append((method, path, data, idempotency_key))
+            request = httpx.Request("POST", f"https://api.stripe.com/v1{path}")
+            raise httpx.ReadTimeout("expiration result unknown", request=request)
+        return original_request(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", ambiguous_expire_request)
+    with pytest.raises(
+        stripe_billing.StripeStateInvalid,
+        match="could not be retired safely",
+    ):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert remote.sessions["cs_legacy_expire_ambiguous"]["status"] == "open"
+    assert practice.stripe_checkout_session_id == "cs_legacy_expire_ambiguous"
+    assert practice.stripe_checkout_attempt == 0
+    assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
+def test_new_checkout_with_wrong_collection_policy_is_retired_and_not_cached(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    original_request = remote.__call__
+
+    def wrong_policy_request(method, path, data=None, *, idempotency_key=None):
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if path == "/checkout/sessions":
+            response["payment_method_collection"] = "if_required"
+            remote.sessions[response["id"]]["payment_method_collection"] = "if_required"
+        return response
+
+    monkeypatch.setattr(stripe_billing, "_request", wrong_policy_request)
+    with pytest.raises(
+        stripe_billing.StripeStateInvalid,
+        match="did not enforce payment method collection",
+    ):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert remote.sessions["cs_test_idempotent"]["status"] == "expired"
+    assert practice.stripe_checkout_session_id is None
+    assert practice.stripe_checkout_attempt == 1
 
 
 def test_expired_cached_checkout_cannot_bypass_acquisition_kill_switch(
