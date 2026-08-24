@@ -6,6 +6,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import Field
 from typeid import TypeID
 from typeid.errors import TypeIDException
 
@@ -24,11 +25,52 @@ from app.models.intake.intake import (
 )
 from sqlalchemy.exc import NoResultFound
 
+# A patient answering in prose needs room; nobody needs this much. Bounding it
+# matters more here than on an authenticated route: possession of the link is
+# the only credential, so anyone holding a forwarded one can write to the
+# record, repeatedly, and every byte lands in a PHI-bearing JSONB column and
+# then in a model prompt.
+MAX_ANSWER_CHARS = 8_000
+
+# The body cap is deliberately looser than the character cap: JSON escaping and
+# multi-byte UTF-8 both inflate the encoded size of a legitimate answer.
+MAX_CHAT_BODY_BYTES = 64 * 1024
+
+
+def reject_oversized_body(request: Request) -> None:
+    """Refuse an over-large body before Starlette buffers it.
+
+    Same intent as `_read_bounded_body` in app/routes/webhooks.py. This is the
+    cheap outer guard -- a caller can understate or omit content-length, so the
+    binding limit is `MAX_ANSWER_CHARS` on the parsed field. Layered on purpose:
+    this one keeps a hostile body out of memory, that one keeps it out of the
+    database.
+    """
+
+    declared = request.headers.get("content-length")
+    if declared is None:
+        return
+
+    try:
+        length = int(declared)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid content length"
+        )
+
+    if length < 0 or length > MAX_CHAT_BODY_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Answer is too long",
+        )
+
+
 chat_api_app = APIRouter(
     prefix="/external/chat",
     dependencies=[
         # NOTE this line could not be more important, look at the underlying implementation!
         Depends(aglobal_session),
+        Depends(reject_oversized_body),
     ],
 )
 
@@ -72,7 +114,7 @@ def process_intake(intake_id: str = Path(title="Intake ID")) -> Intake | JSONRes
 
 
 class ChatInput(PydanticBaseModel):
-    answer: str
+    answer: str = Field(max_length=MAX_ANSWER_CHARS)
     "the patient's answer. An empty string is a deliberate skip."
 
     # TODO do we need the question to be posted back? Would probably provide another layer of validation?

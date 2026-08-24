@@ -22,6 +22,14 @@ export type InterviewProgress = {
 }
 
 /**
+ * Keep in step with `MAX_ANSWER_CHARS` in app/routes/chat.py.
+ *
+ * The server is what enforces this; stopping input here just means a patient
+ * never writes past the limit and then loses the submission to a 422.
+ */
+const MAX_ANSWER_CHARS = 8000
+
+/**
  * One question, one screen.
  *
  * Replaces the assistant-ui chat thread. The endpoint behind it always served
@@ -133,6 +141,7 @@ export function QuestionForm({
             value={draft}
             onChange={(event) => onDraftChange(event.target.value)}
             rows={7}
+            maxLength={MAX_ANSWER_CHARS}
             disabled={submitting}
             placeholder="Write the way you would say it out loud."
             className={cn(

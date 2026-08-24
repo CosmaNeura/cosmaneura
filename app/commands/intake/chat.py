@@ -97,9 +97,29 @@ def validate_question_structure(intake: Intake) -> None:
                 raise ValueError(f"Duplicate question key found: '{question.key}'")
             keys.append(question.key)
 
+    order_by_key = {q.key: q.order for q in questions if q.key}
+
     for question in questions:
-        if question.show_if and question.show_if.key not in keys:
+        if not question.show_if:
+            continue
+
+        gate_order = order_by_key.get(question.show_if.key)
+
+        if gate_order is None:
             raise ValueError(
                 f"Question '{question.key or question.order}' is conditional on "
                 f"unknown key '{question.show_if.key}'"
+            )
+
+        # A question may only depend on one asked before it. That is the real
+        # semantic -- you cannot branch on an answer you have not collected --
+        # and enforcing it as an ordering rule also rules out self-reference and
+        # dependency cycles in one check. Both of those are worse than they
+        # look: every question in a cycle is permanently invisible, so the prep
+        # reports itself complete having asked nothing, and a brief gets written
+        # from no answers at all.
+        if gate_order >= question.order:
+            raise ValueError(
+                f"Question '{question.key or question.order}' is conditional on "
+                f"'{question.show_if.key}', which is not asked before it"
             )
