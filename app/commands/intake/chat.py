@@ -29,7 +29,11 @@ def perform(intake: Intake, user_chat_input: str | None) -> IntakeSchemaQuestion
         )
         return None
 
-    if not user_chat_input:
+    # `None` means "just tell me where I am" (the GET peek). An empty string is
+    # a deliberate skip and has to be stored, or the interview loops forever on
+    # a question the patient chose not to answer. `is_answered` keys off the
+    # timestamp precisely so an empty answer still advances.
+    if user_chat_input is None:
         return current_question
 
     # Find the matching question in intake_questions and update it.
@@ -60,6 +64,13 @@ def validate_question_structure(intake: Intake) -> None:
     """
     1. Make sure all questions are unique
     2. Make sure order is unique
+    3. Make sure physician-authored keys are unique
+    4. Make sure every condition points at a key that exists
+
+    (3) and (4) are no-ops for model-generated intakes, which carry neither
+    keys nor conditions. They matter for physician-authored sets, where a
+    condition anchored to a missing key would silently hide its question
+    forever -- the patient would never see it and the prep would still complete.
     """
     # Get all questions from the intake
     questions = intake.intake_questions
@@ -70,6 +81,7 @@ def validate_question_structure(intake: Intake) -> None:
     # Check for uniqueness of questions and order
     question_texts = []
     orders = []
+    keys = []
 
     for question in questions:
         if question.question in question_texts:
@@ -79,3 +91,15 @@ def validate_question_structure(intake: Intake) -> None:
         if question.order in orders:
             raise ValueError(f"Duplicate order found: {question.order}")
         orders.append(question.order)
+
+        if question.key is not None:
+            if question.key in keys:
+                raise ValueError(f"Duplicate question key found: '{question.key}'")
+            keys.append(question.key)
+
+    for question in questions:
+        if question.show_if and question.show_if.key not in keys:
+            raise ValueError(
+                f"Question '{question.key or question.order}' is conditional on "
+                f"unknown key '{question.show_if.key}'"
+            )
