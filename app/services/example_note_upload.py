@@ -31,7 +31,7 @@ def _invalid_pdf(
     raise ExampleNoteUploadValidationError(status_code=415, detail=detail)
 
 
-def validate_example_note_blob(file_name: str) -> None:
+def validate_example_note_blob(file_name: str, *, owner_clerk_id: str) -> None:
     """Fail closed unless an uploaded example note is a bounded PDF blob."""
 
     if (
@@ -41,6 +41,11 @@ def validate_example_note_blob(file_name: str) -> None:
         or not file_name.lower().endswith(".pdf")
     ):
         _invalid_pdf("Example notes must use a .pdf file name.")
+    if not owner_clerk_id or not file_name.startswith(f"{owner_clerk_id}_"):
+        raise ExampleNoteUploadValidationError(
+            status_code=403,
+            detail="The uploaded example note does not belong to this account.",
+        )
 
     service_client = BlobServiceClient(
         AZURE_UPLOADS_ACCOUNT_URL,

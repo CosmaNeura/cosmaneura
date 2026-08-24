@@ -10,6 +10,8 @@ from app.server import api_app
 
 from app.models.doctor_note_file import DoctorNoteFile
 
+from tests.routes.utils import get_clerk_dev_user
+
 
 class _FakeDownload:
     def __init__(self, content: bytes):
@@ -54,9 +56,13 @@ def _install_blob(
 
 
 def _register_example_note(client: TestClient, file_name: str):
+    _, _, user = get_clerk_dev_user()
     return client.post(
         api_app.url_path_for("upload_example_note"),
-        params={"file_name": file_name, "note_type": "SOAP Note"},
+        params={
+            "file_name": f"{user.id}_1234567890_{file_name}",
+            "note_type": "SOAP Note",
+        },
     )
 
 
@@ -118,7 +124,8 @@ def test_accepts_bounded_pdf_then_persists_and_queues(
 
     assert response.status_code == status.HTTP_200_OK
     assert DoctorNoteFile.count() == initial_count + 1
-    doctor_note = DoctorNoteFile.get(azure_file_name="valid.pdf")
+    _, _, user = get_clerk_dev_user()
+    doctor_note = DoctorNoteFile.get(azure_file_name=f"{user.id}_1234567890_valid.pdf")
     assert doctor_note is not None
     assert doctor_note.note_type == "SOAP Note"
     queue.assert_called_once_with(doctor_note.id)
@@ -142,4 +149,34 @@ def test_rejects_pdf_larger_than_ten_megabytes(
     assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
     assert response.json()["detail"] == "Example note PDFs must be 10 MB or smaller."
     assert DoctorNoteFile.count() == initial_count
+    queue.assert_not_called()
+
+
+def test_rejects_a_blob_owned_by_another_account_before_fetching(
+    authenticated_client: TestClient, monkeypatch
+):
+    service_client = Mock()
+    monkeypatch.setattr(
+        example_note_upload,
+        "BlobServiceClient",
+        lambda *_args, **_kwargs: service_client,
+    )
+    queue = Mock()
+    monkeypatch.setattr(app.jobs.extract, "queue", queue)
+    initial_count = DoctorNoteFile.count()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("upload_example_note"),
+        params={
+            "file_name": "user_someone_else_1234567890_note.pdf",
+            "note_type": "SOAP Note",
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.json()["detail"] == (
+        "The uploaded example note does not belong to this account."
+    )
+    assert DoctorNoteFile.count() == initial_count
+    service_client.get_blob_client.assert_not_called()
     queue.assert_not_called()

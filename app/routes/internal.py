@@ -459,7 +459,10 @@ def upload_example_note(request: Request, file_name: str, note_type: str) -> Non
     doctor: Doctor = request.state.doctor
 
     try:
-        example_note_upload.validate_example_note_blob(file_name)
+        example_note_upload.validate_example_note_blob(
+            file_name,
+            owner_clerk_id=doctor.clerk_id,
+        )
     except example_note_upload.ExampleNoteUploadValidationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
