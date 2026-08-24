@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from fastapi import status
@@ -8,6 +9,38 @@ import app.services.example_note_upload as example_note_upload
 from app.server import api_app
 
 from app.models.doctor_note_file import DoctorNoteFile
+
+from tests.routes.utils import get_clerk_dev_user
+
+
+class _Download:
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+
+    def readall(self) -> bytes:
+        return self.content
+
+
+class _BlobClient:
+    def __init__(self, content: bytes) -> None:
+        self.content = content
+        self.etag = '"legacy-etag"'
+        self.property_calls: list[dict[str, object]] = []
+        self.download_calls: list[dict[str, object]] = []
+
+    def get_blob_properties(self, **kwargs: object) -> SimpleNamespace:
+        self.property_calls.append(kwargs)
+        return SimpleNamespace(
+            etag=self.etag,
+            size=len(self.content),
+            content_settings=SimpleNamespace(
+                content_type=example_note_upload.PDF_CONTENT_TYPE
+            ),
+        )
+
+    def download_blob(self, **kwargs: object) -> _Download:
+        self.download_calls.append(kwargs)
+        return _Download(self.content)
 
 
 def test_openapi_keeps_legacy_contract_and_exposes_distinct_v2_contract():
@@ -71,7 +104,7 @@ def test_legacy_query_registration_is_owner_validated_and_integrity_bound(
         sha256="a" * 64,
     )
     validate = Mock(return_value=registered)
-    serialize = Mock(return_value="example-note:v1:encrypted-legacy-reference")
+    serialize = Mock(return_value="example-note:v2:encrypted-legacy-reference")
     queue = Mock()
     monkeypatch.setattr(
         example_note_upload,
@@ -93,7 +126,7 @@ def test_legacy_query_registration_is_owner_validated_and_integrity_bound(
     assert response.status_code == status.HTTP_200_OK
     assert DoctorNoteFile.count() == initial_count + 1
     doctor_note = DoctorNoteFile.get(
-        azure_file_name="example-note:v1:encrypted-legacy-reference"
+        azure_file_name="example-note:v2:encrypted-legacy-reference"
     )
     assert doctor_note is not None
     assert doctor_note.note_type == "SOAP Note"
@@ -103,6 +136,50 @@ def test_legacy_query_registration_is_owner_validated_and_integrity_bound(
     assert validate.call_args.kwargs["owner_clerk_id"].startswith("user_")
     serialize.assert_called_once_with(registered)
     queue.assert_called_once_with(doctor_note.id)
+
+
+def test_legacy_route_persists_a_locator_the_worker_can_download(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    _, _, user = get_clerk_dev_user()
+    file_name = f"{user.id}_1787572800000_note.pdf"
+    content = b"%PDF-1.7\nlegacy route to worker round trip"
+    client = _BlobClient(content)
+    requested_keys: list[str] = []
+
+    def blob_client(blob_key: str) -> _BlobClient:
+        requested_keys.append(blob_key)
+        return client
+
+    monkeypatch.setattr(example_note_upload, "_blob_client", blob_client)
+    queue = Mock()
+    monkeypatch.setattr(app.jobs.extract, "queue", queue)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("upload_example_note"),
+        params={"file_name": file_name, "note_type": "Legacy Round Trip"},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    doctor_note = DoctorNoteFile.get(note_type="Legacy Round Trip")
+    assert doctor_note is not None
+    assert doctor_note.azure_file_name.startswith("example-note:v2:")
+    assert file_name not in doctor_note.azure_file_name
+    queue.assert_called_once_with(doctor_note.id)
+
+    downloaded = example_note_upload.download_registered_or_legacy_example_note(
+        doctor_note.azure_file_name,
+        doctor_id=str(doctor_note.doctor_id),
+    )
+
+    assert downloaded == content
+    assert requested_keys == [file_name, file_name]
+    assert client.property_calls[0] == {}
+    assert client.property_calls[1] == {
+        "etag": client.etag,
+        "match_condition": example_note_upload.MatchConditions.IfNotModified,
+    }
 
 
 def test_legacy_query_validation_failure_does_not_persist_or_queue(
@@ -177,7 +254,7 @@ def test_v2_registers_only_the_server_resolved_blob_and_queues_once(
         sha256="a" * 64,
     )
     consume = Mock(return_value=registered)
-    serialize = Mock(return_value="example-note:v1:encrypted-reference")
+    serialize = Mock(return_value="example-note:v2:encrypted-reference")
     queue = Mock()
     monkeypatch.setattr(
         example_note_upload,
@@ -199,7 +276,7 @@ def test_v2_registers_only_the_server_resolved_blob_and_queues_once(
     assert response.status_code == status.HTTP_200_OK
     assert DoctorNoteFile.count() == initial_count + 1
     doctor_note = DoctorNoteFile.get(
-        azure_file_name="example-note:v1:encrypted-reference"
+        azure_file_name="example-note:v2:encrypted-reference"
     )
     assert doctor_note is not None
     assert doctor_note.note_type == "SOAP Note"

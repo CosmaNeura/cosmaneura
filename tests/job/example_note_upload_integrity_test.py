@@ -16,7 +16,7 @@ def _note() -> Any:
     return cast(
         Any,
         SimpleNamespace(
-            azure_file_name="example-note:v1:encrypted-reference",
+            azure_file_name="example-note:v2:encrypted-reference",
             doctor_id="doctor_owner",
         ),
     )

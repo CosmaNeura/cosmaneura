@@ -15,7 +15,7 @@ import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from azure.core import MatchConditions
 from azure.core.exceptions import (
@@ -58,8 +58,19 @@ _MAX_LEGACY_BLOB_KEY_BYTES = 1024
 _OPAQUE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _PENDING_BLOB_KEY_RE = re.compile(r"^pending/[A-Za-z0-9_-]{43}\.pdf$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_REGISTERED_REFERENCE_PREFIX = "example-note:v1:"
+_REGISTERED_REFERENCE_V1_PREFIX = "example-note:v1:"
+_REGISTERED_REFERENCE_V2_PREFIX = "example-note:v2:"
 _MAX_ETAG_LENGTH = 256
+_MAX_CLERK_ID_BYTES = 512
+
+_SERVER_OWNED_KEY_KIND: Literal["server_owned_v2"] = "server_owned_v2"
+_LEGACY_OWNER_STAMPED_KEY_KIND: Literal["legacy_owner_stamped_v1"] = (
+    "legacy_owner_stamped_v1"
+)
+RegisteredBlobKeyKind = Literal[
+    "server_owned_v2",
+    "legacy_owner_stamped_v1",
+]
 
 # Only the request which loaded this exact encrypted intent may consume it.
 # This makes registration single-use without allowing another account to
@@ -112,6 +123,8 @@ class RegisteredExampleNoteBlob:
     etag: str
     size: int
     sha256: str
+    key_kind: RegisteredBlobKeyKind = _SERVER_OWNED_KEY_KIND
+    legacy_owner_clerk_id: str | None = None
 
 
 def _invalid_pdf(
@@ -298,8 +311,53 @@ def _etag(properties: object) -> str | None:
     return value
 
 
+def _bounded_legacy_blob_key(file_name: str) -> bool:
+    try:
+        encoded_name = file_name.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return bool(
+        file_name
+        and len(encoded_name) <= _MAX_LEGACY_BLOB_KEY_BYTES
+        and file_name == os.path.basename(file_name)
+        and "\\" not in file_name
+        and file_name.lower().endswith(".pdf")
+    )
+
+
+def _legacy_owner_stamped_blob_key(file_name: str, owner_clerk_id: str) -> bool:
+    try:
+        encoded_owner = owner_clerk_id.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    if (
+        not owner_clerk_id.startswith("user_")
+        or len(encoded_owner) > _MAX_CLERK_ID_BYTES
+        or not _bounded_legacy_blob_key(file_name)
+    ):
+        return False
+
+    owner_prefix = f"{owner_clerk_id}_"
+    if len(file_name) <= len(owner_prefix) or not secrets.compare_digest(
+        file_name[: len(owner_prefix)], owner_prefix
+    ):
+        return False
+
+    timestamp, separator, original_name = file_name[len(owner_prefix) :].partition("_")
+    return bool(
+        separator
+        and 10 <= len(timestamp) <= 16
+        and timestamp.isascii()
+        and timestamp.isdigit()
+        and original_name
+    )
+
+
 def _validate_uploaded_blob(
     intent: _PendingExampleNoteUpload,
+    *,
+    key_kind: RegisteredBlobKeyKind = _SERVER_OWNED_KEY_KIND,
+    legacy_owner_clerk_id: str | None = None,
 ) -> RegisteredExampleNoteBlob:
     blob_client = _blob_client(intent.blob_key)
     try:
@@ -365,6 +423,8 @@ def _validate_uploaded_blob(
         etag=etag,
         size=size,
         sha256=hashlib.sha256(content).hexdigest(),
+        key_kind=key_kind,
+        legacy_owner_clerk_id=legacy_owner_clerk_id,
     )
 
 
@@ -406,63 +466,95 @@ def validate_legacy_example_note_upload(
     ETag/hash-bound reference used by v2 before they are queued.
     """
 
-    owner_prefix = f"{owner_clerk_id}_"
-    encoded_name = file_name.encode("utf-8")
-    if (
-        not file_name
-        or len(encoded_name) > _MAX_LEGACY_BLOB_KEY_BYTES
-        or file_name != os.path.basename(file_name)
-        or "\\" in file_name
-        or not file_name.lower().endswith(".pdf")
-    ):
+    if not _bounded_legacy_blob_key(file_name):
         _invalid_pdf("Example notes must use a .pdf file name.")
-    if (
-        not owner_clerk_id
-        or len(file_name) <= len(owner_prefix)
-        or not secrets.compare_digest(file_name[: len(owner_prefix)], owner_prefix)
-    ):
+    owner_prefix = f"{owner_clerk_id}_"
+    if not owner_clerk_id or not file_name.startswith(owner_prefix):
         raise ExampleNoteUploadValidationError(
             status_code=403,
             detail="The uploaded example note does not belong to this account.",
         )
+    if not _legacy_owner_stamped_blob_key(file_name, owner_clerk_id):
+        _invalid_pdf("Example notes must use the expected upload file name.")
 
     return _validate_uploaded_blob(
-        _PendingExampleNoteUpload(blob_key=file_name, doctor_id=doctor_id)
+        _PendingExampleNoteUpload(blob_key=file_name, doctor_id=doctor_id),
+        key_kind=_LEGACY_OWNER_STAMPED_KEY_KIND,
+        legacy_owner_clerk_id=owner_clerk_id,
     )
 
 
 def serialize_registered_blob(blob: RegisteredExampleNoteBlob) -> str:
+    if blob.key_kind == _SERVER_OWNED_KEY_KIND:
+        valid_key_metadata = (
+            _PENDING_BLOB_KEY_RE.fullmatch(blob.blob_key) is not None
+            and blob.legacy_owner_clerk_id is None
+        )
+    elif blob.key_kind == _LEGACY_OWNER_STAMPED_KEY_KIND:
+        valid_key_metadata = (
+            blob.legacy_owner_clerk_id is not None
+            and _legacy_owner_stamped_blob_key(
+                blob.blob_key,
+                blob.legacy_owner_clerk_id,
+            )
+        )
+    else:
+        valid_key_metadata = False
+    if not valid_key_metadata:
+        raise ValueError("invalid registered example-note blob key metadata")
+
     payload = json.dumps(
         {
             "blob_key": blob.blob_key,
             "doctor_id": blob.doctor_id,
             "etag": blob.etag,
+            "key_kind": blob.key_kind,
+            "legacy_owner_clerk_id": blob.legacy_owner_clerk_id,
             "sha256": blob.sha256,
             "size": blob.size,
+            "version": 2,
         },
         separators=(",", ":"),
         sort_keys=True,
     )
-    return _REGISTERED_REFERENCE_PREFIX + encrypt_value(payload)
+    return _REGISTERED_REFERENCE_V2_PREFIX + encrypt_value(payload)
 
 
 def _deserialize_registered_blob(
     reference: str,
 ) -> RegisteredExampleNoteBlob | None:
-    if not reference.startswith(_REGISTERED_REFERENCE_PREFIX):
+    if reference.startswith(_REGISTERED_REFERENCE_V2_PREFIX):
+        ciphertext = reference.removeprefix(_REGISTERED_REFERENCE_V2_PREFIX)
+        expected_keys = {
+            "blob_key",
+            "doctor_id",
+            "etag",
+            "key_kind",
+            "legacy_owner_clerk_id",
+            "sha256",
+            "size",
+            "version",
+        }
+        expected_version = 2
+    elif reference.startswith(_REGISTERED_REFERENCE_V1_PREFIX):
+        ciphertext = reference.removeprefix(_REGISTERED_REFERENCE_V1_PREFIX)
+        expected_keys = {
+            "blob_key",
+            "doctor_id",
+            "etag",
+            "sha256",
+            "size",
+        }
+        expected_version = 1
+    else:
         return None
-    ciphertext = reference.removeprefix(_REGISTERED_REFERENCE_PREFIX)
     try:
         payload = json.loads(decrypt_value(ciphertext))
     except (DecryptionError, json.JSONDecodeError, TypeError):
         raise ExampleNoteBlobIntegrityError from None
-    if not isinstance(payload, dict) or set(payload) != {
-        "blob_key",
-        "doctor_id",
-        "etag",
-        "sha256",
-        "size",
-    }:
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise ExampleNoteBlobIntegrityError
+    if expected_version == 2 and payload.get("version") != 2:
         raise ExampleNoteBlobIntegrityError
     blob_key = payload.get("blob_key")
     doctor_id = payload.get("doctor_id")
@@ -471,7 +563,6 @@ def _deserialize_registered_blob(
     sha256 = payload.get("sha256")
     if (
         not isinstance(blob_key, str)
-        or _PENDING_BLOB_KEY_RE.fullmatch(blob_key) is None
         or not isinstance(doctor_id, str)
         or not doctor_id
         or not isinstance(etag, str)
@@ -483,7 +574,41 @@ def _deserialize_registered_blob(
         or _SHA256_RE.fullmatch(sha256) is None
     ):
         raise ExampleNoteBlobIntegrityError
-    return RegisteredExampleNoteBlob(blob_key, doctor_id, etag, size, sha256)
+
+    if expected_version == 1:
+        if _PENDING_BLOB_KEY_RE.fullmatch(blob_key) is None:
+            raise ExampleNoteBlobIntegrityError
+        return RegisteredExampleNoteBlob(blob_key, doctor_id, etag, size, sha256)
+
+    key_kind = payload.get("key_kind")
+    legacy_owner_clerk_id = payload.get("legacy_owner_clerk_id")
+    if key_kind == _SERVER_OWNED_KEY_KIND:
+        if (
+            _PENDING_BLOB_KEY_RE.fullmatch(blob_key) is None
+            or legacy_owner_clerk_id is not None
+        ):
+            raise ExampleNoteBlobIntegrityError
+        normalized_key_kind: RegisteredBlobKeyKind = _SERVER_OWNED_KEY_KIND
+        normalized_owner_clerk_id = None
+    elif key_kind == _LEGACY_OWNER_STAMPED_KEY_KIND:
+        if not isinstance(
+            legacy_owner_clerk_id, str
+        ) or not _legacy_owner_stamped_blob_key(blob_key, legacy_owner_clerk_id):
+            raise ExampleNoteBlobIntegrityError
+        normalized_key_kind = _LEGACY_OWNER_STAMPED_KEY_KIND
+        normalized_owner_clerk_id = legacy_owner_clerk_id
+    else:
+        raise ExampleNoteBlobIntegrityError
+
+    return RegisteredExampleNoteBlob(
+        blob_key,
+        doctor_id,
+        etag,
+        size,
+        sha256,
+        key_kind=normalized_key_kind,
+        legacy_owner_clerk_id=normalized_owner_clerk_id,
+    )
 
 
 def _download_registered_blob(blob: RegisteredExampleNoteBlob) -> bytes:

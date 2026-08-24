@@ -401,11 +401,23 @@ wait_for_incompatible_worker_replicas_to_drain() {
 	local expected_image="${PRODUCTION_IMAGE}:${git_sha}"
 	local attempts=0
 	local max_attempts=60 # 5 minutes
+	local active_revisions_mode
+
+	if ! active_revisions_mode=$(az containerapp show \
+		-n "$container_name" -g "$RESOURCE_GROUP" \
+		--query "properties.configuration.activeRevisionsMode" -o tsv); then
+		echo "Failed to read worker revision mode while proving drain completion."
+		return 1
+	fi
+	if [[ "$active_revisions_mode" != "Single" ]]; then
+		echo "Worker drain proof requires Single active revision mode; found '$active_revisions_mode'."
+		return 1
+	fi
 
 	echo "Waiting for worker replicas on older images to drain..."
 
 	while [[ $attempts -lt $max_attempts ]]; do
-		local revisions_json incompatible_revisions remaining_replicas
+		local revisions_json expected_revision_count incompatible_revisions remaining_replicas
 		if ! revisions_json=$(az containerapp revision list \
 			-n "$container_name" -g "$RESOURCE_GROUP" \
 			--query "[].{name:name,image:properties.template.containers[0].image}" \
@@ -413,9 +425,19 @@ wait_for_incompatible_worker_replicas_to_drain() {
 			echo "Failed to list worker revisions while proving drain completion."
 			return 1
 		fi
+		if ! expected_revision_count=$(printf '%s' "$revisions_json" | jq -r \
+			--arg expected_image "$expected_image" \
+			'if type != "array" then error("revision list was not an array") else [.[] | select(.image == $expected_image)] | length end'); then
+			echo "Failed to prove the expected worker revision is present."
+			return 1
+		fi
+		if [[ ! "$expected_revision_count" =~ ^[0-9]+$ || "$expected_revision_count" -eq 0 ]]; then
+			echo "Expected worker image $expected_image is absent from the revision list; refusing to deploy the API."
+			return 1
+		fi
 		if ! incompatible_revisions=$(printf '%s' "$revisions_json" | jq -r \
 			--arg expected_image "$expected_image" \
-			'.[] | select(.image != $expected_image) | .name'); then
+			'if type != "array" then error("revision list was not an array") else .[] | select(.image != $expected_image) | .name end'); then
 			echo "Failed to identify incompatible worker revisions."
 			return 1
 		fi

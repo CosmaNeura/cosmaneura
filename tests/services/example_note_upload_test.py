@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -257,6 +258,8 @@ def test_legacy_registration_is_owner_bound_and_converted_to_immutable_reference
         etag='"etag-v1"',
         size=len(content),
         sha256=hashlib.sha256(content).hexdigest(),
+        key_kind="legacy_owner_stamped_v1",
+        legacy_owner_clerk_id="user_owner",
     )
     assert requested_keys == [file_name]
     assert client.property_calls == [{}]
@@ -268,7 +271,7 @@ def test_legacy_registration_is_owner_bound_and_converted_to_immutable_reference
             "match_condition": MatchConditions.IfNotModified,
         }
     ]
-    assert uploads.serialize_registered_blob(registered).startswith("example-note:v1:")
+    assert uploads.serialize_registered_blob(registered).startswith("example-note:v2:")
 
 
 @pytest.mark.parametrize(
@@ -535,6 +538,106 @@ def test_registered_worker_download_is_etag_conditional_and_hash_bound(
             **expected_condition,
         }
     ]
+
+
+def test_v1_server_owned_reference_remains_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"%PDF-1.7\nprevious server-owned locator"
+    registered = _registered_blob(content)
+    client = _BlobClient(
+        blob_key=registered.blob_key,
+        content=content,
+        etag=registered.etag,
+    )
+    monkeypatch.setattr(uploads, "_blob_client", lambda _blob_key: client)
+    payload = json.dumps(
+        {
+            "blob_key": registered.blob_key,
+            "doctor_id": registered.doctor_id,
+            "etag": registered.etag,
+            "sha256": registered.sha256,
+            "size": registered.size,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    reference = "example-note:v1:" + uploads.encrypt_value(payload)
+
+    downloaded = uploads.download_registered_or_legacy_example_note(
+        reference,
+        doctor_id=registered.doctor_id,
+    )
+
+    assert downloaded == content
+
+
+def test_v1_reference_never_accepts_a_legacy_owner_stamped_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_keys: list[str] = []
+    monkeypatch.setattr(
+        uploads,
+        "_blob_client",
+        lambda blob_key: requested_keys.append(blob_key),
+    )
+    payload = json.dumps(
+        {
+            "blob_key": "user_owner_1787572800000_note.pdf",
+            "doctor_id": "doctor_owner",
+            "etag": '"etag-v1"',
+            "sha256": "a" * 64,
+            "size": 17,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    reference = "example-note:v1:" + uploads.encrypt_value(payload)
+
+    with pytest.raises(uploads.ExampleNoteBlobIntegrityError):
+        uploads.download_registered_or_legacy_example_note(
+            reference,
+            doctor_id="doctor_owner",
+        )
+
+    assert requested_keys == []
+
+
+@pytest.mark.parametrize(
+    "registered",
+    [
+        uploads.RegisteredExampleNoteBlob(
+            blob_key="user_owner_1787572800000_note.pdf",
+            doctor_id="doctor_owner",
+            etag='"etag-v1"',
+            size=17,
+            sha256="a" * 64,
+        ),
+        uploads.RegisteredExampleNoteBlob(
+            blob_key="user_owner_1787572800000_note.pdf",
+            doctor_id="doctor_owner",
+            etag='"etag-v1"',
+            size=17,
+            sha256="a" * 64,
+            key_kind="legacy_owner_stamped_v1",
+            legacy_owner_clerk_id="user_someone_else",
+        ),
+        uploads.RegisteredExampleNoteBlob(
+            blob_key="pending/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.pdf",
+            doctor_id="doctor_owner",
+            etag='"etag-v1"',
+            size=17,
+            sha256="a" * 64,
+            key_kind="legacy_owner_stamped_v1",
+            legacy_owner_clerk_id="user_owner",
+        ),
+    ],
+)
+def test_serializer_rejects_blob_keys_without_matching_discriminator(
+    registered: uploads.RegisteredExampleNoteBlob,
+) -> None:
+    with pytest.raises(ValueError, match="invalid registered example-note"):
+        uploads.serialize_registered_blob(registered)
 
 
 @pytest.mark.parametrize(

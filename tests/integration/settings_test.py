@@ -32,7 +32,7 @@ def test_example_note_upload(server, page: Page) -> None:
     assert doctor_note
     assert doctor_note.note_type == "Example Note"
     assert doctor_note.doctor_id == doctor.id
-    assert doctor_note.azure_file_name.startswith("example-note:v1:")
+    assert doctor_note.azure_file_name.startswith("example-note:v2:")
     assert "example-note.pdf" not in doctor_note.azure_file_name
 
 
