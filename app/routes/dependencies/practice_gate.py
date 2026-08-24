@@ -34,6 +34,13 @@ EXEMPT_ROUTE_NAMES = {
     "claim_organization_access",
     "baa_current",
     "practice_baa_acceptances",
+    # support view-as control plane; begin/targets enforce the independent
+    # environment-scoped capability and status/end must remain reachable to
+    # clear stale sessions even when the actor has no customer practice
+    "view_as_status",
+    "view_as_targets",
+    "begin_view_as",
+    "end_view_as",
     # enforces its own practice/BAA rules
     "complete_onboarding",
 }

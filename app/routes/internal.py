@@ -135,8 +135,9 @@ from ..configuration.clerk import CLERK_PRIVATE_KEY
 from .admin import admin_api_app
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
-from .dependencies.login_as import login_as
 from .dependencies.practice_gate import require_practice_in_force
+from .dependencies.view_as import apply_view_as
+from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
@@ -159,15 +160,18 @@ internal_api_app = APIRouter(
         Depends(authenticate_clerk_request_middleware),
         # inject a doctor record into the request state
         Depends(inject_doctor_record),
-        # allow admins to switch to another doctor
-        Depends(login_as),
-        # fail closed: no PHI processing without a BAA-in-force, attested,
-        # entitled practice (runs after login_as so it gates the effective doctor)
+        # Apply only an explicit, environment-scoped, short-lived support
+        # capability. Active targets are read-only and never change the Clerk
+        # principal carried by the request.
+        Depends(apply_view_as),
+        # Fail closed: no PHI processing without an effective access basis.
+        # This runs after view-as so it gates the selected read-only target.
         Depends(require_practice_in_force),
     ],
 )
 
 internal_api_app.include_router(admin_api_app)
+internal_api_app.include_router(view_as_api_app)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -342,10 +346,9 @@ def open_sandbox_labs_record(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not Authenticated",
         )
-    # Admin login-as changes request.state.doctor after Clerk authentication.
-    # That delegation is useful for ordinary support workflows but is not a
-    # ratified EHR authorization path. Never mint a target doctor's record
-    # grant for a different Clerk subject.
+    # Read-only view-as changes request.state.doctor after Clerk authentication,
+    # but is never a credential-delegation path. Never mint a target doctor's
+    # record grant for a different Clerk subject.
     if doctor.clerk_id != clerk_subject:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -935,7 +938,7 @@ def organization_access_opportunity(
     """Return an exact-roster opportunity without disclosing its access code."""
 
     doctor: Doctor = request.state.doctor
-    # Admin login-as is intentionally unsupported for self-service enrollment.
+    # Support view-as is intentionally unsupported for self-service enrollment.
     # The authenticated Clerk subject must be the rostered doctor.
     if request.state.auth_state.payload.get("sub") != doctor.clerk_id:
         return None
@@ -1894,7 +1897,10 @@ def schedule_list(request: Request) -> ScheduleResponse:
     if not zoom_integration:
         return ScheduleResponse(zoom_connected=False, meetings=[])
 
-    sync_zoom_meetings.queue(str(doctor.id))
+    # A support view may inspect the already-synchronized schedule, but it
+    # must not trigger provider-side reconciliation or any write-like work.
+    if request.state.view_as is None:
+        sync_zoom_meetings.queue(str(doctor.id))
 
     now = datetime.now(timezone.utc)
     past_cutoff = now - timedelta(days=30)

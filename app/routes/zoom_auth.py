@@ -18,6 +18,10 @@ from app.configuration.zoom import (
     ZOOM_REDIRECT_URI,
     ZOOM_SUCCESS_REDIRECT,
 )
+from app.routes.dependencies.view_as import (
+    deny_view_as_browser_activity,
+    view_as_browser_session_present,
+)
 from app.services import zoom_oauth_state
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
@@ -62,8 +66,9 @@ def _clear_browser_binding(response: RedirectResponse) -> RedirectResponse:
 
 
 @zoom_auth_app.get("/zoom-oauth-start", name="zoom_oauth_start")
-def zoom_oauth_start(state: str | None = None) -> RedirectResponse:
+def zoom_oauth_start(request: Request, state: str | None = None) -> RedirectResponse:
     """Redirect only an issued, unexpired OAuth attempt to Zoom."""
+    deny_view_as_browser_activity(request)
     try:
         state_is_issued = zoom_oauth_state.is_issued_zoom_oauth_state(state)
     except RedisError:
@@ -103,6 +108,12 @@ def zoom_oauth_callback(
     error: str | None = None,
 ) -> RedirectResponse:
     """Handle Zoom's redirect after the doctor authorizes the app."""
+    if view_as_browser_session_present(request):
+        log.warning(
+            "zoom oauth callback rejected",
+            event_code="zoom_oauth_view_as_blocked",
+        )
+        return _clear_browser_binding(_authorization_error_response())
     browser_binding = request.cookies.get(zoom_oauth_state.ZOOM_OAUTH_BINDING_COOKIE)
     try:
         doctor_id = zoom_oauth_state.consume_zoom_oauth_state(state, browser_binding)

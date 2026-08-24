@@ -11,6 +11,7 @@ from typeid.errors import TypeIDException
 
 import app.commands.intake.chat
 import app.commands.intake.create
+from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.routes.errors import EarlyResponseException
 from app.services.doctor_access import doctor_access_in_force
 
@@ -25,6 +26,9 @@ chat_api_app = APIRouter(
     dependencies=[
         # NOTE this line could not be more important, look at the underlying implementation!
         Depends(aglobal_session),
+        # Opaque patient intake links are interactive and can append PHI.
+        # They must not be usable from an active support view-as browser.
+        Depends(deny_view_as_browser_activity),
     ],
 )
 

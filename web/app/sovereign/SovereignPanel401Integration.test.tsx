@@ -3,12 +3,24 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { getClient } from "~/configuration/clerk"
+import { getViewAsStatus } from "~/lib/view-as-api"
 
 import { SOVEREIGN_PANEL_ASSET_PATH } from "./SovereignPanelAsset"
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { render, waitFor } from "@testing-library/react"
 
 vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
+
+const inactiveViewAs = {
+  can_view_as: false,
+  active: false,
+  read_only: false,
+  diagnostic_code: null,
+  expires_at: null,
+  actor: null,
+  target: null,
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -50,6 +62,7 @@ describe("Sovereign panel 401 retry integration", () => {
     )
     vi.stubEnv("VITE_SOVEREIGN_CLERK_TEMPLATE", "cosmaneura-sovereign")
     vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
+    vi.mocked(getViewAsStatus).mockResolvedValue(inactiveViewAs)
     vi.mocked(getClient).mockResolvedValue({
       loaded: true,
       load: async () => {},

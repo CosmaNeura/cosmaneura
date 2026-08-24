@@ -1,24 +1,20 @@
-"""
-Admin-only routes:
-
-- login_as / user impersonation, similar to https://clerk.com/docs/users/user-impersonation but without a $100/month sub
-"""
+"""Capability-protected platform administration routes."""
 
 import csv
 import io
-from typing import Annotated, Any, cast
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel as BasePydanticModel
-from pydantic import ConfigDict
 from starlette import status
-from typeid import TypeID
 
-from app import log
 from app.services import external_webhook_inbox
 from app.services import usage as usage_service
-from app.services.external_webhook_inbox import provider_log_ref
+from app.services.superadmin_capability import (
+    SuperadminCapabilityKind,
+    get_runtime_superadmin_capability,
+)
 from app.services.usage import (
     DailyVolumeRow,
     DoctorUsageRow,
@@ -27,78 +23,37 @@ from app.services.usage import (
     TimeToNoteRow,
 )
 
+from activemodel.session_manager import get_session
 from app.models.baa import BaaAcceptance, BaaVersion
-from app.models.doctor import Doctor, DoctorRole
-
-SESSION_KEY_LOGIN_AS_USER = "login_as_user"
 
 
-def require_admin(request: Request):
-    "Protect routes that require admin access"
+def require_admin(request: Request) -> None:
+    """Require an exact, revocable environment-scoped platform capability."""
 
-    admin_user = getattr(request.state, "doctor", None)
-    if admin_user is None or admin_user.role != DoctorRole.admin:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+    actor = getattr(request.state, "view_as_actor", None)
+    payload = getattr(getattr(request.state, "auth_state", None), "payload", None)
+    issuer = payload.get("iss") if isinstance(payload, dict) else None
+    subject = payload.get("sub") if isinstance(payload, dict) else None
+    capability = None
+    if (
+        actor is not None
+        and isinstance(issuer, str)
+        and isinstance(subject, str)
+        and actor.clerk_id == subject
+    ):
+        with get_session() as session:
+            capability = get_runtime_superadmin_capability(
+                session,
+                issuer=issuer,
+                subject=subject,
+                doctor_id=actor.id,
+                capability_kind=SuperadminCapabilityKind.platform_admin,
+            )
+    if capability is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
 
 admin_api_app = APIRouter(prefix="/admin", dependencies=[Depends(require_admin)])
-
-
-class UserSwitchData(BasePydanticModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    clerk_id: str
-    id: TypeID
-    email: str | None
-
-
-class UserListResponse(BasePydanticModel):
-    current_user: UserSwitchData | None
-    users: list[UserSwitchData]
-
-
-@admin_api_app.get("/users")
-def user_list(request: Request) -> UserListResponse:
-    # remember, these routes are protected from the login_as functionality
-    login_as_user = None
-
-    if SESSION_KEY_LOGIN_AS_USER in request.session:
-        login_as_clerk_id = request.session[SESSION_KEY_LOGIN_AS_USER]
-        login_as_user = Doctor.get(clerk_id=login_as_clerk_id)
-
-    return UserListResponse(
-        current_user=login_as_user,  # type: ignore
-        users=list(
-            Doctor.select(Doctor.clerk_id, Doctor.email, Doctor.id)
-            .where(Doctor.role != DoctorRole.admin)
-            # Without an explicit order Postgres may return these rows in any
-            # order it likes, which reshuffles the login_as picker between
-            # requests. created_at alone is not enough — users created inside a
-            # single transaction can share a timestamp — so id breaks the tie.
-            .order_by(cast(Any, Doctor.created_at).asc(), cast(Any, Doctor.id).asc())
-            .all()
-        ),  # type: ignore
-    )
-
-
-@admin_api_app.post("/login_as/{user_id}")
-def login_as_user(request: Request, user_id: Annotated[str, Path()]):
-    if request.state.doctor.clerk_id == user_id:
-        log.info("removing login_as")
-        request.session[SESSION_KEY_LOGIN_AS_USER] = None
-        return
-
-    login_as_user = Doctor.where(
-        Doctor.role != DoctorRole.admin, Doctor.clerk_id == user_id
-    ).one()
-
-    log.info(
-        "login_as_user",
-        user_ref=provider_log_ref(str(cast(Any, login_as_user).id)),
-    )
-
-    request.session[SESSION_KEY_LOGIN_AS_USER] = login_as_user.clerk_id  # type: ignore
-    return
 
 
 class UsageResponse(BasePydanticModel):

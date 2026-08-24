@@ -24,6 +24,7 @@ from .authority_errors import (
     token_problem_response,
 )
 from .dependencies.clerk import AuthenticateClerkRequest
+from .dependencies.view_as import view_as_browser_session_present
 
 embed_context_api_app = APIRouter(
     prefix="/embed/v1/context-tokens",
@@ -158,6 +159,7 @@ def issue_anonymous_context_token(
 )
 def exchange_context_token(
     data: TokenIssueRequest,
+    request: Request,
     response: Response,
     clerk_identity: Annotated[
         VerifiedClerkIdentity,
@@ -169,6 +171,14 @@ def exchange_context_token(
     version: Annotated[str, Depends(require_embed_version)],
 ) -> ContextTokenResponse | JSONResponse:
     del version
+    if view_as_browser_session_present(request):
+        return token_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="REQUEST_DENIED",
+            title="Request denied",
+            detail="Provider context is unavailable during view-as.",
+            retryable=False,
+        )
     try:
         result = app.services.authority.exchange_context_token(
             clerk_issuer=clerk_identity.issuer,
@@ -211,6 +221,7 @@ def exchange_context_token(
 )
 def rotate_context_token(
     data: TokenIssueRequest,
+    request: Request,
     response: Response,
     credentials: Annotated[
         HTTPAuthorizationCredentials | None,
@@ -222,6 +233,14 @@ def rotate_context_token(
     version: Annotated[str, Depends(require_embed_version)],
 ) -> ContextTokenResponse | JSONResponse:
     del version
+    if view_as_browser_session_present(request):
+        return token_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="REQUEST_DENIED",
+            title="Request denied",
+            detail="Provider context is unavailable during view-as.",
+            retryable=False,
+        )
     if credentials is None or credentials.scheme.lower() != "bearer":
         return token_problem_response(
             status_code=status.HTTP_401_UNAUTHORIZED,

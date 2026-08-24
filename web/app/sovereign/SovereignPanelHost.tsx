@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react"
 
 import { getClient } from "~/configuration/clerk"
+import { getViewAsStatus } from "~/lib/view-as-api"
 
 import {
   SOVEREIGN_PANEL_ASSET_PATH,
@@ -420,9 +421,16 @@ export function SovereignPanelHost({
       ? createProviderMountContextTokenProvider(appointmentId)
       : null
 
-    void loadPinnedPanel()
+    // Fail closed before loading either the platform context-token path or the
+    // legacy provider-token path. A real Clerk token is never a delegation
+    // credential for a selected view-as target.
+    void getViewAsStatus()
+      .then((viewAs) => {
+        if (cancelled || viewAs.active) return null
+        return loadPinnedPanel()
+      })
       .then(async (panel) => {
-        if (cancelled) return
+        if (cancelled || panel === null) return
         const candidate = panel.mount({
           sovereignUrl: config.origin,
           embedVersion: EMBED_VERSION,

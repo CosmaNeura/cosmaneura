@@ -4,7 +4,7 @@ import json
 import secrets
 import typing as t
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import itsdangerous
 import pytest
@@ -30,6 +30,11 @@ from app.models.baa import (
 )
 from app.models.doctor import Doctor, DoctorRole
 from app.models.practice import Practice, PracticeMember
+from app.models.superadmin_capability import (
+    SuperadminCapabilityEnvironment,
+    SuperadminCapabilityGrant,
+    SuperadminCapabilityKind,
+)
 
 from tests.constants import (
     CLERK_DEV_ADMIN_EMAIL,
@@ -41,6 +46,8 @@ from tests.constants import (
 # TODO this is a bit dangerous, let's see how it performs
 clerk_cache_instance = LRUCache(maxsize=128)
 "to cache user and session keys for all live clerk api interactions"
+
+MOCK_CLERK_ISSUER = "https://resolved-emu-53.clerk.accounts.dev"
 
 
 @dataclass
@@ -183,6 +190,39 @@ def provision_practice_in_force(doctor: Doctor) -> Practice:
         attestation_name="Test Owner",
     ).save()
     return practice
+
+
+def grant_test_superadmin_capability(
+    doctor: Doctor,
+    capability_kind: SuperadminCapabilityKind,
+    *,
+    environment: SuperadminCapabilityEnvironment = (
+        SuperadminCapabilityEnvironment.staging
+    ),
+    issuer: str = MOCK_CLERK_ISSUER,
+) -> SuperadminCapabilityGrant:
+    """Create one exact test-only grant without invoking live Clerk."""
+
+    assert doctor.email
+    now = datetime.now(timezone.utc)
+    return SuperadminCapabilityGrant(
+        environment=environment,
+        capability_kind=capability_kind,
+        clerk_issuer=issuer,
+        clerk_subject=doctor.clerk_id,
+        doctor_id=doctor.id,
+        issuer_sha256=hashlib.sha256(issuer.encode()).hexdigest(),
+        subject_sha256=hashlib.sha256(doctor.clerk_id.encode()).hexdigest(),
+        verified_primary_email_sha256=hashlib.sha256(
+            doctor.email.strip().lower().encode()
+        ).hexdigest(),
+        source_ref="controlled:route-test",
+        source_sha256="c" * 64,
+        grant_plan_sha256="d" * 64,
+        granted_by_ref="ticket:route-test",
+        grant_reason_code="reviewed_test_grant",
+        granted_at=now - timedelta(minutes=1),
+    ).save()
 
 
 def get_clerk_seed_user():

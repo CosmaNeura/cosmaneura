@@ -9,10 +9,14 @@ from starlette_context import context, request_cycle_context
 from structlog.testing import capture_logs
 from typeid import TypeID
 
-from app.routes.admin import SESSION_KEY_LOGIN_AS_USER
 from app.routes.api import authenticate_api_request_middleware
 from app.routes.dependencies.doctor import _fetch_clerk_email, inject_doctor_record
-from app.routes.dependencies.login_as import login_as
+from app.routes.dependencies.view_as import (
+    SESSION_KEY_VIEW_AS_ID,
+    SESSION_KEY_VIEW_AS_NONCE,
+    apply_view_as,
+)
+from app.services.view_as import ResolvedViewAs, ViewAsResolution
 
 from app.models.doctor import API_KEY_PREFIX, DoctorRole
 
@@ -47,7 +51,13 @@ def _request(*, clerk_id: str, session: dict | None = None) -> Request:
             "session": session or {},
         }
     )
-    request.state.auth_state = SimpleNamespace(payload={"sub": clerk_id})
+    request.state.auth_state = SimpleNamespace(
+        payload={
+            "iss": "https://test.clerk.invalid",
+            "sub": clerk_id,
+            "sid": f"session_{clerk_id}",
+        }
+    )
     return request
 
 
@@ -112,7 +122,7 @@ def test_clerk_lookup_failure_omits_identifier_and_exception_details() -> None:
     assert logs[-1]["clerk_ref"].startswith("hmac:")
 
 
-def test_login_as_context_and_sentry_use_only_pseudonymous_references() -> None:
+def test_view_as_context_and_sentry_use_only_pseudonymous_references() -> None:
     admin = FakeDoctor(
         doctor_id="admin-doctor-private-sentinel",
         clerk_id="admin-clerk-private-sentinel",
@@ -126,26 +136,44 @@ def test_login_as_context_and_sentry_use_only_pseudonymous_references() -> None:
     )
     request = _request(
         clerk_id=admin.clerk_id,
-        session={SESSION_KEY_LOGIN_AS_USER: target.clerk_id},
+        session={
+            SESSION_KEY_VIEW_AS_ID: "view_as_session_01k2a3b4c5d6e7f8g9h0j1k2m3",
+            SESSION_KEY_VIEW_AS_NONCE: "private-browser-nonce",
+        },
     )
     request.state.doctor = admin
+    active = ResolvedViewAs(
+        session=SimpleNamespace(absolute_expires_at=None),
+        actor=admin,
+        target=target,
+        diagnostic_code=None,
+    )
 
     with (
         request_cycle_context({"doctor_ref": "prior-admin-ref"}),
-        patch("app.routes.dependencies.login_as.Doctor.get", return_value=target),
-        patch("app.routes.dependencies.login_as.sentry_sdk.set_extra") as set_extra,
-        patch("app.routes.dependencies.login_as.sentry_sdk.set_user") as set_user,
+        patch(
+            "app.routes.dependencies.view_as.configured_superadmin_capability_environment",
+            return_value=SimpleNamespace(value="staging"),
+        ),
+        patch(
+            "app.routes.dependencies.view_as.resolve_view_as",
+            return_value=ViewAsResolution(active, False, False),
+        ),
+        patch("app.routes.dependencies.view_as.sentry_sdk.set_extra") as set_extra,
+        patch("app.routes.dependencies.view_as.sentry_sdk.set_user") as set_user,
         capture_logs() as logs,
     ):
-        login_as(request)
+        apply_view_as(request)
         context_snapshot = dict(context)
 
-    assert request.state.admin_user is admin
+    assert request.state.view_as_actor is admin
     assert request.state.doctor is target
-    assert set(context_snapshot) == {"doctor_ref", "admin_ref"}
+    assert set(context_snapshot) == {"doctor_ref", "view_as_actor_ref"}
     assert context_snapshot["doctor_ref"].startswith("hmac:")
-    assert context_snapshot["admin_ref"].startswith("hmac:")
-    assert context_snapshot["doctor_ref"] != context_snapshot["admin_ref"]
+    assert context_snapshot["view_as_actor_ref"].startswith("hmac:")
+    assert (
+        context_snapshot["doctor_ref"] != context_snapshot["view_as_actor_ref"]
+    )
 
     serialized = json.dumps([context_snapshot, *logs], sort_keys=True)
     for private_value in (
@@ -158,12 +186,15 @@ def test_login_as_context_and_sentry_use_only_pseudonymous_references() -> None:
     ):
         assert private_value not in serialized
 
-    set_extra.assert_called_once_with("admin_ref", context_snapshot["admin_ref"])
+    set_extra.assert_called_once_with(
+        "view_as_actor_ref", context_snapshot["view_as_actor_ref"]
+    )
     set_user.assert_called_once_with({"id": context_snapshot["doctor_ref"]})
 
 
-def test_login_as_missing_user_log_omits_clerk_identifier() -> None:
-    missing_clerk_id = "missing-clerk-private-sentinel"
+def test_stale_view_as_state_is_cleared_without_logging_identifiers() -> None:
+    stale_session_id = "view_as_session_private-sentinel"
+    private_nonce = "private-browser-nonce"
     admin = FakeDoctor(
         doctor_id="admin-doctor-private-sentinel",
         clerk_id="admin-clerk-private-sentinel",
@@ -172,21 +203,32 @@ def test_login_as_missing_user_log_omits_clerk_identifier() -> None:
     )
     request = _request(
         clerk_id=admin.clerk_id,
-        session={SESSION_KEY_LOGIN_AS_USER: missing_clerk_id},
+        session={
+            SESSION_KEY_VIEW_AS_ID: stale_session_id,
+            SESSION_KEY_VIEW_AS_NONCE: private_nonce,
+        },
     )
     request.state.doctor = admin
 
     with (
         request_cycle_context({"doctor_ref": "prior-admin-ref"}),
-        patch("app.routes.dependencies.login_as.Doctor.get", return_value=None),
+        patch(
+            "app.routes.dependencies.view_as.configured_superadmin_capability_environment",
+            return_value=SimpleNamespace(value="staging"),
+        ),
+        patch(
+            "app.routes.dependencies.view_as.resolve_view_as",
+            return_value=ViewAsResolution(None, True, False),
+        ),
         capture_logs() as logs,
     ):
-        login_as(request)
+        apply_view_as(request)
 
     serialized = json.dumps(logs, sort_keys=True)
-    assert missing_clerk_id not in serialized
-    assert logs[-1]["event_code"] == "login_as_user_not_found"
-    assert logs[-1]["clerk_ref"].startswith("hmac:")
+    assert stale_session_id not in serialized
+    assert private_nonce not in serialized
+    assert SESSION_KEY_VIEW_AS_ID not in request.session
+    assert SESSION_KEY_VIEW_AS_NONCE not in request.session
 
 
 def test_api_auth_context_and_sentry_use_only_pseudonymous_reference() -> None:

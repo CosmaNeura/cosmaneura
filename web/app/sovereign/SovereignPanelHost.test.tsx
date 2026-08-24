@@ -9,6 +9,7 @@ import {
 } from "vitest"
 
 import { getClient } from "~/configuration/clerk"
+import { getViewAsStatus } from "~/lib/view-as-api"
 
 import {
   SOVEREIGN_PANEL_ASSET_PATH,
@@ -21,6 +22,17 @@ import {
 import { act, render, waitFor } from "@testing-library/react"
 
 vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
+
+const inactiveViewAs = {
+  can_view_as: false,
+  active: false,
+  read_only: false,
+  diagnostic_code: null,
+  expires_at: null,
+  actor: null,
+  target: null,
+}
 
 type PanelApi = NonNullable<Window["CosmaNeuraPanel"]>
 type PanelOptions = Parameters<PanelApi["mount"]>[0]
@@ -76,6 +88,7 @@ describe("SovereignPanelHost", () => {
       "https://provider-sovereign.example",
     )
     vi.stubEnv("VITE_SOVEREIGN_CLERK_TEMPLATE", "cosmaneura-sovereign")
+    vi.mocked(getViewAsStatus).mockResolvedValue(inactiveViewAs)
   })
 
   afterEach(() => {
@@ -121,6 +134,36 @@ describe("SovereignPanelHost", () => {
         VITE_SOVEREIGN_CLERK_TEMPLATE: "bad template",
       }),
     ).toBeNull()
+  })
+
+  it("never loads or mounts Sovereign while view-as is active", async () => {
+    vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
+    vi.mocked(getViewAsStatus).mockResolvedValue({
+      ...inactiveViewAs,
+      can_view_as: true,
+      active: true,
+      read_only: true,
+      expires_at: "2026-08-24T17:15:00Z",
+      actor: {
+        doctor_id: "doctor_actor",
+        email: "actor@example.com",
+      },
+      target: {
+        doctor_id: "doctor_target",
+        email: "target@example.com",
+      },
+    })
+    const appendChild = vi.spyOn(document.head, "appendChild")
+
+    render(<SovereignPanelHost appointmentId="appointment_view_as" />)
+    await waitFor(() => expect(getViewAsStatus).toHaveBeenCalledTimes(1))
+
+    expect(mount).not.toHaveBeenCalled()
+    expect(
+      appendChild.mock.calls.some(
+        ([node]) => node instanceof HTMLScriptElement,
+      ),
+    ).toBe(false)
   })
 
   it("reuses and rotates one appointment-bound mount session when enabled", async () => {
