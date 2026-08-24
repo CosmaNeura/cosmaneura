@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -15,6 +16,19 @@ PROVIDER_ORIGIN = (
 )
 PROVIDER_CLIENT_ID = "8cb2ecb5-3554-4405-be6f-5eda985c2f04"
 PUBLIC_CLIENT_ID = "5074cac1-5555-43e9-a469-3e0b7e16608e"
+FRONTEND_BUILD_KEYS = (
+    "NODE_ENV",
+    "OPENAPI_JSON_PATH",
+    "VITE_CLERK_PUBLIC_KEY",
+    "VITE_INTAKE_CHAT_DOMAIN",
+    "VITE_POSTHOG_HOST",
+    "VITE_POSTHOG_KEY",
+    "VITE_PYTHON_URL",
+    "VITE_SENTRY_DSN",
+    "VITE_SOVEREIGN_CLERK_TEMPLATE",
+    FRONTEND_FLAG,
+    "VITE_SOVEREIGN_PROVIDER_URL",
+)
 
 
 def _read(path: str) -> str:
@@ -23,6 +37,12 @@ def _read(path: str) -> str:
 
 def _staging_job(workflow: str) -> str:
     return workflow[workflow.index("\n  deploy-staging:") :]
+
+
+def _frontend_resolve_step(job: str, environment: str) -> str:
+    start = job.index(f"Resolve {environment} frontend build configuration")
+    end = job.index("uses: docker/login-action@", start)
+    return job[start:end]
 
 
 def _shell_array(source: str, name: str) -> str:
@@ -83,6 +103,47 @@ def _render_frontend_flag(value: str | None) -> subprocess.CompletedProcess[str]
     )
 
 
+def _run_frontend_build_allowlist(
+    tmp_path: Path,
+    value: str,
+    *,
+    build_environment: str = "staging",
+    omit_flag: bool = False,
+) -> subprocess.CompletedProcess[bytes]:
+    configuration = {key: f"test-{key.lower()}" for key in FRONTEND_BUILD_KEYS}
+    if omit_flag:
+        configuration.pop(FRONTEND_FLAG)
+    else:
+        configuration[FRONTEND_FLAG] = value
+    configuration_path = tmp_path / f"{build_environment}-frontend-{value}.json"
+    configuration_path.write_text(json.dumps(configuration), encoding="utf-8")
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "JAVASCRIPT_BUILD_ENV_JSON": str(configuration_path),
+            "JAVASCRIPT_SECRETS_FILE": f".env.{build_environment}.frontend",
+        }
+    )
+    return subprocess.run(
+        ["just", "_javascript_build_env_args"],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+    )
+
+
+def _decode_build_arguments(output: bytes) -> dict[str, str]:
+    records = output.split(b"\0")
+    assert records[-1] == b""
+    records.pop()
+    assert records[::2] == [b"--env"] * (len(records) // 2)
+    return {
+        entry.decode("utf-8").split("=", 1)[0]: entry.decode("utf-8").split("=", 1)[1]
+        for entry in records[1::2]
+    }
+
+
 def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
     workflow = _read(".github/workflows/build_and_publish.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
@@ -93,6 +154,70 @@ def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
 
     for path in (".env.staging.backend", "just/direnv.just"):
         assert f'{CONTROL}="${{{CONTROL}:-false}}"' in _read(path)
+
+
+def test_frontend_workflow_resolvers_include_authority_flag_without_control_leak() -> (
+    None
+):
+    workflow = _read(".github/workflows/build_and_publish.yml")
+    staging_start = workflow.index("\n  deploy-staging:")
+    production_job = workflow[:staging_start]
+    staging_job = workflow[staging_start:]
+    production_resolve = _frontend_resolve_step(production_job, "production")
+    staging_resolve = _frontend_resolve_step(staging_job, "staging")
+    exact_boolean_check = f'(.{FRONTEND_FLAG} == "true" or .{FRONTEND_FLAG} == "false")'
+
+    assert production_resolve.count(f'\n              {FRONTEND_FLAG}: "false",') == 1
+    assert staging_resolve.count(f"\n              {FRONTEND_FLAG},") == 1
+    assert exact_boolean_check in production_resolve
+    assert exact_boolean_check in staging_resolve
+    assert CONTROL not in production_resolve
+
+
+def test_frontend_build_allowlist_preserves_true_and_false_values(
+    tmp_path: Path,
+) -> None:
+    for value in ("false", "true"):
+        result = _run_frontend_build_allowlist(tmp_path, value)
+
+        assert result.returncode == 0, result.stderr.decode("utf-8")
+        arguments = _decode_build_arguments(result.stdout)
+        assert tuple(sorted(arguments)) == tuple(sorted(FRONTEND_BUILD_KEYS))
+        assert arguments[FRONTEND_FLAG] == value
+
+
+def test_frontend_build_allowlist_requires_authority_flag(tmp_path: Path) -> None:
+    result = _run_frontend_build_allowlist(tmp_path, "false", omit_flag=True)
+
+    assert result.returncode != 0
+    assert (
+        b"Resolved frontend build configuration has an invalid shape." in result.stderr
+    )
+
+
+def test_frontend_build_allowlist_rejects_noncanonical_boolean(tmp_path: Path) -> None:
+    result = _run_frontend_build_allowlist(tmp_path, "TRUE")
+
+    assert result.returncode != 0
+    assert (
+        b"Resolved frontend build configuration has an invalid shape." in result.stderr
+    )
+
+
+def test_frontend_build_allowlist_keeps_production_false(tmp_path: Path) -> None:
+    disabled = _run_frontend_build_allowlist(
+        tmp_path, "false", build_environment="production"
+    )
+    enabled = _run_frontend_build_allowlist(
+        tmp_path, "true", build_environment="production"
+    )
+
+    assert disabled.returncode == 0, disabled.stderr.decode("utf-8")
+    assert _decode_build_arguments(disabled.stdout)[FRONTEND_FLAG] == "false"
+    assert enabled.returncode != 0
+    assert (
+        b"Resolved frontend build configuration has an invalid shape." in enabled.stderr
+    )
 
 
 def test_unset_switch_executably_injects_both_backend_gates_as_false() -> None:
