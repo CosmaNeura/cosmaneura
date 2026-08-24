@@ -9,6 +9,7 @@ from starlette_context import request_cycle_context
 from structlog.testing import capture_logs
 
 from app.routes.dependencies.doctor import (
+    ACCOUNT_RECOVERY_REQUIRED,
     PILOT_IDENTITY_ERROR,
     inject_doctor_record,
 )
@@ -143,3 +144,40 @@ def test_non_grant_account_does_not_incur_live_clerk_email_lookup() -> None:
 
     fetch_email.assert_not_called()
     active_grant.assert_not_called()
+
+
+def test_recreated_identity_gets_recovery_message_without_stealing_email() -> None:
+    replacement_clerk_id = "user_recreated_identity"
+    email = "returning-private@example.test"
+    provisional = FakeDoctor(clerk_id=replacement_clerk_id, email="")
+    existing = FakeDoctor(clerk_id="user_deleted_identity", email=email)
+    existing.id = "existing-doctor-private-sentinel"
+
+    with (
+        request_cycle_context({}),
+        patch(
+            "app.routes.dependencies.doctor.revoked_pilot_access_grant",
+            return_value=None,
+        ),
+        patch(
+            "app.routes.dependencies.doctor._active_grant_for_clerk",
+            return_value=None,
+        ),
+        patch("app.routes.dependencies.doctor.Doctor.upsert", return_value=provisional),
+        patch("app.routes.dependencies.doctor.Doctor.get", return_value=existing),
+        patch(
+            "app.routes.dependencies.doctor._fetch_clerk_email",
+            return_value=email,
+        ),
+        capture_logs() as logs,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        inject_doctor_record(_request(replacement_clerk_id))
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert exc_info.value.detail == ACCOUNT_RECOVERY_REQUIRED
+    assert provisional.email == ""
+    serialized = json.dumps(logs, sort_keys=True)
+    assert replacement_clerk_id not in serialized
+    assert email not in serialized
+    assert logs[-1]["event_code"] == "account_identity_recovery_required"

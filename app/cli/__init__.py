@@ -435,6 +435,91 @@ def rebind_staging_provider_authority_identity_command(
     typer.echo(f"Authority identity rebind {state}; plan_sha256={result.plan_sha256}.")
 
 
+@app.command("rebind-doctor-clerk-identity")
+def rebind_doctor_clerk_identity_command(
+    doctor_id: str = typer.Option(
+        ..., help="Stable Doctor TypeID for the account whose records are retained."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged recovery."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Rebind a retained provider record after its Clerk sign-in was recreated.
+
+    Identity values are prompted privately and never printed. The original
+    Clerk account must be absent, and the replacement must expose the same
+    verified primary email. Clinical and legal records remain on the original
+    Doctor row; an empty replacement shell is retained as a disabled tombstone.
+    """
+
+    from app.services.doctor_identity_rebind import (
+        DoctorIdentityRebindError,
+        plan_doctor_identity_rebind,
+        rebind_doctor_identity,
+        resolve_live_rebind_identity,
+    )
+
+    stale_clerk_id = typer.prompt("Prior Clerk subject", hide_input=True)
+    replacement_clerk_id = typer.prompt("Replacement Clerk subject", hide_input=True)
+    confirmed_email = typer.prompt("Exact verified account email", hide_input=True)
+    try:
+        replacement = resolve_live_rebind_identity(
+            stale_clerk_id=stale_clerk_id,
+            replacement_clerk_id=replacement_clerk_id,
+            confirmed_email=confirmed_email,
+        )
+        parsed_doctor_id = _typeid(doctor_id, "doctor")
+        with global_session():
+            plan = plan_doctor_identity_rebind(
+                doctor_id=parsed_doctor_id,
+                stale_clerk_id=stale_clerk_id,
+                replacement=replacement,
+                operator_ref=operator_ref,
+                reason=reason,
+            )
+            if not apply:
+                state = "already applied" if plan.already_applied else "ready"
+                typer.echo(
+                    "DRY RUN: doctor identity recovery "
+                    f"state={state} doctor_id={plan.doctor_id} "
+                    f"practice_id={plan.practice_id} "
+                    f"provisional_shell={plan.provisional_doctor_id is not None} "
+                    f"pilot_grant={plan.pilot_grant_rebound} "
+                    f"authority_identities={plan.authority_identity_count} "
+                    f"plan_sha256={plan.plan_sha256}; no changes made."
+                )
+                return
+            if confirm_plan_sha256 is None:
+                raise DoctorIdentityRebindError(
+                    "--apply requires --confirm-plan-sha256"
+                )
+            result = rebind_doctor_identity(
+                doctor_id=parsed_doctor_id,
+                stale_clerk_id=stale_clerk_id,
+                replacement=replacement,
+                operator_ref=operator_ref,
+                reason=reason,
+                confirmed_plan_sha256=confirm_plan_sha256,
+            )
+    except DoctorIdentityRebindError:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"doctor identity recovery {outcome}; verify account state; "
+            "no identity values were printed"
+        ) from None
+
+    state = "applied" if result.changed else "already applied"
+    typer.echo(
+        f"Doctor identity recovery {state}: doctor_id={result.doctor_id} "
+        f"plan_sha256={result.plan_sha256}."
+    )
+
+
 @app.command("authority-ingestion-status")
 def authority_ingestion_status(
     older_than_minutes: int = typer.Option(15, min=1),

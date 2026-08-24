@@ -17,6 +17,10 @@ from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 
 PILOT_IDENTITY_ERROR = "Your account identity could not be verified"
+ACCOUNT_RECOVERY_REQUIRED = (
+    "This email is already linked to a previous sign-in. "
+    "Contact support to recover the existing account; no records have been lost."
+)
 
 
 def _fetch_clerk_email(clerk_id: str) -> str | None:
@@ -102,7 +106,19 @@ def inject_doctor_record(request: Request):
 
     if not doctor.email:
         email = normalized_live_email or _fetch_clerk_email(clerk_id)
-        if email and not Doctor.get(email=email):
+        if email:
+            email_owner = Doctor.get(email=email)
+            if email_owner is not None and email_owner.id != doctor.id:
+                log.warning(
+                    "account identity recovery required",
+                    event_code="account_identity_recovery_required",
+                    doctor_ref=provider_log_ref(f"doctor:{email_owner.id}"),
+                    clerk_ref=provider_log_ref(f"clerk-user:{clerk_id}"),
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=ACCOUNT_RECOVERY_REQUIRED,
+                )
             doctor.email = email
 
     if grant is not None and (
