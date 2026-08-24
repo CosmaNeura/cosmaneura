@@ -14,6 +14,7 @@
 GIT_SHA="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"
 
 # TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
@@ -84,15 +85,24 @@ if ! git rev-parse --quiet --verify "$GIT_SHA^{commit}" >/dev/null; then
 	exit 1
 fi
 
+# Convert potential short SHA to full SHA
+GIT_SHA=$(git rev-parse "$GIT_SHA")
+STAGING_TAG="$STAGING_IMAGE:$GIT_SHA"
+
+if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
+	exit 1
+fi
+if ! validate_deploy_revision_suffix "$REVISION_STRING" $CONTAINERS; then
+	exit 1
+fi
+
+echo "Revision string: $REVISION_STRING"
+
 echo "Azure Acccount Information:"
 az account show
 
 echo "All Available Containers:"
 az containerapp list --query "[].name"
-
-# Convert potential short SHA to full SHA
-GIT_SHA=$(git rev-parse "$GIT_SHA")
-STAGING_TAG="$STAGING_IMAGE:$GIT_SHA"
 
 if ! docker manifest inspect "$STAGING_TAG" >/dev/null 2>&1; then
 	echo "Error: Image $STAGING_TAG does not exist"
@@ -103,28 +113,6 @@ ACR_NAME=$(echo "$STAGING_IMAGE" | cut -d'.' -f1)
 ACR_USERNAME=$(az acr credential show -n "$ACR_NAME" --query "username" -o tsv)
 ACR_PASSWORD=$(az acr credential show -n "$ACR_NAME" --query "passwords[0].value" -o tsv)
 ACR_SERVER=$(echo "$STAGING_IMAGE" | cut -d'/' -f1)
-
-# Function to generate a revision string for the Git SHA
-gen_string_for_sha() {
-	local sha="$1"
-	local sys_date count short_sha
-
-	sys_date=$(date +%Y-%m-%d)
-	count=$(git rev-list --count "$sha")
-	short_sha=$(echo "$sha" | cut -c1-7)
-
-	echo "${sys_date}-v${count}-${short_sha}"
-}
-
-# Generate the revision string
-# Note that if you attempt to deploy the same image twice, the revision string will be the same
-# and probably cause deployment errors, so you'll need to manually adjust this.
-#
-# Also, long application names can limit your revision string:
-# 'A revision name must consist of lower case alphanumeric characters or '-', start with an alphabetic character, and end with an alphanumeric character. The length of the revision name must not be more than a combined 54 characters with the container app name.'
-REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
-
-echo "Revision string: $REVISION_STRING"
 
 if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
 	-z "$(echo "$ENV_JSON" | jq -r '.SOVEREIGN_RECORD_GRANT_SECRET // empty')" ]]; then
@@ -349,6 +337,30 @@ run_migrations() {
 	fi
 	if [[ "$migration_container_name" != "$MIGRATION_JOB" ]]; then
 		echo "Migration job must contain exactly one source-owned container."
+		return 1
+	fi
+
+	# A plain job start executes this persistent template. Query only the fields
+	# needed for the contract (never values), then require the exact reviewed
+	# image, Alembic arguments, database secret reference, and env-name scope.
+	local migration_template secret_env_names public_env_names
+	if ! migration_template=$(az containerapp job show \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--query 'properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}}' \
+		-o json); then
+		echo "Failed to inspect the migration job execution template."
+		return 1
+	fi
+	secret_env_names=$(IFS=,; echo "${COMMON_SECRET_VARS[*]}")
+	public_env_names=$(IFS=,; echo "${PUBLIC_VARS[*]}")
+	if ! printf '%s' "$migration_template" |
+		python "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
+			--expected-name "$MIGRATION_JOB" \
+			--expected-image "$STAGING_TAG" \
+			--database-secret-name database-url \
+			--secret-env-names "$secret_env_names" \
+			--public-env-names "$public_env_names"; then
+		echo "Migration job template is not approved for schema mutation."
 		return 1
 	fi
 
