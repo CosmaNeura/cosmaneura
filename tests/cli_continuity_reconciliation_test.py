@@ -85,7 +85,9 @@ def test_continuity_cli_redacts_upstream_identity_failure(monkeypatch, tmp_path)
     result = CliRunner().invoke(app, _command(path))
 
     assert result.exit_code != 0
-    normalized_output = " ".join(strip_ansi(result.output).split())
+    normalized_output = " ".join(
+        strip_ansi(result.output).replace("│", " ").split()
+    )
     assert "validation failed" in normalized_output
     assert "no identities were printed" in normalized_output
     assert subject not in result.output

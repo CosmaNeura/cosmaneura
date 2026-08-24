@@ -793,6 +793,61 @@ def test_table_reader_supports_expected_pre_deploy_schema_absence() -> None:
     assert snapshot["p0_schema"]["present_count"] == 0
 
 
+def test_table_reader_supports_present_but_empty_pre_deploy_schema() -> None:
+    evidence = _load_evidence()
+    presence = [(name, "r", True) for name in sorted(evidence.P0_SCHEMA_TABLES)]
+    returned: list[Sequence[tuple[Any, ...]]] = [presence]
+    returned.extend([[] for _spec in evidence.TABLE_SPECS])
+    connection = FakeConnection(returned)
+
+    snapshot_rows = evidence.read_snapshot_rows(
+        connection,
+        phase="pre-present-empty",
+    )
+
+    assert snapshot_rows.p0_schema_presence == {
+        name: True for name in sorted(evidence.P0_SCHEMA_TABLES)
+    }
+    assert all(snapshot_rows.tables[name] == [] for name in evidence.P0_SCHEMA_TABLES)
+    assert len(connection.queries) == len(evidence.TABLE_SPECS) + 1
+
+    snapshot = evidence.build_snapshot(
+        snapshot_rows.tables,
+        b"k" * 32,
+        phase="pre-present-empty",
+        p0_schema_presence=snapshot_rows.p0_schema_presence,
+    )
+    assert snapshot["capture_phase"] == "pre-present-empty"
+    assert snapshot["p0_schema"]["present_count"] == len(
+        evidence.P0_SCHEMA_TABLES
+    )
+
+
+def test_present_empty_pre_deploy_phase_rejects_any_p0_row() -> None:
+    evidence = _load_evidence()
+    presence = {table: True for table in evidence.P0_SCHEMA_TABLES}
+
+    for table in evidence.P0_SCHEMA_TABLES:
+        rows = {spec.name: [] for spec in evidence.TABLE_SPECS}
+        rows[table] = [{"unexpected": "row"}]
+        with pytest.raises(evidence.EvidenceFailure, match="is not empty"):
+            evidence.build_snapshot(
+                rows,
+                b"k" * 32,
+                phase="pre-present-empty",
+                p0_schema_presence=presence,
+            )
+
+    empty_rows = {spec.name: [] for spec in evidence.TABLE_SPECS}
+    with pytest.raises(evidence.EvidenceFailure, match="capture phase"):
+        evidence.build_snapshot(
+            empty_rows,
+            b"k" * 32,
+            phase="pre",
+            p0_schema_presence=presence,
+        )
+
+
 def test_table_reader_rejects_permission_hidden_and_partial_p0_schema() -> None:
     evidence = _load_evidence()
     names = sorted(evidence.P0_SCHEMA_TABLES)
@@ -808,6 +863,11 @@ def test_table_reader_rejects_permission_hidden_and_partial_p0_schema() -> None:
         evidence.read_snapshot_rows(FakeConnection([partial]), phase="pre")
     with pytest.raises(evidence.EvidenceFailure, match="capture phase"):
         evidence.read_snapshot_rows(FakeConnection([partial]), phase="post")
+    with pytest.raises(evidence.EvidenceFailure, match="capture phase"):
+        evidence.read_snapshot_rows(
+            FakeConnection([partial]),
+            phase="pre-present-empty",
+        )
 
 
 def test_database_url_validation_binds_exact_staging_target(tmp_path: Path) -> None:
@@ -1015,6 +1075,17 @@ def test_main_rejects_unexpected_connected_server_identity(
     ]
 
 
+@pytest.mark.parametrize("server_address", ["203.0.113.7/24", "not-an-ip"])
+def test_server_identity_rejects_non_host_addresses(server_address: str) -> None:
+    evidence = _load_evidence()
+    connection = FakeConnection(
+        [[("staging", "staging_user", "16.4", server_address, 5432, True)]]
+    )
+
+    with pytest.raises(evidence.EvidenceFailure, match="identity is invalid"):
+        evidence.verify_staging_server_identity(connection)
+
+
 def test_main_uses_repeatable_read_only_transaction_and_emits_json(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1032,7 +1103,7 @@ def test_main_uses_repeatable_read_only_transaction_and_emits_json(
     table_rows = _rows(evidence)
     returned: list[Sequence[tuple[Any, ...]]] = [
         [],
-        [("staging", "staging_user", "16.4", "203.0.113.7", 5432, True)],
+        [("staging", "staging_user", "16.4", "203.0.113.7/32", 5432, True)],
         [(name, "r", True) for name in sorted(evidence.P0_SCHEMA_TABLES)],
     ]
     returned.extend(

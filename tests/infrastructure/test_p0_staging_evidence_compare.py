@@ -47,12 +47,15 @@ def _snapshots(
     pre_rows: dict[str, list[dict[str, Any]]],
     post_rows: dict[str, list[dict[str, Any]]],
     key: bytes,
+    pre_phase: str = "pre",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     pre = evidence.build_snapshot(
         pre_rows,
         key,
-        phase="pre",
-        p0_schema_presence={table: False for table in evidence.P0_SCHEMA_TABLES},
+        phase=pre_phase,
+        p0_schema_presence={
+            table: pre_phase != "pre" for table in evidence.P0_SCHEMA_TABLES
+        },
     )
     post = evidence.build_snapshot(
         post_rows,
@@ -61,6 +64,20 @@ def _snapshots(
         p0_schema_presence={table: True for table in evidence.P0_SCHEMA_TABLES},
     )
     return pre, post
+
+
+def _authenticate_snapshot(
+    evidence: ModuleType,
+    snapshot: dict[str, Any],
+    key: bytes,
+) -> None:
+    unsigned = dict(snapshot)
+    unsigned.pop("snapshot_hmac_sha256", None)
+    snapshot["snapshot_hmac_sha256"] = evidence._hmac_sha256(
+        key,
+        purpose="snapshot",
+        value=evidence._canonical_json(unsigned),
+    )
 
 
 def _write_private_json(path: Path, value: object) -> None:
@@ -131,6 +148,41 @@ def test_compare_accepts_authenticated_unchanged_business_state(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == "P0 staging evidence comparison failed.\n"
+
+
+def test_compare_accepts_authenticated_present_empty_pre_baseline() -> None:
+    evidence, compare = _modules()
+    key = b"k" * 32
+    pre_rows = _empty_rows(evidence)
+    post_rows = copy.deepcopy(pre_rows)
+    pre, post = _snapshots(
+        evidence,
+        pre_rows=pre_rows,
+        post_rows=post_rows,
+        key=key,
+        pre_phase="pre-present-empty",
+    )
+
+    compare.compare_snapshots(pre, post, _expectations(compare), key)
+
+
+def test_compare_rejects_authenticated_nonempty_present_pre_baseline() -> None:
+    evidence, compare = _modules()
+    key = b"k" * 32
+    pre_rows = _empty_rows(evidence)
+    post_rows = copy.deepcopy(pre_rows)
+    pre, post = _snapshots(
+        evidence,
+        pre_rows=pre_rows,
+        post_rows=post_rows,
+        key=key,
+        pre_phase="pre-present-empty",
+    )
+    pre["sections"]["superadmin_capabilities"]["grants"]["count"] = 1
+    _authenticate_snapshot(evidence, pre, key)
+
+    with pytest.raises(compare.ComparisonFailure, match="baseline is not empty"):
+        compare.compare_snapshots(pre, post, _expectations(compare), key)
 
 
 def test_compare_accepts_exact_additive_continuity_amendment() -> None:

@@ -31,10 +31,17 @@ capture runs on another host, use that host's reviewed, canonical CA bundle
 path and re-run the file-safety checks rather than copying an unreviewed root
 into place.
 
-The version-2 `pre` phase requires all six P0 tables to be absent. The `post` phase
-requires all six to be present. Any partial schema, unreadable table, unexpected
-database target, or unexpected connected-server identity fails closed with a
-sanitized message.
+The version-2 `pre` phase requires all six P0 tables to be absent. The exceptional
+`pre-present-empty` phase requires all six tables to be present and every one of
+them to be empty; use it only when an independently verified migration has already
+rolled the schema forward without writing P0 state. The `post` phase requires all
+six tables to be present. Any partial schema, unreadable table, non-empty
+`pre-present-empty` table, unexpected database target, or unexpected connected-
+server identity fails closed with a sanitized message.
+
+Do not import `app.*` while staging configuration is loaded before the PRE capture.
+Application setup runs Alembic in deployed environments, so even a read-only
+helper that imports an application model can advance the staging schema.
 
 ## Protected local capture
 
@@ -51,7 +58,14 @@ chmod 700 "$evidence_dir"
 
 (
   umask 077
-  openssl rand -out "$evidence_dir/hmac.key" 32
+  if [ ! -e "$evidence_dir/hmac.key" ]; then
+    openssl rand -out "$evidence_dir/hmac.key" 32
+  fi
+  test ! -L "$evidence_dir/hmac.key"
+  test "$(stat -f '%Lp' "$evidence_dir/hmac.key")" = 600
+  test "$(stat -f '%z' "$evidence_dir/hmac.key")" = 32
+  pre_candidate="$evidence_dir/pre.candidate.json"
+  pre_stderr_candidate="$evidence_dir/pre.candidate.stderr"
   env -i HOME="$HOME" PATH="$PATH" OP_CACHE=false \
     RENDER_DIRENV=.env.staging.backend \
     direnv exec . /bin/sh -eu -c '
@@ -65,10 +79,26 @@ chmod 700 "$evidence_dir"
         --phase pre \
         --hmac-key-file "$1"
     ' p0-staging-evidence "$evidence_dir/hmac.key" \
-      >"$evidence_dir/pre.json" \
-      2>"$evidence_dir/pre.stderr"
+      >"$pre_candidate" \
+      2>"$pre_stderr_candidate"
+
+  chmod 600 "$pre_candidate" "$pre_stderr_candidate"
+  jq -e '.environment == "staging" and .capture_phase == "pre" and
+    .schema_version == 2 and .p0_schema.expected_table_count == 6 and
+    .p0_schema.present_count == 0 and
+    (.p0_schema.presence | all(.[]; . == false))' \
+    "$pre_candidate" >/dev/null
+  mv -f "$pre_candidate" "$evidence_dir/pre.json"
+  mv -f "$pre_stderr_candidate" "$evidence_dir/pre.stderr"
 )
 ```
+
+The candidate files are deliberate: a failed retry must never truncate a valid
+canonical PRE. If the schema has already been independently verified as all-
+present and all-empty, use `--phase pre-present-empty` instead and require
+`.capture_phase == "pre-present-empty"`, `.p0_schema.present_count == 6`, and
+`all(.p0_schema.presence[]; . == true)` before the atomic rename. Do not use that
+mode merely to bypass a failed ordinary `pre` capture.
 
 The clean environment is important: `.env.staging.backend` supplies
 `PYTHON_ENV` and `DATABASE_URL` together from the staging 1Password vault, so a
@@ -94,8 +124,12 @@ value.
 Validate and compare without printing either snapshot:
 
 ```sh
-jq -e '.environment == "staging" and .capture_phase == "pre" and
-  .p0_schema.present_count == 0' "$evidence_dir/pre.json" >/dev/null
+jq -e '.environment == "staging" and
+  (.capture_phase == "pre" or .capture_phase == "pre-present-empty") and
+  ((.capture_phase == "pre" and .p0_schema.present_count == 0) or
+   (.capture_phase == "pre-present-empty" and
+    .p0_schema.present_count == .p0_schema.expected_table_count))' \
+  "$evidence_dir/pre.json" >/dev/null
 
 jq -e '.environment == "staging" and .capture_phase == "post" and
   .p0_schema.present_count == .p0_schema.expected_table_count' \

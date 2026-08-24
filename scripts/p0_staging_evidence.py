@@ -10,9 +10,12 @@ Use the same high-entropy key file for the before and after snapshots. The key
 file must be an owner-owned, non-symlink regular file with mode exactly 0600.
 The database URL must use ``sslmode=verify-full`` and name an explicit,
 non-symlink PEM trust-root file with ``sslrootcert``.
-``--phase pre`` requires all P0 tables to be absent; ``--phase post`` requires
-all of them to be present. Redirect stdout to an owner-only evidence file rather
-than displaying or teeing the small-cohort aggregate counts.
+``--phase pre`` requires all P0 tables to be absent. The exceptional
+``--phase pre-present-empty`` mode requires all of them to be present and empty,
+for a migration that has already rolled forward without any P0 data writes.
+``--phase post`` requires all of them to be present. Redirect stdout to an
+owner-only evidence file rather than displaying or teeing the small-cohort
+aggregate counts.
 """
 
 from __future__ import annotations
@@ -46,7 +49,7 @@ EXPECTED_DATABASE_PORT = 5432
 EXPECTED_SSLMODE = "verify-full"
 HMAC_DOMAIN = b"cosmaneura:p0-staging-evidence:v1\x00"
 
-EvidencePhase = Literal["pre", "post"]
+EvidencePhase = Literal["pre", "pre-present-empty", "post"]
 
 
 class EvidenceFailure(RuntimeError):
@@ -301,7 +304,12 @@ def verify_staging_server_identity(connection: ReadOnlyConnection) -> None:
         0
     ]
     try:
-        ipaddress.ip_address(server_address)
+        parsed_server_address = ipaddress.ip_interface(server_address)
+        if (
+            parsed_server_address.network.prefixlen
+            != parsed_server_address.max_prefixlen
+        ):
+            raise ValueError
     except (TypeError, ValueError):
         raise EvidenceFailure("staging database identity is invalid") from None
     if (
@@ -322,7 +330,7 @@ def validate_capture_phase(
 ) -> None:
     """Require an unambiguous all-absent pre or all-present post schema."""
 
-    if phase not in {"pre", "post"}:
+    if phase not in {"pre", "pre-present-empty", "post"}:
         raise EvidenceFailure("evidence capture phase is invalid")
     if set(p0_schema_presence) != P0_SCHEMA_TABLES or any(
         type(present) is not bool for present in p0_schema_presence.values()
@@ -332,6 +340,20 @@ def validate_capture_phase(
     expected_count = 0 if phase == "pre" else len(P0_SCHEMA_TABLES)
     if present_count != expected_count:
         raise EvidenceFailure("database schema does not match the capture phase")
+
+
+def validate_present_empty_pre_rows(
+    rows: Mapping[str, Sequence[Mapping[str, Any]]],
+    phase: EvidencePhase,
+) -> None:
+    """Require every P0 table to be empty for the rolled-forward pre phase."""
+
+    if phase != "pre-present-empty":
+        return
+    if not P0_SCHEMA_TABLES.issubset(rows) or any(
+        rows[table] for table in P0_SCHEMA_TABLES
+    ):
+        raise EvidenceFailure("pre-present-empty P0 state is not empty")
 
 
 def _canonical_json(value: object) -> bytes:
@@ -428,6 +450,7 @@ def read_snapshot_rows(
                 raise EvidenceFailure("database snapshot returned an invalid shape")
             rows.append(returned[0])
         snapshots[spec.name] = rows
+    validate_present_empty_pre_rows(snapshots, phase)
     return SnapshotRows(
         tables=snapshots,
         p0_schema_presence=schema_presence,
@@ -772,6 +795,7 @@ def build_snapshot(
     expected_tables = {spec.name for spec in TABLE_SPECS}
     if set(rows) != expected_tables:
         raise EvidenceFailure("database snapshot tables are incomplete")
+    validate_present_empty_pre_rows(rows, phase)
     if len(key) < MINIMUM_HMAC_KEY_BYTES:
         raise EvidenceFailure("evidence HMAC key is too short")
     if p0_schema_presence is None:
@@ -1258,9 +1282,12 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--phase",
-        choices=("pre", "post"),
+        choices=("pre", "pre-present-empty", "post"),
         required=True,
-        help="Require an all-absent pre-deploy or all-present post-deploy P0 schema.",
+        help=(
+            "Require an all-absent pre-deploy, all-present-but-empty "
+            "rolled-forward pre-deploy, or all-present post-deploy P0 schema."
+        ),
     )
     return parser
 

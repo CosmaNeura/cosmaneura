@@ -379,6 +379,53 @@ EXPECTED_PLAN_PATHS: Mapping[str, tuple[tuple[str, ...], str]] = {
     ),
 }
 
+P0_NON_STAGING_PATHS: tuple[tuple[str, ...], ...] = (
+    ("sections", "continuity", "amendments", "non_staging_count"),
+    ("sections", "superadmin_capabilities", "grants", "non_staging_count"),
+    ("sections", "superadmin_capabilities", "audit", "non_staging_count"),
+    ("sections", "view_as", "sessions", "non_staging_count"),
+    ("sections", "view_as", "audit", "non_staging_count"),
+)
+
+EMPTY_PRE_TABLE_STATE_PATHS: Mapping[str, tuple[str, ...]] = {
+    "pilot_access_continuity_amendment": (
+        "sections",
+        "continuity",
+        "amendments",
+        "state_hmac_sha256",
+    ),
+    "pilot_access_continuity_amendment_identity": (
+        "sections",
+        "continuity",
+        "amendment_identities",
+        "state_hmac_sha256",
+    ),
+    "superadmin_capability_grant": (
+        "sections",
+        "superadmin_capabilities",
+        "grants",
+        "state_hmac_sha256",
+    ),
+    "superadmin_capability_audit": (
+        "sections",
+        "superadmin_capabilities",
+        "audit",
+        "state_hmac_sha256",
+    ),
+    "view_as_session": (
+        "sections",
+        "view_as",
+        "sessions",
+        "state_hmac_sha256",
+    ),
+    "view_as_audit_event": (
+        "sections",
+        "view_as",
+        "audit",
+        "state_hmac_sha256",
+    ),
+}
+
 
 def _reject_duplicate_json_keys(
     pairs: list[tuple[str, Any]],
@@ -478,9 +525,36 @@ def _verify_snapshot(
         or schema.get("expected_table_count") != len(evidence.P0_SCHEMA_TABLES)
         or schema.get("present_count") != expected_present
         or schema.get("presence")
-        != {table: phase == "post" for table in sorted(evidence.P0_SCHEMA_TABLES)}
+        != {table: phase != "pre" for table in sorted(evidence.P0_SCHEMA_TABLES)}
     ):
         raise ComparisonFailure("evidence snapshot schema transition is invalid")
+
+
+def _verify_present_empty_pre_baseline(
+    snapshot: Mapping[str, Any],
+    key: bytes,
+) -> None:
+    """Prove a rolled-forward pre-deploy schema contains no P0 state."""
+
+    if any(_get_path(snapshot, path) != 0 for path in EXPECTED_P0_PATHS.values()):
+        raise ComparisonFailure("pre-present-empty P0 baseline is not empty")
+
+    for path, purpose in EXPECTED_PLAN_PATHS.values():
+        expected_digest = evidence._hmac_sha256(
+            key,
+            purpose=purpose,
+            value=evidence._canonical_json([]),
+        )
+        if not hmac.compare_digest(str(_get_path(snapshot, path)), expected_digest):
+            raise ComparisonFailure("pre-present-empty P0 baseline is not empty")
+
+    for table, path in EMPTY_PRE_TABLE_STATE_PATHS.items():
+        expected_digest = evidence._table_digest(key, table, [])
+        if not hmac.compare_digest(str(_get_path(snapshot, path)), expected_digest):
+            raise ComparisonFailure("pre-present-empty P0 baseline is not empty")
+
+    if any(_get_path(snapshot, path) != 0 for path in P0_NON_STAGING_PATHS):
+        raise ComparisonFailure("pre-present-empty P0 baseline is not empty")
 
 
 def compare_snapshots(
@@ -491,7 +565,12 @@ def compare_snapshots(
 ) -> None:
     """Raise unless protected state is unchanged and P0 counts are exact."""
 
-    _verify_snapshot(pre, key, phase="pre")
+    pre_phase = pre.get("capture_phase")
+    if pre_phase not in {"pre", "pre-present-empty"}:
+        raise ComparisonFailure("evidence snapshot metadata is invalid")
+    _verify_snapshot(pre, key, phase=pre_phase)
+    if pre_phase == "pre-present-empty":
+        _verify_present_empty_pre_baseline(pre, key)
     _verify_snapshot(post, key, phase="post")
 
     for path in UNCHANGED_PATHS:
@@ -526,13 +605,7 @@ def compare_snapshots(
         if not hmac.compare_digest(str(_get_path(post, path)), expected_digest):
             raise ComparisonFailure("P0 additions differ from the reviewed plan")
 
-    for path in (
-        ("sections", "continuity", "amendments", "non_staging_count"),
-        ("sections", "superadmin_capabilities", "grants", "non_staging_count"),
-        ("sections", "superadmin_capabilities", "audit", "non_staging_count"),
-        ("sections", "view_as", "sessions", "non_staging_count"),
-        ("sections", "view_as", "audit", "non_staging_count"),
-    ):
+    for path in P0_NON_STAGING_PATHS:
         if _get_path(post, path) != 0:
             raise ComparisonFailure("P0 additions contain another environment")
 

@@ -4,6 +4,7 @@ import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
+from click._compat import strip_ansi
 from typer.testing import CliRunner
 
 from app.cli import app
@@ -225,8 +226,11 @@ def test_grant_cli_dry_run_fails_closed_on_database_mismatch_without_pii(
     result = CliRunner().invoke(app, _grant_command(source_sha256))
 
     assert result.exit_code != 0
-    assert "validation failed" in " ".join(result.output.split())
-    assert "no identities were printed" in " ".join(result.output.split())
+    normalized_output = " ".join(
+        strip_ansi(result.output).replace("│", " ").split()
+    )
+    assert "validation failed" in normalized_output
+    assert "no identities were printed" in normalized_output
     assert sensitive_stored_email not in result.output
     assert PilotAccessGrandfatherGrant.count() == 0
     _assert_no_identity_output(result.output, identities)
