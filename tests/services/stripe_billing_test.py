@@ -331,6 +331,7 @@ def test_checkout_is_idempotent_and_carries_exact_long_trial(remote: FakeStripe)
     assert len(checkout_calls) == 1
     _, _, data, idempotency_key = checkout_calls[0]
     assert data
+    assert data["payment_method_collection"] == "always"
     stripe_trial_end = int(data["subscription_data[trial_end]"])
     carried_trial_end = datetime.fromtimestamp(stripe_trial_end, tz=timezone.utc)
     assert carried_trial_end >= practice.trial_ends_at

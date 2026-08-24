@@ -901,7 +901,10 @@ def create_checkout_session(
         "success_url": success_url,
         "cancel_url": cancel_url,
         "allow_promotion_codes": "true",
-        "payment_method_collection": "if_required",
+        # Existing pilots bypass Checkout through explicit grants/exemptions.
+        # Public self-serve Checkout must collect a payment method so the
+        # subscription can continue when its free trial ends.
+        "payment_method_collection": "always",
         "subscription_data[metadata][practice_id]": str(practice.id),
     }
     if practice.stripe_customer_id:
