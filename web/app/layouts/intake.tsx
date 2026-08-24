@@ -7,7 +7,6 @@ import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { Appointment, IntakeStatus, intakeList } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
-import { useTerminology } from "~/utils/terminology"
 
 import { invariant } from "@epic-web/invariant"
 
@@ -47,7 +46,6 @@ export function appointmentsToSidebarEntries(
 }
 
 export default function Layout({ loaderData }: Route.ComponentProps) {
-  const t = useTerminology()
   const { appointments } = loaderData
 
   return (
@@ -60,7 +58,7 @@ export default function Layout({ loaderData }: Route.ComponentProps) {
     >
       <AppSidebar
         isLoading={!appointments}
-        header={`${t.patientTitle} Intake`}
+        header="Visit Prep"
         entries={appointmentsToSidebarEntries(appointments)}
       />
       <Outlet />

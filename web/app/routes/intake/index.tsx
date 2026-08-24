@@ -4,10 +4,10 @@ import { useTerminology } from "~/utils/terminology"
 
 export const meta = () => {
   return [
-    { title: "Intake" },
+    { title: "Visit Prep" },
     {
       name: "description",
-      content: "Your patient intake chats",
+      content: "Pre-visit answers and briefs",
     },
   ]
 }
@@ -19,7 +19,7 @@ export function EmptySelectionState() {
       <div className="text-muted-foreground text-center">
         <h2 className="mb-2 text-xl font-semibold">Select a {t.patient}</h2>
         <p className="text-sm">
-          Choose a {t.patient} from the list to view their intake details
+          Choose a {t.patient} from the list to view their Visit Prep
         </p>
       </div>
     </div>

@@ -1,7 +1,7 @@
 import * as React from "react"
 import { href, useLocation, useNavigate } from "react-router"
 
-import { Calendar, File, Inbox, Settings } from "lucide-react"
+import { Calendar, File, Inbox, type LucideIcon, Settings } from "lucide-react"
 
 import { StatusBadgeOptions } from "@/components/shared/StatusBadge"
 import { Label } from "@/components/ui/label"
@@ -22,9 +22,10 @@ import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { StatusBadge } from "~/components/shared/StatusBadge"
+import { isVisitPrepEnabled } from "~/utils/visit-prep-feature"
 
 import { SkeletonMessageList } from "./skeleton-message-list"
-import { UserButton } from "@clerk/clerk-react"
+import { UserButton, useUser } from "@clerk/clerk-react"
 import { motion } from "motion/react"
 
 // logo icon at the top
@@ -42,11 +43,25 @@ const IconSidebarHeader = () => (
   </SidebarHeader>
 )
 
-const NAVIGATION_ITEMS = [
+type NavigationItem = {
+  title: string
+  icon: LucideIcon
+  url: string
+  /**
+   * Optional per-user gate. An item with no predicate is always shown.
+   */
+  isEnabled?: (email: string | null | undefined) => boolean
+}
+
+const NAVIGATION_ITEMS: NavigationItem[] = [
   {
-    title: "Intake",
+    // Renamed from "Intake" per CosmaNeura#135. The route stays /intake so
+    // existing links and the patient-facing /chat/intake/:id path keep
+    // working; only the provider-facing label changes.
+    title: "Visit Prep",
     icon: Inbox,
     url: href("/intake"),
+    isEnabled: isVisitPrepEnabled,
   },
   {
     title: "Notetaking",
@@ -69,10 +84,19 @@ const NavigationMenu = () => {
   const location = useLocation()
   const currentUrl = location.pathname
   const navigate = useNavigate()
+  const { user } = useUser()
+  const email = user?.primaryEmailAddress?.emailAddress
+
+  // Ungated items always render. A gated item stays hidden until Clerk has
+  // resolved the user, so it can only ever appear late — never flash for
+  // someone who should not see it.
+  const visibleItems = NAVIGATION_ITEMS.filter(
+    (item) => !item.isEnabled || item.isEnabled(email),
+  )
 
   return (
     <SidebarMenu>
-      {NAVIGATION_ITEMS.map((item) => {
+      {visibleItems.map((item) => {
         return (
           <SidebarMenuItem key={item.title}>
             <SidebarMenuButton

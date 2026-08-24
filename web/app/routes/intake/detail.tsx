@@ -32,10 +32,10 @@ export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
 // TODO can we make this dynamic?
 export const meta: MetaFunction = () => {
   return [
-    { title: "Intake" },
+    { title: "Visit Prep" },
     {
       name: "description",
-      content: "Your patient meeting notes",
+      content: "A pre-visit brief",
     },
   ]
 }
