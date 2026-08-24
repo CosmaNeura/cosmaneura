@@ -6,7 +6,7 @@ import json
 import secrets
 import time
 from copy import deepcopy
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
 import pytest
 
@@ -383,7 +383,7 @@ def test_checkout_remeasures_minimum_trial_lead_after_remote_validation(
 
     class AdvancingDateTime(datetime):
         @classmethod
-        def now(cls, tz: timezone | None = None) -> datetime:
+        def now(cls, tz: tzinfo | None = None) -> datetime:
             nonlocal now_calls
             now_calls += 1
             value = NOW if now_calls == 1 else after_validation
