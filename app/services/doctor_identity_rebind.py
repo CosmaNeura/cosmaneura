@@ -684,7 +684,10 @@ def rebind_doctor_identity(
                 evaluated.provisional.id,
                 replacement.clerk_id,
             )
-            evaluated.provisional.email = None
+            # Doctor.email is historically annotated as ``str`` even though
+            # its column is nullable. Clearing it releases the unique email
+            # for the retained identity without deleting the tombstone.
+            cast(Any, evaluated.provisional).email = None
             evaluated.provisional.deleted_at = current
             session.add(evaluated.provisional)
             session.flush()

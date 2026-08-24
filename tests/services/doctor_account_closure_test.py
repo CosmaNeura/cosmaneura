@@ -356,9 +356,7 @@ def test_closure_retry_refuses_missing_grant_evidence():
         reason=reason,
         effective_at=closed_at,
         expires_at=retain_until,
-        document_reference=(
-            f"doctor-account-closure:{doctor.id}:p=1:r=0:a=0:m=0:v=0"
-        ),
+        document_reference=(f"doctor-account-closure:{doctor.id}:p=1:r=0:a=0:m=0:v=0"),
         evidence_sha256="e" * 64,
     ).save()
 
