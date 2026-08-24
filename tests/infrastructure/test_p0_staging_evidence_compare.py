@@ -13,6 +13,10 @@ import pytest
 ROOT = Path(__file__).parents[2]
 EVIDENCE_SCRIPT = ROOT / "scripts" / "p0_staging_evidence.py"
 COMPARE_SCRIPT = ROOT / "scripts" / "p0_staging_evidence_compare.py"
+AMENDMENT_DOCTOR_DB_ID = "01890a5d-ac96-7ea8-8755-9da1b9f30669"
+AMENDMENT_DOCTOR_TYPEID = "doctor_01h455vb4pftm8encxm6wz61k9"
+AMENDMENT_PRACTICE_DB_ID = "01890a5d-ac96-7ea8-8755-9da1b9f30670"
+AMENDMENT_PRACTICE_TYPEID = "practice_01h455vb4pftm8encxm6wz61kg"
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
@@ -198,8 +202,8 @@ def test_compare_accepts_exact_additive_continuity_amendment() -> None:
     amendment_grant = {
         "id": "pilot_access_grant_amendment",
         "clerk_id": "user_private_amendment",
-        "doctor_id_snapshot": "doctor_amendment",
-        "practice_id_snapshot": None,
+        "doctor_id_snapshot": AMENDMENT_DOCTOR_DB_ID,
+        "practice_id_snapshot": AMENDMENT_PRACTICE_DB_ID,
         "email_snapshot": "private-amendment@example.invalid",
         "email_sha256": evidence._plain_sha256("private-amendment@example.invalid"),
         "source_ref": "review:private-continuity",
@@ -229,8 +233,8 @@ def test_compare_accepts_exact_additive_continuity_amendment() -> None:
         "clerk_issuer": "https://clerk.staging.invalid",
         "clerk_subject": "user_private_amendment",
         "email_sha256": evidence._plain_sha256("private-amendment@example.invalid"),
-        "doctor_id_snapshot": "doctor_amendment",
-        "practice_id_snapshot": None,
+        "doctor_id_snapshot": AMENDMENT_DOCTOR_DB_ID,
+        "practice_id_snapshot": AMENDMENT_PRACTICE_DB_ID,
         "safe_prelogin": False,
         "continuity_basis": "reviewed_operational_user_omission",
     }
@@ -241,12 +245,12 @@ def test_compare_accepts_exact_additive_continuity_amendment() -> None:
             "identities": [
                 {
                     "continuity_basis": amendment_identity["continuity_basis"],
-                    "doctor_id": amendment_identity["doctor_id_snapshot"],
+                    "doctor_id": AMENDMENT_DOCTOR_TYPEID,
                     "email_sha256": amendment_identity["email_sha256"],
                     "issuer_sha256": evidence._plain_sha256(
                         amendment_identity["clerk_issuer"]
                     ),
-                    "practice_id": amendment_identity["practice_id_snapshot"],
+                    "practice_id": AMENDMENT_PRACTICE_TYPEID,
                     "subject_sha256": evidence._plain_sha256(
                         amendment_identity["clerk_subject"]
                     ),
