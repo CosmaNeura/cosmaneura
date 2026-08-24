@@ -1,6 +1,7 @@
 import json
 import secrets
 
+from click.utils import strip_ansi
 from typeid import TypeID
 from typer.testing import CliRunner
 
@@ -84,8 +85,9 @@ def test_continuity_cli_redacts_upstream_identity_failure(monkeypatch, tmp_path)
     result = CliRunner().invoke(app, _command(path))
 
     assert result.exit_code != 0
-    assert "validation failed" in " ".join(result.output.split())
-    assert "no identities were printed" in " ".join(result.output.split())
+    normalized_output = " ".join(strip_ansi(result.output).split())
+    assert "validation failed" in normalized_output
+    assert "no identities were printed" in normalized_output
     assert subject not in result.output
     assert email not in result.output
 
@@ -96,6 +98,6 @@ def test_continuity_cli_apply_requires_confirmed_plan(tmp_path):
     result = CliRunner().invoke(app, _command(path) + ["--apply"])
 
     assert result.exit_code != 0
-    assert "--apply requires --confirm-plan-sha256" in result.output
+    assert "--apply requires --confirm-plan-sha256" in strip_ansi(result.output)
     assert subject not in result.output
     assert email not in result.output

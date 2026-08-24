@@ -4,6 +4,7 @@ import secrets
 from pathlib import Path
 from types import SimpleNamespace
 
+from click.utils import strip_ansi
 from typer.testing import CliRunner
 
 from app.cli import app
@@ -193,6 +194,7 @@ def test_cli_rejects_non_private_manifest_without_disclosing_identity(
         ),
     )
     assert result.exit_code != 0
-    assert "validation failed" in " ".join(result.output.split())
-    assert "no identities were printed" in " ".join(result.output.split())
+    normalized_output = " ".join(strip_ansi(result.output).split())
+    assert "validation failed" in normalized_output
+    assert "no identities were printed" in normalized_output
     _assert_redacted(result.output, subject, email, doctor_id)
