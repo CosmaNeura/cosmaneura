@@ -77,6 +77,10 @@ from app.services.sovereign_record_grant import (
     RecordGrantConfigurationError,
     configured_record_grant_key,
 )
+from app.services.superadmin_capability import (
+    SuperadminCapabilityKind,
+    get_runtime_superadmin_capability,
+)
 from app.services.zoom import get_zoom_integration, zoom_revoked_redis_key
 from app.utils.email_domain import (
     MCD_EMAIL_DOMAIN,
@@ -97,13 +101,13 @@ from app.models.baa import (
     BaaAcceptance,
     BaaVersion,
 )
-from app.models.doctor import Doctor, DoctorRole, Terminology
+from app.models.doctor import Doctor, Terminology
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.drug_reference import DrugReference
 from app.models.engagement_role import EngagementRole
-from app.models.intake.intake import Intake
+from app.models.intake.intake import ExternalIntakeData, Intake, IntakeSchemaQuestion
 from app.models.lab_panel import LabPanel, LabPanelSource, LabPanelStatus
 from app.models.lab_range_set import LabRangeSet
 from app.models.lab_result import LabResult
@@ -403,9 +407,26 @@ def open_sandbox_labs_record(
     return OpenSandboxRecord(record_ref=record_ref)
 
 
+class IntakeDetailIntake(BaseModel, extra="forbid"):
+    # The intake TypeID itself is the public chat bearer credential. It and the
+    # derived URL are both removed during view-as; omitting only the URL would
+    # still let an actor reconstruct the credential.
+    id: str | None
+    deleted_at: datetime | None
+    created_at: datetime | None
+    updated_at: datetime | None
+    doctor_id: str
+    appointment_id: str
+    external_intake_data: dict[str, str]
+    cleaned_external_intake_data: ExternalIntakeData | None
+    intake_questions: list[IntakeSchemaQuestion]
+    summary: str | None
+    public_url: str | None
+
+
 class IntakeDetail(BaseModel, extra="forbid"):
     appointment: Appointment
-    intake: Intake
+    intake: IntakeDetailIntake
     patient: Patient
 
 
@@ -428,25 +449,82 @@ def intake_detail(
 
     intake = cast(Intake, appointment.intake)
 
+    view_as_active = request.state.view_as is not None
     intake_detail = IntakeDetail(
         appointment=appointment,
-        intake=intake,
+        intake=IntakeDetailIntake(
+            id=None if view_as_active else str(intake.id),
+            deleted_at=intake.deleted_at,
+            created_at=intake.created_at,
+            updated_at=intake.updated_at,
+            doctor_id=str(intake.doctor_id),
+            appointment_id=str(intake.appointment_id),
+            external_intake_data=intake.external_intake_data,
+            cleaned_external_intake_data=intake.cleaned_external_intake_data,
+            intake_questions=intake.intake_questions,
+            summary=intake.summary,
+            public_url=None if view_as_active else str(intake.public_url),
+        ),
         patient=appointment.patient,
     )
 
     return intake_detail
 
 
-# unique endpoints are used to generate the signed URLs, this is mostly an arbitrary choice. It probably adds an extra
-# added level of security and ability to evolve the upload flow in the future without modifying the frontend.
-@internal_api_app.post("/visit-audio-file/get-signed-url", response_model=str)
-def generate_signed_visit_recording_upload_url():
-    return app.commands.uploads.sas.perform(UploadType.VISIT)
+class ClinicalUploadGrantRequest(BaseModel, extra="forbid"):
+    # Used only to select an allow-listed extension; the original name is never
+    # stored in the grant or used as an Azure blob key.
+    file_name: str = Field(min_length=1, max_length=512)
+    file_size: int = Field(gt=0)
+
+
+class ClinicalUploadGrant(BaseModel, extra="forbid"):
+    upload_url: str
+    registration_token: str
+    content_type: str
+
+
+def _clinical_upload_clerk_issuer(request: Request) -> str:
+    issuer = request.state.auth_state.payload.get("iss")
+    if not isinstance(issuer, str) or not issuer:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not Authenticated",
+        )
+    return issuer
+
+
+@internal_api_app.post("/visit-audio-file/get-signed-url")
+def generate_signed_visit_recording_upload_url(
+    request: Request,
+    data: ClinicalUploadGrantRequest,
+) -> ClinicalUploadGrant:
+    doctor: Doctor = request.state.doctor
+    try:
+        grant = app.commands.uploads.sas.issue_upload(
+            upload_type=UploadType.VISIT,
+            doctor_id=str(doctor.id),
+            clerk_issuer=_clinical_upload_clerk_issuer(request),
+            clerk_id=doctor.clerk_id,
+            file_name=data.file_name,
+            file_size=data.file_size,
+        )
+    except app.commands.uploads.sas.ClinicalUploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return ClinicalUploadGrant(
+        upload_url=grant.upload_url,
+        registration_token=grant.registration_token,
+        content_type=grant.content_type,
+    )
 
 
 # using a pydantic class for input data validation automatically converts input string json to dates
-class VisitAudioUploadRequest(BaseModel):
-    file_name: str
+class VisitAudioUploadRequest(BaseModel, extra="forbid"):
+    registration_token: str = Field(
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
     appointment_date: datetime
     patient_name: str
     date_of_birth: datetime
@@ -456,11 +534,56 @@ class VisitAudioUploadRequest(BaseModel):
 def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> None:
     doctor: Doctor = request.state.doctor
 
-    return app.commands.uploads.upload_visit_audio_file.perform(
-        doctor=doctor,
-        # TODO(mbianco) model_dump does not retain the types, so we lose type checking on `perform`
-        **data.model_dump(),
-    )
+    try:
+        registered_upload = app.commands.uploads.sas.consume_upload(
+            data.registration_token,
+            upload_type=UploadType.VISIT,
+            doctor_id=str(doctor.id),
+            clerk_issuer=_clinical_upload_clerk_issuer(request),
+            clerk_id=doctor.clerk_id,
+        )
+    except app.commands.uploads.sas.ClinicalUploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    try:
+        result = app.commands.uploads.upload_visit_audio_file.perform(
+            doctor=doctor,
+            file_name=registered_upload.blob_key,
+            appointment_date=data.appointment_date,
+            patient_name=data.patient_name,
+            date_of_birth=data.date_of_birth,
+        )
+    except Exception:
+        try:
+            app.commands.uploads.sas.release_upload_claim(
+                data.registration_token,
+                registered_upload.claim_token,
+            )
+        except Exception:
+            log.warning(
+                "clinical upload claim release failed",
+                event_code="clinical_upload_claim_release_failed",
+                upload_type=UploadType.VISIT.value,
+            )
+        raise
+
+    try:
+        completed = app.commands.uploads.sas.complete_upload(
+            data.registration_token,
+            registered_upload.claim_token,
+        )
+    except Exception:
+        completed = False
+    if not completed:
+        # The durable registration is idempotent by its random blob key. A
+        # retry after the short claim lease can safely resume and finish the
+        # receipt instead of creating duplicate clinical rows.
+        log.warning(
+            "clinical upload receipt completion deferred",
+            event_code="clinical_upload_receipt_completion_deferred",
+            upload_type=UploadType.VISIT.value,
+        )
+    return result
 
 
 class ExampleNoteUploadGrant(BaseModel, extra="forbid"):
@@ -546,13 +669,65 @@ def upload_example_note_v2(
     except example_note_upload.ExampleNoteUploadValidationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
-    doctor_note_file = DoctorNoteFile(
-        doctor_id=doctor.id,
-        azure_file_name=example_note_upload.serialize_registered_blob(registered_blob),
-        note_type=data.note_type,
-    ).save()
+    claim_token = registered_blob.claim_token
+    if claim_token is None:
+        raise RuntimeError("example_note_upload_claim_missing")
+    try:
+        candidate_files = cast(
+            list[DoctorNoteFile],
+            list(DoctorNoteFile.where(DoctorNoteFile.doctor_id == doctor.id).all()),
+        )
+        matching_files = [
+            note_file
+            for note_file in candidate_files
+            if example_note_upload.registered_example_note_blob_matches(
+                note_file.azure_file_name,
+                registered_blob,
+            )
+        ]
+        if len(matching_files) > 1:
+            raise RuntimeError("duplicate_example_note_upload_registration")
+        if matching_files:
+            doctor_note_file = matching_files[0]
+            if doctor_note_file.note_type != data.note_type:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The example note is already registered.",
+                )
+        else:
+            doctor_note_file = DoctorNoteFile(
+                doctor_id=doctor.id,
+                azure_file_name=example_note_upload.serialize_registered_blob(
+                    registered_blob
+                ),
+                note_type=data.note_type,
+            ).save()
+        app.jobs.extract.queue(doctor_note_file.id)
+    except Exception:
+        try:
+            example_note_upload.release_example_note_upload_claim(
+                data.registration_token,
+                claim_token,
+            )
+        except Exception:
+            log.warning(
+                "example note upload claim release failed",
+                event_code="example_note_upload_claim_release_failed",
+            )
+        raise
 
-    app.jobs.extract.queue(doctor_note_file.id)
+    try:
+        completed = example_note_upload.complete_example_note_upload(
+            data.registration_token,
+            claim_token,
+        )
+    except Exception:
+        completed = False
+    if not completed:
+        log.warning(
+            "example note upload receipt completion deferred",
+            event_code="example_note_upload_receipt_completion_deferred",
+        )
 
 
 class NoteTypeCustomizationData(BaseModel, extra="forbid"):
@@ -602,6 +777,33 @@ class SettingsData(BaseModel, extra="forbid"):
     note_customizations: list[NoteTypeCustomizationData]
     has_natmed_subscription: bool
     terminology: Terminology
+
+
+def _platform_admin_capability_active(request: Request) -> bool:
+    """Report capability state without treating the legacy Doctor role as authority."""
+
+    actor = getattr(request.state, "view_as_actor", None)
+    payload = getattr(getattr(request.state, "auth_state", None), "payload", None)
+    issuer = payload.get("iss") if isinstance(payload, dict) else None
+    subject = payload.get("sub") if isinstance(payload, dict) else None
+    if (
+        not isinstance(actor, Doctor)
+        or not isinstance(issuer, str)
+        or not isinstance(subject, str)
+        or actor.clerk_id != subject
+    ):
+        return False
+    with get_session() as session:
+        return (
+            get_runtime_superadmin_capability(
+                session,
+                issuer=issuer,
+                subject=subject,
+                doctor_id=actor.id,
+                capability_kind=SuperadminCapabilityKind.platform_admin,
+            )
+            is not None
+        )
 
 
 @internal_api_app.get("/settings")
@@ -660,7 +862,9 @@ def settings_data(request: Request) -> SettingsData:
             and access_decision.authorization_basis != "pilot_grant"
             and not access_decision.entitlement_in_force
         ),
-        is_admin=doctor.role == DoctorRole.admin,
+        # Kept as a wire-compatible name for the current frontend. This is an
+        # exact runtime capability fact, never the legacy Doctor role.
+        is_admin=_platform_admin_capability_active(request),
         note_customizations=note_customizations,
         has_natmed_subscription=doctor.has_natmed_subscription,
         terminology=doctor.terminology,
@@ -824,7 +1028,10 @@ def _practice_ready(
 
 
 def _practice_payload(
-    practice: Practice | None, member: PracticeMember | None
+    practice: Practice | None,
+    member: PracticeMember | None,
+    *,
+    include_join_code: bool = True,
 ) -> "PracticeStatus | None":
     if not practice or not member:
         return None
@@ -843,7 +1050,8 @@ def _practice_payload(
         # workforce. Never disclose any dormant legacy join code.
         join_code=(
             None
-            if practice.is_solo
+            if not include_join_code
+            or practice.is_solo
             or is_public_email_domain(practice.email_domain)
             or practice.organization_id is not None
             or practice.negotiated_baa_required
@@ -924,7 +1132,11 @@ def practice_status(request: Request) -> PracticeStatus | None:
     if not member:
         return None
     practice = Practice.get(id=member.practice_id)
-    return _practice_payload(practice, member)
+    return _practice_payload(
+        practice,
+        member,
+        include_join_code=request.state.view_as is None,
+    )
 
 
 class ManagedOrganizationAccessResponse(BaseModel, extra="forbid"):
@@ -1067,6 +1279,18 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
                 "Contact your organization administrator or Cosmaneura support."
             ),
         )
+    verified_email = _verified_legacy_enrollment_email(doctor)
+    if uses_managed_organization_path(
+        doctor,
+        verified_primary_email=verified_email,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
     existing = _membership_for(doctor)
     if existing:
         practice = Practice.get(id=existing.practice_id)
@@ -1092,7 +1316,6 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
             detail="This account has organization-managed access. Use that enrollment path.",
         )
 
-    verified_email = _verified_legacy_enrollment_email(doctor)
     domain = extract_email_domain(verified_email)
     if not domain:
         raise HTTPException(
@@ -1261,6 +1484,18 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
                 "Cosmaneura. Contact support if access is not ready."
             ),
         )
+    verified_email = _verified_legacy_enrollment_email(doctor)
+    if uses_managed_organization_path(
+        doctor,
+        verified_primary_email=verified_email,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses an existing BAA already managed by "
+                "Cosmaneura. Contact support if access is not ready."
+            ),
+        )
     if "baa" not in data.checks:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1410,11 +1645,16 @@ def _consume_legacy_join_attempt(doctor: Doctor) -> None:
 def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
     doctor: Doctor = request.state.doctor
     _consume_legacy_join_attempt(doctor)
-    if uses_managed_organization_path(doctor) or doctor_has_managed_roster_assignment(
-        doctor
-    ):
+    if uses_managed_organization_path(
+        doctor,
+    ) or doctor_has_managed_roster_assignment(doctor):
         return PracticeLookupResult()
     verified_email = _verified_legacy_enrollment_email(doctor)
+    if uses_managed_organization_path(
+        doctor,
+        verified_primary_email=verified_email,
+    ) or doctor_has_managed_roster_assignment(doctor):
+        return PracticeLookupResult()
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
     if (
@@ -1487,6 +1727,18 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 "Contact your organization administrator or Cosmaneura support."
             ),
         )
+    verified_email = _verified_legacy_enrollment_email(doctor)
+    if uses_managed_organization_path(
+        doctor,
+        verified_primary_email=verified_email,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This account uses organization-managed access. "
+                "Contact your organization administrator or Cosmaneura support."
+            ),
+        )
     required = {"workforce", "not-party", "direction", "phi"}
     if not required.issubset(set(data.checks)):
         raise HTTPException(
@@ -1519,7 +1771,6 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             status_code=status.HTTP_409_CONFLICT,
             detail="This account has organization-managed access. Use that enrollment path.",
         )
-    _verified_legacy_enrollment_email(doctor)
     code = _normalize_join_code(data.join_code)
     requested_practice = Practice.get(join_code=code)
     if requested_practice is not None and (
@@ -1908,7 +2159,9 @@ class ZoomMeetingResponse(BaseModel, extra="forbid"):
     topic: str
     start_time: datetime
     duration: int
-    join_url: str
+    # A Zoom join URL is an external bearer capability, not passive schedule
+    # metadata. Never expose it while support is viewing another account.
+    join_url: str | None
     status: ZoomMeetingStatus
     appointment_id: str | None
 
@@ -1955,7 +2208,7 @@ def schedule_list(request: Request) -> ScheduleResponse:
                 topic=m.topic,
                 start_time=m.start_time,
                 duration=m.duration,
-                join_url=m.join_url,
+                join_url=m.join_url if request.state.view_as is None else None,
                 status=m.status,
                 appointment_id=str(m.appointment_id) if m.appointment_id else None,
             )
@@ -2503,13 +2756,36 @@ def lab_panel_create(
     return _lab_panel_data(panel, results)
 
 
-@internal_api_app.post("/lab-panels/get-signed-url", response_model=str)
-def generate_signed_lab_upload_url():
-    return app.commands.uploads.sas.perform(UploadType.LAB)
+@internal_api_app.post("/lab-panels/get-signed-url")
+def generate_signed_lab_upload_url(
+    request: Request,
+    data: ClinicalUploadGrantRequest,
+) -> ClinicalUploadGrant:
+    doctor: Doctor = request.state.doctor
+    try:
+        grant = app.commands.uploads.sas.issue_upload(
+            upload_type=UploadType.LAB,
+            doctor_id=str(doctor.id),
+            clerk_issuer=_clinical_upload_clerk_issuer(request),
+            clerk_id=doctor.clerk_id,
+            file_name=data.file_name,
+            file_size=data.file_size,
+        )
+    except app.commands.uploads.sas.ClinicalUploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+    return ClinicalUploadGrant(
+        upload_url=grant.upload_url,
+        registration_token=grant.registration_token,
+        content_type=grant.content_type,
+    )
 
 
 class LabUploadComplete(BaseModel, extra="forbid"):
-    file_name: str
+    registration_token: str = Field(
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
     collected_on: str | None = None
 
 
@@ -2533,18 +2809,75 @@ def lab_panel_upload_complete(
                 detail="collected_on must be an ISO date",
             )
 
-    panel = LabPanel(
-        doctor_id=doctor.id,
-        patient_id=patient.id,
-        source=LabPanelSource.upload,
-        status=LabPanelStatus.pending,
-        azure_file_name=data.file_name,
-        collected_on=collected,
-    ).save()
+    try:
+        registered_upload = app.commands.uploads.sas.consume_upload(
+            data.registration_token,
+            upload_type=UploadType.LAB,
+            doctor_id=str(doctor.id),
+            clerk_issuer=_clinical_upload_clerk_issuer(request),
+            clerk_id=doctor.clerk_id,
+        )
+    except app.commands.uploads.sas.ClinicalUploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
-    extract_labs_job.queue(panel.id)
+    try:
+        existing_panel = LabPanel.get(
+            doctor_id=doctor.id,
+            azure_file_name=registered_upload.blob_key,
+        )
+        if existing_panel is not None:
+            if existing_panel.patient_id != patient.id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The upload is already registered.",
+                )
+            panel = existing_panel
+            results = cast(
+                list[LabResult],
+                list(LabResult.where(LabResult.lab_panel_id == panel.id).all()),
+            )
+            if panel.status == LabPanelStatus.pending:
+                extract_labs_job.queue(panel.id)
+        else:
+            panel = LabPanel(
+                doctor_id=doctor.id,
+                patient_id=patient.id,
+                source=LabPanelSource.upload,
+                status=LabPanelStatus.pending,
+                azure_file_name=registered_upload.blob_key,
+                collected_on=collected,
+            ).save()
+            results = []
+            extract_labs_job.queue(panel.id)
+    except Exception:
+        try:
+            app.commands.uploads.sas.release_upload_claim(
+                data.registration_token,
+                registered_upload.claim_token,
+            )
+        except Exception:
+            log.warning(
+                "clinical upload claim release failed",
+                event_code="clinical_upload_claim_release_failed",
+                upload_type=UploadType.LAB.value,
+            )
+        raise
 
-    return _lab_panel_data(panel, [])
+    try:
+        completed = app.commands.uploads.sas.complete_upload(
+            data.registration_token,
+            registered_upload.claim_token,
+        )
+    except Exception:
+        completed = False
+    if not completed:
+        log.warning(
+            "clinical upload receipt completion deferred",
+            event_code="clinical_upload_receipt_completion_deferred",
+            upload_type=UploadType.LAB.value,
+        )
+
+    return _lab_panel_data(panel, results)
 
 
 @internal_api_app.delete(

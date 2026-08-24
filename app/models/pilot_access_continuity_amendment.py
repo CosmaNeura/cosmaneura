@@ -88,8 +88,7 @@ class PilotAccessContinuityAmendmentIdentity(
             name="ck_pilot_access_amendment_identity_basis",
         ),
         sa.CheckConstraint(
-            "(safe_prelogin IS TRUE AND doctor_id_snapshot IS NULL) OR "
-            "(safe_prelogin IS FALSE AND doctor_id_snapshot IS NOT NULL)",
+            "safe_prelogin IS FALSE AND doctor_id_snapshot IS NOT NULL",
             name="ck_pilot_access_amendment_identity_account_state",
         ),
         sa.UniqueConstraint(
@@ -128,8 +127,7 @@ class PilotAccessContinuityAmendmentIdentity(
     clerk_issuer: str = Field(max_length=255)
     clerk_subject: str = Field(max_length=255)
     email_sha256: str = Field(min_length=64, max_length=64)
-    doctor_id_snapshot: TypeIDType | None = Field(
-        default=None,
+    doctor_id_snapshot: TypeIDType = Field(
         sa_type=TypeIDType("doctor"),  # type: ignore
         foreign_key="doctor.id",
     )

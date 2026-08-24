@@ -1,6 +1,9 @@
-import { getClient } from "~/configuration/clerk"
-import { internalApiFetch } from "~/lib/billing-recovery"
-import { requireEnv } from "~/utils/environment"
+import {
+  type ViewAsRequestBinding,
+  commitViewAsControlTransition,
+  observeViewAsStatusBinding,
+  rawViewAsControlRequest,
+} from "~/lib/view-as-binding"
 
 export type ViewAsAccountSummary = {
   doctor_id: string
@@ -8,6 +11,7 @@ export type ViewAsAccountSummary = {
 }
 
 export type ViewAsStatus = {
+  request_binding: ViewAsRequestBinding
   can_view_as: boolean
   active: boolean
   read_only: boolean
@@ -21,36 +25,54 @@ export type ViewAsTarget = ViewAsAccountSummary & {
   diagnostic_code: string | null
 }
 
-function apiBase() {
-  return requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
+export type ViewAsStatusCheck =
+  | { state: "ready"; status: ViewAsStatus }
+  | { state: "signed_out"; status: null }
+  | { state: "unavailable"; status: null }
+
+async function viewAsRequest<T>(path: string, init?: RequestInit): Promise<T> {
+  return rawViewAsControlRequest<T>(path, init)
 }
 
-async function authHeaders(): Promise<HeadersInit> {
-  const clerk = await getClient()
-  const token = await clerk?.session?.getToken()
-  if (!token) throw new Error("Provider session unavailable")
-  return {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
+export async function getViewAsStatus() {
+  const status = await viewAsRequest<ViewAsStatus>("/status")
+  return observeViewAsStatusBinding(status)
+}
+
+/**
+ * Resolve the browser's view-as state without collapsing an unavailable
+ * control-plane check into the ordinary inactive state.
+ *
+ * Callers that can render provider content must treat `unavailable` as a
+ * fail-closed interstitial. An injected reader keeps this behavior directly
+ * testable without initializing Clerk.
+ */
+export async function checkViewAsStatus(
+  readStatus: () => Promise<ViewAsStatus> = getViewAsStatus,
+): Promise<ViewAsStatusCheck> {
+  try {
+    return { state: "ready", status: await readStatus() }
+  } catch {
+    return { state: "unavailable", status: null }
   }
 }
 
-async function viewAsRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await internalApiFetch(
-    `${apiBase()}/internal/v1/view-as${path}`,
-    {
-      ...init,
-      credentials: "include",
-      cache: "no-store",
-      headers: { ...(await authHeaders()), ...(init?.headers ?? {}) },
-    },
-  )
-  if (!response.ok) throw new Error("View-as is unavailable")
-  return (await response.json()) as T
-}
-
-export function getViewAsStatus() {
-  return viewAsRequest<ViewAsStatus>("/status")
+/** Check view-as only when Clerk already has an authenticated browser user. */
+export async function checkAuthenticatedViewAsStatus(
+  hasAuthenticatedSession: () => Promise<boolean> = async () => {
+    const { getOptionalClient } = await import("~/configuration/clerk")
+    return Boolean((await getOptionalClient())?.session)
+  },
+  readStatus: () => Promise<ViewAsStatus> = getViewAsStatus,
+): Promise<ViewAsStatusCheck> {
+  try {
+    if (!(await hasAuthenticatedSession())) {
+      return { state: "signed_out", status: null }
+    }
+  } catch {
+    return { state: "unavailable", status: null }
+  }
+  return checkViewAsStatus(readStatus)
 }
 
 export async function getViewAsTargets() {
@@ -58,17 +80,19 @@ export async function getViewAsTargets() {
   return response.targets
 }
 
-export function beginViewAs(targetDoctorId: string) {
-  return viewAsRequest<ViewAsStatus>("/sessions", {
+export async function beginViewAs(targetDoctorId: string) {
+  const status = await viewAsRequest<ViewAsStatus>("/sessions", {
     method: "POST",
     body: JSON.stringify({ target_doctor_id: targetDoctorId }),
   })
+  return commitViewAsControlTransition(status)
 }
 
-export function endViewAs() {
-  return viewAsRequest<ViewAsStatus>("/sessions/current", {
+export async function endViewAs() {
+  const status = await viewAsRequest<ViewAsStatus>("/sessions/current", {
     method: "DELETE",
   })
+  return commitViewAsControlTransition(status)
 }
 
 export function viewAsDiagnosticCopy(code: string | null) {

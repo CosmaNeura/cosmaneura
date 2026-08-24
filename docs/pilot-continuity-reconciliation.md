@@ -26,8 +26,7 @@ does not match the running deployment.
       "issuer": "https://<exact-environment-clerk-issuer>",
       "subject": "<exact-clerk-subject>",
       "verified_primary_email": "<normalized-verified-primary-email>",
-      "doctor_id": "<doctor-typeid-or-null>",
-      "safe_prelogin": false,
+      "doctor_id": "<exact-doctor-typeid>",
       "continuity_basis": "reviewed_operational_user_omission",
       "practice_id": "<practice-typeid-or-null>"
     }
@@ -35,14 +34,11 @@ does not match the running deployment.
 }
 ```
 
-Every identity must contain all seven fields. Existing accounts use their
-exact Doctor TypeID with `safe_prelogin: false`. A person who has never signed
-in may use `doctor_id: null` with `safe_prelogin: true`; the command proves no
-Doctor already owns either the subject or email and does not create one.
-`practice_id` is optional, but for an existing Doctor it must exactly match the
-current active membership (or be null when there is no membership). For a
-prelogin identity it may document an existing intended practice without
-creating membership.
+Every identity must contain all six fields and must name an existing Doctor by
+its exact TypeID. The command never pre-authorizes a person who has not signed
+in and never treats a future Doctor as a wildcard binding. `practice_id` is
+optional, but it must exactly match the Doctor's current active membership (or
+be null when there is no membership).
 
 ## Dry-run and apply
 
@@ -78,9 +74,12 @@ conflicting roster, ambiguous authority identity, or existing grant history
 refuses the entire batch. Output never includes emails or Clerk subjects.
 
 If a Clerk subject changed for an existing Doctor, stop. This command will not
-silently move authority. Use the existing `rebind-doctor-identity` dry-run and
-hash-confirmed flow, which preserves the Doctor and clinical records and emits
-its own audit evidence.
+silently move authority. Use the existing `rebind-doctor-clerk-identity` dry-run
+and hash-confirmed flow, which preserves the Doctor and clinical records and
+emits its own audit evidence. Its plan and receipt are bound to the running
+environment and configured Clerk issuer. A continuity-granted Doctor without a
+practice membership remains eligible for this audited recovery; the operation
+does not create practice, BAA, billing, or onboarding state.
 
 ## Audit
 
@@ -94,12 +93,7 @@ rebind chains. A valid base plus valid amendments/revocations/rebinds remains
 `cohort_integrity_valid: true`; amendment and rebind counts/digests are reported
 without identities.
 
-## Prelogin limitation
-
-A prelogin grant is intentionally bound only to the exact live Clerk issuer,
-subject, and verified primary email. It cannot safely contain a Doctor ID
-because no Doctor exists yet, and it does not establish practice membership.
-On first authenticated request the normal Doctor upsert creates the shell, and
-the existing runtime grant check re-verifies Clerk before allowing the pilot
-bypass. If a Doctor or conflicting email owner appears between dry-run and
-apply, the apply fails closed and must be reviewed again.
+An omission for a person who has never signed in is not eligible for this
+continuity mechanism. Let the normal account creation path establish the Doctor
+first, then review an exact identity-bound amendment if operational continuity
+is still required.

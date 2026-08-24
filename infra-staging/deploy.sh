@@ -53,6 +53,12 @@ if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend);
 	echo "Failed to load staging deployment configuration."
 	exit 1
 fi
+if ! printf '%s' "$ENV_JSON" |
+	python "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
+		--environment staging; then
+	echo "Staging capability identity configuration is not deployable."
+	exit 1
+fi
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 
 # Keep the provider-v7 runtime gates synchronized even when the inherited
@@ -244,7 +250,7 @@ PUBLIC_VARS=(
 	AZURE_OPENAI_ENDPOINT
 	AZURE_UPLOADS_CONTAINER_NAME AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
 	ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
-	RECALL_API_BASE
+	API_BASE_URL RECALL_API_BASE
 	COOKIE_DOMAIN
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID

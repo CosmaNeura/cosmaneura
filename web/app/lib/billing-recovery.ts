@@ -1,3 +1,9 @@
+import {
+  bindInternalApiRequest,
+  enforceViewAsBindingResponse,
+  isViewAsControlRequest,
+} from "~/lib/view-as-binding"
+
 const DEFAULT_BILLING_RETURN_TO = "/notes"
 const SETTINGS_PATH = "/settings"
 
@@ -99,15 +105,20 @@ export const internalApiFetch: typeof globalThis.fetch = async (
   input,
   init,
 ) => {
-  const response = await globalThis.fetch(input, init)
-  if (
-    typeof window === "undefined" ||
-    !isInternalApiRequest(input, window.location.href)
-  ) {
-    return response
+  if (typeof window === "undefined") return globalThis.fetch(input, init)
+
+  const currentUrl = window.location.href
+  if (!isInternalApiRequest(input, currentUrl)) {
+    return globalThis.fetch(input, init)
   }
 
-  return handleInternalApiResponse(response, window.location.href, (target) =>
+  const requestInit = isViewAsControlRequest(input, currentUrl)
+    ? init
+    : await bindInternalApiRequest(input, init)
+  const response = await globalThis.fetch(input, requestInit)
+  await enforceViewAsBindingResponse(response)
+
+  return handleInternalApiResponse(response, currentUrl, (target) =>
     window.location.replace(target),
   )
 }

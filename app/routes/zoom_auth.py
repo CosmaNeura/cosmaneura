@@ -29,6 +29,7 @@ from app.services.external_webhook_inbox import provider_log_ref
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
+from app.models.view_as import ViewAsSession
 from sqlmodel import select
 
 ZOOM_AUTHORIZE_URL = "https://zoom.us/oauth/authorize"
@@ -157,6 +158,24 @@ def zoom_oauth_callback(
         )
         return _clear_browser_binding(_authorization_error_response())
 
+    # Avoid an unnecessary provider exchange when support view is already
+    # active. This is only an early-out; the locked check below remains the
+    # authoritative race-safe mutation gate.
+    with get_session() as session:
+        unended_view_as = session.exec(
+            select(ViewAsSession).where(
+                ViewAsSession.actor_doctor_id == doctor.id,
+                ViewAsSession.ended_at == None,  # noqa: E711
+            )
+        ).first()
+    if unended_view_as is not None:
+        log.warning(
+            "zoom oauth callback rejected",
+            event_code="zoom_oauth_view_as_blocked",
+            doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
+        )
+        return _clear_browser_binding(_authorization_error_response())
+
     tokens = _exchange_code_for_tokens(code)
     zoom_user_id = _get_zoom_user_id(tokens["access_token"])
     log.info(
@@ -182,6 +201,27 @@ def zoom_oauth_callback(
             log.warning(
                 "zoom oauth callback rejected",
                 event_code="zoom_oauth_doctor_unavailable_after_exchange",
+                doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
+            )
+            return _clear_browser_binding(_authorization_error_response())
+        # The OAuth callback is public and can arrive without the signed app
+        # session cookie. Serialize with begin_view_as on the Doctor row, then
+        # refuse the credential mutation whenever any support-view session is
+        # still unended. The operator can exit/reconcile view-as and restart
+        # OAuth; provider credentials are never written under ambiguous state.
+        unended_view_as = session.exec(
+            select(ViewAsSession)
+            .where(
+                ViewAsSession.actor_doctor_id == locked_doctor.id,
+                ViewAsSession.ended_at == None,  # noqa: E711
+            )
+            .with_for_update()
+        ).first()
+        if unended_view_as is not None:
+            session.rollback()
+            log.warning(
+                "zoom oauth callback rejected",
+                event_code="zoom_oauth_view_as_blocked_after_exchange",
                 doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
             )
             return _clear_browser_binding(_authorization_error_response())

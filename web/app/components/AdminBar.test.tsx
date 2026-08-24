@@ -18,11 +18,13 @@ describe("AdminBar", () => {
     render(
       <AdminBar
         initialStatus={{
+          request_binding:
+            "vab1.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           can_view_as: true,
           active: true,
           read_only: true,
           diagnostic_code: null,
-          expires_at: "2026-08-24T17:15:00Z",
+          expires_at: "2099-08-24T17:15:00Z",
           actor: {
             doctor_id: "doctor_actor",
             email: "actor@example.com",
@@ -48,6 +50,7 @@ describe("AdminBar", () => {
     const { container } = render(
       <AdminBar
         initialStatus={{
+          request_binding: "inactive",
           can_view_as: false,
           active: false,
           read_only: false,

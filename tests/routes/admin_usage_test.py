@@ -55,8 +55,11 @@ def test_usage_dashboard_returns_all_five_sections(
     authenticated_client.override_user(clerk_admin)  # type: ignore[attr-defined]
 
     response = authenticated_client.get(api_app.url_path_for("usage_dashboard"))
+    settings = authenticated_client.get(api_app.url_path_for("settings_data"))
 
     assert response.status_code == status.HTTP_200_OK
+    assert settings.status_code == status.HTTP_200_OK
+    assert settings.json()["is_admin"] is True
     body = response.json()
 
     expected_keys = {

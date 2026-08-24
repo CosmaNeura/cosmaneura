@@ -7,6 +7,7 @@ import {
   DropzoneTrigger,
   useDropzone,
 } from "@/components/ui/dropzone"
+import { VISIT_UPLOAD_MAX_BYTES } from "~/lib/azure-upload"
 
 export function AudioVideoDropzone({
   children,
@@ -35,10 +36,10 @@ export function AudioVideoDropzone({
     validation: {
       accept: {
         "audio/*": [".mp3", ".wav", ".m4a"],
-        "video/*": [".mp4", "mov", "avi"],
+        "video/*": [".mp4", ".mov", ".avi"],
       },
-      // 2gb this is arbitrary
-      maxSize: 2000 * 1024 * 1024,
+      // Keep this in sync with the server-side visit-upload ceiling.
+      maxSize: VISIT_UPLOAD_MAX_BYTES,
       maxFiles: 1,
     },
     shiftOnMaxFiles: true,

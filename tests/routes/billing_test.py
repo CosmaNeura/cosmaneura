@@ -435,12 +435,17 @@ def test_billing_is_owner_only(authenticated_client: TestClient):
 def test_active_organization_billing_exemption_blocks_checkout(
     authenticated_client: TestClient,
     route_stripe: RouteStripe,
+    monkeypatch: pytest.MonkeyPatch,
 ):
     doctor = _dev_doctor()
     practice = _own_practice(doctor)
     domain = f"billing-{secrets.token_hex(5)}.example.test"
     doctor.email = f"billing-owner@{domain}"
     doctor.save()
+    monkeypatch.setattr(
+        "app.routes.dependencies.doctor.verified_primary_email",
+        lambda _clerk_id: doctor.email,
+    )
     practice.email_domain = domain
     now = datetime.now(timezone.utc)
     practice.negotiated_baa_on_file = True

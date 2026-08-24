@@ -117,10 +117,7 @@ def upgrade() -> None:
             ondelete="RESTRICT",
         ),
         sa.PrimaryKeyConstraint("id", name="superadmin_capability_grant_pkey"),
-        comment=(
-            "Revocable capability keyed by exact environment, Clerk identity, "
-            "Doctor, and capability kind."
-        ),
+        comment="One independently revocable capability for one immutable identity.",
     )
     op.create_index(
         "uq_superadmin_capability_active_identity_kind",
@@ -193,7 +190,7 @@ def upgrade() -> None:
             "action",
             name="uq_superadmin_capability_audit_grant_action",
         ),
-        comment="Append-only, value-minimized superadmin capability evidence.",
+        comment="Append-only, value-minimized evidence for a capability transition.",
     )
     op.create_index(
         "superadmin_capability_audit_occurred_at_idx",

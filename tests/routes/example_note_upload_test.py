@@ -252,16 +252,28 @@ def test_v2_registers_only_the_server_resolved_blob_and_queues_once(
         etag='"etag-1"',
         size=17,
         sha256="a" * 64,
+        claim_token="B" * 43,
     )
     consume = Mock(return_value=registered)
     serialize = Mock(return_value="example-note:v2:encrypted-reference")
     queue = Mock()
+    complete = Mock(return_value=True)
     monkeypatch.setattr(
         example_note_upload,
         "consume_validated_example_note_upload",
         consume,
     )
     monkeypatch.setattr(example_note_upload, "serialize_registered_blob", serialize)
+    monkeypatch.setattr(
+        example_note_upload,
+        "registered_example_note_blob_matches",
+        Mock(return_value=False),
+    )
+    monkeypatch.setattr(
+        example_note_upload,
+        "complete_example_note_upload",
+        complete,
+    )
     monkeypatch.setattr(app.jobs.extract, "queue", queue)
     initial_count = DoctorNoteFile.count()
 
@@ -285,6 +297,142 @@ def test_v2_registers_only_the_server_resolved_blob_and_queues_once(
     assert consume.call_args.args[1] == str(doctor_note.doctor_id)
     serialize.assert_called_once_with(registered)
     queue.assert_called_once_with(doctor_note.id)
+    complete.assert_called_once_with("A" * 43, "B" * 43)
+
+
+def test_v2_queue_failure_releases_claim_and_retry_reuses_durable_row(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    registered = example_note_upload.RegisteredExampleNoteBlob(
+        blob_key="pending/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.pdf",
+        doctor_id="doctor_bound",
+        etag='"etag-1"',
+        size=17,
+        sha256="a" * 64,
+        claim_token="B" * 43,
+    )
+    consume = Mock(return_value=registered)
+    serialize = Mock(return_value="example-note:v2:encrypted-retry-reference")
+    matches = Mock(
+        side_effect=lambda reference, _expected: (
+            reference == "example-note:v2:encrypted-retry-reference"
+        )
+    )
+    release = Mock(return_value=True)
+    complete = Mock(return_value=True)
+    queue = Mock(side_effect=[RuntimeError("temporary broker failure"), None])
+    monkeypatch.setattr(
+        example_note_upload,
+        "consume_validated_example_note_upload",
+        consume,
+    )
+    monkeypatch.setattr(example_note_upload, "serialize_registered_blob", serialize)
+    monkeypatch.setattr(
+        example_note_upload,
+        "registered_example_note_blob_matches",
+        matches,
+    )
+    monkeypatch.setattr(
+        example_note_upload,
+        "release_example_note_upload_claim",
+        release,
+    )
+    monkeypatch.setattr(
+        example_note_upload,
+        "complete_example_note_upload",
+        complete,
+    )
+    monkeypatch.setattr(app.jobs.extract, "queue", queue)
+    initial_count = DoctorNoteFile.count()
+    payload = {
+        "registration_token": "A" * 43,
+        "note_type": "SOAP Note Retry",
+    }
+
+    try:
+        authenticated_client.post(
+            api_app.url_path_for("upload_example_note_v2"),
+            json=payload,
+        )
+    except RuntimeError as exc:
+        assert str(exc) == "temporary broker failure"
+    else:
+        raise AssertionError("queue failure should propagate")
+
+    response = authenticated_client.post(
+        api_app.url_path_for("upload_example_note_v2"),
+        json=payload,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert DoctorNoteFile.count() == initial_count + 1
+    persisted = DoctorNoteFile.get(
+        azure_file_name="example-note:v2:encrypted-retry-reference"
+    )
+    assert persisted is not None
+    assert queue.call_count == 2
+    assert queue.call_args_list[0].args == queue.call_args_list[1].args
+    release.assert_called_once_with("A" * 43, "B" * 43)
+    complete.assert_called_once_with("A" * 43, "B" * 43)
+    serialize.assert_called_once_with(registered)
+
+
+def test_v2_receipt_completion_failure_does_not_fail_durable_registration(
+    authenticated_client: TestClient,
+    monkeypatch,
+    caplog,
+):
+    registered = example_note_upload.RegisteredExampleNoteBlob(
+        blob_key="pending/CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC.pdf",
+        doctor_id="doctor_bound",
+        etag='"etag-2"',
+        size=17,
+        sha256="c" * 64,
+        claim_token="D" * 43,
+    )
+    monkeypatch.setattr(
+        example_note_upload,
+        "consume_validated_example_note_upload",
+        Mock(return_value=registered),
+    )
+    monkeypatch.setattr(
+        example_note_upload,
+        "registered_example_note_blob_matches",
+        Mock(return_value=False),
+    )
+    monkeypatch.setattr(
+        example_note_upload,
+        "serialize_registered_blob",
+        Mock(return_value="example-note:v2:encrypted-completion-reference"),
+    )
+    complete = Mock(side_effect=RuntimeError("private completion detail"))
+    monkeypatch.setattr(
+        example_note_upload,
+        "complete_example_note_upload",
+        complete,
+    )
+    queue = Mock()
+    monkeypatch.setattr(app.jobs.extract, "queue", queue)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("upload_example_note_v2"),
+        json={
+            "registration_token": "A" * 43,
+            "note_type": "SOAP Note Completion",
+        },
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    doctor_note = DoctorNoteFile.get(
+        azure_file_name="example-note:v2:encrypted-completion-reference"
+    )
+    assert doctor_note is not None
+    queue.assert_called_once_with(doctor_note.id)
+    complete.assert_called_once_with("A" * 43, "D" * 43)
+    assert "private completion detail" not in caplog.text
+    assert "A" * 43 not in caplog.text
+    assert registered.blob_key not in caplog.text
 
 
 def test_v2_registration_rejects_client_selected_blob_name(

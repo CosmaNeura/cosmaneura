@@ -34,6 +34,20 @@ def _authed_doctor() -> Doctor:
     return doctor
 
 
+@pytest.fixture(autouse=True)
+def _verified_clerk_email_matches_bound_doctor(monkeypatch):
+    def _current_email(clerk_id: str) -> str | None:
+        doctor = Doctor.get(clerk_id=clerk_id)
+        if doctor is None or not doctor.email:
+            return None
+        return doctor.email.strip().lower()
+
+    monkeypatch.setattr(
+        "app.routes.dependencies.doctor.verified_primary_email",
+        _current_email,
+    )
+
+
 def _provision_roster_access(doctor: Doctor) -> tuple[Practice, str]:
     assert doctor.email
     local_part = doctor.email.rsplit("@", 1)[0]
@@ -105,7 +119,7 @@ def test_verified_primary_email_and_code_open_gate_without_attestation(
         api_app.url_path_for("lookup_practice"),
         json={"join_code": practice.join_code},
     )
-    assert legacy_lookup.status_code == status.HTTP_200_OK
+    assert legacy_lookup.status_code == status.HTTP_200_OK, legacy_lookup.text
     assert legacy_lookup.json() == {"practice": None, "mismatch": None}
     legacy_join = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
@@ -204,6 +218,54 @@ def test_verified_primary_email_must_match_the_exact_rostered_account(
     )
     assert denied.status_code == status.HTTP_403_FORBIDDEN
     assert PracticeMember.get(doctor_id=doctor.id) is None
+
+
+def test_live_managed_email_drift_routes_to_support_and_blocks_personal_baa(
+    bare_authenticated_client: TestClient,
+    monkeypatch,
+):
+    doctor = _authed_doctor()
+    assert doctor.email
+    practice = Practice(
+        legal_name="Legacy Standalone Practice",
+        join_code=f"D{secrets.token_hex(4).upper()[:7]}",
+        email_domain=doctor.email.rsplit("@", 1)[1].lower(),
+        origin_channel="direct",
+        is_solo=True,
+    ).save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="owner",
+    ).save()
+    live_managed_email = f"moved-{secrets.token_hex(4)}@mycatholicdoctor.com"
+    monkeypatch.setattr(
+        internal,
+        "verified_primary_email",
+        lambda _id: live_managed_email,
+    )
+    before_acceptances = BaaAcceptance.count()
+
+    disposition = bare_authenticated_client.get(
+        api_app.url_path_for("organization_access_opportunity")
+    )
+    assert disposition.status_code == status.HTTP_200_OK
+    assert disposition.json() == {
+        "state": "support",
+        "organization_name": None,
+        "email_domain": "mycatholicdoctor.com",
+    }
+
+    baa = bare_authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json={
+            "signature_name": "Must Not Persist",
+            "signature_title": "Clinician",
+            "checks": ["baa"],
+        },
+    )
+    assert baa.status_code == status.HTTP_403_FORBIDDEN
+    assert BaaAcceptance.count() == before_acceptances
 
 
 @pytest.mark.parametrize(

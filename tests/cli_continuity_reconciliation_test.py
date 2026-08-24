@@ -1,6 +1,7 @@
 import json
 import secrets
 
+from typeid import TypeID
 from typer.testing import CliRunner
 
 import app.services.continuity_reconciliation as continuity
@@ -22,8 +23,7 @@ def _manifest(tmp_path):
                         "issuer": "https://cli-test.clerk.invalid",
                         "subject": subject,
                         "verified_primary_email": email,
-                        "doctor_id": None,
-                        "safe_prelogin": True,
+                        "doctor_id": str(TypeID("doctor")),
                         "continuity_basis": "reviewed_operational_user_omission",
                         "practice_id": None,
                     }
@@ -58,8 +58,7 @@ def test_continuity_cli_dry_run_is_aggregate_only(monkeypatch, tmp_path):
             plan_sha256="b" * 64,
             manifest_sha256="a" * 64,
             account_count=1,
-            existing_doctor_count=0,
-            safe_prelogin_count=1,
+            existing_doctor_count=1,
             already_applied=False,
         ),
     )
@@ -68,7 +67,7 @@ def test_continuity_cli_dry_run_is_aggregate_only(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "accounts=1" in result.output
-    assert "safe_prelogin=1" in result.output
+    assert "existing_doctors=1" in result.output
     assert "plan_sha256=" + "b" * 64 in result.output
     assert subject not in result.output
     assert email not in result.output

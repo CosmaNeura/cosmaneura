@@ -1079,6 +1079,7 @@ def get_active_superadmin_capability(
     environment: SuperadminCapabilityEnvironment,
     capability_kind: SuperadminCapabilityKind,
     at: datetime | None = None,
+    lock_for_update: bool = False,
 ) -> SuperadminCapabilityGrant | None:
     """Resolve one exact active grant without consulting email or DoctorRole."""
 
@@ -1090,19 +1091,20 @@ def get_active_superadmin_capability(
         current = _aware(at)
     except SuperadminCapabilityError:
         return None
-    grants = list(
-        session.exec(
-            select(SuperadminCapabilityGrant).where(
-                SuperadminCapabilityGrant.environment == normalized_environment,
-                SuperadminCapabilityGrant.capability_kind == normalized_kind,
-                SuperadminCapabilityGrant.clerk_issuer == normalized_issuer,
-                SuperadminCapabilityGrant.clerk_subject == normalized_subject,
-                SuperadminCapabilityGrant.doctor_id == doctor_id,
-                col(SuperadminCapabilityGrant.revoked_at).is_(None),
-                SuperadminCapabilityGrant.granted_at <= current,
-            )
-        ).all()
+    statement = select(SuperadminCapabilityGrant).where(
+        SuperadminCapabilityGrant.environment == normalized_environment,
+        SuperadminCapabilityGrant.capability_kind == normalized_kind,
+        SuperadminCapabilityGrant.clerk_issuer == normalized_issuer,
+        SuperadminCapabilityGrant.clerk_subject == normalized_subject,
+        SuperadminCapabilityGrant.doctor_id == doctor_id,
+        col(SuperadminCapabilityGrant.revoked_at).is_(None),
+        SuperadminCapabilityGrant.granted_at <= current,
     )
+    if lock_for_update:
+        statement = statement.with_for_update().execution_options(
+            populate_existing=True
+        )
+    grants = list(session.exec(statement).all())
     if len(grants) != 1:
         return None
     grant = grants[0]
@@ -1149,6 +1151,68 @@ def get_runtime_superadmin_capability(
         capability_kind=capability_kind,
         at=at,
     )
+
+
+def get_active_runtime_superadmin_capability_kinds(
+    session: Session,
+    *,
+    subject: str,
+    doctor_id: TypeIDType,
+    at: datetime | None = None,
+    lock_for_update: bool = False,
+) -> frozenset[SuperadminCapabilityKind]:
+    """Return exact active runtime capabilities for one immutable identity.
+
+    Lifecycle workflows use this before disabling a Doctor.  The inexpensive
+    candidate lookup lets ordinary accounts proceed in local/test contexts
+    where deploy-only capability configuration is intentionally unavailable;
+    once any active candidate exists, runtime scope must resolve exactly or the
+    operation fails closed.
+    """
+
+    current = _aware(at)
+    candidate_statement = select(SuperadminCapabilityGrant).where(
+        or_(
+            col(SuperadminCapabilityGrant.clerk_subject) == subject,
+            col(SuperadminCapabilityGrant.doctor_id) == doctor_id,
+        ),
+        col(SuperadminCapabilityGrant.revoked_at).is_(None),
+        SuperadminCapabilityGrant.granted_at <= current,
+    )
+    if lock_for_update:
+        candidate_statement = candidate_statement.with_for_update().execution_options(
+            populate_existing=True
+        )
+    candidates = list(session.exec(candidate_statement).all())
+    if not candidates:
+        return frozenset()
+
+    environment = configured_superadmin_capability_environment()
+    issuer = configured_superadmin_clerk_issuer()
+    scoped_candidates = [
+        grant for grant in candidates if grant.environment == environment
+    ]
+    if not scoped_candidates:
+        return frozenset()
+
+    active_kinds = frozenset(
+        kind
+        for kind in SuperadminCapabilityKind
+        if get_active_superadmin_capability(
+            session,
+            issuer=issuer,
+            subject=subject,
+            doctor_id=doctor_id,
+            environment=environment,
+            capability_kind=kind,
+            at=current,
+            lock_for_update=lock_for_update,
+        )
+        is not None
+    )
+    if len(active_kinds) != len(scoped_candidates):
+        raise SuperadminCapabilityError("superadmin capability state is ambiguous")
+    return active_kinds
 
 
 def require_active_superadmin_capability(

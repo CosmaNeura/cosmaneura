@@ -16,7 +16,7 @@ from app.utils.email_domain import extract_email_domain
 
 from activemodel.session_manager import get_session
 from app.models.baa import BAA_CURRENT_SHA256, BaaAcceptance
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, DoctorRole
 from app.models.organization_access import ProviderOrganization
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
@@ -142,6 +142,24 @@ def test_grandfathered_doctor_can_complete_without_practice(
     assert resp.status_code == status.HTTP_200_OK
     doctor.refresh()
     assert doctor.onboarding_completed_at is not None
+
+
+def test_continuity_granted_legacy_admin_can_reach_clinical_dashboard(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor = _authed_doctor()
+    doctor.role = DoctorRole.admin
+    doctor.save()
+    _grant_pilot_access(doctor)
+    monkeypatch.setattr(
+        "app.routes.dependencies.doctor.verified_primary_email",
+        lambda _clerk_id: doctor.email,
+    )
+
+    response = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+
+    assert response.status_code == status.HTTP_200_OK
 
 
 def test_grandfathered_practice_payload_keeps_facts_and_exposes_bypass(
@@ -825,6 +843,23 @@ def test_practice_gate_blocks_fresh_signup(bare_authenticated_client: TestClient
     resp = bare_authenticated_client.get(api_app.url_path_for("note_list"))
     assert resp.status_code == status.HTTP_403_FORBIDDEN
     assert "practice" in resp.json()["detail"].lower()
+
+
+def test_legacy_admin_role_alone_does_not_open_clinical_gate(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    doctor.role = DoctorRole.admin
+    doctor.save()
+    assert PracticeMember.get(doctor_id=doctor.id) is None
+
+    response = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+    settings = bare_authenticated_client.get(api_app.url_path_for("settings_data"))
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert "practice" in response.json()["detail"].lower()
+    assert settings.status_code == status.HTTP_200_OK
+    assert settings.json()["is_admin"] is False
 
 
 def test_practice_gate_blocks_doctor_without_practice_even_if_onboarded(

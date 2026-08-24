@@ -16,9 +16,14 @@ from app.services.pilot_access_grandfather import (
 
 from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
+from app.models.practice import PracticeMember
 from sqlalchemy import func
 
 PILOT_IDENTITY_ERROR = "Your account identity could not be verified"
+MANAGED_ORGANIZATION_IDENTITY_ERROR = (
+    "Your organization account identity could not be verified. "
+    "Sign out and sign in again, then contact support if access is still blocked."
+)
 ACCOUNT_RECOVERY_REQUIRED = (
     "This email is already linked to a previous sign-in. "
     "Contact support to recover the existing account; no records have been lost."
@@ -75,6 +80,25 @@ def _deny_unverified_pilot_identity(clerk_id: str) -> None:
     )
 
 
+def _deny_unverified_managed_identity(clerk_id: str) -> None:
+    log.warning(
+        "managed organization identity verification failed",
+        event_code="managed_organization_identity_verification_failed",
+        clerk_ref=provider_log_ref(f"clerk-user:{clerk_id}"),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=MANAGED_ORGANIZATION_IDENTITY_ERROR,
+    )
+
+
+def _requires_live_managed_identity(doctor: Doctor) -> bool:
+    """Whether this Doctor's access can rely on an organization roster."""
+
+    member = PracticeMember.get(doctor_id=doctor.id)
+    return bool(member and member.organization_roster_approval_id is not None)
+
+
 def _require_account_recovery(*, doctor: Doctor, conflicting_owner: Doctor) -> None:
     log.warning(
         "account identity recovery required",
@@ -114,7 +138,12 @@ def inject_doctor_record(request: Request):
     # its reviewed, verified primary email. Revalidate that live identity on
     # every request carrying an active grant; ordinary accounts avoid this
     # remote call.
-    live_verified_email = _fetch_clerk_email(clerk_id) if grant is not None else None
+    managed_identity_required = _requires_live_managed_identity(doctor)
+    live_verified_email = (
+        _fetch_clerk_email(clerk_id)
+        if grant is not None or managed_identity_required
+        else None
+    )
     normalized_live_email = (
         live_verified_email.strip().lower() if live_verified_email is not None else None
     )
@@ -131,6 +160,16 @@ def inject_doctor_record(request: Request):
             )
         ):
             _deny_unverified_pilot_identity(clerk_id)
+
+    if managed_identity_required and (
+        normalized_live_email is None
+        or not doctor.email
+        or not hmac.compare_digest(
+            doctor.email.strip().lower(),
+            normalized_live_email,
+        )
+    ):
+        _deny_unverified_managed_identity(clerk_id)
 
     email = (
         doctor.email.strip().lower()

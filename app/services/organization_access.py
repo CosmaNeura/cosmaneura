@@ -1066,13 +1066,31 @@ def member_authorization_basis(
         return None
     if current_email != approval.approved_email:
         return None
+    current = at or datetime.now(timezone.utc)
+    approval_history = cast(
+        list[OrganizationRosterApproval],
+        list(
+            OrganizationRosterApproval.where(
+                OrganizationRosterApproval.approved_email == current_email
+            ).all()
+        ),
+    )
+    active_approvals = [
+        item for item in approval_history if approval_is_active(item, at=current)
+    ]
+    if (
+        any(item.revoked_at is not None for item in approval_history)
+        or len(active_approvals) != 1
+        or active_approvals[0].id != approval.id
+    ):
+        return None
     organization = ProviderOrganization.get(id=approval.organization_id)
     if (
         organization is None
         or organization.status != "active"
         or practice.organization_id != organization.id
         or not email_matches_exact_domain(current_email, organization.email_domain)
-        or not practice.negotiated_baa_in_force(at=at)
+        or not practice.negotiated_baa_in_force(at=current)
     ):
         return None
     return "organization_roster"
@@ -1098,10 +1116,11 @@ def find_access_opportunity(
         list(
             OrganizationRosterApproval.where(
                 OrganizationRosterApproval.approved_email == email,
-                OrganizationRosterApproval.revoked_at == None,  # noqa: E711
             ).all()
         ),
     )
+    if any(item.revoked_at is not None for item in approvals):
+        return None
     active = [item for item in approvals if approval_is_active(item, at=current)]
     if len(active) != 1:
         return None
@@ -1432,9 +1451,24 @@ def claim_roster_access(
         locked_doctor = session.exec(
             select(Doctor).where(Doctor.id == doctor.id).with_for_update()
         ).one()
+        approval_history = list(
+            session.exec(
+                select(OrganizationRosterApproval)
+                .where(
+                    OrganizationRosterApproval.approved_email == approval.approved_email
+                )
+                .with_for_update()
+            ).all()
+        )
+        active_approvals = [
+            item for item in approval_history if approval_is_active(item, at=current)
+        ]
         if (
             locked_doctor.deleted_at is not None
             or normalize_email(locked_doctor.email or "") != approval.approved_email
+            or any(item.revoked_at is not None for item in approval_history)
+            or len(active_approvals) != 1
+            or active_approvals[0].id != approval.id
             or not approval_is_active(approval, at=current)
             or approval.organization_id != organization.id
             or practice.organization_id != organization.id

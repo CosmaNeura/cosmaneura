@@ -19,7 +19,7 @@ describe("authenticated access routing", () => {
     ).toBe(false)
   })
 
-  it("keeps a non-admin account on onboarding until server access is ready", () => {
+  it("keeps an account on onboarding until server access is ready", () => {
     expect(
       needsOnboarding({
         onboarding_completed: true,
@@ -46,14 +46,17 @@ describe("authenticated access routing", () => {
     )
   })
 
-  it("does not route admins or incomplete onboarding into billing recovery", () => {
+  it("does not let an administrative capability bypass billing recovery", () => {
     expect(
       needsBillingRecovery({
         billing_recovery_required: true,
         practice_ready: true,
         is_admin: true,
       }),
-    ).toBe(false)
+    ).toBe(true)
+  })
+
+  it("does not route incomplete onboarding into billing recovery", () => {
     expect(
       needsBillingRecovery({
         billing_recovery_required: true,

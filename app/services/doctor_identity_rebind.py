@@ -20,7 +20,9 @@ from clerk_backend_api.models import ClerkErrors
 
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.configuration.clerk import clerk
+from app.environments import python_environment
 from app.services.clerk_cohort import ClerkCohortIdentity
+from app.services.pilot_access_lock import lock_pilot_access_lineage
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -35,12 +37,18 @@ from app.models.doctor import CLERK_OBJECT_PREFIX, Doctor, DoctorRole, Terminolo
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import PracticeMember
 from app.models.practice_access_audit import PracticeAccessAction, PracticeAccessAudit
+from app.models.superadmin_capability import SuperadminCapabilityGrant
+from app.models.view_as import ViewAsSession
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import Session, SQLModel, col, select
 
 IDENTITY_REBIND_RETENTION_YEARS = 7
+IDENTITY_REBIND_EVENT_TYPE = "platform.doctor_identity.rebound"
 IDENTITY_REBIND_RESOURCE_TYPE = "doctor_identity_rebind"
+IDENTITY_REBIND_ROUTE = "cli:rebind-doctor-clerk-identity"
+IDENTITY_REBIND_SCHEMA_VERSION = 2
+_SUPPORTED_ENVIRONMENTS = frozenset({"development", "test", "staging", "production"})
 
 
 class DoctorIdentityRebindError(ValueError):
@@ -51,7 +59,9 @@ class DoctorIdentityRebindError(ValueError):
 class DoctorIdentityRebindPlan:
     plan_sha256: str
     doctor_id: TypeIDType
-    practice_id: TypeIDType
+    practice_id: TypeIDType | None
+    environment: str
+    clerk_issuer_sha256: str
     provisional_doctor_id: TypeIDType | None
     pilot_grant_rebound: bool
     authority_identity_count: int
@@ -73,14 +83,22 @@ class _AuthorityIdentityScope:
 
 
 @dataclass(frozen=True)
+class _IdentityProvenance:
+    environment: str
+    clerk_issuer: str
+    clerk_issuer_sha256: str
+
+
+@dataclass(frozen=True)
 class _EvaluatedRebind:
     plan: DoctorIdentityRebindPlan
     doctor: Doctor
-    member: PracticeMember
+    member: PracticeMember | None
     provisional: Doctor | None
     pilot_grant: PilotAccessGrandfatherGrant | None
     authority_scopes: tuple[_AuthorityIdentityScope, ...]
-    receipt: PracticeAccessAudit | None
+    receipt: AuthorityAuditEvent | None
+    practice_receipt: PracticeAccessAudit | None
 
 
 def _required(value: str, *, field: str, limit: int) -> str:
@@ -102,7 +120,7 @@ def _normalize_clerk_id(value: str) -> str:
 def _normalize_email(value: str) -> str:
     normalized = value.strip().lower()
     if (
-        normalized != value.lower()
+        normalized != value
         or not normalized
         or len(normalized) > 320
         or normalized.count("@") != 1
@@ -115,6 +133,20 @@ def _normalize_email(value: str) -> str:
 
 def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _identity_provenance() -> _IdentityProvenance:
+    environment = python_environment().strip().lower()
+    if environment not in _SUPPORTED_ENVIRONMENTS:
+        raise DoctorIdentityRebindError("runtime environment is invalid")
+    settings = AUTHORITY_KERNEL_SETTINGS
+    if not settings.has_valid_clerk_issuer():
+        raise DoctorIdentityRebindError("configured Clerk issuer is unavailable")
+    return _IdentityProvenance(
+        environment=environment,
+        clerk_issuer=settings.clerk_issuer,
+        clerk_issuer_sha256=_sha256(settings.clerk_issuer),
+    )
 
 
 def _seven_years_after(value: datetime) -> datetime:
@@ -252,6 +284,7 @@ def _authority_scopes(
     *,
     stale_subject: str,
     replacement_subject: str,
+    clerk_issuer: str,
     lock: bool,
 ) -> tuple[_AuthorityIdentityScope, ...]:
     """Resolve only the configured Clerk issuer and prove its actor tenancy."""
@@ -264,15 +297,11 @@ def _authority_scopes(
     if lock:
         subject_statement = subject_statement.with_for_update()
     subject_rows = list(session.exec(subject_statement).all())
-    settings = AUTHORITY_KERNEL_SETTINGS
-    if not settings.has_valid_clerk_issuer():
-        if subject_rows:
-            raise DoctorIdentityRebindError(
-                "authority identity state exists but its Clerk issuer is unavailable"
-            )
-        return ()
-
-    issuer_rows = [row for row in subject_rows if row.issuer == settings.clerk_issuer]
+    if any(row.issuer != clerk_issuer for row in subject_rows):
+        raise DoctorIdentityRebindError(
+            "authority identity state has an unexpected Clerk issuer"
+        )
+    issuer_rows = [row for row in subject_rows if row.issuer == clerk_issuer]
     if any(row.subject == replacement_subject for row in issuer_rows):
         raise DoctorIdentityRebindError("replacement authority identity already exists")
     stale_active = [
@@ -301,7 +330,7 @@ def _authority_scopes(
     if lock:
         actor_identities_statement = actor_identities_statement.with_for_update()
     actor_identities = list(session.exec(actor_identities_statement).all())
-    if any(row.issuer != settings.clerk_issuer for row in actor_identities):
+    if any(row.issuer != clerk_issuer for row in actor_identities):
         raise DoctorIdentityRebindError(
             "the authority actor has an identity from an unexpected issuer"
         )
@@ -342,15 +371,35 @@ def _authority_scopes(
     )
 
 
+def _require_expected_authority_subject_issuers(
+    session: Session,
+    *,
+    subjects: tuple[str, str],
+    clerk_issuer: str,
+    lock: bool,
+) -> None:
+    statement = select(AuthorityActorExternalIdentity).where(
+        col(AuthorityActorExternalIdentity.subject).in_(subjects)
+    )
+    if lock:
+        statement = statement.with_for_update()
+    rows = list(session.exec(statement).all())
+    if any(row.issuer != clerk_issuer for row in rows):
+        raise DoctorIdentityRebindError(
+            "authority identity state has an unexpected Clerk issuer"
+        )
+
+
 def _plan_sha256(
     *,
     doctor: Doctor,
-    member: PracticeMember,
+    member: PracticeMember | None,
     stale_subject: str,
     replacement: ClerkCohortIdentity,
     provisional: Doctor | None,
     pilot_grant: PilotAccessGrandfatherGrant | None,
     authority_scopes: tuple[_AuthorityIdentityScope, ...],
+    provenance: _IdentityProvenance,
     operator_ref: str,
     reason: str,
 ) -> str:
@@ -368,12 +417,14 @@ def _plan_sha256(
                 authority_scopes, key=lambda item: str(item.identity.id)
             )
         ],
+        "clerk_issuer_sha256": provenance.clerk_issuer_sha256,
         "doctor_id": str(doctor.id),
         "email_sha256": _sha256(replacement.email),
-        "member_id": str(member.id),
+        "environment": provenance.environment,
+        "member_id": str(member.id) if member is not None else None,
         "operator_ref": operator_ref,
         "pilot_grant_id": str(pilot_grant.id) if pilot_grant else None,
-        "practice_id": str(member.practice_id),
+        "practice_id": str(member.practice_id) if member is not None else None,
         "provisional_doctor_id": str(provisional.id) if provisional else None,
         "provisional_email_sha256": (
             _sha256(provisional.email.strip().lower())
@@ -382,11 +433,173 @@ def _plan_sha256(
         ),
         "reason": reason,
         "replacement_subject_sha256": _sha256(replacement.clerk_id),
-        "schema_version": 1,
+        "schema_version": IDENTITY_REBIND_SCHEMA_VERSION,
         "stale_subject_sha256": _sha256(stale_subject),
     }
     canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     return _sha256(canonical)
+
+
+def _is_sha256(value: str | None) -> bool:
+    return bool(
+        value
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _validate_identity_receipt(
+    receipt: AuthorityAuditEvent,
+    *,
+    provenance: _IdentityProvenance,
+    resource_ref: str,
+) -> str:
+    if (
+        receipt.event_source != "platform_authoritative"
+        or receipt.event_type != IDENTITY_REBIND_EVENT_TYPE
+        or receipt.outcome != "accepted"
+        or receipt.resource_type != IDENTITY_REBIND_RESOURCE_TYPE
+        or receipt.resource_ref != resource_ref
+        or receipt.route != IDENTITY_REBIND_ROUTE
+        or receipt.intent != provenance.environment
+        or receipt.content_sha256 != provenance.clerk_issuer_sha256
+        or not _is_sha256(receipt.request_digest)
+    ):
+        raise DoctorIdentityRebindError("identity recovery audit state is invalid")
+    return cast(str, receipt.request_digest)
+
+
+def _validate_practice_receipt(
+    receipt: PracticeAccessAudit,
+    *,
+    member: PracticeMember,
+    identity_receipt: AuthorityAuditEvent,
+    plan_sha256: str,
+    operator_ref: str,
+    reason: str,
+    resource_ref: str,
+) -> None:
+    if (
+        receipt.practice_id != member.practice_id
+        or receipt.action != PracticeAccessAction.doctor_identity_rebound.value
+        or receipt.operator_ref != operator_ref
+        or receipt.reason != reason
+        or receipt.effective_at != identity_receipt.occurred_at
+        or receipt.expires_at is not None
+        or receipt.document_reference != resource_ref
+        or receipt.evidence_sha256 != plan_sha256
+    ):
+        raise DoctorIdentityRebindError("identity recovery audit state is invalid")
+
+
+def _validate_applied_pilot_lineage(
+    grants: list[PilotAccessGrandfatherGrant],
+    *,
+    doctor: Doctor,
+    member: PracticeMember | None,
+    stale_subject: str,
+    replacement_subject: str,
+    email: str,
+    plan_sha256: str,
+    operator_ref: str,
+    reason: str,
+    effective_at: datetime,
+) -> bool:
+    predecessors = [
+        grant
+        for grant in grants
+        if grant.clerk_id == stale_subject
+        and grant.revocation_plan_sha256 == plan_sha256
+    ]
+    successors = [
+        grant
+        for grant in grants
+        if grant.clerk_id == replacement_subject
+        and grant.grant_plan_sha256 == plan_sha256
+    ]
+    replacement_history = [
+        grant for grant in grants if grant.clerk_id == replacement_subject
+    ]
+    if not predecessors and not successors:
+        if replacement_history:
+            raise DoctorIdentityRebindError("pilot authorization has conflicting state")
+        return False
+    if len(predecessors) != 1 or len(successors) != 1 or len(replacement_history) != 1:
+        raise DoctorIdentityRebindError("pilot authorization has conflicting state")
+
+    predecessor = predecessors[0]
+    successor = successors[0]
+    expected_practice_id = member.practice_id if member is not None else None
+    if (
+        predecessor.id == successor.id
+        or predecessor.revoked_at != effective_at
+        or predecessor.revoked_by_ref != operator_ref
+        or predecessor.revocation_reason != reason
+        or predecessor.retain_until is None
+        or predecessor.retain_until < _seven_years_after(effective_at)
+        or successor.revoked_at is not None
+        or successor.granted_at != effective_at
+        or successor.granted_by_ref != operator_ref
+        or successor.grant_reason != reason
+        or predecessor.source_ref != successor.source_ref
+        or not hmac.compare_digest(predecessor.source_sha256, successor.source_sha256)
+        or not hmac.compare_digest(predecessor.email_snapshot, email)
+        or not hmac.compare_digest(successor.email_snapshot, email)
+        or not hmac.compare_digest(predecessor.email_sha256, _sha256(email))
+        or not hmac.compare_digest(successor.email_sha256, _sha256(email))
+        or predecessor.doctor_id_snapshot not in (None, doctor.id)
+        or successor.doctor_id_snapshot != doctor.id
+        or predecessor.practice_id_snapshot not in (None, expected_practice_id)
+        or successor.practice_id_snapshot != expected_practice_id
+    ):
+        raise DoctorIdentityRebindError("pilot authorization has conflicting state")
+    return True
+
+
+def _require_inactive_privileged_state(
+    session: Session,
+    *,
+    doctor: Doctor,
+    provisional: Doctor | None,
+    stale_subject: str,
+    replacement_subject: str,
+    lock: bool,
+) -> None:
+    """Refuse a rebind that would strand live privileged authorization state."""
+
+    doctor_ids = [doctor.id]
+    if provisional is not None:
+        doctor_ids.append(provisional.id)
+
+    capability_statement = select(SuperadminCapabilityGrant).where(
+        col(SuperadminCapabilityGrant.revoked_at).is_(None),
+        or_(
+            col(SuperadminCapabilityGrant.doctor_id).in_(doctor_ids),
+            col(SuperadminCapabilityGrant.clerk_subject).in_(
+                [stale_subject, replacement_subject]
+            ),
+        ),
+    )
+    if lock:
+        capability_statement = capability_statement.with_for_update()
+    if session.exec(capability_statement).first() is not None:
+        raise DoctorIdentityRebindError(
+            "active superadmin capabilities must be revoked before identity recovery"
+        )
+
+    view_as_statement = select(ViewAsSession).where(
+        col(ViewAsSession.ended_at).is_(None),
+        or_(
+            col(ViewAsSession.actor_doctor_id).in_(doctor_ids),
+            col(ViewAsSession.target_doctor_id).in_(doctor_ids),
+        ),
+    )
+    if lock:
+        view_as_statement = view_as_statement.with_for_update()
+    if session.exec(view_as_statement).first() is not None:
+        raise DoctorIdentityRebindError(
+            "active view-as sessions must be ended before identity recovery"
+        )
 
 
 def _evaluate(
@@ -404,6 +617,7 @@ def _evaluate(
     email = _normalize_email(replacement.email)
     operator = _required(operator_ref, field="operator_ref", limit=255)
     explanation = _required(reason, field="reason", limit=512)
+    provenance = _identity_provenance()
     if stale == new_subject:
         raise DoctorIdentityRebindError("replacement identity must be different")
     if lock:
@@ -427,18 +641,36 @@ def _evaluate(
     if lock:
         member_statement = member_statement.with_for_update()
     member = cast(PracticeMember | None, session.exec(member_statement).one_or_none())
-    if member is None or member.access_revoked_at is not None:
+    if member is not None and member.access_revoked_at is not None:
         raise DoctorIdentityRebindError(
             "the retained provider does not have active practice access"
         )
 
+    _require_expected_authority_subject_issuers(
+        session,
+        subjects=(stale, new_subject),
+        clerk_issuer=provenance.clerk_issuer,
+        lock=lock,
+    )
+
     receipt_ref = _receipt_ref(doctor.id, new_subject)
-    receipts = cast(
+    identity_receipts = cast(
+        list[AuthorityAuditEvent],
+        list(
+            session.exec(
+                select(AuthorityAuditEvent).where(
+                    AuthorityAuditEvent.event_type == IDENTITY_REBIND_EVENT_TYPE,
+                    AuthorityAuditEvent.resource_type == IDENTITY_REBIND_RESOURCE_TYPE,
+                    AuthorityAuditEvent.resource_ref == receipt_ref,
+                )
+            ).all()
+        ),
+    )
+    practice_receipts = cast(
         list[PracticeAccessAudit],
         list(
             session.exec(
                 select(PracticeAccessAudit).where(
-                    PracticeAccessAudit.practice_id == member.practice_id,
                     PracticeAccessAudit.action
                     == PracticeAccessAction.doctor_identity_rebound.value,
                     PracticeAccessAudit.document_reference == receipt_ref,
@@ -446,21 +678,74 @@ def _evaluate(
             ).all()
         ),
     )
-    if len(receipts) > 1:
+    if len(identity_receipts) > 1 or len(practice_receipts) > 1:
         raise DoctorIdentityRebindError("identity recovery has conflicting audit state")
-    receipt = receipts[0] if receipts else None
+    receipt = identity_receipts[0] if identity_receipts else None
+    practice_receipt = practice_receipts[0] if practice_receipts else None
+
+    grant_statement = select(PilotAccessGrandfatherGrant).where(
+        col(PilotAccessGrandfatherGrant.clerk_id).in_([stale, new_subject]),
+    )
+    if lock:
+        grant_statement = grant_statement.with_for_update()
+    grants = cast(
+        list[PilotAccessGrandfatherGrant], list(session.exec(grant_statement).all())
+    )
+
     if doctor.clerk_id == new_subject:
-        if receipt is None or not receipt.evidence_sha256:
+        if receipt is None:
             raise DoctorIdentityRebindError(
                 "identity recovery is missing its audit evidence"
             )
+        receipt_plan_sha256 = _validate_identity_receipt(
+            receipt,
+            provenance=provenance,
+            resource_ref=receipt_ref,
+        )
+        if member is None:
+            if practice_receipt is not None:
+                raise DoctorIdentityRebindError(
+                    "identity recovery has conflicting audit state"
+                )
+        else:
+            if practice_receipt is None:
+                raise DoctorIdentityRebindError(
+                    "identity recovery is missing its practice audit evidence"
+                )
+            _validate_practice_receipt(
+                practice_receipt,
+                member=member,
+                identity_receipt=receipt,
+                plan_sha256=receipt_plan_sha256,
+                operator_ref=operator,
+                reason=explanation,
+                resource_ref=receipt_ref,
+            )
+        pilot_grant_rebound = _validate_applied_pilot_lineage(
+            grants,
+            doctor=doctor,
+            member=member,
+            stale_subject=stale,
+            replacement_subject=new_subject,
+            email=email,
+            plan_sha256=receipt_plan_sha256,
+            operator_ref=operator,
+            reason=explanation,
+            effective_at=receipt.occurred_at,
+        )
+        if member is None and not pilot_grant_rebound:
+            raise DoctorIdentityRebindError(
+                "identity recovery is missing continuity authorization evidence"
+            )
         return _EvaluatedRebind(
             plan=DoctorIdentityRebindPlan(
-                plan_sha256=receipt.evidence_sha256,
+                plan_sha256=receipt_plan_sha256,
                 doctor_id=doctor.id,
-                practice_id=member.practice_id,
+                practice_id=member.practice_id if member is not None else None,
+                environment=provenance.environment,
+                clerk_issuer_sha256=provenance.clerk_issuer_sha256,
                 provisional_doctor_id=None,
-                pilot_grant_rebound=False,
+                pilot_grant_rebound=pilot_grant_rebound,
                 authority_identity_count=0,
                 already_applied=True,
             ),
@@ -470,12 +755,13 @@ def _evaluate(
             pilot_grant=None,
             authority_scopes=(),
             receipt=receipt,
+            practice_receipt=practice_receipt,
         )
     if doctor.clerk_id != stale:
         raise DoctorIdentityRebindError(
             "the retained provider is not bound to the confirmed prior identity"
         )
-    if receipt is not None:
+    if receipt is not None or practice_receipt is not None:
         raise DoctorIdentityRebindError("identity recovery has conflicting audit state")
 
     provisional_statement = select(Doctor).where(Doctor.clerk_id == new_subject)
@@ -503,6 +789,15 @@ def _evaluate(
                 "the replacement sign-in already owns application state"
             )
 
+    _require_inactive_privileged_state(
+        session,
+        doctor=doctor,
+        provisional=provisional,
+        stale_subject=stale,
+        replacement_subject=new_subject,
+        lock=lock,
+    )
+
     email_owners = session.exec(
         select(Doctor).where(func.lower(func.btrim(Doctor.email)) == email)
     ).all()
@@ -514,14 +809,6 @@ def _evaluate(
     ):
         raise DoctorIdentityRebindError("the retained email ownership is ambiguous")
 
-    grant_statement = select(PilotAccessGrandfatherGrant).where(
-        col(PilotAccessGrandfatherGrant.clerk_id).in_([stale, new_subject]),
-    )
-    if lock:
-        grant_statement = grant_statement.with_for_update()
-    grants = cast(
-        list[PilotAccessGrandfatherGrant], list(session.exec(grant_statement).all())
-    )
     new_grants = [grant for grant in grants if grant.clerk_id == new_subject]
     old_active_grants = [
         grant
@@ -539,11 +826,29 @@ def _evaluate(
         raise DoctorIdentityRebindError(
             "pilot authorization does not match the account"
         )
+    if member is None:
+        if pilot_grant is None:
+            raise DoctorIdentityRebindError(
+                "the retained provider has neither active practice access nor "
+                "continuity authorization"
+            )
+        if pilot_grant.practice_id_snapshot is not None:
+            raise DoctorIdentityRebindError(
+                "pilot authorization has conflicting practice state"
+            )
+    elif pilot_grant is not None and pilot_grant.practice_id_snapshot not in (
+        None,
+        member.practice_id,
+    ):
+        raise DoctorIdentityRebindError(
+            "pilot authorization has conflicting practice state"
+        )
 
     authority_scopes = _authority_scopes(
         session,
         stale_subject=stale,
         replacement_subject=new_subject,
+        clerk_issuer=provenance.clerk_issuer,
         lock=lock,
     )
 
@@ -555,6 +860,7 @@ def _evaluate(
         provisional=provisional,
         pilot_grant=pilot_grant,
         authority_scopes=authority_scopes,
+        provenance=provenance,
         operator_ref=operator,
         reason=explanation,
     )
@@ -562,7 +868,9 @@ def _evaluate(
         plan=DoctorIdentityRebindPlan(
             plan_sha256=plan_sha256,
             doctor_id=doctor.id,
-            practice_id=member.practice_id,
+            practice_id=member.practice_id if member is not None else None,
+            environment=provenance.environment,
+            clerk_issuer_sha256=provenance.clerk_issuer_sha256,
             provisional_doctor_id=provisional.id if provisional else None,
             pilot_grant_rebound=pilot_grant is not None,
             authority_identity_count=len(authority_scopes),
@@ -574,6 +882,7 @@ def _evaluate(
         pilot_grant=pilot_grant,
         authority_scopes=authority_scopes,
         receipt=None,
+        practice_receipt=None,
     )
 
 
@@ -652,6 +961,7 @@ def rebind_doctor_identity(
         )
 
     try:
+        lock_pilot_access_lineage(session)
         evaluated = _evaluate(
             session,
             doctor_id=doctor_id,
@@ -709,7 +1019,7 @@ def rebind_doctor_identity(
                 PilotAccessGrandfatherGrant(
                     clerk_id=replacement.clerk_id,
                     doctor_id_snapshot=evaluated.doctor.id,
-                    practice_id_snapshot=evaluated.member.practice_id,
+                    practice_id_snapshot=evaluated.plan.practice_id,
                     email_snapshot=replacement.email,
                     email_sha256=_sha256(replacement.email),
                     source_ref=old_grant.source_ref,
@@ -720,6 +1030,34 @@ def rebind_doctor_identity(
                     granted_at=current,
                 )
             )
+
+        receipt_scope = (
+            evaluated.authority_scopes[0] if evaluated.authority_scopes else None
+        )
+        session.add(
+            AuthorityAuditEvent(
+                event_source="platform_authoritative",
+                event_type=IDENTITY_REBIND_EVENT_TYPE,
+                outcome="accepted",
+                occurred_at=current,
+                recorded_at=current,
+                tenant_id=(
+                    receipt_scope.tenant_id if receipt_scope is not None else None
+                ),
+                actor_id=(
+                    receipt_scope.identity.actor_id
+                    if receipt_scope is not None
+                    else None
+                ),
+                resource_type=IDENTITY_REBIND_RESOURCE_TYPE,
+                resource_ref=_receipt_ref(evaluated.doctor.id, replacement.clerk_id),
+                request_digest=evaluated.plan.plan_sha256,
+                route=IDENTITY_REBIND_ROUTE,
+                intent=evaluated.plan.environment,
+                content_sha256=evaluated.plan.clerk_issuer_sha256,
+                platform_refs=[],
+            )
+        )
 
         for scope in evaluated.authority_scopes:
             identity = scope.identity
@@ -749,19 +1087,20 @@ def rebind_doctor_identity(
                 )
             )
 
-        session.add(
-            PracticeAccessAudit(
-                practice_id=evaluated.member.practice_id,
-                action=PracticeAccessAction.doctor_identity_rebound.value,
-                operator_ref=operator_ref,
-                reason=reason,
-                effective_at=current,
-                document_reference=_receipt_ref(
-                    evaluated.doctor.id, replacement.clerk_id
-                ),
-                evidence_sha256=evaluated.plan.plan_sha256,
+        if evaluated.member is not None:
+            session.add(
+                PracticeAccessAudit(
+                    practice_id=evaluated.member.practice_id,
+                    action=PracticeAccessAction.doctor_identity_rebound.value,
+                    operator_ref=operator_ref,
+                    reason=reason,
+                    effective_at=current,
+                    document_reference=_receipt_ref(
+                        evaluated.doctor.id, replacement.clerk_id
+                    ),
+                    evidence_sha256=evaluated.plan.plan_sha256,
+                )
             )
-        )
         session.commit()
     except DoctorIdentityRebindError:
         session.rollback()

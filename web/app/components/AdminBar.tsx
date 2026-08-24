@@ -16,7 +16,6 @@ import {
   type ViewAsTarget,
   beginViewAs,
   endViewAs,
-  getViewAsStatus,
   getViewAsTargets,
   viewAsDiagnosticCopy,
 } from "~/lib/view-as-api"
@@ -28,36 +27,30 @@ function accountLabel(account: { doctor_id: string; email: string | null }) {
 export default function AdminBar({
   initialStatus,
 }: {
-  initialStatus?: ViewAsStatus | null
+  initialStatus: ViewAsStatus
 }) {
-  const [status, setStatus] = useState<ViewAsStatus | null>(
-    initialStatus ?? null,
-  )
+  const status = initialStatus
   const [targets, setTargets] = useState<ViewAsTarget[]>([])
   const [selectedTarget, setSelectedTarget] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (!status.can_view_as || status.active) return
     let cancelled = false
-    void (initialStatus ? Promise.resolve(initialStatus) : getViewAsStatus())
-      .then(async (current) => {
-        if (cancelled) return
-        setStatus(current)
-        if (current.can_view_as && !current.active) {
-          const available = await getViewAsTargets()
-          if (!cancelled) setTargets(available)
-        }
+    void getViewAsTargets()
+      .then((available) => {
+        if (!cancelled) setTargets(available)
       })
       .catch(() => {
-        if (!cancelled) setStatus(null)
+        if (!cancelled) setError("Support accounts could not be loaded.")
       })
     return () => {
       cancelled = true
     }
-  }, [initialStatus])
+  }, [status.active, status.can_view_as])
 
-  if (!status?.can_view_as) return null
+  if (!status.can_view_as) return null
 
   async function activate() {
     if (!selectedTarget) return

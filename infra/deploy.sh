@@ -33,6 +33,12 @@ if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.production.backen
 	echo "Failed to load production deployment configuration."
 	exit 1
 fi
+if ! printf '%s' "$ENV_JSON" |
+	python "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
+		--environment production; then
+	echo "Production capability identity configuration is not deployable."
+	exit 1
+fi
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 
 # Check for Git SHA input and validate it exists in repo

@@ -1,7 +1,7 @@
 """Add capability-bound support view-as sessions and audit events.
 
 Revision ID: 89c31f0ae275
-Revises: 6a91d2f4c8e0
+Revises: 02b1cd080521
 Create Date: 2026-08-24 12:00:00.000000
 """
 
@@ -14,7 +14,7 @@ from alembic import op
 
 
 revision: str = "89c31f0ae275"
-down_revision: Union[str, None] = "6a91d2f4c8e0"
+down_revision: Union[str, None] = "02b1cd080521"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -226,7 +226,7 @@ def upgrade() -> None:
             name=op.f("view_as_audit_event_target_doctor_id_fkey"),
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("view_as_audit_event_pkey")),
-        comment="Append-only, value-minimized view-as lifecycle evidence.",
+        comment="Append-only, value-minimized evidence for view-as lifecycle changes.",
     )
     op.create_index(
         op.f("view_as_audit_event_event_type_idx"),

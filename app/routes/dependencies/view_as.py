@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 import sentry_sdk
 from fastapi import HTTPException, Request, status
 from starlette_context import context
@@ -13,9 +15,14 @@ from app.services.superadmin_capability import (
     configured_superadmin_capability_environment,
 )
 from app.services.view_as import (
+    INACTIVE_VIEW_AS_REQUEST_BINDING,
+    VIEW_AS_REQUEST_BINDING_HEADER,
     ViewAsActorIdentity,
     ViewAsError,
+    actor_bound_unended_view_as_exists,
+    reconcile_view_as_without_browser_binding,
     resolve_view_as,
+    view_as_request_binding,
 )
 
 from activemodel.session_manager import get_session
@@ -28,6 +35,7 @@ LEGACY_SESSION_KEY_LOGIN_AS_USER = "login_as_user"
 # These GET endpoints create credentials or provider-side authorization state.
 # They are not read-only even though their historical HTTP method says GET.
 SIDE_EFFECTING_GET_ROUTE_NAMES = {
+    "medication_drug_reference",
     "zoom_auth_url",
     "open_sandbox_labs_record",
 }
@@ -56,10 +64,16 @@ def view_as_browser_session_present(request: Request) -> bool:
     presenting another provider's account.
     """
 
+    # Some isolated API mounts intentionally omit SessionMiddleware. Treat the
+    # absence of a browser session as no view-as state instead of turning a
+    # disabled credential endpoint into a server error.
+    session = request.scope.get("session")
+    if not isinstance(session, dict):
+        return False
     return (
-        SESSION_KEY_VIEW_AS_ID in request.session
-        or SESSION_KEY_VIEW_AS_NONCE in request.session
-        or LEGACY_SESSION_KEY_LOGIN_AS_USER in request.session
+        SESSION_KEY_VIEW_AS_ID in session
+        or SESSION_KEY_VIEW_AS_NONCE in session
+        or LEGACY_SESSION_KEY_LOGIN_AS_USER in session
     )
 
 
@@ -109,6 +123,27 @@ def _unsafe_for_view_as(request: Request, route_name: str | None) -> bool:
     )
 
 
+def _reject_stale_request_binding() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "VIEW_AS_BINDING_STALE",
+            "message": "The account view changed. Reload before continuing.",
+        },
+    )
+
+
+def _presented_request_binding(request: Request) -> str | None:
+    values = request.headers.getlist(VIEW_AS_REQUEST_BINDING_HEADER)
+    return values[0] if len(values) == 1 else None
+
+
+def _require_request_binding(request: Request, expected: str) -> None:
+    presented = _presented_request_binding(request)
+    if presented is None or not hmac.compare_digest(presented, expected):
+        _reject_stale_request_binding()
+
+
 def apply_view_as(request: Request) -> None:
     """Resolve view-as before practice authorization and enforce read-only use."""
 
@@ -118,13 +153,11 @@ def apply_view_as(request: Request) -> None:
 
     # Retire pre-P0 client state. It held a raw target Clerk subject and is not
     # valid authority under the environment-scoped capability contract.
+    legacy_binding_claimed = LEGACY_SESSION_KEY_LOGIN_AS_USER in request.session
     request.session.pop(LEGACY_SESSION_KEY_LOGIN_AS_USER, None)
 
     session_id = request.session.get(SESSION_KEY_VIEW_AS_ID)
     browser_nonce = request.session.get(SESSION_KEY_VIEW_AS_NONCE)
-    if session_id is None and browser_nonce is None:
-        return
-
     route_name = _route_name(request)
     is_control_route = route_name in VIEW_AS_CONTROL_ROUTE_NAMES
     unsafe_request = _unsafe_for_view_as(request, route_name) and not is_control_route
@@ -133,45 +166,86 @@ def apply_view_as(request: Request) -> None:
     use_real_actor = is_control_route or (
         request.url.path.startswith("/internal/v1/admin") and not unsafe_request
     )
-    if not isinstance(session_id, str) or not isinstance(browser_nonce, str):
-        _clear_browser_view_as(request)
-        if unsafe_request:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The prior view-as session ended. Reload before making changes.",
-            )
-        return
+    complete_browser_binding = isinstance(session_id, str) and isinstance(
+        browser_nonce, str
+    )
+    browser_binding_claimed = (
+        legacy_binding_claimed
+        or SESSION_KEY_VIEW_AS_ID in request.session
+        or SESSION_KEY_VIEW_AS_NONCE in request.session
+    )
 
     try:
         environment = configured_superadmin_capability_environment()
         # ``aglobal_session`` makes this context manager yield the existing
         # request-scoped transaction rather than opening a second connection.
         with get_session() as database_session:
-            resolution = resolve_view_as(
-                database_session,
-                view_as_session_id=session_id,
-                browser_nonce=browser_nonce,
-                actor=actor,
-                identity=_actor_identity(request),
-                environment=environment,
-                unsafe_request=unsafe_request,
-            )
-    except (SuperadminCapabilityError, ViewAsError):
+            if complete_browser_binding:
+                assert isinstance(session_id, str)
+                assert isinstance(browser_nonce, str)
+                resolution = resolve_view_as(
+                    database_session,
+                    view_as_session_id=session_id,
+                    browser_nonce=browser_nonce,
+                    actor=actor,
+                    identity=_actor_identity(request),
+                    environment=environment,
+                    unsafe_request=unsafe_request,
+                )
+            else:
+                resolution = reconcile_view_as_without_browser_binding(
+                    database_session,
+                    actor=actor,
+                    identity=_actor_identity(request),
+                    environment=environment,
+                    unsafe_request=unsafe_request,
+                )
+    except SuperadminCapabilityError:
         _clear_browser_view_as(request)
-        if unsafe_request:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="The prior view-as session ended. Reload before making changes.",
-            ) from None
+        server_binding_claimed = False
+        if not browser_binding_claimed and not is_control_route:
+            try:
+                with get_session() as database_session:
+                    server_binding_claimed = actor_bound_unended_view_as_exists(
+                        database_session,
+                        actor=actor,
+                        identity=_actor_identity(request),
+                    )
+            except ViewAsError:
+                server_binding_claimed = True
+        if not is_control_route and (browser_binding_claimed or server_binding_claimed):
+            _reject_stale_request_binding()
+        if not is_control_route:
+            _require_request_binding(request, INACTIVE_VIEW_AS_REQUEST_BINDING)
         return
-
-    if resolution.clear_browser_session:
+    except ViewAsError:
         _clear_browser_view_as(request)
-    if resolution.rejected_unsafe_fallback:
+        if not is_control_route:
+            _reject_stale_request_binding()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="The prior view-as session ended. Reload before making changes.",
+            detail="This account is not ready for interactive view-as.",
+        ) from None
+
+    stale_browser_binding = resolution.clear_browser_session or (
+        browser_binding_claimed and not complete_browser_binding
+    )
+    if stale_browser_binding:
+        _clear_browser_view_as(request)
+    if not is_control_route and (
+        stale_browser_binding
+        or resolution.rejected_unsafe_fallback
+        or (legacy_binding_claimed and unsafe_request)
+    ):
+        _reject_stale_request_binding()
+
+    if not is_control_route:
+        expected_request_binding = (
+            view_as_request_binding(resolution.active.session)
+            if resolution.active is not None
+            else INACTIVE_VIEW_AS_REQUEST_BINDING
         )
+        _require_request_binding(request, expected_request_binding)
     if resolution.active is None:
         return
 
@@ -185,6 +259,11 @@ def apply_view_as(request: Request) -> None:
             detail="View-as is read-only. Exit view-as before making changes.",
         )
     if active.diagnostic_code is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account is not ready for interactive view-as.",
+        )
+    if active.target is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This account is not ready for interactive view-as.",

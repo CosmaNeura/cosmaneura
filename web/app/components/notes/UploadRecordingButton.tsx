@@ -34,15 +34,10 @@ import {
 } from "~/components/ui/form"
 import { Input } from "~/components/ui/input"
 import { ComboboxItemBase } from "~/components/vendor/Combobox"
-import {
-  Patient,
-  client,
-  generateSignedVisitRecordingUploadUrl,
-  uploadVisitAudioFile,
-} from "~/configuration/client"
+import { Patient, client } from "~/configuration/client"
 import { useToast } from "~/hooks/use-toast"
-import { uploadFileToAzure } from "~/lib/azure-upload"
 import { standardDateFormat } from "~/lib/date"
+import { submitVisitAudioUpload } from "~/lib/visit-audio-upload"
 import { useTerminology } from "~/utils/terminology"
 
 import * as Sentry from "@sentry/react"
@@ -189,28 +184,24 @@ function VisitAudioUploadForm({
 
   // the upload process took an embarrasing amount of time to figure out, mess with it at your own risk
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    const { data: sasSignature } = await generateSignedVisitRecordingUploadUrl()
-    invariant(sasSignature, "sasSignature should always exist")
-
-    const { error: uploadFileError, stampedFileName } = await uploadFileToAzure(
-      values.file,
-      sasSignature,
-    )
-
-    const { error: uploadVisitError } = await uploadVisitAudioFile({
-      // TODO what is the best pattern for passing dates over the wire?
-      body: {
-        ...values,
-        appointment_date: values.appointment_date.toISOString(),
-        date_of_birth: values.date_of_birth.toISOString(),
-        file_name: stampedFileName,
-      },
+    const result = await submitVisitAudioUpload({
+      appointmentDate: values.appointment_date.toISOString(),
+      dateOfBirth: values.date_of_birth.toISOString(),
+      file: values.file,
+      patientName: values.patient_name,
     })
 
-    if (uploadVisitError) {
-      const reportedEventId = Sentry.captureException(uploadVisitError)
-      Sentry.showReportDialog({ eventId: reportedEventId })
-      // TODO stop execution
+    if (!result.ok) {
+      Sentry.captureMessage("visit audio upload failed", {
+        tags: { upload_stage: result.stage },
+      })
+      toast({
+        title: "Upload failed",
+        description:
+          "Your recording was not submitted. Please check your connection and try again.",
+        variant: "destructive",
+      })
+      return
     }
 
     toast({

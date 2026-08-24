@@ -3,11 +3,13 @@ import json
 import secrets
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from typeid import TypeID
 
 import app.services.continuity_reconciliation as continuity
+import app.services.doctor_identity_rebind as doctor_identity_rebind
 import app.services.pilot_access_audit as pilot_access_audit
 from app.configuration.authority import AuthorityKernelSettings
 from app.services.clerk_cohort import ClerkCohortIdentity
@@ -34,6 +36,7 @@ from app.services.pilot_access_grandfather import (
 )
 
 from activemodel.session_manager import get_session
+from activemodel.types import TypeIDType
 from app.models.authority import (
     AuthorityActor,
     AuthorityActorExternalIdentity,
@@ -115,15 +118,14 @@ def _identity(
     *,
     subject: str,
     email: str,
-    doctor: Doctor | None = None,
+    doctor: Doctor,
     practice: Practice | None = None,
 ) -> ContinuityIdentityInput:
     return ContinuityIdentityInput(
         issuer=ISSUER,
         subject=subject,
         verified_primary_email=email,
-        doctor_id=doctor.id if doctor else None,
-        safe_prelogin=doctor is None,
+        doctor_id=doctor.id,
         continuity_basis=CONTINUITY_BASIS_OPERATIONAL_OMISSION,
         practice_id=practice.id if practice else None,
     )
@@ -148,16 +150,17 @@ def _clerk_user(subject: str, email: str):
 @pytest.fixture(autouse=True)
 def configured_environment(monkeypatch):
     monkeypatch.setattr(continuity, "_current_environment", lambda: "production")
-    monkeypatch.setattr(
-        continuity,
-        "AUTHORITY_KERNEL_SETTINGS",
-        AuthorityKernelSettings(
-            enabled=True,
-            token_ttl_seconds=900,
-            token_refresh_after_seconds=300,
-            clerk_issuer=ISSUER,
-        ),
+    settings = AuthorityKernelSettings(
+        enabled=True,
+        token_ttl_seconds=900,
+        token_refresh_after_seconds=300,
+        clerk_issuer=ISSUER,
     )
+    monkeypatch.setattr(continuity, "AUTHORITY_KERNEL_SETTINGS", settings)
+    monkeypatch.setattr(
+        doctor_identity_rebind, "python_environment", lambda: "production"
+    )
+    monkeypatch.setattr(doctor_identity_rebind, "AUTHORITY_KERNEL_SETTINGS", settings)
 
 
 def _set_live_users(monkeypatch, identities: list[ContinuityIdentityInput]):
@@ -172,7 +175,7 @@ def _set_live_users(monkeypatch, identities: list[ContinuityIdentityInput]):
     )
 
 
-def test_private_manifest_requires_exact_0600_and_explicit_prelogin(tmp_path):
+def test_private_manifest_requires_exact_0600_and_doctor_binding(tmp_path):
     subject = "user_private_manifest_test"
     email = "private-manifest@example.com"
     path = tmp_path / "continuity.json"
@@ -186,8 +189,7 @@ def test_private_manifest_requires_exact_0600_and_explicit_prelogin(tmp_path):
                         "issuer": ISSUER,
                         "subject": subject,
                         "verified_primary_email": email,
-                        "doctor_id": None,
-                        "safe_prelogin": True,
+                        "doctor_id": str(TypeID("doctor")),
                         "continuity_basis": CONTINUITY_BASIS_OPERATIONAL_OMISSION,
                         "practice_id": None,
                     }
@@ -204,7 +206,7 @@ def test_private_manifest_requires_exact_0600_and_explicit_prelogin(tmp_path):
     parsed = read_private_continuity_manifest(str(path))
     assert parsed.environment == "production"
     assert len(parsed.identities) == 1
-    assert parsed.identities[0].safe_prelogin is True
+    assert str(parsed.identities[0].doctor_id).startswith("doctor_")
     assert parsed.manifest_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -240,7 +242,6 @@ def test_amendment_adds_existing_doctor_without_fabricating_account_state(monkey
     )
     assert plan.account_count == 1
     assert plan.existing_doctor_count == 1
-    assert plan.safe_prelogin_count == 0
     assert plan.already_applied is False
 
     result = apply_continuity_amendment(
@@ -281,41 +282,39 @@ def test_amendment_adds_existing_doctor_without_fabricating_account_state(monkey
     assert PilotAccessGrandfatherGrant.count() == 48
 
 
-def test_safe_prelogin_amendment_does_not_create_doctor_or_tenant_state(monkeypatch):
+def test_amendment_refuses_missing_doctor_binding_before_writes(monkeypatch):
     _seed_base()
     subject = f"user_prelogin_{secrets.token_hex(6)}"
     email = f"prelogin-{secrets.token_hex(5)}@example.com"
-    manifest = _manifest(_identity(subject=subject, email=email))
+    manifest = _manifest(
+        ContinuityIdentityInput(
+            issuer=ISSUER,
+            subject=subject,
+            verified_primary_email=email,
+            doctor_id=None,  # type: ignore[arg-type]
+            continuity_basis=CONTINUITY_BASIS_OPERATIONAL_OMISSION,
+            practice_id=None,
+        )
+    )
     _set_live_users(monkeypatch, list(manifest.identities))
-    plan = plan_continuity_amendment(
-        manifest,
-        source_ref=SOURCE_REF,
-        operator_ref=OPERATOR_REF,
-        reason=REASON,
-    )
-
-    apply_continuity_amendment(
-        manifest,
-        source_ref=SOURCE_REF,
-        operator_ref=OPERATOR_REF,
-        reason=REASON,
-        confirm_plan_sha256=plan.plan_sha256,
-    )
+    with pytest.raises(ContinuityReconciliationError, match="Doctor references"):
+        plan_continuity_amendment(
+            manifest,
+            source_ref=SOURCE_REF,
+            operator_ref=OPERATOR_REF,
+            reason=REASON,
+        )
 
     assert Doctor.get(clerk_id=subject) is None
-    grant = PilotAccessGrandfatherGrant.get(clerk_id=subject, revoked_at=None)
-    assert grant is not None
-    assert grant.doctor_id_snapshot is None
-    assert grant.practice_id_snapshot is None
-    doctor = Doctor(clerk_id=subject, email=email, biography="").save()
-    assert active_pilot_access_grant(doctor) is not None
+    assert PilotAccessGrandfatherGrant.get(clerk_id=subject, revoked_at=None) is None
 
 
 def test_amendment_refuses_a_live_primary_email_mismatch(monkeypatch):
     _seed_base()
     subject = f"user_live_mismatch_{secrets.token_hex(6)}"
     email = f"manifest-{secrets.token_hex(5)}@example.com"
-    manifest = _manifest(_identity(subject=subject, email=email))
+    doctor = Doctor(clerk_id=subject, email=email, biography="").save()
+    manifest = _manifest(_identity(subject=subject, email=email, doctor=doctor))
     monkeypatch.setattr(
         continuity,
         "clerk",
@@ -421,6 +420,49 @@ def test_apply_rechecks_every_identity_and_keeps_a_conflicting_batch_atomic(
     assert PilotAccessGrandfatherGrant.count() == 47
 
 
+def test_amendment_acquires_lineage_lock_before_auditing_base_cohort(monkeypatch):
+    calls: list[str] = []
+    entry = ContinuityIdentityInput(
+        issuer=ISSUER,
+        subject="user_lock_order_test",
+        verified_primary_email="lock-order@example.com",
+        doctor_id=cast(TypeIDType, TypeID("doctor")),
+        continuity_basis=CONTINUITY_BASIS_OPERATIONAL_OMISSION,
+    )
+    manifest = _manifest(entry)
+
+    monkeypatch.setattr(
+        continuity,
+        "lock_pilot_access_lineage",
+        lambda session: calls.append("lineage-lock"),
+    )
+
+    def audit_after_lock(**kwargs):
+        del kwargs
+        calls.append("base-audit")
+        return SimpleNamespace(valid=False)
+
+    monkeypatch.setattr(
+        pilot_access_audit, "audit_pilot_access_state", audit_after_lock
+    )
+
+    with get_session() as session:
+        with pytest.raises(
+            ContinuityReconciliationError, match="evidence is not valid"
+        ):
+            continuity._assess_database_state(
+                session,
+                manifest=manifest,
+                plan_sha256="b" * 64,
+                source_ref=SOURCE_REF,
+                operator_ref=OPERATOR_REF,
+                reason=REASON,
+                lock=True,
+            )
+
+    assert calls == ["lineage-lock", "base-audit"]
+
+
 def test_amendment_refuses_revoked_or_conflicting_practice_state(monkeypatch):
     _seed_base()
     subject = f"user_revoked_member_{secrets.token_hex(6)}"
@@ -502,10 +544,73 @@ def test_amendment_refuses_expired_or_suspended_organization_authority(
         source_sha256="d" * 64,
         expires_at=expires_at,
     ).save()
-    manifest = _manifest(_identity(subject=subject, email=email, practice=practice))
+    doctor = Doctor(clerk_id=subject, email=email, biography="").save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="workforce",
+    ).save()
+    manifest = _manifest(
+        _identity(subject=subject, email=email, doctor=doctor, practice=practice)
+    )
     _set_live_users(monkeypatch, list(manifest.identities))
 
     with pytest.raises(ContinuityReconciliationError, match=message):
+        plan_continuity_amendment(
+            manifest,
+            source_ref=SOURCE_REF,
+            operator_ref=OPERATOR_REF,
+            reason=REASON,
+        )
+
+
+def test_amendment_refuses_claimed_roster_with_conflicting_email(monkeypatch):
+    _seed_base()
+    subject = f"user_roster_email_conflict_{secrets.token_hex(6)}"
+    email = f"manifest-{secrets.token_hex(5)}@example.com"
+    now = datetime(2026, 8, 24, 10, 0, tzinfo=UTC)
+    organization = ProviderOrganization(
+        legal_name="Roster Email Conflict Organization",
+        slug=f"roster-conflict-{secrets.token_hex(4)}",
+        email_domain="example.com",
+        status="active",
+        access_code_salt="a" * 32,
+        access_code_digest=secrets.token_hex(32),
+        access_code_version=1,
+        access_code_created_at=now,
+    ).save()
+    practice = Practice(
+        legal_name="Roster Email Conflict Practice",
+        join_code=f"R{secrets.token_hex(4).upper()[:7]}",
+        email_domain=organization.email_domain,
+        organization_id=organization.id,
+    ).save()
+    doctor = Doctor(clerk_id=subject, email=email, biography="").save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="workforce",
+    ).save()
+    OrganizationRosterApproval(
+        organization_id=organization.id,
+        target_practice_id=practice.id,
+        approved_email=f"other-{secrets.token_hex(5)}@example.com",
+        approved_at=now,
+        approved_by_ref="change:roster-review",
+        source_ref="controlled://roster/test",
+        source_sha256="d" * 64,
+        claimed_doctor_id=doctor.id,
+        claimed_at=now,
+        claimed_code_version=1,
+    ).save()
+    manifest = _manifest(
+        _identity(subject=subject, email=email, doctor=doctor, practice=practice)
+    )
+    _set_live_users(monkeypatch, list(manifest.identities))
+
+    with pytest.raises(
+        ContinuityReconciliationError, match="roster identities conflict"
+    ):
         plan_continuity_amendment(
             manifest,
             source_ref=SOURCE_REF,
@@ -532,7 +637,8 @@ def test_amendment_refuses_revoked_or_ambiguous_authority_scope(monkeypatch):
         membership_kind="provider",
         status="revoked",
     ).save()
-    manifest = _manifest(_identity(subject=subject, email=email))
+    doctor = Doctor(clerk_id=subject, email=email, biography="").save()
+    manifest = _manifest(_identity(subject=subject, email=email, doctor=doctor))
     _set_live_users(monkeypatch, list(manifest.identities))
 
     with pytest.raises(ContinuityReconciliationError, match="authority scopes"):
@@ -682,13 +788,71 @@ def test_audit_accepts_audited_rebind_of_an_amendment(monkeypatch):
     assert report.payload["total_count"] == 49
 
 
+def test_audit_accepts_audited_rebind_of_no_practice_amendment(monkeypatch):
+    _seed_base()
+    original_subject = f"user_no_practice_rebind_{secrets.token_hex(6)}"
+    replacement_subject = f"user_no_practice_replacement_{secrets.token_hex(6)}"
+    email = f"no-practice-rebind-{secrets.token_hex(5)}@example.com"
+    doctor = Doctor(clerk_id=original_subject, email=email, biography="").save()
+    manifest = _manifest(
+        _identity(subject=original_subject, email=email, doctor=doctor)
+    )
+    _set_live_users(monkeypatch, list(manifest.identities))
+    amendment_plan = plan_continuity_amendment(
+        manifest,
+        source_ref=SOURCE_REF,
+        operator_ref=OPERATOR_REF,
+        reason=REASON,
+    )
+    apply_continuity_amendment(
+        manifest,
+        source_ref=SOURCE_REF,
+        operator_ref=OPERATOR_REF,
+        reason=REASON,
+        confirm_plan_sha256=amendment_plan.plan_sha256,
+        now=datetime(2026, 8, 24, 12, 0, tzinfo=UTC),
+    )
+
+    rebind_args = {
+        "doctor_id": doctor.id,
+        "stale_clerk_id": original_subject,
+        "replacement": ClerkCohortIdentity(
+            clerk_id=replacement_subject,
+            email=email,
+        ),
+        "operator_ref": "change:no-practice-amendment-rebind",
+        "reason": "Recover amended provider without practice membership",
+    }
+    rebind_plan = plan_doctor_identity_rebind(**rebind_args)
+    assert rebind_plan.practice_id is None
+    rebind_doctor_identity(
+        **rebind_args,
+        confirmed_plan_sha256=rebind_plan.plan_sha256,
+        now=datetime(2026, 8, 24, 13, 0, tzinfo=UTC),
+    )
+
+    report = audit_pilot_access_state(
+        expected_environment="production",
+        expected_clerk_issuer=ISSUER,
+    )
+
+    assert report.valid is True
+    assert report.payload["base_count"] == 47
+    assert report.payload["amendment_count"] == 1
+    assert report.payload["amendment_account_count"] == 1
+    assert report.payload["rebind_count"] == 1
+    assert report.payload["lineage_count"] == 48
+    assert report.payload["total_count"] == 49
+
+
 def test_audit_fails_closed_when_amendment_issuer_configuration_is_missing(
     monkeypatch,
 ):
     _seed_base()
     subject = f"user_missing_issuer_{secrets.token_hex(6)}"
     email = f"missing-issuer-{secrets.token_hex(5)}@example.com"
-    manifest = _manifest(_identity(subject=subject, email=email))
+    doctor = Doctor(clerk_id=subject, email=email, biography="").save()
+    manifest = _manifest(_identity(subject=subject, email=email, doctor=doctor))
     _set_live_users(monkeypatch, list(manifest.identities))
     plan = plan_continuity_amendment(
         manifest,
@@ -721,7 +885,7 @@ def test_audit_fails_closed_when_amendment_issuer_configuration_is_missing(
     assert report.payload["integrity_error_count"] == 1
 
 
-def test_manifest_rejects_doctor_and_prelogin_both_set(tmp_path):
+def test_manifest_rejects_obsolete_safe_prelogin_field(tmp_path):
     path = tmp_path / "ambiguous.json"
     path.write_text(
         json.dumps(
@@ -744,5 +908,5 @@ def test_manifest_rejects_doctor_and_prelogin_both_set(tmp_path):
     )
     path.chmod(0o600)
 
-    with pytest.raises(ContinuityReconciliationError, match="either Doctor ID"):
+    with pytest.raises(ContinuityReconciliationError, match="exact v1 fields"):
         read_private_continuity_manifest(str(path))

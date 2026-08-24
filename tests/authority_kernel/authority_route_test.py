@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -25,6 +26,7 @@ from app.routes.embed_context import (
 )
 
 from activemodel.session_manager import aglobal_session
+from app.models.superadmin_capability import SuperadminCapabilityEnvironment
 
 TEST_CLERK_ISSUER = "https://test.clerk.invalid"
 
@@ -71,6 +73,7 @@ def test_exchange_feature_flag_fails_before_authority_lookup() -> None:
         lambda: VerifiedClerkIdentity(
             issuer=TEST_CLERK_ISSUER,
             subject="user_test_provider",
+            clerk_session_id="sess_test_provider",
         )
     )
     fastapi_app.dependency_overrides[get_authority_kernel_settings] = lambda: (
@@ -94,6 +97,57 @@ def test_exchange_feature_flag_fails_before_authority_lookup() -> None:
 
     assert response.status_code == 503
     assert response.json()["code"] == "SERVICE_UNAVAILABLE"
+
+
+def test_rotate_checks_server_side_view_as_before_issuing(monkeypatch) -> None:
+    fastapi_app = _isolated_app(embed_context_api_app)
+    fastapi_app.dependency_overrides[get_authority_kernel_settings] = lambda: (
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+            clerk_issuer=TEST_CLERK_ISSUER,
+        )
+    )
+
+    @contextmanager
+    def synthetic_session():
+        yield object()
+
+    monkeypatch.setattr("app.routes.embed_context.get_session", synthetic_session)
+    monkeypatch.setattr(
+        "app.routes.embed_context.configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.staging,
+    )
+
+    def blocked(*_args, **kwargs):
+        assert kwargs["current_token"] == "mctx_synthetic_current_token"
+        return True
+
+    monkeypatch.setattr(
+        "app.routes.embed_context.context_token_rotation_blocked_by_view_as",
+        blocked,
+    )
+
+    def unexpected_rotate(**_kwargs):
+        raise AssertionError("view-as must block before context-token rotation")
+
+    monkeypatch.setattr(
+        app.services.authority,
+        "rotate_context_token",
+        unexpected_rotate,
+    )
+    response = TestClient(fastapi_app).post(
+        "/embed/v1/context-tokens/rotate",
+        headers={
+            "Authorization": "Bearer mctx_synthetic_current_token",
+            "X-Cosmaneura-Embed-Version": "1.0",
+        },
+        json={"requested_surface": "provider_assistant"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "REQUEST_DENIED"
 
 
 def test_mount_resolution_returns_only_five_fields_and_lineage_headers(

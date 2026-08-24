@@ -51,9 +51,11 @@ MAX_EXAMPLE_NOTE_BYTES = 10 * 1024 * 1024
 PDF_CONTENT_TYPE = "application/pdf"
 PDF_SIGNATURE = b"%PDF-"
 EXAMPLE_NOTE_UPLOAD_TTL_SECONDS = 10 * 60
+EXAMPLE_NOTE_REGISTRATION_GRACE_SECONDS = 15 * 60
 LEGACY_EXAMPLE_NOTE_UPLOAD_TTL_SECONDS = 10 * 60
 
 _MAX_ISSUE_ATTEMPTS = 3
+_REGISTRATION_CLAIM_TTL_SECONDS = 15 * 60
 _MAX_LEGACY_BLOB_KEY_BYTES = 1024
 _OPAQUE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _PENDING_BLOB_KEY_RE = re.compile(r"^pending/[A-Za-z0-9_-]{43}\.pdf$")
@@ -81,6 +83,43 @@ if not value or value ~= ARGV[1] then
   return 0
 end
 redis.call('DEL', KEYS[1])
+return 1
+"""
+
+_ATOMIC_RELEASE_MATCHING_CLAIM = """
+local value = redis.call('GET', KEYS[1])
+if not value or value ~= ARGV[1] then
+  return 0
+end
+redis.call('DEL', KEYS[1])
+return 1
+"""
+
+_ATOMIC_ACQUIRE_MATCHING_CLAIM = """
+local intent = redis.call('GET', KEYS[1])
+if not intent or intent ~= ARGV[1] then
+  return 0
+end
+local claimed = redis.call('SET', KEYS[2], ARGV[2], 'NX', 'EX', ARGV[3])
+if not claimed then
+  return 0
+end
+local intent_ttl = redis.call('TTL', KEYS[1])
+local claim_ttl = tonumber(ARGV[3])
+if intent_ttl < claim_ttl then
+  redis.call('EXPIRE', KEYS[1], claim_ttl)
+end
+return 1
+"""
+
+_ATOMIC_COMPLETE_MATCHING_CLAIM = """
+local intent = redis.call('GET', KEYS[1])
+local claim = redis.call('GET', KEYS[2])
+if not intent or intent ~= ARGV[1] or not claim or claim ~= ARGV[2] then
+  return 0
+end
+redis.call('DEL', KEYS[1])
+redis.call('DEL', KEYS[2])
 return 1
 """
 
@@ -125,6 +164,7 @@ class RegisteredExampleNoteBlob:
     sha256: str
     key_kind: RegisteredBlobKeyKind = _SERVER_OWNED_KEY_KIND
     legacy_owner_clerk_id: str | None = None
+    claim_token: str | None = None
 
 
 def _invalid_pdf(
@@ -149,6 +189,14 @@ def _redis_key(registration_token: str) -> str:
         context="example-note-upload-registration",
     )
     return f"example-note:upload:{digest}"
+
+
+def _claim_redis_key(registration_token: str) -> str:
+    digest = pseudonymous_digest(
+        registration_token,
+        context="example-note-upload-registration-claim",
+    )
+    return f"example-note:upload-claim:{digest}"
 
 
 def _blob_client(blob_key: str) -> BlobClient:
@@ -223,7 +271,10 @@ def issue_example_note_upload(doctor_id: str) -> IssuedExampleNoteUpload:
             _redis_key(registration_token),
             _encode_pending_intent(intent),
             nx=True,
-            ex=EXAMPLE_NOTE_UPLOAD_TTL_SECONDS,
+            ex=(
+                EXAMPLE_NOTE_UPLOAD_TTL_SECONDS
+                + EXAMPLE_NOTE_REGISTRATION_GRACE_SECONDS
+            ),
         ):
             continue
 
@@ -432,7 +483,7 @@ def consume_validated_example_note_upload(
     registration_token: str,
     doctor_id: str,
 ) -> RegisteredExampleNoteBlob:
-    """Validate and atomically consume one upload owned by ``doctor_id``."""
+    """Validate and exclusively claim one upload owned by ``doctor_id``."""
 
     intent, stored_value = _load_pending_intent(registration_token)
     if not secrets.compare_digest(intent.doctor_id, doctor_id):
@@ -448,9 +499,75 @@ def consume_validated_example_note_upload(
             _consume_pending_intent(registration_token, stored_value)
         raise
 
-    if not _consume_pending_intent(registration_token, stored_value):
+    claim_token = secrets.token_urlsafe(32)
+    if not get_redis().eval(
+        _ATOMIC_ACQUIRE_MATCHING_CLAIM,
+        2,
+        _redis_key(registration_token),
+        _claim_redis_key(registration_token),
+        stored_value,
+        claim_token,
+        str(_REGISTRATION_CLAIM_TTL_SECONDS),
+    ):
         _upload_session_error()
-    return registered
+    return RegisteredExampleNoteBlob(
+        blob_key=registered.blob_key,
+        doctor_id=registered.doctor_id,
+        etag=registered.etag,
+        size=registered.size,
+        sha256=registered.sha256,
+        key_kind=registered.key_kind,
+        legacy_owner_clerk_id=registered.legacy_owner_clerk_id,
+        claim_token=claim_token,
+    )
+
+
+def release_example_note_upload_claim(
+    registration_token: str,
+    claim_token: str,
+) -> bool:
+    """Release only this caller's in-flight claim after registration fails."""
+
+    if (
+        _OPAQUE_TOKEN_RE.fullmatch(registration_token) is None
+        or _OPAQUE_TOKEN_RE.fullmatch(claim_token) is None
+    ):
+        return False
+    return bool(
+        get_redis().eval(
+            _ATOMIC_RELEASE_MATCHING_CLAIM,
+            1,
+            _claim_redis_key(registration_token),
+            claim_token,
+        )
+    )
+
+
+def complete_example_note_upload(
+    registration_token: str,
+    claim_token: str,
+) -> bool:
+    """Consume an intent only after its durable registration has succeeded."""
+
+    if (
+        _OPAQUE_TOKEN_RE.fullmatch(registration_token) is None
+        or _OPAQUE_TOKEN_RE.fullmatch(claim_token) is None
+    ):
+        return False
+    raw_value = get_redis().get(_redis_key(registration_token))
+    stored_value = _decode_redis_value(raw_value)
+    if stored_value is None:
+        return False
+    return bool(
+        get_redis().eval(
+            _ATOMIC_COMPLETE_MATCHING_CLAIM,
+            2,
+            _redis_key(registration_token),
+            _claim_redis_key(registration_token),
+            stored_value,
+            claim_token,
+        )
+    )
 
 
 def validate_legacy_example_note_upload(
@@ -608,6 +725,35 @@ def _deserialize_registered_blob(
         sha256,
         key_kind=normalized_key_kind,
         legacy_owner_clerk_id=normalized_owner_clerk_id,
+    )
+
+
+def registered_example_note_blob_matches(
+    reference: str,
+    expected: RegisteredExampleNoteBlob,
+) -> bool:
+    """Match a stored encrypted locator to one validated server-owned blob.
+
+    Encryption is intentionally randomized, so a freshly serialized locator
+    cannot be compared as text. The Redis registration claim serializes this
+    lookup/create path; matching the authenticated contents makes a retry after
+    a queue failure reuse the durable row instead of creating a duplicate.
+    """
+
+    try:
+        registered = _deserialize_registered_blob(reference)
+    except ExampleNoteBlobIntegrityError:
+        return False
+    if registered is None:
+        return False
+    return bool(
+        secrets.compare_digest(registered.blob_key, expected.blob_key)
+        and secrets.compare_digest(registered.doctor_id, expected.doctor_id)
+        and secrets.compare_digest(registered.etag, expected.etag)
+        and registered.size == expected.size
+        and secrets.compare_digest(registered.sha256, expected.sha256)
+        and registered.key_kind == expected.key_kind
+        and registered.legacy_owner_clerk_id == expected.legacy_owner_clerk_id
     )
 
 

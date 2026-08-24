@@ -1,17 +1,30 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   BillingRecoveryRedirectError,
   billingRecoveryLocation,
   handleInternalApiResponse,
+  internalApiFetch,
   isBillingRecoveryRedirectError,
   isInternalApiRequest,
   resetBillingRecoveryRedirectState,
   restrictSettingsToBillingRecovery,
   safeBillingReturnTo,
 } from "./billing-recovery"
+import {
+  VIEW_AS_REQUEST_BINDING_HEADER,
+  commitViewAsControlTransition,
+  resetViewAsBindingStateForTests,
+} from "./view-as-binding"
 
-beforeEach(() => resetBillingRecoveryRedirectState())
+beforeEach(() => {
+  resetBillingRecoveryRedirectState()
+  resetViewAsBindingStateForTests()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe("billing recovery settings mode", () => {
   it("hides gated controls only until practice entitlement is restored", () => {
@@ -121,5 +134,56 @@ describe("billing recovery routing", () => {
         current,
       ),
     ).toBe(false)
+  })
+})
+
+describe("bound internal API fetch", () => {
+  it("adds the current tab binding without dropping request headers", async () => {
+    commitViewAsControlTransition({ request_binding: "inactive" })
+    const response = new Response(null, { status: 200 })
+    const fetchMock = vi.fn().mockResolvedValue(response)
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      internalApiFetch("/internal/v1/settings", {
+        headers: {
+          Authorization: "Bearer test",
+          [VIEW_AS_REQUEST_BINDING_HEADER]: "spoofed",
+        },
+      }),
+    ).resolves.toBe(response)
+
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = new Headers(init.headers)
+    expect(headers.get("Authorization")).toBe("Bearer test")
+    expect(headers.get(VIEW_AS_REQUEST_BINDING_HEADER)).toBe("inactive")
+  })
+
+  it("does not recurse through binding bootstrap for control calls", async () => {
+    const response = new Response(null, { status: 200 })
+    const fetchMock = vi.fn().mockResolvedValue(response)
+    vi.stubGlobal("fetch", fetchMock)
+
+    await expect(
+      internalApiFetch("/internal/v1/view-as/status", {
+        headers: { Authorization: "Bearer test" },
+      }),
+    ).resolves.toBe(response)
+
+    const [, init] = fetchMock.mock.calls[0]
+    const headers = new Headers(init.headers)
+    expect(headers.get("Authorization")).toBe("Bearer test")
+    expect(headers.has(VIEW_AS_REQUEST_BINDING_HEADER)).toBe(false)
+  })
+
+  it("keeps the existing settings 402 behavior after binding", async () => {
+    window.history.replaceState({}, "", "/settings?billing=required")
+    commitViewAsControlTransition({ request_binding: "inactive" })
+    const response = new Response(null, { status: 402 })
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response))
+
+    await expect(internalApiFetch("/internal/v1/settings")).resolves.toBe(
+      response,
+    )
   })
 })

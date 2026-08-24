@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from activemodel.session_manager import get_session
+from app.models.doctor import Doctor
 from app.models.pilot_access_continuity_amendment import (
     PilotAccessContinuityAmendment,
     PilotAccessContinuityAmendmentIdentity,
@@ -19,8 +20,10 @@ def _evidence():
     email = f"amendment-model-{secrets.token_hex(5)}@example.com"
     subject = f"user_amendment_model_{secrets.token_hex(6)}"
     now = datetime.now(UTC)
+    doctor = Doctor(clerk_id=subject, email=email, biography="").save()
     grant = PilotAccessGrandfatherGrant(
         clerk_id=subject,
+        doctor_id_snapshot=doctor.id,
         email_snapshot=email,
         email_sha256=hashlib.sha256(email.encode()).hexdigest(),
         source_ref="change:model-amendment",
@@ -47,7 +50,7 @@ def _evidence():
         clerk_issuer=batch.clerk_issuer,
         clerk_subject=subject,
         email_sha256=grant.email_sha256,
-        safe_prelogin=True,
+        doctor_id_snapshot=doctor.id,
         continuity_basis="reviewed_operational_user_omission",
     ).save()
     return batch, identity

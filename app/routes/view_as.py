@@ -23,9 +23,12 @@ from app.services.superadmin_capability import (
     get_runtime_superadmin_capability,
 )
 from app.services.view_as import (
+    INACTIVE_VIEW_AS_REQUEST_BINDING,
     ResolvedViewAs,
     ViewAsError,
+    audit_view_as_begin_rejection,
     target_diagnostic,
+    view_as_request_binding,
 )
 from app.services.view_as import (
     begin_view_as as begin_view_as_session,
@@ -69,6 +72,7 @@ class ViewAsStatusResponse(BaseModel):
     expires_at: datetime | None
     actor: ViewAsAccountSummary | None
     target: ViewAsAccountSummary | None
+    request_binding: str
 
 
 class ViewAsTargetSummary(ViewAsAccountSummary):
@@ -129,7 +133,14 @@ def _status_response(request: Request) -> ViewAsStatusResponse:
         diagnostic_code=active.diagnostic_code if active else None,
         expires_at=active.session.absolute_expires_at if active else None,
         actor=_summary(actor) if can_view_as else None,
-        target=_summary(active.target) if active else None,
+        target=_summary(active.target)
+        if active and active.target is not None
+        else None,
+        request_binding=(
+            view_as_request_binding(active.session)
+            if active is not None
+            else INACTIVE_VIEW_AS_REQUEST_BINDING
+        ),
     )
 
 
@@ -171,16 +182,39 @@ def begin_view_as(
     request: Request,
     data: BeginViewAsBody,
 ) -> ViewAsStatusResponse:
-    actor: Doctor = request.state.view_as_actor
+    # Establish immutable capability authority before parsing or auditing any
+    # caller-controlled target value. Unauthorized malformed requests must not
+    # be able to grow the append-only audit table.
     _active_capability(request, required=True)
+    actor: Doctor = request.state.view_as_actor
     try:
         target_id = TypeID.from_string(data.target_doctor_id)
         if target_id.prefix != "doctor":
             raise ValueError
     except (TypeIDException, ValueError):
+        try:
+            environment = configured_superadmin_capability_environment()
+            with get_session() as session:
+                has_capability = audit_view_as_begin_rejection(
+                    session,
+                    actor=actor,
+                    identity=_actor_identity(request),
+                    environment=environment,
+                    requested_reason_code="target_unavailable",
+                )
+        except (SuperadminCapabilityError, ViewAsError):
+            has_capability = False
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="View-as target is unavailable.",
+            status_code=(
+                status.HTTP_404_NOT_FOUND
+                if has_capability
+                else status.HTTP_403_FORBIDDEN
+            ),
+            detail=(
+                "View-as target is unavailable."
+                if has_capability
+                else "View-as capability is required."
+            ),
         ) from None
     try:
         environment = configured_superadmin_capability_environment()
@@ -195,7 +229,6 @@ def begin_view_as(
             target = session.get(Doctor, result.session.target_doctor_id)
             if target is None:
                 raise ViewAsError("view-as target is unavailable")
-            diagnostic_code = target_diagnostic(session, target)
     except (SuperadminCapabilityError, ViewAsError):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -208,7 +241,7 @@ def begin_view_as(
         session=result.session,
         actor=actor,
         target=target,
-        diagnostic_code=diagnostic_code,
+        diagnostic_code=result.diagnostic_code,
     )
     return _status_response(request)
 

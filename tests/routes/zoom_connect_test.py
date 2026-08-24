@@ -1,5 +1,6 @@
 """Tests for the Zoom OAuth Authorization Code Grant flow."""
 
+import hashlib
 import json
 import re
 import secrets
@@ -22,8 +23,13 @@ from app.services import zoom_oauth_state
 
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
+from app.models.superadmin_capability import (
+    SuperadminCapabilityEnvironment,
+    SuperadminCapabilityKind,
+)
+from app.models.view_as import ViewAsSession
 
-from tests.routes.utils import get_clerk_dev_user
+from tests.routes.utils import get_clerk_dev_user, grant_test_superadmin_capability
 
 CLERK_DEV_USER_EMAIL = "dev@test.com"
 
@@ -213,6 +219,62 @@ def test_zoom_oauth_callback_updates_existing_integration(
     )
     assert integration is not None
     assert integration.provider_user_id == "new_zoom_id"
+
+
+def test_zoom_oauth_callback_without_app_cookie_cannot_write_during_view_as(
+    authenticated_client: TestClient,
+):
+    """Server-side view-as state blocks a pre-issued cookie-bound callback."""
+
+    doctor = _get_or_create_doctor()
+    _, state_value = _issue_oauth_state(authenticated_client)
+    target = Doctor(
+        clerk_id=f"user_zoom_view_as_target_{secrets.token_hex(5)}",
+        email=f"zoom-view-as-target-{secrets.token_hex(5)}@example.com",
+        biography="",
+    ).save()
+    grant = grant_test_superadmin_capability(
+        doctor,
+        SuperadminCapabilityKind.view_as,
+        environment=SuperadminCapabilityEnvironment.staging,
+    )
+    now = datetime.now(timezone.utc)
+    ViewAsSession(
+        environment=SuperadminCapabilityEnvironment.staging.value,
+        capability_grant_id=grant.id,
+        actor_doctor_id=doctor.id,
+        target_doctor_id=target.id,
+        actor_issuer_sha256=grant.issuer_sha256,
+        actor_subject_sha256=grant.subject_sha256,
+        clerk_session_sha256=hashlib.sha256(b"zoom-session").hexdigest(),
+        browser_nonce_sha256=hashlib.sha256(b"zoom-nonce").hexdigest(),
+        started_at=now,
+        absolute_expires_at=now + timedelta(minutes=15),
+    ).save()
+
+    # The direct service-created view-as record deliberately leaves the
+    # browser without the app's signed view-as cookie while preserving the
+    # independent OAuth binding cookie issued above.
+    with (
+        patch("app.routes.zoom_auth._exchange_code_for_tokens") as exchange,
+        patch("app.routes.zoom_auth._get_zoom_user_id") as get_user,
+    ):
+        response = authenticated_client.get(
+            api_app.url_path_for("zoom_oauth_callback"),
+            params={"code": "must-not-be-exchanged", "state": state_value},
+            follow_redirects=False,
+        )
+
+    _assert_authorization_failed(response)
+    exchange.assert_not_called()
+    get_user.assert_not_called()
+    assert (
+        DoctorVideoIntegration.get(
+            doctor_id=doctor.id,
+            provider=VideoProvider.zoom,
+        )
+        is None
+    )
 
 
 def test_zoom_oauth_callback_error_param_consumes_state(

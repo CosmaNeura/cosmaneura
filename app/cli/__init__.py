@@ -535,6 +535,8 @@ def rebind_doctor_clerk_identity_command(
                     "DRY RUN: doctor identity recovery "
                     f"state={state} doctor_id={plan.doctor_id} "
                     f"practice_id={plan.practice_id} "
+                    f"environment={plan.environment} "
+                    f"clerk_issuer_sha256={plan.clerk_issuer_sha256} "
                     f"provisional_shell={plan.provisional_doctor_id is not None} "
                     f"pilot_grant={plan.pilot_grant_rebound} "
                     f"authority_identities={plan.authority_identity_count} "
@@ -1839,7 +1841,6 @@ def amend_pilot_continuity_command(
                 "DRY RUN: pilot continuity amendment; "
                 f"state={state} accounts={plan.account_count} "
                 f"existing_doctors={plan.existing_doctor_count} "
-                f"safe_prelogin={plan.safe_prelogin_count} "
                 f"manifest_sha256={plan.manifest_sha256} "
                 f"plan_sha256={plan.plan_sha256}."
             )
@@ -1889,8 +1890,12 @@ def revoke_pilot_access_command(
         pilot_access_revoke_plan_sha256,
         revoke_pilot_access_grants,
     )
+    from app.services.superadmin_capability import (
+        get_active_runtime_superadmin_capability_kinds,
+    )
 
-    from app.models.doctor import Doctor, DoctorRole
+    from activemodel.session_manager import get_session
+    from app.models.doctor import Doctor
     from app.models.pilot_access_grandfather_grant import (
         PilotAccessGrandfatherGrant,
     )
@@ -1944,12 +1949,17 @@ def revoke_pilot_access_command(
             )
         ):
             raise ValueError("revocation plan conflicts with retained evidence")
-        if (
-            doctor is not None
-            and doctor.role == DoctorRole.admin
-            and doctor.deleted_at is None
-        ):
-            raise ValueError("platform administrators require a separate lifecycle")
+        if doctor is not None and doctor.deleted_at is None:
+            with get_session() as session:
+                protected_capabilities = get_active_runtime_superadmin_capability_kinds(
+                    session,
+                    subject=doctor.clerk_id,
+                    doctor_id=doctor.id,
+                )
+            if protected_capabilities:
+                raise ValueError(
+                    "active superadmin capabilities require a separate lifecycle"
+                )
         if not apply:
             state = "already revoked" if target.revoked_at is not None else "revocable"
             typer.echo(

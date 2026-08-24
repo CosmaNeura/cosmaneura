@@ -528,6 +528,59 @@ def test_offboarding_revokes_access_and_retains_authorization_records_for_seven_
     )
 
 
+def test_revoked_roster_history_is_a_global_authorization_tombstone():
+    approved_at = datetime(2028, 3, 1, 9, 0, tzinfo=timezone.utc)
+    revoked_at = approved_at + timedelta(days=1)
+    domain = f"tombstone-{secrets.token_hex(4)}.example.com"
+    doctor = _doctor(f"returning@{domain}")
+    practice, code = _configured_practice(domain, now=approved_at)
+    _approve(practice, doctor.email or "", now=approved_at)
+    revoke_roster_access(
+        practice,
+        doctor.email or "",
+        operator_ref="ticket-TOMBSTONE",
+        reason="Exercise historical revocation precedence",
+        now=revoked_at,
+    )
+
+    organization = ProviderOrganization.get(id=practice.organization_id)
+    assert organization is not None
+    conflicting_active = OrganizationRosterApproval(
+        organization_id=organization.id,
+        target_practice_id=practice.id,
+        approved_email=doctor.email or "",
+        approved_at=revoked_at + timedelta(seconds=1),
+        approved_by_ref="test-corrupt-state",
+        source_ref="test://unauthorized-reauthorization",
+        source_sha256="e" * 64,
+        claimed_doctor_id=doctor.id,
+        claimed_at=revoked_at + timedelta(seconds=2),
+        claimed_code_version=organization.access_code_version,
+    ).save()
+    member = PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="workforce",
+        organization_roster_approval_id=conflicting_active.id,
+        organization_authorized_at=revoked_at + timedelta(seconds=2),
+    ).save()
+
+    assert find_access_opportunity(doctor, at=revoked_at + timedelta(seconds=3)) is None
+    assert (
+        member_authorization_basis(
+            member,
+            at=revoked_at + timedelta(seconds=3),
+        )
+        is None
+    )
+    with pytest.raises(OrganizationAccessError, match="not available"):
+        claim_roster_access(
+            doctor,
+            supplied_code=code,
+            now=revoked_at + timedelta(seconds=3),
+        )
+
+
 def test_database_guards_revoked_organization_access_evidence_for_seven_years():
     approved_at = datetime(2028, 2, 1, 9, 0, tzinfo=timezone.utc)
     revoked_at = datetime(2028, 2, 2, 9, 0, tzinfo=timezone.utc)

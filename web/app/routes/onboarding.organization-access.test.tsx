@@ -4,11 +4,31 @@ import { vi } from "vitest"
 import {
   AccountRecoveryRequired,
   ManagedOrganizationAccessNotice,
+  default as OnboardingPage,
   OrganizationAccessFlow,
   PracticeForm,
   canLeaveOnboarding,
 } from "./onboarding"
 import { fireEvent, render, screen } from "@testing-library/react"
+
+describe("onboarding view-as safety", () => {
+  it("renders only the verification interstitial when status is unavailable", () => {
+    const props = {
+      loaderData: {
+        viewAsCheck: { state: "unavailable", status: null },
+      },
+    } as Parameters<typeof OnboardingPage>[0]
+
+    render(<OnboardingPage {...props} />)
+
+    expect(
+      screen.getByText("Support-view status unavailable"),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("How will this Cosmas account be used?"),
+    ).not.toBeInTheDocument()
+  })
+})
 
 describe("OrganizationAccessFlow", () => {
   it("masks the organization code from the browser and replay tools", () => {
@@ -95,7 +115,7 @@ describe("OrganizationAccessFlow", () => {
     expect(
       canLeaveOnboarding({
         onboarding_completed: true,
-        is_admin: false,
+        is_admin: true,
         practice_ready: false,
       }),
     ).toBe(false)

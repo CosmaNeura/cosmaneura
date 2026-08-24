@@ -77,9 +77,38 @@ class _Redis:
             value = self.values.get(key)
         return value.encode("utf-8") if value is not None else None
 
-    def eval(self, _script: str, key_count: int, key: str, expected: str) -> int:
-        assert key_count == 1
+    def eval(self, script: str, key_count: int, *args: str) -> int:
         with self.lock:
+            if script == uploads._ATOMIC_ACQUIRE_MATCHING_CLAIM:
+                assert key_count == 2
+                intent_key, claim_key, expected_intent, claim, claim_ttl = args
+                if (
+                    self.values.get(intent_key) != expected_intent
+                    or claim_key in self.values
+                ):
+                    return 0
+                self.values[claim_key] = claim
+                self.expirations[claim_key] = int(claim_ttl)
+                if self.expirations[intent_key] < int(claim_ttl):
+                    self.expirations[intent_key] = int(claim_ttl)
+                return 1
+
+            if script == uploads._ATOMIC_COMPLETE_MATCHING_CLAIM:
+                assert key_count == 2
+                intent_key, claim_key, expected_intent, expected_claim = args
+                if (
+                    self.values.get(intent_key) != expected_intent
+                    or self.values.get(claim_key) != expected_claim
+                ):
+                    return 0
+                del self.values[intent_key]
+                del self.values[claim_key]
+                self.expirations.pop(intent_key, None)
+                self.expirations.pop(claim_key, None)
+                return 1
+
+            assert key_count == 1
+            key, expected = args
             if self.values.get(key) != expected:
                 return 0
             del self.values[key]
@@ -178,7 +207,10 @@ def test_example_note_grant_is_random_exact_blob_create_only_and_server_owned(
         assert before + timedelta(minutes=9) <= expiry
         assert expiry <= after + timedelta(minutes=11)
 
-    assert set(redis.expirations.values()) == {uploads.EXAMPLE_NOTE_UPLOAD_TTL_SECONDS}
+    assert set(redis.expirations.values()) == {
+        uploads.EXAMPLE_NOTE_UPLOAD_TTL_SECONDS
+        + uploads.EXAMPLE_NOTE_REGISTRATION_GRACE_SECONDS
+    }
     assert all(first.registration_token not in key for key in redis.values)
     assert all("doctor_server_owned" not in value for value in redis.values.values())
 
@@ -337,6 +369,7 @@ def test_registration_token_is_owner_bound_single_use_and_accepts_no_client_key(
     assert registered.doctor_id == "doctor_owner"
     assert registered.blob_key in grant.upload_url
     assert registered.sha256 == hashlib.sha256(content).hexdigest()
+    assert registered.claim_token is not None
 
     with pytest.raises(uploads.ExampleNoteUploadValidationError) as replay:
         uploads.consume_validated_example_note_upload(
@@ -344,7 +377,16 @@ def test_registration_token_is_owner_bound_single_use_and_accepts_no_client_key(
             "doctor_owner",
         )
     assert replay.value.status_code == 409
-    assert sum(len(client.property_calls) for client in clients.values()) == 1
+    assert sum(len(client.property_calls) for client in clients.values()) == 2
+    assert uploads.complete_example_note_upload(
+        grant.registration_token,
+        registered.claim_token,
+    )
+    with pytest.raises(uploads.ExampleNoteUploadValidationError):
+        uploads.consume_validated_example_note_upload(
+            grant.registration_token,
+            "doctor_owner",
+        )
     assert (
         "file_name"
         not in inspect.signature(
@@ -412,6 +454,62 @@ def test_concurrent_registration_has_exactly_one_winner(
         results = list(executor.map(lambda _index: register(), range(2)))
 
     assert sorted(results) == ["accepted", "rejected"]
+
+
+def test_failed_registration_releases_only_its_claim_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"%PDF-1.7\nregistered bytes"
+    redis = _Redis()
+    monkeypatch.setattr(uploads, "get_redis", lambda: redis)
+    monkeypatch.setattr(uploads, "generate_blob_sas", lambda **_kwargs: "signature")
+    monkeypatch.setattr(
+        uploads,
+        "_blob_client",
+        lambda blob_key: _BlobClient(blob_key=blob_key, content=content),
+    )
+    grant = uploads.issue_example_note_upload("doctor_owner")
+
+    first = uploads.consume_validated_example_note_upload(
+        grant.registration_token,
+        "doctor_owner",
+    )
+    assert first.claim_token is not None
+    assert not uploads.release_example_note_upload_claim(
+        grant.registration_token,
+        "B" * 43,
+    )
+    assert uploads.release_example_note_upload_claim(
+        grant.registration_token,
+        first.claim_token,
+    )
+
+    retry = uploads.consume_validated_example_note_upload(
+        grant.registration_token,
+        "doctor_owner",
+    )
+    assert retry.claim_token is not None
+    assert retry.claim_token != first.claim_token
+    assert uploads.complete_example_note_upload(
+        grant.registration_token,
+        retry.claim_token,
+    )
+
+
+def test_registered_reference_match_is_stable_across_randomized_encryption() -> None:
+    content = b"%PDF-1.7\nregistered bytes"
+    registered = _registered_blob(content)
+
+    first_reference = uploads.serialize_registered_blob(registered)
+    second_reference = uploads.serialize_registered_blob(registered)
+
+    assert first_reference != second_reference
+    assert uploads.registered_example_note_blob_matches(first_reference, registered)
+    assert uploads.registered_example_note_blob_matches(second_reference, registered)
+    assert not uploads.registered_example_note_blob_matches(
+        first_reference,
+        _registered_blob(content, doctor_id="doctor_other"),
+    )
 
 
 def test_registration_rejects_mutation_during_conditional_read_and_consumes_token(

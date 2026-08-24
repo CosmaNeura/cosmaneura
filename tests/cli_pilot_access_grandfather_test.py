@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from typer.testing import CliRunner
 
@@ -21,12 +21,18 @@ from app.models.doctor import Doctor, DoctorRole
 from app.models.pilot_access_grandfather_grant import (
     PilotAccessGrandfatherGrant,
 )
+from app.models.superadmin_capability import (
+    SuperadminCapabilityEnvironment,
+    SuperadminCapabilityGrant,
+    SuperadminCapabilityKind,
+)
 from sqlmodel import col
 
 SOURCE_REF = "controlled://legacy-pilot-export/2026-08-23"
 OPERATOR_REF = "change:legacy-pilot-access"
 GRANT_REASON = "Preserve approved legacy pilot access"
 REVOKE_REASON = "Approved pilot offboarding"
+SUPERADMIN_ISSUER = "https://staging.example.clerk.accounts.dev"
 
 
 def _identities(label: str) -> tuple[ClerkCohortIdentity, ...]:
@@ -46,6 +52,36 @@ def _source_sha256(identities: tuple[ClerkCohortIdentity, ...]) -> str:
         for identity in sorted(identities, key=lambda item: item.clerk_id)
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _grant_superadmin_capability(monkeypatch, doctor: Doctor) -> None:
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.staging,
+    )
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_clerk_issuer",
+        lambda: SUPERADMIN_ISSUER,
+    )
+    assert doctor.email is not None
+    SuperadminCapabilityGrant(
+        environment=SuperadminCapabilityEnvironment.staging,
+        capability_kind=SuperadminCapabilityKind.platform_admin,
+        clerk_issuer=SUPERADMIN_ISSUER,
+        clerk_subject=doctor.clerk_id,
+        doctor_id=doctor.id,
+        issuer_sha256=hashlib.sha256(SUPERADMIN_ISSUER.encode()).hexdigest(),
+        subject_sha256=hashlib.sha256(doctor.clerk_id.encode()).hexdigest(),
+        verified_primary_email_sha256=hashlib.sha256(
+            doctor.email.strip().lower().encode()
+        ).hexdigest(),
+        source_ref="controlled:pilot-cli-test",
+        source_sha256="c" * 64,
+        grant_plan_sha256="d" * 64,
+        granted_by_ref="ticket:pilot-cli-test",
+        grant_reason_code="reviewed_test_grant",
+        granted_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+    ).save()
 
 
 def _grant_command(source_sha256: str) -> list[str]:
@@ -305,7 +341,7 @@ def test_revoke_cli_wrong_email_refuses_without_disclosure_or_mutation():
     _assert_no_identity_output(result.output, identities)
 
 
-def test_revoke_cli_dry_run_refuses_a_platform_administrator():
+def test_revoke_cli_dry_run_does_not_treat_legacy_admin_role_as_authority():
     identities = _identities("admin-revoke-cli")
     source_sha256 = _source_sha256(identities)
     doctor = Doctor(
@@ -315,6 +351,36 @@ def test_revoke_cli_dry_run_refuses_a_platform_administrator():
         role=DoctorRole.admin,
     ).save()
     _seed_grants(identities, source_sha256)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "revoke-pilot-access",
+            "--operator-ref",
+            OPERATOR_REF,
+            "--reason",
+            REVOKE_REASON,
+        ],
+        input=f"{identities[0].clerk_id}\n{identities[0].email}\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "state=revocable" in result.output
+    doctor.refresh()
+    assert doctor.deleted_at is None
+    _assert_no_identity_output(result.output, identities)
+
+
+def test_revoke_cli_dry_run_refuses_an_active_superadmin_capability(monkeypatch):
+    identities = _identities("capability-revoke-cli")
+    source_sha256 = _source_sha256(identities)
+    doctor = Doctor(
+        clerk_id=identities[0].clerk_id,
+        email=identities[0].email,
+        biography="",
+    ).save()
+    _seed_grants(identities, source_sha256)
+    _grant_superadmin_capability(monkeypatch, doctor)
 
     result = CliRunner().invoke(
         app,

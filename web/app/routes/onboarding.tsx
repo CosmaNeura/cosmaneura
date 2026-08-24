@@ -7,7 +7,8 @@ import { ArrowRight, Building2, UserRound } from "lucide-react"
 
 import type { Route } from "./+types/onboarding"
 
-import AdminBar from "~/components/AdminBar"
+import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
+import { ViewAsRouteGuard } from "~/components/ViewAsRouteGuard"
 import { BrandLogo } from "~/components/brand/BrandLogo"
 import { Icons } from "~/components/icons"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
@@ -72,11 +73,10 @@ import {
   practiceReady,
 } from "~/lib/practice-api"
 import { cn } from "~/lib/utils"
-import { getViewAsStatus, viewAsDiagnosticCopy } from "~/lib/view-as-api"
+import { checkViewAsStatus } from "~/lib/view-as-api"
 import { requireEnv } from "~/utils/environment"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
-import { UserButton } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { motion } from "motion/react"
@@ -90,16 +90,18 @@ export function canLeaveOnboarding(data: {
   is_admin: boolean
   practice_ready: boolean
 }) {
-  return data.onboarding_completed && (data.is_admin || data.practice_ready)
+  return data.onboarding_completed && data.practice_ready
 }
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
-  const viewAs = await getViewAsStatus().catch(() => null)
-  if (viewAs?.active && viewAs.diagnostic_code) {
+  const viewAsCheck = await checkViewAsStatus()
+  if (viewAsCheck.state !== "ready") {
+    return { viewAsCheck }
+  }
+  if (viewAsCheck.status.active && viewAsCheck.status.diagnostic_code) {
     return {
       accountRecoveryRequired: false as const,
-      viewAsDiagnostic: true as const,
-      viewAs,
+      viewAsCheck,
     }
   }
 
@@ -107,8 +109,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   if (!data && isAccountRecoveryRequired(error, response?.status)) {
     return {
       accountRecoveryRequired: true as const,
-      viewAsDiagnostic: false as const,
-      viewAs,
+      viewAsCheck,
     }
   }
   invariant(data, "settings data failed to load")
@@ -132,8 +133,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
 
   return {
     accountRecoveryRequired: false as const,
-    viewAsDiagnostic: false as const,
-    viewAs,
+    viewAsCheck,
     ...data,
     email,
     channel,
@@ -143,23 +143,6 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
 }
 
 export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
-  if (loaderData.viewAsDiagnostic) {
-    return (
-      <div className="bg-background min-h-screen">
-        <AdminBar initialStatus={loaderData.viewAs} />
-        <main className="mx-auto max-w-2xl px-5 py-16" role="status">
-          <StepKicker n="01" label="View-as diagnostic" />
-          <DisplayTitle>Account not ready</DisplayTitle>
-          <p className="text-muted-foreground mt-4 leading-relaxed">
-            {viewAsDiagnosticCopy(loaderData.viewAs.diagnostic_code)} No
-            onboarding, BAA, billing, or account form is available while
-            reviewing this state.
-          </p>
-        </main>
-      </div>
-    )
-  }
-
   const onboardingData =
     "practice" in loaderData && !loaderData.accountRecoveryRequired
       ? loaderData
@@ -170,8 +153,10 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
   const zoomEnabled = isZoomEnabled(onboardingData?.email ?? null)
 
   return (
-    <div className="bg-background min-h-screen">
-      <AdminBar initialStatus={loaderData.viewAs} />
+    <ViewAsRouteGuard
+      check={loaderData.viewAsCheck}
+      className="bg-background min-h-screen"
+    >
       <header className="border-b">
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5">
           <BrandLogo variant="dark" size="sm" />
@@ -181,7 +166,7 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
                 {onboardingData.email}
               </span>
             ) : null}
-            <UserButton />
+            <ViewAsAccountControl />
           </div>
         </div>
       </header>
@@ -217,7 +202,7 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           />
         )}
       </main>
-    </div>
+    </ViewAsRouteGuard>
   )
 }
 

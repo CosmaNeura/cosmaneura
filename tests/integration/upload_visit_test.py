@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 
 from playwright.sync_api import Page, expect
@@ -49,7 +50,9 @@ def test_audio_file_upload(server, page: Page) -> None:
     audio_file = VisitAudioFile.first()
 
     assert audio_file
-    assert audio_file.azure_file_name.endswith("recording.wav")
+    assert re.fullmatch(r"visit_[A-Za-z0-9_-]{43}\.wav", audio_file.azure_file_name)
+    assert upload_file.name not in audio_file.azure_file_name
+    assert "A Brand New Patient" not in audio_file.azure_file_name
     assert audio_file.doctor_id is not None
     assert audio_file.id is not None
 

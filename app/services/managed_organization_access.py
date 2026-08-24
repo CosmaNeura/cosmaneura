@@ -95,10 +95,22 @@ def managed_organization_discovery_domain(email: str | None) -> str | None:
     return max(candidates, key=lambda value: (len(value), value))
 
 
-def uses_managed_organization_path(doctor: Doctor) -> bool:
-    """Whether this account must stay out of legacy enrollment surfaces."""
+def uses_managed_organization_path(
+    doctor: Doctor,
+    *,
+    verified_primary_email: str | None = None,
+) -> bool:
+    """Whether this identity must stay out of legacy enrollment surfaces.
 
-    return managed_organization_discovery_domain(doctor.email) is not None
+    Local email is retained as a fail-closed signal, while a current verified
+    Clerk email can newly route an account into the managed path. Neither
+    domain is sufficient to grant organization access.
+    """
+
+    return (
+        managed_organization_discovery_domain(doctor.email) is not None
+        or managed_organization_discovery_domain(verified_primary_email) is not None
+    )
 
 
 def resolve_managed_organization_access(
@@ -117,7 +129,11 @@ def resolve_managed_organization_access(
     to its live membership.
     """
 
-    discovery_domain = managed_organization_discovery_domain(doctor.email)
+    local_discovery_domain = managed_organization_discovery_domain(doctor.email)
+    live_discovery_domain = managed_organization_discovery_domain(
+        verified_primary_email
+    )
+    discovery_domain = live_discovery_domain or local_discovery_domain
     if discovery_domain is None:
         return None
 
@@ -145,6 +161,8 @@ def resolve_managed_organization_access(
             ).all()
         ),
     )
+    if any(approval.revoked_at is not None for approval in approvals):
+        return fallback
     active_approvals = [
         approval for approval in approvals if approval_is_active(approval, at=current)
     ]

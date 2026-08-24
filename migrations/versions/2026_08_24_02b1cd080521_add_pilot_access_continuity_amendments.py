@@ -162,7 +162,7 @@ def upgrade() -> None:
         sa.Column(
             "doctor_id_snapshot",
             activemodel.types.typeid.TypeIDType(prefix="doctor"),
-            nullable=True,
+            nullable=False,
         ),
         sa.Column(
             "practice_id_snapshot",
@@ -207,8 +207,7 @@ def upgrade() -> None:
             ),
         ),
         sa.CheckConstraint(
-            "(safe_prelogin IS TRUE AND doctor_id_snapshot IS NULL) OR "
-            "(safe_prelogin IS FALSE AND doctor_id_snapshot IS NOT NULL)",
+            "safe_prelogin IS FALSE AND doctor_id_snapshot IS NOT NULL",
             name=op.f(
                 "pilot_access_continuity_amendment_identity_ck_pilot_access_amendment_identity_account_state_check"
             ),

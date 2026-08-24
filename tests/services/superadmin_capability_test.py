@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +9,7 @@ import pytest
 from app.services import superadmin_capability
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
+    get_active_runtime_superadmin_capability_kinds,
     get_active_superadmin_capability,
     grant_superadmin_capabilities,
     load_private_superadmin_capability_manifest,
@@ -219,6 +220,54 @@ def test_runtime_check_requires_every_binding_and_never_uses_doctor_role(monkeyp
             assert get_active_superadmin_capability(session, **arguments) is None
 
 
+def test_runtime_lifecycle_check_is_environment_scoped_and_fails_closed(
+    monkeypatch,
+):
+    doctor, subject, _, _, _, _ = _grant(monkeypatch, role=DoctorRole.admin)
+
+    with get_session() as session:
+        assert get_active_runtime_superadmin_capability_kinds(
+            session,
+            subject=subject,
+            doctor_id=doctor.id,
+        ) == frozenset(
+            {
+                SuperadminCapabilityKind.platform_admin,
+                SuperadminCapabilityKind.view_as,
+            }
+        )
+
+    monkeypatch.setattr(
+        superadmin_capability,
+        "configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.production,
+    )
+    with get_session() as session:
+        assert not get_active_runtime_superadmin_capability_kinds(
+            session,
+            subject=subject,
+            doctor_id=doctor.id,
+        )
+
+    monkeypatch.setattr(
+        superadmin_capability,
+        "configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.staging,
+    )
+    monkeypatch.setattr(
+        superadmin_capability,
+        "configured_superadmin_clerk_issuer",
+        lambda: "https://different.example.clerk.accounts.dev",
+    )
+    with get_session() as session:
+        with pytest.raises(SuperadminCapabilityError, match="ambiguous"):
+            get_active_runtime_superadmin_capability_kinds(
+                session,
+                subject=subject,
+                doctor_id=doctor.id,
+            )
+
+
 def test_live_clerk_mismatch_and_wrong_confirmation_leave_no_state(monkeypatch):
     doctor, subject, email = _identity()
     _mock_live_clerk(monkeypatch, subject, f"different-{email}")
@@ -254,7 +303,9 @@ def test_revocation_is_atomic_retained_audited_and_idempotent(monkeypatch):
         operator_ref=OPERATOR_REF,
         reason_code=REVOKE_REASON,
     )
-    now = datetime(2026, 8, 24, 17, 0, tzinfo=timezone.utc)
+    # Revocation must follow the grant created above regardless of wall-clock
+    # test execution time.
+    now = datetime.now(timezone.utc) + timedelta(seconds=1)
     result = revoke_superadmin_capabilities(
         manifest,
         source_ref="controlled:revocation-test",

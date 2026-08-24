@@ -13,6 +13,7 @@ vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 const inactiveViewAs = {
+  request_binding: "inactive" as const,
   can_view_as: false,
   active: false,
   read_only: false,
@@ -60,7 +61,6 @@ describe("Sovereign panel 401 retry integration", () => {
       "VITE_SOVEREIGN_PROVIDER_URL",
       "https://provider-sovereign.example",
     )
-    vi.stubEnv("VITE_SOVEREIGN_CLERK_TEMPLATE", "cosmaneura-sovereign")
     vi.stubEnv("VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "true")
     vi.mocked(getViewAsStatus).mockResolvedValue(inactiveViewAs)
     vi.mocked(getClient).mockResolvedValue({

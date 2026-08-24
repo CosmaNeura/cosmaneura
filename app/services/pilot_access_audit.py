@@ -19,6 +19,11 @@ from app.services.continuity_reconciliation import (
     ContinuityManifest,
     continuity_amendment_plan_sha256,
 )
+from app.services.doctor_identity_rebind import (
+    IDENTITY_REBIND_EVENT_TYPE,
+    IDENTITY_REBIND_RESOURCE_TYPE,
+    IDENTITY_REBIND_ROUTE,
+)
 from app.services.pilot_access_grandfather import (
     PILOT_ACCESS_GRANDFATHER_REQUIRED_ACCOUNT_COUNT,
     PILOT_ACCESS_GRANDFATHER_STAGING_ACCOUNT_COUNT,
@@ -28,6 +33,7 @@ from app.services.pilot_access_grandfather import (
 )
 
 from activemodel.session_manager import get_session
+from app.models.authority import AuthorityAuditEvent
 from app.models.pilot_access_continuity_amendment import (
     PilotAccessContinuityAmendment,
     PilotAccessContinuityAmendmentIdentity,
@@ -89,6 +95,14 @@ def _audit_with_session(
             )
         ).all()
     )
+    identity_receipts = list(
+        session.exec(
+            select(AuthorityAuditEvent).where(
+                AuthorityAuditEvent.event_type == IDENTITY_REBIND_EVENT_TYPE,
+                AuthorityAuditEvent.resource_type == IDENTITY_REBIND_RESOURCE_TYPE,
+            )
+        ).all()
+    )
 
     integrity_error_count = 0
     for grant in grants:
@@ -103,6 +117,12 @@ def _audit_with_session(
     for receipt in receipts:
         if receipt.evidence_sha256:
             receipts_by_digest.setdefault(receipt.evidence_sha256, []).append(receipt)
+    identity_receipts_by_digest: dict[str, list[AuthorityAuditEvent]] = {}
+    for receipt in identity_receipts:
+        if receipt.request_digest:
+            identity_receipts_by_digest.setdefault(receipt.request_digest, []).append(
+                receipt
+            )
     predecessors_by_rebind_digest: dict[str, list[PilotAccessGrandfatherGrant]] = {}
     for grant in grants:
         if grant.revocation_plan_sha256:
@@ -118,16 +138,64 @@ def _audit_with_session(
             successor.grant_plan_sha256, []
         )
         matching_receipts = receipts_by_digest.get(successor.grant_plan_sha256, [])
-        if not predecessors or not matching_receipts:
+        matching_identity_receipts = identity_receipts_by_digest.get(
+            successor.grant_plan_sha256, []
+        )
+        if not predecessors or not matching_identity_receipts:
             continue
-        if len(predecessors) != 1 or len(matching_receipts) != 1:
+        if (
+            len(predecessors) != 1
+            or len(matching_identity_receipts) != 1
+            or len(matching_receipts) > 1
+        ):
             rebind_error_count += 1
             continue
         predecessor = predecessors[0]
-        receipt = matching_receipts[0]
+        identity_receipt = matching_identity_receipts[0]
+        receipt = matching_receipts[0] if matching_receipts else None
         expected_receipt_ref = (
             f"doctor-identity-rebind:{successor.doctor_id_snapshot}:"
             f"{_digest(successor.clerk_id)[:24]}"
+        )
+        expected_issuer_sha256 = (
+            _digest(expected_clerk_issuer) if expected_clerk_issuer else None
+        )
+        identity_receipt_compatible = bool(
+            identity_receipt.event_source == "platform_authoritative"
+            and identity_receipt.outcome == "accepted"
+            and identity_receipt.resource_ref == expected_receipt_ref
+            and identity_receipt.route == IDENTITY_REBIND_ROUTE
+            and identity_receipt.intent
+            in {"development", "test", "staging", "production"}
+            and (
+                expected_environment is None
+                or identity_receipt.intent == expected_environment
+            )
+            and identity_receipt.content_sha256 is not None
+            and len(identity_receipt.content_sha256) == 64
+            and (
+                expected_issuer_sha256 is None
+                or hmac.compare_digest(
+                    identity_receipt.content_sha256,
+                    expected_issuer_sha256,
+                )
+            )
+            and identity_receipt.occurred_at == successor.granted_at
+        )
+        practice_receipt_compatible = bool(
+            (successor.practice_id_snapshot is None and receipt is None)
+            or (
+                successor.practice_id_snapshot is not None
+                and receipt is not None
+                and receipt.practice_id == successor.practice_id_snapshot
+                and receipt.operator_ref == predecessor.revoked_by_ref
+                and receipt.operator_ref == successor.granted_by_ref
+                and receipt.reason == predecessor.revocation_reason
+                and receipt.reason == successor.grant_reason
+                and receipt.effective_at == successor.granted_at
+                and receipt.expires_at is None
+                and receipt.document_reference == expected_receipt_ref
+            )
         )
         compatible = bool(
             predecessor.id != successor.id
@@ -141,15 +209,8 @@ def _audit_with_session(
             and predecessor.practice_id_snapshot
             in (None, successor.practice_id_snapshot)
             and successor.doctor_id_snapshot is not None
-            and successor.practice_id_snapshot is not None
-            and receipt.practice_id == successor.practice_id_snapshot
-            and receipt.operator_ref == predecessor.revoked_by_ref
-            and receipt.operator_ref == successor.granted_by_ref
-            and receipt.reason == predecessor.revocation_reason
-            and receipt.reason == successor.grant_reason
-            and receipt.effective_at == successor.granted_at
-            and receipt.expires_at is None
-            and receipt.document_reference == expected_receipt_ref
+            and identity_receipt_compatible
+            and practice_receipt_compatible
         )
         if not compatible:
             rebind_error_count += 1
@@ -170,7 +231,7 @@ def _audit_with_session(
     # receipt and remain valid history.
     for predecessor in grants:
         digest = predecessor.revocation_plan_sha256
-        if not digest or digest not in receipts_by_digest:
+        if not digest or digest not in identity_receipts_by_digest:
             continue
         if str(predecessor.id) not in successor_for_predecessor:
             rebind_error_count += 1
@@ -238,8 +299,8 @@ def _audit_with_session(
                 or grant.granted_by_ref != batch.applied_by_ref
                 or grant.grant_reason != batch.reason
                 or grant.granted_at != batch.applied_at
-                or (row.safe_prelogin and row.doctor_id_snapshot is not None)
-                or (not row.safe_prelogin and row.doctor_id_snapshot is None)
+                or row.safe_prelogin
+                or row.doctor_id_snapshot is None
             ):
                 amendment_error_count += 1
             manifest_inputs.append(
@@ -248,7 +309,6 @@ def _audit_with_session(
                     subject=row.clerk_subject,
                     verified_primary_email=grant.email_snapshot,
                     doctor_id=row.doctor_id_snapshot,
-                    safe_prelogin=row.safe_prelogin,
                     continuity_basis=row.continuity_basis,
                     practice_id=row.practice_id_snapshot,
                 )

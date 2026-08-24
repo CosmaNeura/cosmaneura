@@ -1,6 +1,7 @@
 from fastapi import status
 from fastapi.testclient import TestClient
 
+import app.commands.uploads.sas as upload_sas
 import app.jobs.extract_labs as extract_labs_job
 from app.server import api_app
 
@@ -67,15 +68,34 @@ def test_upload_complete_creates_pending_panel_and_extracts(
     )
     doctor = _authed_doctor()
     patient = PatientFactory.build(doctor_id=doctor.id).save()
+    monkeypatch.setattr(
+        upload_sas,
+        "consume_upload",
+        lambda *_args, **_kwargs: upload_sas.RegisteredClinicalUpload(
+            blob_key="lab_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.pdf",
+            content_type="application/pdf",
+            size=123,
+            etag='"etag-v1"',
+            claim_token="B" * 43,
+        ),
+    )
+    monkeypatch.setattr(
+        upload_sas,
+        "complete_upload",
+        lambda *_args, **_kwargs: True,
+    )
 
     resp = authenticated_client.post(
         api_app.url_path_for("lab_panel_upload_complete", patient_id=str(patient.id)),
-        json={"file_name": "labs.pdf"},
+        json={"registration_token": "A" * 43},
     )
     assert resp.status_code == status.HTTP_200_OK
     # offline fallback → extraction completes with zero rows, panel not left pending
     panel = LabPanel.one(id=resp.json()["id"])
     assert panel.status == LabPanelStatus.completed
+    assert panel.azure_file_name == (
+        "lab_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.pdf"
+    )
 
 
 def test_delete(authenticated_client: TestClient):

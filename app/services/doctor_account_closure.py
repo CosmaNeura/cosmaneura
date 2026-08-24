@@ -15,6 +15,11 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
+from app.services.pilot_access_lock import lock_pilot_access_lineage
+from app.services.superadmin_capability import (
+    SuperadminCapabilityError,
+    get_active_runtime_superadmin_capability_kinds,
+)
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -26,7 +31,7 @@ from app.models.authority import (
     AuthorityTenantMembership,
     MountContextSession,
 )
-from app.models.doctor import Doctor, DoctorRole
+from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration
 from app.models.organization_access import OrganizationRosterApproval
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
@@ -215,6 +220,10 @@ def _authority_scope(
     configured_rows = [
         row for row in subject_rows if row.issuer == settings.clerk_issuer
     ]
+    if len(configured_rows) != len(subject_rows):
+        raise DoctorAccountClosureError(
+            "authority identity state has an unexpected Clerk issuer"
+        )
     active = [row for row in configured_rows if row.revoked_at is None]
     if len(active) > 1:
         raise DoctorAccountClosureError("authority identity state is ambiguous")
@@ -492,6 +501,10 @@ def _validate_applied_state(
     configured_rows = [
         row for row in authority_rows if row.issuer == settings.clerk_issuer
     ]
+    if len(configured_rows) != len(authority_rows):
+        raise DoctorAccountClosureError(
+            "authority identity state has an unexpected Clerk issuer"
+        )
     if any(row.revoked_at is None for row in configured_rows):
         raise DoctorAccountClosureError("account closure left an active identity")
     authority_events = list(
@@ -694,9 +707,20 @@ def _evaluate(
         raise DoctorAccountClosureError(
             "provider has a prior or incomplete access revocation"
         )
-    if doctor.role == DoctorRole.admin:
+    try:
+        protected_capabilities = get_active_runtime_superadmin_capability_kinds(
+            session,
+            subject=doctor.clerk_id,
+            doctor_id=doctor.id,
+            lock_for_update=lock,
+        )
+    except SuperadminCapabilityError:
         raise DoctorAccountClosureError(
-            "platform administrators must be demoted before account closure"
+            "superadmin capability state could not be verified"
+        ) from None
+    if protected_capabilities:
+        raise DoctorAccountClosureError(
+            "active superadmin capabilities must be revoked before account closure"
         )
     if roster_approval is not None and roster_approval.revoked_at is not None:
         raise DoctorAccountClosureError(
@@ -835,6 +859,7 @@ def close_doctor_account(
         )
 
     try:
+        lock_pilot_access_lineage(session)
         evaluated = _evaluate(
             session,
             doctor_id=doctor_id,

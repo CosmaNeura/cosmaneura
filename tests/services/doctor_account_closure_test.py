@@ -31,13 +31,20 @@ from app.models.authority import (
     MountContextSession,
 )
 from app.models.baa import BaaAcceptance, BaaVersion
-from app.models.doctor import Doctor
+from app.models.doctor import Doctor, DoctorRole
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.organization_access import OrganizationRosterApproval
 from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
 from app.models.practice_access_audit import PracticeAccessAction, PracticeAccessAudit
+from app.models.superadmin_capability import (
+    SuperadminCapabilityEnvironment,
+    SuperadminCapabilityGrant,
+    SuperadminCapabilityKind,
+)
+
+SUPERADMIN_ISSUER = "https://staging.example.clerk.accounts.dev"
 
 
 def _scope(*, is_solo: bool = True, role: str = "owner"):
@@ -85,6 +92,73 @@ def _pilot_grant(doctor: Doctor, practice: Practice) -> PilotAccessGrandfatherGr
         grant_reason="Preserve approved pilot access",
         granted_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
     ).save()
+
+
+def _grant_superadmin_capability(monkeypatch, doctor: Doctor) -> None:
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_capability_environment",
+        lambda: SuperadminCapabilityEnvironment.staging,
+    )
+    monkeypatch.setattr(
+        "app.services.superadmin_capability.configured_superadmin_clerk_issuer",
+        lambda: SUPERADMIN_ISSUER,
+    )
+    assert doctor.email is not None
+    SuperadminCapabilityGrant(
+        environment=SuperadminCapabilityEnvironment.staging,
+        capability_kind=SuperadminCapabilityKind.platform_admin,
+        clerk_issuer=SUPERADMIN_ISSUER,
+        clerk_subject=doctor.clerk_id,
+        doctor_id=doctor.id,
+        issuer_sha256=hashlib.sha256(SUPERADMIN_ISSUER.encode()).hexdigest(),
+        subject_sha256=hashlib.sha256(doctor.clerk_id.encode()).hexdigest(),
+        verified_primary_email_sha256=hashlib.sha256(
+            doctor.email.strip().lower().encode()
+        ).hexdigest(),
+        source_ref="controlled:account-closure-test",
+        source_sha256="c" * 64,
+        grant_plan_sha256="d" * 64,
+        granted_by_ref="ticket:account-closure-test",
+        grant_reason_code="reviewed_test_grant",
+        granted_at=datetime.now(UTC) - timedelta(minutes=1),
+    ).save()
+
+
+def test_closure_does_not_treat_legacy_admin_role_as_authority():
+    doctor, _, _ = _scope()
+    doctor.role = DoctorRole.admin
+    doctor.save()
+    args = {
+        "doctor_id": doctor.id,
+        "operator_ref": "change:legacy-role-closure-test",
+        "reason": "Verify legacy role does not confer closure protection",
+    }
+
+    plan = plan_doctor_account_closure(**args)
+    result = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 12, 0, tzinfo=UTC),
+    )
+
+    assert result.changed is True
+    doctor.refresh()
+    assert doctor.deleted_at is not None
+
+
+def test_closure_requires_explicit_superadmin_capability_revocation(monkeypatch):
+    doctor, _, _ = _scope()
+    _grant_superadmin_capability(monkeypatch, doctor)
+
+    with pytest.raises(DoctorAccountClosureError, match="capabilities"):
+        plan_doctor_account_closure(
+            doctor_id=doctor.id,
+            operator_ref="change:capability-closure-test",
+            reason="Verify explicit capabilities require explicit revocation",
+        )
+
+    doctor.refresh()
+    assert doctor.deleted_at is None
 
 
 def test_closure_preserves_clinical_and_baa_records_and_is_idempotent():
@@ -504,6 +578,67 @@ def test_closure_revokes_governed_authority_without_deleting_history(monkeypatch
         match="authority session closure evidence is incomplete",
     ):
         plan_doctor_account_closure(**args)
+
+
+@pytest.mark.parametrize("include_configured_identity", [False, True])
+def test_closure_refuses_wrong_or_mixed_authority_issuer_without_mutation(
+    monkeypatch,
+    include_configured_identity,
+):
+    doctor, _, _ = _scope()
+    issuer = "https://test-clerk.example"
+    monkeypatch.setattr(
+        account_closure,
+        "AUTHORITY_KERNEL_SETTINGS",
+        AuthorityKernelSettings(
+            enabled=True,
+            token_ttl_seconds=900,
+            token_refresh_after_seconds=300,
+            clerk_issuer=issuer,
+        ),
+    )
+    identities: list[AuthorityActorExternalIdentity] = []
+    if include_configured_identity:
+        tenant = AuthorityTenant(status="active").save()
+        configured_actor = AuthorityActor(actor_kind="human", status="active").save()
+        AuthorityTenantMembership(
+            tenant_id=tenant.id,
+            actor_id=configured_actor.id,
+            membership_kind="provider",
+            status="active",
+        ).save()
+        identities.append(
+            AuthorityActorExternalIdentity(
+                actor_id=configured_actor.id,
+                issuer=issuer,
+                subject=doctor.clerk_id,
+                verified_at=datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
+            ).save()
+        )
+    wrong_actor = AuthorityActor(actor_kind="human", status="active").save()
+    identities.append(
+        AuthorityActorExternalIdentity(
+            actor_id=wrong_actor.id,
+            issuer="https://unexpected-issuer.example",
+            subject=doctor.clerk_id,
+            verified_at=datetime(2026, 8, 20, 12, 0, tzinfo=UTC),
+        ).save()
+    )
+    audit_count = PracticeAccessAudit.count()
+
+    with pytest.raises(DoctorAccountClosureError, match="unexpected Clerk issuer"):
+        plan_doctor_account_closure(
+            doctor_id=doctor.id,
+            operator_ref="change:authority-issuer-closure-test",
+            reason="Refuse cross-environment authority identity ambiguity",
+        )
+
+    doctor.refresh()
+    assert doctor.deleted_at is None
+    assert PracticeAccessAudit.count() == audit_count
+    for identity in identities:
+        identity.refresh()
+        assert identity.revoked_at is None
 
 
 def test_closure_cli_is_dry_run_first_and_does_not_print_identity_values():

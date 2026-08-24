@@ -28,6 +28,7 @@ from app.services.organization_access import (
     approval_is_active,
     lock_roster_enrollment_email,
 )
+from app.services.pilot_access_lock import lock_pilot_access_lineage
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -67,8 +68,7 @@ class ContinuityIdentityInput:
     issuer: str
     subject: str
     verified_primary_email: str
-    doctor_id: TypeIDType | None
-    safe_prelogin: bool
+    doctor_id: TypeIDType
     continuity_basis: str
     practice_id: TypeIDType | None = None
 
@@ -86,7 +86,6 @@ class ContinuityAmendmentPlan:
     manifest_sha256: str
     account_count: int
     existing_doctor_count: int
-    safe_prelogin_count: int
     already_applied: bool
 
 
@@ -102,7 +101,7 @@ class ContinuityAmendmentResult:
 @dataclass(frozen=True, slots=True)
 class _IdentitySnapshot:
     entry: ContinuityIdentityInput
-    doctor: Doctor | None
+    doctor: Doctor
     practice: Practice | None
 
 
@@ -228,7 +227,6 @@ def _parse_manifest_payload(
         "subject",
         "verified_primary_email",
         "doctor_id",
-        "safe_prelogin",
         "continuity_basis",
         "practice_id",
     }
@@ -238,15 +236,11 @@ def _parse_manifest_payload(
         issuer = _normalize_issuer(raw["issuer"])
         subject = _normalize_subject(raw["subject"])
         email = _normalize_email(raw["verified_primary_email"])
-        safe_prelogin = raw["safe_prelogin"]
-        if not isinstance(safe_prelogin, bool):
-            raise _safe_error("manifest safe_prelogin must be a boolean")
-        doctor_id = _typeid(raw["doctor_id"], prefix="doctor", optional=True)
+        doctor_id = cast(
+            TypeIDType,
+            _typeid(raw["doctor_id"], prefix="doctor", optional=False),
+        )
         practice_id = _typeid(raw["practice_id"], prefix="practice", optional=True)
-        if safe_prelogin == (doctor_id is not None):
-            raise _safe_error(
-                "each identity must provide either Doctor ID or explicit safe prelogin state"
-            )
         continuity_basis = _required(
             raw["continuity_basis"], field="continuity basis", limit=64
         )
@@ -256,19 +250,17 @@ def _parse_manifest_payload(
         issuer_subject = (issuer, subject)
         if issuer_subject in seen_issuer_subjects or email in seen_emails:
             raise _safe_error("manifest contains duplicate or ambiguous identities")
-        if doctor_id is not None and str(doctor_id) in seen_doctors:
+        if str(doctor_id) in seen_doctors:
             raise _safe_error("manifest contains duplicate or ambiguous identities")
         seen_issuer_subjects.add(issuer_subject)
         seen_emails.add(email)
-        if doctor_id is not None:
-            seen_doctors.add(str(doctor_id))
+        seen_doctors.add(str(doctor_id))
         identities.append(
             ContinuityIdentityInput(
                 issuer=issuer,
                 subject=subject,
                 verified_primary_email=email,
                 doctor_id=doctor_id,
-                safe_prelogin=safe_prelogin,
                 continuity_basis=continuity_basis,
                 practice_id=practice_id,
             )
@@ -347,7 +339,6 @@ def continuity_amendment_plan_sha256(
                 "email_sha256": _digest(entry.verified_primary_email),
                 "issuer_sha256": _digest(entry.issuer),
                 "practice_id": str(entry.practice_id) if entry.practice_id else None,
-                "safe_prelogin": entry.safe_prelogin,
                 "subject_sha256": _digest(entry.subject),
             }
             for entry in manifest.identities
@@ -494,22 +485,16 @@ def _validate_roster_state(
     session: Session,
     *,
     entry: ContinuityIdentityInput,
-    doctor: Doctor | None,
+    doctor: Doctor,
     lock: bool,
 ) -> None:
     statement = select(OrganizationRosterApproval).where(
         or_(
             func.lower(func.btrim(OrganizationRosterApproval.approved_email))
             == entry.verified_primary_email,
-            col(OrganizationRosterApproval.claimed_doctor_id)
-            == (doctor.id if doctor is not None else None),
+            col(OrganizationRosterApproval.claimed_doctor_id) == doctor.id,
         )
     )
-    if doctor is None:
-        statement = select(OrganizationRosterApproval).where(
-            func.lower(func.btrim(OrganizationRosterApproval.approved_email))
-            == entry.verified_primary_email
-        )
     if lock:
         statement = statement.with_for_update()
     approvals = list(session.exec(statement).all())
@@ -525,12 +510,20 @@ def _validate_roster_state(
     if not active:
         return
     approval = active[0]
+    try:
+        approved_email = _normalize_email(approval.approved_email)
+    except ContinuityReconciliationError:
+        raise _safe_error(
+            "one or more organization roster identities conflict"
+        ) from None
+    if not hmac.compare_digest(approved_email, entry.verified_primary_email):
+        raise _safe_error("one or more organization roster identities conflict")
     if (
         entry.practice_id is not None
         and approval.target_practice_id != entry.practice_id
     ):
         raise _safe_error("one or more manifest practice assignments conflict")
-    if doctor is not None and approval.claimed_doctor_id not in (None, doctor.id):
+    if approval.claimed_doctor_id not in (None, doctor.id):
         raise _safe_error("one or more organization roster identities conflict")
     organization_statement = select(ProviderOrganization).where(
         ProviderOrganization.id == approval.organization_id
@@ -564,54 +557,42 @@ def _snapshot_identity(
     if len(subject_doctors) > 1 or len(email_doctors) > 1:
         raise _safe_error("one or more persisted Doctor identities are ambiguous")
 
-    doctor: Doctor | None
-    if entry.safe_prelogin:
-        if subject_doctors or email_doctors:
-            raise _safe_error(
-                "one or more safe-prelogin identities already have an account"
-            )
-        doctor = None
-    else:
-        if entry.doctor_id is None:
-            raise _safe_error("one or more manifest Doctor references are missing")
-        doctor_statement = select(Doctor).where(Doctor.id == entry.doctor_id)
-        if lock:
-            doctor_statement = doctor_statement.with_for_update()
-        doctor = cast(Doctor | None, session.exec(doctor_statement).one_or_none())
-        if doctor is None:
-            raise _safe_error("one or more manifest Doctor references are orphaned")
-        if (
-            doctor.deleted_at is not None
-            or doctor.clerk_id != entry.subject
-            or not doctor.email
-            or not hmac.compare_digest(
-                doctor.email.strip().lower(), entry.verified_primary_email
-            )
-            or len(subject_doctors) != 1
-            or subject_doctors[0].id != doctor.id
-            or len(email_doctors) != 1
-            or email_doctors[0].id != doctor.id
-        ):
-            raise _safe_error("one or more manifest Doctor identities do not match")
-
-    member: PracticeMember | None = None
-    if doctor is not None:
-        member_statement = select(PracticeMember).where(
-            PracticeMember.doctor_id == doctor.id
+    doctor_statement = select(Doctor).where(Doctor.id == entry.doctor_id)
+    if lock:
+        doctor_statement = doctor_statement.with_for_update()
+    doctor = cast(Doctor | None, session.exec(doctor_statement).one_or_none())
+    if doctor is None:
+        raise _safe_error("one or more manifest Doctor references are orphaned")
+    if (
+        doctor.deleted_at is not None
+        or doctor.clerk_id != entry.subject
+        or not doctor.email
+        or not hmac.compare_digest(
+            doctor.email.strip().lower(), entry.verified_primary_email
         )
-        if lock:
-            member_statement = member_statement.with_for_update()
-        members = list(session.exec(member_statement).all())
-        if len(members) > 1:
-            raise _safe_error("one or more Doctor practice assignments are ambiguous")
-        member = members[0] if members else None
-        if member is not None and member.access_revoked_at is not None:
-            raise _safe_error(
-                "one or more manifest identities have prior access revocation"
-            )
-        actual_practice_id = member.practice_id if member is not None else None
-        if actual_practice_id != entry.practice_id:
-            raise _safe_error("one or more manifest practice assignments conflict")
+        or len(subject_doctors) != 1
+        or subject_doctors[0].id != doctor.id
+        or len(email_doctors) != 1
+        or email_doctors[0].id != doctor.id
+    ):
+        raise _safe_error("one or more manifest Doctor identities do not match")
+
+    member_statement = select(PracticeMember).where(
+        PracticeMember.doctor_id == doctor.id
+    )
+    if lock:
+        member_statement = member_statement.with_for_update()
+    members = list(session.exec(member_statement).all())
+    if len(members) > 1:
+        raise _safe_error("one or more Doctor practice assignments are ambiguous")
+    member = members[0] if members else None
+    if member is not None and member.access_revoked_at is not None:
+        raise _safe_error(
+            "one or more manifest identities have prior access revocation"
+        )
+    actual_practice_id = member.practice_id if member is not None else None
+    if actual_practice_id != entry.practice_id:
+        raise _safe_error("one or more manifest practice assignments conflict")
 
     practice: Practice | None = None
     if entry.practice_id is not None:
@@ -630,17 +611,9 @@ def _snapshot_identity(
         or_(
             col(PilotAccessGrandfatherGrant.clerk_id) == entry.subject,
             col(PilotAccessGrandfatherGrant.email_sha256) == email_sha256,
-            col(PilotAccessGrandfatherGrant.doctor_id_snapshot)
-            == (doctor.id if doctor is not None else None),
+            col(PilotAccessGrandfatherGrant.doctor_id_snapshot) == doctor.id,
         )
     )
-    if doctor is None:
-        grant_statement = select(PilotAccessGrandfatherGrant).where(
-            or_(
-                col(PilotAccessGrandfatherGrant.clerk_id) == entry.subject,
-                col(PilotAccessGrandfatherGrant.email_sha256) == email_sha256,
-            )
-        )
     if lock:
         grant_statement = grant_statement.with_for_update()
     if session.exec(grant_statement).first() is not None:
@@ -650,19 +623,9 @@ def _snapshot_identity(
         or_(
             col(PilotAccessContinuityAmendmentIdentity.clerk_subject) == entry.subject,
             col(PilotAccessContinuityAmendmentIdentity.email_sha256) == email_sha256,
-            col(PilotAccessContinuityAmendmentIdentity.doctor_id_snapshot)
-            == (doctor.id if doctor is not None else None),
+            col(PilotAccessContinuityAmendmentIdentity.doctor_id_snapshot) == doctor.id,
         )
     )
-    if doctor is None:
-        evidence_statement = select(PilotAccessContinuityAmendmentIdentity).where(
-            or_(
-                col(PilotAccessContinuityAmendmentIdentity.clerk_subject)
-                == entry.subject,
-                col(PilotAccessContinuityAmendmentIdentity.email_sha256)
-                == email_sha256,
-            )
-        )
     if lock:
         evidence_statement = evidence_statement.with_for_update()
     if session.exec(evidence_statement).first() is not None:
@@ -724,7 +687,6 @@ def _existing_exact_amendment(
             )
             or row.doctor_id_snapshot != expected.doctor_id
             or row.practice_id_snapshot != expected.practice_id
-            or row.safe_prelogin != expected.safe_prelogin
             or row.continuity_basis != expected.continuity_basis
         ):
             raise _safe_error("continuity amendment evidence conflicts with the plan")
@@ -766,6 +728,11 @@ def _assess_database_state(
     # history), never as a replacement for it.
     from app.services.pilot_access_audit import audit_pilot_access_state
 
+    if lock:
+        # This cohort-wide lock is the first lock in every pilot lineage
+        # mutation. It keeps the audit and amendment write in one serialized
+        # critical section, including base identities not in this amendment.
+        lock_pilot_access_lineage(session)
     audit = audit_pilot_access_state(
         expected_environment=manifest.environment,
         expected_clerk_issuer=manifest.identities[0].issuer,
@@ -836,15 +803,12 @@ def plan_continuity_amendment(
             reason=explanation,
             lock=False,
         )
-    existing_count = sum(snapshot.doctor is not None for snapshot in snapshots)
-    if already_applied:
-        existing_count = sum(not entry.safe_prelogin for entry in manifest.identities)
+    existing_count = len(manifest.identities) if already_applied else len(snapshots)
     return ContinuityAmendmentPlan(
         plan_sha256=plan_sha256,
         manifest_sha256=manifest.manifest_sha256,
         account_count=len(manifest.identities),
         existing_doctor_count=existing_count,
-        safe_prelogin_count=len(manifest.identities) - existing_count,
         already_applied=already_applied,
     )
 
@@ -938,7 +902,6 @@ def apply_continuity_amendment(
                         email_sha256=email_sha256,
                         doctor_id_snapshot=entry.doctor_id,
                         practice_id_snapshot=entry.practice_id,
-                        safe_prelogin=entry.safe_prelogin,
                         continuity_basis=entry.continuity_basis,
                     )
                 )
