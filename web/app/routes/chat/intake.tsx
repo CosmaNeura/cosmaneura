@@ -3,131 +3,167 @@ import { MetaFunction, useParams } from "react-router"
 
 import type { Route } from "./+types/intake"
 
-import { IntakeRuntimeProvider } from "~/components/chat/intake/IntakeRuntimeProvider"
-import { IntakeThread } from "~/components/chat/intake/IntakeThread"
+import { InterviewFrame } from "~/components/visit-prep/InterviewFrame"
+import {
+  type InterviewProgress,
+  type InterviewQuestion,
+  QuestionForm,
+} from "~/components/visit-prep/QuestionForm"
 import { requireEnv } from "~/utils/environment"
 
 import { invariant } from "@epic-web/invariant"
 
 const VITE_PYTHON_URL = requireEnv("VITE_PYTHON_URL")
 
-function chatEndpoint(intakeId: string) {
+/**
+ * Visit Prep, the patient side (CosmaNeura#135).
+ *
+ * Unauthenticated: the opaque id in the path is the only credential, and the
+ * API deliberately returns no identity -- no name, no physician, no visit date
+ * -- so a forwarded link exposes the questions and nothing more.
+ *
+ * This route talks to the backend with plain `fetch` rather than the generated
+ * client, which only covers the authenticated internal API. That was a
+ * deliberate call before this rewrite and it still holds: one endpoint pair is
+ * not worth a second OpenAPI pipeline.
+ */
+type InterviewResponse = {
+  question: InterviewQuestion | null
+  status: "processing" | "completed" | "in_progress"
+  progress?: InterviewProgress | null
+}
+
+function questionEndpoint(intakeId: string) {
   return `${VITE_PYTHON_URL}/external/chat/intake/${intakeId}/question`
 }
 
 export const meta: MetaFunction = () => {
   return [
-    { title: "Your Doctor's Intake" },
+    { title: "Before your visit" },
     {
       name: "description",
-      content: "Your doctor is requesting information about your health.",
+      content: "A few questions from your care team before your visit.",
     },
+    // A link that lands in an inbox should not end up in a search index.
+    { name: "robots", content: "noindex, nofollow" },
   ]
 }
 
-/**
- * Unlike other endpoints, this is not authenticated *and* does not require an api key. We could generate another openapi
- * file for this part of the system and have another client library, but that's overkill, especially as we figure out what this feature really is
- */
 export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
   const intakeId = loaderArgs.params.id
 
   if (!intakeId) {
-    throw new Response("Intake ID is required", { status: 400 })
+    throw new Response("This link is not valid", { status: 400 })
   }
 
-  const response = await fetch(chatEndpoint(intakeId))
+  const response = await fetch(questionEndpoint(intakeId))
 
   if (!response.ok) {
-    throw new Response(`Failed to load intake data: ${response.statusText}`, {
-      status: response.status,
-    })
+    throw new Response("This link has expired", { status: response.status })
   }
 
-  return await response.json()
+  return (await response.json()) as InterviewResponse
 }
 
-function IntakeLayout({ children }: { children: React.ReactNode }) {
+function Done() {
   return (
-    <div className="h-full">
-      <div className="bg-background box-border flex h-full flex-col overflow-hidden">
-        <div className="flex h-full flex-col items-center overflow-y-scroll scroll-smooth bg-inherit px-4 pt-8">
-          <div className="flex w-full flex-grow flex-col">
-            <div className="flex w-full flex-grow flex-col items-center justify-center">
-              {children}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <InterviewFrame>
+      <p className="text-xs font-semibold tracking-[0.22em] text-[var(--brand-gold)] uppercase">
+        All set
+      </p>
+      <h1 className="mt-3 text-3xl leading-tight font-semibold md:text-4xl">
+        Thank you — your answers are with your care team.
+      </h1>
+      <p className="mt-4 text-[var(--brand-muted-text)]">
+        They will read this before you meet, so the visit can start on what you
+        actually came for. There is nothing else you need to do.
+      </p>
+    </InterviewFrame>
   )
 }
 
-function IntakeComplete() {
-  return (
-    <IntakeLayout>
-      <p className="mt-4 text-lg font-medium">Intake Complete</p>
-      <p className="mt-4">Thank you for your responses! </p>
-    </IntakeLayout>
-  )
-}
+/**
+ * Only reachable for legacy model-generated intakes, whose questions are
+ * written by a background job shortly after the intake is created. Visit Prep
+ * seeds its questions up front and never shows this.
+ */
+function Preparing() {
+  const [waited, setWaited] = useState(0)
 
-function IntakeProcessing() {
-  // reload every 10s until we are ready
   useEffect(() => {
-    const reloadTimer = setTimeout(() => {
+    const timer = window.setTimeout(() => {
+      setWaited((count) => count + 1)
       window.location.reload()
-    }, 10000)
-
-    return () => clearTimeout(reloadTimer)
-  }, [])
+    }, 10_000)
+    return () => window.clearTimeout(timer)
+  }, [waited])
 
   return (
-    <IntakeLayout>
-      <h1 className="text-2xl font-bold">Loading...</h1>
-      <p className="mt-4 text-lg">Please wait while we load your intake.</p>
-    </IntakeLayout>
+    <InterviewFrame>
+      <h1 className="text-2xl font-semibold">Getting your questions ready…</h1>
+      <p className="mt-3 text-[var(--brand-muted-text)]">
+        This page will refresh on its own in a moment.
+      </p>
+    </InterviewFrame>
   )
 }
 
-export default function IntakeChat({ loaderData }: Route.ComponentProps) {
-  // hook to disable the page once intake is finished
-  const [isFinished, setIsFinished] = useState(false)
+export default function VisitPrepInterview({
+  loaderData,
+}: Route.ComponentProps) {
+  const { id } = useParams()
+  invariant(id, "intake id is required")
+  // Resolved once, outside `submit`, so the narrowed id does not have to
+  // survive into a closure.
+  const endpoint = questionEndpoint(id)
 
-  const params = useParams()
-  const intakeId = params.id
+  const [state, setState] = useState<InterviewResponse>(loaderData)
+  const [draft, setDraft] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  invariant(intakeId, "Intake ID is required")
+  async function submit(answer: string) {
+    setSubmitting(true)
+    setError(null)
 
-  if (loaderData.status == "completed" || isFinished) {
-    return <IntakeComplete />
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ answer }),
+      })
+
+      if (!response.ok) {
+        // The draft stays in state on purpose. Losing a paragraph someone typed
+        // on a phone with bad signal is the one failure this page must not have.
+        setError("That did not save. Check your connection and try again.")
+        return
+      }
+
+      const next = (await response.json()) as InterviewResponse
+      setState(next)
+      setDraft("")
+    } catch {
+      setError("That did not save. Check your connection and try again.")
+    } finally {
+      setSubmitting(false)
+    }
   }
 
-  if (loaderData.status === "processing") {
-    return <IntakeProcessing />
-  }
-
-  // TODO transform API shape to what assistant-ui expects https://www.assistant-ui.com/docs/runtimes/custom/external-store and https://discord.com/channels/1251324227668283443/1251324228171726889/1354153714029563935
-  // TODO mark as complete depending on the response
-  // TODO handle errors from chat API
-  // TODO make sure UI disables while loading
-  // TODO test slow connection
-  // TODO integration tests
+  if (state.status === "completed" || !state.question) return <Done />
+  if (state.status === "processing") return <Preparing />
 
   return (
-    <div className="h-full">
-      <IntakeRuntimeProvider
-        setIsFinished={setIsFinished}
-        api={chatEndpoint(intakeId)}
-        initialMessages={[
-          {
-            role: "assistant",
-            content: loaderData.question,
-          },
-        ]}
-      >
-        <IntakeThread />
-      </IntakeRuntimeProvider>
-    </div>
+    <InterviewFrame>
+      <QuestionForm
+        question={state.question}
+        progress={state.progress}
+        draft={draft}
+        onDraftChange={setDraft}
+        onSubmit={submit}
+        submitting={submitting}
+        error={error}
+      />
+    </InterviewFrame>
   )
 }
