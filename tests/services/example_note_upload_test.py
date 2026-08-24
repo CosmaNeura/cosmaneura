@@ -182,6 +182,125 @@ def test_example_note_grant_is_random_exact_blob_create_only_and_server_owned(
     assert all("doctor_server_owned" not in value for value in redis.values.values())
 
 
+def test_legacy_grant_is_short_lived_create_only_and_container_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generated: list[dict[str, object]] = []
+    clients: list[dict[str, object]] = []
+
+    def fake_generate_container_sas(**kwargs: object) -> str:
+        generated.append(kwargs)
+        return "legacy-create-only-signature"
+
+    def fake_container_client(**kwargs: object) -> SimpleNamespace:
+        clients.append(kwargs)
+        return SimpleNamespace(
+            url="https://uploads.invalid/example-notes?sp=c&sig=secret"
+        )
+
+    monkeypatch.setattr(
+        uploads,
+        "generate_container_sas",
+        fake_generate_container_sas,
+    )
+    monkeypatch.setattr(uploads, "ContainerClient", fake_container_client)
+    before = datetime.now(timezone.utc)
+
+    result = uploads.issue_legacy_example_note_upload_url()
+
+    after = datetime.now(timezone.utc)
+    assert result == "https://uploads.invalid/example-notes?sp=c&sig=secret"
+    assert len(generated) == 1
+    call = generated[0]
+    assert call["container_name"] == uploads.AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
+    assert str(call["permission"]) == "c"
+    assert call["protocol"] == "https"
+    start = call["start"]
+    expiry = call["expiry"]
+    assert isinstance(start, datetime)
+    assert isinstance(expiry, datetime)
+    assert before - timedelta(minutes=2) <= start <= after
+    assert before + timedelta(minutes=9) <= expiry
+    assert expiry <= after + timedelta(minutes=11)
+    assert clients == [
+        {
+            "container_name": uploads.AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
+            "account_url": uploads.AZURE_UPLOADS_ACCOUNT_URL,
+            "credential": "legacy-create-only-signature",
+        }
+    ]
+
+
+def test_legacy_registration_is_owner_bound_and_converted_to_immutable_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"%PDF-1.7\nlegacy cached SPA bytes"
+    file_name = "user_owner_1787572800000_note.pdf"
+    client = _BlobClient(blob_key=file_name, content=content)
+    requested_keys: list[str] = []
+
+    def blob_client(blob_key: str) -> _BlobClient:
+        requested_keys.append(blob_key)
+        return client
+
+    monkeypatch.setattr(uploads, "_blob_client", blob_client)
+
+    registered = uploads.validate_legacy_example_note_upload(
+        file_name,
+        doctor_id="doctor_owner",
+        owner_clerk_id="user_owner",
+    )
+
+    assert registered == uploads.RegisteredExampleNoteBlob(
+        blob_key=file_name,
+        doctor_id="doctor_owner",
+        etag='"etag-v1"',
+        size=len(content),
+        sha256=hashlib.sha256(content).hexdigest(),
+    )
+    assert requested_keys == [file_name]
+    assert client.property_calls == [{}]
+    assert client.download_calls == [
+        {
+            "offset": 0,
+            "length": uploads.MAX_EXAMPLE_NOTE_BYTES + 1,
+            "etag": '"etag-v1"',
+            "match_condition": MatchConditions.IfNotModified,
+        }
+    ]
+    assert uploads.serialize_registered_blob(registered).startswith("example-note:v1:")
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    [
+        "user_attacker_1787572800000_note.pdf",
+        "../user_owner_1787572800000_note.pdf",
+        "user_owner_1787572800000_note.jpg",
+        "user_owner_1787572800000_directory\\note.pdf",
+    ],
+)
+def test_legacy_registration_rejects_unowned_or_unbounded_names_before_blob_access(
+    monkeypatch: pytest.MonkeyPatch,
+    file_name: str,
+) -> None:
+    requested_keys: list[str] = []
+    monkeypatch.setattr(
+        uploads,
+        "_blob_client",
+        lambda blob_key: requested_keys.append(blob_key),
+    )
+
+    with pytest.raises(uploads.ExampleNoteUploadValidationError):
+        uploads.validate_legacy_example_note_upload(
+            file_name,
+            doctor_id="doctor_owner",
+            owner_clerk_id="user_owner",
+        )
+
+    assert requested_keys == []
+
+
 def test_registration_token_is_owner_bound_single_use_and_accepts_no_client_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

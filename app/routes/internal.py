@@ -464,8 +464,50 @@ class ExampleNoteUploadRegistration(BaseModel, extra="forbid"):
     note_type: str
 
 
-@internal_api_app.post("/notes/get-signed-url")
+@internal_api_app.post(
+    "/notes/get-signed-url",
+    response_model=str,
+    deprecated=True,
+)
 def generate_signed_example_note_upload_url(
+    request: Request,
+) -> str:
+    # Compatibility for cached pre-v2 browser bundles. Remove only after the
+    # rollout window has elapsed and access logs show no remaining callers.
+    return example_note_upload.issue_legacy_example_note_upload_url()
+
+
+@internal_api_app.post(
+    "/notes/upload-example",
+    deprecated=True,
+)
+def upload_example_note(
+    request: Request,
+    file_name: str,
+    note_type: str,
+) -> None:
+    doctor: Doctor = request.state.doctor
+
+    try:
+        registered_blob = example_note_upload.validate_legacy_example_note_upload(
+            file_name,
+            doctor_id=str(doctor.id),
+            owner_clerk_id=doctor.clerk_id,
+        )
+    except example_note_upload.ExampleNoteUploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
+
+    doctor_note_file = DoctorNoteFile(
+        doctor_id=doctor.id,
+        azure_file_name=example_note_upload.serialize_registered_blob(registered_blob),
+        note_type=note_type,
+    ).save()
+
+    app.jobs.extract.queue(doctor_note_file.id)
+
+
+@internal_api_app.post("/notes/v2/get-signed-url")
+def generate_signed_example_note_upload_url_v2(
     request: Request,
 ) -> ExampleNoteUploadGrant:
     doctor: Doctor = request.state.doctor
@@ -476,8 +518,8 @@ def generate_signed_example_note_upload_url(
     )
 
 
-@internal_api_app.post("/notes/upload-example")
-def upload_example_note(
+@internal_api_app.post("/notes/v2/upload-example")
+def upload_example_note_v2(
     request: Request,
     data: ExampleNoteUploadRegistration,
 ) -> None:

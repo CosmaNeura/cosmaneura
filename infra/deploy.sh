@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCE_GROUP="cosmaneura-prod"
 MIGRATION_JOB="cosmaneura-prod-migrate"
 WORKER_SCHEDULER_CONTAINERS="cosmaneura-prod-worker cosmaneura-prod-scheduler"
+WORKER_CONTAINER="cosmaneura-prod-worker"
 API_CONTAINER="cosmaneura-prod-app"
 JMON_CONTAINER="cosmaneura-prod-app-jmon"
 PRODUCTION_IMAGE="cosmaneuraprodregistry.azurecr.io/cosmaneura/cosmaneura"
@@ -394,6 +395,61 @@ check_deployment() {
 	return 1
 }
 
+wait_for_incompatible_worker_replicas_to_drain() {
+	local container_name=$1
+	local git_sha=$2
+	local expected_image="${PRODUCTION_IMAGE}:${git_sha}"
+	local attempts=0
+	local max_attempts=60 # 5 minutes
+
+	echo "Waiting for worker replicas on older images to drain..."
+
+	while [[ $attempts -lt $max_attempts ]]; do
+		local revisions_json incompatible_revisions remaining_replicas
+		if ! revisions_json=$(az containerapp revision list \
+			-n "$container_name" -g "$RESOURCE_GROUP" \
+			--query "[].{name:name,image:properties.template.containers[0].image}" \
+			-o json); then
+			echo "Failed to list worker revisions while proving drain completion."
+			return 1
+		fi
+		if ! incompatible_revisions=$(printf '%s' "$revisions_json" | jq -r \
+			--arg expected_image "$expected_image" \
+			'.[] | select(.image != $expected_image) | .name'); then
+			echo "Failed to identify incompatible worker revisions."
+			return 1
+		fi
+
+		remaining_replicas=0
+		for revision_name in $incompatible_revisions; do
+			local replica_count
+			if ! replica_count=$(az containerapp replica list \
+				-n "$container_name" -g "$RESOURCE_GROUP" \
+				--revision "$revision_name" --query "length(@)" -o tsv); then
+				echo "Failed to inspect replicas for worker revision $revision_name."
+				return 1
+			fi
+			if [[ ! "$replica_count" =~ ^[0-9]+$ ]]; then
+				echo "Invalid replica count for worker revision $revision_name."
+				return 1
+			fi
+			remaining_replicas=$((remaining_replicas + replica_count))
+		done
+
+		if [[ "$remaining_replicas" -eq 0 ]]; then
+			echo "All worker replicas on older images have drained."
+			return 0
+		fi
+
+		echo "  $remaining_replicas incompatible worker replica(s) remain (attempt $((attempts + 1))/$max_attempts)"
+		sleep 5
+		((attempts++))
+	done
+
+	echo "Worker drain proof failed after $((max_attempts * 5)) seconds. The API was not deployed."
+	return 1
+}
+
 # Run migrations before deploying new containers
 run_migrations
 if [[ $? -ne 0 ]]; then
@@ -415,6 +471,9 @@ for container in $WORKER_SCHEDULER_CONTAINERS; do
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
 		exit 1
+	fi
+	if [[ "$container" == "$WORKER_CONTAINER" ]]; then
+		wait_for_incompatible_worker_replicas_to_drain "$container" "$GIT_SHA" || exit 1
 	fi
 done
 

@@ -476,12 +476,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ExampleNoteUploadGrant"
+                  "type": "string",
+                  "title": "Response Generate Signed Example Note Upload Url Internal V1 Notes Get Signed Url Post"
                 }
               }
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "HTTPBearer": []
@@ -496,6 +498,87 @@
         ],
         "summary": "Upload Example Note",
         "operationId": "upload_example_note",
+        "deprecated": true,
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Name"
+            }
+          },
+          {
+            "name": "note_type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Note Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/notes/v2/get-signed-url": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Signed Example Note Upload Url V2",
+        "operationId": "generate_signed_example_note_upload_url_v2",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExampleNoteUploadGrant"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes/v2/upload-example": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Upload Example Note V2",
+        "operationId": "upload_example_note_v2",
         "requestBody": {
           "content": {
             "application/json": {
