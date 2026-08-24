@@ -5,6 +5,7 @@ Summarize a patient visit into a clinical note with the specified schema.
 import json
 import math
 import textwrap
+from datetime import UTC, datetime
 from textwrap import dedent
 from typing import Any, cast
 
@@ -22,7 +23,7 @@ from app.services.terminology import (
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
-from app.models.ai_visit_note import AIVisitNote
+from app.models.ai_visit_note import REGENERATED_NOTE_SUPERSESSION, AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
@@ -35,7 +36,8 @@ from app.models.note_type_customization import (
     PronounStyle,
     SubjectiveSource,
 )
-from sqlmodel import select
+from sqlalchemy import and_, or_, update
+from sqlmodel import Session, select
 
 
 def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
@@ -87,6 +89,7 @@ def perform(transcript_id: str | TypeIDType, schema_id: str | TypeIDType):
     existing_note = AIVisitNote.get(
         (AIVisitNote.appointment_id == trigger.appointment_id)
         & (AIVisitNote.doctor_note_schema_id == schema.id)
+        & (cast(Any, AIVisitNote.superseded_at).is_(None))
     )
     if existing_note and existing_note.ai_transcript_id == latest.id:
         log.info(
@@ -159,9 +162,9 @@ def _finalize_generated_note(
     The appointment row is the shared serialization lock for transcript ingest
     and note finalization.  Recall transcript ingest takes the same lock before
     inserting a new segment, so a worker cannot validate an old snapshot while
-    a newer segment is being committed.  The database unique constraint on
-    ``(appointment_id, doctor_note_schema_id)`` is the final duplicate guard for
-    broker redelivery and concurrent workers.
+    a newer segment is being committed. The database partial unique index on
+    current ``(appointment_id, doctor_note_schema_id)`` rows is the final
+    duplicate guard for broker redelivery and concurrent workers.
 
     Returns ``True`` when a new note was committed and ``False`` when another
     worker already committed this snapshot or this worker generated from a
@@ -190,6 +193,7 @@ def _finalize_generated_note(
             select(AIVisitNote).where(
                 AIVisitNote.appointment_id == trigger.appointment_id,
                 AIVisitNote.doctor_note_schema_id == schema.id,
+                cast(Any, AIVisitNote.superseded_at).is_(None),
             )
         ).one_or_none()
 
@@ -215,10 +219,47 @@ def _finalize_generated_note(
             )
             return False
 
-        # Keep the existing replace-on-new-segment behavior, including a fresh
-        # note id, but perform the delete and insert in one locked transaction.
+        if not _finalization_scope_is_consistent(
+            appointment=appointment,
+            trigger=trigger,
+            schema=schema,
+            latest=current_latest,
+            existing_note=existing_note,
+        ):
+            log.info(
+                "visit note finalization scope validation failed",
+                event_code="visit_note_finalization_scope_invalid",
+                appointment_ref=provider_log_ref(str(trigger.appointment_id)),
+                schema_ref=provider_log_ref(str(schema.id)),
+            )
+            return False
+
+        if existing_note is not None and _restore_frontier_blocks_regeneration(
+            session=session,
+            appointment=appointment,
+            existing_note=existing_note,
+        ):
+            log.info(
+                "administratively restored visit note retained",
+                event_code="visit_note_restore_frontier_preserved",
+                appointment_ref=provider_log_ref(str(trigger.appointment_id)),
+                schema_ref=provider_log_ref(str(schema.id)),
+            )
+            return False
+
+        # Preserve the prior generated output as retained history. Explicitly
+        # carry its old updated_at value through the SQL update: the generic
+        # timestamp mixin otherwise treats classification as a content edit.
         if existing_note is not None:
-            session.delete(existing_note)
+            session.execute(
+                update(cast(Any, AIVisitNote))
+                .where(cast(Any, AIVisitNote.id) == existing_note.id)
+                .values(
+                    superseded_at=datetime.now(UTC),
+                    supersession_reason=REGENERATED_NOTE_SUPERSESSION,
+                    updated_at=existing_note.updated_at,
+                )
+            )
             session.flush()
 
         log.info(
@@ -239,6 +280,83 @@ def _finalize_generated_note(
         session.add(appointment)
         session.commit()
         return True
+
+
+def _finalization_scope_is_consistent(
+    *,
+    appointment: Appointment,
+    trigger: AIVisitTranscript,
+    schema: DoctorNoteSchema,
+    latest: AIVisitTranscript,
+    existing_note: AIVisitNote | None,
+) -> bool:
+    """Require every row used for finalization to share one clinical scope."""
+
+    expected = (
+        appointment.id,
+        appointment.doctor_id,
+        appointment.patient_id,
+    )
+    if (
+        (trigger.appointment_id, trigger.doctor_id, trigger.patient_id) != expected
+        or (latest.appointment_id, latest.doctor_id, latest.patient_id) != expected
+        or schema.doctor_id != appointment.doctor_id
+    ):
+        return False
+    return existing_note is None or (
+        existing_note.appointment_id == appointment.id
+        and existing_note.doctor_id == appointment.doctor_id
+        and existing_note.doctor_note_schema_id == schema.id
+    )
+
+
+def _restore_frontier_blocks_regeneration(
+    *,
+    session: Session,
+    appointment: Appointment,
+    existing_note: AIVisitNote,
+) -> bool:
+    """Protect an administrative restore from delayed generation retries.
+
+    A restore records the latest active transcript visible while holding the
+    appointment lock. A worker generated from that transcript (or an older
+    one) must not immediately overwrite the operator's choice. A genuinely
+    later active transcript is allowed to produce a new retained version.
+    """
+
+    frontier_id = existing_note.restore_frontier_transcript_id
+    if frontier_id is None:
+        return False
+    frontier = session.exec(
+        select(AIVisitTranscript).where(AIVisitTranscript.id == frontier_id)
+    ).one_or_none()
+    if frontier is None or (
+        frontier.appointment_id,
+        frontier.doctor_id,
+        frontier.patient_id,
+    ) != (
+        appointment.id,
+        appointment.doctor_id,
+        appointment.patient_id,
+    ):
+        return True
+
+    newer_active_id = session.exec(
+        select(cast(Any, AIVisitTranscript.id))
+        .where(
+            AIVisitTranscript.appointment_id == appointment.id,
+            cast(Any, AIVisitTranscript.deleted_at).is_(None),
+            or_(
+                cast(Any, AIVisitTranscript.created_at) > frontier.created_at,
+                and_(
+                    cast(Any, AIVisitTranscript.created_at) == frontier.created_at,
+                    cast(Any, AIVisitTranscript.id) > frontier.id,
+                ),
+            ),
+        )
+        .limit(1)
+    ).first()
+    return newer_active_id is None
 
 
 def _merge_transcripts(

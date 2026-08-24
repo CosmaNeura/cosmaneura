@@ -86,7 +86,9 @@ def process_appointments_without_notes(data):
         JSON_AGG(DISTINCT d.email)::TEXT AS doctors      -- Cast JSON to TEXT for proper escaping
     FROM appointment a
     JOIN visit_audio_file vaf ON a.id = vaf.appointment_id
-    LEFT JOIN ai_visit_note avn ON a.id = avn.appointment_id
+    LEFT JOIN ai_visit_note avn
+      ON a.id = avn.appointment_id
+     AND avn.superseded_at IS NULL
     LEFT JOIN ai_visit_transcript avt ON a.id = avt.appointment_id
     LEFT JOIN doctor_note_schema dns ON dns.doctor_id = a.doctor_id
     JOIN doctor d ON a.doctor_id = d.id
