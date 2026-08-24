@@ -14,7 +14,7 @@ from fastapi import (
     Response,
     status,
 )
-from pydantic import BaseModel, Field, computed_field, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -79,7 +79,9 @@ from app.utils.email_domain import (
     email_matches_domain,
     extract_email_domain,
     is_mcd_email,
+    is_public_email_domain,
 )
+from app.utils.npi import is_valid_npi
 
 from activemodel.session_manager import aglobal_session, get_session
 from activemodel.types import TypeIDType
@@ -741,11 +743,14 @@ def _practice_payload(
     return PracticeStatus(
         legal_name=practice.legal_name,
         # Administratively reserved and organization-managed practices use the
-        # exact roster + organization code flow. Never disclose their dormant
-        # legacy reusable practice join code.
+        # exact roster + organization code flow. Solo practices do not admit
+        # workforce. Never disclose any dormant legacy join code.
         join_code=(
             None
-            if practice.organization_id is not None or practice.negotiated_baa_required
+            if practice.is_solo
+            or is_public_email_domain(practice.email_domain)
+            or practice.organization_id is not None
+            or practice.negotiated_baa_required
             else practice.join_code
         ),
         email_domain=practice.email_domain,
@@ -935,6 +940,26 @@ class CreatePracticeBody(BaseModel, extra="forbid"):
     channel: str = "direct"
     pastoral_pack: bool = False
 
+    @field_validator("npi", mode="before")
+    @classmethod
+    def validate_npi(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("NPI must be exactly 10 digits.")
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if (
+            len(normalized) != 10
+            or not normalized.isascii()
+            or not normalized.isdigit()
+        ):
+            raise ValueError("NPI must be exactly 10 digits.")
+        if not is_valid_npi(normalized):
+            raise ValueError("NPI checksum is invalid.")
+        return normalized
+
 
 @internal_api_app.post("/practice", name="create_practice")
 def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatus:
@@ -983,7 +1008,15 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
         else:
             email_domain = MCD_EMAIL_DOMAIN
 
-    npi = "".join(ch for ch in (data.npi or "") if ch.isdigit())[:10] or None
+    if not data.is_solo and is_public_email_domain(email_domain):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Group practices require a practice-owned work email domain. "
+                f"@{email_domain} can be used for a solo practice only."
+            ),
+        )
+
     normalized_email = (doctor.email or "").strip().lower()
     with get_session() as session:
         lock_roster_enrollment_email(session, normalized_email)
@@ -1052,14 +1085,16 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
 
         practice = Practice(
             legal_name=data.legal_name.strip(),
-            npi=npi,
+            npi=data.npi,
             city=(data.city or "").strip() or None,
             region=(data.region or "").strip() or None,
             is_solo=data.is_solo,
             join_code=join_code,
             email_domain=email_domain,
             origin_channel=channel,
-            pastoral_pack=data.pastoral_pack,
+            # The future feature flag remains in the schema, but onboarding
+            # must not imply that a not-yet-built capability is active.
+            pastoral_pack=False,
         )
         session.add(practice)
         session.flush()
@@ -1239,15 +1274,35 @@ class JoinCodeBody(BaseModel, extra="forbid"):
     join_code: str = Field(min_length=4, max_length=16)
 
 
+def _consume_legacy_join_attempt(doctor: Doctor) -> None:
+    """Bound legacy reusable-code guesses per authenticated account."""
+
+    key_id = hashlib.sha256(str(doctor.id).encode("ascii")).hexdigest()
+    key = f"practice-join-attempt:{key_id}"
+    redis = get_redis()
+    pipe = redis.pipeline(transaction=True)
+    pipe.incr(key)
+    pipe.expire(key, 15 * 60)
+    attempts, _ = pipe.execute()
+    if int(attempts) > 10:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many practice join attempts. Try again later.",
+        )
+
+
 @internal_api_app.post("/practice/lookup", name="lookup_practice")
 def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResult:
     doctor: Doctor = request.state.doctor
+    _consume_legacy_join_attempt(doctor)
     if doctor_has_managed_roster_assignment(doctor):
         return PracticeLookupResult()
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
     if (
         not practice
+        or practice.is_solo
+        or is_public_email_domain(practice.email_domain)
         or practice.organization_id is not None
         or practice.negotiated_baa_required
     ):
@@ -1312,6 +1367,17 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             detail="All workforce acknowledgements are required.",
         )
     doctor: Doctor = request.state.doctor
+    _consume_legacy_join_attempt(doctor)
+    code = _normalize_join_code(data.join_code)
+    requested_practice = Practice.get(join_code=code)
+    if requested_practice is not None and (
+        requested_practice.is_solo
+        or is_public_email_domain(requested_practice.email_domain)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No practice matches that join code.",
+        )
     existing = _membership_for(doctor)
     if existing:
         practice = Practice.get(id=existing.practice_id)
@@ -1337,10 +1403,11 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             status_code=status.HTTP_409_CONFLICT,
             detail="This account has organization-managed access. Use that enrollment path.",
         )
-    code = _normalize_join_code(data.join_code)
-    practice = Practice.get(join_code=code)
+    practice = requested_practice
     if (
         not practice
+        or practice.is_solo
+        or is_public_email_domain(practice.email_domain)
         or practice.organization_id is not None
         or practice.negotiated_baa_required
     ):
@@ -1393,7 +1460,9 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             assert payload
             return payload
         if (
-            locked_practice.organization_id is not None
+            locked_practice.is_solo
+            or is_public_email_domain(locked_practice.email_domain)
+            or locked_practice.organization_id is not None
             or locked_practice.negotiated_baa_required
         ):
             raise HTTPException(

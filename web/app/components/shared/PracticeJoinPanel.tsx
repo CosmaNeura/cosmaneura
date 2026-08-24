@@ -186,7 +186,9 @@ export function PracticeJoinPanel({
       </p>
       <p className="mt-1 text-lg font-semibold">{practice.legal_name}</p>
       <p className="text-muted-foreground mt-1 text-sm">
-        Workforce must sign in from @{practice.email_domain}
+        {practice.join_code
+          ? `Workforce must sign in from @${practice.email_domain}`
+          : `@${practice.email_domain} is the practice email domain`}
       </p>
       {practice.pilot_access_grant_active ? (
         <p className="mt-1 text-sm">
@@ -195,7 +197,7 @@ export function PracticeJoinPanel({
       ) : practice.baa_accepted ? (
         <p className="mt-1 text-sm">
           Cosmaneura Inc BAA is in force
-          {practice.pastoral_pack ? " · pastoral pack on" : ""}.
+          {practice.pastoral_pack ? " · pastoral pack coming soon" : ""}.
         </p>
       ) : (
         <p className="text-destructive mt-1 text-sm">
@@ -276,7 +278,7 @@ export function PracticeJoinPanel({
           : isOwner
             ? practice.join_code
               ? "Share this code with clinicians on the same work-email domain. They attest under this BAA — they do not sign a second agreement."
-              : "Workforce access is managed through the organization’s approved roster."
+              : "This practice does not accept reusable join-code enrollment."
             : practice.authorization_basis === "organization_roster"
               ? "Your access is authorized through the organization’s approved roster under this BAA; you did not personally attest to it."
               : "You attested under this practice’s Cosmaneura Inc BAA."}

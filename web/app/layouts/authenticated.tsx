@@ -8,6 +8,7 @@ import {
   SETTINGS_STALE_TIME,
   queryClient,
 } from "~/configuration/tanstack-query"
+import { isAccountRecoveryRequired } from "~/lib/account-recovery"
 
 import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
@@ -74,10 +75,18 @@ export function shouldRedirectToBillingRecovery(
 }
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
-  const data = await queryClient.ensureQueryData({
-    ...settingsDataOptions(),
-    staleTime: SETTINGS_STALE_TIME,
-  })
+  let data
+  try {
+    data = await queryClient.ensureQueryData({
+      ...settingsDataOptions(),
+      staleTime: SETTINGS_STALE_TIME,
+    })
+  } catch (error) {
+    if (isAccountRecoveryRequired(error)) {
+      throw redirect(href("/onboarding"))
+    }
+    throw error
+  }
 
   if (needsOnboarding(data)) {
     throw redirect(href("/onboarding"))

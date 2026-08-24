@@ -275,4 +275,13 @@ describe("PracticeJoinPanel billing recovery", () => {
       screen.queryByText(/you attested under this practice/i),
     ).not.toBeInTheDocument()
   })
+
+  it("does not offer reusable enrollment when no join code is available", () => {
+    render(<PracticeJoinPanel practice={practice({ join_code: null })} />)
+
+    expect(
+      screen.getByText(/does not accept reusable join-code enrollment/i),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("TESTCODE")).not.toBeInTheDocument()
+  })
 })

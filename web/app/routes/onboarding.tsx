@@ -34,6 +34,7 @@ import {
   uploadExampleNote,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
+import { isAccountRecoveryRequired } from "~/lib/account-recovery"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import {
   BAA_DOC_ID,
@@ -45,7 +46,13 @@ import {
   baaCheckboxLabel,
 } from "~/lib/baa"
 import { type Channel, resolveChannel } from "~/lib/channel"
-import { MCD_EMAIL_DOMAIN, isMcdEmail } from "~/lib/email-domain"
+import {
+  MCD_EMAIL_DOMAIN,
+  extractEmailDomain,
+  isMcdEmail,
+  isPublicEmailDomain,
+} from "~/lib/email-domain"
+import { isValidNpi } from "~/lib/npi"
 import {
   type BaaDocument,
   type JoinMismatch,
@@ -83,7 +90,10 @@ export function canLeaveOnboarding(data: {
 }
 
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
-  const { data } = await settingsData()
+  const { data, error, response } = await settingsData()
+  if (!data && isAccountRecoveryRequired(error, response?.status)) {
+    return { accountRecoveryRequired: true as const }
+  }
   invariant(data, "settings data failed to load")
 
   const [practice, organizationAccess] = await Promise.all([
@@ -103,14 +113,25 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     new URL(request.url).searchParams.get("channel"),
   )
 
-  return { ...data, email, channel, practice, organizationAccess }
+  return {
+    accountRecoveryRequired: false as const,
+    ...data,
+    email,
+    channel,
+    practice,
+    organizationAccess,
+  }
 }
 
 export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
+  const onboardingData =
+    "practice" in loaderData && !loaderData.accountRecoveryRequired
+      ? loaderData
+      : null
   const [practice, setPractice] = useState<PracticeStatus | null>(
-    loaderData.practice,
+    onboardingData?.practice ?? null,
   )
-  const zoomEnabled = isZoomEnabled(loaderData.email)
+  const zoomEnabled = isZoomEnabled(onboardingData?.email ?? null)
 
   return (
     <div className="bg-background min-h-screen">
@@ -118,9 +139,9 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
         <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-5">
           <BrandLogo variant="dark" size="sm" />
           <div className="flex items-center gap-3">
-            {loaderData.email ? (
+            {onboardingData?.email ? (
               <span className="text-muted-foreground hidden text-sm sm:inline">
-                {loaderData.email}
+                {onboardingData.email}
               </span>
             ) : null}
             <UserButton />
@@ -128,16 +149,18 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
         </div>
       </header>
       <main className="mx-auto max-w-5xl px-5 py-10">
-        {practice?.access_revoked ? (
+        {!onboardingData ? (
+          <AccountRecoveryRequired />
+        ) : practice?.access_revoked ? (
           <OrganizationAccessRevoked practice={practice} />
-        ) : !practiceReady(practice) && loaderData.organizationAccess ? (
+        ) : !practiceReady(practice) && onboardingData.organizationAccess ? (
           <OrganizationAccessFlow
-            opportunity={loaderData.organizationAccess}
-            onboardingCompleted={loaderData.onboarding_completed}
+            opportunity={onboardingData.organizationAccess}
+            onboardingCompleted={onboardingData.onboarding_completed}
           />
         ) : practiceReady(practice) ? (
           <OptionalSetup
-            biography={loaderData.biography}
+            biography={onboardingData.biography}
             zoomEnabled={zoomEnabled}
             practice={practice}
           />
@@ -145,11 +168,27 @@ export default function OnboardingPage({ loaderData }: Route.ComponentProps) {
           <PracticeFlow
             practice={practice}
             onPractice={setPractice}
-            channel={loaderData.channel}
-            email={loaderData.email}
+            channel={onboardingData.channel}
+            email={onboardingData.email}
           />
         )}
       </main>
+    </div>
+  )
+}
+
+export function AccountRecoveryRequired() {
+  return (
+    <div className="max-w-xl">
+      <StepKicker n="01" label="Account recovery" />
+      <DisplayTitle>Your records are safe</DisplayTitle>
+      <p className="text-muted-foreground mt-4 leading-relaxed">
+        This email is linked to a previous sign-in. Contact Cosmaneura support
+        so we can securely reconnect this sign-in to your existing account.
+      </p>
+      <Button asChild size="lg" className="mt-8">
+        <a href="mailto:info@cosmaneura.com">Contact support</a>
+      </Button>
     </div>
   )
 }
@@ -467,7 +506,7 @@ function OwnerFlow({
   )
 }
 
-function PracticeForm({
+export function PracticeForm({
   onPractice,
   onBack,
   channel,
@@ -491,12 +530,29 @@ function PracticeForm({
   const [region, setRegion] = useState("")
   const [npi, setNpi] = useState("")
   const [isSolo, setIsSolo] = useState(formChannel !== "mcd")
-  const [pastoralPack, setPastoralPack] = useState(formChannel !== "direct")
+  const [domainConfirmed, setDomainConfirmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const controllingDomain = mcdOk ? MCD_EMAIL_DOMAIN : extractEmailDomain(email)
+  const publicEmailDomain = isPublicEmailDomain(controllingDomain)
+  const normalizedNpi = npi.trim()
+  const npiError =
+    normalizedNpi && !/^\d{10}$/.test(normalizedNpi)
+      ? "NPI must be exactly 10 digits."
+      : normalizedNpi && !isValidNpi(normalizedNpi)
+        ? "NPI checksum is invalid."
+        : null
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (npiError) {
+      setError(npiError)
+      return
+    }
+    if (!isSolo && !domainConfirmed) {
+      setError(`Confirm @${controllingDomain} before continuing.`)
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -504,10 +560,10 @@ function PracticeForm({
         legal_name: legalName,
         city,
         region,
-        npi,
+        npi: normalizedNpi,
         is_solo: isSolo,
         channel: formChannel,
-        pastoral_pack: pastoralPack,
+        pastoral_pack: false,
       })
       onPractice(next)
     } catch (err) {
@@ -537,20 +593,29 @@ function PracticeForm({
         </div>
       ) : channel === "mcd" && !mcdOk ? (
         <div className="mt-4 rounded-xl border border-[var(--brand-gold)] bg-[var(--brand-cream)] px-4 py-3 text-sm text-[var(--brand-navy-deep)]">
-          This is a Cosmas practice on your email, not an MCD tenant. Pastoral
-          pack can stay on.
+          This is a Cosmas practice on your email, not an MCD tenant. The
+          conscience and pastoral pack will be available soon.
         </div>
       ) : null}
       <StepKicker n="02" label="Covered entity" />
       <DisplayTitle>Name the practice</DisplayTitle>
       <p className="text-muted-foreground mt-3">
-        This legal name appears on the BAA with {COMPANY}. Solo or group — one
-        agreement either way. Workforce will have to sign in from the same email
-        domain as this account.
+        This legal name appears on the BAA with {COMPANY}.{" "}
+        {publicEmailDomain
+          ? "This account can create a solo practice."
+          : "Solo or group — one agreement either way. Workforce will have to sign in from the same email domain as this account."}
         {formChannel === "mcd"
           ? " MyCatholicDoctor is the network. Cosmas is still the product."
           : ""}
       </p>
+      {controllingDomain ? (
+        <div className="bg-card mt-5 rounded-lg border px-4 py-3 text-sm">
+          <span className="font-medium text-[var(--brand-navy-deep)]">
+            @{controllingDomain}
+          </span>{" "}
+          will be the controlling email domain for this practice.
+        </div>
+      ) : null}
       <form onSubmit={(e) => void onSubmit(e)} className="mt-8 grid gap-5">
         <Field label="Legal name of the covered entity" htmlFor="legal">
           <Input
@@ -586,12 +651,17 @@ function PracticeForm({
           <Input
             id="npi"
             inputMode="numeric"
-            maxLength={10}
             value={npi}
-            onChange={(e) =>
-              setNpi(e.target.value.replace(/\D/g, "").slice(0, 10))
-            }
+            onChange={(e) => setNpi(e.target.value)}
+            aria-invalid={Boolean(npiError)}
+            aria-describedby={npiError ? "npi-error" : undefined}
+            placeholder="10 digits"
           />
+          {npiError ? (
+            <p id="npi-error" role="alert" className="text-destructive text-xs">
+              {npiError}
+            </p>
+          ) : null}
         </Field>
         <fieldset className="grid gap-2">
           <legend className="text-sm font-medium">Who practices here?</legend>
@@ -600,35 +670,67 @@ function PracticeForm({
               type="radio"
               className="sr-only"
               checked={isSolo}
-              onChange={() => setIsSolo(true)}
+              onChange={() => {
+                setIsSolo(true)
+                setDomainConfirmed(false)
+              }}
             />
             Solo — I am the only clinician on this BAA
           </label>
-          <label className={choiceClass(!isSolo)}>
+          <label
+            className={cn(
+              choiceClass(!isSolo),
+              publicEmailDomain && "cursor-not-allowed opacity-60",
+            )}
+          >
             <input
               type="radio"
               className="sr-only"
               checked={!isSolo}
+              disabled={publicEmailDomain}
               onChange={() => setIsSolo(false)}
             />
             Group — I will invite workforce under this same BAA
           </label>
+          {publicEmailDomain ? (
+            <p className="text-muted-foreground mt-1 text-xs">
+              Shared email domains such as @{controllingDomain} can create a
+              solo practice. Use a practice-owned work email to invite a group.
+            </p>
+          ) : null}
         </fieldset>
-        <label className="bg-card flex gap-3 rounded-lg border px-4 py-3 text-sm leading-snug">
+        {!isSolo && controllingDomain ? (
+          <label className="bg-card flex gap-3 rounded-lg border px-4 py-3 text-sm leading-snug">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 accent-[var(--brand-navy-deep)]"
+              checked={domainConfirmed}
+              onChange={(e) => setDomainConfirmed(e.target.checked)}
+            />
+            <span>
+              I confirm that @{controllingDomain} is the practice’s work email
+              domain. Clinicians using another domain will not be able to join.
+            </span>
+          </label>
+        ) : null}
+        <label className="bg-muted/40 flex gap-3 rounded-lg border px-4 py-3 text-sm leading-snug">
           <input
             type="checkbox"
+            disabled
             className="mt-0.5 size-4 accent-[var(--brand-navy-deep)]"
-            checked={pastoralPack}
-            onChange={(e) => setPastoralPack(e.target.checked)}
           />
           <span>
-            Enable the conscience and pastoral pack (NFP terminology, parish
-            correspondence under per-event approval). Off by default for
-            practices that are not Catholic.
+            <span className="font-medium">Coming soon:</span> the conscience and
+            pastoral pack, including NFP terminology and parish correspondence
+            under per-event approval.
           </span>
         </label>
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
-        <Button type="submit" disabled={busy} size="lg">
+        <Button
+          type="submit"
+          disabled={busy || Boolean(npiError) || (!isSolo && !domainConfirmed)}
+          size="lg"
+        >
           {busy ? "Saving…" : "Continue to the BAA"}
         </Button>
       </form>

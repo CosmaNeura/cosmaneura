@@ -5,6 +5,7 @@ import {
   emailMatchesDomain,
   extractEmailDomain,
   isMcdEmail,
+  isPublicEmailDomain,
 } from "./email-domain"
 
 describe("email domain matching", () => {
@@ -31,5 +32,12 @@ describe("email domain matching", () => {
     expect(isMcdEmail("lead@mycatholicdoctor.com")).toBe(true)
     expect(isMcdEmail(null)).toBe(false)
     expect(emailMatchesDomain("a@b.com", null)).toBe(false)
+  })
+
+  it("identifies shared consumer domains without blocking custom domains", () => {
+    expect(isPublicEmailDomain(" Gmail.COM ")).toBe(true)
+    expect(isPublicEmailDomain("@outlook.com")).toBe(true)
+    expect(isPublicEmailDomain("clinic.example.com")).toBe(false)
+    expect(isPublicEmailDomain("clinic.gmail.com")).toBe(false)
   })
 })
