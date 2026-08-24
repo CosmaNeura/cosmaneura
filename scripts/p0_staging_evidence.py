@@ -35,6 +35,9 @@ from pathlib import Path
 from typing import Any, Literal, LiteralString, Protocol
 
 import psycopg
+from typeid import TypeID
+from typeid.errors import TypeIDException
+from uuid6 import UUID
 
 CONNECT_TIMEOUT_SECONDS = 10
 STATEMENT_TIMEOUT_MILLISECONDS = 30_000
@@ -535,6 +538,32 @@ def _required_row_string(row: Mapping[str, Any], field: str) -> str:
     return value
 
 
+def _external_typeid(value: object, *, prefix: str) -> str:
+    """Normalize PostgreSQL UUID JSON into the TypeID used by plan hashing."""
+
+    if not isinstance(value, str) or not value:
+        raise EvidenceFailure("P0 row binding is invalid")
+    try:
+        if value.startswith(f"{prefix}_"):
+            parsed = TypeID.from_string(value)
+            if parsed.prefix != prefix or str(parsed) != value:
+                raise ValueError
+        else:
+            suffix = UUID(value)
+            if str(suffix) != value:
+                raise ValueError
+            parsed = TypeID.from_uuid(suffix, prefix)
+    except (TypeError, ValueError, TypeIDException):
+        raise EvidenceFailure("P0 row binding is invalid") from None
+    return str(parsed)
+
+
+def _optional_external_typeid(value: object, *, prefix: str) -> str | None:
+    if value is None:
+        return None
+    return _external_typeid(value, prefix=prefix)
+
+
 def _normalized_email_sha256(value: object) -> str:
     if not isinstance(value, str):
         raise EvidenceFailure("superadmin identity binding is invalid")
@@ -611,10 +640,16 @@ def _validate_continuity_bindings(
             identity_payloads.append(
                 {
                     "continuity_basis": identity.get("continuity_basis"),
-                    "doctor_id": identity.get("doctor_id_snapshot"),
+                    "doctor_id": _external_typeid(
+                        identity.get("doctor_id_snapshot"),
+                        prefix="doctor",
+                    ),
                     "email_sha256": identity.get("email_sha256"),
                     "issuer_sha256": _plain_sha256(issuer),
-                    "practice_id": identity.get("practice_id_snapshot"),
+                    "practice_id": _optional_external_typeid(
+                        identity.get("practice_id_snapshot"),
+                        prefix="practice",
+                    ),
                     "subject_sha256": _plain_sha256(subject),
                 }
             )
@@ -647,7 +682,9 @@ def _superadmin_identity_binding_sha256(grant: Mapping[str, Any]) -> str:
             "clerk_subject_sha256": _plain_sha256(
                 _required_row_string(grant, "clerk_subject")
             ),
-            "doctor_id_sha256": _plain_sha256(_required_row_string(grant, "doctor_id")),
+            "doctor_id_sha256": _plain_sha256(
+                _external_typeid(grant.get("doctor_id"), prefix="doctor")
+            ),
             "environment": grant.get("environment"),
         }
     )

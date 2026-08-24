@@ -16,6 +16,14 @@ import pytest
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts" / "p0_staging_evidence.py"
+DOCTOR_ONE_DB_ID = "01890a5d-ac96-7ea8-8755-9da1b9f30667"
+DOCTOR_ONE_TYPEID = "doctor_01h455vb4pftm8encxm6wz61k7"
+DOCTOR_TWO_DB_ID = "01890a5d-ac96-7ea8-8755-9da1b9f30668"
+DOCTOR_TWO_TYPEID = "doctor_01h455vb4pftm8encxm6wz61k8"
+DOCTOR_THREE_DB_ID = "01890a5d-ac96-7ea8-8755-9da1b9f30669"
+DOCTOR_THREE_TYPEID = "doctor_01h455vb4pftm8encxm6wz61k9"
+PRACTICE_ONE_DB_ID = "01890a5d-ac96-7ea8-8755-9da1b9f30670"
+PRACTICE_ONE_TYPEID = "practice_01h455vb4pftm8encxm6wz61kg"
 
 
 def _load_evidence() -> ModuleType:
@@ -55,7 +63,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
     rows = {spec.name: [] for spec in module.TABLE_SPECS}
     rows["doctor"] = [
         {
-            "id": "doctor_private_one",
+            "id": DOCTOR_ONE_DB_ID,
             "clerk_id": "user_private_one",
             "email": "private-one@example.invalid",
             "role": "admin",
@@ -69,7 +77,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
             "updated_at": "2026-08-24T12:00:00+00:00",
         },
         {
-            "id": "doctor_private_two",
+            "id": DOCTOR_TWO_DB_ID,
             "clerk_id": "user_private_two",
             "email": "private-two@example.invalid",
             "role": "normal",
@@ -238,7 +246,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
         {
             "id": "pilot_grant_private_amendment",
             "clerk_id": "user_private_three",
-            "doctor_id_snapshot": "doctor_private_three",
+            "doctor_id_snapshot": DOCTOR_THREE_DB_ID,
             "practice_id_snapshot": None,
             "email_snapshot": "private-three@example.invalid",
             "email_sha256": module._plain_sha256("private-three@example.invalid"),
@@ -273,7 +281,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
             "grant_id": "pilot_grant_private_amendment",
             "clerk_issuer": "https://clerk.staging.invalid",
             "email_sha256": module._plain_sha256("private-three@example.invalid"),
-            "doctor_id_snapshot": "doctor_private_three",
+            "doctor_id_snapshot": DOCTOR_THREE_DB_ID,
             "practice_id_snapshot": None,
             "safe_prelogin": False,
             "continuity_basis": "reviewed_operational_user_omission",
@@ -286,7 +294,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
             "capability_kind": "platform_admin",
             "clerk_issuer": "https://clerk.staging.invalid",
             "clerk_subject": "user_private_one",
-            "doctor_id": "doctor_private_one",
+            "doctor_id": DOCTOR_ONE_DB_ID,
             "issuer_sha256": module._plain_sha256("https://clerk.staging.invalid"),
             "subject_sha256": module._plain_sha256("user_private_one"),
             "verified_primary_email_sha256": module._plain_sha256(
@@ -306,7 +314,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
             "capability_kind": "view_as",
             "clerk_issuer": "https://clerk.staging.invalid",
             "clerk_subject": "user_private_one",
-            "doctor_id": "doctor_private_one",
+            "doctor_id": DOCTOR_ONE_DB_ID,
             "issuer_sha256": module._plain_sha256("https://clerk.staging.invalid"),
             "subject_sha256": module._plain_sha256("user_private_one"),
             "verified_primary_email_sha256": module._plain_sha256(
@@ -326,7 +334,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
             "capability_kind": "view_as",
             "clerk_issuer": "https://clerk.staging.invalid",
             "clerk_subject": "user_private_two",
-            "doctor_id": "doctor_private_two",
+            "doctor_id": DOCTOR_TWO_DB_ID,
             "issuer_sha256": module._plain_sha256("https://clerk.staging.invalid"),
             "subject_sha256": module._plain_sha256("user_private_two"),
             "verified_primary_email_sha256": module._plain_sha256(
@@ -418,7 +426,7 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
             "identities": [
                 {
                     "continuity_basis": amendment_identity["continuity_basis"],
-                    "doctor_id": amendment_identity["doctor_id_snapshot"],
+                    "doctor_id": DOCTOR_THREE_TYPEID,
                     "email_sha256": amendment_identity["email_sha256"],
                     "issuer_sha256": module._plain_sha256(
                         amendment_identity["clerk_issuer"]
@@ -525,6 +533,41 @@ def _rows(module: ModuleType) -> dict[str, list[dict[str, Any]]]:
         {"environment": "production", "event_type": "began", "outcome": "accepted"},
     ]
     return rows
+
+
+def test_external_typeid_normalizes_database_uuid_for_service_plan_hashing():
+    module = _load_evidence()
+    grant = {
+        "capability_kind": "platform_admin",
+        "clerk_issuer": "https://clerk.staging.invalid",
+        "clerk_subject": "user_private_one",
+        "doctor_id": DOCTOR_ONE_DB_ID,
+        "environment": "staging",
+    }
+
+    expected = module._canonical_sha256(
+        {
+            "capability_kind": "platform_admin",
+            "clerk_issuer_sha256": module._plain_sha256(
+                "https://clerk.staging.invalid"
+            ),
+            "clerk_subject_sha256": module._plain_sha256("user_private_one"),
+            "doctor_id_sha256": module._plain_sha256(DOCTOR_ONE_TYPEID),
+            "environment": "staging",
+        }
+    )
+
+    assert module._superadmin_identity_binding_sha256(grant) == expected
+    assert (
+        module._external_typeid(DOCTOR_TWO_DB_ID, prefix="doctor") == DOCTOR_TWO_TYPEID
+    )
+    assert (
+        module._optional_external_typeid(PRACTICE_ONE_DB_ID, prefix="practice")
+        == PRACTICE_ONE_TYPEID
+    )
+    assert module._optional_external_typeid(None, prefix="practice") is None
+    with pytest.raises(module.EvidenceFailure, match="P0 row binding is invalid"):
+        module._external_typeid("doctor_private_one", prefix="doctor")
 
 
 class FakeResult:
