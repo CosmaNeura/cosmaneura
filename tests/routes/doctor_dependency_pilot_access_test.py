@@ -184,3 +184,35 @@ def test_recreated_identity_gets_recovery_message_without_stealing_email() -> No
     assert replacement_clerk_id not in serialized
     assert email not in serialized
     assert logs[-1]["event_code"] == "account_identity_recovery_required"
+
+
+def test_case_variant_legacy_shell_requires_recovery() -> None:
+    replacement_clerk_id = "user_case_variant_shell"
+    email = "returning-private@example.test"
+    provisional = FakeDoctor(clerk_id=replacement_clerk_id, email=email.upper())
+    existing = FakeDoctor(clerk_id="user_deleted_identity", email=email)
+    existing.id = "existing-doctor-private-sentinel"
+
+    with (
+        request_cycle_context({}),
+        patch(
+            "app.routes.dependencies.doctor.revoked_pilot_access_grant",
+            return_value=None,
+        ),
+        patch(
+            "app.routes.dependencies.doctor._active_grant_for_clerk",
+            return_value=None,
+        ),
+        patch("app.routes.dependencies.doctor.Doctor.upsert", return_value=provisional),
+        patch(
+            "app.routes.dependencies.doctor._doctors_for_normalized_email",
+            return_value=[existing, provisional],
+        ),
+        patch("app.routes.dependencies.doctor._fetch_clerk_email") as fetch_email,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        inject_doctor_record(_request(replacement_clerk_id))
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert exc_info.value.detail == ACCOUNT_RECOVERY_REQUIRED
+    fetch_email.assert_not_called()

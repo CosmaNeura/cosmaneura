@@ -64,7 +64,7 @@ def test_live_rebind_requires_same_verified_email_and_absent_predecessor(monkeyp
     ) == ClerkCohortIdentity(clerk_id=replacement, email=email)
 
 
-def _scope(*, provisional: bool = True):
+def _scope(*, provisional: bool = True, provisional_email: str | None = None):
     suffix = secrets.token_hex(5)
     email = f"identity-{suffix}@example.com"
     stale_subject = f"user_stale_{suffix}"
@@ -91,7 +91,7 @@ def _scope(*, provisional: bool = True):
     if provisional:
         replacement_shell = Doctor(
             clerk_id=replacement_subject,
-            email=cast(str, None),
+            email=cast(str, provisional_email),
             biography=None,
         ).save()
     replacement = ClerkCohortIdentity(
@@ -141,6 +141,27 @@ def test_rebind_preserves_provider_records_and_tombstones_empty_shell():
     )
     assert retry.changed is False
     assert retry.plan_sha256 == plan.plan_sha256
+
+
+def test_rebind_recovers_a_stateless_case_variant_email_shell():
+    doctor, _, provisional, args = _scope(provisional_email="IDENTITY-PLACEHOLDER")
+    assert provisional is not None
+    provisional.email = args["replacement"].email.upper()
+    provisional.save()
+
+    plan = plan_doctor_identity_rebind(**args)
+    result = rebind_doctor_identity(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 12, 0, tzinfo=UTC),
+    )
+
+    doctor.refresh()
+    provisional.refresh()
+    assert result.changed is True
+    assert doctor.clerk_id == args["replacement"].clerk_id
+    assert provisional.deleted_at is not None
+    assert provisional.email is None
 
 
 def test_rebind_refuses_replacement_shell_with_records():

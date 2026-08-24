@@ -75,6 +75,19 @@ def _deny_unverified_pilot_identity(clerk_id: str) -> None:
     )
 
 
+def _require_account_recovery(*, doctor: Doctor, conflicting_owner: Doctor) -> None:
+    log.warning(
+        "account identity recovery required",
+        event_code="account_identity_recovery_required",
+        doctor_ref=provider_log_ref(f"doctor:{conflicting_owner.id}"),
+        clerk_ref=provider_log_ref(f"clerk-user:{doctor.clerk_id}"),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=ACCOUNT_RECOVERY_REQUIRED,
+    )
+
+
 def inject_doctor_record(request: Request):
     """
     If a valid Clerk user is detected which is not in the DB, create it. Upstream logic talks to Clerk and makes sure
@@ -119,24 +132,20 @@ def inject_doctor_record(request: Request):
         ):
             _deny_unverified_pilot_identity(clerk_id)
 
-    if not doctor.email:
-        email = normalized_live_email or _fetch_clerk_email(clerk_id)
-        if email:
-            email_owners = _doctors_for_normalized_email(email)
-            conflicting_owners = [
-                owner for owner in email_owners if owner.id != doctor.id
-            ]
-            if conflicting_owners:
-                log.warning(
-                    "account identity recovery required",
-                    event_code="account_identity_recovery_required",
-                    doctor_ref=provider_log_ref(f"doctor:{conflicting_owners[0].id}"),
-                    clerk_ref=provider_log_ref(f"clerk-user:{clerk_id}"),
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=ACCOUNT_RECOVERY_REQUIRED,
-                )
+    email = (
+        doctor.email.strip().lower()
+        if doctor.email
+        else normalized_live_email or _fetch_clerk_email(clerk_id)
+    )
+    if email:
+        email_owners = _doctors_for_normalized_email(email)
+        conflicting_owners = [owner for owner in email_owners if owner.id != doctor.id]
+        if conflicting_owners:
+            _require_account_recovery(
+                doctor=doctor,
+                conflicting_owner=conflicting_owners[0],
+            )
+        if not doctor.email:
             doctor.email = email
 
     if grant is not None and (

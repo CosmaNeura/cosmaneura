@@ -375,6 +375,11 @@ def _plan_sha256(
         "pilot_grant_id": str(pilot_grant.id) if pilot_grant else None,
         "practice_id": str(member.practice_id),
         "provisional_doctor_id": str(provisional.id) if provisional else None,
+        "provisional_email_sha256": (
+            _sha256(provisional.email.strip().lower())
+            if provisional is not None and provisional.email
+            else None
+        ),
         "reason": reason,
         "replacement_subject_sha256": _sha256(replacement.clerk_id),
         "schema_version": 1,
@@ -478,10 +483,14 @@ def _evaluate(
         provisional_statement = provisional_statement.with_for_update()
     provisional = cast(Doctor | None, session.exec(provisional_statement).one_or_none())
     if provisional is not None:
+        provisional_email_matches = bool(
+            provisional.email
+            and hmac.compare_digest(provisional.email.strip().lower(), email)
+        )
         if (
             provisional.id == doctor.id
             or provisional.deleted_at is not None
-            or provisional.email
+            or (provisional.email and not provisional_email_matches)
             or provisional.role != DoctorRole.normal
             or provisional.api_key is not None
             or provisional.onboarding_completed_at is not None
@@ -497,7 +506,12 @@ def _evaluate(
     email_owners = session.exec(
         select(Doctor).where(func.lower(func.btrim(Doctor.email)) == email)
     ).all()
-    if len(email_owners) != 1 or email_owners[0].id != doctor.id:
+    allowed_email_owner_ids = {doctor.id}
+    if provisional is not None:
+        allowed_email_owner_ids.add(provisional.id)
+    if doctor.id not in {owner.id for owner in email_owners} or any(
+        owner.id not in allowed_email_owner_ids for owner in email_owners
+    ):
         raise DoctorIdentityRebindError("the retained email ownership is ambiguous")
 
     grant_statement = select(PilotAccessGrandfatherGrant).where(
@@ -670,6 +684,7 @@ def rebind_doctor_identity(
                 evaluated.provisional.id,
                 replacement.clerk_id,
             )
+            evaluated.provisional.email = None
             evaluated.provisional.deleted_at = current
             session.add(evaluated.provisional)
             session.flush()
