@@ -1,8 +1,16 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { initializePostHogForLocation, isPublicIntakeLocation } from "./posthog"
 
 describe("PostHog privacy boundaries", () => {
+  beforeEach(() => {
+    vi.stubEnv("VITE_INTAKE_CHAT_DOMAIN", "intake.example.test")
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
   it("recognizes the dedicated intake host and intake routes exactly", () => {
     expect(
       isPublicIntakeLocation(
@@ -40,6 +48,8 @@ describe("PostHog privacy boundaries", () => {
   })
 
   it("keeps normal app telemetry explicit and disables automatic capture", () => {
+    vi.stubEnv("VITE_POSTHOG_KEY", "test-posthog-key")
+    vi.stubEnv("VITE_POSTHOG_HOST", "https://posthog.example.invalid")
     const initialized = { capture: vi.fn() }
     const client = { init: vi.fn(() => initialized) }
 
@@ -50,7 +60,7 @@ describe("PostHog privacy boundaries", () => {
 
     expect(result).toBe(initialized)
     expect(client.init).toHaveBeenCalledWith(
-      import.meta.env.VITE_POSTHOG_KEY,
+      "test-posthog-key",
       expect.objectContaining({
         autocapture: false,
         capture_pageview: false,
