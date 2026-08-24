@@ -36,7 +36,44 @@ export function needsOnboarding(
   )
 }
 
-export async function clientLoader(_: Route.ClientLoaderArgs) {
+export function needsBillingRecovery(
+  data:
+    | {
+        is_admin: boolean
+        practice_ready: boolean
+        billing_recovery_required: boolean
+      }
+    | null
+    | undefined,
+) {
+  return Boolean(
+    data &&
+      !data.is_admin &&
+      data.practice_ready &&
+      data.billing_recovery_required,
+  )
+}
+
+export function billingRecoveryLocation(requestUrl: string) {
+  const current = new URL(requestUrl)
+  const params = new URLSearchParams({
+    billing: "required",
+    returnTo: `${current.pathname}${current.search}`,
+  })
+  return `${href("/settings")}?${params.toString()}`
+}
+
+export function shouldRedirectToBillingRecovery(
+  data: Parameters<typeof needsBillingRecovery>[0],
+  requestUrl: string,
+) {
+  return (
+    needsBillingRecovery(data) &&
+    new URL(requestUrl).pathname !== href("/settings")
+  )
+}
+
+export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const data = await queryClient.ensureQueryData({
     ...settingsDataOptions(),
     staleTime: SETTINGS_STALE_TIME,
@@ -44,6 +81,10 @@ export async function clientLoader(_: Route.ClientLoaderArgs) {
 
   if (needsOnboarding(data)) {
     throw redirect(href("/onboarding"))
+  }
+
+  if (shouldRedirectToBillingRecovery(data, request.url)) {
+    throw redirect(billingRecoveryLocation(request.url))
   }
 
   return null

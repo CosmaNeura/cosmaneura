@@ -204,7 +204,7 @@ export function createBillingCheckout() {
   return practiceRequest<{ url: string }>("/practice/billing/checkout", {
     method: "POST",
     body: JSON.stringify({
-      success_path: "/settings?billing=success",
+      success_path: "/settings?billing=success&returnTo=%2Fnotes",
       cancel_path: "/settings?billing=cancelled",
     }),
   })

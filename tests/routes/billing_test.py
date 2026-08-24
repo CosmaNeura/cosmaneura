@@ -273,6 +273,11 @@ def test_expired_comp_is_reported_inactive_and_can_reactivate(
     assert body["entitled"] is False
     assert body["billing_enabled"] is True
 
+    settings = authenticated_client.get(api_app.url_path_for("settings_data"))
+    assert settings.status_code == status.HTTP_200_OK
+    assert settings.json()["practice_ready"] is True
+    assert settings.json()["billing_recovery_required"] is True
+
     checkout = authenticated_client.post(
         api_app.url_path_for("create_billing_checkout"),
         json={},

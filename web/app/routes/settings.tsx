@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useForm } from "react-hook-form"
 import { MetaFunction, useRevalidator } from "react-router"
 import { z } from "zod"
@@ -15,6 +15,7 @@ import { LabRangeSettings } from "~/components/LabRangeSettings"
 import { NoteCustomizationForm } from "~/components/NoteCustomizationForm"
 import { TerminologySettings } from "~/components/TerminologySettings"
 import { Icons } from "~/components/icons"
+import { BillingReturnNotice } from "~/components/shared/BillingReturnNotice"
 import { ImageDropzone } from "~/components/shared/ImageDropzone"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { PracticeJoinPanel } from "~/components/shared/PracticeJoinPanel"
@@ -36,6 +37,7 @@ import {
   zoomAuthUrl,
   zoomDisconnect,
 } from "~/configuration/client"
+import { queryClient } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { BAA_PDF_URL } from "~/lib/baa"
@@ -53,19 +55,26 @@ import { isZoomEnabled } from "~/utils/zoom-feature"
 import { useUser } from "@clerk/clerk-react"
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
+import { settingsDataOptions } from "client/@tanstack/react-query.gen"
 
 type NoteSchema = Route.ComponentProps["loaderData"]["notes_schema"][number]
 
 function PracticeSettings({
   practice,
   acceptances,
+  onPracticeChange,
 }: {
   practice: PracticeStatus | null
   acceptances: BaaAcceptanceRecord[]
+  onPracticeChange: (practice: PracticeStatus) => void
 }) {
   if (!practice) return null
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
+      <BillingReturnNotice
+        practice={practice}
+        onPracticeChange={onPracticeChange}
+      />
       <h3>Practice</h3>
       <PracticeJoinPanel practice={practice} showBillingActions />
       {acceptances.length > 0 ? (
@@ -654,6 +663,15 @@ function NatMedConnection({ hasSubscription }: { hasSubscription: boolean }) {
 
 export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const { user } = useUser()
+  const [practice, setPractice] = useState(loaderData.practice)
+  useEffect(() => setPractice(loaderData.practice), [loaderData.practice])
+  const handlePracticeChange = useCallback((next: PracticeStatus) => {
+    setPractice(next)
+    void queryClient.invalidateQueries({
+      queryKey: settingsDataOptions().queryKey,
+      refetchType: "none",
+    })
+  }, [])
   const referenceToolkitEnabled = isReferenceToolkitEnabled(
     user?.primaryEmailAddress?.emailAddress,
   )
@@ -674,8 +692,9 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
         </header>
         <InnerScrollableContent>
           <PracticeSettings
-            practice={loaderData.practice}
+            practice={practice}
             acceptances={loaderData.baa_acceptances}
+            onPracticeChange={handlePracticeChange}
           />
           <BiographyInput biography={loaderData.biography} />
           {terminologyEnabled && (

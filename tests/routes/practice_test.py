@@ -117,6 +117,7 @@ def test_grandfathered_doctor_can_complete_without_practice(
     assert settings.status_code == status.HTTP_200_OK
     assert settings.json()["onboarding_completed"] is True
     assert settings.json()["practice_ready"] is True
+    assert settings.json()["billing_recovery_required"] is False
 
     notes = bare_authenticated_client.get(api_app.url_path_for("note_list"))
     assert notes.status_code == status.HTTP_200_OK

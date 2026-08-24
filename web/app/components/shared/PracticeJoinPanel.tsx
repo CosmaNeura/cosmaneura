@@ -15,6 +15,7 @@ export type BillingActionKind =
   | "none"
   | "portal"
   | "portal-unavailable"
+  | "checkout-unavailable"
   | "deferred"
   | "checkout"
 
@@ -38,7 +39,10 @@ export function billingActionKind(
   if (practice.billing_subscription_manageable) {
     return practice.billing_management_enabled ? "portal" : "portal-unavailable"
   }
-  if (!practice.billing_enabled || practice.billing_exempt_active) return "none"
+  if (practice.billing_exempt_active) return "none"
+  if (!practice.billing_enabled) {
+    return practice.entitled ? "none" : "checkout-unavailable"
+  }
   if (
     practice.billing_checkout_available_at &&
     new Date(practice.billing_checkout_available_at) > now
@@ -94,6 +98,16 @@ function BillingActions({ practice }: { practice: PracticeStatus }) {
           <p className="text-destructive mt-1 text-xs">
             Billing maintenance is temporarily unavailable. Contact support;
             your existing subscription has not been hidden or replaced.
+          </p>
+        </>
+      ) : action === "checkout-unavailable" ? (
+        <>
+          <Button size="sm" disabled>
+            Reactivation temporarily unavailable
+          </Button>
+          <p className="text-muted-foreground mt-1 text-xs">
+            Online billing is not available right now. Please contact support;
+            do not create another practice or account.
           </p>
         </>
       ) : action === "deferred" ? (
@@ -230,6 +244,20 @@ export function PracticeJoinPanel({
           })}
           .
         </p>
+      ) : null}
+      {!practice.pilot_access_grant_active &&
+      practice.baa_accepted &&
+      practice.access_authorized &&
+      !practice.access_revoked &&
+      !practice.entitled ? (
+        <div className="bg-muted/50 mt-3 rounded-md border p-3" role="alert">
+          <p className="text-sm font-semibold">Practice access is paused</p>
+          <p className="text-muted-foreground mt-1 text-sm">
+            {isOwner
+              ? "Billing needs attention before clinical tools can be reopened. Your existing records remain stored and unchanged."
+              : "Please contact your practice owner about billing. Only the owner can restore practice access; your existing records remain stored and unchanged."}
+          </p>
+        </div>
       ) : null}
       {isOwner && showBillingActions ? (
         <BillingActions practice={practice} />

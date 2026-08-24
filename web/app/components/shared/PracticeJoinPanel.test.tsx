@@ -44,6 +44,30 @@ describe("PracticeJoinPanel billing recovery", () => {
     )
   })
 
+  it("shows an honest recovery state when a lapsed owner cannot check out", () => {
+    const expired = practice({ billing_enabled: false, entitled: false })
+    expect(billingActionKind(expired, NOW)).toBe("checkout-unavailable")
+    render(<PracticeJoinPanel practice={expired} showBillingActions />)
+    expect(screen.getByText(/practice access is paused/i)).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", {
+        name: /reactivation temporarily unavailable/i,
+      }),
+    ).toBeDisabled()
+    expect(screen.getByText(/records remain stored/i)).toBeInTheDocument()
+  })
+
+  it("tells lapsed workforce to contact the owner without exposing billing controls", () => {
+    render(
+      <PracticeJoinPanel
+        practice={practice({ role: "workforce", entitled: false })}
+        showBillingActions
+      />,
+    )
+    expect(screen.getByText(/contact your practice owner/i)).toBeInTheDocument()
+    expect(screen.queryByRole("button")).not.toBeInTheDocument()
+  })
+
   it("lets an expired timed comp reactivate instead of hiding billing", () => {
     const expired = practice({
       billing_exempt: true,

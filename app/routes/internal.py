@@ -514,6 +514,8 @@ class SettingsData(BaseModel, extra="forbid"):
     onboarding_completed: bool
     practice_ready: bool
     "member of a practice whose BAA is in force, with attestation recorded"
+    billing_recovery_required: bool
+    "practice access is authorized, but its billing entitlement is not in force"
     is_admin: bool
     note_customizations: list[NoteTypeCustomizationData]
     has_natmed_subscription: bool
@@ -571,6 +573,11 @@ def settings_data(request: Request) -> SettingsData:
             )
         ),
         practice_ready=_practice_ready(doctor, decision=access_decision),
+        billing_recovery_required=(
+            access_decision.allowed
+            and access_decision.authorization_basis != "pilot_grant"
+            and not access_decision.entitlement_in_force
+        ),
         is_admin=doctor.role == DoctorRole.admin,
         note_customizations=note_customizations,
         has_natmed_subscription=doctor.has_natmed_subscription,

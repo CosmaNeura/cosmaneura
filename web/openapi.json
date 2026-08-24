@@ -4746,6 +4746,10 @@
             "type": "boolean",
             "title": "Practice Ready"
           },
+          "billing_recovery_required": {
+            "type": "boolean",
+            "title": "Billing Recovery Required"
+          },
           "is_admin": {
             "type": "boolean",
             "title": "Is Admin"
@@ -4776,6 +4780,7 @@
           "email",
           "onboarding_completed",
           "practice_ready",
+          "billing_recovery_required",
           "is_admin",
           "note_customizations",
           "has_natmed_subscription",
