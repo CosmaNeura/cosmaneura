@@ -177,6 +177,18 @@ describe("SovereignPanelHost", () => {
     await waitFor(() => expect(mount).toHaveBeenCalledTimes(1))
     const options = mount.mock.calls[0][0]
     expect(options.embedVersion).toBe("1.0")
+    expect(options.fabBottom).toBe("84px")
+    expect(options.shiftContent).toBe(true)
+    expect(options).not.toHaveProperty("fabRight")
+    const layerStyle = document.querySelector(
+      "style[data-sovereign-provider-v7-layer]",
+    )
+    expect(layerStyle?.textContent).toContain(
+      ".cnp-root > .cnp-rail { z-index: 100001 !important; }",
+    )
+    expect(layerStyle?.textContent).toContain(
+      ".cnp-root > .cnp-tip { z-index: 100002 !important; }",
+    )
     expect(options).not.toHaveProperty("requireClientTurnId")
     expect(options).not.toHaveProperty("loadHistory")
     await expect(
@@ -372,6 +384,12 @@ describe("SovereignPanelHost", () => {
 
     const options = mount.mock.calls[0][0]
     expect(options.embedVersion).toBe("1.0")
+    expect(options).not.toHaveProperty("fabBottom")
+    expect(options.shiftContent).toBe(true)
+    expect(options).not.toHaveProperty("fabRight")
+    expect(
+      document.querySelector("style[data-sovereign-provider-v7-layer]"),
+    ).toBeNull()
     expect(options).not.toHaveProperty("requireClientTurnId")
     expect(options).not.toHaveProperty("loadHistory")
     await expect(options.getAuthToken()).resolves.toBe("provider-oidc-token")
