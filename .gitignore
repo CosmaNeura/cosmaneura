@@ -9,6 +9,7 @@ __pycache__
 .mypy_cache
 
 *.env.*local
+*.superadmin-capabilities.private.json
 
 .nixpacks
 

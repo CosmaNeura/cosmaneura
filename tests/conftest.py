@@ -48,6 +48,8 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "authority_audit_event": "authority_audit_event_append_only",
     "baa_acceptance": "baa_acceptance_reject_mutation",
     "practice_access_audit": "practice_access_audit_reject_mutation",
+    "superadmin_capability_audit": "superadmin_capability_audit_reject_mutation",
+    "superadmin_capability_grant": "superadmin_capability_grant_guard_mutation",
 }
 
 

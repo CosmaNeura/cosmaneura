@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import typer
@@ -10,6 +11,52 @@ from activemodel.session_manager import global_session
 from activemodel.types import TypeIDType
 
 app = typer.Typer()
+
+
+def _superadmin_capability_manifest_from_input(
+    manifest_path: Path | None,
+):
+    """Load an owner-only file or collect one target without terminal echo."""
+
+    from app.services.superadmin_capability import (
+        configured_superadmin_capability_environment,
+        configured_superadmin_clerk_issuer,
+        load_private_superadmin_capability_manifest,
+        parse_superadmin_capability_manifest,
+        validate_superadmin_manifest_runtime_scope,
+    )
+
+    if manifest_path is not None:
+        manifest = load_private_superadmin_capability_manifest(manifest_path)
+    else:
+        environment = configured_superadmin_capability_environment()
+        issuer = configured_superadmin_clerk_issuer()
+        subject = typer.prompt("Exact Clerk subject", hide_input=True)
+        email = typer.prompt("Exact verified primary email", hide_input=True)
+        doctor_id = typer.prompt("Exact Doctor TypeID", hide_input=True)
+        kinds = typer.prompt(
+            "Capability kinds (comma-separated platform_admin,view_as)",
+            hide_input=True,
+        )
+        manifest = parse_superadmin_capability_manifest(
+            {
+                "schema_version": 1,
+                "environment": environment.value,
+                "clerk_issuer": issuer,
+                "accounts": [
+                    {
+                        "clerk_subject": subject,
+                        "verified_primary_email": email,
+                        "doctor_id": doctor_id,
+                        "capability_kinds": [
+                            value.strip() for value in kinds.split(",") if value.strip()
+                        ],
+                    }
+                ],
+            }
+        )
+    validate_superadmin_manifest_runtime_scope(manifest)
+    return manifest
 
 
 @app.command()
@@ -2256,6 +2303,204 @@ def revoke_organization_roster_access_command(
             f"retain_until={result.retain_until.isoformat()} "
             f"audit={result.audit.id}; no clinical or content records were deleted."
         )
+
+
+@app.command("grant-superadmin-capabilities")
+def grant_superadmin_capabilities_command(
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Owner-only mode-0600 JSON manifest. Omit to enter one account's "
+            "identity fields in hidden prompts."
+        ),
+    ),
+    source_ref: str = typer.Option(
+        ...,
+        help="Opaque controlled-manifest reference; never enter an email or name.",
+    ),
+    operator_ref: str = typer.Option(
+        ...,
+        help="Opaque operator/ticket reference; never enter an email or name.",
+    ),
+    reason_code: str = typer.Option(
+        ...,
+        help="Non-sensitive lowercase audit reason code.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by the dry run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Grant exact identity-bound capabilities; dry-run by default."""
+
+    from app.services.superadmin_capability import (
+        grant_superadmin_capabilities,
+        plan_superadmin_capability_grants,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    try:
+        private_manifest = _superadmin_capability_manifest_from_input(manifest)
+        plan = plan_superadmin_capability_grants(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+        )
+        if not apply:
+            state = "already_applied" if plan.already_applied else "deployable"
+            typer.echo(
+                "DRY RUN: superadmin capability grant "
+                f"state={state} environment={private_manifest.environment.value} "
+                f"accounts={plan.account_count} capabilities={plan.capability_count} "
+                f"platform_admin={plan.platform_admin_count} "
+                f"view_as={plan.view_as_count} "
+                f"already_applied={plan.already_applied_count} "
+                f"source_sha256={plan.source_sha256} "
+                f"plan_sha256={plan.plan_sha256}."
+            )
+            return
+        result = grant_superadmin_capabilities(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"superadmin capability grant {outcome}; verify aggregate database "
+            "state; no identities were printed"
+        ) from None
+    state = "already_applied" if result.created_count == 0 else "applied"
+    typer.echo(
+        "Superadmin capability grant "
+        f"state={state} capabilities={result.capability_count} "
+        f"created={result.created_count} unchanged={result.unchanged_count} "
+        f"source_sha256={result.source_sha256} "
+        f"plan_sha256={result.plan_sha256}."
+    )
+
+
+@app.command("revoke-superadmin-capabilities")
+def revoke_superadmin_capabilities_command(
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Owner-only mode-0600 JSON manifest. Omit to enter one account's "
+            "identity fields in hidden prompts."
+        ),
+    ),
+    source_ref: str = typer.Option(
+        ...,
+        help="Opaque controlled-manifest reference; never enter an email or name.",
+    ),
+    operator_ref: str = typer.Option(
+        ...,
+        help="Opaque operator/ticket reference; never enter an email or name.",
+    ),
+    reason_code: str = typer.Option(
+        ...,
+        help="Non-sensitive lowercase audit reason code.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by the dry run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the revocation."),
+) -> None:
+    """Revoke exact capabilities without depending on Clerk availability."""
+
+    from app.services.superadmin_capability import (
+        plan_superadmin_capability_revocations,
+        revoke_superadmin_capabilities,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    try:
+        private_manifest = _superadmin_capability_manifest_from_input(manifest)
+        plan = plan_superadmin_capability_revocations(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+        )
+        if not apply:
+            state = "already_revoked" if plan.already_applied else "revocable"
+            typer.echo(
+                "DRY RUN: superadmin capability revocation "
+                f"state={state} environment={private_manifest.environment.value} "
+                f"accounts={plan.account_count} capabilities={plan.capability_count} "
+                f"platform_admin={plan.platform_admin_count} "
+                f"view_as={plan.view_as_count} "
+                f"already_revoked={plan.already_applied_count} "
+                f"source_sha256={plan.source_sha256} "
+                f"plan_sha256={plan.plan_sha256}."
+            )
+            return
+        result = revoke_superadmin_capabilities(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"superadmin capability revocation {outcome}; verify aggregate "
+            "database state; no identities were printed"
+        ) from None
+    state = "already_revoked" if result.revoked_count == 0 else "revoked"
+    typer.echo(
+        "Superadmin capability revocation "
+        f"state={state} capabilities={result.capability_count} "
+        f"revoked={result.revoked_count} unchanged={result.unchanged_count} "
+        f"source_sha256={result.source_sha256} "
+        f"plan_sha256={result.plan_sha256}; no records were deleted."
+    )
+
+
+@app.command("list-superadmin-capabilities")
+def list_superadmin_capabilities_command() -> None:
+    """Print only aggregate capability counts and a pseudonymous digest."""
+
+    from app.services.superadmin_capability import (
+        configured_superadmin_capability_environment,
+        list_superadmin_capability_summary,
+    )
+
+    try:
+        summary = list_superadmin_capability_summary(
+            configured_superadmin_capability_environment()
+        )
+    except Exception:
+        raise typer.BadParameter(
+            "superadmin capability listing failed; no identities were printed"
+        ) from None
+    typer.echo(
+        json.dumps(
+            {
+                "active_binding_sha256": summary.active_binding_sha256,
+                "active_count": summary.active_count,
+                "audit_count": summary.audit_count,
+                "environment": summary.environment.value,
+                "platform_admin_active_count": (summary.platform_admin_active_count),
+                "revoked_count": summary.revoked_count,
+                "total_count": summary.total_count,
+                "view_as_active_count": summary.view_as_active_count,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @app.command("restore-visit-note-version")
