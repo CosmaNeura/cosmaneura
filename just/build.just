@@ -68,10 +68,10 @@ JAVASCRIPT_BUILD_ENV := if JAVASCRIPT_SECRETS_FILE == ".env.staging.frontend" { 
 		build_env_json=$(cat "$JAVASCRIPT_BUILD_ENV_JSON"); \
 	else \
 		build_env_json=$(just direnv_export "{{JAVASCRIPT_SECRETS_FILE}}" | \
-			jq -ce '{NODE_ENV, OPENAPI_JSON_PATH, VITE_CLERK_PUBLIC_KEY, VITE_INTAKE_CHAT_DOMAIN, VITE_POSTHOG_HOST, VITE_POSTHOG_KEY, VITE_PYTHON_URL, VITE_SENTRY_DSN, VITE_SOVEREIGN_CLERK_TEMPLATE, VITE_SOVEREIGN_PROVIDER_URL}'); \
+			jq -ce '{NODE_ENV, OPENAPI_JSON_PATH, VITE_CLERK_PUBLIC_KEY, VITE_INTAKE_CHAT_DOMAIN, VITE_POSTHOG_HOST, VITE_POSTHOG_KEY, VITE_PYTHON_URL, VITE_SENTRY_DSN, VITE_SOVEREIGN_CLERK_TEMPLATE, VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED, VITE_SOVEREIGN_PROVIDER_URL}'); \
 	fi; \
 	printf '%s\n' "$build_env_json" | \
-		jq -je 'if keys == ["NODE_ENV", "OPENAPI_JSON_PATH", "VITE_CLERK_PUBLIC_KEY", "VITE_INTAKE_CHAT_DOMAIN", "VITE_POSTHOG_HOST", "VITE_POSTHOG_KEY", "VITE_PYTHON_URL", "VITE_SENTRY_DSN", "VITE_SOVEREIGN_CLERK_TEMPLATE", "VITE_SOVEREIGN_PROVIDER_URL"] and all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) then to_entries[] | "--env\u0000", (.key + "=" + .value), "\u0000" else error("invalid frontend build configuration") end' || { \
+		jq -je 'if keys == ["NODE_ENV", "OPENAPI_JSON_PATH", "VITE_CLERK_PUBLIC_KEY", "VITE_INTAKE_CHAT_DOMAIN", "VITE_POSTHOG_HOST", "VITE_POSTHOG_KEY", "VITE_PYTHON_URL", "VITE_SENTRY_DSN", "VITE_SOVEREIGN_CLERK_TEMPLATE", "VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED", "VITE_SOVEREIGN_PROVIDER_URL"] and all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") and ("{{JAVASCRIPT_BUILD_ENV}}" == "staging" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then to_entries[] | "--env\u0000", (.key + "=" + .value), "\u0000" else error("invalid frontend build configuration") end' || { \
 			echo "Resolved frontend build configuration has an invalid shape." >&2; \
 			exit 1; \
 		}

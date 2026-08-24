@@ -295,8 +295,9 @@ jobs:
               VITE_PYTHON_URL,
               VITE_SENTRY_DSN,
               VITE_SOVEREIGN_CLERK_TEMPLATE,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED: "false",
               VITE_SOVEREIGN_PROVIDER_URL
-            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) then . else error("frontend build configuration is incomplete") end' \
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
             > "$JAVASCRIPT_BUILD_ENV_JSON"
           chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
 
@@ -428,8 +429,9 @@ jobs:
               VITE_PYTHON_URL,
               VITE_SENTRY_DSN,
               VITE_SOVEREIGN_CLERK_TEMPLATE,
+              VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED,
               VITE_SOVEREIGN_PROVIDER_URL
-            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) then . else error("frontend build configuration is incomplete") end' \
+            } | if all(.[]; type == "string" and length > 0 and (contains("\u0000") | not)) and (.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "true" or .VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED == "false") then . else error("frontend build configuration is incomplete") end' \
             > "$JAVASCRIPT_BUILD_ENV_JSON"
           chmod 0600 "$JAVASCRIPT_BUILD_ENV_JSON"
 
