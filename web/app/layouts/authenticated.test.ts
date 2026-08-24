@@ -5,6 +5,7 @@ import {
   needsBillingRecovery,
   needsOnboarding,
   shouldRedirectToBillingRecovery,
+  shouldRetrySettingsQuery,
 } from "./authenticated"
 
 describe("authenticated access routing", () => {
@@ -73,5 +74,16 @@ describe("authenticated access routing", () => {
         "https://app.cosmaneura.com/settings?billing=success",
       ),
     ).toBe(false)
+  })
+
+  it("does not retry a durable account-recovery conflict", () => {
+    expect(
+      shouldRetrySettingsQuery(0, {
+        detail:
+          "This email is already linked to a previous sign-in. Contact support to recover the existing account; no records have been lost.",
+      }),
+    ).toBe(false)
+    expect(shouldRetrySettingsQuery(0, new Error("transient"))).toBe(true)
+    expect(shouldRetrySettingsQuery(3, new Error("transient"))).toBe(false)
   })
 })

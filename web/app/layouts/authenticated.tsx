@@ -74,12 +74,20 @@ export function shouldRedirectToBillingRecovery(
   )
 }
 
+export function shouldRetrySettingsQuery(failureCount: number, error: unknown) {
+  // An identity collision is durable until support rebinds the account. Do not
+  // leave the user behind React Query's exponential retry delay before routing
+  // them to the recovery screen. Preserve the normal retry budget otherwise.
+  return !isAccountRecoveryRequired(error) && failureCount < 3
+}
+
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   let data
   try {
     data = await queryClient.ensureQueryData({
       ...settingsDataOptions(),
       staleTime: SETTINGS_STALE_TIME,
+      retry: shouldRetrySettingsQuery,
     })
   } catch (error) {
     if (isAccountRecoveryRequired(error)) {
