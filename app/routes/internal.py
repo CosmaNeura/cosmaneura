@@ -711,6 +711,22 @@ def _normalize_join_code(value: str) -> str:
     return value.strip().upper().replace(" ", "").replace("-", "")
 
 
+def _verified_legacy_enrollment_email(doctor: Doctor) -> str:
+    """Return the live verified email only when it matches our bound identity."""
+
+    stored_email = (doctor.email or "").strip().lower()
+    live_email = verified_primary_email(doctor.clerk_id)
+    if live_email is None or live_email != stored_email:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Your current verified email could not be confirmed. "
+                "Sign out and sign in again, then retry or contact support."
+            ),
+        )
+    return live_email
+
+
 def _membership_for(doctor: Doctor) -> PracticeMember | None:
     return PracticeMember.get(doctor_id=doctor.id)
 
@@ -989,7 +1005,8 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
             detail="This account has organization-managed access. Use that enrollment path.",
         )
 
-    domain = extract_email_domain(doctor.email)
+    verified_email = _verified_legacy_enrollment_email(doctor)
+    domain = extract_email_domain(verified_email)
     if not domain:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1048,6 +1065,9 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The account email changed during enrollment. Please retry.",
             )
+        # Recheck Clerk after acquiring the database lock so a stale local
+        # email cannot authorize practice creation during an identity change.
+        _verified_legacy_enrollment_email(locked_doctor)
         existing = session.exec(
             select(PracticeMember)
             .where(PracticeMember.doctor_id == locked_doctor.id)
@@ -1297,6 +1317,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
     _consume_legacy_join_attempt(doctor)
     if doctor_has_managed_roster_assignment(doctor):
         return PracticeLookupResult()
+    verified_email = _verified_legacy_enrollment_email(doctor)
     code = _normalize_join_code(data.join_code)
     practice = Practice.get(join_code=code)
     if (
@@ -1307,12 +1328,12 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
         or practice.negotiated_baa_required
     ):
         return PracticeLookupResult()
-    if not email_matches_domain(doctor.email, practice.email_domain):
+    if not email_matches_domain(verified_email, practice.email_domain):
         return PracticeLookupResult(
             mismatch=JoinMismatch(
                 practice_name=practice.legal_name,
                 required_domain=practice.email_domain,
-                signed_in_domain=extract_email_domain(doctor.email),
+                signed_in_domain=extract_email_domain(verified_email),
             )
         )
     return PracticeLookupResult(
@@ -1368,16 +1389,6 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         )
     doctor: Doctor = request.state.doctor
     _consume_legacy_join_attempt(doctor)
-    code = _normalize_join_code(data.join_code)
-    requested_practice = Practice.get(join_code=code)
-    if requested_practice is not None and (
-        requested_practice.is_solo
-        or is_public_email_domain(requested_practice.email_domain)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No practice matches that join code.",
-        )
     existing = _membership_for(doctor)
     if existing:
         practice = Practice.get(id=existing.practice_id)
@@ -1402,6 +1413,17 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This account has organization-managed access. Use that enrollment path.",
+        )
+    _verified_legacy_enrollment_email(doctor)
+    code = _normalize_join_code(data.join_code)
+    requested_practice = Practice.get(join_code=code)
+    if requested_practice is not None and (
+        requested_practice.is_solo
+        or is_public_email_domain(requested_practice.email_domain)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No practice matches that join code.",
         )
     practice = requested_practice
     if (
@@ -1432,6 +1454,9 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="The account email changed during enrollment. Please retry.",
             )
+        # Clerk is the live identity authority. Recheck it while the practice
+        # and doctor rows are locked before creating a membership.
+        locked_verified_email = _verified_legacy_enrollment_email(locked_doctor)
         if doctor_has_managed_roster_assignment(
             locked_doctor,
             session=session,
@@ -1469,7 +1494,9 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No practice matches that join code.",
             )
-        if not email_matches_domain(locked_doctor.email, locked_practice.email_domain):
+        if not email_matches_domain(
+            locked_verified_email, locked_practice.email_domain
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(

@@ -69,6 +69,19 @@ def _own_practice(doctor: Doctor) -> Practice:
     return practice
 
 
+@pytest.fixture(autouse=True)
+def _verified_clerk_email_matches_bound_doctor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Keep route tests offline while preserving the live-identity invariant."""
+
+    def current_email(clerk_id: str) -> str | None:
+        doctor = Doctor.get(clerk_id=clerk_id)
+        return (doctor.email or "").strip().lower() if doctor else None
+
+    monkeypatch.setattr(internal, "verified_primary_email", current_email)
+
+
 def _grant_pilot_access(
     doctor: Doctor,
     *,
@@ -217,6 +230,58 @@ def test_public_email_solo_hides_join_code_and_cannot_enable_future_pack(
     assert body["pastoral_pack"] is False
     assert practice.join_code
     assert practice.pastoral_pack is False
+
+
+def test_create_practice_rejects_a_stale_bound_email(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor = _authed_doctor()
+    monkeypatch.setattr(
+        internal,
+        "verified_primary_email",
+        lambda _clerk_id: "replacement@outside.example",
+    )
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Stale Identity Practice",
+            "is_solo": True,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert "current verified email" in response.json()["detail"]
+    assert PracticeMember.get(doctor_id=doctor.id) is None
+
+
+def test_create_practice_rechecks_live_email_while_rows_are_locked(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor = _authed_doctor()
+    live_emails = iter([doctor.email, "replacement@outside.example"])
+    monkeypatch.setattr(
+        internal,
+        "verified_primary_email",
+        lambda _clerk_id: next(live_emails),
+    )
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Racing Identity Practice",
+            "is_solo": True,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
 @pytest.mark.parametrize(
@@ -598,6 +663,76 @@ def test_legacy_public_domain_group_code_is_not_usable(
         },
     )
     assert joined.status_code == status.HTTP_404_NOT_FOUND
+    assert PracticeMember.get(doctor_id=doctor.id) is None
+
+
+def test_lookup_does_not_disclose_practice_to_a_stale_bound_email(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor = _authed_doctor()
+    domain = extract_email_domain(doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Confidential Practice Name",
+        join_code=f"V{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        pastoral_pack=False,
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version="CN-BAA-CUST-CW v2.2",
+    ).save()
+    monkeypatch.setattr(
+        internal,
+        "verified_primary_email",
+        lambda _clerk_id: "replacement@outside.example",
+    )
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("lookup_practice"),
+        json={"join_code": practice.join_code},
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert practice.legal_name not in response.text
+    assert practice.email_domain not in response.text
+
+
+def test_join_rechecks_live_email_while_rows_are_locked(
+    bare_authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    doctor = _authed_doctor()
+    domain = extract_email_domain(doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Live Identity Practice",
+        join_code=f"V{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        pastoral_pack=False,
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version="CN-BAA-CUST-CW v2.2",
+    ).save()
+    live_emails = iter([doctor.email, "replacement@outside.example"])
+    monkeypatch.setattr(
+        internal,
+        "verified_primary_email",
+        lambda _clerk_id: next(live_emails),
+    )
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("join_practice"),
+        json={
+            "join_code": practice.join_code,
+            "attestation_name": "Pat Clinician",
+            "checks": ["workforce", "not-party", "direction", "phi"],
+        },
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
