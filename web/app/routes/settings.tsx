@@ -41,7 +41,10 @@ import { queryClient } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
 import { uploadFileToAzure } from "~/lib/azure-upload"
 import { BAA_PDF_URL } from "~/lib/baa"
-import { safeBillingReturnTo } from "~/lib/billing-recovery"
+import {
+  restrictSettingsToBillingRecovery,
+  safeBillingReturnTo,
+} from "~/lib/billing-recovery"
 import {
   type BaaAcceptanceRecord,
   type PracticeStatus,
@@ -674,6 +677,10 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
   const billingReturnTo = safeBillingReturnTo(searchParams.get("returnTo"))
   const [practice, setPractice] = useState(loaderData.practice)
   useEffect(() => setPractice(loaderData.practice), [loaderData.practice])
+  const billingRecoveryOnly = restrictSettingsToBillingRecovery(
+    loaderData.billing_recovery_required,
+    practice?.entitled,
+  )
   const handlePracticeChange = useCallback((next: PracticeStatus) => {
     setPractice(next)
     void queryClient.invalidateQueries({
@@ -706,25 +713,29 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
             onPracticeChange={handlePracticeChange}
             billingReturnTo={billingReturnTo}
           />
-          <BiographyInput biography={loaderData.biography} />
-          {terminologyEnabled && (
-            <TerminologySettings
-              terminology={loaderData.terminology}
-              biography={loaderData.biography}
-            />
-          )}
-          <NoteUpload noteSchemas={loaderData.notes_schema} />
-          <NoteCustomization
-            noteSchemas={loaderData.notes_schema}
-            customizations={loaderData.note_customizations}
-          />
-          <ZoomConnect zoomConnected={loaderData.zoom_connected} />
-          {referenceToolkitEnabled && (
-            <NatMedConnection
-              hasSubscription={loaderData.has_natmed_subscription}
-            />
-          )}
-          {referenceToolkitEnabled && <LabRangeSettings />}
+          {!billingRecoveryOnly ? (
+            <>
+              <BiographyInput biography={loaderData.biography} />
+              {terminologyEnabled && (
+                <TerminologySettings
+                  terminology={loaderData.terminology}
+                  biography={loaderData.biography}
+                />
+              )}
+              <NoteUpload noteSchemas={loaderData.notes_schema} />
+              <NoteCustomization
+                noteSchemas={loaderData.notes_schema}
+                customizations={loaderData.note_customizations}
+              />
+              <ZoomConnect zoomConnected={loaderData.zoom_connected} />
+              {referenceToolkitEnabled && (
+                <NatMedConnection
+                  hasSubscription={loaderData.has_natmed_subscription}
+                />
+              )}
+              {referenceToolkitEnabled && <LabRangeSettings />}
+            </>
+          ) : null}
         </InnerScrollableContent>
       </SidebarInset>
     </SidebarProvider>

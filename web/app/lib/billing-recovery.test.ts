@@ -6,11 +6,22 @@ import {
   handleInternalApiResponse,
   isBillingRecoveryRedirectError,
   isInternalApiRequest,
+  restrictSettingsToBillingRecovery,
   resetBillingRecoveryRedirectState,
   safeBillingReturnTo,
 } from "./billing-recovery"
 
 beforeEach(() => resetBillingRecoveryRedirectState())
+
+describe("billing recovery settings mode", () => {
+  it("hides gated controls only until practice entitlement is restored", () => {
+    expect(restrictSettingsToBillingRecovery(true, false)).toBe(true)
+    expect(restrictSettingsToBillingRecovery(true, null)).toBe(true)
+    expect(restrictSettingsToBillingRecovery(true, undefined)).toBe(true)
+    expect(restrictSettingsToBillingRecovery(true, true)).toBe(false)
+    expect(restrictSettingsToBillingRecovery(false, false)).toBe(false)
+  })
+})
 
 describe("billing recovery routing", () => {
   it("preserves the current path, query, and hash", () => {

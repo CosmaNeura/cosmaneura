@@ -49,6 +49,13 @@ export function billingRecoveryLocation(requestUrl: string) {
   return `${SETTINGS_PATH}?${params.toString()}`
 }
 
+export function restrictSettingsToBillingRecovery(
+  recoveryRequired: boolean,
+  practiceEntitled: boolean | null | undefined,
+) {
+  return recoveryRequired && practiceEntitled !== true
+}
+
 function isSettingsLocation(requestUrl: string) {
   const pathname = new URL(requestUrl).pathname.replace(/\/+$/, "") || "/"
   return pathname === SETTINGS_PATH
