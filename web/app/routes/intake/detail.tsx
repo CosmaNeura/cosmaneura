@@ -8,6 +8,11 @@ import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { CopyButton } from "~/components/shared/CopyButton"
 import { InnerScrollableContent } from "~/components/shared/InnerScrollableContent"
 import { StatusBadge } from "~/components/shared/StatusBadge"
+import {
+  AnswerList,
+  answeredQuestions,
+  prepStatusFor,
+} from "~/components/visit-prep/AnswerList"
 import { Intake, intakeDetail } from "~/configuration/client"
 import { standardDateTimeFormat } from "~/lib/date"
 import { useTerminology } from "~/utils/terminology"
@@ -82,13 +87,13 @@ function IntakeHeader({
   )
 }
 
-function EmptyState({ intake }: { intake: Intake }) {
+function NotStartedState({ intake }: { intake: Intake }) {
   const t = useTerminology()
   return (
     <div className="mb-4">
       <div className="text-muted-foreground">
-        Your {t.patient} has not yet completed their intake they have been sent.
-        If you'd like to resend their intake URL, you can find it below.
+        Your {t.patient} has not answered anything yet. If you'd like to resend
+        their link, you can find it below.
         <br />
         <br />
         <div className="flex items-center gap-2">
@@ -102,9 +107,20 @@ function EmptyState({ intake }: { intake: Intake }) {
   )
 }
 
+function SectionHeading({ children }: { children: React.ReactNode }) {
+  return (
+    <h2 className="text-muted-foreground mb-3 text-xs font-semibold tracking-wide uppercase">
+      {children}
+    </h2>
+  )
+}
+
 export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
   const { intake } = loaderData
-  const hasSummary = !!intake.summary
+  const hasBrief = !!intake.summary
+  const answers = answeredQuestions(intake.intake_questions)
+
+  const status = prepStatusFor(answers, hasBrief)
 
   return (
     <SidebarInset>
@@ -112,20 +128,40 @@ export default function IntakeDetailPage({ loaderData }: Route.ComponentProps) {
       <InnerScrollableContent>
         <IntakeHeader
           title={loaderData.patient.name}
-          status={hasSummary ? "completed" : "not-started"}
+          status={status}
           dataFields={{
             "Appointment Date": standardDateTimeFormat(
               loaderData.appointment.appointment_date,
             ),
           }}
         />
-        {hasSummary && (
-          <div className="prose-headings prose max-w-full">
-            <Markdown>{intake.summary}</Markdown>
-          </div>
+
+        {hasBrief && (
+          <section className="mb-8">
+            <SectionHeading>Before the visit</SectionHeading>
+            <div className="prose-headings prose max-w-full">
+              <Markdown>{intake.summary}</Markdown>
+            </div>
+          </section>
         )}
 
-        {!hasSummary && <EmptyState intake={intake} />}
+        {answers.length > 0 && (
+          <section className="mb-4">
+            <SectionHeading>
+              {hasBrief
+                ? "In their own words"
+                : `Answered so far · ${answers.length}`}
+            </SectionHeading>
+            {!hasBrief && (
+              <p className="text-muted-foreground mb-5 text-sm">
+                Still in progress. The brief is written once they finish.
+              </p>
+            )}
+            <AnswerList answers={answers} />
+          </section>
+        )}
+
+        {status === "not-started" && <NotStartedState intake={intake} />}
       </InnerScrollableContent>
     </SidebarInset>
   )
