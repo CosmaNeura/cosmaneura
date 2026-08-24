@@ -1,4 +1,3 @@
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 from fastapi import status
@@ -10,173 +9,155 @@ from app.server import api_app
 
 from app.models.doctor_note_file import DoctorNoteFile
 
-from tests.routes.utils import get_clerk_dev_user
 
-
-class _FakeDownload:
-    def __init__(self, content: bytes):
-        self.content = content
-
-    def readall(self) -> bytes:
-        return self.content
-
-
-class _FakeBlobClient:
-    def __init__(self, *, content_type: str, content: bytes, size: int | None = None):
-        self.content_type = content_type
-        self.content = content
-        self.size = len(content) if size is None else size
-
-    def get_blob_properties(self):
-        return SimpleNamespace(
-            size=self.size,
-            content_settings=SimpleNamespace(content_type=self.content_type),
+def test_issues_server_owned_example_note_upload_grant(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    issue = Mock(
+        return_value=example_note_upload.IssuedExampleNoteUpload(
+            upload_url="https://uploads.example/pending/random.pdf?sp=c&sig=secret",
+            registration_token="opaque-registration-token",
         )
-
-    def download_blob(self, *, offset: int, length: int):
-        return _FakeDownload(self.content[offset : offset + length])
-
-
-def _install_blob(
-    monkeypatch, *, content_type: str, content: bytes, size: int | None = None
-) -> None:
-    blob_client = _FakeBlobClient(
-        content_type=content_type,
-        content=content,
-        size=size,
     )
-    service_client = SimpleNamespace(
-        get_blob_client=lambda **_kwargs: blob_client,
+    monkeypatch.setattr(example_note_upload, "issue_example_note_upload", issue)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("generate_signed_example_note_upload_url")
     )
-    monkeypatch.setattr(
-        example_note_upload,
-        "BlobServiceClient",
-        lambda *_args, **_kwargs: service_client,
-    )
-
-
-def _register_example_note(client: TestClient, file_name: str):
-    _, _, user = get_clerk_dev_user()
-    return client.post(
-        api_app.url_path_for("upload_example_note"),
-        params={
-            "file_name": f"{user.id}_1234567890_{file_name}",
-            "note_type": "SOAP Note",
-        },
-    )
-
-
-def test_rejects_an_image_before_persisting_or_queueing(
-    authenticated_client: TestClient, monkeypatch
-):
-    _install_blob(
-        monkeypatch,
-        content_type="image/jpeg",
-        content=b"\xff\xd8\xff\xe0fake-image",
-    )
-    queue = Mock()
-    monkeypatch.setattr(app.jobs.extract, "queue", queue)
-    initial_count = DoctorNoteFile.count()
-
-    response = _register_example_note(authenticated_client, "renamed-image.pdf")
-
-    assert response.status_code == status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
-    assert response.json()["detail"] == (
-        "Example notes must have the application/pdf content type."
-    )
-    assert DoctorNoteFile.count() == initial_count
-    queue.assert_not_called()
-
-
-def test_rejects_invalid_pdf_signature_before_persisting_or_queueing(
-    authenticated_client: TestClient, monkeypatch
-):
-    _install_blob(
-        monkeypatch,
-        content_type="application/pdf",
-        content=b"not-a-pdf",
-    )
-    queue = Mock()
-    monkeypatch.setattr(app.jobs.extract, "queue", queue)
-    initial_count = DoctorNoteFile.count()
-
-    response = _register_example_note(authenticated_client, "invalid.pdf")
-
-    assert response.status_code == status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
-    assert response.json()["detail"] == "Example notes must be valid PDF files."
-    assert DoctorNoteFile.count() == initial_count
-    queue.assert_not_called()
-
-
-def test_accepts_bounded_pdf_then_persists_and_queues(
-    authenticated_client: TestClient, monkeypatch
-):
-    _install_blob(
-        monkeypatch,
-        content_type="application/pdf",
-        content=b"%PDF-1.7\nsynthetic test document",
-    )
-    queue = Mock()
-    monkeypatch.setattr(app.jobs.extract, "queue", queue)
-    initial_count = DoctorNoteFile.count()
-
-    response = _register_example_note(authenticated_client, "valid.pdf")
 
     assert response.status_code == status.HTTP_200_OK
-    assert DoctorNoteFile.count() == initial_count + 1
-    _, _, user = get_clerk_dev_user()
-    doctor_note = DoctorNoteFile.get(azure_file_name=f"{user.id}_1234567890_valid.pdf")
-    assert doctor_note is not None
-    assert doctor_note.note_type == "SOAP Note"
-    queue.assert_called_once_with(doctor_note.id)
+    assert response.json() == {
+        "upload_url": "https://uploads.example/pending/random.pdf?sp=c&sig=secret",
+        "registration_token": "opaque-registration-token",
+    }
+    (doctor_id,) = issue.call_args.args
+    assert doctor_id.startswith("doctor_")
 
 
-def test_rejects_pdf_larger_than_ten_megabytes(
-    authenticated_client: TestClient, monkeypatch
+def test_registers_only_the_server_resolved_blob_and_queues_once(
+    authenticated_client: TestClient,
+    monkeypatch,
 ):
-    _install_blob(
-        monkeypatch,
-        content_type="application/pdf",
-        content=b"%PDF-",
-        size=example_note_upload.MAX_EXAMPLE_NOTE_BYTES + 1,
+    registered = example_note_upload.RegisteredExampleNoteBlob(
+        blob_key="pending/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.pdf",
+        doctor_id="doctor_bound",
+        etag='"etag-1"',
+        size=17,
+        sha256="a" * 64,
     )
+    consume = Mock(return_value=registered)
+    serialize = Mock(return_value="example-note:v1:encrypted-reference")
     queue = Mock()
-    monkeypatch.setattr(app.jobs.extract, "queue", queue)
-    initial_count = DoctorNoteFile.count()
-
-    response = _register_example_note(authenticated_client, "too-large.pdf")
-
-    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
-    assert response.json()["detail"] == "Example note PDFs must be 10 MB or smaller."
-    assert DoctorNoteFile.count() == initial_count
-    queue.assert_not_called()
-
-
-def test_rejects_a_blob_owned_by_another_account_before_fetching(
-    authenticated_client: TestClient, monkeypatch
-):
-    service_client = Mock()
     monkeypatch.setattr(
         example_note_upload,
-        "BlobServiceClient",
-        lambda *_args, **_kwargs: service_client,
+        "consume_validated_example_note_upload",
+        consume,
     )
-    queue = Mock()
+    monkeypatch.setattr(example_note_upload, "serialize_registered_blob", serialize)
     monkeypatch.setattr(app.jobs.extract, "queue", queue)
     initial_count = DoctorNoteFile.count()
 
     response = authenticated_client.post(
         api_app.url_path_for("upload_example_note"),
-        params={
-            "file_name": "user_someone_else_1234567890_note.pdf",
+        json={
+            "registration_token": "A" * 43,
             "note_type": "SOAP Note",
         },
     )
 
-    assert response.status_code == status.HTTP_403_FORBIDDEN
-    assert response.json()["detail"] == (
-        "The uploaded example note does not belong to this account."
+    assert response.status_code == status.HTTP_200_OK
+    assert DoctorNoteFile.count() == initial_count + 1
+    doctor_note = DoctorNoteFile.get(
+        azure_file_name="example-note:v1:encrypted-reference"
     )
+    assert doctor_note is not None
+    assert doctor_note.note_type == "SOAP Note"
+    consume.assert_called_once()
+    assert consume.call_args.args[0] == "A" * 43
+    assert consume.call_args.args[1] == str(doctor_note.doctor_id)
+    serialize.assert_called_once_with(registered)
+    queue.assert_called_once_with(doctor_note.id)
+
+
+def test_registration_rejects_client_selected_blob_name(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    consume = Mock()
+    queue = Mock()
+    monkeypatch.setattr(
+        example_note_upload,
+        "consume_validated_example_note_upload",
+        consume,
+    )
+    monkeypatch.setattr(app.jobs.extract, "queue", queue)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("upload_example_note"),
+        json={
+            "registration_token": "A" * 43,
+            "note_type": "SOAP Note",
+            "file_name": "user_chosen.pdf",
+        },
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    consume.assert_not_called()
+    queue.assert_not_called()
+
+
+def test_legacy_query_registration_contract_is_closed(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    consume = Mock()
+    queue = Mock()
+    monkeypatch.setattr(
+        example_note_upload,
+        "consume_validated_example_note_upload",
+        consume,
+    )
+    monkeypatch.setattr(app.jobs.extract, "queue", queue)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("upload_example_note"),
+        params={"file_name": "attacker.pdf", "note_type": "SOAP Note"},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    consume.assert_not_called()
+    queue.assert_not_called()
+
+
+def test_validation_failure_keeps_pdf_only_error_and_does_not_persist_or_queue(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    consume = Mock(
+        side_effect=example_note_upload.ExampleNoteUploadValidationError(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="Example notes must be valid PDF files.",
+        )
+    )
+    queue = Mock()
+    monkeypatch.setattr(
+        example_note_upload,
+        "consume_validated_example_note_upload",
+        consume,
+    )
+    monkeypatch.setattr(app.jobs.extract, "queue", queue)
+    initial_count = DoctorNoteFile.count()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("upload_example_note"),
+        json={
+            "registration_token": "A" * 43,
+            "note_type": "SOAP Note",
+        },
+    )
+
+    assert response.status_code == status.HTTP_415_UNSUPPORTED_MEDIA_TYPE
+    assert response.json()["detail"] == "Example notes must be valid PDF files."
     assert DoctorNoteFile.count() == initial_count
-    service_client.get_blob_client.assert_not_called()
     queue.assert_not_called()

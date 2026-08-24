@@ -2,10 +2,9 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 
 from azure.storage.blob import (
-    AccountSasPermissions,
     ContainerClient,
-    ResourceTypes,
-    generate_account_sas,
+    ContainerSasPermissions,
+    generate_container_sas,
 )
 
 from app.configuration.azure import (
@@ -13,13 +12,11 @@ from app.configuration.azure import (
     AZURE_UPLOADS_ACCOUNT_NAME,
     AZURE_UPLOADS_ACCOUNT_URL,
     AZURE_UPLOADS_CONTAINER_NAME,
-    AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
 )
 
 
 class UploadType(Enum):
     VISIT = AZURE_UPLOADS_CONTAINER_NAME
-    EXAMPLE_NOTE = AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
     # lab PDFs are PHI, so they share the PHI-capable visit container,
     # never the de-identified example-notes container
     LAB = AZURE_UPLOADS_CONTAINER_NAME
@@ -33,11 +30,12 @@ def perform(upload_type: UploadType) -> str:
     * "Object" is the name used for blob storage
     """
 
-    sas_token = generate_account_sas(
+    sas_token = generate_container_sas(
         account_name=AZURE_UPLOADS_ACCOUNT_NAME,
         account_key=AZURE_UPLOADS_ACCOUNT_KEY,
-        resource_types=ResourceTypes(object=True),
-        permission=AccountSasPermissions(write=True),
+        container_name=upload_type.value,
+        permission=ContainerSasPermissions(write=True),
+        protocol="https",
         # 1hr is arbitrary
         expiry=datetime.now(timezone.utc) + timedelta(hours=1),
     )

@@ -30,21 +30,22 @@ import {
   FormMessage,
 } from "~/components/ui/form"
 import {
-  generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
-  uploadExampleNote,
   zoomAuthUrl,
   zoomDisconnect,
 } from "~/configuration/client"
 import { queryClient } from "~/configuration/tanstack-query"
 import { toast } from "~/hooks/use-toast"
-import { uploadFileToAzure } from "~/lib/azure-upload"
 import { BAA_PDF_URL } from "~/lib/baa"
 import {
   restrictSettingsToBillingRecovery,
   safeBillingReturnTo,
 } from "~/lib/billing-recovery"
+import {
+  exampleNoteUploadErrorCopy,
+  submitExampleNote,
+} from "~/lib/example-note-upload"
 import {
   type BaaAcceptanceRecord,
   type PracticeStatus,
@@ -301,37 +302,11 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
       "file should be required, submit should be impossible without a valid file",
     )
 
-    const { data: sasSignature } = await generateSignedExampleNoteUploadUrl()
+    const uploadResult = await submitExampleNote(file, values.note_type)
 
-    invariant(
-      sasSignature,
-      "sasSignature should always exist unless the server fails",
-    )
-
-    const { stampedFileName, error: uploadError } = await uploadFileToAzure(
-      file,
-      sasSignature,
-    )
-
-    if (uploadError) {
+    if (!uploadResult.ok) {
       toast({
-        title: "Failed to upload note. Please try again.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const { error: registrationError } = await uploadExampleNote({
-      query: {
-        file_name: stampedFileName,
-        note_type: values.note_type,
-      },
-    })
-
-    if (registrationError) {
-      toast({
-        title: "Example note was not accepted",
-        description: "Please choose a valid PDF under 10MB and try again.",
+        ...exampleNoteUploadErrorCopy(uploadResult.stage),
         variant: "destructive",
       })
       return
@@ -442,7 +417,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
             )}
           />
 
-          <Button disabled={!file} type="submit">
+          <Button disabled={!file || form.formState.isSubmitting} type="submit">
             {form.formState.isSubmitting ? (
               <>
                 <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />

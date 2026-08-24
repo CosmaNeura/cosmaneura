@@ -476,8 +476,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "string",
-                  "title": "Response Generate Signed Example Note Upload Url Internal V1 Notes Get Signed Url Post"
+                  "$ref": "#/components/schemas/ExampleNoteUploadGrant"
                 }
               }
             }
@@ -497,31 +496,16 @@
         ],
         "summary": "Upload Example Note",
         "operationId": "upload_example_note",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "file_name",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "File Name"
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExampleNoteUploadRegistration"
+              }
             }
           },
-          {
-            "name": "note_type",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Note Type"
-            }
-          }
-        ],
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -541,7 +525,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/internal/v1/settings": {
@@ -3082,6 +3071,47 @@
         ],
         "title": "EngagementRole",
         "description": "A communication-role estimate for one visit transcript (engagement engine v2).\n\nReads the patient's *enacted* communication style from the visit transcript and\nmaps it to a Control Preferences Scale role (Self-Directed / Collaborative /\nDirected). This is a decision-support communication aid, NOT a diagnosis or a\npersonality assessment. One row per scored transcript."
+      },
+      "ExampleNoteUploadGrant": {
+        "properties": {
+          "upload_url": {
+            "type": "string",
+            "title": "Upload Url"
+          },
+          "registration_token": {
+            "type": "string",
+            "title": "Registration Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "upload_url",
+          "registration_token"
+        ],
+        "title": "ExampleNoteUploadGrant"
+      },
+      "ExampleNoteUploadRegistration": {
+        "properties": {
+          "registration_token": {
+            "type": "string",
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Registration Token"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "registration_token",
+          "note_type"
+        ],
+        "title": "ExampleNoteUploadRegistration"
       },
       "ExternalIntakeData": {
         "properties": {

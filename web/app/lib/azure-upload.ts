@@ -30,3 +30,23 @@ export async function uploadFileToAzure(file: File, sasSignature: string) {
     error: !azureUploadResponse.ok,
   }
 }
+
+/** Upload an example-note PDF to the exact blob URL issued by the server. */
+export async function uploadPdfToExactAzureUrl(file: File, uploadUrl: string) {
+  invariant(uploadUrl, "uploadUrl should always exist")
+
+  const azureUploadResponse = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: {
+      "x-ms-blob-type": "BlockBlob",
+      "Content-Type": "application/pdf",
+      "If-None-Match": "*",
+    },
+    body: file,
+  })
+
+  return {
+    azureUploadResponse,
+    error: !azureUploadResponse.ok,
+  }
+}

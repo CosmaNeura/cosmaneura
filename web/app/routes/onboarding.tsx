@@ -28,14 +28,11 @@ import { ScrollArea } from "~/components/ui/scroll-area"
 import { getClient } from "~/configuration/clerk"
 import {
   completeOnboarding,
-  generateSignedExampleNoteUploadUrl,
   settingsData,
   updateSettingsData,
-  uploadExampleNote,
 } from "~/configuration/client"
 import { toast } from "~/hooks/use-toast"
 import { isAccountRecoveryRequired } from "~/lib/account-recovery"
-import { uploadFileToAzure } from "~/lib/azure-upload"
 import {
   BAA_DOC_ID,
   BAA_PDF_URL,
@@ -54,6 +51,10 @@ import {
   isPublicEmailDomain,
 } from "~/lib/email-domain"
 import { isValidNpi } from "~/lib/npi"
+import {
+  exampleNoteUploadErrorCopy,
+  submitExampleNote,
+} from "~/lib/example-note-upload"
 import {
   type BaaDocument,
   type JoinMismatch,
@@ -1211,30 +1212,11 @@ function NotesStep({
   async function onSubmit(values: z.infer<typeof formSchema>) {
     invariant(file, "a file must be selected before submitting")
 
-    const { data: sasSignature } = await generateSignedExampleNoteUploadUrl()
-    invariant(sasSignature, "SAS signature should exist")
+    const uploadResult = await submitExampleNote(file, values.note_type)
 
-    const { stampedFileName, error: uploadError } = await uploadFileToAzure(
-      file,
-      sasSignature,
-    )
-
-    if (uploadError) {
+    if (!uploadResult.ok) {
       toast({
-        title: "Failed to upload note. Please try again.",
-        variant: "destructive",
-      })
-      return
-    }
-
-    const { error: registrationError } = await uploadExampleNote({
-      query: { file_name: stampedFileName, note_type: values.note_type },
-    })
-
-    if (registrationError) {
-      toast({
-        title: "Example note was not accepted",
-        description: "Please choose a valid PDF under 10MB and try again.",
+        ...exampleNoteUploadErrorCopy(uploadResult.stage),
         variant: "destructive",
       })
       return

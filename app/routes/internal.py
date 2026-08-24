@@ -450,26 +450,51 @@ def upload_visit_audio_file(request: Request, data: VisitAudioUploadRequest) -> 
     )
 
 
-# for "raw" types like str, we need to explicitly specify the response_model
-@internal_api_app.post("/notes/get-signed-url", response_model=str)
-def generate_signed_example_note_upload_url():
-    return app.commands.uploads.sas.perform(UploadType.EXAMPLE_NOTE)
+class ExampleNoteUploadGrant(BaseModel, extra="forbid"):
+    upload_url: str
+    registration_token: str
+
+
+class ExampleNoteUploadRegistration(BaseModel, extra="forbid"):
+    registration_token: str = Field(
+        min_length=43,
+        max_length=43,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    note_type: str
+
+
+@internal_api_app.post("/notes/get-signed-url")
+def generate_signed_example_note_upload_url(
+    request: Request,
+) -> ExampleNoteUploadGrant:
+    doctor: Doctor = request.state.doctor
+    grant = example_note_upload.issue_example_note_upload(str(doctor.id))
+    return ExampleNoteUploadGrant(
+        upload_url=grant.upload_url,
+        registration_token=grant.registration_token,
+    )
 
 
 @internal_api_app.post("/notes/upload-example")
-def upload_example_note(request: Request, file_name: str, note_type: str) -> None:
+def upload_example_note(
+    request: Request,
+    data: ExampleNoteUploadRegistration,
+) -> None:
     doctor: Doctor = request.state.doctor
 
     try:
-        example_note_upload.validate_example_note_blob(
-            file_name,
-            owner_clerk_id=doctor.clerk_id,
+        registered_blob = example_note_upload.consume_validated_example_note_upload(
+            data.registration_token,
+            str(doctor.id),
         )
     except example_note_upload.ExampleNoteUploadValidationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from None
 
     doctor_note_file = DoctorNoteFile(
-        doctor_id=doctor.id, azure_file_name=file_name, note_type=note_type
+        doctor_id=doctor.id,
+        azure_file_name=example_note_upload.serialize_registered_blob(registered_blob),
+        note_type=data.note_type,
     ).save()
 
     app.jobs.extract.queue(doctor_note_file.id)
