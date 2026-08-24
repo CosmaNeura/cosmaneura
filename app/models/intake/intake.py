@@ -121,12 +121,16 @@ class IntakeSchemaQuestion(PydanticBaseModel):
     def is_answered(self) -> bool:
         """Whether the patient has dealt with this question, skips included.
 
-        Keyed off the timestamp rather than the answer text so that skipping
-        can store an empty string and still advance -- `if not answer` would
-        loop on it forever. Every existing row sets both fields together, so
-        this is behavior-preserving for model-generated intakes.
+        Not `if not answer`: a skip stores an empty string, and truthiness would
+        treat that as unanswered and serve the same question forever.
+
+        Either field is enough. The timestamp alone would be tighter, but it
+        would also mean any row carrying an answer without one -- older data, a
+        backfill, a fixture -- silently reverts to unanswered and its prep never
+        completes. `chat.py` is the only writer and always sets both, so this is
+        belt-and-braces rather than a fix, and it fails in the safe direction.
         """
-        return self.answer_timestamp is not None
+        return self.answer is not None or self.answer_timestamp is not None
 
 
 class Intake(

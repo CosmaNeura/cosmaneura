@@ -16,11 +16,18 @@ from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.patient_context import days_since, latest_note_for_patient
 from app.services.terminology import terminology_terms
+from app.services.visit_prep import (
+    ADHERENCE,
+    ADHERENCE_IMPERFECT,
+    answered_questions,
+    is_physician_authored,
+)
 
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
 from app.models.doctor import Doctor
 from app.models.intake.intake import Intake
+from app.models.intake.intake_summary import BriefFlag, IntakeSummary, VisitBrief
 from app.models.patient import Patient
 
 
@@ -70,7 +77,12 @@ def perform(intake_id: str | TypeID | TypeIDType):
         )
         return
 
-    if not intake.cleaned_external_intake_data:
+    # Visit Prep preps are authored by the physician and have no external intake
+    # payload to clean, so the precondition below is unsatisfiable for them.
+    # Legacy model-generated intakes keep their existing path untouched.
+    authored = is_physician_authored(intake)
+
+    if not authored and not intake.cleaned_external_intake_data:
         log.error("summarize_intake: intake data not prepared", intake_ref=intake_ref)
         raise ValueError("intake data not prepared")
 
@@ -84,6 +96,28 @@ def perform(intake_id: str | TypeID | TypeIDType):
             intake_ref=intake_ref,
         )
         raise ValueError("intake questions not answered")
+
+    if authored:
+        brief = generate_visit_brief(intake, doctor)
+        assert brief
+
+        IntakeSummary(
+            doctor_id=intake.doctor_id, intake_id=intake.id, summary=brief
+        ).save()
+
+        # `intake.summary` stays the prose form. It is not just the old shape:
+        # Appointment.intake_status keys off it, and patient_context feeds it to
+        # Session Prep. Deriving it from the brief rather than making a second
+        # model call keeps the two from ever disagreeing.
+        intake.summary = brief_to_markdown(brief)
+        intake.save()
+
+        log.info(
+            "generated visit prep brief",
+            intake_ref=intake_ref,
+            flags=len(brief.flags),
+        )
+        return
 
     summary = generate_intake_summary(intake)
     assert summary
@@ -204,3 +238,185 @@ def generate_intake_summary(intake: Intake) -> str | None:
         return None
 
     return summary.strip()
+
+
+# ---------------------------------------------------------------------------
+# Visit Prep brief (CosmaNeura#135)
+#
+# The physician wrote the questions; the model writes only the brief. It never
+# writes the interview, and it must not invent anything the patient did not say.
+# ---------------------------------------------------------------------------
+
+
+def brief_to_markdown(brief: VisitBrief) -> str:
+    """Render the brief as the prose `intake.summary` has always held.
+
+    Session Prep reads that field and Appointment.intake_status keys off it, so
+    the string form has to survive. Deriving it here means one model call
+    produces both artifacts and they cannot drift apart.
+    """
+    lines = [brief.headline, ""]
+
+    for bullet in brief.bullets:
+        lines.append(f"- {bullet}")
+
+    if brief.decision_points:
+        lines.extend(["", "**Decisions for the room**"])
+        for decision in brief.decision_points:
+            lines.append(f"- {decision}")
+
+    if brief.flags:
+        lines.extend(["", "**Flags**"])
+        for flag in brief.flags:
+            lines.append(f"- _{flag.kind}_ — **{flag.label}**: {flag.detail}")
+
+    if brief.narrative:
+        lines.extend(["", brief.narrative])
+
+    return "\n".join(lines).strip()
+
+
+def _local_generate_visit_brief(intake: Intake) -> VisitBrief:
+    """Deterministic stand-in used when the model is unavailable (tests, dev).
+
+    Mirrors the real prompt's judgment where it can do so from the data alone:
+    the adherence answer is the one signal whose meaning is structural rather
+    than interpretive, so it produces a real flag rather than a placeholder.
+    """
+    answers = intake.answers_by_key()
+    pairs = answered_questions(intake)
+
+    flags: list[BriefFlag] = []
+    adherence = answers.get(ADHERENCE)
+    if adherence in ADHERENCE_IMPERFECT:
+        flags.append(
+            BriefFlag(
+                kind="adherence",
+                label="Not taking as prescribed",
+                detail="The patient reported the regimen is not being taken as written.",
+            )
+        )
+
+    first_answer = pairs[0][1] if pairs else "No answers given."
+
+    return VisitBrief(
+        headline=first_answer.strip().splitlines()[0][:110],
+        bullets=[f"{question} {answer}".strip() for question, answer in pairs][:5],
+        decision_points=[
+            "Open on what they said they came for.",
+            "Confirm the medication list before changing anything.",
+        ],
+        flags=flags,
+        narrative=" ".join(answer for _question, answer in pairs)[:600],
+    )
+
+
+def visit_brief_prompt(intake: Intake, doctor: Doctor) -> str:
+    t = terminology_terms(doctor)
+    appointment = Appointment.one(id=intake.appointment_id)
+    patient = Patient.one(id=appointment.patient_id)
+
+    interview = "\n\n".join(
+        f"{index}. {question}\n{answer}"
+        for index, (question, answer) in enumerate(answered_questions(intake), start=1)
+    )
+
+    last_note = latest_note_for_patient(doctor.id, patient.id)
+    last_visit_section = ""
+    if last_note is not None:
+        last_appointment = Appointment.one(id=last_note.appointment_id)
+        last_visit_section = dedent(f"""
+        This {t.patient} has seen you before. Their last visit was {days_since(last_appointment.appointment_date)} days ago:
+
+        <CLINICAL_NOTE>
+        {json.dumps(last_note.note, indent=2)}
+        </CLINICAL_NOTE>
+
+        Where today's answers and that note disagree, today's answers are the
+        newer information. Say so plainly -- that gap is often the whole visit.
+        """)
+
+    return dedent(f"""
+    You are a {t.provider} with the following bio:
+
+    <BIO>
+    {doctor.biography}
+    </BIO>
+
+    Before this appointment you asked your {t.patient} a short set of questions
+    that you wrote yourself. These are their answers, in their own words.
+
+    <INTERVIEW>
+    {interview}
+    </INTERVIEW>
+
+    {last_visit_section}
+
+    Write the brief you want to read in the 45 seconds before you walk in.
+
+    Rules:
+    - Be specific. Keep numbers, drug names, doses and durations exactly as given.
+    - Do NOT invent anything. If something was not said, it is not in the brief.
+    - Do NOT restate a question the {t.patient} skipped as though it were answered.
+    - Lead with what changed or what they are worried about, not with demographics.
+    - No {t.patient} identifiers: no name, date of birth, address, phone or email.
+    - Flags are for things you should not walk past. Use "adherence" when the
+      regimen is not being taken as written, "clinical" for a change or symptom
+      that needs attention, "story" when life circumstance is the actual visit.
+    - A "billing" flag is optional and speculative -- only when a documented
+      screen is clearly suggested by what they said. Never diagnose to justify
+      one, and never let it displace a clinical flag.
+
+    Respond only in JSON matching this SCHEMA:
+
+    <SCHEMA>
+    {{
+      // one sentence, specific, no throat-clearing
+      "headline": str,
+      // 3-5 short facts you must not miss
+      "bullets": str[],
+      // 3 decisions to make in the room
+      "decision_points": str[],
+      "flags": {{
+        "kind": "clinical" | "adherence" | "story" | "billing",
+        "label": str,   // 3-5 words
+        "detail": str   // one sentence
+      }}[],
+      // one tight paragraph in your own voice
+      "narrative": str
+    }}
+    </SCHEMA>
+    """)
+
+
+def generate_visit_brief(intake: Intake, doctor: Doctor) -> VisitBrief | None:
+    if should_use_test_openai_fallback():
+        return _local_generate_visit_brief(intake)
+
+    prompt = visit_brief_prompt(intake, doctor)
+    response = openai.chat.completions.create(
+        model=DEFAULT_MULTI_MODAL_MODEL,
+        messages=[{"role": "system", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0,
+        top_p=0.1,
+    )
+
+    raw = response.choices[0].message.content
+    if not raw:
+        log.error(
+            "openai returned no visit brief",
+            intake_ref=provider_log_ref(str(intake.id)),
+        )
+        return None
+
+    try:
+        return VisitBrief.model_validate_json(raw)
+    except ValueError:
+        # A malformed brief is not something to paper over with a partial
+        # object: the physician would read it as complete.
+        log.error(
+            "could not parse the visit brief",
+            intake_ref=provider_log_ref(str(intake.id)),
+        )
+        return None

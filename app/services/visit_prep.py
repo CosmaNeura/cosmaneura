@@ -119,3 +119,29 @@ def default_questions() -> list[IntakeSchemaQuestion]:
             kind="story",
         ),
     ]
+
+
+def is_physician_authored(intake) -> bool:
+    """Whether this prep carries a physician-authored question set.
+
+    Authored questions have keys; model-generated ones never do. This is what
+    routes an intake down the Visit Prep brief path rather than the legacy prose
+    summary -- and it is why legacy intakes keep their existing behavior
+    untouched, including the external-intake-data precondition that a Visit Prep
+    prep has no way to satisfy.
+    """
+    return any(question.key for question in intake.intake_questions)
+
+
+def answered_questions(intake) -> list[tuple[str, str]]:
+    """(question, answer) for everything the patient actually answered, in order.
+
+    Skips are dropped rather than passed along as empty strings: an unanswered
+    question is not a fact about the patient, and feeding "" to the model invites
+    it to invent one.
+    """
+    return [
+        (question.question, question.answer)
+        for question in intake.visible_questions()
+        if question.answer
+    ]

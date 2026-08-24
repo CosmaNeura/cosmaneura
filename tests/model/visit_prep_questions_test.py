@@ -267,3 +267,23 @@ def test_required_details_is_optional_for_authored_questions():
     "Model-generated questions supply it; physician-authored ones have no use for it."
     question = IntakeSchemaQuestion(order=1, question="Why are you here?")
     assert question.required_details == ""
+
+
+def test_an_answer_without_a_timestamp_still_counts_as_answered():
+    """Older rows, backfills and fixtures can carry an answer and no timestamp.
+
+    Requiring the timestamp would quietly revert those to unanswered, and their
+    preps would never complete.
+    """
+    question = IntakeSchemaQuestion(order=1, question="Why are you here?")
+    question.answer = "Blood pressure follow-up"
+
+    assert question.answer_timestamp is None
+    assert question.is_answered is True
+
+
+def test_a_timestamp_without_an_answer_still_counts_as_answered():
+    question = IntakeSchemaQuestion(order=1, question="Why are you here?")
+    question.answer_timestamp = 1
+
+    assert question.is_answered is True
