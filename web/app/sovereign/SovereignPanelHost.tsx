@@ -33,6 +33,7 @@ type PanelMountOptions = {
   getContext: () => Promise<PanelContext>
   onHumanContact: (action: HumanContactAction) => void | Promise<void>
   shiftContent: boolean
+  fabBottom?: string
 }
 
 type PanelInstance = {
@@ -73,6 +74,11 @@ export type SovereignProviderConfig = {
 const TEMPLATE_NAME = /^[A-Za-z0-9_-]{1,64}$/
 const EMBED_VERSION = "1.0" as const
 const HUMAN_CONTACT_ACTION_ID = "human-contact"
+const PROVIDER_V7_FAB_BOTTOM = "84px"
+const PROVIDER_V7_LAYER_STYLE = `
+.cnp-root > .cnp-rail { z-index: 100001 !important; }
+.cnp-root > .cnp-tip { z-index: 100002 !important; }
+`
 
 class MountContextUnauthorizedError extends Error {}
 
@@ -437,6 +443,10 @@ export function SovereignPanelHost({
           // loadHistory is deliberately omitted until the platform exposes the
           // governed HydratedHistory read operation.
           shiftContent: true,
+          // Keep the V7 launcher above the dashboard's existing support pill.
+          ...(config.platformAuthorityEnabled
+            ? { fabBottom: PROVIDER_V7_FAB_BOTTOM }
+            : {}),
         })
         mounted = candidate
         const binding = await candidate.setRecord(appointmentId)
@@ -474,5 +484,7 @@ export function SovereignPanelHost({
     config?.platformAuthorityEnabled,
   ])
 
-  return null
+  return config?.platformAuthorityEnabled ? (
+    <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
+  ) : null
 }
