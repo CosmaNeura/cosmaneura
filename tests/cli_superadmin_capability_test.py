@@ -194,9 +194,7 @@ def test_cli_rejects_non_private_manifest_without_disclosing_identity(
         ),
     )
     assert result.exit_code != 0
-    normalized_output = " ".join(
-        strip_ansi(result.output).replace("│", " ").split()
-    )
+    normalized_output = " ".join(strip_ansi(result.output).replace("│", " ").split())
     assert "validation failed" in normalized_output
     assert "no identities were printed" in normalized_output
     _assert_redacted(result.output, subject, email, doctor_id)

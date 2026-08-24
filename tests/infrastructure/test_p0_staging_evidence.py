@@ -818,9 +818,7 @@ def test_table_reader_supports_present_but_empty_pre_deploy_schema() -> None:
         p0_schema_presence=snapshot_rows.p0_schema_presence,
     )
     assert snapshot["capture_phase"] == "pre-present-empty"
-    assert snapshot["p0_schema"]["present_count"] == len(
-        evidence.P0_SCHEMA_TABLES
-    )
+    assert snapshot["p0_schema"]["present_count"] == len(evidence.P0_SCHEMA_TABLES)
 
 
 def test_present_empty_pre_deploy_phase_rejects_any_p0_row() -> None:

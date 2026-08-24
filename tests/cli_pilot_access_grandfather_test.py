@@ -226,9 +226,7 @@ def test_grant_cli_dry_run_fails_closed_on_database_mismatch_without_pii(
     result = CliRunner().invoke(app, _grant_command(source_sha256))
 
     assert result.exit_code != 0
-    normalized_output = " ".join(
-        strip_ansi(result.output).replace("│", " ").split()
-    )
+    normalized_output = " ".join(strip_ansi(result.output).replace("│", " ").split())
     assert "validation failed" in normalized_output
     assert "no identities were printed" in normalized_output
     assert sensitive_stored_email not in result.output
