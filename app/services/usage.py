@@ -72,6 +72,7 @@ def recent_appointments() -> list[RecentAppointmentRow]:
         FROM ai_visit_note avn
         JOIN doctor d ON d.id = avn.doctor_id
         JOIN appointment a ON avn.appointment_id = a.id
+        WHERE avn.superseded_at IS NULL
         GROUP BY avn.appointment_id
         ORDER BY MAX(avn.created_at) DESC
         LIMIT :limit
@@ -90,6 +91,7 @@ def doctor_usage() -> list[DoctorUsageRow]:
                MAX(avn.created_at)                  AS last_note_at
         FROM ai_visit_note avn
         JOIN doctor d ON d.id = avn.doctor_id
+        WHERE avn.superseded_at IS NULL
         GROUP BY avn.doctor_id, d.email
         ORDER BY appointment_count DESC
         """
@@ -108,6 +110,7 @@ def daily_volume() -> list[DailyVolumeRow]:
                COUNT(DISTINCT(avn.doctor_id))   AS doctor_count
         FROM appointment a
         JOIN ai_visit_note avn ON avn.appointment_id = a.id
+        WHERE avn.superseded_at IS NULL
         GROUP BY day
         ORDER BY appointment_count DESC
         LIMIT :limit
@@ -128,7 +131,9 @@ def pending_uploads() -> list[PendingUploadRow]:
         FROM visit_audio_file vaf
         LEFT JOIN ai_visit_transcript avt ON avt.appointment_id = vaf.appointment_id
         JOIN appointment a ON a.id = vaf.appointment_id
-        JOIN ai_visit_note avn ON avn.ai_transcript_id = avt.id
+        JOIN ai_visit_note avn
+          ON avn.ai_transcript_id = avt.id
+         AND avn.superseded_at IS NULL
         JOIN doctor d ON vaf.doctor_id = d.id
         ORDER BY vaf.created_at DESC
         """
@@ -146,7 +151,9 @@ def time_to_note() -> list[TimeToNoteRow]:
                  avn.created_at - vaf.created_at AS time_to_note
           FROM visit_audio_file vaf
           LEFT JOIN ai_visit_transcript avt ON avt.appointment_id = vaf.appointment_id
-          JOIN ai_visit_note avn ON avn.ai_transcript_id = avt.id
+          JOIN ai_visit_note avn
+            ON avn.ai_transcript_id = avt.id
+           AND avn.superseded_at IS NULL
           JOIN doctor d ON vaf.doctor_id = d.id
           WHERE vaf.created_at > :since
         )

@@ -51,6 +51,7 @@ def recent_notes_for_patient(
             (AIVisitNote.doctor_id == doctor_id)
             & (Patient.id == patient_id)
             & (Appointment.appointment_date >= cutoff)
+            & (cast(Any, AIVisitNote.superseded_at).is_(None))
         )
         # the visit that happened last, not the row that was written last
         .order_by(cast(Any, Appointment.appointment_date).desc())

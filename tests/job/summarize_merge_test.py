@@ -11,8 +11,16 @@ import pytest
 from flexmock import flexmock
 
 from app.jobs import summarize
+from app.services.ai_visit_note_versions import (
+    VisitNoteRestoreReason,
+    plan_visit_note_restore,
+    restore_visit_note_version,
+)
 
-from app.models.ai_visit_note import AIVisitNote
+from app.models.ai_visit_note import (
+    HISTORICAL_DUPLICATE_SUPERSESSION,
+    AIVisitNote,
+)
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
 
 from tests.factories import (
@@ -189,8 +197,8 @@ def test_summarize_replaces_existing_note_when_new_segment_lands(
     stub_llm,
 ):
     """When a second transcript arrives for an appointment that already
-    has a note, the note is regenerated and the prior one is removed —
-    we end up with exactly one note linked to the latest transcript."""
+    has a note, the note is regenerated and the prior version is retained —
+    we end up with exactly one current note linked to the latest transcript."""
     doctor, patient, appointment, schema = appointment_with_schema
     base = datetime.now(timezone.utc) - timedelta(minutes=20)
     t1 = _make_transcript(
@@ -219,17 +227,32 @@ def test_summarize_replaces_existing_note_when_new_segment_lands(
     )
     summarize.perform(t2.id, schema.id)
 
-    count = AIVisitNote.where(
-        (AIVisitNote.appointment_id == appointment.id)
-        & (AIVisitNote.doctor_note_schema_id == schema.id)
-    ).count()
-    note = AIVisitNote.where(
-        (AIVisitNote.appointment_id == appointment.id)
-        & (AIVisitNote.doctor_note_schema_id == schema.id)
-    ).one()
-    assert count == 1
+    versions = list(
+        AIVisitNote.where(
+            (AIVisitNote.appointment_id == appointment.id)
+            & (AIVisitNote.doctor_note_schema_id == schema.id)
+        ).all()
+    )
+    current = [note for note in versions if note.superseded_at is None]
+    historical = [note for note in versions if note.superseded_at is not None]
+    note = current[0]
+    assert len(versions) == 2
+    assert len(current) == 1
+    assert len(historical) == 1
+    assert historical[0].id == note_after_first.id
+    assert historical[0].note == note_after_first.note
+    assert historical[0].created_at == note_after_first.created_at
+    assert historical[0].updated_at == note_after_first.updated_at
+    assert historical[0].supersession_reason == "regenerated_from_newer_transcript"
     assert note.ai_transcript_id == t2.id
-    assert note.id != note_after_first.id  # the old row was replaced
+    assert note.id != note_after_first.id
+
+    current_count = AIVisitNote.where(
+        (AIVisitNote.appointment_id == appointment.id)
+        & (AIVisitNote.doctor_note_schema_id == schema.id)
+        & (AIVisitNote.superseded_at == None)  # noqa: E711
+    ).count()
+    assert current_count == 1
 
 
 def test_summarize_skips_when_note_already_reflects_trigger(
@@ -256,3 +279,102 @@ def test_summarize_skips_when_note_already_reflects_trigger(
     assert len(stub_llm["generate"]) == first_calls, (
         "second call must short-circuit; LLM should not be invoked"
     )
+
+
+def test_restore_frontier_blocks_delayed_retry_but_allows_later_transcript(
+    appointment_with_schema,
+):
+    doctor, patient, appointment, schema = appointment_with_schema
+    base = datetime.now(timezone.utc) - timedelta(minutes=20)
+    first = _make_transcript(
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "first")],
+        duration=30,
+        created_at=base,
+    )
+    latest_at_restore = _make_transcript(
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "second")],
+        duration=30,
+        created_at=base + timedelta(minutes=1),
+    )
+    historical = AIVisitNote(
+        doctor_id=doctor.id,
+        appointment_id=appointment.id,
+        ai_transcript_id=first.id,
+        doctor_note_schema_id=schema.id,
+        note={"CC": "operator-selected", "Plan": "retain this"},
+        superseded_at=base + timedelta(minutes=2),
+        supersession_reason=HISTORICAL_DUPLICATE_SUPERSESSION,
+    ).save()
+    displaced = AIVisitNote(
+        doctor_id=doctor.id,
+        appointment_id=appointment.id,
+        ai_transcript_id=latest_at_restore.id,
+        doctor_note_schema_id=schema.id,
+        note={"CC": "generated current", "Plan": "generated"},
+    ).save()
+    plan = plan_visit_note_restore(
+        target_note_id=historical.id,
+        operator_ref="frontier-regression-reviewer",
+        reason=VisitNoteRestoreReason.clinical_correction,
+    )
+    restore_visit_note_version(
+        target_note_id=historical.id,
+        operator_ref="frontier-regression-reviewer",
+        reason=VisitNoteRestoreReason.clinical_correction,
+        confirm_plan_sha256=plan.plan_sha256,
+    )
+
+    assert (
+        summarize._finalize_generated_note(
+            trigger=latest_at_restore,
+            schema=schema,
+            generated_through_transcript_id=latest_at_restore.id,
+            note={"CC": "delayed retry", "Plan": "must not replace"},
+            appointment_name="Delayed retry",
+        )
+        is False
+    )
+    after_retry = list(
+        AIVisitNote.where(
+            (AIVisitNote.appointment_id == appointment.id)
+            & (AIVisitNote.doctor_note_schema_id == schema.id)
+        ).all()
+    )
+    assert len(after_retry) == 2
+    assert [note.id for note in after_retry if note.superseded_at is None] == [
+        historical.id
+    ]
+    assert AIVisitNote.one(displaced.id).note == displaced.note
+
+    genuinely_later = _make_transcript(
+        doctor.id,
+        appointment.id,
+        patient.id,
+        entries=[("doctor", "genuinely later")],
+        duration=30,
+        created_at=base + timedelta(minutes=3),
+    )
+    assert summarize._finalize_generated_note(
+        trigger=genuinely_later,
+        schema=schema,
+        generated_through_transcript_id=genuinely_later.id,
+        note={"CC": "later transcript", "Plan": "allowed"},
+        appointment_name="Later transcript",
+    )
+    after_later = list(
+        AIVisitNote.where(
+            (AIVisitNote.appointment_id == appointment.id)
+            & (AIVisitNote.doctor_note_schema_id == schema.id)
+        ).all()
+    )
+    assert len(after_later) == 3
+    current = [note for note in after_later if note.superseded_at is None]
+    assert len(current) == 1
+    assert current[0].ai_transcript_id == genuinely_later.id
+    assert current[0].restore_frontier_transcript_id is None

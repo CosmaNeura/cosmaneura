@@ -263,6 +263,7 @@ def note_detail(
         list[AIVisitNote],
         AIVisitNote.where(
             AIVisitNote.appointment_id == appointment_id,
+            cast(Any, AIVisitNote.superseded_at).is_(None),
         ).all(),
     )
 

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from app.services.patient_context import (
     NOTE_LOOKBACK,
@@ -167,3 +167,28 @@ def test_assemble_limits_note_count():
     context = assemble_patient_context(doctor.id, patient.id, limit_notes=2)
     assert len(context.notes) == 2
     assert context.notes[0].note["Plan"] == "10 days ago"
+
+
+def test_superseded_note_is_excluded_from_patient_prompt_context():
+    doctor = DoctorFactory.build().save()
+    patient = PatientFactory.build(doctor_id=doctor.id).save()
+    current = _create_note(
+        doctor,
+        patient,
+        appointment_date=datetime.now() - timedelta(days=2),
+        note={"Plan": "current synthetic context"},
+    )
+    historical = AIVisitNote(
+        doctor_id=current.doctor_id,
+        appointment_id=current.appointment_id,
+        ai_transcript_id=current.ai_transcript_id,
+        doctor_note_schema_id=current.doctor_note_schema_id,
+        note={"Plan": "superseded synthetic context"},
+        superseded_at=datetime.now(UTC),
+        supersession_reason="migration:a81c9d7e4f20",
+    ).save()
+
+    notes = recent_notes_for_patient(doctor.id, patient.id, limit=5)
+
+    assert [note.id for note in notes] == [current.id]
+    assert historical.note not in [note.note for note in notes]

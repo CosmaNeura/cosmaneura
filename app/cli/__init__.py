@@ -1987,5 +1987,111 @@ def revoke_organization_roster_access_command(
         )
 
 
+@app.command("restore-visit-note-version")
+def restore_visit_note_version_command(
+    note_id: str | None = typer.Option(
+        None,
+        "--note-id",
+        help=(
+            "Superseded visit-note TypeID to restore. Omit to enter it in a "
+            "hidden prompt and keep it out of shell history."
+        ),
+    ),
+    operator_ref: str = typer.Option(
+        ...,
+        help="Opaque operator or ticket reference; do not enter a name or email.",
+    ),
+    reason_code: str = typer.Option(
+        ...,
+        help=(
+            "One of: operator_selected_prior_version, clinical_correction, "
+            "incident_recovery."
+        ),
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        help="Exact digest printed by the dry run; required with --apply.",
+    ),
+    apply: bool = typer.Option(
+        False, "--apply", help="Apply the current-version swap."
+    ),
+) -> None:
+    """Restore one retained note version without deleting any version."""
+
+    from app.services.ai_visit_note_versions import (
+        VisitNoteRestoreReason,
+        VisitNoteVersionError,
+        plan_visit_note_restore,
+        restore_visit_note_version,
+    )
+
+    raw_note_id = note_id or typer.prompt(
+        "Superseded visit-note TypeID", hide_input=True
+    )
+    try:
+        target_note_id = _typeid(raw_note_id, "visit_note")
+        reason = VisitNoteRestoreReason(reason_code)
+    except (typer.BadParameter, ValueError) as exc:
+        raise typer.BadParameter(
+            "note id or reason code is invalid; no clinical identifiers were printed"
+        ) from exc
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+
+    try:
+        with global_session():
+            if not apply:
+                plan = plan_visit_note_restore(
+                    target_note_id=target_note_id,
+                    operator_ref=operator_ref,
+                    reason=reason,
+                )
+                typer.echo(
+                    "DRY RUN: retained note version can be restored; "
+                    f"versions={plan.version_count} "
+                    f"current_ref={plan.current_note_ref} "
+                    f"target_ref={plan.target_note_ref} "
+                    f"plan_sha256={plan.plan_sha256}; no records changed."
+                )
+                return
+
+            result = restore_visit_note_version(
+                target_note_id=target_note_id,
+                operator_ref=operator_ref,
+                reason=reason,
+                confirm_plan_sha256=cast(str, confirm_plan_sha256),
+            )
+    except VisitNoteVersionError:
+        typer.echo(
+            "Restore refused: note-version state or confirmation is invalid; "
+            "no clinical identifiers were printed.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+    except Exception:
+        if apply:
+            typer.echo(
+                "Restore outcome unknown: verify the append-only audit and "
+                "current note state before retrying; no clinical identifiers "
+                "or database details were printed.",
+                err=True,
+            )
+        else:
+            typer.echo(
+                "Restore plan unavailable due to an unexpected failure; no "
+                "clinical identifiers or database details were printed.",
+                err=True,
+            )
+        raise typer.Exit(1) from None
+
+    state = "applied" if result.changed else "already applied"
+    typer.echo(
+        "Visit-note restore "
+        f"{state}: audit={result.audit_id} "
+        f"plan_sha256={result.plan_sha256}; no note versions were deleted."
+    )
+
+
 if __name__ == "__main__":
     app()
