@@ -268,9 +268,6 @@ function NoteCustomization({
 function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
   const t = useTerminology()
   const formSchema = z.object({
-    //   image: z
-    //     .instanceof(File),
-    //   // .refine((file) => file.size !== 0, "Please upload an image"),
     note_type: z.string(),
   })
 
@@ -292,21 +289,41 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
       "sasSignature should always exist unless the server fails",
     )
 
-    const { stampedFileName } = await uploadFileToAzure(file, sasSignature)
+    const { stampedFileName, error: uploadError } = await uploadFileToAzure(
+      file,
+      sasSignature,
+    )
 
-    const _internalResponse = await uploadExampleNote({
+    if (uploadError) {
+      toast({
+        title: "Failed to upload note. Please try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
+    const { error: registrationError } = await uploadExampleNote({
       query: {
         file_name: stampedFileName,
         note_type: values.note_type,
       },
     })
 
+    if (registrationError) {
+      toast({
+        title: "Example note was not accepted",
+        description: "Please choose a valid PDF under 10MB and try again.",
+        variant: "destructive",
+      })
+      return
+    }
+
     setFile(null)
 
     toast({
       title: "Upload Complete",
       description:
-        "Your intake notes have been uploaded successfully. They will be processed and displayed here in a couple minutes.",
+        "Your example note has been received and will be processed shortly.",
     })
   }
 
@@ -364,7 +381,7 @@ function NoteUpload({ noteSchemas }: { noteSchemas: NoteSchema[] }) {
                 <div className="flex flex-col gap-1">
                   <p>Upload Example Visit Note</p>
                   <p className="text-muted-foreground text-xs">
-                    Click here or drag to select an image smaller than 10MB
+                    Click here or drag to select a PDF (10MB or smaller)
                   </p>
                 </div>
               </div>

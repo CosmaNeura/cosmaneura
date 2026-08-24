@@ -1124,9 +1124,18 @@ function NotesStep({
       return
     }
 
-    await uploadExampleNote({
+    const { error: registrationError } = await uploadExampleNote({
       query: { file_name: stampedFileName, note_type: values.note_type },
     })
+
+    if (registrationError) {
+      toast({
+        title: "Example note was not accepted",
+        description: "Please choose a valid PDF under 10MB and try again.",
+        variant: "destructive",
+      })
+      return
+    }
 
     setFile(null)
     toast({
@@ -1156,7 +1165,7 @@ function NotesStep({
               <div className="flex items-center gap-4 font-semibold">
                 <p>Upload Example Visit Note</p>
                 <p className="text-muted-foreground text-xs">
-                  Click or drag a PDF (under 10MB)
+                  Click or drag a PDF (10MB or smaller)
                 </p>
               </div>
             ) : (

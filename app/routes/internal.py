@@ -25,6 +25,7 @@ import app.jobs.fetch_drug_reference as fetch_drug_reference_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
+import app.services.example_note_upload as example_note_upload
 import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
 import app.services.zoom_oauth_state as zoom_oauth_state
@@ -456,6 +457,11 @@ def generate_signed_example_note_upload_url():
 @internal_api_app.post("/notes/upload-example")
 def upload_example_note(request: Request, file_name: str, note_type: str) -> None:
     doctor: Doctor = request.state.doctor
+
+    try:
+        example_note_upload.validate_example_note_blob(file_name)
+    except example_note_upload.ExampleNoteUploadValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     doctor_note_file = DoctorNoteFile(
         doctor_id=doctor.id, azure_file_name=file_name, note_type=note_type
