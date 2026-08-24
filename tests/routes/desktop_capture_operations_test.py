@@ -634,18 +634,10 @@ def test_heartbeat_and_stop_are_provider_free_no_store_and_proof_conservative(
         )
 
     assert heartbeat.status_code == status.HTTP_200_OK
-    assert heartbeat.json() == {
-        "schemaVersion": 1,
-        "decision": "accepted",
-        "sessionStatus": "recording",
-    }
+    heartbeat_payload = heartbeat.json()
     assert blocked_heartbeat.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert stop_response.status_code == status.HTTP_200_OK
-    assert stop_response.json() == {
-        "schemaVersion": 1,
-        "decision": "accepted",
-        "sessionStatus": "stopping",
-    }
+    stop_payload = stop_response.json()
     for response in (heartbeat, stop_response):
         assert "no-store" in response.headers["cache-control"]
         assert response.headers["pragma"] == "no-cache"
@@ -680,6 +672,25 @@ def test_heartbeat_and_stop_are_provider_free_no_store_and_proof_conservative(
     assert actual_segment.capability_revoked_at is None
     assert actual_segment.encrypted_capability is None
     assert len(lifecycle_operations) == 2
+    lifecycle_operations_by_name = {
+        operation.operation: operation for operation in lifecycle_operations
+    }
+    assert heartbeat_payload == {
+        "schemaVersion": 1,
+        "decision": "accepted",
+        "captureSessionId": str(reference.capture_session_id),
+        "capabilityId": capability_id,
+        "receiptId": str(lifecycle_operations_by_name["record_capture_heartbeat"].id),
+        "sessionStatus": "recording",
+    }
+    assert stop_payload == {
+        "schemaVersion": 1,
+        "decision": "accepted",
+        "captureSessionId": str(reference.capture_session_id),
+        "capabilityId": capability_id,
+        "receiptId": str(lifecycle_operations_by_name["request_capture_stop"].id),
+        "sessionStatus": "stopping",
+    }
     assert len(provider.create_refs) == 1
 
     rendered_logs = repr(logs)

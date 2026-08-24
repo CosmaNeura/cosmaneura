@@ -111,6 +111,10 @@ mounted under `/desktop/v1`; it deliberately excludes the authenticated browser
 launch routes under `/internal/v1/desktop-capture`. Those routes are consumed
 only by the authenticated `/desktop-capture` and `/desktop-capture/connect`
 provider pages; launch and PKCE material is never added to this native contract.
+Accepted heartbeat and stop responses echo the exact capture-session and
+capability identifiers and include the durable capture-operation identifier as
+the receipt. The desktop main process must reject a receipt whose binding does
+not match the request it sent.
 
 Regenerate the artifact after changing a desktop route or its Pydantic model:
 

@@ -112,9 +112,21 @@
       "CaptureLifecycleDecisionResponse": {
         "additionalProperties": false,
         "properties": {
+          "capabilityId": {
+            "title": "Capabilityid",
+            "type": "string"
+          },
+          "captureSessionId": {
+            "title": "Capturesessionid",
+            "type": "string"
+          },
           "decision": {
             "const": "accepted",
             "title": "Decision",
+            "type": "string"
+          },
+          "receiptId": {
+            "title": "Receiptid",
             "type": "string"
           },
           "schemaVersion": {
@@ -134,6 +146,9 @@
         "required": [
           "schemaVersion",
           "decision",
+          "captureSessionId",
+          "capabilityId",
+          "receiptId",
           "sessionStatus"
         ],
         "title": "CaptureLifecycleDecisionResponse",

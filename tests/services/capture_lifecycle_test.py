@@ -208,6 +208,9 @@ def test_first_heartbeat_consumes_capability_purges_replay_and_refreshes_lease()
     assert first.as_wire_dict() == {
         "schemaVersion": 1,
         "decision": "accepted",
+        "captureSessionId": str(scope.session_id),
+        "capabilityId": str(scope.capability_id),
+        "receiptId": str(heartbeat_operations[0].id),
         "sessionStatus": "recording",
     }
     assert capture_session is not None
@@ -358,6 +361,8 @@ def test_stop_before_heartbeat_revokes_secrets_without_claiming_stop_proof() -> 
             )
         ).one()
     assert receipt.session_status == "stopping"
+    assert receipt.capture_session_id == scope.session_id
+    assert receipt.capability_id == scope.capability_id
     assert capture_session is not None
     assert capture_session.state == "stopping"
     assert capture_session.started_at is None
@@ -433,6 +438,8 @@ def test_stop_after_heartbeat_preserves_consumption_and_blocks_new_heartbeat() -
             )
         ).one()
     assert first == replay
+    assert first.capture_session_id == scope.session_id
+    assert first.capability_id == scope.capability_id
     assert capture_session is not None
     assert capture_session.state == "stopping"
     assert capture_session.ended_at is None

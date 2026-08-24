@@ -117,6 +117,9 @@ class CaptureLifecycleDecisionResponse(BaseModel):
 
     schema_version: Literal[1] = Field(alias="schemaVersion")
     decision: Literal["accepted"]
+    capture_session_id: str = Field(alias="captureSessionId")
+    capability_id: str = Field(alias="capabilityId")
+    receipt_id: str = Field(alias="receiptId")
     session_status: Literal["recording", "stopping"] = Field(alias="sessionStatus")
 
 

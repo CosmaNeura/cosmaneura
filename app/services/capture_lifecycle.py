@@ -75,12 +75,18 @@ class CaptureLifecycleUnavailable(CaptureLifecycleError):
 
 @dataclass(frozen=True)
 class CaptureLifecycleReceipt:
+    capture_session_id: TypeIDType
+    capability_id: UUID
+    receipt_id: TypeIDType
     session_status: Literal["recording", "stopping"]
 
     def as_wire_dict(self) -> dict[str, int | str]:
         return {
             "schemaVersion": 1,
             "decision": "accepted",
+            "captureSessionId": str(self.capture_session_id),
+            "capabilityId": str(self.capability_id),
+            "receiptId": str(self.receipt_id),
             "sessionStatus": self.session_status,
         }
 
@@ -216,6 +222,7 @@ def _existing_receipt(
     actor_id: TypeIDType,
     capture_session_id: TypeIDType,
     segment_id: TypeIDType,
+    capability_id: UUID,
 ) -> CaptureLifecycleReceipt:
     if (
         operation.operation != expected_operation
@@ -232,9 +239,12 @@ def _existing_receipt(
     ):
         raise CaptureLifecycleConflict("capture_lifecycle_request_conflict")
     return CaptureLifecycleReceipt(
+        capture_session_id=capture_session_id,
+        capability_id=capability_id,
+        receipt_id=operation.id,
         session_status=(
             "recording" if expected_operation == HEARTBEAT_OPERATION else "stopping"
-        )
+        ),
     )
 
 
@@ -536,6 +546,7 @@ def _record_lifecycle_operation(
                     actor_id=actor_id,
                     capture_session_id=capture_session_id,
                     segment_id=existing.segment_id,
+                    capability_id=capability_id,
                 )
 
             if operation_name == HEARTBEAT_OPERATION:
@@ -581,6 +592,7 @@ def _record_lifecycle_operation(
                     actor_id=actor_id,
                     capture_session_id=capture_session_id,
                     segment_id=segment.id,
+                    capability_id=capability_id,
                 )
             if operation_name == HEARTBEAT_OPERATION and (
                 source_lease.heartbeat_at is not None
@@ -691,7 +703,12 @@ def _record_lifecycle_operation(
                 recorded_at=current,
             )
             db.commit()
-            return CaptureLifecycleReceipt(session_status=session_status)
+            return CaptureLifecycleReceipt(
+                capture_session_id=capture_session.id,
+                capability_id=capability_id,
+                receipt_id=operation.id,
+                session_status=session_status,
+            )
         except CaptureLifecycleError:
             db.rollback()
             raise
@@ -716,6 +733,7 @@ def _record_lifecycle_operation(
                 actor_id=actor_id,
                 capture_session_id=capture_session_id,
                 segment_id=existing.segment_id,
+                capability_id=capability_id,
             )
         except SQLAlchemyError:
             db.rollback()
