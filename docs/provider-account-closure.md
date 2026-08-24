@@ -13,14 +13,17 @@ The command:
   approval;
 - revokes the provider's governed authority identity, membership, and active
   mount sessions when that authority binding exists;
+- removes locally stored video-provider OAuth credentials so the platform can
+  no longer act on that third-party grant;
 - records append-only practice and authority audit evidence; and
 - applies the existing seven-calendar-year retention hold to membership and
   access-grant evidence.
 
 It does **not** delete or alter the provider's Clerk identity, patients,
 appointments, notes, transcripts, BAA acceptance, practice, or historical
-audit/recovery records. Do not manually delete those rows as a substitute for
-this workflow.
+audit/recovery records. The removed OAuth integration row contains encrypted
+operational credentials, not clinical or legal evidence. Do not manually
+delete retained rows as a substitute for this workflow.
 
 An owner cannot be closed while another active practice member remains;
 ownership must first be transferred explicitly. A sole-member solo owner and a
@@ -66,3 +69,7 @@ subscription after closure: workforce closure queues the platform's seat-count
 reconciliation, while closing a sole owner does not automatically cancel the
 practice subscription or customer. Record that separate billing decision on
 the same ticket.
+
+Because local credential removal cannot prove that the third-party provider
+invalidated its server-side grant, also remove CosmaNeura from the provider's
+connected-apps page and record that confirmation on the ticket.

@@ -587,6 +587,7 @@ def close_provider_account_command(
                     f"roster_approvals={plan.organization_approval_count} "
                     f"authority_identities={plan.authority_identity_count} "
                     f"active_mount_sessions={plan.active_mount_session_count} "
+                    f"video_integrations={plan.video_integration_count} "
                     f"stripe_follow_up={plan.stripe_follow_up_required} "
                     f"plan_sha256={plan.plan_sha256}; no changes made."
                 )

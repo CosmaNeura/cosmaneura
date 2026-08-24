@@ -27,6 +27,7 @@ from app.models.authority import (
     MountContextSession,
 )
 from app.models.doctor import Doctor, DoctorRole
+from app.models.doctor_video_integration import DoctorVideoIntegration
 from app.models.organization_access import OrganizationRosterApproval
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember, PracticeRole
@@ -54,6 +55,7 @@ class DoctorAccountClosurePlan:
     organization_approval_count: int
     authority_identity_count: int
     active_mount_session_count: int
+    video_integration_count: int
     stripe_follow_up_required: bool
     already_applied: bool
 
@@ -86,6 +88,7 @@ class _EvaluatedClosure:
     pilot_grants: tuple[PilotAccessGrandfatherGrant, ...]
     roster_approval: OrganizationRosterApproval | None
     authority_scope: _AuthorityClosureScope | None
+    video_integrations: tuple[DoctorVideoIntegration, ...]
     receipt: PracticeAccessAudit | None
 
 
@@ -123,8 +126,66 @@ def _canonical_sha256(payload: dict[str, Any]) -> str:
     return _sha256(canonical)
 
 
-def _receipt_reference(doctor_id: TypeIDType) -> str:
-    return f"doctor-account-closure:{doctor_id}"
+@dataclass(frozen=True)
+class _ReceiptCounts:
+    pilot_grants: int
+    roster_approvals: int
+    authority_identities: int
+    video_integrations: int
+
+
+def _receipt_prefix(doctor_id: TypeIDType) -> str:
+    return f"doctor-account-closure:{doctor_id}:"
+
+
+def _receipt_reference(
+    doctor_id: TypeIDType,
+    *,
+    pilot_grants: int,
+    roster_approvals: int,
+    authority_identities: int,
+    video_integrations: int,
+) -> str:
+    return (
+        f"{_receipt_prefix(doctor_id)}"
+        f"p={pilot_grants}:r={roster_approvals}:"
+        f"a={authority_identities}:v={video_integrations}"
+    )
+
+
+def _receipt_counts(
+    receipt: PracticeAccessAudit, doctor_id: TypeIDType
+) -> _ReceiptCounts:
+    reference = receipt.document_reference or ""
+    prefix = _receipt_prefix(doctor_id)
+    if not reference.startswith(prefix):
+        raise DoctorAccountClosureError("account closure audit state is invalid")
+    try:
+        fields = {
+            key: int(value)
+            for key, value in (
+                item.split("=", 1) for item in reference.removeprefix(prefix).split(":")
+            )
+        }
+        counts = _ReceiptCounts(
+            pilot_grants=fields["p"],
+            roster_approvals=fields["r"],
+            authority_identities=fields["a"],
+            video_integrations=fields["v"],
+        )
+    except (KeyError, TypeError, ValueError):
+        raise DoctorAccountClosureError(
+            "account closure audit state is invalid"
+        ) from None
+    if (
+        set(fields) != {"p", "r", "a", "v"}
+        or counts.pilot_grants not in (0, 1)
+        or counts.roster_approvals not in (0, 1)
+        or counts.authority_identities not in (0, 1)
+        or counts.video_integrations < 0
+    ):
+        raise DoctorAccountClosureError("account closure audit state is invalid")
+    return counts
 
 
 def _authority_scope(
@@ -274,6 +335,20 @@ def _roster_approval(
     return approval
 
 
+def _video_integrations(
+    session: Session,
+    *,
+    doctor: Doctor,
+    lock: bool,
+) -> tuple[DoctorVideoIntegration, ...]:
+    statement = select(DoctorVideoIntegration).where(
+        DoctorVideoIntegration.doctor_id == doctor.id
+    )
+    if lock:
+        statement = statement.with_for_update()
+    return tuple(session.exec(statement).all())
+
+
 def _plan_sha256(
     *,
     doctor: Doctor,
@@ -282,6 +357,7 @@ def _plan_sha256(
     pilot_grants: tuple[PilotAccessGrandfatherGrant, ...],
     roster_approval: OrganizationRosterApproval | None,
     authority_scope: _AuthorityClosureScope | None,
+    video_integrations: tuple[DoctorVideoIntegration, ...],
     operator_ref: str,
     reason: str,
 ) -> str:
@@ -319,6 +395,9 @@ def _plan_sha256(
                 if practice.stripe_subscription_id
                 else None
             ),
+            "video_integration_ids": sorted(
+                str(item.id) for item in video_integrations
+            ),
         }
     )
 
@@ -329,10 +408,12 @@ def _validate_applied_state(
     doctor: Doctor,
     member: PracticeMember,
     roster_approval: OrganizationRosterApproval | None,
+    video_integrations: tuple[DoctorVideoIntegration, ...],
     receipt: PracticeAccessAudit,
     operator_ref: str,
     reason: str,
 ) -> datetime:
+    counts = _receipt_counts(receipt, doctor.id)
     if (
         receipt.operator_ref != operator_ref
         or receipt.reason != reason
@@ -359,6 +440,10 @@ def _validate_applied_state(
         or roster_approval.retain_until != receipt.expires_at
     ):
         raise DoctorAccountClosureError("organization roster closure is incomplete")
+    if int(roster_approval is not None) != counts.roster_approvals:
+        raise DoctorAccountClosureError("organization roster closure is incomplete")
+    if video_integrations:
+        raise DoctorAccountClosureError("video integration closure is incomplete")
 
     related_grants = list(
         session.exec(
@@ -377,6 +462,8 @@ def _validate_applied_state(
         for grant in related_grants
         if grant.revocation_plan_sha256 == receipt.evidence_sha256
     ]
+    if len(closure_grants) != counts.pilot_grants:
+        raise DoctorAccountClosureError("pilot grant closure evidence is incomplete")
     if any(
         grant.revoked_at != receipt.effective_at
         or grant.revoked_by_ref != operator_ref
@@ -414,6 +501,10 @@ def _validate_applied_state(
     )
     if len(authority_events) > 1:
         raise DoctorAccountClosureError("authority closure audit state is ambiguous")
+    if len(authority_events) != counts.authority_identities:
+        raise DoctorAccountClosureError(
+            "authority closure audit evidence is incomplete"
+        )
     if authority_events:
         event = authority_events[0]
         if event.actor_id is None or event.tenant_id is None:
@@ -525,22 +616,28 @@ def _evaluate(
     receipt_statement = select(PracticeAccessAudit).where(
         PracticeAccessAudit.practice_id == practice.id,
         PracticeAccessAudit.action == PracticeAccessAction.doctor_account_closed.value,
-        PracticeAccessAudit.document_reference == _receipt_reference(doctor.id),
     )
     if lock:
         receipt_statement = receipt_statement.with_for_update()
-    receipts = list(session.exec(receipt_statement).all())
+    receipts = [
+        row
+        for row in session.exec(receipt_statement).all()
+        if (row.document_reference or "").startswith(_receipt_prefix(doctor.id))
+    ]
     if len(receipts) > 1:
         raise DoctorAccountClosureError("account closure audit state is ambiguous")
     receipt = receipts[0] if receipts else None
     roster_approval = _roster_approval(session, member=member, lock=lock)
+    video_integrations = _video_integrations(session, doctor=doctor, lock=lock)
 
     if receipt is not None:
+        counts = _receipt_counts(receipt, doctor.id)
         retain_until = _validate_applied_state(
             session,
             doctor=doctor,
             member=member,
             roster_approval=roster_approval,
+            video_integrations=video_integrations,
             receipt=receipt,
             operator_ref=operator,
             reason=explanation,
@@ -553,10 +650,11 @@ def _evaluate(
                 practice_id=practice.id,
                 member_id=member.id,
                 member_role=member.role,
-                pilot_grant_count=0,
-                organization_approval_count=int(roster_approval is not None),
-                authority_identity_count=0,
+                pilot_grant_count=counts.pilot_grants,
+                organization_approval_count=counts.roster_approvals,
+                authority_identity_count=counts.authority_identities,
                 active_mount_session_count=0,
+                video_integration_count=counts.video_integrations,
                 stripe_follow_up_required=bool(practice.stripe_subscription_id),
                 already_applied=True,
             ),
@@ -566,6 +664,7 @@ def _evaluate(
             pilot_grants=(),
             roster_approval=roster_approval,
             authority_scope=None,
+            video_integrations=(),
             receipt=receipt,
         )
 
@@ -619,6 +718,7 @@ def _evaluate(
         pilot_grants=pilot_grants,
         roster_approval=roster_approval,
         authority_scope=authority_scope,
+        video_integrations=video_integrations,
         operator_ref=operator,
         reason=explanation,
     )
@@ -635,6 +735,7 @@ def _evaluate(
             active_mount_session_count=(
                 len(authority_scope.sessions) if authority_scope is not None else 0
             ),
+            video_integration_count=len(video_integrations),
             stripe_follow_up_required=bool(practice.stripe_subscription_id),
             already_applied=False,
         ),
@@ -644,6 +745,7 @@ def _evaluate(
         pilot_grants=pilot_grants,
         roster_approval=roster_approval,
         authority_scope=authority_scope,
+        video_integrations=video_integrations,
         receipt=None,
     )
 
@@ -773,6 +875,12 @@ def close_doctor_account(
                 grant.retain_until = retain_until
                 session.add(grant)
 
+            # OAuth credentials are operational secrets, not retained clinical
+            # or legal records. Removing them locally makes the provider grant
+            # unusable by this platform without deleting the external account.
+            for integration in evaluated.video_integrations:
+                session.delete(integration)
+
             if evaluated.authority_scope is not None:
                 scope = evaluated.authority_scope
                 scope.identity.revoked_at = current
@@ -808,7 +916,13 @@ def close_doctor_account(
                 reason=reason,
                 effective_at=current,
                 expires_at=retain_until,
-                document_reference=_receipt_reference(evaluated.doctor.id),
+                document_reference=_receipt_reference(
+                    evaluated.doctor.id,
+                    pilot_grants=len(evaluated.pilot_grants),
+                    roster_approvals=int(evaluated.roster_approval is not None),
+                    authority_identities=int(evaluated.authority_scope is not None),
+                    video_integrations=len(evaluated.video_integrations),
+                ),
                 evidence_sha256=evaluated.plan.plan_sha256,
             )
             session.add(receipt)

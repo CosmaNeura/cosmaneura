@@ -149,18 +149,26 @@ def _actor_for_clerk_identity(
     session: Session,
     issuer: str,
     subject: str,
+    *,
+    lock_for_update: bool = False,
 ) -> tuple[AuthorityActor, AuthorityActorExternalIdentity]:
-    identity = session.exec(
-        select(AuthorityActorExternalIdentity).where(
-            AuthorityActorExternalIdentity.issuer == issuer,
-            AuthorityActorExternalIdentity.subject == subject,
-            cast(Any, AuthorityActorExternalIdentity.revoked_at).is_(None),
-        )
-    ).first()
+    identity_statement = select(AuthorityActorExternalIdentity).where(
+        AuthorityActorExternalIdentity.issuer == issuer,
+        AuthorityActorExternalIdentity.subject == subject,
+        cast(Any, AuthorityActorExternalIdentity.revoked_at).is_(None),
+    )
+    if lock_for_update:
+        identity_statement = identity_statement.with_for_update()
+    identity = session.exec(identity_statement).first()
     if identity is None:
         raise AuthorityRequestDeniedError
 
-    actor = session.get(AuthorityActor, identity.actor_id)
+    actor_statement = select(AuthorityActor).where(
+        AuthorityActor.id == identity.actor_id
+    )
+    if lock_for_update:
+        actor_statement = actor_statement.with_for_update()
+    actor = session.exec(actor_statement).one_or_none()
     if actor is None or actor.status != "active" or actor.actor_kind != "human":
         raise AuthorityRequestDeniedError
     return actor, identity
@@ -416,6 +424,7 @@ def exchange_context_token(
         db,
         clerk_issuer,
         clerk_subject,
+        lock_for_update=True,
     )
     tenant_id, person_binding_id = _exchange_binding(
         db,

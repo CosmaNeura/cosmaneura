@@ -7,6 +7,7 @@ import pytest
 import app.services.doctor_account_closure as account_closure
 import app.services.stripe_billing as stripe_billing
 from app.configuration.authority import AuthorityKernelSettings
+from app.services.doctor_access import resolve_doctor_access
 from app.services.doctor_account_closure import (
     DoctorAccountClosureError,
     close_doctor_account,
@@ -18,6 +19,7 @@ from app.services.organization_access import (
     configure_provider_organization,
     import_roster_approvals,
 )
+from app.services.zoom import get_zoom_integration
 
 from app.models.authority import (
     AuthorityActor,
@@ -30,6 +32,7 @@ from app.models.authority import (
 )
 from app.models.baa import BaaAcceptance, BaaVersion
 from app.models.doctor import Doctor
+from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
 from app.models.organization_access import OrganizationRosterApproval
 from app.models.patient import Patient
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
@@ -86,7 +89,17 @@ def _pilot_grant(doctor: Doctor, practice: Practice) -> PilotAccessGrandfatherGr
 
 def test_closure_preserves_clinical_and_baa_records_and_is_idempotent():
     doctor, practice, member = _scope()
+    doctor.generate_api_key()
+    retained_api_key = doctor.api_key
     grant = _pilot_grant(doctor, practice)
+    video_integration = DoctorVideoIntegration(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+        provider_user_id=f"zoom-{secrets.token_hex(5)}",
+        access_token="encrypted-access-fixture",
+        refresh_token="encrypted-refresh-fixture",
+        token_expires_at=datetime(2026, 8, 25, 12, 0, tzinfo=UTC),
+    ).save()
     patient = Patient(
         doctor_id=doctor.id,
         name="Retained Test Patient",
@@ -121,6 +134,7 @@ def test_closure_preserves_clinical_and_baa_records_and_is_idempotent():
     second_plan = plan_doctor_account_closure(**args)
     assert first_plan == second_plan
     assert first_plan.pilot_grant_count == 1
+    assert first_plan.video_integration_count == 1
 
     closed_at = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
     result = close_doctor_account(
@@ -138,6 +152,8 @@ def test_closure_preserves_clinical_and_baa_records_and_is_idempotent():
     practice.refresh()
     assert doctor.deleted_at == closed_at
     assert doctor.clerk_id == original_clerk_id
+    assert doctor.api_key == retained_api_key
+    assert resolve_doctor_access(doctor).denial_reason == "doctor_disabled"
     assert member.access_revoked_at == closed_at
     assert member.access_records_retain_until == result.retain_until
     assert grant.revoked_at == closed_at
@@ -145,6 +161,8 @@ def test_closure_preserves_clinical_and_baa_records_and_is_idempotent():
     assert grant.revocation_plan_sha256 == first_plan.plan_sha256
     assert Patient.get(id=patient.id) is not None
     assert BaaAcceptance.get(id=acceptance.id) is not None
+    assert DoctorVideoIntegration.get(id=video_integration.id) is None
+    assert get_zoom_integration(doctor) is None
     assert practice.baa_version == "test-preserved"
     assert practice.baa_signature_name == "Retained Signer"
     receipt = PracticeAccessAudit.get(
@@ -316,6 +334,40 @@ def test_closure_rejects_wrong_digest_without_mutation():
     member.refresh()
     assert doctor.deleted_at is None
     assert member.access_revoked_at is None
+
+
+def test_closure_retry_refuses_missing_grant_evidence():
+    doctor, practice, member = _scope()
+    closed_at = datetime(2026, 8, 24, 13, 15, tzinfo=UTC)
+    retain_until = datetime(2033, 8, 24, 13, 15, tzinfo=UTC)
+    operator_ref = "change:missing-evidence-test"
+    reason = "Exercise fail-closed closure receipt validation"
+    doctor.deleted_at = closed_at
+    doctor.save()
+    member.access_revoked_at = closed_at
+    member.access_revoked_by_ref = operator_ref
+    member.access_revocation_reason = reason
+    member.access_records_retain_until = retain_until
+    member.save()
+    PracticeAccessAudit(
+        practice_id=practice.id,
+        action=PracticeAccessAction.doctor_account_closed.value,
+        operator_ref=operator_ref,
+        reason=reason,
+        effective_at=closed_at,
+        expires_at=retain_until,
+        document_reference=(f"doctor-account-closure:{doctor.id}:p=1:r=0:a=0:v=0"),
+        evidence_sha256="e" * 64,
+    ).save()
+
+    with pytest.raises(
+        DoctorAccountClosureError, match="grant closure evidence is incomplete"
+    ):
+        plan_doctor_account_closure(
+            doctor_id=doctor.id,
+            operator_ref=operator_ref,
+            reason=reason,
+        )
 
 
 def test_closure_retry_repairs_a_failed_stripe_reconciliation_queue(monkeypatch):
