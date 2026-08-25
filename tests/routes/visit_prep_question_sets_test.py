@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import pytest
 from fastapi import FastAPI, HTTPException, status
@@ -162,7 +162,7 @@ def test_full_internal_router_keeps_every_visit_prep_denial_non_disclosing(
     bare_authenticated_client: TestClient,
     method: str,
     route_name: str,
-    request_kwargs: dict[str, object],
+    request_kwargs: dict[str, Any],
 ):
     from app.server import api_app
 
