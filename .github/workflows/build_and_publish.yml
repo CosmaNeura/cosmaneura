@@ -51,6 +51,38 @@ env:
   COLUMNS: 120
 
 jobs:
+  authorize-production:
+    name: Authorize production promotion
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require founder-authorized manual promotion from master
+        env:
+          PROMOTION_ACTOR: ${{ github.actor }}
+          PROMOTION_EVENT: ${{ github.event_name }}
+          PROMOTION_REF: ${{ github.ref }}
+          PROMOTION_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          if [[ "$PROMOTION_EVENT" != "workflow_dispatch" ]]; then
+            echo "::error::Production promotion must be started manually with workflow_dispatch."
+            exit 1
+          fi
+          if [[ "$PROMOTION_REF" != "refs/heads/master" ]]; then
+            echo "::error::Production promotion must target the exact master branch."
+            exit 1
+          fi
+          if [[ "$PROMOTION_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production promotion is restricted to the founder account."
+            exit 1
+          fi
+          if [[ "$PROMOTION_TRIGGERING_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production promotion reruns are restricted to the founder account."
+            exit 1
+          fi
+
   deployment-scope:
     name: Release scope
     runs-on: ubuntu-latest
@@ -174,17 +206,14 @@ jobs:
     concurrency:
       group: cosmaneura-production-container-apps
       cancel-in-progress: false
-    needs: [web, app, deployment-scope]
+    needs: [web, app, deployment-scope, authorize-production]
     if: >-
       ${{
+        github.event_name == 'workflow_dispatch' &&
         github.ref == 'refs/heads/master' &&
-        (
-          github.event_name == 'workflow_dispatch' ||
-          (
-            github.event_name == 'push' &&
-            needs.deployment-scope.outputs.production_infra_changed != 'true'
-          )
-        )
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize-production.result == 'success'
       }}
     environment: production
     env:
