@@ -313,6 +313,7 @@ describe("requiresViewAsProtection", () => {
     "/intake/intake_123",
     "/schedule/meeting_123",
     "/settings",
+    "/visit-preps",
   ])("protects provider route %s", (pathname) => {
     expect(requiresViewAsProtection(pathname)).toBe(true)
   })

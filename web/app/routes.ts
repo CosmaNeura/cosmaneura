@@ -28,6 +28,7 @@ export default [
         route(":zoom_meeting_id", "routes/schedule/detail.tsx"),
       ]),
     ]),
+    route("/visit-preps", "routes/visit-preps.tsx"),
     route("/settings", "routes/settings.tsx"),
   ]),
   // public, unauthenticated, intake chat

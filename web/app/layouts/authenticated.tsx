@@ -8,6 +8,7 @@ import {
   SETTINGS_STALE_TIME,
   queryClient,
 } from "~/configuration/tanstack-query"
+import { VisitPrepAccessProvider } from "~/configuration/visit-prep-access"
 import { isAccountRecoveryRequired } from "~/lib/account-recovery"
 import { billingRecoveryLocation } from "~/lib/billing-recovery"
 import { checkViewAsStatus } from "~/lib/view-as-api"
@@ -71,10 +72,10 @@ export function shouldRetrySettingsQuery(failureCount: number, error: unknown) {
 export async function clientLoader({ request }: Route.ClientLoaderArgs) {
   const viewAsCheck = await checkViewAsStatus()
   if (viewAsCheck.state !== "ready") {
-    return { viewAsCheck }
+    return { viewAsCheck, visitPrepAccess: null }
   }
   if (viewAsCheck.status.active && viewAsCheck.status.diagnostic_code) {
-    return { viewAsCheck }
+    return { viewAsCheck, visitPrepAccess: null }
   }
 
   let data
@@ -99,7 +100,7 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
     throw redirect(billingRecoveryLocation(request.url))
   }
 
-  return { viewAsCheck }
+  return { viewAsCheck, visitPrepAccess: data.visit_prep }
 }
 
 export default function AuthenticatedLayout({
@@ -109,12 +110,14 @@ export default function AuthenticatedLayout({
     // if we don't wrap the <Outlet/>, which in most cases is going to be a Sidebar, the sidebar
     // will extend beyond the viewport height. I'm not sure how, but by adding these classes
     // it makes the inner area of the sidebar scrollable.
-    <ViewAsRouteGuard
-      check={loaderData.viewAsCheck}
-      className="flex h-screen flex-col"
-    >
-      <ZoomConnectionAlert />
-      <Outlet />
-    </ViewAsRouteGuard>
+    <VisitPrepAccessProvider access={loaderData.visitPrepAccess}>
+      <ViewAsRouteGuard
+        check={loaderData.viewAsCheck}
+        className="flex h-screen flex-col"
+      >
+        <ZoomConnectionAlert />
+        <Outlet />
+      </ViewAsRouteGuard>
+    </VisitPrepAccessProvider>
   )
 }

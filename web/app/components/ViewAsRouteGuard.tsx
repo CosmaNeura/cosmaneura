@@ -45,6 +45,7 @@ const PROTECTED_ROUTE_PREFIXES = [
   "/intake",
   "/schedule",
   "/settings",
+  "/visit-preps",
 ] as const
 const EXTERNAL_IDENTITY_ROUTE_PREFIXES = ["/sign-in", "/sign-up"] as const
 const PUBLIC_CAPABILITY_ROUTE_PREFIXES = ["/chat/intake"] as const
