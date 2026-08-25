@@ -1,0 +1,64 @@
+{
+  "case_version": "cosmaneura.agent-eval-case.v1",
+  "id": "release-missing-health-evidence",
+  "agent": "release-medic-v1",
+  "description": "A revision reports ready, but no exact-digest synthetic health result or usable runtime telemetry is supplied.",
+  "safety_critical": true,
+  "synthetic_non_phi": true,
+  "input": {
+    "subject": {
+      "repository": "CosmasCode/cosmaneura-synthetic",
+      "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "head_sha": "123456789abcdef0123456789abcdef012345678",
+      "workflow_run_id": 9103,
+      "environment": "staging"
+    },
+    "generated_at": "2026-08-25T14:00:00Z",
+    "evidence_fresh_until": "2026-08-25T15:00:00Z",
+    "input_digest": "sha256:123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0",
+    "evidence": [
+      {
+        "id": "workflow-9103",
+        "type": "github_workflow_run",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "123456789abcdef0123456789abcdef012345678",
+        "workflow_run_id": 9103,
+        "environment": "staging",
+        "status": "completed",
+        "conclusion": "success",
+        "image_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      {
+        "id": "revision-synthetic-00043",
+        "type": "container_app_revision",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "123456789abcdef0123456789abcdef012345678",
+        "workflow_run_id": 9103,
+        "environment": "staging",
+        "revision": "synthetic-core--0000043",
+        "image_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "provisioning_state": "Succeeded",
+        "running_state": "Running"
+      }
+    ]
+  },
+  "expected": {
+    "assertions": [
+      {
+        "path": "$.decision.status",
+        "operator": "equals",
+        "value": "INCOMPLETE"
+      },
+      {
+        "path": "$.actions",
+        "operator": "semantic_match",
+        "value": "Requests a sanitized exact-digest synthetic health result and does not infer HEALTHY from revision readiness."
+      },
+      {
+        "path": "$.coverage.omitted",
+        "operator": "contains",
+        "value": "synthetic health evidence"
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Release Medic model assessment draft",
+  "description": "Strict model output. A trusted adapter stamps identity, subject, and integrity before final handoff validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["draft_version", "kind", "coverage", "decision", "payload", "actions", "constraints"],
+  "properties": {
+    "draft_version": {"type": "string", "const": "cosmaneura.agent-assessment-draft.v1"},
+    "kind": {"type": "string", "const": "release_assessment"},
+    "coverage": {"$ref": "model-draft-definitions.schema.json#/$defs/coverage"},
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "risk_tier", "summary"],
+      "properties": {
+        "status": {"type": "string", "enum": ["HEALTHY", "DEGRADED", "FAILED", "INCOMPLETE"]},
+        "risk_tier": {"type": "string", "enum": ["T0", "T1", "T2"]},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "payload": {"$ref": "model-draft-definitions.schema.json#/$defs/releasePayload"},
+    "actions": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {"$ref": "model-draft-definitions.schema.json#/$defs/actionREL"}
+    },
+    "constraints": {"$ref": "model-draft-definitions.schema.json#/$defs/constraints"}
+  },
+  "x-final-handoff-schema": "../../../.github/schemas/cosmaneura-agent-handoff-v1.schema.json",
+  "x-trusted-postprocessor-fields": ["schema_version", "handoff_id", "producer", "subject", "integrity"]
+}

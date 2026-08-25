@@ -1,0 +1,1027 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.cosmaneura.local/cosmaneura-agent-handoff-v1.schema.json",
+  "title": "Cosmaneura agent assessment handoff v1",
+  "description": "An immutable, commit-bound assessment produced for a deployment worker.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "handoff_id",
+    "producer",
+    "subject",
+    "coverage",
+    "decision",
+    "payload",
+    "actions",
+    "constraints",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "cosmaneura.agent-handoff.v1"
+    },
+    "kind": {
+      "enum": [
+        "deployment_assessment",
+        "migration_assessment",
+        "release_assessment",
+        "security_assessment"
+      ]
+    },
+    "handoff_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{7,255}$"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "subject": {
+      "$ref": "#/$defs/subject"
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "decision": {
+      "$ref": "#/$defs/decision"
+    },
+    "payload": {
+      "type": "object"
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 500
+    },
+    "constraints": {
+      "$ref": "#/$defs/constraints"
+    },
+    "integrity": {
+      "$ref": "#/$defs/integrity"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "deployment_assessment"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "READY",
+                  "HOLD",
+                  "NEEDS_HUMAN",
+                  "INCOMPLETE"
+                ]
+              }
+            }
+          },
+          "payload": {
+            "$ref": "#/$defs/deploymentPayload"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/deploymentAction"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "migration_assessment"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "READY",
+                  "HOLD",
+                  "NEEDS_HUMAN",
+                  "INCOMPLETE"
+                ]
+              }
+            }
+          },
+          "payload": {
+            "$ref": "#/$defs/migrationPayload"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/migrationAction"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "release_assessment"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "HEALTHY",
+                  "DEGRADED",
+                  "FAILED",
+                  "INCOMPLETE"
+                ]
+              }
+            }
+          },
+          "payload": {
+            "$ref": "#/$defs/releasePayload"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/releaseAction"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "security_assessment"
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "decision": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "HOLD",
+                  "NEEDS_HUMAN",
+                  "INCOMPLETE",
+                  "PASS_WITH_FINDINGS",
+                  "NO_FINDINGS_OBSERVED"
+                ]
+              }
+            }
+          },
+          "payload": {
+            "$ref": "#/$defs/securityPayload"
+          },
+          "actions": {
+            "items": {
+              "$ref": "#/$defs/securityAction"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "release_assessment"
+          },
+          "decision": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "HEALTHY",
+                  "DEGRADED"
+                ]
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "properties": {
+              "deployed_sha": {
+                "$ref": "#/$defs/sha"
+              },
+              "image_digest": {
+                "$ref": "#/$defs/sha256"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent",
+        "policy_version",
+        "foundry_agent_version",
+        "model",
+        "policy_sha"
+      ],
+      "properties": {
+        "agent": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "policy_version": {
+          "description": "Semantic version of the checked-in agent policy bundle.",
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+        },
+        "foundry_agent_version": {
+          "description": "Immutable numeric Azure AI Foundry agent version invoked by the broker.",
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "policy_sha": {
+          "$ref": "#/$defs/sha"
+        }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository",
+        "base_sha",
+        "head_sha",
+        "environment"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "pull_request": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "base_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "head_sha": {
+          "$ref": "#/$defs/sha"
+        },
+        "workflow_run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "environment": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included",
+        "omitted",
+        "evidence_fresh_until"
+      ],
+      "properties": {
+        "included": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        },
+        "omitted": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        },
+        "evidence_fresh_until": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "risk_tier",
+        "summary"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "READY",
+            "HOLD",
+            "NEEDS_HUMAN",
+            "INCOMPLETE",
+            "PASS_WITH_FINDINGS",
+            "NO_FINDINGS_OBSERVED",
+            "HEALTHY",
+            "DEGRADED",
+            "FAILED"
+          ]
+        },
+        "risk_tier": {
+          "enum": [
+            "T0",
+            "T1",
+            "T2"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "locator",
+        "claim"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "repository",
+            "ci",
+            "deployment",
+            "migration",
+            "policy",
+            "scanner",
+            "telemetry",
+            "other"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        },
+        "line_start": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "claim": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "test",
+        "expected"
+      ],
+      "properties": {
+        "test": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "expected": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "deploymentAction": {
+      "$ref": "#/$defs/actionDEP"
+    },
+    "migrationAction": {
+      "$ref": "#/$defs/actionMIG"
+    },
+    "releaseAction": {
+      "$ref": "#/$defs/actionREL"
+    },
+    "actionDEP": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "severity",
+        "confidence",
+        "blocking",
+        "state",
+        "title",
+        "evidence",
+        "required_change",
+        "non_goals",
+        "verification",
+        "owner_role"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^DEP-[0-9]{3,}$"
+        },
+        "category": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "state": {
+          "const": "open"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "non_goals": {
+          "$ref": "#/$defs/nonGoals"
+        },
+        "verification": {
+          "$ref": "#/$defs/verificationList"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/ownerRole"
+        }
+      }
+    },
+    "actionMIG": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "severity",
+        "confidence",
+        "blocking",
+        "state",
+        "title",
+        "evidence",
+        "required_change",
+        "non_goals",
+        "verification",
+        "owner_role"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^MIG-[0-9]{3,}$"
+        },
+        "category": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "state": {
+          "const": "open"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "non_goals": {
+          "$ref": "#/$defs/nonGoals"
+        },
+        "verification": {
+          "$ref": "#/$defs/verificationList"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/ownerRole"
+        }
+      }
+    },
+    "actionREL": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "severity",
+        "confidence",
+        "blocking",
+        "state",
+        "title",
+        "evidence",
+        "required_change",
+        "non_goals",
+        "verification",
+        "owner_role"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^REL-[0-9]{3,}$"
+        },
+        "category": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "state": {
+          "const": "open"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "non_goals": {
+          "$ref": "#/$defs/nonGoals"
+        },
+        "verification": {
+          "$ref": "#/$defs/verificationList"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/ownerRole"
+        }
+      }
+    },
+    "securityAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "severity",
+        "confidence",
+        "blocking",
+        "state",
+        "title",
+        "classification",
+        "attack_path",
+        "impact",
+        "evidence",
+        "required_change",
+        "non_goals",
+        "verification",
+        "owner_role"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^SEC-[0-9]{3,}$"
+        },
+        "category": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"
+        },
+        "severity": {
+          "$ref": "#/$defs/severity"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "blocking": {
+          "type": "boolean"
+        },
+        "state": {
+          "const": "open"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "classification": {
+          "enum": [
+            "confirmed",
+            "probable",
+            "potential",
+            "informational"
+          ]
+        },
+        "cwe": {
+          "type": "string",
+          "pattern": "^CWE-[1-9][0-9]*$"
+        },
+        "attack_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "impact": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "evidence": {
+          "$ref": "#/$defs/evidenceList"
+        },
+        "required_change": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "non_goals": {
+          "$ref": "#/$defs/nonGoals"
+        },
+        "verification": {
+          "$ref": "#/$defs/verificationList"
+        },
+        "owner_role": {
+          "$ref": "#/$defs/ownerRole"
+        }
+      }
+    },
+    "severity": {
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info"
+      ]
+    },
+    "evidenceList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "$ref": "#/$defs/evidence"
+      }
+    },
+    "nonGoals": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000
+      }
+    },
+    "verificationList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/verification"
+      }
+    },
+    "ownerRole": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "evidence_locator"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "status": {
+          "enum": [
+            "success",
+            "failure",
+            "pending",
+            "skipped",
+            "missing"
+          ]
+        },
+        "evidence_locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "deploymentPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_environment",
+        "required_checks",
+        "migration_review_required"
+      ],
+      "properties": {
+        "target_environment": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"
+        },
+        "required_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        },
+        "migration_review_required": {
+          "type": "boolean"
+        },
+        "rollback_reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "migrationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "migration_paths",
+        "rehearsal_status",
+        "expand_contract_compliant"
+      ],
+      "properties": {
+        "migration_paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "rehearsal_status": {
+          "enum": [
+            "passed",
+            "failed",
+            "not_run",
+            "unavailable"
+          ]
+        },
+        "expand_contract_compliant": {
+          "type": "boolean"
+        }
+      }
+    },
+    "releasePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deployed_sha",
+        "image_digest",
+        "health_checks"
+      ],
+      "properties": {
+        "deployed_sha": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "image_digest": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "health_checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/check"
+          }
+        }
+      }
+    },
+    "scannerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "evidence_locator"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "status": {
+          "enum": [
+            "available",
+            "unavailable",
+            "not_configured"
+          ]
+        },
+        "evidence_locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    },
+    "securityPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "review_scope",
+        "scanner_inputs",
+        "live_target_testing"
+      ],
+      "properties": {
+        "review_scope": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "scanner_inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scannerInput"
+          }
+        },
+        "live_target_testing": {
+          "const": false
+        }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "must_not",
+        "approvals_required"
+      ],
+      "properties": {
+        "must_not": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "approvals_required": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generated_at",
+        "input_digest",
+        "artifact_digest"
+      ],
+      "properties": {
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "input_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifact_digest": {
+          "$comment": "SHA-256 of compact, key-sorted UTF-8 JSON for the envelope with integrity.artifact_digest omitted; separators are comma and colon and non-ASCII characters are not escaped.",
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

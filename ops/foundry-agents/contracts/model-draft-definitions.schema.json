@@ -1,0 +1,261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Strict Foundry model-draft definitions",
+  "$defs": {
+    "sha": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "nullableSha": {
+      "type": ["string", "null"],
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "nullableSha256": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["included", "omitted", "evidence_fresh_until"],
+      "properties": {
+        "included": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 240}
+        },
+        "omitted": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 240}
+        },
+        "evidence_fresh_until": {"type": "string", "format": "date-time"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "locator", "line_start", "line_end", "claim", "digest"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["repository", "ci", "deployment", "migration", "policy", "scanner", "telemetry", "other"]
+        },
+        "locator": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "line_start": {"type": ["integer", "null"], "minimum": 1},
+        "line_end": {"type": ["integer", "null"], "minimum": 1},
+        "claim": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "digest": {"$ref": "#/$defs/nullableSha256"}
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test", "expected"],
+      "properties": {
+        "test": {"type": "string", "minLength": 1, "maxLength": 2000},
+        "expected": {"type": "string", "minLength": 1, "maxLength": 2000}
+      }
+    },
+    "evidenceList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {"$ref": "#/$defs/evidence"}
+    },
+    "nonGoals": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+    },
+    "verificationList": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": {"$ref": "#/$defs/verification"}
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "info"]
+    },
+    "ownerRole": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "actionDEP": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "severity", "confidence", "blocking", "state", "title", "evidence", "required_change", "non_goals", "verification", "owner_role"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^DEP-[0-9]{3,}$"},
+        "category": {"type": "string", "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "blocking": {"type": "boolean"},
+        "state": {"type": "string", "const": "open"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "evidence": {"$ref": "#/$defs/evidenceList"},
+        "required_change": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "non_goals": {"$ref": "#/$defs/nonGoals"},
+        "verification": {"$ref": "#/$defs/verificationList"},
+        "owner_role": {"$ref": "#/$defs/ownerRole"}
+      }
+    },
+    "actionMIG": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "severity", "confidence", "blocking", "state", "title", "evidence", "required_change", "non_goals", "verification", "owner_role"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^MIG-[0-9]{3,}$"},
+        "category": {"type": "string", "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "blocking": {"type": "boolean"},
+        "state": {"type": "string", "const": "open"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "evidence": {"$ref": "#/$defs/evidenceList"},
+        "required_change": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "non_goals": {"$ref": "#/$defs/nonGoals"},
+        "verification": {"$ref": "#/$defs/verificationList"},
+        "owner_role": {"$ref": "#/$defs/ownerRole"}
+      }
+    },
+    "actionREL": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "severity", "confidence", "blocking", "state", "title", "evidence", "required_change", "non_goals", "verification", "owner_role"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^REL-[0-9]{3,}$"},
+        "category": {"type": "string", "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "blocking": {"type": "boolean"},
+        "state": {"type": "string", "const": "open"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "evidence": {"$ref": "#/$defs/evidenceList"},
+        "required_change": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "non_goals": {"$ref": "#/$defs/nonGoals"},
+        "verification": {"$ref": "#/$defs/verificationList"},
+        "owner_role": {"$ref": "#/$defs/ownerRole"}
+      }
+    },
+    "securityAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "severity", "confidence", "blocking", "state", "title", "classification", "cwe", "attack_path", "impact", "evidence", "required_change", "non_goals", "verification", "owner_role"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^SEC-[0-9]{3,}$"},
+        "category": {"type": "string", "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$"},
+        "severity": {"$ref": "#/$defs/severity"},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "blocking": {"type": "boolean"},
+        "state": {"type": "string", "const": "open"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 300},
+        "classification": {"type": "string", "enum": ["confirmed", "probable", "potential", "informational"]},
+        "cwe": {"type": ["string", "null"], "pattern": "^CWE-[1-9][0-9]*$"},
+        "attack_path": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "impact": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "evidence": {"$ref": "#/$defs/evidenceList"},
+        "required_change": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "non_goals": {"$ref": "#/$defs/nonGoals"},
+        "verification": {"$ref": "#/$defs/verificationList"},
+        "owner_role": {"$ref": "#/$defs/ownerRole"}
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "evidence_locator"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 240},
+        "status": {"type": "string", "enum": ["success", "failure", "pending", "skipped", "missing"]},
+        "evidence_locator": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "deploymentPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target_environment", "required_checks", "migration_review_required", "rollback_reference"],
+      "properties": {
+        "target_environment": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$"},
+        "required_checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+        "migration_review_required": {"type": "boolean"},
+        "rollback_reference": {"type": ["string", "null"], "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "migrationPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["migration_paths", "rehearsal_status", "expand_contract_compliant"],
+      "properties": {
+        "migration_paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+        },
+        "rehearsal_status": {"type": "string", "enum": ["passed", "failed", "not_run", "unavailable"]},
+        "expand_contract_compliant": {"type": "boolean"}
+      }
+    },
+    "releasePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deployed_sha", "image_digest", "revision", "health_checks"],
+      "properties": {
+        "deployed_sha": {"$ref": "#/$defs/nullableSha"},
+        "image_digest": {"$ref": "#/$defs/nullableSha256"},
+        "revision": {"type": ["string", "null"], "minLength": 1, "maxLength": 240},
+        "health_checks": {"type": "array", "items": {"$ref": "#/$defs/check"}}
+      }
+    },
+    "scannerInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "status", "evidence_locator"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 240},
+        "status": {"type": "string", "enum": ["available", "unavailable", "not_configured"]},
+        "evidence_locator": {"type": "string", "minLength": 1, "maxLength": 1000}
+      }
+    },
+    "securityPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["review_scope", "scanner_inputs", "live_target_testing"],
+      "properties": {
+        "review_scope": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+        },
+        "scanner_inputs": {"type": "array", "items": {"$ref": "#/$defs/scannerInput"}},
+        "live_target_testing": {"type": "boolean", "const": false}
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["must_not", "approvals_required"],
+      "properties": {
+        "must_not": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+        },
+        "approvals_required": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+        }
+      }
+    }
+  }
+}

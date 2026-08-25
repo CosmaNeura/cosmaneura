@@ -1,0 +1,76 @@
+{
+  "schema_version": "cosmaneura.foundry-agent-deployment.v1",
+  "project": {
+    "name": "CosmasCode/proj-default",
+    "endpoint": "https://cosmascode.services.ai.azure.com/api/projects/proj-default",
+    "model_deployment": "gpt-5.6-sol"
+  },
+  "runtime": {
+    "authorization": "Entra",
+    "required_role": "Foundry Project Runtime User",
+    "response_storage": false,
+    "tools": [],
+    "memory": false
+  },
+  "agents": {
+    "deployment_assessment": {
+      "name": "deploy-navigator-v1",
+      "producer_name": "deploy-navigator",
+      "routed_version": "4",
+      "policy_version": "1.0.0",
+      "instructions_sha256": "sha256:c911383e2b24ac8be60e34e1ad6cc146052e6a79e202b13a614ec92a7da0b2bc",
+      "output_schema_sha256": "sha256:e8fcec1637564559ee8deaf9853a48c65530fb6581589c232f18a01be6a143a5",
+      "foundry_schema_sha256": "sha256:d444fc27c820203e91d07a278ba11211f24eadde1d5f51b4d7f453d76e530444",
+      "synthetic_cases": [
+        "deploy-prompt-injection-and-ci-failure",
+        "deploy-stale-sha",
+        "deploy-missing-required-evidence"
+      ]
+    },
+    "migration_assessment": {
+      "name": "migration-sentinel-v1",
+      "producer_name": "migration-sentinel",
+      "routed_version": "1",
+      "policy_version": "1.0.0",
+      "instructions_sha256": "sha256:a3a3f51d5e0b6e54c3960a9d13cd178ab94fbd5204d60cee29f43c221a22d717",
+      "output_schema_sha256": "sha256:4eac5e3f92952e1ca30f00e667b397ab14d88b330fe426f478781ee1f9c187ff",
+      "foundry_schema_sha256": "sha256:d870a24b4ae4ab18067f63b71a61b6a9b8a05ca590afa2307ef86a935c66e8bb",
+      "synthetic_cases": [
+        "migration-unsafe-contract-step",
+        "migration-missing-rehearsal"
+      ]
+    },
+    "release_assessment": {
+      "name": "release-medic-v1",
+      "producer_name": "release-medic",
+      "routed_version": "1",
+      "policy_version": "1.0.0",
+      "instructions_sha256": "sha256:692b6486edab55952392c9bd57acd4f30441b73c0cad73ca716ab6338fa91933",
+      "output_schema_sha256": "sha256:b4800ec4549e36d36bcd392a413932a5729d9bb9e9cfa74442b584a4334be1c6",
+      "foundry_schema_sha256": "sha256:5f191948960e3c439469687d7bc3bfd6a80d62b86b3b76778e0c99d9456c3710",
+      "synthetic_cases": [
+        "release-build-failure",
+        "release-startup-failure",
+        "release-missing-health-evidence"
+      ]
+    },
+    "security_assessment": {
+      "name": "security-vulnerability-sentinel-v1",
+      "producer_name": "security-vulnerability-sentinel",
+      "routed_version": "2",
+      "policy_version": "1.0.0",
+      "instructions_sha256": "sha256:1900afb48903455e87abf843020d0c342f17af3bbff2bed8094ab67d54029380",
+      "output_schema_sha256": "sha256:9761eab57b0e4dc5a95e4de4364891ddc94186e9007831be34fbe752c25e6ecc",
+      "foundry_schema_sha256": "sha256:f10ff9410d01861ce553cf9fe3d7313fa3acb84eb8a380f1c6b80745e68aa569",
+      "synthetic_cases": [
+        "security-cross-tenant-idor",
+        "security-prompt-injection-and-ssrf",
+        "security-missing-scanner-coverage"
+      ]
+    }
+  },
+  "inactive_unrouted_versions": {
+    "deploy-navigator-v1": ["1", "2", "3"],
+    "security-vulnerability-sentinel-v1": ["1"]
+  }
+}

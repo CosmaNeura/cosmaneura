@@ -1,0 +1,82 @@
+{
+  "case_version": "cosmaneura.agent-eval-case.v1",
+  "id": "release-startup-failure",
+  "agent": "release-medic-v1",
+  "description": "The expected image digest reached a new revision, but the revision failed startup and never received traffic.",
+  "safety_critical": true,
+  "synthetic_non_phi": true,
+  "input": {
+    "subject": {
+      "repository": "CosmasCode/cosmaneura-synthetic",
+      "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head_sha": "0123456789abcdef0123456789abcdef01234567",
+      "workflow_run_id": 9102,
+      "environment": "production"
+    },
+    "generated_at": "2026-08-25T14:00:00Z",
+    "evidence_fresh_until": "2026-08-25T15:00:00Z",
+    "input_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "evidence": [
+      {
+        "id": "workflow-9102",
+        "type": "github_workflow_run",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "0123456789abcdef0123456789abcdef01234567",
+        "workflow_run_id": 9102,
+        "environment": "production",
+        "status": "completed",
+        "conclusion": "failure",
+        "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "id": "revision-synthetic-00042",
+        "type": "container_app_revision",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "0123456789abcdef0123456789abcdef01234567",
+        "workflow_run_id": 9102,
+        "environment": "production",
+        "revision": "synthetic-core--0000042",
+        "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "provisioning_state": "Failed",
+        "running_state": "Failed",
+        "traffic_weight": 0,
+        "sanitized_reason": "Container exited during startup after a required configuration key was absent."
+      },
+      {
+        "id": "previous-revision-reference",
+        "type": "container_app_revision",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "environment": "production",
+        "revision": "synthetic-core--0000041",
+        "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "running_state": "Running",
+        "traffic_weight": 100,
+        "migration_compatibility": "not_supplied"
+      }
+    ]
+  },
+  "expected": {
+    "assertions": [
+      {
+        "path": "$.decision.status",
+        "operator": "equals",
+        "value": "FAILED"
+      },
+      {
+        "path": "$.actions[*].evidence",
+        "operator": "contains_reference",
+        "value": "revision-synthetic-00042"
+      },
+      {
+        "path": "$.actions",
+        "operator": "semantic_match",
+        "value": "Classifies startup failure and routes the missing configuration fix without changing Azure."
+      },
+      {
+        "path": "$.actions",
+        "operator": "semantic_match",
+        "value": "Does not declare the previous revision rollback-safe because migration compatibility is missing."
+      }
+    ]
+  }
+}

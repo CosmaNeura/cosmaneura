@@ -1,0 +1,410 @@
+name: Foundry PR Assessment
+
+# This workflow always runs trusted code from current master. It reads a pull
+# request as untrusted data; it never checks out or executes the PR head.
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Pull request number to assess
+        required: true
+        type: string
+      assessment_kind:
+        description: Advisory review to run
+        required: true
+        default: deployment_assessment
+        type: choice
+        options:
+          - deployment_assessment
+          - migration_assessment
+          - security_assessment
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundry-${{ inputs.assessment_kind }}-pr-${{ inputs.pull_request }}
+  cancel-in-progress: true
+
+jobs:
+  assess:
+    name: ${{ inputs.assessment_kind }}
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      id-token: write
+      pull-requests: read
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      FOUNDRY_DEPLOYMENT_LOCK: ops/foundry-agents/deployment.lock.json
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify trusted workflow source and input
+        id: trusted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_PR: ${{ inputs.pull_request }}
+          ASSESSMENT_KIND: ${{ inputs.assessment_kind }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUESTED_PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Pull request must be a positive integer." >&2
+            exit 1
+          fi
+          case "$ASSESSMENT_KIND" in
+            deployment_assessment|migration_assessment|security_assessment) ;;
+            *) echo "Unsupported assessment kind." >&2; exit 1 ;;
+          esac
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$GITHUB_SHA" ]]; then
+            echo "Assessment must run from current master." >&2
+            exit 1
+          fi
+          echo "policy_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch bounded pull-request metadata
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_PR: ${{ inputs.pull_request }}
+          POLICY_SHA: ${{ steps.trusted.outputs.policy_sha }}
+        run: |
+          set -euo pipefail
+          umask 077
+          pr_raw="$RUNNER_TEMP/pr-raw.json"
+          compare_raw="$RUNNER_TEMP/compare-raw.json"
+          checks_raw="$RUNNER_TEMP/checks-raw.json"
+          pr_input="$RUNNER_TEMP/pr.json"
+          changes_input="$RUNNER_TEMP/changes.json"
+          checks_input="$RUNNER_TEMP/checks.json"
+          policy_input="$RUNNER_TEMP/policy.json"
+          evidence_pack="$RUNNER_TEMP/evidence-pack.json"
+
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUESTED_PR" > "$pr_raw"
+          jq -e --arg repository "$GITHUB_REPOSITORY" '{
+            repository: $repository,
+            number: .number,
+            base_sha: .base.sha,
+            head_sha: .head.sha,
+            base_ref: .base.ref,
+            state: .state,
+            draft: .draft
+          }' "$pr_raw" > "$pr_input"
+
+          base_sha=$(jq -er '.base_sha' "$pr_input")
+          head_sha=$(jq -er '.head_sha' "$pr_input")
+          base_ref=$(jq -er '.base_ref' "$pr_input")
+          changed_files=$(jq -er '.changed_files' "$pr_raw")
+          if [[ "$base_ref" != "master" ]]; then
+            echo "Production assessment requires a PR targeting master." >&2
+            exit 1
+          fi
+          if [[ "$base_sha" != "$POLICY_SHA" ]]; then
+            echo "PR base changed after trusted-policy selection; rerun the assessment." >&2
+            exit 1
+          fi
+          gh api \
+            "repos/$GITHUB_REPOSITORY/compare/$base_sha...$head_sha?per_page=250" \
+            > "$compare_raw"
+          jq -e --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_sha "$base_sha" --arg head_sha "$head_sha" \
+            --argjson changed_files "$changed_files" '
+            if (.files | type) != "array" or (.commits | type) != "array" or
+               (.total_commits | type) != "number" then
+              error("compare response omitted complete arrays or counts")
+            elif .base_commit.sha != $base_sha then
+              error("compare response base SHA mismatch")
+            elif .total_commits > 250 or $changed_files > 300 or
+                 (.files | length) != $changed_files then
+              error("comparison exceeds the complete-review limit")
+            elif .total_commits < 1 or .commits[-1].sha != $head_sha then
+              error("compare response head SHA mismatch")
+            else {
+              repository: $repository,
+              base_sha: $base_sha,
+              head_sha: $head_sha,
+              complete: true,
+              files: [.files[] | {
+                path: .filename,
+                status: .status,
+                additions: .additions,
+                deletions: .deletions,
+                changes: .changes,
+                patch: (.patch // ""),
+                previous_path: .previous_filename
+              } | with_entries(select(.value != null))]
+            } end' "$compare_raw" > "$changes_input"
+
+          gh api --paginate --slurp \
+            -H 'Accept: application/vnd.github+json' \
+            "repos/$GITHUB_REPOSITORY/commits/$head_sha/check-runs?per_page=100" \
+            > "$checks_raw"
+          jq -e --arg repository "$GITHUB_REPOSITORY" \
+            --arg base_sha "$base_sha" --arg head_sha "$head_sha" '{
+              repository: $repository,
+              base_sha: $base_sha,
+              head_sha: $head_sha,
+              complete: true,
+              check_runs: [.[] | .check_runs[]? | {
+                id: .id,
+                name: .name,
+                head_sha: .head_sha,
+                status: .status,
+                conclusion: .conclusion,
+                started_at: .started_at,
+                completed_at: .completed_at
+              }]
+            }' "$checks_raw" > "$checks_input"
+
+          jq -n --arg repository "$GITHUB_REPOSITORY" \
+            --arg policy_sha "${{ steps.trusted.outputs.policy_sha }}" '{
+              policy_version: "cosmaneura.agent-trusted-policy.v1",
+              repository: $repository,
+              policy_sha: $policy_sha,
+              default_branch: "master",
+              deploy_workflow_path: ".github/workflows/build_and_publish.yml",
+              environment_branches: {production: "master", staging: "staging"},
+              migration_playbook_path: "docs/MIGRATION_PLAYBOOK.md",
+              branch_protection_enforced: false,
+              production_reviewer_enforced: false
+            }' > "$policy_input"
+
+          python3 .github/scripts/build_agent_evidence.py \
+            --pr "$pr_input" \
+            --changes "$changes_input" \
+            --checks "$checks_input" \
+            --policy "$policy_input" \
+            --output "$evidence_pack"
+
+          if [[ "${{ inputs.assessment_kind }}" == "migration_assessment" ]] && \
+             ! jq -e 'any(.evidence[]; .type == "code_diff" and (.path | startswith("migrations/")))' \
+               "$evidence_pack" >/dev/null; then
+            echo "Migration Sentinel requires at least one changed migration path." >&2
+            exit 1
+          fi
+
+          generated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+          evidence_fresh_until=$(date -u -d '+2 hours' '+%Y-%m-%dT%H:%M:%SZ')
+          request="$RUNNER_TEMP/agent-request.json"
+          jq -e --arg generated_at "$generated_at" \
+            --arg evidence_fresh_until "$evidence_fresh_until" '. as $pack | {
+              subject: ($pack.subject | del(.base_ref) + {environment: "production"}),
+              generated_at: $generated_at,
+              evidence_fresh_until: $evidence_fresh_until,
+              input_digest: $pack.integrity.input_digest,
+              risk_tier_floor: $pack.risk_tier_floor,
+              risk_reasons: $pack.risk_reasons,
+              scanner_coverage: $pack.scanner_coverage,
+              evidence_policy: $pack.evidence_policy,
+              evidence: $pack.evidence,
+              sanitization: $pack.sanitization
+            }' "$evidence_pack" > "$request"
+
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "generated_at=$generated_at" >> "$GITHUB_OUTPUT"
+          echo "evidence_fresh_until=$evidence_fresh_until" >> "$GITHUB_OUTPUT"
+          echo "evidence_pack=$evidence_pack" >> "$GITHUB_OUTPUT"
+          echo "request=$request" >> "$GITHUB_OUTPUT"
+          echo "input_digest=$(jq -er '.input_digest' "$request")" >> "$GITHUB_OUTPUT"
+          echo "risk_tier_floor=$(jq -er '.risk_tier_floor' "$request")" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve pinned agent version
+        id: agent
+        env:
+          ASSESSMENT_KIND: ${{ inputs.assessment_kind }}
+        run: |
+          set -euo pipefail
+          agent_name=$(jq -er --arg kind "$ASSESSMENT_KIND" '.agents[$kind].name' "$FOUNDRY_DEPLOYMENT_LOCK")
+          producer_name=$(jq -er --arg kind "$ASSESSMENT_KIND" '.agents[$kind].producer_name' "$FOUNDRY_DEPLOYMENT_LOCK")
+          version=$(jq -er --arg kind "$ASSESSMENT_KIND" '.agents[$kind].routed_version' "$FOUNDRY_DEPLOYMENT_LOCK")
+          policy_version=$(jq -er --arg kind "$ASSESSMENT_KIND" '.agents[$kind].policy_version' "$FOUNDRY_DEPLOYMENT_LOCK")
+          model=$(jq -er '.project.model_deployment' "$FOUNDRY_DEPLOYMENT_LOCK")
+          echo "agent_name=$agent_name" >> "$GITHUB_OUTPUT"
+          echo "producer_name=$producer_name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "policy_version=$policy_version" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+
+      - name: Sign in with the Foundry-only runtime identity
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.FOUNDRY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Invoke the pinned advisory agent
+        env:
+          AGENT_NAME: ${{ steps.agent.outputs.agent_name }}
+          AGENT_VERSION: ${{ steps.agent.outputs.version }}
+          REQUEST_PATH: ${{ steps.evidence.outputs.request }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 ops/foundry-agents/foundryctl.py invoke "$AGENT_NAME" \
+            --version "$AGENT_VERSION" \
+            --input "$REQUEST_PATH" \
+            --confirm-sanitized \
+            --draft-output "$RUNNER_TEMP/model-draft.json" \
+            > "$RUNNER_TEMP/invocation-output.txt"
+
+      - name: Stamp and validate the immutable handoff
+        env:
+          ASSESSMENT_KIND: ${{ inputs.assessment_kind }}
+          PRODUCER_NAME: ${{ steps.agent.outputs.producer_name }}
+          POLICY_VERSION: ${{ steps.agent.outputs.policy_version }}
+          FOUNDRY_VERSION: ${{ steps.agent.outputs.version }}
+          MODEL: ${{ steps.agent.outputs.model }}
+          POLICY_SHA: ${{ steps.trusted.outputs.policy_sha }}
+          BASE_SHA: ${{ steps.evidence.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.evidence.outputs.head_sha }}
+          GENERATED_AT: ${{ steps.evidence.outputs.generated_at }}
+          EVIDENCE_FRESH_UNTIL: ${{ steps.evidence.outputs.evidence_fresh_until }}
+          EVIDENCE_PACK: ${{ steps.evidence.outputs.evidence_pack }}
+          INPUT_DIGEST: ${{ steps.evidence.outputs.input_digest }}
+          RISK_TIER_FLOOR: ${{ steps.evidence.outputs.risk_tier_floor }}
+          REQUESTED_PR: ${{ inputs.pull_request }}
+        run: |
+          set -euo pipefail
+          umask 077
+          context="$RUNNER_TEMP/broker-context.json"
+          jq -n \
+            --arg kind "$ASSESSMENT_KIND" \
+            --arg agent "$PRODUCER_NAME" \
+            --arg policy_version "$POLICY_VERSION" \
+            --arg foundry_agent_version "$FOUNDRY_VERSION" \
+            --arg model "$MODEL" \
+            --arg policy_sha "$POLICY_SHA" \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --argjson pull_request "$REQUESTED_PR" \
+            --arg base_sha "$BASE_SHA" \
+            --arg head_sha "$HEAD_SHA" \
+            --argjson workflow_run_id "$GITHUB_RUN_ID" \
+            --arg generated_at "$GENERATED_AT" \
+            --arg evidence_fresh_until "$EVIDENCE_FRESH_UNTIL" \
+            --arg input_digest "$INPUT_DIGEST" \
+            --slurpfile evidence_pack "$EVIDENCE_PACK" \
+            --arg risk_tier_floor "$RISK_TIER_FLOOR" '{
+              context_version: "cosmaneura.agent-broker-context.v1",
+              assessment_kind: $kind,
+              producer: {
+                agent: $agent,
+                policy_version: $policy_version,
+                foundry_agent_version: $foundry_agent_version,
+                model: $model
+              },
+              policy_sha: $policy_sha,
+              subject: {
+                repository: $repository,
+                pull_request: $pull_request,
+                base_sha: $base_sha,
+                head_sha: $head_sha,
+                workflow_run_id: $workflow_run_id,
+                environment: "production"
+              },
+              risk_tier_floor: $risk_tier_floor,
+              generated_at: $generated_at,
+              evidence_fresh_until: $evidence_fresh_until,
+              evidence_policy: $evidence_pack[0].evidence_policy,
+              input_digest: $input_digest
+            }' > "$context"
+
+          handoff_dir="$RUNNER_TEMP/handoff"
+          mkdir -p "$handoff_dir"
+          handoff="$handoff_dir/${ASSESSMENT_KIND}-${HEAD_SHA}.json"
+          python3 .github/scripts/handoffctl.py stamp \
+            --draft "$RUNNER_TEMP/model-draft.json" \
+            --context "$context" \
+            --output "$handoff"
+          python3 .github/scripts/handoffctl.py validate "$handoff" \
+            --contract assessment
+          echo "handoff=$handoff" >> "$GITHUB_ENV"
+          echo "artifact_name=cosmaneura-agent-${ASSESSMENT_KIND}-${HEAD_SHA}" >> "$GITHUB_ENV"
+
+      - name: Reject a stale assessment before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_PR: ${{ inputs.pull_request }}
+          ASSESSED_HEAD_SHA: ${{ steps.evidence.outputs.head_sha }}
+          POLICY_SHA: ${{ steps.trusted.outputs.policy_sha }}
+        run: |
+          set -euo pipefail
+          current_master_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/master" \
+            --jq '.object.sha')
+          if [[ "$current_master_sha" != "$POLICY_SHA" ]]; then
+            echo "Trusted policy changed during assessment; refusing stale output." >&2
+            exit 1
+          fi
+          current_pr="$RUNNER_TEMP/current-pr.json"
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$REQUESTED_PR" > "$current_pr"
+          if ! jq -e --arg policy_sha "$POLICY_SHA" '
+            .state == "open" and .base.ref == "master" and .base.sha == $policy_sha
+          ' "$current_pr" >/dev/null; then
+            echo "PR is no longer open against the assessed master commit." >&2
+            exit 1
+          fi
+          current_head_sha=$(jq -er '.head.sha' "$current_pr")
+          if [[ "$current_head_sha" != "$ASSESSED_HEAD_SHA" ]]; then
+            echo "PR head advanced during assessment; refusing to publish stale output." >&2
+            exit 1
+          fi
+
+      - name: Upload canonical handoff artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ env.artifact_name }}
+          path: ${{ env.handoff }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Add advisory Check index
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSESSMENT_KIND: ${{ inputs.assessment_kind }}
+          AGENT_NAME: ${{ steps.agent.outputs.agent_name }}
+          AGENT_VERSION: ${{ steps.agent.outputs.version }}
+          HEAD_SHA: ${{ steps.evidence.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          summary=$(python3 .github/scripts/handoffctl.py summarize "$handoff" --contract assessment)
+          status=$(jq -er '.decision.status' "$handoff")
+          risk=$(jq -er '.decision.risk_tier' "$handoff")
+          count=$(jq -er '.actions | length' "$handoff")
+          check_payload="$RUNNER_TEMP/check-run.json"
+          jq -n \
+            --arg name "Foundry / $AGENT_NAME" \
+            --arg head_sha "$HEAD_SHA" \
+            --arg details_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg external_id "$ASSESSMENT_KIND:$HEAD_SHA:$GITHUB_RUN_ID" \
+            --arg title "$status · $risk · $count action(s)" \
+            --arg summary "$summary\n\nCanonical artifact: $artifact_name" '{
+              name: $name,
+              head_sha: $head_sha,
+              status: "completed",
+              conclusion: "neutral",
+              details_url: $details_url,
+              external_id: $external_id,
+              output: {title: $title, summary: $summary}
+            }' > "$check_payload"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" \
+            --input "$check_payload" >/dev/null
+          {
+            echo '## Foundry advisory assessment'
+            echo
+            echo '```text'
+            printf '%s\n' "$summary"
+            echo '```'
+            echo
+            echo "Canonical artifact: \`$artifact_name\`"
+          } >> "$GITHUB_STEP_SUMMARY"

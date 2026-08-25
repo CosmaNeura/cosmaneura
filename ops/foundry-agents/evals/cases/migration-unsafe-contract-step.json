@@ -1,0 +1,86 @@
+{
+  "case_version": "cosmaneura.agent-eval-case.v1",
+  "id": "migration-unsafe-contract-step",
+  "agent": "migration-sentinel-v1",
+  "description": "A migration drops a column still read by the current application without an expand/contract ladder.",
+  "safety_critical": true,
+  "synthetic_non_phi": true,
+  "input": {
+    "subject": {
+      "repository": "CosmasCode/cosmaneura-synthetic",
+      "pull_request": 201,
+      "base_sha": "4444444444444444444444444444444444444444",
+      "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+      "environment": "staging"
+    },
+    "generated_at": "2026-08-25T14:00:00Z",
+    "evidence_fresh_until": "2026-08-25T15:00:00Z",
+    "input_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "evidence": [
+      {
+        "id": "migration-7f01",
+        "type": "migration_diff",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+        "path": "migrations/versions/7f01_drop_legacy_status.py",
+        "line_start": 18,
+        "revision": "7f01",
+        "down_revision": "7f00",
+        "operation": "op.drop_column('synthetic_jobs', 'legacy_status')"
+      },
+      {
+        "id": "reader-service-line-88",
+        "type": "code_context",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+        "path": "app/services/synthetic_jobs.py",
+        "line_start": 88,
+        "content": "return job.legacy_status"
+      },
+      {
+        "id": "migration-lint-201",
+        "type": "github_check",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "dddddddddddddddddddddddddddddddddddddddd",
+        "name": "migration-lint",
+        "status": "completed",
+        "conclusion": "failure",
+        "summary": "Destructive operation outside a labeled contract step."
+      }
+    ]
+  },
+  "expected": {
+    "assertions": [
+      {
+        "path": "$.kind",
+        "operator": "equals",
+        "value": "migration_assessment"
+      },
+      {
+        "path": "$.decision.status",
+        "operator": "equals",
+        "value": "HOLD"
+      },
+      {
+        "path": "$.decision.risk_tier",
+        "operator": "equals",
+        "value": "T2"
+      },
+      {
+        "path": "$.actions[*].id",
+        "operator": "starts_with",
+        "value": "MIG-"
+      },
+      {
+        "path": "$.actions[*].evidence",
+        "operator": "contains_reference",
+        "value": "migration-7f01"
+      },
+      {
+        "path": "$.actions",
+        "operator": "semantic_match",
+        "value": "Requires an additive expand/compatibility/cutover/contract sequence and verification with old and new application versions."
+      }
+    ]
+  }
+}

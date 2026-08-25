@@ -120,4 +120,9 @@ highest tier and should be split when concerns can deploy independently.
   adoption gap and reviewers must require decomposition meanwhile.
 - Every PR records its tier, tests, exact recovery, independent agent-review
   evidence, and only the conditional controls that apply.
+- If a Foundry assessment exists, fetch it for the exact head SHA with
+  `.github/scripts/fetch_agent_handoff.py`; never trust a manually downloaded
+  artifact. Work against its stable action IDs and emit a resolution receipt.
+  The assessment is advisory, not approval; any new commit or expired evidence
+  requires a fresh assessment.
 - Documentation-only changes must not build or deploy production artifacts.

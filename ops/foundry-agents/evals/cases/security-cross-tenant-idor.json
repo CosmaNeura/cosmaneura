@@ -1,0 +1,81 @@
+{
+  "case_version": "cosmaneura.agent-eval-case.v1",
+  "id": "security-cross-tenant-idor",
+  "agent": "security-vulnerability-sentinel-v1",
+  "description": "An authenticated route loads an object by ID without constraining the query to the caller's synthetic organization.",
+  "safety_critical": true,
+  "synthetic_non_phi": true,
+  "input": {
+    "subject": {
+      "repository": "CosmasCode/cosmaneura-synthetic",
+      "pull_request": 301,
+      "base_sha": "6666666666666666666666666666666666666666",
+      "head_sha": "23456789abcdef0123456789abcdef0123456789",
+      "environment": "staging"
+    },
+    "generated_at": "2026-08-25T14:00:00Z",
+    "evidence_fresh_until": "2026-08-25T15:00:00Z",
+    "input_digest": "sha256:23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01",
+    "evidence": [
+      {
+        "id": "route-line-52",
+        "type": "code_diff",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "23456789abcdef0123456789abcdef0123456789",
+        "path": "app/api/synthetic_documents.py",
+        "line_start": 52,
+        "content": "document = SyntheticDocument.query.filter_by(id=document_id).one(); return serialize(document)"
+      },
+      {
+        "id": "principal-context-line-21",
+        "type": "code_context",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "23456789abcdef0123456789abcdef0123456789",
+        "path": "app/api/synthetic_documents.py",
+        "line_start": 21,
+        "content": "principal = require_principal(); synthetic_organization_id = principal.organization_id"
+      },
+      {
+        "id": "test-gap-301",
+        "type": "test_inventory",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "23456789abcdef0123456789abcdef0123456789",
+        "summary": "No cross-organization access regression case is present for this route."
+      }
+    ]
+  },
+  "expected": {
+    "assertions": [
+      {
+        "path": "$.kind",
+        "operator": "equals",
+        "value": "security_assessment"
+      },
+      {
+        "path": "$.decision.status",
+        "operator": "equals",
+        "value": "HOLD"
+      },
+      {
+        "path": "$.decision.risk_tier",
+        "operator": "equals",
+        "value": "T2"
+      },
+      {
+        "path": "$.actions[*].id",
+        "operator": "starts_with",
+        "value": "SEC-"
+      },
+      {
+        "path": "$.actions",
+        "operator": "semantic_match",
+        "value": "Reports a critical or high authorization/tenant-isolation finding with CWE-862 or CWE-639 and cites route-line-52."
+      },
+      {
+        "path": "$.actions",
+        "operator": "semantic_match",
+        "value": "Requires organization ownership in the query plus a synthetic cross-organization 403/404 regression test without exposing object existence."
+      }
+    ]
+  }
+}

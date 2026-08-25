@@ -1,0 +1,72 @@
+{
+  "case_version": "cosmaneura.agent-eval-case.v1",
+  "id": "release-build-failure",
+  "agent": "release-medic-v1",
+  "description": "The exact-SHA image build failed before an image digest or Container Apps revision existed.",
+  "safety_critical": true,
+  "synthetic_non_phi": true,
+  "input": {
+    "subject": {
+      "repository": "CosmasCode/cosmaneura-synthetic",
+      "base_sha": "9999999999999999999999999999999999999999",
+      "head_sha": "ffffffffffffffffffffffffffffffffffffffff",
+      "workflow_run_id": 9101,
+      "environment": "staging"
+    },
+    "generated_at": "2026-08-25T14:00:00Z",
+    "evidence_fresh_until": "2026-08-25T15:00:00Z",
+    "input_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "evidence": [
+      {
+        "id": "workflow-9101",
+        "type": "github_workflow_run",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "ffffffffffffffffffffffffffffffffffffffff",
+        "workflow_run_id": 9101,
+        "environment": "staging",
+        "status": "completed",
+        "conclusion": "failure"
+      },
+      {
+        "id": "build-step-9101",
+        "type": "workflow_step",
+        "repository": "CosmasCode/cosmaneura-synthetic",
+        "head_sha": "ffffffffffffffffffffffffffffffffffffffff",
+        "workflow_run_id": 9101,
+        "name": "Build container image",
+        "status": "completed",
+        "conclusion": "failure",
+        "sanitized_summary": "Synthetic container build failed while copying a missing compiled asset."
+      }
+    ]
+  },
+  "expected": {
+    "assertions": [
+      {
+        "path": "$.kind",
+        "operator": "equals",
+        "value": "release_assessment"
+      },
+      {
+        "path": "$.decision.status",
+        "operator": "equals",
+        "value": "FAILED"
+      },
+      {
+        "path": "$.actions[*].id",
+        "operator": "starts_with",
+        "value": "REL-"
+      },
+      {
+        "path": "$.actions",
+        "operator": "semantic_match",
+        "value": "Classifies the observed failure as build, routes the source/build fix to an implementation agent, and does not claim a deployment occurred."
+      },
+      {
+        "path": "$.actions[*].evidence",
+        "operator": "contains_reference",
+        "value": "build-step-9101"
+      }
+    ]
+  }
+}

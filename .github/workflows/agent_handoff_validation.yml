@@ -1,0 +1,65 @@
+name: Agent Handoff Contracts
+
+# This pull-request workflow executes checked-in validators and tests without
+# cloud credentials, secrets, write-capable tokens, or live Foundry access.
+on:
+  pull_request:
+    paths:
+      - '.github/schemas/**'
+      - '.github/scripts/*.py'
+      - '.github/workflows/agent_handoff_validation.yml'
+      - '.github/workflows/agent_pr_assessment.yml'
+      - 'docs/AGENTIC_DEPLOYMENT_SUPPORT_PLAN.md'
+      - 'docs/AGENT_HANDOFF.md'
+      - 'AGENTS.md'
+      - 'ops/foundry-agents/**'
+      - 'tests/infrastructure/test_agent_workflows.py'
+      - 'tests/infrastructure/test_build_agent_evidence.py'
+      - 'tests/infrastructure/test_fetch_agent_handoff.py'
+      - 'tests/infrastructure/test_foundryctl.py'
+      - 'tests/infrastructure/test_handoffctl.py'
+      - '.tool-versions'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-handoff-contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Secretless handoff and agent validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONHASHSEED: '0'
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+      UV_NO_PROGRESS: '1'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install pinned repository tools
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2025.3.6
+
+      - name: Validate agent definitions, contracts, and synthetic evals
+        run: ruby ops/foundry-agents/validate.rb
+
+      - name: Test the local handoff and Foundry controls
+        run: >-
+          uv run --no-config --no-project --python 3.13
+          --with pytest==8.3.5 python -m pytest
+          -q -p no:cacheprovider -c /dev/null --confcutdir=tests/infrastructure
+          tests/infrastructure/test_agent_workflows.py
+          tests/infrastructure/test_build_agent_evidence.py
+          tests/infrastructure/test_fetch_agent_handoff.py
+          tests/infrastructure/test_foundryctl.py
+          tests/infrastructure/test_handoffctl.py

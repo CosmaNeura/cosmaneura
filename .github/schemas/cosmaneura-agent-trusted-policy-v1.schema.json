@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.cosmaneura.local/cosmaneura-agent-trusted-policy-v1.schema.json",
+  "title": "Cosmaneura trusted repository policy v1",
+  "description": "A closed set of default-branch deployment facts supplied to the evidence builder by trusted automation.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "policy_version",
+    "repository",
+    "policy_sha",
+    "default_branch",
+    "deploy_workflow_path",
+    "environment_branches",
+    "migration_playbook_path",
+    "branch_protection_enforced",
+    "production_reviewer_enforced"
+  ],
+  "properties": {
+    "policy_version": {
+      "const": "cosmaneura.agent-trusted-policy.v1"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "policy_sha": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "default_branch": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
+    },
+    "deploy_workflow_path": {
+      "type": "string",
+      "pattern": "^\\.github/workflows/[A-Za-z0-9._/-]+\\.ya?ml$"
+    },
+    "environment_branches": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "production",
+        "staging"
+      ],
+      "properties": {
+        "production": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
+        },
+        "staging": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$"
+        }
+      }
+    },
+    "migration_playbook_path": {
+      "type": "string",
+      "pattern": "^docs/[A-Za-z0-9._/-]+\\.md$"
+    },
+    "branch_protection_enforced": {
+      "type": "boolean"
+    },
+    "production_reviewer_enforced": {
+      "type": "boolean"
+    }
+  }
+}
