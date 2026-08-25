@@ -209,6 +209,14 @@ class PracticeMember(
     """One Cosmas account belongs to at most one practice."""
 
     __table_args__ = (
+        # Redundant with the primary key, but required as the referenced tuple
+        # for Visit Prep's database-enforced practice/physician ownership fence.
+        sa.UniqueConstraint(
+            "id",
+            "practice_id",
+            "doctor_id",
+            name="uq_practice_member_id_practice_doctor",
+        ),
         sa.ForeignKeyConstraint(
             [
                 "organization_roster_approval_id",

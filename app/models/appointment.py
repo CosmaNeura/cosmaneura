@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import computed_field
 
+import sqlalchemy as sa
 from activemodel import BaseModel
 from activemodel.mixins import TimestampsMixin, TypeIDMixin
 from activemodel.types import TypeIDType
@@ -28,6 +29,18 @@ class Appointment(BaseModel, TimestampsMixin, TypeIDMixin("appointment"), table=
     """
     Represents an appointment with a patient from accuity
     """
+
+    # The primary key already makes ``id`` unique. This explicit tuple lets
+    # Visit Prep bind an optional appointment to the exact physician/patient
+    # pair at the database boundary.
+    __table_args__ = (
+        sa.UniqueConstraint(
+            "id",
+            "doctor_id",
+            "patient_id",
+            name="uq_appointment_id_doctor_patient",
+        ),
+    )
 
     doctor_id: TypeIDType = Doctor.foreign_key()
     doctor: Doctor = Relationship()
