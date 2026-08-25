@@ -29,6 +29,7 @@ import {
   FormLabel,
   FormMessage,
 } from "~/components/ui/form"
+import { VisitPrepQuestionSetSettings } from "~/components/visit-prep/QuestionSetSettings"
 import {
   settingsData,
   updateSettingsData,
@@ -691,6 +692,7 @@ export default function SettingsPage({ loaderData }: Route.ComponentProps) {
           {!billingRecoveryOnly ? (
             <>
               <BiographyInput biography={loaderData.biography} />
+              <VisitPrepQuestionSetSettings access={loaderData.visit_prep} />
               {terminologyEnabled && (
                 <TerminologySettings
                   terminology={loaderData.terminology}
