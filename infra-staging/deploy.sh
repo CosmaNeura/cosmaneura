@@ -248,6 +248,30 @@ PUBLIC_VARS=(
 	DURABLE_WEBHOOK_INBOX_ENABLED
 )
 
+verify_migration_job_template() {
+	# Query only the fields needed for the contract; never request env values.
+	local migration_template secret_env_names public_env_names
+	if ! migration_template=$(az containerapp job show \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--query 'properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}}' \
+		-o json); then
+		echo "Failed to inspect the migration job execution template."
+		return 1
+	fi
+	secret_env_names=$(IFS=,; echo "${COMMON_SECRET_VARS[*]}")
+	public_env_names=$(IFS=,; echo "${PUBLIC_VARS[*]}")
+	if ! printf '%s' "$migration_template" |
+		python "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
+			--expected-name "$MIGRATION_JOB" \
+			--expected-image "$STAGING_TAG" \
+			--database-secret-name database-url \
+			--secret-env-names "$secret_env_names" \
+			--public-env-names "$public_env_names"; then
+		echo "Migration job template is not approved for schema mutation."
+		return 1
+	fi
+}
+
 wait_for_migration_job_execution() {
 	local execution_name=$1
 	local phase=$2
@@ -346,29 +370,10 @@ run_migrations() {
 		return 1
 	fi
 
-	# A plain job start executes this persistent template. Query only the fields
-	# needed for the contract (never values), then require the exact reviewed
-	# image, Alembic arguments, database secret reference, and env-name scope.
-	local migration_template secret_env_names public_env_names
-	if ! migration_template=$(az containerapp job show \
-		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
-		--query 'properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}}' \
-		-o json); then
-		echo "Failed to inspect the migration job execution template."
-		return 1
-	fi
-	secret_env_names=$(IFS=,; echo "${COMMON_SECRET_VARS[*]}")
-	public_env_names=$(IFS=,; echo "${PUBLIC_VARS[*]}")
-	if ! printf '%s' "$migration_template" |
-		python "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
-			--expected-name "$MIGRATION_JOB" \
-			--expected-image "$STAGING_TAG" \
-			--database-secret-name database-url \
-			--secret-env-names "$secret_env_names" \
-			--public-env-names "$public_env_names"; then
-		echo "Migration job template is not approved for schema mutation."
-		return 1
-	fi
+	# A plain job start executes this persistent template. Require the exact
+	# reviewed contract before the read-only preflight and again immediately
+	# before schema mutation so an intervening out-of-band edit fails closed.
+	verify_migration_job_template || return 1
 
 	# Run the aggregate-only gate as an execution override. Azure replaces the
 	# container definition when an override is supplied, so explicitly restore
@@ -392,6 +397,7 @@ run_migrations() {
 		echo "Billing migration preflight blocked schema migration."
 		return 1
 	fi
+	verify_migration_job_template || return 1
 
 	local execution_name
 	if ! execution_name=$(az containerapp job start \
@@ -577,6 +583,7 @@ check_deployment() {
 	# minutes on a container that cannot fail the deploy only slows every deploy.
 	local max_attempts=${3:-60} # default 60 * 5s = 5 minutes
 	local expected_image="${STAGING_IMAGE}:${git_sha}"
+	local expected_revision_name="${container_name}--${REVISION_STRING}"
 
 	# Initialize backoff variables
 	local attempts=0
@@ -591,6 +598,12 @@ check_deployment() {
 
 		if [[ -z "$latest_rev_name" ]]; then
 			echo "  $container_name: could not read latestRevisionName (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+		if [[ "$latest_rev_name" != "$expected_revision_name" ]]; then
+			echo "  $container_name: latest revision is not this deployment attempt yet (attempt $((attempts + 1))/$max_attempts)"
 			sleep 5
 			((attempts++))
 			continue

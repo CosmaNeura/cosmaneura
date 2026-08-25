@@ -158,23 +158,24 @@ def test_template_guard_precedes_preflight_and_plain_migration_start(
     configure_marker: str,
 ) -> None:
     deploy = (ROOT / deploy_path).read_text(encoding="utf-8")
+    helper_start = deploy.index("verify_migration_job_template()")
+    helper_end = deploy.index("\n}\n", helper_start)
+    helper = deploy[helper_start:helper_end]
     configure = deploy.index(configure_marker)
-    guard = deploy.index("migration_job_template_guard.py", configure)
-    preflight = deploy.index("/app/scripts/billing_migration_preflight.py", guard)
+    first_guard = deploy.index("verify_migration_job_template || return 1", configure)
+    preflight = deploy.index("/app/scripts/billing_migration_preflight.py", first_guard)
+    second_guard = deploy.index("verify_migration_job_template || return 1", preflight)
     plain_start = deploy.index("local execution_name", preflight)
-    query = deploy[configure:guard]
 
-    assert configure < guard < preflight < plain_start
-    assert "name:name" in query
-    assert "image:image" in query
-    assert "command:command" in query
-    assert "args:args" in query
-    assert "secretRef:secretRef" in query
-    assert "value:value" not in query
-    assert (
-        "Migration job template is not approved for schema mutation."
-        in deploy[guard:preflight]
-    )
+    assert configure < first_guard < preflight < second_guard < plain_start
+    assert "migration_job_template_guard.py" in helper
+    assert "name:name" in helper
+    assert "image:image" in helper
+    assert "command:command" in helper
+    assert "args:args" in helper
+    assert "secretRef:secretRef" in helper
+    assert "value:value" not in helper
+    assert "Migration job template is not approved for schema mutation." in helper
 
 
 def test_guard_cli_accepts_exact_value_minimized_payload() -> None:
