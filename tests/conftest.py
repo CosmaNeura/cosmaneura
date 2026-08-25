@@ -58,6 +58,10 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "pilot_access_continuity_amendment_identity": (
         "pilot_access_continuity_amendment_identity_reject_mutation"
     ),
+    "visit_prep_question": "visit_prep_question_guard_mutation",
+    "visit_prep_question_set_version": (
+        "visit_prep_question_set_version_guard_mutation"
+    ),
 }
 
 
