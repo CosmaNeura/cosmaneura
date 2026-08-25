@@ -453,6 +453,68 @@ def test_published_version_rejects_late_question_insert() -> None:
         _question(version)
 
 
+def test_temporary_parent_table_cannot_bypass_published_question_guards() -> None:
+    version = _version(_question_set(_owner("published-shadow")))
+    question = _question(version)
+    version.published_at = datetime.now(UTC) + timedelta(minutes=1)
+    version.save()
+
+    with get_session() as session:
+        session.execute(
+            text(
+                "CREATE TEMP TABLE visit_prep_question_set_version ("
+                "id uuid PRIMARY KEY, published_at timestamptz"
+                ") ON COMMIT DROP"
+            )
+        )
+        session.execute(
+            text(
+                "INSERT INTO pg_temp.visit_prep_question_set_version "
+                "(id, published_at) VALUES (:id, NULL)"
+            ),
+            params={"id": version.id.uuid},
+        )
+        session.execute(text("SET LOCAL search_path = pg_temp, public, pg_catalog"))
+
+        with pytest.raises(DBAPIError, match="published Visit Prep questions"):
+            with session.begin_nested():
+                session.execute(
+                    text(
+                        "UPDATE public.visit_prep_question "
+                        "SET prompt_text = 'Shadowed mutation' WHERE id = :id"
+                    ),
+                    params={"id": question.id.uuid},
+                )
+
+        with pytest.raises(DBAPIError, match="published Visit Prep questions"):
+            with session.begin_nested():
+                session.execute(
+                    text("DELETE FROM public.visit_prep_question WHERE id = :id"),
+                    params={"id": question.id.uuid},
+                )
+
+        with pytest.raises(DBAPIError, match="published Visit Prep questions"):
+            with session.begin_nested():
+                session.execute(
+                    text(
+                        "INSERT INTO public.visit_prep_question ("
+                        "id, question_set_version_id, question_key, position, "
+                        "prompt_text, kind, choice_options"
+                        ") VALUES ("
+                        ":id, :version_id, 'shadowed_insert', 2, "
+                        "'Shadowed insert?', 'story', '[]'::jsonb"
+                        ")"
+                    ),
+                    params={
+                        "id": TypeID("visit_prep_question").uuid,
+                        "version_id": version.id.uuid,
+                    },
+                )
+
+    question.refresh()
+    assert question.prompt_text == "Synthetic prompt for reason_for_visit?"
+
+
 def test_published_version_content_and_publication_reject_mutation() -> None:
     version = _version(_question_set(_owner("published-version")), published=True)
     version_table = SQLModel.metadata.tables["visit_prep_question_set_version"]

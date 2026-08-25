@@ -20,7 +20,13 @@ down_revision: Union[str, None] = "89c31f0ae275"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-_QUESTION_TABLES = (
+_QUESTION_TABLES_ROOT_FIRST = (
+    "visit_prep_question_set",
+    "visit_prep_question_set_version",
+    "visit_prep_question",
+)
+
+_QUESTION_TABLES_CHILD_FIRST = (
     "visit_prep_question",
     "visit_prep_question_set_version",
     "visit_prep_question_set",
@@ -39,15 +45,20 @@ def _refuse_populated_or_offline_downgrade() -> None:
     connection.execute(
         sa.text(
             "LOCK TABLE "
-            + ", ".join(f'"{table_name}"' for table_name in _QUESTION_TABLES)
+            + ", ".join(
+                f'public."{table_name}"'
+                for table_name in _QUESTION_TABLES_ROOT_FIRST
+            )
             + " IN ACCESS EXCLUSIVE MODE"
         )
     )
     populated = [
         table_name
-        for table_name in _QUESTION_TABLES
+        for table_name in _QUESTION_TABLES_CHILD_FIRST
         if connection.execute(
-            sa.text(f'SELECT EXISTS (SELECT 1 FROM "{table_name}" LIMIT 1)')
+            sa.text(
+                f'SELECT EXISTS (SELECT 1 FROM public."{table_name}" LIMIT 1)'
+            )
         ).scalar_one()
     ]
     if populated:
@@ -360,8 +371,9 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        CREATE FUNCTION cosmas_guard_visit_prep_question_set_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION public.cosmas_guard_visit_prep_question_set_mutation()
+        RETURNS trigger LANGUAGE plpgsql
+        SET search_path = pg_catalog, public AS $$
         BEGIN
           IF NEW.id IS DISTINCT FROM OLD.id
              OR NEW.owner_practice_member_id IS DISTINCT FROM OLD.owner_practice_member_id
@@ -382,14 +394,16 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE TRIGGER visit_prep_question_set_guard_mutation
-        BEFORE UPDATE ON visit_prep_question_set
-        FOR EACH ROW EXECUTE FUNCTION cosmas_guard_visit_prep_question_set_mutation()
+        BEFORE UPDATE ON public.visit_prep_question_set
+        FOR EACH ROW
+        EXECUTE FUNCTION public.cosmas_guard_visit_prep_question_set_mutation()
         """
     )
     op.execute(
         """
-        CREATE FUNCTION cosmas_guard_visit_prep_question_set_version_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION public.cosmas_guard_visit_prep_question_set_version_mutation()
+        RETURNS trigger LANGUAGE plpgsql
+        SET search_path = pg_catalog, public AS $$
         BEGIN
           IF TG_OP = 'UPDATE'
              AND (
@@ -430,21 +444,22 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE TRIGGER visit_prep_question_set_version_guard_mutation
-        BEFORE UPDATE OR DELETE ON visit_prep_question_set_version
+        BEFORE UPDATE OR DELETE ON public.visit_prep_question_set_version
         FOR EACH ROW
-        EXECUTE FUNCTION cosmas_guard_visit_prep_question_set_version_mutation()
+        EXECUTE FUNCTION public.cosmas_guard_visit_prep_question_set_version_mutation()
         """
     )
     op.execute(
         """
-        CREATE FUNCTION cosmas_guard_visit_prep_question_mutation()
-        RETURNS trigger LANGUAGE plpgsql AS $$
+        CREATE FUNCTION public.cosmas_guard_visit_prep_question_mutation()
+        RETURNS trigger LANGUAGE plpgsql
+        SET search_path = pg_catalog, public AS $$
         DECLARE
           parent_published_at timestamptz;
         BEGIN
           IF TG_OP = 'INSERT' THEN
             SELECT published_at INTO parent_published_at
-              FROM visit_prep_question_set_version
+              FROM public.visit_prep_question_set_version
              WHERE id = NEW.question_set_version_id
              FOR UPDATE;
             IF parent_published_at IS NOT NULL THEN
@@ -461,7 +476,7 @@ def upgrade() -> None:
           END IF;
 
           SELECT published_at INTO parent_published_at
-            FROM visit_prep_question_set_version
+            FROM public.visit_prep_question_set_version
            WHERE id = OLD.question_set_version_id
            FOR UPDATE;
           IF parent_published_at IS NOT NULL THEN
@@ -480,8 +495,9 @@ def upgrade() -> None:
     op.execute(
         """
         CREATE TRIGGER visit_prep_question_guard_mutation
-        BEFORE INSERT OR UPDATE OR DELETE ON visit_prep_question
-        FOR EACH ROW EXECUTE FUNCTION cosmas_guard_visit_prep_question_mutation()
+        BEFORE INSERT OR UPDATE OR DELETE ON public.visit_prep_question
+        FOR EACH ROW
+        EXECUTE FUNCTION public.cosmas_guard_visit_prep_question_mutation()
         """
     )
     # ### end Alembic commands ###
@@ -491,30 +507,36 @@ def downgrade() -> None:
     _refuse_populated_or_offline_downgrade()
     op.execute(
         "DROP TRIGGER IF EXISTS visit_prep_question_guard_mutation "
-        "ON visit_prep_question"
+        "ON public.visit_prep_question"
     )
-    op.execute("DROP FUNCTION IF EXISTS cosmas_guard_visit_prep_question_mutation()")
+    op.execute(
+        "DROP FUNCTION IF EXISTS public.cosmas_guard_visit_prep_question_mutation()"
+    )
     op.execute(
         "DROP TRIGGER IF EXISTS visit_prep_question_set_version_guard_mutation "
-        "ON visit_prep_question_set_version"
+        "ON public.visit_prep_question_set_version"
     )
     op.execute(
         "DROP FUNCTION IF EXISTS "
-        "cosmas_guard_visit_prep_question_set_version_mutation()"
+        "public.cosmas_guard_visit_prep_question_set_version_mutation()"
     )
-    op.drop_table("visit_prep_question")
-    op.execute("DROP INDEX IF EXISTS visit_prep_qset_version_supersedes_idx")
+    op.drop_table("visit_prep_question", schema="public")
+    op.execute(
+        "DROP INDEX IF EXISTS public.visit_prep_qset_version_supersedes_idx"
+    )
     op.drop_index(
         "uq_visit_prep_qset_default_owner",
         table_name="visit_prep_question_set_version",
+        schema="public",
         postgresql_where=sa.text("is_default IS TRUE"),
     )
-    op.drop_table("visit_prep_question_set_version")
+    op.drop_table("visit_prep_question_set_version", schema="public")
     op.execute(
         "DROP TRIGGER IF EXISTS visit_prep_question_set_guard_mutation "
-        "ON visit_prep_question_set"
+        "ON public.visit_prep_question_set"
     )
     op.execute(
-        "DROP FUNCTION IF EXISTS cosmas_guard_visit_prep_question_set_mutation()"
+        "DROP FUNCTION IF EXISTS "
+        "public.cosmas_guard_visit_prep_question_set_mutation()"
     )
-    op.drop_table("visit_prep_question_set")
+    op.drop_table("visit_prep_question_set", schema="public")
