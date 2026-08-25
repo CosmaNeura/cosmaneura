@@ -14,6 +14,7 @@
 GIT_SHA="$1"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../scripts/deploy_revision_suffix.sh"
 
 # TODO(mbianco) these should really be pulled from the ENV or somewhere more stable
 # Define variables
@@ -84,15 +85,24 @@ if ! git rev-parse --quiet --verify "$GIT_SHA^{commit}" >/dev/null; then
 	exit 1
 fi
 
+# Convert potential short SHA to full SHA
+GIT_SHA=$(git rev-parse "$GIT_SHA")
+STAGING_TAG="$STAGING_IMAGE:$GIT_SHA"
+
+if ! REVISION_STRING=$(generate_deploy_revision_suffix "$GIT_SHA"); then
+	exit 1
+fi
+if ! validate_deploy_revision_suffix "$REVISION_STRING" $CONTAINERS; then
+	exit 1
+fi
+
+echo "Revision string: $REVISION_STRING"
+
 echo "Azure Acccount Information:"
 az account show
 
 echo "All Available Containers:"
 az containerapp list --query "[].name"
-
-# Convert potential short SHA to full SHA
-GIT_SHA=$(git rev-parse "$GIT_SHA")
-STAGING_TAG="$STAGING_IMAGE:$GIT_SHA"
 
 if ! docker manifest inspect "$STAGING_TAG" >/dev/null 2>&1; then
 	echo "Error: Image $STAGING_TAG does not exist"
@@ -103,28 +113,6 @@ ACR_NAME=$(echo "$STAGING_IMAGE" | cut -d'.' -f1)
 ACR_USERNAME=$(az acr credential show -n "$ACR_NAME" --query "username" -o tsv)
 ACR_PASSWORD=$(az acr credential show -n "$ACR_NAME" --query "passwords[0].value" -o tsv)
 ACR_SERVER=$(echo "$STAGING_IMAGE" | cut -d'/' -f1)
-
-# Function to generate a revision string for the Git SHA
-gen_string_for_sha() {
-	local sha="$1"
-	local sys_date count short_sha
-
-	sys_date=$(date +%Y-%m-%d)
-	count=$(git rev-list --count "$sha")
-	short_sha=$(echo "$sha" | cut -c1-7)
-
-	echo "${sys_date}-v${count}-${short_sha}"
-}
-
-# Generate the revision string
-# Note that if you attempt to deploy the same image twice, the revision string will be the same
-# and probably cause deployment errors, so you'll need to manually adjust this.
-#
-# Also, long application names can limit your revision string:
-# 'A revision name must consist of lower case alphanumeric characters or '-', start with an alphabetic character, and end with an alphanumeric character. The length of the revision name must not be more than a combined 54 characters with the container app name.'
-REVISION_STRING=$(gen_string_for_sha "$GIT_SHA")
-
-echo "Revision string: $REVISION_STRING"
 
 if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
 	-z "$(echo "$ENV_JSON" | jq -r '.SOVEREIGN_RECORD_GRANT_SECRET // empty')" ]]; then
@@ -254,6 +242,30 @@ PUBLIC_VARS=(
 	DURABLE_WEBHOOK_INBOX_ENABLED
 )
 
+verify_migration_job_template() {
+	# Query only the fields needed for the contract; never request env values.
+	local migration_template secret_env_names public_env_names
+	if ! migration_template=$(az containerapp job show \
+		-n "$MIGRATION_JOB" -g "$RESOURCE_GROUP" \
+		--query 'properties.template.containers[].{name:name,image:image,command:command,args:args,env:env[].{name:name,secretRef:secretRef}}' \
+		-o json); then
+		echo "Failed to inspect the migration job execution template."
+		return 1
+	fi
+	secret_env_names=$(IFS=,; echo "${COMMON_SECRET_VARS[*]}")
+	public_env_names=$(IFS=,; echo "${PUBLIC_VARS[*]}")
+	if ! printf '%s' "$migration_template" |
+		python "$SCRIPT_DIR/../scripts/migration_job_template_guard.py" \
+			--expected-name "$MIGRATION_JOB" \
+			--expected-image "$STAGING_TAG" \
+			--database-secret-name database-url \
+			--secret-env-names "$secret_env_names" \
+			--public-env-names "$public_env_names"; then
+		echo "Migration job template is not approved for schema mutation."
+		return 1
+	fi
+}
+
 wait_for_migration_job_execution() {
 	local execution_name=$1
 	local phase=$2
@@ -352,6 +364,11 @@ run_migrations() {
 		return 1
 	fi
 
+	# A plain job start executes this persistent template. Require the exact
+	# reviewed contract before the read-only preflight and again immediately
+	# before schema mutation so an intervening out-of-band edit fails closed.
+	verify_migration_job_template || return 1
+
 	# Run the aggregate-only gate as an execution override. Azure replaces the
 	# container definition when an override is supplied, so explicitly restore
 	# the DATABASE_URL secret reference. The job template remains Alembic-owned,
@@ -374,6 +391,7 @@ run_migrations() {
 		echo "Billing migration preflight blocked schema migration."
 		return 1
 	fi
+	verify_migration_job_template || return 1
 
 	local execution_name
 	if ! execution_name=$(az containerapp job start \
@@ -559,6 +577,7 @@ check_deployment() {
 	# minutes on a container that cannot fail the deploy only slows every deploy.
 	local max_attempts=${3:-60} # default 60 * 5s = 5 minutes
 	local expected_image="${STAGING_IMAGE}:${git_sha}"
+	local expected_revision_name="${container_name}--${REVISION_STRING}"
 
 	# Initialize backoff variables
 	local attempts=0
@@ -566,25 +585,52 @@ check_deployment() {
 	echo "Checking deployment status for $container_name..."
 
 	while [[ $attempts -lt $max_attempts ]]; do
-		# Check provisioning state
-		provisioning_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.provisioningState" -o tsv)
-		current_image=$(az containerapp revision list -n "$container_name" -g "$RESOURCE_GROUP" --query "[0].properties.template.containers[0].image" -o tsv)
-		running_state=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.runningStatus" -o tsv)
+		# Revision-list order is unspecified. Inspect the exact latest revision
+		# created by the update rather than accepting an arbitrary healthy image.
+		local latest_rev_name revision_json current_image health_state running_state provisioning_state
+		latest_rev_name=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" --query "properties.latestRevisionName" -o tsv)
 
-		# should never be empty, error if so
-		if [[ -z "$provisioning_state" ]] || [[ -z "$current_image" ]] || [[ -z "$running_state" ]]; then
-			echo "Error: Failed to get complete status information for $container_name"
-			echo "Provisioning state: $provisioning_state"
-			echo "Current image: $current_image"
-			echo "Running state: $running_state"
+		if [[ -z "$latest_rev_name" ]]; then
+			echo "  $container_name: could not read latestRevisionName (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+		if [[ "$latest_rev_name" != "$expected_revision_name" ]]; then
+			echo "  $container_name: latest revision is not this deployment attempt yet (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+
+		revision_json=$(az containerapp revision show -n "$container_name" -g "$RESOURCE_GROUP" \
+			--revision "$latest_rev_name" \
+			--query "{image:properties.template.containers[0].image,health:properties.healthState,running:properties.runningState,provisioning:properties.provisioningState}" -o json 2>/dev/null)
+
+		current_image=$(echo "$revision_json" | jq -r '.image // empty')
+		health_state=$(echo "$revision_json" | jq -r '.health // empty')
+		running_state=$(echo "$revision_json" | jq -r '.running // empty')
+		provisioning_state=$(echo "$revision_json" | jq -r '.provisioning // empty')
+
+		if [[ "$current_image" != "$expected_image" ]]; then
+			echo "  $container_name: latest revision still $current_image, waiting for $expected_image (attempt $((attempts + 1))/$max_attempts)"
+			sleep 5
+			((attempts++))
+			continue
+		fi
+
+		if [[ "$provisioning_state" == "Failed" || "$running_state" == "Failed" ]]; then
+			echo "$container_name: revision $latest_rev_name failed (provisioning=$provisioning_state, running=$running_state, health=$health_state)"
 			return 1
 		fi
 
-		# Validate all conditions
-		if [[ "$provisioning_state" == "Succeeded" && "$current_image" == "$expected_image" && ( "$running_state" == "Running" || "$running_state" == "RunningAtMaxScale" ) ]]; then
+		# Healthy is the readiness signal. runningState may be Running for the
+		# API or RunningAtMaxScale for a worker, so do not pin one spelling.
+		if [[ "$health_state" == "Healthy" && "$provisioning_state" == "Provisioned" ]]; then
 			if [[ "$container_name" == "$SCHEDULER_CONTAINER" ]]; then
 				local live_scheduler_command
-				live_scheduler_command=$(az containerapp show -n "$container_name" -g "$RESOURCE_GROUP" \
+				live_scheduler_command=$(az containerapp revision show -n "$container_name" -g "$RESOURCE_GROUP" \
+					--revision "$latest_rev_name" \
 					--query "properties.template.containers[0].args[0]" -o tsv)
 				if [[ "$live_scheduler_command" != "$SCHEDULER_COMMAND" ]]; then
 					echo "Scheduler command does not match the checked-in Procfile."
@@ -595,7 +641,7 @@ check_deployment() {
 			return 0
 		fi
 
-		echo "Retrying deployment status for $container_name in 5 seconds... (Attempt $((attempts + 1))/$max_attempts)"
+		echo "  $container_name: provisioning=$provisioning_state running=$running_state health=$health_state (attempt $((attempts + 1))/$max_attempts)"
 
 		sleep 5
 		((attempts++))
