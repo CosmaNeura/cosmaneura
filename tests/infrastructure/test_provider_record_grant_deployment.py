@@ -210,6 +210,38 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
     assert "needs.authorize-production.result == 'success'" in production_job
 
 
+def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
+    for path, protected_job_name, prefix in (
+        (".github/workflows/infra_production_plan.yml", "plan", "PLAN"),
+        (".github/workflows/infra_apply.yml", "apply", "APPLY"),
+    ):
+        workflow = _read(path)
+        authorization_start = workflow.index("\n  authorize-production:")
+        protected_start = workflow.index(f"\n  {protected_job_name}:")
+        authorization_job = workflow[authorization_start:protected_start]
+        protected_job = workflow[protected_start:]
+
+        assert "permissions: {}" in authorization_job
+        assert "environment: production" not in authorization_job
+        assert f"{prefix}_ACTOR: ${{{{ github.actor }}}}" in authorization_job
+        assert (
+            f"{prefix}_TRIGGERING_ACTOR: ${{{{ github.triggering_actor }}}}"
+            in authorization_job
+        )
+        assert f'"${prefix}_EVENT" != "workflow_dispatch"' in authorization_job
+        assert f'"${prefix}_REF" != "refs/heads/master"' in authorization_job
+        assert f'"${prefix}_ACTOR" != "JohnClem"' in authorization_job
+        assert f'"${prefix}_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
+
+        assert "needs: authorize-production" in protected_job
+        assert "environment: production" in protected_job
+        assert "github.event_name == 'workflow_dispatch'" in protected_job
+        assert "github.ref == 'refs/heads/master'" in protected_job
+        assert "github.actor == 'JohnClem'" in protected_job
+        assert "github.triggering_actor == 'JohnClem'" in protected_job
+        assert "needs.authorize-production.result == 'success'" in protected_job
+
+
 def test_application_deploys_cannot_be_cancelled_mid_rollout_and_have_time() -> None:
     workflow = _read(".github/workflows/build_and_publish.yml")
     production_start = workflow.index("\n  deploy:")
