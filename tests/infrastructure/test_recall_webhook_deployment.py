@@ -491,7 +491,8 @@ def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None
     assert "production_plan_run_id:" in trigger
     assert "production_plan_artifact_digest:" in trigger
     assert "required: true" in trigger
-    assert "if: github.ref == 'refs/heads/master'" in apply_job
+    assert "github.ref == 'refs/heads/master'" in apply_job
+    assert "needs.authorize-production.result == 'success'" in apply_job
     assert "environment: production" in apply_job
     assert "actions: read" in apply_job
     assert "actions: write" not in apply_job
