@@ -55,6 +55,11 @@ EXEMPT_ROUTE_NAMES = {
     "visit_prep_question_set_successor",
     "visit_prep_question_set_publish",
     "visit_prep_question_set_default",
+    "visit_prep_create",
+    "visit_prep_copy_link",
+    "visit_prep_revoke",
+    "visit_prep_reschedule",
+    "visit_prep_reconcile",
 }
 
 # These routes still require a real practice, an in-force BAA, and an authorized

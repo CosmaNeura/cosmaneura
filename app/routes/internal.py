@@ -148,6 +148,7 @@ from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as
 from .view_as import view_as_api_app
 from .visit_prep import visit_prep_api_app
+from .visit_prep_preparations import visit_prep_preparations_api_app
 
 # extract into variable for test import to easily override dependencies
 authenticate_clerk_request_middleware = AuthenticateClerkRequest(CLERK_PRIVATE_KEY)
@@ -3134,3 +3135,4 @@ def lab_range_reset(request: Request, biomarker: Annotated[str, Path()]) -> None
 # Keep feature routers after the legacy inline routes so generated OpenAPI diffs
 # remain append-only and reviewable.
 internal_api_app.include_router(visit_prep_api_app)
+internal_api_app.include_router(visit_prep_preparations_api_app)
