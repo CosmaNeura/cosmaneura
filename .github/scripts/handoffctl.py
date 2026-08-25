@@ -844,10 +844,14 @@ def _normalize_model_draft(draft: dict[str, Any]) -> dict[str, Any]:
     kind = normalized.get("kind")
     payload = normalized.get("payload")
     if isinstance(payload, dict):
-        optional_payload_field = {
-            "deployment_assessment": "rollback_reference",
-            "release_assessment": "revision",
-        }.get(kind)
+        optional_payload_field = (
+            {
+                "deployment_assessment": "rollback_reference",
+                "release_assessment": "revision",
+            }.get(kind)
+            if isinstance(kind, str)
+            else None
+        )
         if (
             optional_payload_field is not None
             and optional_payload_field in payload

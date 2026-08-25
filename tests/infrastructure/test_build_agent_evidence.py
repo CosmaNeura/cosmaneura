@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -211,7 +212,8 @@ def test_builds_deterministic_exact_sha_sanitized_evidence(tmp_path: Path) -> No
         "format": "unified-diff-structure.v1",
         "content_redacted": True,
         "content_digest": (
-            "sha256:" + hashlib.sha256(_file()["patch"].encode("utf-8")).hexdigest()
+            "sha256:"
+            + hashlib.sha256(cast(str, _file()["patch"]).encode("utf-8")).hexdigest()
         ),
         "hunks": [
             {
@@ -416,7 +418,8 @@ def test_rejects_any_sha_mismatch(tmp_path: Path, source: str) -> None:
     elif source == "checks":
         checks["base_sha"] = "c" * 40
     else:
-        checks["check_runs"][0]["head_sha"] = "c" * 40
+        check_runs = cast(list[dict[str, object]], checks["check_runs"])
+        check_runs[0]["head_sha"] = "c" * 40
 
     result, output = _run(tmp_path, changes=changes, checks=checks)
 

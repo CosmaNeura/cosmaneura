@@ -4,7 +4,9 @@ import json
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -31,8 +33,33 @@ FOUNDRY_AGENT_VERSIONS = {
 }
 SCANNERS = ("CodeQL/SAST", "dependency", "secret", "IaC", "SBOM", "container")
 
+JsonObject = dict[str, object]
+Mutation = Callable[[JsonObject], object]
 
-def _evidence_policy() -> dict[str, object]:
+
+def _as_object(value: object) -> JsonObject:
+    assert isinstance(value, dict)
+    return cast(JsonObject, value)
+
+
+def _object_at(document: JsonObject, key: str) -> JsonObject:
+    return _as_object(document[key])
+
+
+def _objects_at(document: JsonObject, key: str) -> list[JsonObject]:
+    value = document[key]
+    assert isinstance(value, list)
+    assert all(isinstance(item, dict) for item in value)
+    return cast(list[JsonObject], value)
+
+
+def _string_at(document: JsonObject, key: str) -> str:
+    value = document[key]
+    assert isinstance(value, str)
+    return value
+
+
+def _evidence_policy() -> JsonObject:
     scanner_coverage = [
         {
             "locator": (
@@ -118,9 +145,9 @@ def _evidence_policy() -> dict[str, object]:
     }
 
 
-def _seal_assessment(document: dict[str, object]) -> dict[str, object]:
+def _seal_assessment(document: JsonObject) -> JsonObject:
     preimage = copy.deepcopy(document)
-    preimage["integrity"].pop("artifact_digest", None)
+    _object_at(preimage, "integrity").pop("artifact_digest", None)
     encoded = json.dumps(
         preimage,
         ensure_ascii=False,
@@ -128,14 +155,14 @@ def _seal_assessment(document: dict[str, object]) -> dict[str, object]:
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    document["integrity"]["artifact_digest"] = (
+    _object_at(document, "integrity")["artifact_digest"] = (
         f"sha256:{hashlib.sha256(encoded).hexdigest()}"
     )
     return document
 
 
-def _action(prefix: str) -> dict[str, object]:
-    action: dict[str, object] = {
+def _action(prefix: str) -> JsonObject:
+    action: JsonObject = {
         "id": f"{prefix}-001",
         "category": "deployment.readiness",
         "severity": "medium",
@@ -182,14 +209,14 @@ def _assessment(
     *,
     generated_at: str = "2026-08-25T12:00:00Z",
     artifact_digit: str = "1",
-) -> dict[str, object]:
+) -> JsonObject:
     prefix = {
         "deployment_assessment": "DEP",
         "migration_assessment": "MIG",
         "release_assessment": "REL",
         "security_assessment": "SEC",
     }[kind]
-    payloads: dict[str, dict[str, object]] = {
+    payloads: dict[str, JsonObject] = {
         "deployment_assessment": {
             "target_environment": "staging",
             "required_checks": [
@@ -244,7 +271,7 @@ def _assessment(
         "security_assessment": "INCOMPLETE",
     }
     actions = [_action(prefix)]
-    document: dict[str, object] = {
+    document: JsonObject = {
         "schema_version": "cosmaneura.agent-handoff.v1",
         "kind": kind,
         "handoff_id": f"{kind}:CosmasCode/cosmaneura:{HEAD_SHA}:run-101",
@@ -288,7 +315,7 @@ def _assessment(
     return _seal_assessment(document)
 
 
-def _resolution() -> dict[str, object]:
+def _resolution() -> JsonObject:
     source = _assessment("security_assessment")
     return {
         "schema_version": "cosmaneura.agent-resolution.v1",
@@ -296,7 +323,7 @@ def _resolution() -> dict[str, object]:
         "assessment": {
             "repository": "CosmasCode/cosmaneura",
             "head_sha": HEAD_SHA,
-            "artifact_digest": source["integrity"]["artifact_digest"],
+            "artifact_digest": _object_at(source, "integrity")["artifact_digest"],
         },
         "resolver": {
             "agent": "implementation-agent",
@@ -320,7 +347,7 @@ def _resolution() -> dict[str, object]:
     }
 
 
-def _draft(kind: str = "deployment_assessment") -> dict[str, object]:
+def _draft(kind: str = "deployment_assessment") -> JsonObject:
     assessment = _assessment(kind)
     return {
         "draft_version": "cosmaneura.agent-assessment-draft.v1",
@@ -333,7 +360,7 @@ def _draft(kind: str = "deployment_assessment") -> dict[str, object]:
     }
 
 
-def _context(kind: str = "deployment_assessment") -> dict[str, object]:
+def _context(kind: str = "deployment_assessment") -> JsonObject:
     assessment = _assessment(kind)
     return {
         "context_version": "cosmaneura.agent-broker-context.v1",
@@ -354,7 +381,7 @@ def _context(kind: str = "deployment_assessment") -> dict[str, object]:
     }
 
 
-def _write(path: Path, document: dict[str, object]) -> Path:
+def _write(path: Path, document: JsonObject) -> Path:
     path.write_text(json.dumps(document), encoding="utf-8")
     return path
 
@@ -414,7 +441,9 @@ def test_validate_recomputes_and_rejects_tampered_artifact_digest(
     tmp_path: Path,
 ) -> None:
     document = _assessment()
-    document["decision"]["summary"] = "Content changed after broker stamping."
+    _object_at(document, "decision")["summary"] = (
+        "Content changed after broker stamping."
+    )
     path = _write(tmp_path / "tampered.json", document)
 
     result = _run("validate", path, "--contract", "assessment")
@@ -429,7 +458,7 @@ def test_validate_rejects_well_formed_but_incorrect_artifact_digest(
     tmp_path: Path,
 ) -> None:
     document = _assessment()
-    document["integrity"]["artifact_digest"] = f"sha256:{'f' * 64}"
+    _object_at(document, "integrity")["artifact_digest"] = f"sha256:{'f' * 64}"
     path = _write(tmp_path / "wrong-digest.json", document)
 
     result = _run("validate", path)
@@ -442,9 +471,10 @@ def test_security_pass_with_findings_rejects_any_blocking_action(
     tmp_path: Path,
 ) -> None:
     document = _assessment("security_assessment")
-    document["decision"]["status"] = "PASS_WITH_FINDINGS"
-    document["actions"][0]["severity"] = "high"
-    document["actions"][0]["blocking"] = True
+    _object_at(document, "decision")["status"] = "PASS_WITH_FINDINGS"
+    action = _objects_at(document, "actions")[0]
+    action["severity"] = "high"
+    action["blocking"] = True
     _seal_assessment(document)
     path = _write(tmp_path / "blocking-security-pass.json", document)
 
@@ -473,7 +503,7 @@ def test_resolution_binding_rejects_wrong_artifact_and_missing_actions(
     assessment_path = _write(tmp_path / "assessment.json", assessment)
     receipt = _resolution()
     receipt["handoff_id"] = assessment["handoff_id"]
-    receipt["assessment"]["artifact_digest"] = f"sha256:{'9' * 64}"
+    _object_at(receipt, "assessment")["artifact_digest"] = f"sha256:{'9' * 64}"
     receipt["resolutions"] = []
     receipt_path = _write(tmp_path / "resolution.json", receipt)
 
@@ -486,9 +516,10 @@ def test_resolution_binding_rejects_wrong_artifact_and_missing_actions(
 
 def test_failed_release_can_precede_image_creation(tmp_path: Path) -> None:
     document = _assessment("release_assessment")
-    document["decision"]["status"] = "FAILED"
-    document["payload"]["deployed_sha"] = None
-    document["payload"]["image_digest"] = None
+    _object_at(document, "decision")["status"] = "FAILED"
+    payload = _object_at(document, "payload")
+    payload["deployed_sha"] = None
+    payload["image_digest"] = None
     _seal_assessment(document)
     path = _write(tmp_path / "failed-release.json", document)
 
@@ -499,9 +530,10 @@ def test_failed_release_can_precede_image_creation(tmp_path: Path) -> None:
 
 def test_healthy_release_requires_deployed_identity(tmp_path: Path) -> None:
     document = _assessment("release_assessment")
-    document["decision"]["status"] = "HEALTHY"
-    document["payload"]["deployed_sha"] = None
-    document["payload"]["image_digest"] = None
+    _object_at(document, "decision")["status"] = "HEALTHY"
+    payload = _object_at(document, "payload")
+    payload["deployed_sha"] = None
+    payload["image_digest"] = None
     path = _write(tmp_path / "invalid-healthy-release.json", document)
 
     result = _run("validate", path)
@@ -529,7 +561,7 @@ def test_healthy_release_requires_deployed_identity(tmp_path: Path) -> None:
     ],
 )
 def test_validate_fails_closed_on_unsafe_assessment_shape(
-    tmp_path: Path, mutation: object, expected_error: str
+    tmp_path: Path, mutation: Mutation, expected_error: str
 ) -> None:
     document = _assessment()
     mutation(document)
@@ -588,7 +620,7 @@ def test_fetch_local_returns_newest_exact_sha_and_ignores_stale_sha(
     old = _assessment(generated_at="2026-08-25T11:00:00Z", artifact_digit="1")
     latest = _assessment(generated_at="2026-08-25T12:00:00Z", artifact_digit="2")
     other_sha = _assessment(generated_at="2026-08-25T13:00:00Z", artifact_digit="3")
-    other_sha["subject"]["head_sha"] = NEW_HEAD_SHA
+    _object_at(other_sha, "subject")["head_sha"] = NEW_HEAD_SHA
     other_sha["handoff_id"] = str(other_sha["handoff_id"]).replace(
         HEAD_SHA, NEW_HEAD_SHA
     )
@@ -610,12 +642,12 @@ def test_fetch_local_returns_newest_exact_sha_and_ignores_stale_sha(
     )
 
     assert result.returncode == 0, result.stderr
-    selected = json.loads(result.stdout)
+    selected = _as_object(json.loads(result.stdout))
     assert (
-        selected["integrity"]["artifact_digest"]
-        == latest["integrity"]["artifact_digest"]
+        _object_at(selected, "integrity")["artifact_digest"]
+        == _object_at(latest, "integrity")["artifact_digest"]
     )
-    assert selected["subject"]["head_sha"] == HEAD_SHA
+    assert _object_at(selected, "subject")["head_sha"] == HEAD_SHA
 
 
 def test_fetch_local_has_distinct_not_found_exit_code(tmp_path: Path) -> None:
@@ -634,7 +666,7 @@ def test_fetch_local_has_distinct_not_found_exit_code(tmp_path: Path) -> None:
 
 def test_fetch_local_rejects_expired_assessment(tmp_path: Path) -> None:
     document = _assessment(generated_at="2020-01-01T00:00:00Z")
-    document["coverage"]["evidence_fresh_until"] = "2020-01-01T01:00:00Z"
+    _object_at(document, "coverage")["evidence_fresh_until"] = "2020-01-01T01:00:00Z"
     _seal_assessment(document)
     _write(tmp_path / "expired.json", document)
 
@@ -653,7 +685,8 @@ def test_fetch_local_rejects_expired_assessment(tmp_path: Path) -> None:
 
 def test_resolution_rejects_duplicate_action_ids(tmp_path: Path) -> None:
     document = _resolution()
-    document["resolutions"].append(copy.deepcopy(document["resolutions"][0]))
+    resolutions = _objects_at(document, "resolutions")
+    resolutions.append(copy.deepcopy(resolutions[0]))
     path = _write(tmp_path / "invalid-resolution.json", document)
 
     result = _run("validate", path)
@@ -682,7 +715,7 @@ def test_stamp_creates_valid_canonical_assessment_for_each_kind(
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.startswith(f"STAMPED {output_path} {kind} ")
-    handoff = json.loads(output_path.read_text(encoding="utf-8"))
+    handoff = _as_object(json.loads(output_path.read_text(encoding="utf-8")))
     assert "draft_version" not in handoff
     assert handoff["producer"] == {
         "agent": AGENTS[kind],
@@ -691,10 +724,10 @@ def test_stamp_creates_valid_canonical_assessment_for_each_kind(
         "model": "gpt-5.6-sol",
         "policy_sha": POLICY_SHA,
     }
-    assert handoff["subject"]["head_sha"] == HEAD_SHA
-    assert HEAD_SHA in handoff["handoff_id"]
+    assert _object_at(handoff, "subject")["head_sha"] == HEAD_SHA
+    assert HEAD_SHA in _string_at(handoff, "handoff_id")
     preimage = copy.deepcopy(handoff)
-    artifact_digest = preimage["integrity"].pop("artifact_digest")
+    artifact_digest = _object_at(preimage, "integrity").pop("artifact_digest")
     encoded = json.dumps(
         preimage,
         ensure_ascii=False,
@@ -712,7 +745,7 @@ def test_stamp_overwrites_model_freshness_with_trusted_broker_deadline(
     tmp_path: Path,
 ) -> None:
     draft = _draft()
-    draft["coverage"]["evidence_fresh_until"] = "2199-01-01T00:00:00Z"
+    _object_at(draft, "coverage")["evidence_fresh_until"] = "2199-01-01T00:00:00Z"
     context = _context()
     context["evidence_fresh_until"] = "2026-08-25T13:00:00Z"
     draft_path = _write(tmp_path / "draft.json", draft)
@@ -730,9 +763,10 @@ def test_stamp_overwrites_model_freshness_with_trusted_broker_deadline(
     )
 
     assert result.returncode == 0, result.stderr
-    handoff = json.loads(output_path.read_text(encoding="utf-8"))
+    handoff = _as_object(json.loads(output_path.read_text(encoding="utf-8")))
     assert (
-        handoff["coverage"]["evidence_fresh_until"] == (context["evidence_fresh_until"])
+        _object_at(handoff, "coverage")["evidence_fresh_until"]
+        == context["evidence_fresh_until"]
     )
 
 
@@ -762,8 +796,10 @@ def test_stamp_rejects_action_and_payload_locators_outside_trusted_manifest(
     tmp_path: Path,
 ) -> None:
     draft = _draft()
-    draft["actions"][0]["evidence"][0]["locator"] = "invented:evidence"
-    draft["payload"]["required_checks"][0]["evidence_locator"] = "invented:check"
+    action = _objects_at(draft, "actions")[0]
+    _objects_at(action, "evidence")[0]["locator"] = "invented:evidence"
+    payload = _object_at(draft, "payload")
+    _objects_at(payload, "required_checks")[0]["evidence_locator"] = "invented:check"
     draft_path = _write(tmp_path / "draft.json", draft)
     context_path = _write(tmp_path / "context.json", _context())
 
@@ -785,9 +821,10 @@ def test_context_rejects_allowlist_not_exactly_backed_by_manifest(
     tmp_path: Path,
 ) -> None:
     context = _context()
-    context["evidence_policy"]["allowed_action_evidence_locators"].append(
-        "unmanifested:evidence"
-    )
+    evidence_policy = _object_at(context, "evidence_policy")
+    allowed_locators = evidence_policy["allowed_action_evidence_locators"]
+    assert isinstance(allowed_locators, list)
+    allowed_locators.append("unmanifested:evidence")
     path = _write(tmp_path / "context.json", context)
 
     result = _run("validate", path, "--contract", "context")
@@ -800,13 +837,17 @@ def test_deployment_ready_requires_open_pr_green_checks_and_available_evidence(
     tmp_path: Path,
 ) -> None:
     draft = _draft()
-    draft["decision"]["status"] = "READY"
-    draft["decision"]["risk_tier"] = "T0"
+    decision = _object_at(draft, "decision")
+    decision["status"] = "READY"
+    decision["risk_tier"] = "T0"
     draft["actions"] = []
-    draft["payload"]["required_checks"][0]["status"] = "success"
+    _objects_at(_object_at(draft, "payload"), "required_checks")[0]["status"] = (
+        "success"
+    )
     context = _context()
     context["risk_tier_floor"] = "T0"
-    context["evidence_policy"]["checks"][0]["conclusion"] = "success"
+    evidence_policy = _object_at(context, "evidence_policy")
+    _objects_at(evidence_policy, "checks")[0]["conclusion"] = "success"
 
     good_draft = _write(tmp_path / "good-draft.json", draft)
     good_context = _write(tmp_path / "good-context.json", context)
@@ -820,12 +861,13 @@ def test_deployment_ready_requires_open_pr_green_checks_and_available_evidence(
         tmp_path / "accepted.json",
     )
 
-    context["evidence_policy"]["pull_request"]["draft"] = True
-    context["evidence_policy"]["checks"][0]["status"] = "in_progress"
-    context["evidence_policy"]["checks"][0]["conclusion"] = None
+    _object_at(evidence_policy, "pull_request")["draft"] = True
+    check = _objects_at(evidence_policy, "checks")[0]
+    check["status"] = "in_progress"
+    check["conclusion"] = None
     required_item = next(
         item
-        for item in context["evidence_policy"]["evidence_manifest"]
+        for item in _objects_at(evidence_policy, "evidence_manifest")
         if item["locator"] == ".github/workflows/build_and_publish.yml"
     )
     required_item["availability"] = "unavailable"
@@ -849,14 +891,18 @@ def test_deployment_ready_requires_open_pr_green_checks_and_available_evidence(
 
 def test_deployment_ready_rejects_closed_pull_request(tmp_path: Path) -> None:
     draft = _draft()
-    draft["decision"]["status"] = "READY"
-    draft["decision"]["risk_tier"] = "T0"
+    decision = _object_at(draft, "decision")
+    decision["status"] = "READY"
+    decision["risk_tier"] = "T0"
     draft["actions"] = []
-    draft["payload"]["required_checks"][0]["status"] = "success"
+    _objects_at(_object_at(draft, "payload"), "required_checks")[0]["status"] = (
+        "success"
+    )
     context = _context()
     context["risk_tier_floor"] = "T0"
-    context["evidence_policy"]["pull_request"]["state"] = "closed"
-    context["evidence_policy"]["checks"][0]["conclusion"] = "success"
+    evidence_policy = _object_at(context, "evidence_policy")
+    _object_at(evidence_policy, "pull_request")["state"] = "closed"
+    _objects_at(evidence_policy, "checks")[0]["conclusion"] = "success"
 
     result = _run(
         "stamp",
@@ -874,13 +920,15 @@ def test_deployment_ready_rejects_closed_pull_request(tmp_path: Path) -> None:
 
 def test_deployment_ready_rejects_unattested_observed_checks(tmp_path: Path) -> None:
     draft = _draft()
-    draft["decision"]["status"] = "READY"
-    draft["decision"]["risk_tier"] = "T0"
+    decision = _object_at(draft, "decision")
+    decision["status"] = "READY"
+    decision["risk_tier"] = "T0"
     draft["actions"] = []
-    draft["payload"]["required_checks"] = []
+    _object_at(draft, "payload")["required_checks"] = []
     context = _context()
     context["risk_tier_floor"] = "T0"
-    context["evidence_policy"]["checks"][0]["required"] = False
+    evidence_policy = _object_at(context, "evidence_policy")
+    _objects_at(evidence_policy, "checks")[0]["required"] = False
 
     result = _run(
         "stamp",
@@ -901,13 +949,17 @@ def test_deployment_ready_is_disabled_for_tier_one_and_two_without_trusted_contr
     tmp_path: Path, tier: str
 ) -> None:
     draft = _draft()
-    draft["decision"]["status"] = "READY"
-    draft["decision"]["risk_tier"] = tier
+    decision = _object_at(draft, "decision")
+    decision["status"] = "READY"
+    decision["risk_tier"] = tier
     draft["actions"] = []
-    draft["payload"]["required_checks"][0]["status"] = "success"
+    _objects_at(_object_at(draft, "payload"), "required_checks")[0]["status"] = (
+        "success"
+    )
     context = _context()
     context["risk_tier_floor"] = tier
-    context["evidence_policy"]["checks"][0]["conclusion"] = "success"
+    evidence_policy = _object_at(context, "evidence_policy")
+    _objects_at(evidence_policy, "checks")[0]["conclusion"] = "success"
     draft_path = _write(tmp_path / "draft.json", draft)
     context_path = _write(tmp_path / "context.json", context)
 
@@ -929,7 +981,7 @@ def test_migration_ready_requires_semantic_source_and_passed_rehearsal(
     tmp_path: Path,
 ) -> None:
     draft = _draft("migration_assessment")
-    draft["decision"]["status"] = "READY"
+    _object_at(draft, "decision")["status"] = "READY"
     draft["actions"] = []
     draft_path = _write(tmp_path / "draft.json", draft)
     context_path = _write(tmp_path / "context.json", _context("migration_assessment"))
@@ -954,7 +1006,7 @@ def test_security_green_decisions_require_semantic_source_and_all_scanners(
     tmp_path: Path, status: str
 ) -> None:
     draft = _draft("security_assessment")
-    draft["decision"]["status"] = status
+    _object_at(draft, "decision")["status"] = status
     if status == "NO_FINDINGS_OBSERVED":
         draft["actions"] = []
     draft_path = _write(tmp_path / "draft.json", draft)
@@ -979,7 +1031,8 @@ def test_stamp_rejects_model_scanner_status_that_differs_from_broker(
     tmp_path: Path,
 ) -> None:
     draft = _draft("security_assessment")
-    draft["payload"]["scanner_inputs"][0]["status"] = "available"
+    payload = _object_at(draft, "payload")
+    _objects_at(payload, "scanner_inputs")[0]["status"] = "available"
     draft_path = _write(tmp_path / "draft.json", draft)
     context_path = _write(tmp_path / "context.json", _context("security_assessment"))
 
@@ -1001,21 +1054,22 @@ def test_release_without_pr_is_supported_but_healthy_is_fail_closed(
     tmp_path: Path,
 ) -> None:
     context = _context("release_assessment")
-    context["subject"].pop("pull_request")
-    context["evidence_policy"]["pull_request"] = None
-    context["evidence_policy"]["allowed_action_evidence_locators"].remove(
-        "pull-request:101"
-    )
-    context["evidence_policy"]["evidence_manifest"] = [
+    _object_at(context, "subject").pop("pull_request")
+    evidence_policy = _object_at(context, "evidence_policy")
+    evidence_policy["pull_request"] = None
+    allowed_locators = evidence_policy["allowed_action_evidence_locators"]
+    assert isinstance(allowed_locators, list)
+    allowed_locators.remove("pull-request:101")
+    evidence_policy["evidence_manifest"] = [
         item
-        for item in context["evidence_policy"]["evidence_manifest"]
+        for item in _objects_at(evidence_policy, "evidence_manifest")
         if item["locator"] != "pull-request:101"
     ]
     context_path = _write(tmp_path / "context.json", context)
     assert _run("validate", context_path, "--contract", "context").returncode == 0
 
     draft = _draft("release_assessment")
-    draft["decision"]["status"] = "HEALTHY"
+    _object_at(draft, "decision")["status"] = "HEALTHY"
     draft["actions"] = []
     draft_path = _write(tmp_path / "draft.json", draft)
     result = _run(
@@ -1062,7 +1116,7 @@ def test_release_without_pr_is_supported_but_healthy_is_fail_closed(
     ],
 )
 def test_stamp_requires_policy_foundry_versions_and_trusted_freshness(
-    tmp_path: Path, mutation: object, expected_error: str
+    tmp_path: Path, mutation: Mutation, expected_error: str
 ) -> None:
     context = _context()
     mutation(context)
@@ -1112,7 +1166,7 @@ def test_stamp_rejects_model_supplied_trusted_fields_without_touching_output(
 def test_stamp_rejects_kind_and_producer_mismatch(tmp_path: Path) -> None:
     draft_path = _write(tmp_path / "draft.json", _draft("deployment_assessment"))
     context = _context("security_assessment")
-    context["producer"]["agent"] = "deploy-navigator"
+    _object_at(context, "producer")["agent"] = "deploy-navigator"
     context_path = _write(tmp_path / "context.json", context)
     output_path = tmp_path / "handoff.json"
 
@@ -1134,7 +1188,7 @@ def test_stamp_rejects_kind_and_producer_mismatch(tmp_path: Path) -> None:
 
 def test_stamp_enforces_trusted_risk_floor(tmp_path: Path) -> None:
     draft = _draft()
-    draft["decision"]["risk_tier"] = "T0"
+    _object_at(draft, "decision")["risk_tier"] = "T0"
     context = _context()
     context["risk_tier_floor"] = "T2"
     draft_path = _write(tmp_path / "draft.json", draft)
@@ -1161,20 +1215,22 @@ def test_stamp_strips_only_allowlisted_foundry_null_placeholders(
     tmp_path: Path, kind: str
 ) -> None:
     draft = _draft(kind)
-    if not draft["actions"]:
+    actions = _objects_at(draft, "actions")
+    if not actions:
         release_action = _action("REL")
         release_action["blocking"] = False
         draft["actions"] = [release_action]
-    evidence = draft["actions"][0]["evidence"][0]
+        actions = _objects_at(draft, "actions")
+    evidence = _objects_at(actions[0], "evidence")[0]
     evidence["line_start"] = None
     evidence["line_end"] = None
     evidence["digest"] = None
     if kind == "deployment_assessment":
-        draft["payload"]["rollback_reference"] = None
+        _object_at(draft, "payload")["rollback_reference"] = None
     elif kind == "release_assessment":
-        draft["payload"]["revision"] = None
+        _object_at(draft, "payload")["revision"] = None
     elif kind == "security_assessment":
-        draft["actions"][0]["cwe"] = None
+        actions[0]["cwe"] = None
     draft_path = _write(tmp_path / "draft.json", draft)
     context_path = _write(tmp_path / "context.json", _context(kind))
     output_path = tmp_path / "handoff.json"
@@ -1190,23 +1246,25 @@ def test_stamp_strips_only_allowlisted_foundry_null_placeholders(
     )
 
     assert result.returncode == 0, result.stderr
-    handoff = json.loads(output_path.read_text(encoding="utf-8"))
-    emitted_evidence = handoff["actions"][0]["evidence"][0]
+    handoff = _as_object(json.loads(output_path.read_text(encoding="utf-8")))
+    emitted_action = _objects_at(handoff, "actions")[0]
+    emitted_evidence = _objects_at(emitted_action, "evidence")[0]
     assert "line_start" not in emitted_evidence
     assert "line_end" not in emitted_evidence
     assert "digest" not in emitted_evidence
     if kind == "deployment_assessment":
-        assert "rollback_reference" not in handoff["payload"]
+        assert "rollback_reference" not in _object_at(handoff, "payload")
     elif kind == "release_assessment":
-        assert "revision" not in handoff["payload"]
+        assert "revision" not in _object_at(handoff, "payload")
     elif kind == "security_assessment":
-        assert "cwe" not in handoff["actions"][0]
+        assert "cwe" not in emitted_action
 
 
 def test_stamp_does_not_strip_arbitrary_nulls(tmp_path: Path) -> None:
     draft = _draft()
-    draft["actions"][0]["title"] = None
-    draft["actions"][0]["cwe"] = None
+    action = _objects_at(draft, "actions")[0]
+    action["title"] = None
+    action["cwe"] = None
     draft_path = _write(tmp_path / "draft.json", draft)
     context_path = _write(tmp_path / "context.json", _context())
     output_path = tmp_path / "handoff.json"
