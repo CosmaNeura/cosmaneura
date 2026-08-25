@@ -33,6 +33,10 @@ validate_deploy_revision_suffix() {
 		echo "Generated deployment revision suffix is invalid." >&2
 		return 1
 	fi
+	if [[ "$suffix" == *--* ]]; then
+		echo "Generated deployment revision suffix contains consecutive hyphens." >&2
+		return 1
+	fi
 	if [[ $# -eq 0 ]]; then
 		echo "At least one Container App name is required for revision validation." >&2
 		return 1

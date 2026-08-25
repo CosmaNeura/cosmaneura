@@ -17,6 +17,12 @@ CONTAINERS = (
 )
 
 
+def _shell_function(source: str, name: str) -> str:
+    start = source.index(f"{name}() {{")
+    end = source.index("\n}", start)
+    return source[start : end + 2]
+
+
 def _generate(
     *,
     run_id: str | None = "32790258415",
@@ -114,6 +120,112 @@ def test_revision_name_overflow_fails_closed() -> None:
 
     assert result.returncode != 0
     assert "54-character limit" in result.stderr
+
+
+def test_validator_rejects_consecutive_hyphens() -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; validate_deploy_revision_suffix bad--suffix app',
+            "test",
+            str(HELPER),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "consecutive hyphens" in result.stderr
+
+
+def _run_deployment_check(
+    deploy_path: str,
+    image_variable: str,
+    *,
+    latest_revision: str,
+) -> subprocess.CompletedProcess[str]:
+    check_function = _shell_function(
+        (ROOT / deploy_path).read_text(encoding="utf-8"),
+        "check_deployment",
+    )
+    suffix = f"r32790258415a2-{SHA[:7]}"
+    script = f"""
+RESOURCE_GROUP=test-resource-group
+REVISION_STRING={suffix}
+{image_variable}=registry.example/cosmaneura
+SCHEDULER_CONTAINER=test-scheduler
+sleep() {{ :; }}
+az() {{
+    if [[ "$*" == *"properties.latestRevisionName"* ]]; then
+        printf '%s\n' "$TEST_LATEST_REVISION"
+    elif [[ "$1 $2" == "containerapp show" ]]; then
+        return 0
+    elif [[ "$1 $2 $3" == "containerapp revision show" ]]; then
+        printf 'revision-show-called\n' >&2
+        printf '{{"image":"registry.example/cosmaneura:{SHA}","health":"Healthy","running":"Running","provisioning":"Provisioned"}}\n'
+    else
+        printf 'unexpected az call: %s\n' "$*" >&2
+        return 97
+    fi
+}}
+{check_function}
+check_deployment test-app {SHA} 1
+"""
+    environment = os.environ.copy()
+    environment["TEST_LATEST_REVISION"] = latest_revision
+    return subprocess.run(
+        ["bash", "-c", script],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("deploy_path", "image_variable"),
+    [
+        ("infra/deploy.sh", "PRODUCTION_IMAGE"),
+        ("infra-staging/deploy.sh", "STAGING_IMAGE"),
+    ],
+)
+def test_health_check_accepts_only_this_attempts_exact_revision(
+    deploy_path: str,
+    image_variable: str,
+) -> None:
+    suffix = f"r32790258415a2-{SHA[:7]}"
+    result = _run_deployment_check(
+        deploy_path,
+        image_variable,
+        latest_revision=f"test-app--{suffix}",
+    )
+
+    assert result.returncode == 0
+
+
+@pytest.mark.parametrize(
+    ("deploy_path", "image_variable"),
+    [
+        ("infra/deploy.sh", "PRODUCTION_IMAGE"),
+        ("infra-staging/deploy.sh", "STAGING_IMAGE"),
+    ],
+)
+def test_prior_attempts_healthy_same_image_revision_cannot_pass(
+    deploy_path: str,
+    image_variable: str,
+) -> None:
+    result = _run_deployment_check(
+        deploy_path,
+        image_variable,
+        latest_revision=f"test-app--r32790258415a1-{SHA[:7]}",
+    )
+
+    assert result.returncode != 0
+    assert "not this deployment attempt yet" in result.stdout
 
 
 @pytest.mark.parametrize(
