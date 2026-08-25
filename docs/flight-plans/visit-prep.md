@@ -95,7 +95,8 @@ index enforces at most one default set version per physician.
 
 ## Flags and kill switches
 
-- **Eligibility flag:** `ff_visit_prep_202608`
+- **Eligibility flag:** `ff_visit_prep_202608` (backend environment key:
+  `FF_VISIT_PREP_202608`)
 - **Owner:** John
 - **Expiry:** remove within 30 days after full rollout, no later than 2026-12-31
   unless this plan records a renewed date.
