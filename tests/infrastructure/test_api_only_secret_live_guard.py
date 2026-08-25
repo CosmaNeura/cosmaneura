@@ -22,7 +22,13 @@ def _query() -> dict[str, str]:
     }
 
 
-def _resource(*, api: bool, literal: bool = False, duplicate: bool = False) -> str:
+def _resource(
+    *,
+    api: bool,
+    literal: bool = False,
+    azure_empty_value: bool = False,
+    duplicate: bool = False,
+) -> str:
     environment = []
     secrets = [{"name": "registry-secret"}]
     if api:
@@ -32,6 +38,9 @@ def _resource(*, api: bool, literal: bool = False, duplicate: bool = False) -> s
         }
         if literal:
             entry["value"] = "never-print-this-secret"
+        elif azure_empty_value:
+            # Azure normalizes secretRef-backed env entries with value="".
+            entry["value"] = ""
         environment.append(entry)
         secrets.append({"name": guard.SECRET_NAME})
         if duplicate:
@@ -64,12 +73,111 @@ def test_live_scope_requires_exactly_one_api_reference_and_no_leakage() -> None:
 
         def leaked_runner(arguments: tuple[str, ...], leaked=leaked_name) -> str:
             name = arguments[arguments.index("--name") + 1]
-            return _resource(api=name in {"cosmaneura-prod-app", leaked})
+            is_bound = name in {"cosmaneura-prod-app", leaked}
+            return _resource(api=is_bound, azure_empty_value=is_bound)
 
         with pytest.raises(guard.LiveGuardError, match="non-API"):
             guard.verify_live_state(
                 _query(), runner=leaked_runner, signing_secret=VALID_SIGNING_SECRET
             )
+
+
+def test_live_scope_accepts_azure_normalized_empty_value_on_api_reference() -> None:
+    def runner(arguments: tuple[str, ...]) -> str:
+        name = arguments[arguments.index("--name") + 1]
+        return _resource(
+            api=name == "cosmaneura-prod-app",
+            azure_empty_value=name == "cosmaneura-prod-app",
+        )
+
+    assert guard.verify_live_state(
+        _query(), runner=runner, signing_secret=VALID_SIGNING_SECRET
+    ) == len(guard.WORKLOADS)
+
+
+def test_live_scope_accepts_azure_normalized_null_value_on_api_reference() -> None:
+    api_resource = json.loads(_resource(api=True))
+    api_resource["properties"]["template"]["containers"][0]["env"][0]["value"] = None
+
+    def runner(arguments: tuple[str, ...]) -> str:
+        name = arguments[arguments.index("--name") + 1]
+        return (
+            json.dumps(api_resource)
+            if name == "cosmaneura-prod-app"
+            else _resource(api=False)
+        )
+
+    assert guard.verify_live_state(
+        _query(), runner=runner, signing_secret=VALID_SIGNING_SECRET
+    ) == len(guard.WORKLOADS)
+
+
+@pytest.mark.parametrize("secret_ref", [None, "wrong-secret"])
+def test_live_scope_rejects_missing_or_wrong_api_secret_reference(
+    secret_ref: str | None,
+) -> None:
+    api_resource = json.loads(_resource(api=True, azure_empty_value=True))
+    entry = api_resource["properties"]["template"]["containers"][0]["env"][0]
+    if secret_ref is None:
+        entry.pop("secretRef")
+    else:
+        entry["secretRef"] = secret_ref
+
+    def runner(arguments: tuple[str, ...]) -> str:
+        name = arguments[arguments.index("--name") + 1]
+        return (
+            json.dumps(api_resource)
+            if name == "cosmaneura-prod-app"
+            else _resource(api=False)
+        )
+
+    with pytest.raises(guard.LiveGuardError, match="secret"):
+        guard.verify_live_state(
+            _query(), runner=runner, signing_secret=VALID_SIGNING_SECRET
+        )
+
+
+@pytest.mark.parametrize("mode", ["missing", "duplicate"])
+def test_live_scope_rejects_missing_or_duplicate_api_secret_object(mode: str) -> None:
+    api_resource = json.loads(_resource(api=True, azure_empty_value=True))
+    secrets = api_resource["properties"]["configuration"]["secrets"]
+    if mode == "missing":
+        secrets[:] = [item for item in secrets if item["name"] != guard.SECRET_NAME]
+    else:
+        secrets.append({"name": guard.SECRET_NAME})
+
+    def runner(arguments: tuple[str, ...]) -> str:
+        name = arguments[arguments.index("--name") + 1]
+        return (
+            json.dumps(api_resource)
+            if name == "cosmaneura-prod-app"
+            else _resource(api=False)
+        )
+
+    with pytest.raises(guard.LiveGuardError, match="secret"):
+        guard.verify_live_state(
+            _query(), runner=runner, signing_secret=VALID_SIGNING_SECRET
+        )
+
+
+def test_live_scope_rejects_non_api_backing_secret_without_env_binding() -> None:
+    leaked_resource = json.loads(_resource(api=False))
+    leaked_resource["properties"]["configuration"]["secrets"].append(
+        {"name": guard.SECRET_NAME}
+    )
+
+    def runner(arguments: tuple[str, ...]) -> str:
+        name = arguments[arguments.index("--name") + 1]
+        if name == "cosmaneura-prod-app":
+            return _resource(api=True, azure_empty_value=True)
+        if name == "cosmaneura-prod-worker":
+            return json.dumps(leaked_resource)
+        return _resource(api=False)
+
+    with pytest.raises(guard.LiveGuardError, match="non-API"):
+        guard.verify_live_state(
+            _query(), runner=runner, signing_secret=VALID_SIGNING_SECRET
+        )
 
 
 @pytest.mark.parametrize(
