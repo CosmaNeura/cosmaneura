@@ -7,25 +7,29 @@ Requires poppler to be installed on your system.
 import base64
 import io
 import json
-import os
-import uuid
+import tempfile
 from collections.abc import Sized
+from pathlib import Path
 from textwrap import dedent
 
 import PIL.Image
-from azure.storage.blob import BlobServiceClient
-from pdf2image import convert_from_path
+from pdf2image import convert_from_path, pdfinfo_from_path
+from pdf2image.exceptions import (
+    PDFInfoNotInstalledError,
+    PDFPageCountError,
+    PDFPopplerTimeoutError,
+    PDFSyntaxError,
+)
 from typeid import TypeID
 
 from app import log
 from app.celery import celery_app
-from app.configuration.azure import (
-    AZURE_UPLOADS_ACCOUNT_KEY,
-    AZURE_UPLOADS_ACCOUNT_URL,
-    AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
-)
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.services.doctor_access import doctor_access_in_force
+from app.services.example_note_upload import (
+    ExampleNoteBlobIntegrityError,
+    download_registered_or_legacy_example_note,
+)
 from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
@@ -37,6 +41,10 @@ from app.models.doctor_note_schema import DoctorNoteSchema
 from .anonymize import deidentify
 
 _MAX_LOG_COUNT = 10_000
+_MAX_EXAMPLE_NOTE_PAGES = 20
+_PDF_INFO_TIMEOUT_SECONDS = 15
+_PDF_RENDER_TIMEOUT_SECONDS = 60
+_MAX_RENDER_DIMENSION = 2_500
 
 
 def _bounded_count(items: Sized) -> int:
@@ -141,37 +149,67 @@ def get_img_uri(img: PIL.Image.Image) -> str:
 
 
 def download_note(note: DoctorNoteFile) -> list[str]:
-    full_upload_url = note.azure_file_name
-
-    # full upload url from azure is stored in the DB, we need to extract just the last path component
-    filename = os.path.basename(full_upload_url)
-
-    # TODO may cause issues in prod
-    temp_download_path = f"./tmp/example-note-{uuid.uuid4()}-{filename}"
-
-    service_client = BlobServiceClient(
-        AZURE_UPLOADS_ACCOUNT_URL,
-        credential=AZURE_UPLOADS_ACCOUNT_KEY,
+    content = download_registered_or_legacy_example_note(
+        note.azure_file_name,
+        doctor_id=str(note.doctor_id),
     )
-    blob_client = service_client.get_blob_client(
-        container=AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME,
-        blob=filename,
-    )
+    temp_download_path: str | None = None
 
     try:
-        with open(temp_download_path, "wb") as file:
-            file.write(blob_client.download_blob().readall())
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix="example-note-",
+            suffix=".pdf",
+            dir="./tmp",
+            delete=False,
+        ) as file:
+            file.write(content)
+            temp_download_path = file.name
 
-        # https://cookbook.openai.com/examples/parse_pdf_docs_for_rag
-        # Split the PDF into pages, then convert each page to an image.
-        pdf_pages = convert_from_path(temp_download_path, 500)
+        try:
+            page_count = pdfinfo_from_path(
+                temp_download_path,
+                timeout=_PDF_INFO_TIMEOUT_SECONDS,
+            ).get("Pages")
+            if (
+                not isinstance(page_count, int)
+                or not 0 < page_count <= _MAX_EXAMPLE_NOTE_PAGES
+            ):
+                raise ExampleNoteBlobIntegrityError(
+                    "example_note_pdf_page_limit_exceeded"
+                )
+
+            # https://cookbook.openai.com/examples/parse_pdf_docs_for_rag
+            # Bound page count, dimensions, concurrency, and parser time before
+            # any image is handed to the model.
+            pdf_pages = convert_from_path(
+                temp_download_path,
+                dpi=500,
+                first_page=1,
+                last_page=page_count,
+                thread_count=1,
+                strict=True,
+                size=_MAX_RENDER_DIMENSION,
+                timeout=_PDF_RENDER_TIMEOUT_SECONDS,
+            )
+        except (
+            PDFInfoNotInstalledError,
+            PDFPageCountError,
+            PDFPopplerTimeoutError,
+            PDFSyntaxError,
+        ):
+            raise ExampleNoteBlobIntegrityError(
+                "example_note_pdf_processing_failed"
+            ) from None
+        if len(pdf_pages) != page_count:
+            raise ExampleNoteBlobIntegrityError("example_note_pdf_processing_failed")
         return [get_img_uri(page) for page in pdf_pages]
 
     finally:
         # Images are stored in memory at this point so we can delete the PDF
         # from disk.
-        if os.path.exists(temp_download_path):
-            os.remove(temp_download_path)
+        if temp_download_path is not None:
+            Path(temp_download_path).unlink(missing_ok=True)
 
 
 # Extract the fields from an example clinical note.

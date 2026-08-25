@@ -7,8 +7,11 @@ from fastapi import HTTPException, status
 from starlette.requests import Request
 from starlette_context import request_cycle_context
 from structlog.testing import capture_logs
+from typeid import TypeID
 
 from app.routes.dependencies.doctor import (
+    ACCOUNT_RECOVERY_REQUIRED,
+    MANAGED_ORGANIZATION_IDENTITY_ERROR,
     PILOT_IDENTITY_ERROR,
     inject_doctor_record,
 )
@@ -18,7 +21,7 @@ from app.models.doctor import DoctorRole
 
 class FakeDoctor:
     def __init__(self, *, clerk_id: str, email: str) -> None:
-        self.id = "doctor-private-sentinel"
+        self.id = TypeID("doctor")
         self.clerk_id = clerk_id
         self.email = email
         self.role = DoctorRole.normal
@@ -143,3 +146,153 @@ def test_non_grant_account_does_not_incur_live_clerk_email_lookup() -> None:
 
     fetch_email.assert_not_called()
     active_grant.assert_not_called()
+
+
+def test_roster_authorized_account_revalidates_live_identity() -> None:
+    clerk_id = "user_managed_identity_match"
+    email = "managed@mycatholicdoctor.com"
+    doctor = FakeDoctor(clerk_id=clerk_id, email=email)
+
+    with (
+        request_cycle_context({}),
+        patch(
+            "app.routes.dependencies.doctor.revoked_pilot_access_grant",
+            return_value=None,
+        ),
+        patch(
+            "app.routes.dependencies.doctor._active_grant_for_clerk",
+            return_value=None,
+        ),
+        patch("app.routes.dependencies.doctor.Doctor.upsert", return_value=doctor),
+        patch(
+            "app.routes.dependencies.doctor.PracticeMember.get",
+            return_value=SimpleNamespace(
+                organization_roster_approval_id="organization_roster_approval_private"
+            ),
+        ),
+        patch(
+            "app.routes.dependencies.doctor._fetch_clerk_email",
+            return_value=email.upper(),
+        ) as fetch_email,
+    ):
+        request = _request(clerk_id)
+        inject_doctor_record(request)
+
+    assert request.state.doctor is doctor
+    fetch_email.assert_called_once_with(clerk_id)
+
+
+@pytest.mark.parametrize("live_email", [None, "changed@example.test"])
+def test_roster_authorized_account_fails_closed_on_live_identity_drift(
+    live_email: str | None,
+) -> None:
+    clerk_id = "user_managed_identity_changed"
+    approved_email = "managed@mycatholicdoctor.com"
+    doctor = FakeDoctor(clerk_id=clerk_id, email=approved_email)
+
+    with (
+        request_cycle_context({}),
+        patch(
+            "app.routes.dependencies.doctor.revoked_pilot_access_grant",
+            return_value=None,
+        ),
+        patch(
+            "app.routes.dependencies.doctor._active_grant_for_clerk",
+            return_value=None,
+        ),
+        patch("app.routes.dependencies.doctor.Doctor.upsert", return_value=doctor),
+        patch(
+            "app.routes.dependencies.doctor.PracticeMember.get",
+            return_value=SimpleNamespace(
+                organization_roster_approval_id="organization_roster_approval_private"
+            ),
+        ),
+        patch(
+            "app.routes.dependencies.doctor._fetch_clerk_email",
+            return_value=live_email,
+        ),
+        capture_logs() as logs,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        inject_doctor_record(_request(clerk_id))
+
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == MANAGED_ORGANIZATION_IDENTITY_ERROR
+    serialized = json.dumps(logs, sort_keys=True)
+    assert clerk_id not in serialized
+    assert approved_email not in serialized
+    assert live_email is None or live_email not in serialized
+    assert logs[-1]["event_code"] == (
+        "managed_organization_identity_verification_failed"
+    )
+    assert logs[-1]["clerk_ref"].startswith("hmac:")
+
+
+def test_recreated_identity_gets_recovery_message_without_stealing_email() -> None:
+    replacement_clerk_id = "user_recreated_identity"
+    email = "returning-private@example.test"
+    provisional = FakeDoctor(clerk_id=replacement_clerk_id, email="")
+    existing = FakeDoctor(clerk_id="user_deleted_identity", email=email.upper())
+
+    with (
+        request_cycle_context({}),
+        patch(
+            "app.routes.dependencies.doctor.revoked_pilot_access_grant",
+            return_value=None,
+        ),
+        patch(
+            "app.routes.dependencies.doctor._active_grant_for_clerk",
+            return_value=None,
+        ),
+        patch("app.routes.dependencies.doctor.Doctor.upsert", return_value=provisional),
+        patch(
+            "app.routes.dependencies.doctor._doctors_for_normalized_email",
+            return_value=[existing],
+        ),
+        patch(
+            "app.routes.dependencies.doctor._fetch_clerk_email",
+            return_value=email,
+        ),
+        capture_logs() as logs,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        inject_doctor_record(_request(replacement_clerk_id))
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert exc_info.value.detail == ACCOUNT_RECOVERY_REQUIRED
+    assert provisional.email == ""
+    serialized = json.dumps(logs, sort_keys=True)
+    assert replacement_clerk_id not in serialized
+    assert email not in serialized
+    assert logs[-1]["event_code"] == "account_identity_recovery_required"
+
+
+def test_case_variant_legacy_shell_requires_recovery() -> None:
+    replacement_clerk_id = "user_case_variant_shell"
+    email = "returning-private@example.test"
+    provisional = FakeDoctor(clerk_id=replacement_clerk_id, email=email.upper())
+    existing = FakeDoctor(clerk_id="user_deleted_identity", email=email)
+
+    with (
+        request_cycle_context({}),
+        patch(
+            "app.routes.dependencies.doctor.revoked_pilot_access_grant",
+            return_value=None,
+        ),
+        patch(
+            "app.routes.dependencies.doctor._active_grant_for_clerk",
+            return_value=None,
+        ),
+        patch("app.routes.dependencies.doctor.Doctor.upsert", return_value=provisional),
+        patch(
+            "app.routes.dependencies.doctor._doctors_for_normalized_email",
+            return_value=[existing, provisional],
+        ),
+        patch("app.routes.dependencies.doctor._fetch_clerk_email") as fetch_email,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        inject_doctor_record(_request(replacement_clerk_id))
+
+    assert exc_info.value.status_code == status.HTTP_409_CONFLICT
+    assert exc_info.value.detail == ACCOUNT_RECOVERY_REQUIRED
+    fetch_email.assert_not_called()

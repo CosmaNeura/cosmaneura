@@ -59,7 +59,7 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
       </div>
 
       <div className="flex gap-3">
-        {isActive && (
+        {isActive && meeting.join_url && (
           <Button
             asChild
             className="bg-[#0E72ED] text-white hover:bg-[#0E72ED]/90"
@@ -68,6 +68,8 @@ function MeetingDetail({ meeting }: { meeting: ZoomMeetingResponse }) {
               href={meeting.join_url}
               target="_blank"
               rel="noopener noreferrer"
+              data-ph-no-capture=""
+              data-sentry-block=""
             >
               Join Meeting
             </a>

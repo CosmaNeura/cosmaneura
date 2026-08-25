@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Literal, cast
 
 import typer
@@ -10,6 +11,52 @@ from activemodel.session_manager import global_session
 from activemodel.types import TypeIDType
 
 app = typer.Typer()
+
+
+def _superadmin_capability_manifest_from_input(
+    manifest_path: Path | None,
+):
+    """Load an owner-only file or collect one target without terminal echo."""
+
+    from app.services.superadmin_capability import (
+        configured_superadmin_capability_environment,
+        configured_superadmin_clerk_issuer,
+        load_private_superadmin_capability_manifest,
+        parse_superadmin_capability_manifest,
+        validate_superadmin_manifest_runtime_scope,
+    )
+
+    if manifest_path is not None:
+        manifest = load_private_superadmin_capability_manifest(manifest_path)
+    else:
+        environment = configured_superadmin_capability_environment()
+        issuer = configured_superadmin_clerk_issuer()
+        subject = typer.prompt("Exact Clerk subject", hide_input=True)
+        email = typer.prompt("Exact verified primary email", hide_input=True)
+        doctor_id = typer.prompt("Exact Doctor TypeID", hide_input=True)
+        kinds = typer.prompt(
+            "Capability kinds (comma-separated platform_admin,view_as)",
+            hide_input=True,
+        )
+        manifest = parse_superadmin_capability_manifest(
+            {
+                "schema_version": 1,
+                "environment": environment.value,
+                "clerk_issuer": issuer,
+                "accounts": [
+                    {
+                        "clerk_subject": subject,
+                        "verified_primary_email": email,
+                        "doctor_id": doctor_id,
+                        "capability_kinds": [
+                            value.strip() for value in kinds.split(",") if value.strip()
+                        ],
+                    }
+                ],
+            }
+        )
+    validate_superadmin_manifest_runtime_scope(manifest)
+    return manifest
 
 
 @app.command()
@@ -341,6 +388,279 @@ def provision_staging_provider_authority(
         "Provider authority "
         f"{state}: actor_id={result.actor_id} tenant_id={result.tenant_id} "
         f"person_id={result.person_id} binding_ref={result.binding_ref}."
+    )
+
+
+@app.command("rebind-staging-provider-authority-identity")
+def rebind_staging_provider_authority_identity_command(
+    doctor_id: str = typer.Option(...),
+    appointment_id: str = typer.Option(...),
+    actor_id: str = typer.Option(...),
+    operator_ref: str = typer.Option(...),
+    reason: str = typer.Option(...),
+    current_clerk_pair_sha256: str = typer.Option(
+        ...,
+        "--current-clerk-pair-sha256",
+        help="Confirmed digest of the one active Clerk subject/email pair.",
+    ),
+    stale_subject_sha256: str = typer.Option(
+        ...,
+        "--stale-subject-sha256",
+        help="Confirmed SHA-256 of the one stale active Clerk subject.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by dry-run; required with --apply.",
+    ),
+    confirm_staging_only: bool = typer.Option(False, "--confirm-staging-only"),
+    confirm_revoke_only_stale_identity: bool = typer.Option(
+        False,
+        "--confirm-revoke-only-stale-identity",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the validated plan."),
+) -> None:
+    """Rebind one reviewed synthetic provider actor to its current Clerk subject."""
+
+    from app.services.authority_identity_rebind import (
+        AuthorityIdentityRebindError,
+        plan_staging_provider_authority_identity_rebind,
+        rebind_staging_provider_authority_identity,
+    )
+
+    try:
+        parsed_doctor_id = _typeid(doctor_id, "doctor")
+        parsed_appointment_id = _typeid(appointment_id, "appointment")
+        parsed_actor_id = _typeid(actor_id, "authority_actor")
+        with global_session():
+            if not apply:
+                plan = plan_staging_provider_authority_identity_rebind(
+                    doctor_id=parsed_doctor_id,
+                    appointment_id=parsed_appointment_id,
+                    actor_id=parsed_actor_id,
+                    operator_ref=operator_ref,
+                    reason=reason,
+                    expected_current_clerk_pair_sha256=current_clerk_pair_sha256,
+                    expected_stale_subject_sha256=stale_subject_sha256,
+                )
+                state = "already-applied" if plan.already_applied else "ready"
+                typer.echo(
+                    "DRY RUN: staging authority identity rebind "
+                    f"state={state} identities={plan.identity_count} "
+                    f"active={plan.active_identity_count} "
+                    f"revoked={plan.revoked_identity_count} "
+                    f"plan_sha256={plan.plan_sha256}; no changes made."
+                )
+                return
+
+            if (
+                not confirm_staging_only
+                or not confirm_revoke_only_stale_identity
+                or confirm_plan_sha256 is None
+            ):
+                raise AuthorityIdentityRebindError(
+                    "apply requires both staging confirmations and the plan digest"
+                )
+            result = rebind_staging_provider_authority_identity(
+                doctor_id=parsed_doctor_id,
+                appointment_id=parsed_appointment_id,
+                actor_id=parsed_actor_id,
+                operator_ref=operator_ref,
+                reason=reason,
+                expected_current_clerk_pair_sha256=current_clerk_pair_sha256,
+                expected_stale_subject_sha256=stale_subject_sha256,
+                confirmed_plan_sha256=confirm_plan_sha256,
+            )
+    except AuthorityIdentityRebindError:
+        typer.echo(
+            "Authority identity rebind refused; no identity values were printed.",
+            err=True,
+        )
+        raise typer.Exit(1) from None
+
+    state = "applied" if result.changed else "already applied"
+    typer.echo(f"Authority identity rebind {state}; plan_sha256={result.plan_sha256}.")
+
+
+@app.command("rebind-doctor-clerk-identity")
+def rebind_doctor_clerk_identity_command(
+    doctor_id: str = typer.Option(
+        ..., help="Stable Doctor TypeID for the account whose records are retained."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged recovery."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Rebind a retained provider record after its Clerk sign-in was recreated.
+
+    Identity values are prompted privately and never printed. The original
+    Clerk account must be absent, and the replacement must expose the same
+    verified primary email. Clinical and legal records remain on the original
+    Doctor row; an empty replacement shell is retained as a disabled tombstone.
+    """
+
+    from app.services.doctor_identity_rebind import (
+        DoctorIdentityRebindError,
+        plan_doctor_identity_rebind,
+        rebind_doctor_identity,
+        resolve_live_rebind_identity,
+    )
+
+    stale_clerk_id = typer.prompt("Prior Clerk subject", hide_input=True)
+    replacement_clerk_id = typer.prompt("Replacement Clerk subject", hide_input=True)
+    confirmed_email = typer.prompt("Exact verified account email", hide_input=True)
+    try:
+        replacement = resolve_live_rebind_identity(
+            stale_clerk_id=stale_clerk_id,
+            replacement_clerk_id=replacement_clerk_id,
+            confirmed_email=confirmed_email,
+        )
+        parsed_doctor_id = _typeid(doctor_id, "doctor")
+        with global_session():
+            plan = plan_doctor_identity_rebind(
+                doctor_id=parsed_doctor_id,
+                stale_clerk_id=stale_clerk_id,
+                replacement=replacement,
+                operator_ref=operator_ref,
+                reason=reason,
+            )
+            if not apply:
+                state = "already applied" if plan.already_applied else "ready"
+                typer.echo(
+                    "DRY RUN: doctor identity recovery "
+                    f"state={state} doctor_id={plan.doctor_id} "
+                    f"practice_id={plan.practice_id} "
+                    f"environment={plan.environment} "
+                    f"clerk_issuer_sha256={plan.clerk_issuer_sha256} "
+                    f"provisional_shell={plan.provisional_doctor_id is not None} "
+                    f"pilot_grant={plan.pilot_grant_rebound} "
+                    f"authority_identities={plan.authority_identity_count} "
+                    f"plan_sha256={plan.plan_sha256}; no changes made."
+                )
+                return
+            if confirm_plan_sha256 is None:
+                raise DoctorIdentityRebindError(
+                    "--apply requires --confirm-plan-sha256"
+                )
+            result = rebind_doctor_identity(
+                doctor_id=parsed_doctor_id,
+                stale_clerk_id=stale_clerk_id,
+                replacement=replacement,
+                operator_ref=operator_ref,
+                reason=reason,
+                confirmed_plan_sha256=confirm_plan_sha256,
+            )
+    except DoctorIdentityRebindError:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"doctor identity recovery {outcome}; verify account state; "
+            "no identity values were printed"
+        ) from None
+
+    state = "applied" if result.changed else "already applied"
+    typer.echo(
+        f"Doctor identity recovery {state}: doctor_id={result.doctor_id} "
+        f"plan_sha256={result.plan_sha256}."
+    )
+
+
+@app.command("close-provider-account")
+def close_provider_account_command(
+    doctor_id: str = typer.Option(
+        ..., help="Stable Doctor TypeID for the provider account to disable."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the privileged closure."),
+    confirm_email: str | None = typer.Option(
+        None,
+        help=(
+            "Exact account email confirmation. Omit to enter it privately and keep "
+            "it out of shell history."
+        ),
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Disable a provider account while retaining records for at least 7 years.
+
+    This command never deletes the Clerk identity, clinical records, BAA
+    acceptances, or audit history. A bound Stripe subscription is not canceled;
+    its billing follow-up is reported explicitly.
+    """
+
+    import hmac
+
+    from app.services.doctor_account_closure import (
+        DoctorAccountClosureError,
+        close_doctor_account,
+        plan_doctor_account_closure,
+    )
+
+    _validate_operator_change(operator_ref, reason)
+    entered_email = confirm_email or typer.prompt(
+        "Exact account email", hide_input=True
+    )
+    try:
+        parsed_doctor_id = _typeid(doctor_id, "doctor")
+        with global_session():
+            doctor = _doctor_by_id(doctor_id)
+            stored_email = (doctor.email or "").strip().lower()
+            supplied_email = entered_email.strip().lower()
+            if not stored_email or not hmac.compare_digest(
+                stored_email, supplied_email
+            ):
+                raise DoctorAccountClosureError(
+                    "email confirmation does not match the provider account"
+                )
+            plan = plan_doctor_account_closure(
+                doctor_id=parsed_doctor_id,
+                operator_ref=operator_ref,
+                reason=reason,
+            )
+            if not apply:
+                state = "already applied" if plan.already_applied else "ready"
+                typer.echo(
+                    "DRY RUN: provider account closure "
+                    f"state={state} doctor_id={plan.doctor_id} "
+                    f"practice_id={plan.practice_id} member_id={plan.member_id} "
+                    f"role={plan.member_role} pilot_grants={plan.pilot_grant_count} "
+                    f"roster_approvals={plan.organization_approval_count} "
+                    f"authority_identities={plan.authority_identity_count} "
+                    f"active_mount_sessions={plan.active_mount_session_count} "
+                    f"video_integrations={plan.video_integration_count} "
+                    f"stripe_follow_up={plan.stripe_follow_up_required} "
+                    f"plan_sha256={plan.plan_sha256}; no changes made."
+                )
+                return
+            if confirm_plan_sha256 is None:
+                raise DoctorAccountClosureError(
+                    "--apply requires --confirm-plan-sha256"
+                )
+            result = close_doctor_account(
+                doctor_id=parsed_doctor_id,
+                operator_ref=operator_ref,
+                reason=reason,
+                confirmed_plan_sha256=confirm_plan_sha256,
+            )
+    except DoctorAccountClosureError as exc:
+        raise typer.BadParameter(str(exc)) from None
+
+    state = "applied" if result.changed else "already applied"
+    typer.echo(
+        f"Provider account closure {state}: doctor_id={result.doctor_id} "
+        f"practice_id={result.practice_id} "
+        f"retain_until={result.retain_until.isoformat()} "
+        f"stripe_follow_up={result.stripe_follow_up_required} "
+        f"plan_sha256={result.plan_sha256}; Clerk and retained records were not deleted."
     )
 
 
@@ -1476,6 +1796,79 @@ def grant_pilot_access_command(
     )
 
 
+@app.command("amend-pilot-continuity")
+def amend_pilot_continuity_command(
+    manifest: str = typer.Option(
+        ...,
+        help=(
+            "Private mode-0600, environment-specific continuity manifest. "
+            "Identity values are never printed."
+        ),
+    ),
+    source_ref: str = typer.Option(
+        ..., help="Opaque reference for the reviewed omission source."
+    ),
+    operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
+    reason: str = typer.Option(..., help="Reason for the continuity amendment."),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Canonical plan digest printed by dry-run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed amendment."),
+) -> None:
+    """Add reviewed omissions without changing the fixed base cohort."""
+
+    from app.services.continuity_reconciliation import (
+        apply_continuity_amendment,
+        plan_continuity_amendment,
+        read_private_continuity_manifest,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    try:
+        parsed = read_private_continuity_manifest(manifest)
+        plan = plan_continuity_amendment(
+            parsed,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason=reason,
+        )
+        if not apply:
+            state = "already applied" if plan.already_applied else "deployable"
+            typer.echo(
+                "DRY RUN: pilot continuity amendment; "
+                f"state={state} accounts={plan.account_count} "
+                f"existing_doctors={plan.existing_doctor_count} "
+                f"manifest_sha256={plan.manifest_sha256} "
+                f"plan_sha256={plan.plan_sha256}."
+            )
+            return
+        result = apply_continuity_amendment(
+            parsed,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason=reason,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"pilot continuity amendment {outcome}; verify aggregate database state; "
+            "no identities were printed"
+        ) from None
+
+    state = "already applied" if result.created_count == 0 else "applied"
+    typer.echo(
+        "Pilot continuity amendment "
+        f"{state}: accounts={result.account_count} created={result.created_count} "
+        f"unchanged={result.unchanged_count} "
+        f"manifest_sha256={result.manifest_sha256} "
+        f"plan_sha256={result.plan_sha256}."
+    )
+
+
 @app.command("revoke-pilot-access")
 def revoke_pilot_access_command(
     operator_ref: str = typer.Option(..., help="Durable operator/ticket reference."),
@@ -1497,8 +1890,12 @@ def revoke_pilot_access_command(
         pilot_access_revoke_plan_sha256,
         revoke_pilot_access_grants,
     )
+    from app.services.superadmin_capability import (
+        get_active_runtime_superadmin_capability_kinds,
+    )
 
-    from app.models.doctor import Doctor, DoctorRole
+    from activemodel.session_manager import get_session
+    from app.models.doctor import Doctor
     from app.models.pilot_access_grandfather_grant import (
         PilotAccessGrandfatherGrant,
     )
@@ -1552,12 +1949,17 @@ def revoke_pilot_access_command(
             )
         ):
             raise ValueError("revocation plan conflicts with retained evidence")
-        if (
-            doctor is not None
-            and doctor.role == DoctorRole.admin
-            and doctor.deleted_at is None
-        ):
-            raise ValueError("platform administrators require a separate lifecycle")
+        if doctor is not None and doctor.deleted_at is None:
+            with get_session() as session:
+                protected_capabilities = get_active_runtime_superadmin_capability_kinds(
+                    session,
+                    subject=doctor.clerk_id,
+                    doctor_id=doctor.id,
+                )
+            if protected_capabilities:
+                raise ValueError(
+                    "active superadmin capabilities require a separate lifecycle"
+                )
         if not apply:
             state = "already revoked" if target.revoked_at is not None else "revocable"
             typer.echo(
@@ -1593,162 +1995,18 @@ def revoke_pilot_access_command(
 
 @app.command("audit-pilot-access")
 def audit_pilot_access_command() -> None:
-    """Report only aggregate state and digests for grandfather access."""
+    """Report aggregate base, amendment, revocation, and rebind integrity."""
 
-    import hashlib
-    import hmac
-
-    from app.services.clerk_cohort import (
-        ClerkCohortError,
-        ClerkCohortIdentity,
-        canonical_clerk_email_pair_sha256,
-    )
-    from app.services.pilot_access_grandfather import (
-        GrandfatherGrantInput,
-        pilot_access_grant_plan_sha256,
-        required_pilot_access_grandfather_account_count,
-    )
-
-    from app.models.pilot_access_grandfather_grant import (
-        PilotAccessGrandfatherGrant,
-    )
+    from app.services.pilot_access_audit import audit_pilot_access_state
 
     try:
-        with global_session():
-            grants = cast(
-                list[PilotAccessGrandfatherGrant],
-                list(PilotAccessGrandfatherGrant.all()),
-            )
-        active_count = sum(grant.revoked_at is None for grant in grants)
-        revoked_count = len(grants) - active_count
-        doctor_snapshot_count = sum(
-            grant.doctor_id_snapshot is not None for grant in grants
-        )
-        integrity_error_count = sum(
-            not hmac.compare_digest(
-                grant.email_sha256,
-                hashlib.sha256(grant.email_snapshot.encode("utf-8")).hexdigest(),
-            )
-            for grant in grants
-        )
-        source_digests: dict[str, int] = {}
-        grant_plan_digests: dict[str, int] = {}
-        revocation_plan_digests: dict[str, int] = {}
-        for grant in grants:
-            source_digests[grant.source_sha256] = (
-                source_digests.get(grant.source_sha256, 0) + 1
-            )
-            grant_plan_digests[grant.grant_plan_sha256] = (
-                grant_plan_digests.get(grant.grant_plan_sha256, 0) + 1
-            )
-            if grant.revocation_plan_sha256:
-                revocation_plan_digests[grant.revocation_plan_sha256] = (
-                    revocation_plan_digests.get(grant.revocation_plan_sha256, 0) + 1
-                )
-        try:
-            canonical_source_sha256 = canonical_clerk_email_pair_sha256(
-                tuple(
-                    ClerkCohortIdentity(
-                        clerk_id=grant.clerk_id,
-                        email=grant.email_snapshot,
-                    )
-                    for grant in grants
-                )
-            )
-        except ClerkCohortError:
-            canonical_source_sha256 = None
+        report = audit_pilot_access_state()
     except Exception:
         raise typer.BadParameter(
             "pilot access audit failed; no identities were printed"
         ) from None
-
-    source_digest_matches = bool(
-        canonical_source_sha256
-        and len(source_digests) == 1
-        and next(iter(source_digests)) == canonical_source_sha256
-        and next(iter(source_digests.values())) == len(grants)
-    )
-    source_refs = {grant.source_ref for grant in grants}
-    operator_refs = {grant.granted_by_ref for grant in grants}
-    grant_reasons = {grant.grant_reason for grant in grants}
-    recomputed_plan_sha256: str | None = None
-    if (
-        len(source_refs) == 1
-        and len(source_digests) == 1
-        and len(operator_refs) == 1
-        and len(grant_reasons) == 1
-    ):
-        try:
-            recomputed_plan_sha256 = pilot_access_grant_plan_sha256(
-                [
-                    GrandfatherGrantInput(
-                        clerk_id=grant.clerk_id,
-                        email=grant.email_snapshot,
-                    )
-                    for grant in grants
-                ],
-                source_ref=next(iter(source_refs)),
-                source_sha256=next(iter(source_digests)),
-                operator_ref=next(iter(operator_refs)),
-                reason=next(iter(grant_reasons)),
-            )
-        except Exception:
-            recomputed_plan_sha256 = None
-    plan_digest_matches = bool(
-        recomputed_plan_sha256
-        and len(grant_plan_digests) == 1
-        and next(iter(grant_plan_digests.values())) == len(grants)
-        and hmac.compare_digest(
-            next(iter(grant_plan_digests)),
-            recomputed_plan_sha256,
-        )
-    )
-    cohort_integrity_valid = bool(
-        len(grants) == required_pilot_access_grandfather_account_count()
-        and integrity_error_count == 0
-        and source_digest_matches
-        and plan_digest_matches
-    )
-    if not grants:
-        lifecycle_state = "empty"
-    elif not cohort_integrity_valid:
-        lifecycle_state = "invalid"
-    elif active_count and revoked_count:
-        lifecycle_state = "mixed"
-    elif active_count:
-        lifecycle_state = "active"
-    else:
-        lifecycle_state = "revoked"
-    typer.echo(
-        json.dumps(
-            {
-                "active_count": active_count,
-                "canonical_source_sha256": canonical_source_sha256,
-                "cohort_integrity_valid": cohort_integrity_valid,
-                "doctor_snapshot_count": doctor_snapshot_count,
-                "grant_plan_digests": [
-                    {"count": count, "sha256": digest}
-                    for digest, count in sorted(grant_plan_digests.items())
-                ],
-                "integrity_error_count": integrity_error_count,
-                "prelogin_snapshot_count": len(grants) - doctor_snapshot_count,
-                "revocation_plan_digests": [
-                    {"count": count, "sha256": digest}
-                    for digest, count in sorted(revocation_plan_digests.items())
-                ],
-                "revoked_count": revoked_count,
-                "source_digests": [
-                    {"count": count, "sha256": digest}
-                    for digest, count in sorted(source_digests.items())
-                ],
-                "state": lifecycle_state,
-                "total_count": len(grants),
-            },
-            separators=(",", ":"),
-            sort_keys=True,
-        )
-    )
-    if not cohort_integrity_valid:
+    typer.echo(json.dumps(report.payload, separators=(",", ":"), sort_keys=True))
+    if not report.valid:
         raise typer.Exit(code=1)
 
 
@@ -1985,6 +2243,204 @@ def revoke_organization_roster_access_command(
             f"retain_until={result.retain_until.isoformat()} "
             f"audit={result.audit.id}; no clinical or content records were deleted."
         )
+
+
+@app.command("grant-superadmin-capabilities")
+def grant_superadmin_capabilities_command(
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Owner-only mode-0600 JSON manifest. Omit to enter one account's "
+            "identity fields in hidden prompts."
+        ),
+    ),
+    source_ref: str = typer.Option(
+        ...,
+        help="Opaque controlled-manifest reference; never enter an email or name.",
+    ),
+    operator_ref: str = typer.Option(
+        ...,
+        help="Opaque operator/ticket reference; never enter an email or name.",
+    ),
+    reason_code: str = typer.Option(
+        ...,
+        help="Non-sensitive lowercase audit reason code.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by the dry run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the reviewed plan."),
+) -> None:
+    """Grant exact identity-bound capabilities; dry-run by default."""
+
+    from app.services.superadmin_capability import (
+        grant_superadmin_capabilities,
+        plan_superadmin_capability_grants,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    try:
+        private_manifest = _superadmin_capability_manifest_from_input(manifest)
+        plan = plan_superadmin_capability_grants(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+        )
+        if not apply:
+            state = "already_applied" if plan.already_applied else "deployable"
+            typer.echo(
+                "DRY RUN: superadmin capability grant "
+                f"state={state} environment={private_manifest.environment.value} "
+                f"accounts={plan.account_count} capabilities={plan.capability_count} "
+                f"platform_admin={plan.platform_admin_count} "
+                f"view_as={plan.view_as_count} "
+                f"already_applied={plan.already_applied_count} "
+                f"source_sha256={plan.source_sha256} "
+                f"plan_sha256={plan.plan_sha256}."
+            )
+            return
+        result = grant_superadmin_capabilities(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"superadmin capability grant {outcome}; verify aggregate database "
+            "state; no identities were printed"
+        ) from None
+    state = "already_applied" if result.created_count == 0 else "applied"
+    typer.echo(
+        "Superadmin capability grant "
+        f"state={state} capabilities={result.capability_count} "
+        f"created={result.created_count} unchanged={result.unchanged_count} "
+        f"source_sha256={result.source_sha256} "
+        f"plan_sha256={result.plan_sha256}."
+    )
+
+
+@app.command("revoke-superadmin-capabilities")
+def revoke_superadmin_capabilities_command(
+    manifest: Path | None = typer.Option(
+        None,
+        "--manifest",
+        help=(
+            "Owner-only mode-0600 JSON manifest. Omit to enter one account's "
+            "identity fields in hidden prompts."
+        ),
+    ),
+    source_ref: str = typer.Option(
+        ...,
+        help="Opaque controlled-manifest reference; never enter an email or name.",
+    ),
+    operator_ref: str = typer.Option(
+        ...,
+        help="Opaque operator/ticket reference; never enter an email or name.",
+    ),
+    reason_code: str = typer.Option(
+        ...,
+        help="Non-sensitive lowercase audit reason code.",
+    ),
+    confirm_plan_sha256: str | None = typer.Option(
+        None,
+        "--confirm-plan-sha256",
+        help="Exact digest printed by the dry run; required with --apply.",
+    ),
+    apply: bool = typer.Option(False, "--apply", help="Apply the revocation."),
+) -> None:
+    """Revoke exact capabilities without depending on Clerk availability."""
+
+    from app.services.superadmin_capability import (
+        plan_superadmin_capability_revocations,
+        revoke_superadmin_capabilities,
+    )
+
+    if apply and not confirm_plan_sha256:
+        raise typer.BadParameter("--apply requires --confirm-plan-sha256")
+    try:
+        private_manifest = _superadmin_capability_manifest_from_input(manifest)
+        plan = plan_superadmin_capability_revocations(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+        )
+        if not apply:
+            state = "already_revoked" if plan.already_applied else "revocable"
+            typer.echo(
+                "DRY RUN: superadmin capability revocation "
+                f"state={state} environment={private_manifest.environment.value} "
+                f"accounts={plan.account_count} capabilities={plan.capability_count} "
+                f"platform_admin={plan.platform_admin_count} "
+                f"view_as={plan.view_as_count} "
+                f"already_revoked={plan.already_applied_count} "
+                f"source_sha256={plan.source_sha256} "
+                f"plan_sha256={plan.plan_sha256}."
+            )
+            return
+        result = revoke_superadmin_capabilities(
+            private_manifest,
+            source_ref=source_ref,
+            operator_ref=operator_ref,
+            reason_code=reason_code,
+            confirm_plan_sha256=cast(str, confirm_plan_sha256),
+        )
+    except Exception:
+        outcome = "outcome is ambiguous" if apply else "validation failed"
+        raise typer.BadParameter(
+            f"superadmin capability revocation {outcome}; verify aggregate "
+            "database state; no identities were printed"
+        ) from None
+    state = "already_revoked" if result.revoked_count == 0 else "revoked"
+    typer.echo(
+        "Superadmin capability revocation "
+        f"state={state} capabilities={result.capability_count} "
+        f"revoked={result.revoked_count} unchanged={result.unchanged_count} "
+        f"source_sha256={result.source_sha256} "
+        f"plan_sha256={result.plan_sha256}; no records were deleted."
+    )
+
+
+@app.command("list-superadmin-capabilities")
+def list_superadmin_capabilities_command() -> None:
+    """Print only aggregate capability counts and a pseudonymous digest."""
+
+    from app.services.superadmin_capability import (
+        configured_superadmin_capability_environment,
+        list_superadmin_capability_summary,
+    )
+
+    try:
+        summary = list_superadmin_capability_summary(
+            configured_superadmin_capability_environment()
+        )
+    except Exception:
+        raise typer.BadParameter(
+            "superadmin capability listing failed; no identities were printed"
+        ) from None
+    typer.echo(
+        json.dumps(
+            {
+                "active_binding_sha256": summary.active_binding_sha256,
+                "active_count": summary.active_count,
+                "audit_count": summary.audit_count,
+                "environment": summary.environment.value,
+                "platform_admin_active_count": (summary.platform_admin_active_count),
+                "revoked_count": summary.revoked_count,
+                "total_count": summary.total_count,
+                "view_as_active_count": summary.view_as_active_count,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 @app.command("restore-visit-note-version")

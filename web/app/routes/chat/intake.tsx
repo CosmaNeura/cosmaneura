@@ -36,7 +36,12 @@ export async function clientLoader(loaderArgs: Route.ClientLoaderArgs) {
     throw new Response("Intake ID is required", { status: 400 })
   }
 
-  const response = await fetch(chatEndpoint(intakeId))
+  const response = await fetch(chatEndpoint(intakeId), {
+    // The chat UI is served from a sibling origin. Include the signed platform
+    // session when one exists so the server can enforce active view-as state;
+    // ordinary patient browsers simply send no platform session cookie.
+    credentials: "include",
+  })
 
   if (!response.ok) {
     throw new Response(`Failed to load intake data: ${response.statusText}`, {

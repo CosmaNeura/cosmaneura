@@ -8,7 +8,7 @@ from fastapi import Request, status
 from fastapi.testclient import TestClient
 
 import app.services.authority as authority_service
-from app.routes.dependencies.login_as import login_as
+from app.routes.dependencies.view_as import apply_view_as
 from app.server import api_app
 from app.services.ehr_sandbox_record_mapping import (
     designate_athena_preview_patient,
@@ -236,7 +236,7 @@ def test_open_record_fails_closed_for_noncanonical_grant_key(
     assert RECORD_REF not in response.text
 
 
-def test_open_record_refuses_admin_login_as_as_an_ehr_authority(
+def test_open_record_refuses_view_as_as_an_ehr_authority(
     authenticated_client: TestClient,
 ):
     target = Doctor(
@@ -244,8 +244,8 @@ def test_open_record_refuses_admin_login_as_as_an_ehr_authority(
         email="ehr-preview-impersonated@example.test",
         biography=None,
     ).save()
-    # give the impersonated doctor a practice that passes the gate: this test
-    # is about EHR authority under login_as, not the practice gate
+    # Give the selected doctor a practice that passes the gate: this test is
+    # about EHR authority under view-as, not the practice gate.
     provision_practice_in_force(target)
     patient = Patient(
         doctor_id=target.id,
@@ -260,14 +260,16 @@ def test_open_record_refuses_admin_login_as_as_an_ehr_authority(
     ).save()
     _provision(target, patient)
 
-    def force_login_as(request: Request) -> None:
+    def force_view_as(request: Request) -> None:
+        request.state.view_as_actor = request.state.doctor
+        request.state.view_as = object()
         request.state.doctor = target
 
-    api_app.dependency_overrides[login_as] = force_login_as
+    api_app.dependency_overrides[apply_view_as] = force_view_as
     try:
         response = authenticated_client.get(_url(appointment))
     finally:
-        del api_app.dependency_overrides[login_as]
+        del api_app.dependency_overrides[apply_view_as]
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert RECORD_REF not in response.text

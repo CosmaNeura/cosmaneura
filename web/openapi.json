@@ -5,77 +5,6 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/internal/v1/admin/users": {
-      "get": {
-        "tags": [
-          "private"
-        ],
-        "summary": "User List",
-        "operationId": "user_list",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserListResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ]
-      }
-    },
-    "/internal/v1/admin/login_as/{user_id}": {
-      "post": {
-        "tags": [
-          "private"
-        ],
-        "summary": "Login As User",
-        "operationId": "login_as_user",
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "parameters": [
-          {
-            "name": "user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "User Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/internal/v1/admin/usage": {
       "get": {
         "tags": [
@@ -148,6 +77,134 @@
             }
           }
         }
+      }
+    },
+    "/internal/v1/view-as/status": {
+      "get": {
+        "tags": [
+          "private",
+          "view-as"
+        ],
+        "summary": "View As Status",
+        "operationId": "view_as_status",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewAsStatusResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/view-as/targets": {
+      "get": {
+        "tags": [
+          "private",
+          "view-as"
+        ],
+        "summary": "View As Targets",
+        "operationId": "view_as_targets",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewAsTargetListResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/view-as/sessions": {
+      "post": {
+        "tags": [
+          "private",
+          "view-as"
+        ],
+        "summary": "Begin View As",
+        "operationId": "begin_view_as",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BeginViewAsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewAsStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/view-as/sessions/current": {
+      "delete": {
+        "tags": [
+          "private",
+          "view-as"
+        ],
+        "summary": "End View As",
+        "operationId": "end_view_as",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ViewAsStatusResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/internal/v1/intake": {
@@ -399,14 +456,33 @@
         ],
         "summary": "Generate Signed Visit Recording Upload Url",
         "operationId": "generate_signed_visit_recording_upload_url",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClinicalUploadGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "string",
-                  "title": "Response Generate Signed Visit Recording Upload Url Internal V1 Visit Audio File Get Signed Url Post"
+                  "$ref": "#/components/schemas/ClinicalUploadGrant"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -483,6 +559,7 @@
             }
           }
         },
+        "deprecated": true,
         "security": [
           {
             "HTTPBearer": []
@@ -497,6 +574,7 @@
         ],
         "summary": "Upload Example Note",
         "operationId": "upload_example_note",
+        "deprecated": true,
         "security": [
           {
             "HTTPBearer": []
@@ -542,6 +620,76 @@
             }
           }
         }
+      }
+    },
+    "/internal/v1/notes/v2/get-signed-url": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Generate Signed Example Note Upload Url V2",
+        "operationId": "generate_signed_example_note_upload_url_v2",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExampleNoteUploadGrant"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/notes/v2/upload-example": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Upload Example Note V2",
+        "operationId": "upload_example_note_v2",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExampleNoteUploadRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/internal/v1/settings": {
@@ -818,7 +966,7 @@
           "private"
         ],
         "summary": "Organization Access Opportunity",
-        "description": "Return an exact-roster opportunity without disclosing its access code.",
+        "description": "Return sanitized managed routing state without disclosing authority.",
         "operationId": "organization_access_opportunity",
         "responses": {
           "200": {
@@ -828,7 +976,7 @@
                 "schema": {
                   "anyOf": [
                     {
-                      "$ref": "#/components/schemas/OrganizationAccessOpportunityResponse"
+                      "$ref": "#/components/schemas/ManagedOrganizationAccessResponse"
                     },
                     {
                       "type": "null"
@@ -1788,14 +1936,33 @@
         ],
         "summary": "Generate Signed Lab Upload Url",
         "operationId": "generate_signed_lab_upload_url",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClinicalUploadGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "string",
-                  "title": "Response Generate Signed Lab Upload Url Internal V1 Lab Panels Get Signed Url Post"
+                  "$ref": "#/components/schemas/ClinicalUploadGrant"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -2459,6 +2626,20 @@
         ],
         "title": "BaaDocument"
       },
+      "BeginViewAsBody": {
+        "properties": {
+          "target_doctor_id": {
+            "type": "string",
+            "title": "Target Doctor Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "target_doctor_id"
+        ],
+        "title": "BeginViewAsBody"
+      },
       "BillingCheckoutBody": {
         "properties": {
           "success_path": {
@@ -2520,6 +2701,52 @@
           "access_code"
         ],
         "title": "ClaimOrganizationAccessBody"
+      },
+      "ClinicalUploadGrant": {
+        "properties": {
+          "upload_url": {
+            "type": "string",
+            "title": "Upload Url"
+          },
+          "registration_token": {
+            "type": "string",
+            "title": "Registration Token"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "upload_url",
+          "registration_token",
+          "content_type"
+        ],
+        "title": "ClinicalUploadGrant"
+      },
+      "ClinicalUploadGrantRequest": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "File Name"
+          },
+          "file_size": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "File Size"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file_name",
+          "file_size"
+        ],
+        "title": "ClinicalUploadGrantRequest"
       },
       "ConfidenceBand": {
         "type": "string",
@@ -3083,6 +3310,47 @@
         "title": "EngagementRole",
         "description": "A communication-role estimate for one visit transcript (engagement engine v2).\n\nReads the patient's *enacted* communication style from the visit transcript and\nmaps it to a Control Preferences Scale role (Self-Directed / Collaborative /\nDirected). This is a decision-support communication aid, NOT a diagnosis or a\npersonality assessment. One row per scored transcript."
       },
+      "ExampleNoteUploadGrant": {
+        "properties": {
+          "upload_url": {
+            "type": "string",
+            "title": "Upload Url"
+          },
+          "registration_token": {
+            "type": "string",
+            "title": "Registration Token"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "upload_url",
+          "registration_token"
+        ],
+        "title": "ExampleNoteUploadGrant"
+      },
+      "ExampleNoteUploadRegistration": {
+        "properties": {
+          "registration_token": {
+            "type": "string",
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Registration Token"
+          },
+          "note_type": {
+            "type": "string",
+            "title": "Note Type"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "registration_token",
+          "note_type"
+        ],
+        "title": "ExampleNoteUploadRegistration"
+      },
       "ExternalIntakeData": {
         "properties": {
           "reason_for_visit": {
@@ -3144,16 +3412,50 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
-      "Intake": {
+      "IntakeDetail": {
+        "properties": {
+          "appointment": {
+            "$ref": "#/components/schemas/Appointment"
+          },
+          "intake": {
+            "$ref": "#/components/schemas/IntakeDetailIntake"
+          },
+          "patient": {
+            "$ref": "#/components/schemas/Patient"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "appointment",
+          "intake",
+          "patient"
+        ],
+        "title": "IntakeDetail"
+      },
+      "IntakeDetailIntake": {
         "properties": {
           "id": {
-            "type": "string",
-            "title": "Id",
-            "description": "TypeID with prefix: intake"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
           },
           "deleted_at": {
-            "type": "string",
-            "format": "date-time",
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Deleted At"
           },
           "created_at": {
@@ -3193,8 +3495,7 @@
               "type": "string"
             },
             "type": "object",
-            "title": "External Intake Data",
-            "description": "arbitrary blob of data from an external system representing any other intake data that has been collected"
+            "title": "External Intake Data"
           },
           "cleaned_external_intake_data": {
             "anyOf": [
@@ -3204,16 +3505,14 @@
               {
                 "type": "null"
               }
-            ],
-            "description": "data from an external intake system that has been cleaned and normalized"
+            ]
           },
           "intake_questions": {
             "items": {
               "$ref": "#/components/schemas/IntakeSchemaQuestion"
             },
             "type": "array",
-            "title": "Intake Questions",
-            "description": "list of questions extracted from the intake schema when this intake URL was generated"
+            "title": "Intake Questions"
           },
           "summary": {
             "anyOf": [
@@ -3224,50 +3523,36 @@
                 "type": "null"
               }
             ],
-            "title": "Summary",
-            "description": "AI generated summary of all intake information"
+            "title": "Summary"
           },
           "public_url": {
-            "type": "string",
-            "maxLength": 2083,
-            "minLength": 1,
-            "format": "uri",
-            "title": "Public Url",
-            "readOnly": true
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "doctor_id",
-          "appointment_id",
-          "external_intake_data",
-          "intake_questions",
-          "public_url"
-        ],
-        "title": "Intake",
-        "description": "This represents a chat experience with a patient to gather information about them."
-      },
-      "IntakeDetail": {
-        "properties": {
-          "appointment": {
-            "$ref": "#/components/schemas/Appointment"
-          },
-          "intake": {
-            "$ref": "#/components/schemas/Intake"
-          },
-          "patient": {
-            "$ref": "#/components/schemas/Patient"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Public Url"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "appointment",
-          "intake",
-          "patient"
+          "id",
+          "deleted_at",
+          "created_at",
+          "updated_at",
+          "doctor_id",
+          "appointment_id",
+          "external_intake_data",
+          "cleaned_external_intake_data",
+          "intake_questions",
+          "summary",
+          "public_url"
         ],
-        "title": "IntakeDetail"
+        "title": "IntakeDetailIntake"
       },
       "IntakeList": {
         "properties": {
@@ -3760,9 +4045,12 @@
       },
       "LabUploadComplete": {
         "properties": {
-          "file_name": {
+          "registration_token": {
             "type": "string",
-            "title": "File Name"
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Registration Token"
           },
           "collected_on": {
             "anyOf": [
@@ -3779,9 +4067,46 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "file_name"
+          "registration_token"
         ],
         "title": "LabUploadComplete"
+      },
+      "ManagedOrganizationAccessResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "claim",
+              "pending",
+              "support"
+            ],
+            "title": "State"
+          },
+          "organization_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Organization Name"
+          },
+          "email_domain": {
+            "type": "string",
+            "title": "Email Domain"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "state",
+          "organization_name",
+          "email_domain"
+        ],
+        "title": "ManagedOrganizationAccessResponse"
       },
       "ManualLabResult": {
         "properties": {
@@ -4218,25 +4543,6 @@
         ],
         "title": "OpenSandboxRecord",
         "description": "Opaque, short-lived record grant; never a vendor patient identifier."
-      },
-      "OrganizationAccessOpportunityResponse": {
-        "properties": {
-          "organization_name": {
-            "type": "string",
-            "title": "Organization Name"
-          },
-          "email_domain": {
-            "type": "string",
-            "title": "Email Domain"
-          }
-        },
-        "additionalProperties": false,
-        "type": "object",
-        "required": [
-          "organization_name",
-          "email_domain"
-        ],
-        "title": "OrganizationAccessOpportunityResponse"
       },
       "Patient": {
         "properties": {
@@ -4746,6 +5052,10 @@
             "type": "boolean",
             "title": "Practice Ready"
           },
+          "billing_recovery_required": {
+            "type": "boolean",
+            "title": "Billing Recovery Required"
+          },
           "is_admin": {
             "type": "boolean",
             "title": "Is Admin"
@@ -4776,6 +5086,7 @@
           "email",
           "onboarding_completed",
           "practice_ready",
+          "billing_recovery_required",
           "is_admin",
           "note_customizations",
           "has_natmed_subscription",
@@ -5165,63 +5476,6 @@
         ],
         "title": "UsageResponse"
       },
-      "UserListResponse": {
-        "properties": {
-          "current_user": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/UserSwitchData"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "users": {
-            "items": {
-              "$ref": "#/components/schemas/UserSwitchData"
-            },
-            "type": "array",
-            "title": "Users"
-          }
-        },
-        "type": "object",
-        "required": [
-          "current_user",
-          "users"
-        ],
-        "title": "UserListResponse"
-      },
-      "UserSwitchData": {
-        "properties": {
-          "clerk_id": {
-            "type": "string",
-            "title": "Clerk Id"
-          },
-          "id": {
-            "type": "string",
-            "title": "Id"
-          },
-          "email": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Email"
-          }
-        },
-        "type": "object",
-        "required": [
-          "clerk_id",
-          "id",
-          "email"
-        ],
-        "title": "UserSwitchData"
-      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -5255,11 +5509,171 @@
         ],
         "title": "ValidationError"
       },
+      "ViewAsAccountSummary": {
+        "properties": {
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doctor_id",
+          "email"
+        ],
+        "title": "ViewAsAccountSummary"
+      },
+      "ViewAsStatusResponse": {
+        "properties": {
+          "can_view_as": {
+            "type": "boolean",
+            "title": "Can View As"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "read_only": {
+            "type": "boolean",
+            "title": "Read Only"
+          },
+          "diagnostic_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnostic Code"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "actor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewAsAccountSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "target": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ViewAsAccountSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "request_binding": {
+            "type": "string",
+            "title": "Request Binding"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "can_view_as",
+          "active",
+          "read_only",
+          "diagnostic_code",
+          "expires_at",
+          "actor",
+          "target",
+          "request_binding"
+        ],
+        "title": "ViewAsStatusResponse"
+      },
+      "ViewAsTargetListResponse": {
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/ViewAsTargetSummary"
+            },
+            "type": "array",
+            "title": "Targets"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "targets"
+        ],
+        "title": "ViewAsTargetListResponse"
+      },
+      "ViewAsTargetSummary": {
+        "properties": {
+          "doctor_id": {
+            "type": "string",
+            "title": "Doctor Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "diagnostic_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Diagnostic Code"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "doctor_id",
+          "email",
+          "diagnostic_code"
+        ],
+        "title": "ViewAsTargetSummary"
+      },
       "VisitAudioUploadRequest": {
         "properties": {
-          "file_name": {
+          "registration_token": {
             "type": "string",
-            "title": "File Name"
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "title": "Registration Token"
           },
           "appointment_date": {
             "type": "string",
@@ -5276,9 +5690,10 @@
             "title": "Date Of Birth"
           }
         },
+        "additionalProperties": false,
         "type": "object",
         "required": [
-          "file_name",
+          "registration_token",
           "appointment_date",
           "patient_name",
           "date_of_birth"
@@ -5323,7 +5738,14 @@
             "title": "Duration"
           },
           "join_url": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Join Url"
           },
           "status": {

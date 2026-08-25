@@ -149,18 +149,26 @@ def _actor_for_clerk_identity(
     session: Session,
     issuer: str,
     subject: str,
+    *,
+    lock_for_update: bool = False,
 ) -> tuple[AuthorityActor, AuthorityActorExternalIdentity]:
-    identity = session.exec(
-        select(AuthorityActorExternalIdentity).where(
-            AuthorityActorExternalIdentity.issuer == issuer,
-            AuthorityActorExternalIdentity.subject == subject,
-            cast(Any, AuthorityActorExternalIdentity.revoked_at).is_(None),
-        )
-    ).first()
+    identity_statement = select(AuthorityActorExternalIdentity).where(
+        AuthorityActorExternalIdentity.issuer == issuer,
+        AuthorityActorExternalIdentity.subject == subject,
+        cast(Any, AuthorityActorExternalIdentity.revoked_at).is_(None),
+    )
+    if lock_for_update:
+        identity_statement = identity_statement.with_for_update()
+    identity = session.exec(identity_statement).first()
     if identity is None:
         raise AuthorityRequestDeniedError
 
-    actor = session.get(AuthorityActor, identity.actor_id)
+    actor_statement = select(AuthorityActor).where(
+        AuthorityActor.id == identity.actor_id
+    )
+    if lock_for_update:
+        actor_statement = actor_statement.with_for_update()
+    actor = session.exec(actor_statement).one_or_none()
     if actor is None or actor.status != "active" or actor.actor_kind != "human":
         raise AuthorityRequestDeniedError
     return actor, identity
@@ -416,6 +424,7 @@ def exchange_context_token(
         db,
         clerk_issuer,
         clerk_subject,
+        lock_for_update=True,
     )
     tenant_id, person_binding_id = _exchange_binding(
         db,
@@ -504,11 +513,12 @@ def _active_token(
     *,
     lock_for_update: bool = False,
 ) -> tuple[MountContextToken, MountContextSession]:
+    # Resolve without a token lock first. Actor-bound view-as state must always
+    # be locked before the token row so ``begin_view_as`` and every Agent API
+    # path share one lock order.
     statement = select(MountContextToken).where(
         MountContextToken.token_hash == _token_hash(plaintext)
     )
-    if lock_for_update:
-        statement = statement.with_for_update()
     token = session.exec(statement).first()
     if token is None or token.revoked_at is not None:
         raise ContextTokenInvalidError
@@ -532,6 +542,49 @@ def _active_token(
         absolute_now = absolute_now.replace(tzinfo=None)
     if absolute_expires_at <= absolute_now:
         raise ContextTokenExpiredError
+
+    # Local import avoids coupling the authority model layer to the Platform's
+    # support UI at module import time. The helper locks Doctor -> ViewAsSession
+    # and retains the actor lock through this request transaction, preventing a
+    # pre-issued token from racing a new support session.
+    from app.services.view_as import mount_context_session_blocked_by_view_as
+
+    if mount_context_session_blocked_by_view_as(
+        session,
+        mount_session=mount_session,
+    ):
+        raise AuthorityRequestDeniedError
+
+    if lock_for_update:
+        token = session.exec(
+            select(MountContextToken)
+            .where(MountContextToken.token_hash == _token_hash(plaintext))
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).first()
+        if token is None or token.revoked_at is not None:
+            raise ContextTokenInvalidError
+        locked_now = datetime.now(UTC)
+        if token.expires_at.tzinfo is None:
+            locked_now = locked_now.replace(tzinfo=None)
+        if token.expires_at <= locked_now:
+            raise ContextTokenExpiredError
+        mount_session = session.exec(
+            select(MountContextSession)
+            .where(MountContextSession.id == token.session_id)
+            .execution_options(populate_existing=True)
+        ).first()
+        if (
+            mount_session is None
+            or mount_session.status != "active"
+            or mount_session.revoked_at is not None
+        ):
+            raise ContextTokenInvalidError
+        locked_absolute_now = datetime.now(UTC)
+        if mount_session.absolute_expires_at.tzinfo is None:
+            locked_absolute_now = locked_absolute_now.replace(tzinfo=None)
+        if mount_session.absolute_expires_at <= locked_absolute_now:
+            raise ContextTokenExpiredError
     return token, mount_session
 
 
@@ -750,18 +803,19 @@ def authorize_observational_reporting(
     """
 
     _ensure_enabled(settings)
+    # First discover the immutable mount binding without row locks. View-as
+    # then takes Doctor -> ViewAsSession locks before this reporting write takes
+    # its lineage/session locks, keeping the global ordering consistent.
     lineage = session.exec(
-        select(InteractionLineage)
-        .where(InteractionLineage.interaction_ref == interaction_ref)
-        .with_for_update()
+        select(InteractionLineage).where(
+            InteractionLineage.interaction_ref == interaction_ref
+        )
     ).first()
     if lineage is None or lineage.workload_client_id != workload_client_id:
         raise InteractionInvalidError
 
     mount_session = session.exec(
-        select(MountContextSession)
-        .where(MountContextSession.id == lineage.session_id)
-        .with_for_update()
+        select(MountContextSession).where(MountContextSession.id == lineage.session_id)
     ).first()
     if (
         mount_session is None
@@ -770,17 +824,56 @@ def authorize_observational_reporting(
     ):
         raise InteractionInvalidError
 
+    from app.services.view_as import mount_context_session_blocked_by_view_as
+
+    if mount_context_session_blocked_by_view_as(
+        session,
+        mount_session=mount_session,
+    ):
+        raise AuthorityRequestDeniedError
+
+    # Match the interaction-write order: actor/view-as (above), optional token,
+    # lineage, then mount session. Acquiring the token after the lineage could
+    # deadlock with ``authorize_interaction`` on concurrent writes.
+    token = None
     if mount_context_token is not None:
         token = session.exec(
-            select(MountContextToken).where(
-                MountContextToken.token_hash == _token_hash(mount_context_token)
-            )
+            select(MountContextToken)
+            .where(MountContextToken.token_hash == _token_hash(mount_context_token))
+            .with_for_update()
+            .execution_options(populate_existing=True)
         ).first()
         if (
             token is None
             or token.revoked_at is not None
             or token.session_id != mount_session.id
         ):
+            raise ContextTokenInvalidError
+
+    lineage = session.exec(
+        select(InteractionLineage)
+        .where(InteractionLineage.interaction_ref == interaction_ref)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).first()
+    if lineage is None or lineage.workload_client_id != workload_client_id:
+        raise InteractionInvalidError
+
+    mount_session = session.exec(
+        select(MountContextSession)
+        .where(MountContextSession.id == lineage.session_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).first()
+    if (
+        mount_session is None
+        or mount_session.status != "active"
+        or mount_session.revoked_at is not None
+    ):
+        raise InteractionInvalidError
+
+    if token is not None:
+        if token.revoked_at is not None or token.session_id != mount_session.id:
             raise ContextTokenInvalidError
 
     context = _context_for_session(

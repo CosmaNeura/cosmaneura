@@ -5,6 +5,7 @@ import {
   Scripts,
   ScrollRestoration,
   isRouteErrorResponse,
+  useLocation,
 } from "react-router"
 import type { LinksFunction } from "react-router"
 
@@ -15,6 +16,11 @@ import { Loader2 } from "lucide-react"
 import type { Route } from "./+types/root"
 
 import { Toaster } from "@/components/ui/toaster"
+import {
+  ViewAsGlobalRouteGuard,
+  ViewAsProtectedErrorGuard,
+} from "~/components/ViewAsRouteGuard"
+import { isBillingRecoveryRedirectError } from "~/lib/billing-recovery"
 
 import "./app.css"
 import PageNotFound from "./components/shared/PageNotFound"
@@ -60,7 +66,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 function App() {
-  return <Outlet />
+  const { pathname } = useLocation()
+  return (
+    <ViewAsGlobalRouteGuard pathname={pathname}>
+      <Outlet />
+    </ViewAsGlobalRouteGuard>
+  )
 }
 
 export function HydrateFallback() {
@@ -77,13 +88,28 @@ export function HydrateFallback() {
 export default withProviders(App)
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
+  if (isBillingRecoveryRedirectError(error)) {
+    return (
+      <ViewAsProtectedErrorGuard>
+        <main className="container mx-auto p-4 pt-16" role="status">
+          <Loader2 className="text-primary h-6 w-6 animate-spin" />
+          <p className="mt-3">Redirecting to restore practice access…</p>
+        </main>
+      </ViewAsProtectedErrorGuard>
+    )
+  }
+
   let message = "Oops!"
   let details = "An unexpected error occurred."
   let stack: string | undefined
 
   if (isRouteErrorResponse(error)) {
     if (error.status === 404) {
-      return <PageNotFound />
+      return (
+        <ViewAsProtectedErrorGuard>
+          <PageNotFound />
+        </ViewAsProtectedErrorGuard>
+      )
     }
 
     message = "Error"
@@ -94,14 +120,16 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   }
 
   return (
-    <main className="container mx-auto p-4 pt-16">
-      <h1>{message}</h1>
-      <p>{details}</p>
-      {stack && (
-        <pre className="w-full overflow-x-auto p-4">
-          <code>{stack}</code>
-        </pre>
-      )}
-    </main>
+    <ViewAsProtectedErrorGuard>
+      <main className="container mx-auto p-4 pt-16">
+        <h1>{message}</h1>
+        <p>{details}</p>
+        {stack && (
+          <pre className="w-full overflow-x-auto p-4">
+            <code>{stack}</code>
+          </pre>
+        )}
+      </main>
+    </ViewAsProtectedErrorGuard>
   )
 }

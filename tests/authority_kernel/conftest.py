@@ -144,3 +144,19 @@ def authority_session() -> Iterator[Session]:
     SQLModel.metadata.create_all(engine, tables=_AUTHORITY_TABLES)
     with Session(engine, expire_on_commit=False) as session:
         yield session
+
+
+@pytest.fixture(autouse=True)
+def _platform_view_as_guard_is_outside_isolated_kernel(monkeypatch) -> None:
+    """Keep authority-only SQLite tests independent of Platform-owned tables.
+
+    The integrated PostgreSQL route/service suites exercise the real guard with
+    Doctor, capability, and ViewAsSession tables. This isolated kernel fixture
+    deliberately creates only authority tables, so its tests replace the
+    Platform integration seam with the ordinary no-view-as result.
+    """
+
+    monkeypatch.setattr(
+        "app.services.view_as.mount_context_session_blocked_by_view_as",
+        lambda _session, **_kwargs: False,
+    )

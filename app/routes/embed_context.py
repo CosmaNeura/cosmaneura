@@ -15,8 +15,17 @@ from app.configuration.authority import (
     AuthorityKernelSettings,
 )
 from app.configuration.clerk import CLERK_PRIVATE_KEY
+from app.services.superadmin_capability import (
+    SuperadminCapabilityError,
+    configured_superadmin_capability_environment,
+)
+from app.services.view_as import (
+    ViewAsError,
+    context_token_exchange_blocked_by_view_as,
+    context_token_rotation_blocked_by_view_as,
+)
 
-from activemodel.session_manager import aglobal_session
+from activemodel.session_manager import aglobal_session, get_session
 from sqlalchemy.exc import SQLAlchemyError
 
 from .authority_errors import (
@@ -24,6 +33,7 @@ from .authority_errors import (
     token_problem_response,
 )
 from .dependencies.clerk import AuthenticateClerkRequest
+from .dependencies.view_as import view_as_browser_session_present
 
 embed_context_api_app = APIRouter(
     prefix="/embed/v1/context-tokens",
@@ -67,6 +77,7 @@ class ContextTokenResponse(BaseModel):
 class VerifiedClerkIdentity:
     issuer: str
     subject: str
+    clerk_session_id: str
 
 
 def get_authority_kernel_settings() -> AuthorityKernelSettings:
@@ -103,17 +114,24 @@ def authenticate_embed_platform_session(
         ) from None
     subject = auth_state.payload.get("sub") if auth_state.payload else None
     issuer = auth_state.payload.get("iss") if auth_state.payload else None
+    clerk_session_id = auth_state.payload.get("sid") if auth_state.payload else None
     if (
         not isinstance(subject, str)
         or not subject
         or not isinstance(issuer, str)
         or not issuer
+        or not isinstance(clerk_session_id, str)
+        or not clerk_session_id
     ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="A verified platform session is required.",
         )
-    return VerifiedClerkIdentity(issuer=issuer, subject=subject)
+    return VerifiedClerkIdentity(
+        issuer=issuer,
+        subject=subject,
+        clerk_session_id=clerk_session_id,
+    )
 
 
 def _set_token_response_headers(response: Response) -> None:
@@ -158,6 +176,7 @@ def issue_anonymous_context_token(
 )
 def exchange_context_token(
     data: TokenIssueRequest,
+    request: Request,
     response: Response,
     clerk_identity: Annotated[
         VerifiedClerkIdentity,
@@ -169,13 +188,46 @@ def exchange_context_token(
     version: Annotated[str, Depends(require_embed_version)],
 ) -> ContextTokenResponse | JSONResponse:
     del version
+    if view_as_browser_session_present(request):
+        return token_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="REQUEST_DENIED",
+            title="Request denied",
+            detail="Provider context is unavailable during view-as.",
+            retryable=False,
+        )
     try:
+        if settings.enabled:
+            environment = configured_superadmin_capability_environment()
+            with get_session() as session:
+                if context_token_exchange_blocked_by_view_as(
+                    session,
+                    issuer=clerk_identity.issuer,
+                    subject=clerk_identity.subject,
+                    clerk_session_id=clerk_identity.clerk_session_id,
+                    environment=environment,
+                ):
+                    return token_problem_response(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        code="REQUEST_DENIED",
+                        title="Request denied",
+                        detail="Provider context is unavailable during view-as.",
+                        retryable=False,
+                    )
         result = app.services.authority.exchange_context_token(
             clerk_issuer=clerk_identity.issuer,
             clerk_subject=clerk_identity.subject,
             requested_surface=data.requested_surface,
             record_ref=data.record_ref,
             settings=settings,
+        )
+    except (SuperadminCapabilityError, ViewAsError):
+        return token_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="REQUEST_DENIED",
+            title="Request denied",
+            detail="The requested context cannot be issued.",
+            retryable=False,
         )
     except app.services.authority.AuthorityKernelDisabledError:
         return token_problem_response(
@@ -211,6 +263,7 @@ def exchange_context_token(
 )
 def rotate_context_token(
     data: TokenIssueRequest,
+    request: Request,
     response: Response,
     credentials: Annotated[
         HTTPAuthorizationCredentials | None,
@@ -222,6 +275,14 @@ def rotate_context_token(
     version: Annotated[str, Depends(require_embed_version)],
 ) -> ContextTokenResponse | JSONResponse:
     del version
+    if view_as_browser_session_present(request):
+        return token_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="REQUEST_DENIED",
+            title="Request denied",
+            detail="Provider context is unavailable during view-as.",
+            retryable=False,
+        )
     if credentials is None or credentials.scheme.lower() != "bearer":
         return token_problem_response(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -231,11 +292,34 @@ def rotate_context_token(
         )
 
     try:
+        if settings.enabled:
+            environment = configured_superadmin_capability_environment()
+            with get_session() as session:
+                if context_token_rotation_blocked_by_view_as(
+                    session,
+                    current_token=credentials.credentials,
+                    environment=environment,
+                ):
+                    return token_problem_response(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        code="REQUEST_DENIED",
+                        title="Request denied",
+                        detail="Provider context is unavailable during view-as.",
+                        retryable=False,
+                    )
         result = app.services.authority.rotate_context_token(
             current_token=credentials.credentials,
             requested_surface=data.requested_surface,
             record_ref=data.record_ref,
             settings=settings,
+        )
+    except (SuperadminCapabilityError, ViewAsError):
+        return token_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="REQUEST_DENIED",
+            title="Request denied",
+            detail="The requested context cannot be rotated.",
+            retryable=False,
         )
     except app.services.authority.AuthorityKernelDisabledError:
         return token_problem_response(

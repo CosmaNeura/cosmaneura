@@ -55,6 +55,8 @@ class ZoomIntegrationInvalid(Exception):
 
 
 def get_zoom_integration(doctor: Doctor) -> DoctorVideoIntegration | None:
+    if doctor.deleted_at is not None:
+        return None
     return DoctorVideoIntegration.get(doctor_id=doctor.id, provider=VideoProvider.zoom)
 
 

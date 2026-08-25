@@ -19,6 +19,48 @@ interface PosthogProviderProps {
   children: React.ReactNode
 }
 
+type BrowserLocation = Pick<Location, "hostname" | "pathname">
+type PosthogInitializer = Pick<typeof posthog, "init">
+
+export function isPublicIntakeLocation(
+  location: BrowserLocation,
+  intakeChatDomain: string,
+) {
+  const hostname = location.hostname.trim().toLowerCase().replace(/\.$/, "")
+  const configuredDomain = intakeChatDomain
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, "")
+  const pathname = location.pathname.replace(/\/+$/, "")
+
+  return (
+    hostname === configuredDomain ||
+    pathname === "/chat/intake" ||
+    pathname.startsWith("/chat/intake/")
+  )
+}
+
+export function initializePostHogForLocation(
+  location: BrowserLocation,
+  client: PosthogInitializer = posthog,
+) {
+  if (isPublicIntakeLocation(location, requireEnv("VITE_INTAKE_CHAT_DOMAIN"))) {
+    return undefined
+  }
+
+  return client.init(requireEnv("VITE_POSTHOG_KEY"), {
+    api_host: requireEnv("VITE_POSTHOG_HOST"),
+    person_profiles: "identified_only",
+
+    // The clinical platform uses explicit, reviewed analytics only. Automatic
+    // DOM, URL, and session capture can contain PHI or bearer credentials.
+    autocapture: false,
+    capture_pageview: false,
+    capture_pageleave: false,
+    disable_session_recording: true,
+  })
+}
+
 export function PostHogProvider({ children }: PosthogProviderProps) {
   const posthogInstanceRef = useRef<PosthogType>(undefined)
 
@@ -26,14 +68,9 @@ export function PostHogProvider({ children }: PosthogProviderProps) {
   // Note that in StrictMode, this will run twice.
   function getPosthogInstance() {
     if (posthogInstanceRef.current) return posthogInstanceRef.current
+    if (typeof window === "undefined") return undefined
 
-    posthogInstanceRef.current = posthog.init(requireEnv("VITE_POSTHOG_KEY"), {
-      api_host: requireEnv("VITE_POSTHOG_HOST"),
-      person_profiles: "identified_only",
-
-      // required for react-router
-      capture_pageview: false,
-    })
+    posthogInstanceRef.current = initializePostHogForLocation(window.location)
 
     return posthogInstanceRef.current
   }

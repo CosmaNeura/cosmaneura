@@ -28,6 +28,8 @@ class PracticeAccessAction(str, Enum):
     organization_roster_imported = "organization_roster_imported"
     organization_access_granted = "organization_access_granted"
     organization_access_revoked = "organization_access_revoked"
+    doctor_identity_rebound = "doctor_identity_rebound"
+    doctor_account_closed = "doctor_account_closed"
 
 
 class PracticeAccessAudit(

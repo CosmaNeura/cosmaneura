@@ -21,6 +21,18 @@ def perform(
     Handles processing a doctor uploading a visit audio file for an appointment
     """
 
+    # Registration can be retried if the API process loses its response after
+    # durable writes. The server-generated blob key is the idempotency key;
+    # never create a second patient/appointment/file for the same upload.
+    existing_file = VisitAudioFile.get(
+        doctor_id=doctor.id,
+        azure_file_name=file_name,
+    )
+    if existing_file is not None:
+        log.info("resuming registered audio upload", id=existing_file.id)
+        app.jobs.transcribe.queue(existing_file.id)
+        return
+
     # TODO wrap in transaction, needs to be added to activemodel
 
     # only care about the date, we want to optimize for matching

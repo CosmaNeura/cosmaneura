@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react"
 
 import { getClient } from "~/configuration/clerk"
+import { getViewAsStatus } from "~/lib/view-as-api"
 
 import {
   SOVEREIGN_PANEL_ASSET_PATH,
@@ -33,6 +34,7 @@ type PanelMountOptions = {
   getContext: () => Promise<PanelContext>
   onHumanContact: (action: HumanContactAction) => void | Promise<void>
   shiftContent: boolean
+  fabBottom?: string
 }
 
 type PanelInstance = {
@@ -66,13 +68,15 @@ type ViteEnvironment = Record<string, string | boolean | undefined>
 
 export type SovereignProviderConfig = {
   origin: string
-  clerkTemplate: string
-  platformAuthorityEnabled: boolean
 }
 
-const TEMPLATE_NAME = /^[A-Za-z0-9_-]{1,64}$/
 const EMBED_VERSION = "1.0" as const
 const HUMAN_CONTACT_ACTION_ID = "human-contact"
+const PROVIDER_V7_FAB_BOTTOM = "84px"
+const PROVIDER_V7_LAYER_STYLE = `
+.cnp-root > .cnp-rail { z-index: 100001 !important; }
+.cnp-root > .cnp-tip { z-index: 100002 !important; }
+`
 
 class MountContextUnauthorizedError extends Error {}
 
@@ -93,13 +97,11 @@ function requestedForceRefresh(request: AuthTokenRequest | undefined): boolean {
 export function resolveSovereignProviderConfig(
   environment: ViteEnvironment = import.meta.env,
 ): SovereignProviderConfig | null {
+  if (environment.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED !== "true") {
+    return null
+  }
   const configuredOrigin = environment.VITE_SOVEREIGN_PROVIDER_URL
-  const configuredTemplate = environment.VITE_SOVEREIGN_CLERK_TEMPLATE
-  if (
-    typeof configuredOrigin !== "string" ||
-    typeof configuredTemplate !== "string" ||
-    !TEMPLATE_NAME.test(configuredTemplate)
-  ) {
+  if (typeof configuredOrigin !== "string") {
     return null
   }
 
@@ -117,9 +119,6 @@ export function resolveSovereignProviderConfig(
     }
     return {
       origin: parsed.origin,
-      clerkTemplate: configuredTemplate,
-      platformAuthorityEnabled:
-        environment.VITE_SOVEREIGN_PLATFORM_AUTHORITY_ENABLED === "true",
     }
   } catch {
     return null
@@ -193,16 +192,6 @@ async function platformSessionToken(): Promise<string> {
   return token
 }
 
-async function sovereignProviderToken(template: string): Promise<string> {
-  const clerk = await getClient()
-  if (!clerk?.user || !clerk.session) {
-    throw new Error("Provider session unavailable")
-  }
-  const token = await clerk.session.getToken({ template })
-  if (!token) throw new Error("Provider assistant token unavailable")
-  return token
-}
-
 function parseMountContextCredential(
   value: unknown,
   now: number,
@@ -215,6 +204,7 @@ function parseMountContextCredential(
       "context_token,expires_at,issued_at,refresh_after,token_type" ||
     !("context_token" in value) ||
     typeof value.context_token !== "string" ||
+    !value.context_token.startsWith("mctx_") ||
     value.context_token.length < 16 ||
     value.context_token.length > 8192 ||
     /\s/.test(value.context_token) ||
@@ -410,20 +400,23 @@ export function SovereignPanelHost({
     if (!config) return
     let cancelled = false
     let mounted: PanelInstance | null = null
-    const mountTokenProvider = config.platformAuthorityEnabled
-      ? createProviderMountContextTokenProvider(appointmentId)
-      : null
+    const mountTokenProvider =
+      createProviderMountContextTokenProvider(appointmentId)
 
-    void loadPinnedPanel()
+    // Fail closed before loading the platform context-token path. A Clerk
+    // session token is accepted only by the same-origin exchange endpoint and
+    // is never handed to the embedded panel as a delegation credential.
+    void getViewAsStatus()
+      .then((viewAs) => {
+        if (cancelled || viewAs.active) return null
+        return loadPinnedPanel()
+      })
       .then(async (panel) => {
-        if (cancelled) return
+        if (cancelled || panel === null) return
         const candidate = panel.mount({
           sovereignUrl: config.origin,
           embedVersion: EMBED_VERSION,
-          getAuthToken: (request) =>
-            mountTokenProvider
-              ? mountTokenProvider.getToken(request)
-              : sovereignProviderToken(config.clerkTemplate),
+          getAuthToken: (request) => mountTokenProvider.getToken(request),
           getContext: async () => {
             if (cancelled) {
               throw new Error("Open record changed while context was resolving")
@@ -437,6 +430,8 @@ export function SovereignPanelHost({
           // loadHistory is deliberately omitted until the platform exposes the
           // governed HydratedHistory read operation.
           shiftContent: true,
+          // Keep the V7 launcher above the dashboard's existing support pill.
+          fabBottom: PROVIDER_V7_FAB_BOTTOM,
         })
         mounted = candidate
         const binding = await candidate.setRecord(appointmentId)
@@ -450,7 +445,7 @@ export function SovereignPanelHost({
         panelRef.current = candidate
       })
       .catch(() => {
-        mountTokenProvider?.discard()
+        mountTokenProvider.discard()
         const failed = mounted
         mounted = null
         if (panelRef.current === failed) panelRef.current = null
@@ -461,18 +456,15 @@ export function SovereignPanelHost({
 
     return () => {
       cancelled = true
-      mountTokenProvider?.discard()
+      mountTokenProvider.discard()
       panelRef.current = null
       const previous = mounted
       mounted = null
       if (previous) resetAndDestroy(previous)
     }
-  }, [
-    appointmentId,
-    config?.clerkTemplate,
-    config?.origin,
-    config?.platformAuthorityEnabled,
-  ])
+  }, [appointmentId, config?.origin])
 
-  return null
+  return config ? (
+    <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
+  ) : null
 }

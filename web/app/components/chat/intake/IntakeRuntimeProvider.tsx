@@ -26,12 +26,15 @@ interface IntakeResponse {
   status: string
 }
 
-const getNextQuestion = async (
+export const getNextQuestion = async (
   apiEndpoint: string,
   messageInput: string,
 ): Promise<IntakeResponse> => {
   const response = await fetch(apiEndpoint, {
     method: "POST",
+    // The chat UI is served from a sibling origin. Include the signed platform
+    // session when one exists so the server can reject writes during view-as.
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
     },

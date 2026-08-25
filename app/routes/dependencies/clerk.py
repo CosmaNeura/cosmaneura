@@ -72,7 +72,11 @@ class AuthenticateClerkRequest:
             log.warning("auth bypass active (PYTHON_ENV=test)", clerk_id=test_clerk_id)
             bypass_state = RequestState(
                 status=AuthStatus.SIGNED_IN,
-                payload={"iss": TEST_CLERK_ISSUER, "sub": test_clerk_id},
+                payload={
+                    "iss": TEST_CLERK_ISSUER,
+                    "sub": test_clerk_id,
+                    "sid": f"session_{test_clerk_id}",
+                },
             )
             request.state.auth_state = bypass_state
             return bypass_state

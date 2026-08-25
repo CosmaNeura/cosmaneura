@@ -1,3 +1,4 @@
+import { ViewAsProtectedErrorGuard } from "~/components/ViewAsRouteGuard"
 import {
   environmentName,
   isDevelopment,
@@ -7,6 +8,24 @@ import {
 } from "~/utils/environment"
 
 import * as Sentry from "@sentry/react"
+import {
+  scrubSentryBreadcrumb,
+  scrubSentryErrorEvent,
+  scrubSentrySpan,
+  scrubSentryTransaction,
+  shouldCreateSentryRequestSpan,
+} from "./sentry-privacy"
+
+function SentryFallback() {
+  return (
+    <ViewAsProtectedErrorGuard>
+      <main className="container mx-auto p-4 pt-16" role="alert">
+        <h1>Page unavailable</h1>
+        <p>An unexpected error occurred.</p>
+      </main>
+    </ViewAsProtectedErrorGuard>
+  )
+}
 
 if (isProduction()) {
   // TODO fix up react router when rr7 is supported https://docs.sentry.io/platforms/javascript/guides/react/features/react-router/
@@ -18,12 +37,15 @@ if (isProduction()) {
     release: requireEnv("VITE_BUILD_COMMIT"),
 
     integrations: [
-      Sentry.browserTracingIntegration(),
+      Sentry.browserTracingIntegration({
+        shouldCreateSpanForRequest: shouldCreateSentryRequestSpan,
+      }),
       // TODO(mbianco) we should add react-router 7 integration when it's available
-      // Replay is only available in the client
-      Sentry.replayIntegration(),
+      // Session Replay is intentionally disabled for the clinical app. Its
+      // rrweb envelope records URL/DOM data outside the beforeSend scrubbers.
       Sentry.feedbackIntegration({
         colorScheme: "system",
+        enableScreenshot: false,
         showBranding: false,
       }),
     ],
@@ -33,15 +55,21 @@ if (isProduction()) {
     // We recommend adjusting this value in production
     tracesSampleRate: 1.0,
 
+    // Azure upload URLs and public intake paths carry bearer credentials. Keep
+    // normal request telemetry, but prevent those credentials from entering
+    // any Sentry payload shape even if SDK instrumentation changes.
+    beforeBreadcrumb: scrubSentryBreadcrumb,
+    beforeSend: scrubSentryErrorEvent,
+    beforeSendSpan: scrubSentrySpan,
+    beforeSendTransaction: scrubSentryTransaction,
+
     // TODO(mbianco) pull domain from ENV, maybe using a python CLI to inject the domain?
     // TODO(mbianco) should pull localias as well
     // Set `tracePropagationTargets` to control for which URLs distributed tracing should be enabled
     // tracePropagationTargets: ["localhost", /^https:\/\/yourserver\.io\/api/],
 
-    // Capture Replay for 10% of all sessions,
-    // plus for 100% of sessions with an error
-    replaysSessionSampleRate: 0.1,
-    replaysOnErrorSampleRate: 1.0,
+    replaysSessionSampleRate: 0,
+    replaysOnErrorSampleRate: 0,
   })
 }
 
@@ -58,7 +86,6 @@ export default function withSentryProvider(Component: React.ComponentType) {
 
   return Sentry.withErrorBoundary(Component, {
     showDialog: true,
-    // TODO implement custom fallback for a nicer experience
-    fallback: <p>an error has occurred</p>,
+    fallback: <SentryFallback />,
   })
 }

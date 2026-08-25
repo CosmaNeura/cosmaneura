@@ -455,6 +455,8 @@ const DropZoneArea = forwardRef<HTMLDivElement, DropZoneAreaProps>(
         onDrop={onDrop}
         {...props}
         aria-label="dropzone"
+        data-ph-no-capture=""
+        data-sentry-block=""
         className={cn(
           "flex items-center justify-center rounded-md border border-input bg-background px-4 py-2 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
           context.isDragActive && "animate-pulse bg-black/5",
@@ -759,6 +761,8 @@ const DropzoneTrigger = forwardRef<HTMLLabelElement, DropzoneTriggerProps>(
               display: undefined,
             },
             className: "sr-only",
+            "data-ph-no-capture": "",
+            "data-sentry-block": "",
             tabIndex: undefined,
           })}
           aria-describedby={

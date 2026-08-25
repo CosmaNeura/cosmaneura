@@ -77,7 +77,19 @@ function makeTestClerkClient(userId: string): ClerkClient {
 // each fire their own `clerk.load()`, producing 5x /v1/environment + 5x
 // /v1/client per page load (Sentry N+1) and occasionally leaving the SDK in
 // a state that hangs React Router hydration ("Loading application…").
+let loadedClerkClientPromise: Promise<ClerkClient> | null = null
 let clerkClientPromise: Promise<ClerkClient | undefined> | null = null
+
+/** Load Clerk without redirecting a signed-out visitor. */
+export async function getOptionalClient(): Promise<ClerkClient | undefined> {
+  const testAuth = readTestAuth()
+  if (testAuth) return makeTestClerkClient(testAuth.userId)
+  if (!loadedClerkClientPromise) {
+    loadedClerkClientPromise = resolveLoadedClient()
+  }
+  const clerk = await loadedClerkClientPromise
+  return clerk.user ? clerk : undefined
+}
 
 export function getClient(): Promise<ClerkClient | undefined> {
   const testAuth = readTestAuth()
@@ -90,7 +102,7 @@ export function getClient(): Promise<ClerkClient | undefined> {
   return clerkClientPromise
 }
 
-async function resolveClient(): Promise<ClerkClient | undefined> {
+async function resolveLoadedClient(): Promise<ClerkClient> {
   const clerkWindow = window as Window & {
     Clerk?: ClerkClient
   }
@@ -111,12 +123,18 @@ async function resolveClient(): Promise<ClerkClient | undefined> {
     await clerk.load()
   }
 
+  return clerk
+}
+
+async function resolveClient(): Promise<ClerkClient | undefined> {
+  const clerk = await getOptionalClient()
+
   // protect users from hitting the internal API if they aren't authenticated.
   // We bypass clerk.redirectToSignIn() because clerk-js is loaded before the
   // ClerkProvider mounts, so its signInUrl config is not applied and the call
   // would otherwise bounce to the hosted account portal instead of the
   // embedded /sign-in route.
-  if (!clerk.user) {
+  if (!clerk) {
     const redirectUrl = encodeURIComponent(
       window.location.pathname + window.location.search,
     )

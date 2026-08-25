@@ -146,8 +146,10 @@ def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> 
     assert 'git merge-base --is-ancestor "$apply_sha" "$TARGET_SHA"' in workflow
     assert 'git diff --quiet "$apply_sha" "$TARGET_SHA" --' in workflow
     assert workflow.count("group: cosmaneura-production-container-apps") == 1
-    assert "cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}" in workflow
-    assert workflow.count("cancel-in-progress: false") == 1
+    assert (
+        "cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}" not in workflow
+    )
+    assert workflow.count("cancel-in-progress: false") == 2
     assert apply_workflow.count("group: cosmaneura-production-container-apps") == 1
     assert "cancel-in-progress: false" in apply_workflow
     apply_trigger = apply_workflow[: apply_workflow.index("permissions:\n")]
@@ -178,6 +180,18 @@ def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> 
     assert documentation.count("repo:CosmaNeura/cosmaneura:environment:production") >= 3
     assert "repo:CosmaNeura/cosmaneura:environment:staging" in documentation
     assert "staging-scoped Azure identity" in documentation
+
+
+def test_application_deploys_cannot_be_cancelled_mid_rollout_and_have_time() -> None:
+    workflow = _read(".github/workflows/build_and_publish.yml")
+    production_start = workflow.index("\n  deploy:")
+    staging_start = workflow.index("\n  deploy-staging:")
+    production_job = workflow[production_start:staging_start]
+    staging_job = workflow[staging_start:]
+
+    assert "cancel-in-progress: false" in workflow[: workflow.index("jobs:\n")]
+    assert "timeout-minutes: 60" in production_job
+    assert "timeout-minutes: 60" in staging_job
 
 
 def test_terraform_plan_installs_only_required_host_package() -> None:

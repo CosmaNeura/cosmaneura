@@ -14,6 +14,9 @@ from tests.routes.utils import (
     provision_practice_in_force,
 )
 
+VIEW_AS_BINDING_HEADER = "X-Cosmaneura-View-As-Binding"
+INACTIVE_VIEW_AS_BINDING = "inactive"
+
 
 # TODO should move to activemodel
 # TODO I wonder how the other factory library handles this?
@@ -52,6 +55,7 @@ def api_client():
     from app.server import api_app
 
     with TestClient(api_app, base_url="api.example.com") as client:
+        client.headers[VIEW_AS_BINDING_HEADER] = INACTIVE_VIEW_AS_BINDING
         yield client
 
 
@@ -62,6 +66,7 @@ def client():
 
     with TestClient(api_app, base_url=base_server_url()) as client:
         client.cookies.clear()
+        client.headers[VIEW_AS_BINDING_HEADER] = INACTIVE_VIEW_AS_BINDING
         yield client
 
 
@@ -91,6 +96,7 @@ def _mocked_clerk_client(provision: bool):
 
     with TestClient(api_app, base_url=base_server_url()) as client:
         client.cookies.clear()
+        client.headers[VIEW_AS_BINDING_HEADER] = INACTIVE_VIEW_AS_BINDING
 
         def override_user(user: ClerkUser | None):
             api_app.dependency_overrides[authenticate_clerk_request_middleware] = (
@@ -124,6 +130,7 @@ async def aclient() -> t.AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(
         transport=ASGITransport(app=api_app),
         base_url=base_server_url(),
+        headers={VIEW_AS_BINDING_HEADER: INACTIVE_VIEW_AS_BINDING},
     ) as client:
         client.cookies.clear()
         yield client

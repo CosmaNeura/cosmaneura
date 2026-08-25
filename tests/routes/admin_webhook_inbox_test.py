@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -12,21 +13,40 @@ from app.models.doctor import DoctorRole
 def _request(role: DoctorRole | None) -> Request:
     request = Request({"type": "http", "headers": []})
     if role is not None:
-        request.state.doctor = SimpleNamespace(role=role)
+        actor = SimpleNamespace(
+            role=role,
+            id="doctor_test_admin",
+            clerk_id="user_test_admin",
+        )
+        request.state.doctor = actor
+        request.state.view_as_actor = actor
+        request.state.auth_state = SimpleNamespace(
+            payload={
+                "iss": "https://test.clerk.invalid",
+                "sub": actor.clerk_id,
+            }
+        )
     return request
 
 
-@pytest.mark.parametrize("role", [None, DoctorRole.normal])
-def test_webhook_admin_routes_fail_closed_for_missing_or_non_admin(
+@pytest.mark.parametrize("role", [None, DoctorRole.normal, DoctorRole.admin])
+def test_webhook_admin_routes_fail_closed_without_explicit_capability(
     role: DoctorRole | None,
 ) -> None:
     with pytest.raises(HTTPException) as exc_info:
         admin.require_admin(_request(role))
-    assert exc_info.value.status_code == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_webhook_admin_routes_accept_admin() -> None:
-    assert admin.require_admin(_request(DoctorRole.admin)) is None
+def test_webhook_admin_routes_accept_exact_capability(monkeypatch) -> None:
+    monkeypatch.setattr(admin, "get_session", lambda: nullcontext(object()))
+    monkeypatch.setattr(
+        admin,
+        "get_runtime_superadmin_capability",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    assert admin.require_admin(_request(DoctorRole.normal)) is None
 
 
 def test_webhook_inbox_health_is_metadata_only(monkeypatch) -> None:

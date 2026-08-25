@@ -54,6 +54,12 @@ if ! ENV_JSON=$(cd "$SCRIPT_DIR/.." && just direnv_export .env.staging.backend);
 	echo "Failed to load staging deployment configuration."
 	exit 1
 fi
+if ! printf '%s' "$ENV_JSON" |
+	python "$SCRIPT_DIR/../scripts/superadmin_capability_config_preflight.py" \
+		--environment staging; then
+	echo "Staging capability identity configuration is not deployable."
+	exit 1
+fi
 unset OP_SERVICE_ACCOUNT_TOKEN RECALL_WEBHOOK_SECRET
 
 # Keep the provider-v7 runtime gates synchronized even when the inherited
@@ -232,7 +238,7 @@ PUBLIC_VARS=(
 	AZURE_OPENAI_ENDPOINT
 	AZURE_UPLOADS_CONTAINER_NAME AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME
 	ZOOM_REDIRECT_URI ZOOM_SUCCESS_REDIRECT
-	RECALL_API_BASE
+	API_BASE_URL RECALL_API_BASE
 	COOKIE_DOMAIN
 	SCRIBE_HANDOFF_ENABLED ENTRA_TENANT_ID SCRIBE_API_AUDIENCE SCRIBE_CALLER_CLIENT_ID
 	SCRIBE_RECONCILER_CALLER_CLIENT_ID
@@ -651,6 +657,83 @@ check_deployment() {
 	return 1
 }
 
+wait_for_incompatible_worker_replicas_to_drain() {
+	local container_name=$1
+	local git_sha=$2
+	local expected_image="${STAGING_IMAGE}:${git_sha}"
+	local attempts=0
+	local max_attempts=60 # 5 minutes
+	local active_revisions_mode
+
+	if ! active_revisions_mode=$(az containerapp show \
+		-n "$container_name" -g "$RESOURCE_GROUP" \
+		--query "properties.configuration.activeRevisionsMode" -o tsv); then
+		echo "Failed to read worker revision mode while proving drain completion."
+		return 1
+	fi
+	if [[ "$active_revisions_mode" != "Single" ]]; then
+		echo "Worker drain proof requires Single active revision mode; found '$active_revisions_mode'."
+		return 1
+	fi
+
+	echo "Waiting for worker replicas on older images to drain..."
+
+	while [[ $attempts -lt $max_attempts ]]; do
+		local revisions_json expected_revision_count incompatible_revisions remaining_replicas
+		if ! revisions_json=$(az containerapp revision list \
+			-n "$container_name" -g "$RESOURCE_GROUP" \
+			--query "[].{name:name,image:properties.template.containers[0].image}" \
+			-o json); then
+			echo "Failed to list worker revisions while proving drain completion."
+			return 1
+		fi
+		if ! expected_revision_count=$(printf '%s' "$revisions_json" | jq -r \
+			--arg expected_image "$expected_image" \
+			'if type != "array" then error("revision list was not an array") else [.[] | select(.image == $expected_image)] | length end'); then
+			echo "Failed to prove the expected worker revision is present."
+			return 1
+		fi
+		if [[ ! "$expected_revision_count" =~ ^[0-9]+$ || "$expected_revision_count" -eq 0 ]]; then
+			echo "Expected worker image $expected_image is absent from the revision list; refusing to deploy the API."
+			return 1
+		fi
+		if ! incompatible_revisions=$(printf '%s' "$revisions_json" | jq -r \
+			--arg expected_image "$expected_image" \
+			'if type != "array" then error("revision list was not an array") else .[] | select(.image != $expected_image) | .name end'); then
+			echo "Failed to identify incompatible worker revisions."
+			return 1
+		fi
+
+		remaining_replicas=0
+		for revision_name in $incompatible_revisions; do
+			local replica_count
+			if ! replica_count=$(az containerapp replica list \
+				-n "$container_name" -g "$RESOURCE_GROUP" \
+				--revision "$revision_name" --query "length(@)" -o tsv); then
+				echo "Failed to inspect replicas for worker revision $revision_name."
+				return 1
+			fi
+			if [[ ! "$replica_count" =~ ^[0-9]+$ ]]; then
+				echo "Invalid replica count for worker revision $revision_name."
+				return 1
+			fi
+			remaining_replicas=$((remaining_replicas + replica_count))
+		done
+
+		if [[ "$remaining_replicas" -eq 0 ]]; then
+			echo "All worker replicas on older images have drained."
+			return 0
+		fi
+
+		echo "  $remaining_replicas incompatible worker replica(s) remain (attempt $((attempts + 1))/$max_attempts)"
+		sleep 5
+		((attempts++))
+	done
+
+	echo "Worker drain proof failed after $((max_attempts * 5)) seconds. The API was not deployed."
+	return 1
+}
+
 # Run migrations before deploying new containers
 run_migrations
 if [[ $? -ne 0 ]]; then
@@ -669,6 +752,9 @@ for container in $BACKEND_CONTAINERS; do
 	if [[ $? -ne 0 ]]; then
 		echo "Deployment failed for $container. Exiting."
 		exit 1
+	fi
+	if [[ "$container" == "$WORKER_CONTAINER" ]]; then
+		wait_for_incompatible_worker_replicas_to_drain "$container" "$GIT_SHA" || exit 1
 	fi
 done
 

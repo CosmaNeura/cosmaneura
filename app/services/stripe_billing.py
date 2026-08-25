@@ -37,9 +37,19 @@ from sqlmodel import Session, col, select
 STRIPE_API = "https://api.stripe.com/v1"
 SIGNATURE_TOLERANCE_SECONDS = 5 * 60
 MINIMUM_CHECKOUT_TRIAL_LEAD = timedelta(hours=48)
+# Stripe validates the minimum lead against its own request-processing time.
+# A small buffer prevents an otherwise-valid 48-hour timestamp from falling
+# below that minimum while the Checkout Session request is in flight.
+CHECKOUT_TRIAL_LEAD_SAFETY = timedelta(minutes=5)
 EXPECTED_PRICE_CURRENCY = "usd"
 EXPECTED_PRICE_UNIT_AMOUNT = 8_900
 EXPECTED_PRICE_INTERVAL = "month"
+CHECKOUT_PAYMENT_METHOD_COLLECTION = "always"
+# Changing Checkout request parameters while reusing a Stripe idempotency key
+# permanently conflicts with any pre-change request retained by Stripe. Keep an
+# explicit policy generation in the key so a successful old request whose local
+# cache write was interrupted cannot block the card-required rollout.
+CHECKOUT_IDEMPOTENCY_POLICY_VERSION = "card-required-v1"
 MAX_STATE_APPLY_ATTEMPTS = 3
 
 MIRRORED_EVENT_TYPES = {
@@ -84,6 +94,8 @@ class StripeSubscriptionContractInvalid(StripeStateInvalid):
 
 
 class StripeTrialCarryoverDeferred(Exception):
+    """Legacy API compatibility for callers that handled the former dead zone."""
+
     def __init__(self, available_at: datetime):
         self.available_at = available_at
         super().__init__(
@@ -94,6 +106,10 @@ class StripeTrialCarryoverDeferred(Exception):
 
 class StripeCheckoutAlreadyCompleted(Exception):
     """A delayed/lost webhook was recovered from the durable session id."""
+
+
+class StripeCheckoutRetirementPending(Exception):
+    """An expired legacy Checkout still has a nonterminal subscription."""
 
 
 def _isolated_state_session() -> Session:
@@ -639,20 +655,37 @@ def _authorized_member_count(session: Session, practice: Practice) -> int:
 def checkout_deferred_until(
     practice: Practice, *, now: datetime | None = None
 ) -> datetime | None:
-    """Return the trial end when Checkout cannot preserve an exact short trial.
+    """Compatibility signal retained after removal of the Checkout dead zone.
 
-    Stripe Checkout requires ``trial_end`` to be at least 48 hours away. We
-    fail closed during that final window instead of silently charging early or
-    extending the platform's exact trial promise.
+    This field used to expose when Checkout would become available. Checkout
+    is now always available when billing is configured, so existing API clients
+    continue to receive the field as ``null``.
+    """
+
+    del practice, now
+    return None
+
+
+def checkout_trial_end(
+    practice: Practice, *, now: datetime | None = None
+) -> datetime | None:
+    """Return the safe Stripe trial end without shortening platform access.
+
+    Stripe Checkout requires a subscription ``trial_end`` at least 48 hours in
+    the future. A platform trial with more lead time keeps its exact end. A
+    shorter active trial is extended just enough to satisfy Stripe plus a small
+    request-processing buffer. An expired trial has no Stripe trial, so payment
+    can begin immediately without charging before platform entitlement ends.
     """
 
     current = now or datetime.now(timezone.utc)
-    if not practice.trial_ends_at:
+    platform_trial_end = practice.trial_ends_at
+    if not platform_trial_end or platform_trial_end <= current:
         return None
-    remaining = practice.trial_ends_at - current
-    if timedelta(0) < remaining <= MINIMUM_CHECKOUT_TRIAL_LEAD:
-        return practice.trial_ends_at
-    return None
+    minimum_safe_end = (
+        current + MINIMUM_CHECKOUT_TRIAL_LEAD + CHECKOUT_TRIAL_LEAD_SAFETY
+    )
+    return max(platform_trial_end, minimum_safe_end)
 
 
 def has_nonterminal_subscription(practice: Practice) -> bool:
@@ -683,8 +716,16 @@ def refresh_subscription_state(practice: Practice) -> dict[str, Any] | None:
 
 
 def _checkout_idempotency_key(practice: Practice) -> str:
-    raw = f"cosmas-checkout:{practice.id}:{practice.stripe_checkout_attempt}"
+    raw = (
+        f"cosmas-checkout:{CHECKOUT_IDEMPOTENCY_POLICY_VERSION}:"
+        f"{practice.id}:{practice.stripe_checkout_attempt}"
+    )
     return f"cosmas-checkout-{hashlib.sha256(raw.encode()).hexdigest()}"
+
+
+def _checkout_expire_idempotency_key(session_id: str) -> str:
+    raw = f"cosmas-checkout-expire:{session_id}"
+    return f"cosmas-checkout-expire-{hashlib.sha256(raw.encode()).hexdigest()}"
 
 
 def _clear_checkout_session(practice: Practice, *, advance: bool) -> None:
@@ -757,6 +798,140 @@ def _validate_checkout_session_binding(
         raise StripeStateInvalid("checkout session practice binding changed")
 
 
+def _checkout_session_uses_current_policy(
+    session: dict[str, Any],
+    practice: Practice,
+    *,
+    require_metadata: bool,
+) -> bool:
+    if session.get("payment_method_collection") != CHECKOUT_PAYMENT_METHOD_COLLECTION:
+        return False
+    metadata = session.get("metadata")
+    if metadata is None or metadata == {}:
+        # `always` sessions from the immediately preceding revision remain
+        # safe to resume even though policy metadata was not written yet.
+        # Stripe serializes an unset metadata map as `{}` on retrieval.
+        return not require_metadata
+    return bool(
+        isinstance(metadata, dict)
+        and metadata.get("checkout_policy") == CHECKOUT_IDEMPOTENCY_POLICY_VERSION
+        and metadata.get("practice_id") == str(practice.id)
+    )
+
+
+def _recover_completed_checkout_session(
+    practice: Practice, session: dict[str, Any]
+) -> None:
+    subscription_id = session.get("subscription")
+    if not isinstance(subscription_id, str) or not subscription_id.startswith("sub_"):
+        raise StripeStateInvalid("completed checkout has no subscription")
+    subscription, _ = _apply_authoritative_subscription(
+        practice,
+        subscription_id,
+        clear_checkout=True,
+        require_practice_metadata=True,
+        allow_terminal_rebind=True,
+    )
+    assert subscription is not None
+    raise StripeCheckoutAlreadyCompleted
+
+
+def _resolve_expired_checkout_subscription(
+    practice: Practice,
+    session: dict[str, Any],
+    *,
+    expected_version: int,
+    expected_session_id: str | None,
+) -> None:
+    """Bind an expired session's subscription before deciding on replacement.
+
+    Although ordinary subscription-mode Checkout does not attach a subscription
+    until completion, handling the state explicitly prevents a future Stripe
+    behavior change or partial legacy flow from either creating a duplicate or
+    leaving an opaque cache entry forever. Incomplete subscriptions remain the
+    authoritative blocker until Stripe makes them terminal; retries refresh that
+    state and can then start a new policy-compliant attempt.
+    """
+
+    subscription_id = session.get("subscription")
+    if not isinstance(subscription_id, str) or not subscription_id.startswith("sub_"):
+        raise StripeStateInvalid("expired checkout subscription id is invalid")
+    subscription, _ = _apply_authoritative_subscription(
+        practice,
+        subscription_id,
+        require_practice_metadata=True,
+        allow_terminal_rebind=True,
+    )
+    assert subscription is not None
+    _persist_checkout_cache(
+        practice,
+        expected_version=expected_version,
+        expected_session_id=expected_session_id,
+        session_id=None,
+        url=None,
+        expires_at=None,
+        advance=True,
+    )
+    if practice.subscription_status in TERMINAL_SUBSCRIPTION_STATUSES:
+        return
+    if practice.subscription_status == "incomplete":
+        raise StripeCheckoutRetirementPending
+    if has_nonterminal_subscription(practice):
+        raise StripeCheckoutAlreadyCompleted
+    raise StripeStateInvalid("expired checkout subscription state is invalid")
+
+
+def _retire_open_checkout_session(
+    practice: Practice,
+    session: dict[str, Any],
+    *,
+    expected_version: int,
+    expected_session_id: str | None,
+) -> None:
+    """Expire an open session before rotating its local idempotency attempt.
+
+    Stripe expiration is the boundary that makes replacement safe: a Checkout
+    Session that Stripe has expired cannot subsequently complete. If the
+    expiration request races with completion or has an uncertain transport
+    result, retrieve the session again and only clear local state after Stripe
+    reports it expired. A completed session is bound instead of replaced.
+    """
+
+    session_id = cast(str, session["id"])
+    try:
+        resolved = _request(
+            "POST",
+            f"/checkout/sessions/{session_id}/expire",
+            idempotency_key=_checkout_expire_idempotency_key(session_id),
+        )
+    except httpx.HTTPError:
+        resolved = _request("GET", f"/checkout/sessions/{session_id}")
+
+    _validate_checkout_session_binding(resolved, practice, expected_id=session_id)
+    status = resolved.get("status")
+    if status == "complete":
+        _recover_completed_checkout_session(practice, resolved)
+    if status != "expired":
+        raise StripeStateInvalid("open checkout session could not be retired safely")
+    if resolved.get("subscription") is not None:
+        _resolve_expired_checkout_subscription(
+            practice,
+            resolved,
+            expected_version=expected_version,
+            expected_session_id=expected_session_id,
+        )
+        return
+    _persist_checkout_cache(
+        practice,
+        expected_version=expected_version,
+        expected_session_id=expected_session_id,
+        session_id=None,
+        url=None,
+        expires_at=None,
+        advance=True,
+    )
+
+
 def _recover_checkout_session(practice: Practice, *, current: datetime) -> str | None:
     """Resolve a durable prior Checkout attempt before rotating its key.
 
@@ -790,6 +965,16 @@ def _recover_checkout_session(practice: Practice, *, current: datetime) -> str |
             raise StripeStateInvalid(
                 "Stripe reports an open but expired checkout session"
             )
+        if not _checkout_session_uses_current_policy(
+            session, practice, require_metadata=False
+        ):
+            _retire_open_checkout_session(
+                practice,
+                session,
+                expected_version=expected_version,
+                expected_session_id=session_id,
+            )
+            return None
         url = _hosted_url(session.get("url"), hostname="checkout.stripe.com")
         _persist_checkout_cache(
             practice,
@@ -801,23 +986,16 @@ def _recover_checkout_session(practice: Practice, *, current: datetime) -> str |
         )
         return url
     if session_status == "complete":
-        subscription_id = session.get("subscription")
-        if not isinstance(subscription_id, str) or not subscription_id.startswith(
-            "sub_"
-        ):
-            raise StripeStateInvalid("completed checkout has no subscription")
-        subscription, _ = _apply_authoritative_subscription(
-            practice,
-            subscription_id,
-            clear_checkout=True,
-            require_practice_metadata=True,
-            allow_terminal_rebind=True,
-        )
-        assert subscription is not None
-        raise StripeCheckoutAlreadyCompleted
+        _recover_completed_checkout_session(practice, session)
     if session_status == "expired":
         if session.get("subscription") is not None:
-            raise StripeStateInvalid("expired checkout unexpectedly has a subscription")
+            _resolve_expired_checkout_subscription(
+                practice,
+                session,
+                expected_version=expected_version,
+                expected_session_id=session_id,
+            )
+            return None
         _persist_checkout_cache(
             practice,
             expected_version=expected_version,
@@ -842,9 +1020,9 @@ def create_checkout_session(
     """Get or create one idempotent hosted Checkout Session for the practice."""
 
     current = now or datetime.now(timezone.utc)
-    # A previously-created exact session is not a new sale. Revalidate and
+    # A previously-created session is not a new sale. Revalidate and
     # return it before applying new-session trial/active-price gates, otherwise
-    # the final 48h or a later price archive would strand payment completion.
+    # a later price archive would strand payment completion.
     if practice.stripe_checkout_session_id:
         _validate_runtime_configuration()
         recovered_url = _recover_checkout_session(practice, current=current)
@@ -852,9 +1030,7 @@ def create_checkout_session(
             return recovered_url
     if practice.subscription_status == "incomplete":
         if not practice.stripe_checkout_session_id:
-            raise StripeStateInvalid(
-                "incomplete subscription has no resumable Checkout session"
-            )
+            raise StripeCheckoutRetirementPending
         raise StripeStateInvalid("incomplete Checkout session is no longer resumable")
 
     # A cached session that proved expired/abandoned is no longer a resume.
@@ -864,16 +1040,11 @@ def create_checkout_session(
     if not stripe_config.stripe_billing_configured():
         raise StripeNotConfigured
 
-    deferred_until = checkout_deferred_until(practice, now=current)
-    if deferred_until:
-        raise StripeTrialCarryoverDeferred(deferred_until)
     _validate_runtime_configuration(require_active_price=True)
     if now is None:
-        deferred_until = checkout_deferred_until(
-            practice, now=datetime.now(timezone.utc)
-        )
-        if deferred_until:
-            raise StripeTrialCarryoverDeferred(deferred_until)
+        # Re-read the clock after remote validation so the minimum Stripe lead
+        # is measured from as near as practical to Checkout Session creation.
+        current = datetime.now(timezone.utc)
 
     data: dict[str, Any] = {
         "mode": "subscription",
@@ -883,7 +1054,12 @@ def create_checkout_session(
         "success_url": success_url,
         "cancel_url": cancel_url,
         "allow_promotion_codes": "true",
-        "payment_method_collection": "if_required",
+        # Existing pilots bypass Checkout through explicit grants/exemptions.
+        # Public self-serve Checkout must collect a payment method so the
+        # subscription can continue when its free trial ends.
+        "payment_method_collection": CHECKOUT_PAYMENT_METHOD_COLLECTION,
+        "metadata[checkout_policy]": CHECKOUT_IDEMPOTENCY_POLICY_VERSION,
+        "metadata[practice_id]": str(practice.id),
         "subscription_data[metadata][practice_id]": str(practice.id),
     }
     if practice.stripe_customer_id:
@@ -891,9 +1067,10 @@ def create_checkout_session(
     elif customer_email:
         data["customer_email"] = customer_email
 
-    if practice.trial_ends_at and practice.trial_ends_at > current:
+    stripe_trial_end = checkout_trial_end(practice, now=current)
+    if stripe_trial_end:
         data["subscription_data[trial_end]"] = str(
-            math.ceil(practice.trial_ends_at.timestamp())
+            math.ceil(stripe_trial_end.timestamp())
         )
         data[
             "subscription_data[trial_settings][end_behavior][missing_payment_method]"
@@ -913,6 +1090,18 @@ def create_checkout_session(
     expiry = _checkout_session_expiry(session)
     if expiry <= current:
         raise StripeStateInvalid("checkout session was already expired")
+    if not _checkout_session_uses_current_policy(
+        session, practice, require_metadata=True
+    ):
+        _retire_open_checkout_session(
+            practice,
+            session,
+            expected_version=expected_version,
+            expected_session_id=expected_session_id,
+        )
+        raise StripeStateInvalid(
+            "new checkout session did not enforce payment method collection"
+        )
     url = _hosted_url(session.get("url"), hostname="checkout.stripe.com")
 
     try:
