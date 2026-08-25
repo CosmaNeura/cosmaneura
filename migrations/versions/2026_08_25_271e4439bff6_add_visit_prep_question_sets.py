@@ -91,6 +91,21 @@ def upgrade() -> None:
             nullable=True,
             comment="Stable idempotency key for a system-supplied starting set.",
         ),
+        sa.Column(
+            "creation_payload_sha256",
+            sqlmodel.sql.sqltypes.AutoString(length=64),
+            nullable=True,
+            comment=(
+                "Immutable fingerprint binding an idempotency key to its create payload."
+            ),
+        ),
+        sa.CheckConstraint(
+            "creation_payload_sha256 IS NULL OR "
+            "creation_payload_sha256 ~ '^[0-9a-f]{64}$'",
+            name=op.f(
+                "visit_prep_question_set_creation_payload_sha256_shape_check"
+            ),
+        ),
         sa.CheckConstraint(
             "seed_key IS NULL OR seed_key ~ '^[a-z][a-z0-9_.-]{0,63}$'",
             name=op.f("visit_prep_question_set_seed_key_shape_check"),
@@ -353,6 +368,10 @@ def upgrade() -> None:
              OR NEW.seed_key IS DISTINCT FROM OLD.seed_key
              OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
             RAISE EXCEPTION 'Visit Prep question-set ownership and seed lineage are immutable'
+              USING ERRCODE = '55000';
+          END IF;
+          IF NEW.creation_payload_sha256 IS DISTINCT FROM OLD.creation_payload_sha256 THEN
+            RAISE EXCEPTION 'Visit Prep question-set creation payload fingerprint is immutable'
               USING ERRCODE = '55000';
           END IF;
           RETURN NEW;

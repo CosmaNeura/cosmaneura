@@ -102,3 +102,16 @@ def test_question_set_downgrade_allows_only_empty_online_schema() -> None:
 
     assert connection.statements[0].startswith("LOCK TABLE")
     assert len(connection.statements) == 1 + len(migration._QUESTION_TABLES)
+
+
+def test_question_set_migration_defines_immutable_creation_payload_fingerprint() -> (
+    None
+):
+    migration_source = MIGRATION_PATH.read_text()
+
+    assert '"creation_payload_sha256"' in migration_source
+    assert "creation_payload_sha256 ~ '^[0-9a-f]{64}$'" in migration_source
+    assert (
+        "NEW.creation_payload_sha256 IS DISTINCT FROM "
+        "OLD.creation_payload_sha256" in migration_source
+    )
