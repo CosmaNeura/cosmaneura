@@ -57,15 +57,30 @@ def find_lint_base(paths: list[Path]) -> str:
         revisions[revision] = _parents(values.get("down_revision"))
 
     revision_ids = set(revisions)
-    roots = [
-        parents
-        for parents in revisions.values()
+    root_ids = [
+        revision
+        for revision, parents in revisions.items()
         if not any(parent in revision_ids for parent in parents)
     ]
-    if len(roots) != 1:
+    if len(root_ids) != 1:
         raise ValueError("new migrations are not one connected ancestry range")
 
-    external_parents = [parent for parent in roots[0] if parent not in revision_ids]
+    reachable = set(root_ids)
+    while True:
+        discovered = {
+            revision
+            for revision, parents in revisions.items()
+            if any(parent in reachable for parent in parents)
+        }
+        if discovered <= reachable:
+            break
+        reachable.update(discovered)
+    if reachable != revision_ids:
+        raise ValueError("new migrations contain a disconnected ancestry cycle")
+
+    external_parents = [
+        parent for parent in revisions[root_ids[0]] if parent not in revision_ids
+    ]
     if not external_parents:
         return "base"
     if len(external_parents) != 1:

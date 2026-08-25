@@ -64,6 +64,15 @@ def test_disconnected_ranges_fail_closed(tmp_path: Path) -> None:
         MIGRATIONS.find_lint_base([first, second])
 
 
+def test_disconnected_cycle_fails_closed(tmp_path: Path) -> None:
+    root = _migration(tmp_path / "root.py", "root", "existing")
+    cycle_a = _migration(tmp_path / "cycle_a.py", "cycle-a", "cycle-b")
+    cycle_b = _migration(tmp_path / "cycle_b.py", "cycle-b", "cycle-a")
+
+    with pytest.raises(ValueError, match="disconnected ancestry cycle"):
+        MIGRATIONS.find_lint_base([root, cycle_a, cycle_b])
+
+
 def test_duplicate_or_dynamic_revision_fails_closed(tmp_path: Path) -> None:
     first = _migration(tmp_path / "first.py", "same", "existing")
     duplicate = _migration(tmp_path / "duplicate.py", "same", "existing")
