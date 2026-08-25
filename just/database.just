@@ -48,10 +48,9 @@ db_lint:
 		echo "No new migrations vs origin/master — skipping squawk"
 		exit 0
 	fi
-	oldest=$(echo "$new_migrations" | head -1)
-	prev_rev=$(grep -E "^down_revision" "$oldest" | sed -E "s/.*['\"]([^'\"]+)['\"].*/\1/" | head -1)
+	prev_rev=$(printf '%s\n' "$new_migrations" | uv run python scripts/migration_lint_base.py)
 	if [ -z "$prev_rev" ]; then
-		echo "Could not determine previous revision from $oldest" >&2
+		echo "Could not determine the new migration ancestry range" >&2
 		exit 1
 	fi
 	echo "Linting $(echo "$new_migrations" | wc -l | tr -d ' ') new migration(s) from $prev_rev to head"
