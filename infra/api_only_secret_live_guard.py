@@ -165,7 +165,7 @@ def verify_live_state(
             if (
                 len(entries) != 1
                 or entries[0].get("secretRef") != SECRET_NAME
-                or "value" in entries[0]
+                or entries[0].get("value") not in (None, "")
                 or names.count(SECRET_NAME) != 1
             ):
                 raise LiveGuardError("API secret reference is invalid")
