@@ -384,6 +384,7 @@ def test_every_pull_request_workflow_is_credential_free() -> None:
             pull_request_workflows.append((path.name, source))
 
     assert {name for name, _ in pull_request_workflows} == {
+        "agent_handoff_validation.yml",
         "infra_plan.yml",
         "pull_request_checks.yml",
     }

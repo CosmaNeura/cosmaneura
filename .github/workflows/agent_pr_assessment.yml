@@ -77,6 +77,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_PR: ${{ inputs.pull_request }}
+          ASSESSMENT_KIND: ${{ inputs.assessment_kind }}
           POLICY_SHA: ${{ steps.trusted.outputs.policy_sha }}
         run: |
           set -euo pipefail
@@ -186,7 +187,7 @@ jobs:
             --policy "$policy_input" \
             --output "$evidence_pack"
 
-          if [[ "${{ inputs.assessment_kind }}" == "migration_assessment" ]] && \
+          if [[ "$ASSESSMENT_KIND" == "migration_assessment" ]] && \
              ! jq -e 'any(.evidence[]; .type == "code_diff" and (.path | startswith("migrations/")))' \
                "$evidence_pack" >/dev/null; then
             echo "Migration Sentinel requires at least one changed migration path." >&2
