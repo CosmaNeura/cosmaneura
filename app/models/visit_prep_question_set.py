@@ -39,6 +39,11 @@ class VisitPrepQuestionSet(
             "seed_key IS NULL OR seed_key ~ '^[a-z][a-z0-9_.-]{0,63}$'",
             name="seed_key_shape",
         ),
+        sa.CheckConstraint(
+            "creation_payload_sha256 IS NULL OR "
+            "creation_payload_sha256 ~ '^[0-9a-f]{64}$'",
+            name="creation_payload_sha256_shape",
+        ),
         sa.UniqueConstraint(
             "id",
             "owner_practice_member_id",
@@ -62,6 +67,9 @@ class VisitPrepQuestionSet(
 
     seed_key: str | None = Field(default=None, max_length=64)
     """Stable idempotency key for a system-supplied starting set."""
+
+    creation_payload_sha256: str | None = Field(default=None, max_length=64)
+    """Immutable fingerprint binding an idempotency key to its create payload."""
 
 
 class VisitPrepQuestionSetVersion(

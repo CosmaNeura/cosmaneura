@@ -39,11 +39,15 @@ def _owner(label: str = "owner") -> PracticeMember:
 
 
 def _question_set(
-    owner: PracticeMember, *, seed_key: str | None = None
+    owner: PracticeMember,
+    *,
+    seed_key: str | None = None,
+    creation_payload_sha256: str | None = None,
 ) -> VisitPrepQuestionSet:
     return VisitPrepQuestionSet(
         owner_practice_member_id=owner.id,
         seed_key=seed_key,
+        creation_payload_sha256=creation_payload_sha256,
     ).save()
 
 
@@ -114,6 +118,47 @@ def test_seed_key_is_unique_per_owner_but_reusable_by_another_owner() -> None:
         _question_set(first_owner, seed_key="default.v1")
 
 
+@pytest.mark.parametrize(
+    ("creation_payload_sha256", "error_match"),
+    (
+        ("a" * 63, "creation_payload_sha256_shape_check"),
+        ("a" * 65, "value too long"),
+        ("A" * 64, "creation_payload_sha256_shape_check"),
+        ("g" * 64, "creation_payload_sha256_shape_check"),
+    ),
+)
+def test_creation_payload_fingerprint_requires_lowercase_sha256(
+    creation_payload_sha256: str,
+    error_match: str,
+) -> None:
+    with pytest.raises(
+        DBAPIError,
+        match=error_match,
+    ):
+        _question_set(
+            _owner(f"fingerprint-shape-{len(creation_payload_sha256)}"),
+            seed_key="client.synthetic",
+            creation_payload_sha256=creation_payload_sha256,
+        )
+
+
+def test_creation_payload_fingerprint_is_nullable_and_round_trips() -> None:
+    owner = _owner("fingerprint-round-trip")
+    without_fingerprint = _question_set(owner)
+    fingerprint = "0123456789abcdef" * 4
+    with_fingerprint = _question_set(
+        owner,
+        seed_key="client.synthetic",
+        creation_payload_sha256=fingerprint,
+    )
+
+    without_fingerprint.refresh()
+    with_fingerprint.refresh()
+
+    assert without_fingerprint.creation_payload_sha256 is None
+    assert with_fingerprint.creation_payload_sha256 == fingerprint
+
+
 def test_question_set_owner_and_seed_lineage_are_immutable() -> None:
     first_owner = _owner("immutable-seed-first")
     second_owner = _owner("immutable-seed-second")
@@ -134,6 +179,35 @@ def test_question_set_owner_and_seed_lineage_are_immutable() -> None:
                     update(set_table)
                     .where(set_table.c.id == question_set.id)
                     .values(owner_practice_member_id=second_owner.id)
+                )
+
+
+def test_creation_payload_fingerprint_is_immutable() -> None:
+    fingerprint = "0123456789abcdef" * 4
+    question_set = _question_set(
+        _owner("immutable-fingerprint"),
+        seed_key="client.synthetic",
+        creation_payload_sha256=fingerprint,
+    )
+    question_set_without_fingerprint = _question_set(
+        _owner("immutable-null-fingerprint"),
+    )
+    set_table = SQLModel.metadata.tables["visit_prep_question_set"]
+
+    with get_session() as session:
+        with pytest.raises(DBAPIError, match="payload fingerprint is immutable"):
+            with session.begin_nested():
+                session.execute(
+                    update(set_table)
+                    .where(set_table.c.id == question_set.id)
+                    .values(creation_payload_sha256="f" * 64)
+                )
+        with pytest.raises(DBAPIError, match="payload fingerprint is immutable"):
+            with session.begin_nested():
+                session.execute(
+                    update(set_table)
+                    .where(set_table.c.id == question_set_without_fingerprint.id)
+                    .values(creation_payload_sha256=fingerprint)
                 )
 
 
