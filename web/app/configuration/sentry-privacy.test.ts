@@ -4,10 +4,12 @@ import {
   REDACTED_AZURE_SAS_URL,
   REDACTED_INTAKE_CREDENTIAL,
   REDACTED_LEGACY_EXAMPLE_NOTE_URL,
+  REDACTED_VISIT_PREP_CREDENTIAL,
   REDACTED_ZOOM_JOIN_URL,
   containsAzureBlobSasUrl,
   containsIntakeBearerCredential,
   containsLegacyExampleNoteQuery,
+  containsVisitPrepBearerCredential,
   containsZoomJoinUrl,
   scrubSensitiveSentryPayload,
   scrubSentryBreadcrumb,
@@ -22,6 +24,8 @@ const azureUploadUrl =
 const intakeId = "intake_01k39j8v3y9s6x4t2q7w5r0mnp"
 const intakePageUrl = `https://intake.cosmaneura.test/chat/intake/${intakeId}`
 const intakeApiUrl = `https://api.cosmaneura.test/external/chat/intake/${intakeId}/question`
+const visitPrepToken = `vp1_${"A".repeat(43)}`
+const visitPrepUrl = `https://chat.cosmaneura.test/visit-prep#access_token=${visitPrepToken}`
 const zoomJoinUrl =
   "https://example.zoom.us/j/123456789?pwd=private-meeting-password"
 const legacyExampleNoteUrl =
@@ -168,6 +172,41 @@ describe("Sentry Azure SAS privacy", () => {
       `https://api.cosmaneura.test/external/chat/intake/${REDACTED_INTAKE_CREDENTIAL}/question`,
     )
     expect(event.contexts.router.intake_id).toBe(REDACTED_INTAKE_CREDENTIAL)
+  })
+
+  it("redacts Visit Prep bearer credentials and normalized access URLs", () => {
+    expect(containsVisitPrepBearerCredential(visitPrepToken)).toBe(true)
+    expect(containsVisitPrepBearerCredential(visitPrepUrl)).toBe(true)
+    expect(containsVisitPrepBearerCredential("vp1_too-short")).toBe(false)
+    expect(containsVisitPrepBearerCredential(`${visitPrepToken}-extra`)).toBe(
+      false,
+    )
+
+    const event = scrubSensitiveSentryPayload({
+      request: { url: visitPrepUrl },
+      response: { access_url: visitPrepUrl },
+      message: `Visit Prep link ${visitPrepToken}`,
+    })
+    const serialized = JSON.stringify(event)
+
+    expect(serialized).not.toContain(visitPrepToken)
+    expect(event.request.url).toBe(
+      `https://chat.cosmaneura.test/visit-prep#access_token=${REDACTED_VISIT_PREP_CREDENTIAL}`,
+    )
+    expect(event.response.access_url).toBe("[Filtered sensitive value]")
+    expect(shouldCreateSentryRequestSpan(visitPrepUrl)).toBe(false)
+    expect(
+      scrubSentryBreadcrumb({ data: { url: visitPrepUrl } }).data.url,
+    ).not.toContain(visitPrepToken)
+    expect(
+      scrubSentrySpan({ description: visitPrepUrl }).description,
+    ).not.toContain(visitPrepToken)
+    expect(
+      scrubSentryErrorEvent({ message: visitPrepUrl }).message,
+    ).not.toContain(visitPrepToken)
+    expect(
+      scrubSentryTransaction({ transaction: visitPrepUrl }).transaction,
+    ).not.toContain(visitPrepToken)
   })
 
   it("redacts Zoom join credentials without hiding ordinary Zoom links", () => {

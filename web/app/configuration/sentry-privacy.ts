@@ -1,5 +1,6 @@
 export const REDACTED_AZURE_SAS_URL = "[Filtered Azure Blob SAS URL]"
 export const REDACTED_INTAKE_CREDENTIAL = "[Filtered-intake-credential]"
+export const REDACTED_VISIT_PREP_CREDENTIAL = "[Filtered Visit Prep credential]"
 export const REDACTED_LEGACY_EXAMPLE_NOTE_URL =
   "[Filtered legacy example-note request]"
 export const REDACTED_ZOOM_JOIN_URL = "[Filtered Zoom join URL]"
@@ -12,6 +13,7 @@ const SAS_VERSION_PATTERN = /(?:^|[?&]|&amp;)sv=/iu
 const INTAKE_BEARER_PATH_PATTERN =
   /(\/(?:external\/)?chat\/intake\/)[^/?#\s"'<>]+/giu
 const INTAKE_TYPEID_PATTERN = /\bintake_[0-9a-hjkmnp-tv-z]{26}\b/giu
+const VISIT_PREP_TOKEN_PATTERN = /\bvp1_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/gu
 const LEGACY_EXAMPLE_NOTE_PATH_PATTERN =
   /\/internal\/v1\/notes\/upload-example\b/iu
 const LEGACY_EXAMPLE_NOTE_QUERY_PATTERN =
@@ -22,6 +24,7 @@ const SENSITIVE_NORMALIZED_KEYS = new Set([
   "accesstoken",
   "accesscode",
   "authorization",
+  "accessurl",
   "contexttoken",
   "intakeid",
   "joincode",
@@ -95,6 +98,17 @@ export function containsIntakeBearerCredential(value: string): boolean {
   return INTAKE_TYPEID_PATTERN.test(value)
 }
 
+/** True when a telemetry string contains a Visit Prep bearer credential. */
+export function containsVisitPrepBearerCredential(value: string): boolean {
+  VISIT_PREP_TOKEN_PATTERN.lastIndex = 0
+  return VISIT_PREP_TOKEN_PATTERN.test(value)
+}
+
+function redactVisitPrepBearerCredentials(value: string): string {
+  VISIT_PREP_TOKEN_PATTERN.lastIndex = 0
+  return value.replace(VISIT_PREP_TOKEN_PATTERN, REDACTED_VISIT_PREP_CREDENTIAL)
+}
+
 function redactIntakeBearerCredentials(value: string): string {
   INTAKE_BEARER_PATH_PATTERN.lastIndex = 0
   const pathRedacted = value.replace(
@@ -153,7 +167,9 @@ function redactLegacyExampleNoteQuery(value: string): string {
 function redactSensitiveTelemetryString(value: string): string {
   const urlRedacted = redactLegacyExampleNoteQuery(
     redactZoomJoinUrls(
-      redactIntakeBearerCredentials(redactAzureBlobSasUrls(value)),
+      redactVisitPrepBearerCredentials(
+        redactIntakeBearerCredentials(redactAzureBlobSasUrls(value)),
+      ),
     ),
   )
   BEARER_CREDENTIAL_PATTERN.lastIndex = 0
@@ -219,6 +235,7 @@ export function shouldCreateSentryRequestSpan(url: string): boolean {
   return (
     !containsAzureBlobSasUrl(url) &&
     !containsIntakeBearerCredential(url) &&
+    !containsVisitPrepBearerCredential(url) &&
     !containsZoomJoinUrl(url) &&
     !containsLegacyExampleNoteQuery(url)
   )
