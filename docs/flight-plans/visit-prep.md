@@ -43,10 +43,12 @@ MCD end-to-end path is ready
   - registration, insurance, copay, demographics, or EHR write-back;
   - copying the TanStack/Zustand/local-storage prototype into this repository;
   - deleting the legacy intake path while a legacy link can still be valid.
-- **User cohorts affected:** founder/synthetic accounts first; controlled internal
-  DIY validation second; MCD is the first external customer. No MCD activation
-  occurs until Acuity-triggered email and SMS are ready end to end. Manual
-  physician send remains available as fallback.
+- **User cohorts affected:** John's exact physician TypeID first, using synthetic
+  recipients; a named beta allowlist of exact physician TypeIDs second; MCD is
+  the first external customer. Practice-wide cohort IDs are not used until the
+  named-physician beta is accepted. No MCD activation occurs until
+  Acuity-triggered email and SMS are ready end to end. Manual physician send
+  remains available as fallback.
 
 ## Product boundary
 
@@ -222,13 +224,16 @@ return or supersede the same lineage rather than racing a second insert.
 
 ## Rollout plan
 
-1. Deploy each layer dark to founder/synthetic accounts; no delivery.
-2. Validate physician DIY creation and copy-link with synthetic contacts.
-3. Enable controlled Azure email and SMS only to founder-controlled recipients.
+1. Deploy each layer dark with every flag and delivery channel off.
+2. Add only John's exact physician TypeID and validate physician DIY creation and
+   copy-link with synthetic contacts; do not use a practice-wide cohort yet.
+3. Enable controlled Azure email and SMS only to John and founder-controlled
+   recipients after the applicable delivery layer and provider checks pass.
 4. Complete the MCD Acuity-triggered synthetic journey and reminder timing tests.
-5. Activate one named MCD physician cohort; observe at least five completed preps
-   and 72 hours without a rollback signal.
-6. Expand to the approved MCD cohort after founder review of health signals.
+5. Add a named beta allowlist of exact physician TypeIDs; observe at least five
+   completed preps and 72 hours without a rollback signal.
+6. Expand to the approved MCD practice cohort only after founder acceptance and
+   review of the health signals above.
 7. Add other practices or calendar adapters only through later flight-plan layers.
 
 ## Health signals
