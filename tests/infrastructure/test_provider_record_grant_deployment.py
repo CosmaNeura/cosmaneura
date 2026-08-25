@@ -112,7 +112,7 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
     )
 
 
-def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> None:
+def test_production_application_requires_manual_plan_and_apply() -> None:
     workflow = _read(".github/workflows/build_and_publish.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
     plan_workflow = _read(".github/workflows/infra_plan.yml")
@@ -128,10 +128,8 @@ def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> 
     assert workflow.count(".github/workflows/infra_apply.yml") >= 2
     assert workflow.count(".github/workflows/infra_production_plan.yml") >= 2
     assert workflow.count(".github/workflows/build_and_publish.yml") >= 2
-    assert "needs: [web, app, deployment-scope]" in workflow
-    assert (
-        "needs.deployment-scope.outputs.production_infra_changed != 'true'" in workflow
-    )
+    assert "needs: [web, app, deployment-scope, authorize-production]" in workflow
+    assert "needs.deployment-scope.outputs.production_infra_changed" not in workflow
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "terraform_apply_run_id" in workflow
     assert "provider_signed_recall_callback_verified" in workflow
@@ -180,6 +178,36 @@ def test_infrastructure_push_holds_application_until_manual_plan_and_apply() -> 
     assert documentation.count("repo:CosmaNeura/cosmaneura:environment:production") >= 3
     assert "repo:CosmaNeura/cosmaneura:environment:staging" in documentation
     assert "staging-scoped Azure identity" in documentation
+
+
+def test_production_promotion_requires_founder_manual_dispatch() -> None:
+    workflow = _read(".github/workflows/build_and_publish.yml")
+
+    authorization_start = workflow.index("\n  authorize-production:")
+    deployment_scope_start = workflow.index("\n  deployment-scope:")
+    authorization_job = workflow[authorization_start:deployment_scope_start]
+
+    production_start = workflow.index("\n  deploy:")
+    staging_start = workflow.index("\n  deploy-staging:")
+    production_job = workflow[production_start:staging_start]
+
+    assert "if: ${{ github.event_name == 'workflow_dispatch' }}" in authorization_job
+    assert "permissions: {}" in authorization_job
+    assert "PROMOTION_ACTOR: ${{ github.actor }}" in authorization_job
+    assert (
+        "PROMOTION_TRIGGERING_ACTOR: ${{ github.triggering_actor }}"
+        in authorization_job
+    )
+    assert '"$PROMOTION_REF" != "refs/heads/master"' in authorization_job
+    assert '"$PROMOTION_ACTOR" != "JohnClem"' in authorization_job
+    assert '"$PROMOTION_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
+
+    assert "needs: [web, app, deployment-scope, authorize-production]" in production_job
+    assert "github.event_name == 'workflow_dispatch'" in production_job
+    assert "github.ref == 'refs/heads/master'" in production_job
+    assert "github.actor == 'JohnClem'" in production_job
+    assert "github.triggering_actor == 'JohnClem'" in production_job
+    assert "needs.authorize-production.result == 'success'" in production_job
 
 
 def test_application_deploys_cannot_be_cancelled_mid_rollout_and_have_time() -> None:
