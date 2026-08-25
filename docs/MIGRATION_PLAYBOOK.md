@@ -1,86 +1,109 @@
-# MIGRATION_PLAYBOOK.md — the migration ladder
+# MIGRATION_PLAYBOOK.md — schema and data ladder (v0.2.1)
 
-For ANY change to schemas, auth, billing, or patient-data structures.
-Never migrate by cutover. Each rung is its own PR/deploy; you may hold at any
-rung indefinitely. Deleting is the last rung, never the first.
+This playbook applies only when a change alters schema or stored data. Auth,
+billing, or PHI code without schema/data work may still be Tier 2, but it does
+not invent a migration rung or rehearsal.
 
-A "rung" = one independently deployable, observable, backward-compatible
-transition. It may require coordinated PRs across repos (versioned API
-contracts; receiver/auth deploys before sender activation) — "one rung per
-PR" means per transition, not literally one file.
+## Core mechanism and current gap
 
-Auth context: identity is per-service (Clerk in core; Entra tokens in Scribe
-and CAB; scheduling owns its own users tables; sovereign is provider-neutral
-OIDC). Any migration that moves users between providers, changes
-session/token handling, or reshapes a users table follows this ladder in
-full — `auth_version` tracks provider + credential format, and both paths
-keep working until the contract rung.
+- Core owns PostgreSQL schema through Alembic revisions in
+  `migrations/versions/`.
+- Generate a revision with `just db_generate_migration "<name>"`. Never invent
+  a revision ID. Apply it to local dev/test databases with `just db_migrate`.
+- Pull-request CI applies and lints migrations against disposable CI databases.
+  This validates code; it is not a production-shaped PHI-safe rehearsal.
+- No generic, automated isolated restore/scrub/verify/TTL-cleanup procedure is
+  established by the tracked workflow. Until a change links a reviewed,
+  resource-specific runbook and successful evidence, a schema/data rung cannot
+  claim rehearsal complete and must not be promoted to a PHI-bearing
+  environment.
+
+A rung is one independently deployable, observable, backward-compatible
+transition. Each schema/data PR declares exactly one rung and may be held
+indefinitely. Cross-repo rungs use versioned contracts and deploy receivers
+before activating senders.
 
 ## The ladder
 
-### Rung 1 — Expand
-Add new structures alongside old: new tables, nullable columns, new token
-format, new IdP config. Old code ignores them entirely. Zero user-visible
-change.
-- PR label: `expand`
-- Rollback: drop the new structures (nothing reads them yet)
+### 1. Expand
 
-### Rung 2 — Dual-write
-New writes go to BOTH old and new structures. All reads remain on the old
-path. Track migration state per record (e.g. `auth_version` on users).
-- Rollback: stop writing to new structures
+Add a nullable column, new table/index, new format, or other structure beside
+the old one. Existing code ignores it; no user-visible behavior changes.
 
-### Rung 3 — Backfill + just-in-time migrate
-- Batch-backfill rows that can migrate without the user present, in small
-  batches, resumable, idempotent.
-- For credentials/anything needing the user: migrate lazily on next successful
-  login — verify via OLD path, mint new credentials, mark migrated. Unmigrated
-  users keep authenticating via the old path. **Nobody gets locked out.**
-- Rollback: pause the backfill; JIT-migrated users still work via dual-write
+**Recovery:** stop rollout and leave the additive structure dormant. Do not
+drop it as rollback. Removal is a later, separately approved destructive
+cleanup after evidence proves nothing reads or writes it.
 
-### Rung 4 — Shadow-verify
-Run the new path in parallel on real traffic; log mismatches; ENFORCE NOTHING.
-Hold until mismatch rate is 0 for N days (default N=5).
-- This rung is mandatory for auth changes. It converts "grandfathering bugs"
-  into log lines instead of locked-out doctors.
+### 2. Dual-write
 
-### Rung 5 — Cut reads
-Flip reads to the new path behind a flag, cohort by cohort (see
-DEPLOYMENT.md). Old path stays deployed and dormant as the kill switch.
-- Rollback: flag off
+Write old and new representations while reads remain on the old path. Track
+per-record migration state where needed. Recovery stops the new write while
+preserving compatible data.
 
-### Rung 6 — Contract
-After ≥ 2 weeks stable with no kill-switch use: stop dual-writes (own PR),
-then remove old code + schema (own PR, label: `contract`).
-- Irreversible by design. That's why it waits.
+### 3. Backfill / just-in-time migration
 
-## Before climbing: rehearse
+Backfill in bounded, resumable, idempotent batches with progress and mismatch
+metrics. Where user presence or credentials are required, migrate only after a
+successful old-path verification. Recovery pauses the worker; it does not
+blindly reverse verified records.
 
-Restore a **de-identified** snapshot of production into the rehearsal DB and
-run all pending migrations against it. Required for every Tier 2 PR.
-Production-shaped data (legacy rows, nulls, pre-column accounts) breaks
-migrations in rehearsal, not in production.
+The PR records the chosen batch bound and load-test evidence. There is no
+universal batch-size default.
 
-On Azure Database for PostgreSQL Flexible Server, the rehearsal DB comes from
-point-in-time restore (creates a NEW server — production is never touched):
+### 4. Shadow-verify
 
-```
-az postgres flexible-server restore \
-  --resource-group <rg> --name <app>-rehearsal \
-  --source-server <prod-server> --restore-time <UTC timestamp>
-```
+Run the new read/decision path without enforcing it. Compare results against a
+predeclared zero-or-accepted mismatch threshold for a predeclared period. This
+rung is mandatory for identity/auth data transitions.
 
-Then: run the de-identification scrubber against `<app>-rehearsal`, run all
-pending migrations (`alembic upgrade head`; CAB via its runner), run the test
-suite pointed at it, and delete the server when done (it bills while it
-exists). Each run doubles as restore-drill evidence — log it.
+### 5. Cut reads
 
-Rehearsal CI job name: `<TODO: job name once wired>`
+Move reads to the new representation in explicit cohorts while retaining the
+old compatible path. Use a feature flag only when the cut is reversible
+user-visible behavior. Recovery restores old reads.
 
-## Hard rules for agents
+### 6. Contract
 
-- A migration PR does exactly one rung. Never combine rungs.
-- Backfills: batched (≤ `<TODO>` rows/batch), resumable, idempotent, logged.
-- No `DROP`, `RENAME`, or type change outside a `contract` PR.
-- Every rung's PR states its rollback move before merge.
-- Real PHI never appears in fixtures, rehearsal exports, logs, or PR text.
+After the flight plan's stability window and proof that recovery was not
+needed, stop compatibility writes in one PR. Removal of old code or schema is
+a separate destructive PR with explicit founder approval. Contract cleanup is
+irreversible and never bundled into an earlier rung.
+
+## PHI-safe rehearsal
+
+Before a schema/data rung is promoted to a PHI-bearing environment, its flight
+plan must link a reviewed runbook with exact identities, resources, commands,
+scrubber, verifier, and cleanup. Generic placeholders are not authorization.
+
+The procedure must fail closed:
+
+1. Create a restore target inside an already-enforced isolated network, with
+   public access denied at creation, unique least privilege, no application
+   identities, and automatic TTL cleanup.
+2. Verify isolation independently before restored data is accessible. Abort
+   and clean up if the check fails.
+3. Restore through reviewed PITR automation. Treat the copy as production PHI
+   until scrub verification succeeds.
+4. Run the approved in-place scrubber. It emits counts and hashes, never raw
+   values or exports.
+5. Verify every identified PHI-bearing field automatically. Only a signed pass
+   receipt may open access to migration/test identities.
+6. Run the exact pending rung and representative tests; record timing, counts,
+   invariants, and recovery results; then revoke access.
+7. Execute pre-authorized TTL cleanup and verify deletion. If cleanup fails,
+   alert the founder and keep the target isolated as production data.
+
+Evidence records resource identifiers, recovery point, isolation result,
+scrubber/verifier versions and receipt, migration SHA, results, RTO comparison,
+cleanup result, and founder acceptance. It never includes PHI, connection
+strings, secrets, or raw query output.
+
+## Hard rules
+
+- One rung per schema/data PR; no cutover migration.
+- Backfills are bounded, resumable, idempotent, and observable.
+- Every rung defines invariants, health signals, and recovery before merge.
+- No `DROP`, rename, narrowing/type conversion, or destructive rewrite before
+  separately approved contract cleanup.
+- An expand rollback leaves structures dormant.
+- Failed or unverifiable rehearsal blocks PHI-bearing promotion.
