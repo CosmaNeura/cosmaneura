@@ -62,16 +62,16 @@ highest tier and should be split when concerns can deploy independently.
 
 - Preserve the repository's current GitHub PR approval settings. These
   documents add or remove no required human approvals.
-- Target production policy is founder-only manual promotion from a merged
-  `master` commit and an already-built artifact. The run records founder
-  self-authorization; it is not independent review.
-- Current tracked behavior does not yet match that target:
-  `Build & Publish` can build, publish, and deploy eligible pushes to `master`
-  automatically, including documentation-only pushes because it has no path
-  exclusion, while production infrastructure uses separate manual
-  `Terraform Production Plan` and `Terraform Apply` workflows. This adoption
-  does not change those workflows. Treat manual-only artifact promotion as an
-  open remediation item and never claim a required environment reviewer exists.
+- Production promotion is founder-only and manual. `Build & Publish` permits
+  the production job only for a manual run of the exact `master` ref when both
+  the original actor and any rerun actor are `JohnClem`; ordinary pushes,
+  including documentation-only pushes, cannot enter that job. The run records
+  founder self-authorization; it is not independent review.
+- The production job still builds and publishes during the promotion run
+  instead of promoting a previously verified immutable artifact. Treat that
+  source-to-artifact separation as an open remediation item. Preserve the
+  existing Terraform Apply, provider-callback, ancestry, and current-`master`
+  gates, and never claim a required environment reviewer exists.
 - Before promoting over an environment whose SHA, digest, configuration, or
   schema differs from `master`, record the drift and choose keep, assimilate,
   or replace. Never reconcile by blindly deploying `master`.

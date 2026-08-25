@@ -52,9 +52,9 @@ new review.
 - Exact rollback or recovery move:
 - Previous known-good artifact/data boundary:
 
-Target production policy is founder-only manual promotion from merged
-`master`, recorded as self-authorization. `AGENTS.md` records the current
-workflow gap; this checklist does not claim the target control already exists.
+Production promotion is founder-only and manual from exact `master`, recorded
+as self-authorization. `AGENTS.md` records the remaining immutable-artifact
+promotion gap; this checklist does not claim a required environment reviewer.
 
 ## Change record
 
