@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
 
 import pytest
@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from typeid import TypeID
 
 import app.routes.visit_prep as route
+from app.routes.dependencies.practice_gate import EXEMPT_ROUTE_NAMES
 from app.routes.dependencies.visit_prep import (
     require_visit_prep_read,
     require_visit_prep_write,
@@ -30,7 +31,10 @@ from app.services.visit_prep_question_sets import (
 )
 
 from activemodel.types import TypeIDType
+from app.models.doctor import Doctor
 from sqlalchemy.exc import SQLAlchemyError
+
+from tests.routes.utils import get_clerk_dev_user, provision_practice_in_force
 
 OWNER_ID = cast(TypeIDType, TypeID("practice_member"))
 PRACTICE_ID = cast(TypeIDType, TypeID("practice"))
@@ -101,9 +105,10 @@ def _client(decision: VisitPrepAccessDecision) -> TestClient:
 
 
 def test_router_is_wired_only_under_the_internal_provider_api():
-    paths = {
-        item.path for item in internal_api_app.routes if isinstance(item, APIRoute)
-    }
+    api_routes = [
+        item for item in internal_api_app.routes if isinstance(item, APIRoute)
+    ]
+    paths = {item.path for item in api_routes}
 
     assert {
         "/internal/v1/visit-prep/question-sets",
@@ -113,6 +118,91 @@ def test_router_is_wired_only_under_the_internal_provider_api():
         "/internal/v1/visit-prep/question-set-versions/{version_id}/default",
     } <= paths
     assert not any(path.startswith("/visit-prep") for path in paths)
+    assert {
+        item.name
+        for item in api_routes
+        if item.path.startswith("/internal/v1/visit-prep/")
+    } <= EXEMPT_ROUTE_NAMES
+
+
+@pytest.mark.parametrize(
+    ("method", "route_name", "request_kwargs"),
+    [
+        ("GET", "visit_prep_question_set_list", {}),
+        ("GET", "visit_prep_question_set_version", {}),
+        (
+            "POST",
+            "visit_prep_question_set_create",
+            {
+                "headers": {"Idempotency-Key": IDEMPOTENCY_KEY},
+                "json": {"name": "Draft", "questions": []},
+            },
+        ),
+        (
+            "PUT",
+            "visit_prep_question_set_replace",
+            {
+                "json": {
+                    "name": "Draft",
+                    "questions": [],
+                    "expected_updated_at": NOW.isoformat(),
+                }
+            },
+        ),
+        ("POST", "visit_prep_question_set_successor", {"json": {}}),
+        (
+            "POST",
+            "visit_prep_question_set_publish",
+            {"json": {"make_default": False}},
+        ),
+        ("PUT", "visit_prep_question_set_default", {}),
+    ],
+)
+def test_full_internal_router_keeps_every_visit_prep_denial_non_disclosing(
+    bare_authenticated_client: TestClient,
+    method: str,
+    route_name: str,
+    request_kwargs: dict[str, object],
+):
+    from app.server import api_app
+
+    path_params = (
+        {"version_id": str(VERSION_ID)}
+        if route_name != "visit_prep_question_set_list"
+        and route_name != "visit_prep_question_set_create"
+        else {}
+    )
+    response = bare_authenticated_client.request(
+        method,
+        api_app.url_path_for(route_name, **path_params),
+        **request_kwargs,
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": "Not found"}
+
+
+def test_full_internal_router_hides_lapsed_entitlement_details(
+    authenticated_client: TestClient,
+):
+    from app.server import api_app
+
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.get(clerk_id=clerk_user.id)
+    assert doctor is not None
+    practice = provision_practice_in_force(doctor)
+    practice.billing_exempt = False
+    practice.billing_exempt_until = None
+    practice.subscription_status = None
+    practice.trial_ends_at = datetime.now(UTC) - timedelta(days=1)
+    practice.save()
+
+    response = authenticated_client.get(
+        api_app.url_path_for("visit_prep_question_set_list")
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": "Not found"}
 
 
 def test_openapi_documents_replays_and_generic_error_contracts():

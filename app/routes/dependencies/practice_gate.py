@@ -43,6 +43,18 @@ EXEMPT_ROUTE_NAMES = {
     "end_view_as",
     # enforces its own practice/BAA rules
     "complete_onboarding",
+    # Visit Prep has a stricter, non-disclosing release gate. Its dependencies
+    # independently require an authorized practice member, an in-force BAA,
+    # entitlement, and an exact rollout cohort before any resource lookup.
+    # Let that gate own denials so disabled/non-cohort requests consistently
+    # receive a generic 404 instead of revealing billing or membership state.
+    "visit_prep_question_set_list",
+    "visit_prep_question_set_version",
+    "visit_prep_question_set_create",
+    "visit_prep_question_set_replace",
+    "visit_prep_question_set_successor",
+    "visit_prep_question_set_publish",
+    "visit_prep_question_set_default",
 }
 
 # These routes still require a real practice, an in-force BAA, and an authorized
