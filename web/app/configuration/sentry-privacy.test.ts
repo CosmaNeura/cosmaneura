@@ -177,19 +177,21 @@ describe("Sentry Azure SAS privacy", () => {
   it("redacts Visit Prep bearer credentials and normalized access URLs", () => {
     expect(containsVisitPrepBearerCredential(visitPrepToken)).toBe(true)
     expect(containsVisitPrepBearerCredential(visitPrepUrl)).toBe(true)
-    expect(containsVisitPrepBearerCredential("vp1_too-short")).toBe(false)
+    expect(containsVisitPrepBearerCredential("vp1_too-short")).toBe(true)
     expect(containsVisitPrepBearerCredential(`${visitPrepToken}-extra`)).toBe(
-      false,
+      true,
     )
 
     const event = scrubSensitiveSentryPayload({
       request: { url: visitPrepUrl },
       response: { access_url: visitPrepUrl },
       message: `Visit Prep link ${visitPrepToken}`,
+      concatenated: `prefix_${visitPrepToken}-extra`,
     })
     const serialized = JSON.stringify(event)
 
     expect(serialized).not.toContain(visitPrepToken)
+    expect(serialized).not.toContain("-extra")
     expect(event.request.url).toBe(
       `https://chat.cosmaneura.test/visit-prep#access_token=${REDACTED_VISIT_PREP_CREDENTIAL}`,
     )

@@ -13,7 +13,7 @@ const SAS_VERSION_PATTERN = /(?:^|[?&]|&amp;)sv=/iu
 const INTAKE_BEARER_PATH_PATTERN =
   /(\/(?:external\/)?chat\/intake\/)[^/?#\s"'<>]+/giu
 const INTAKE_TYPEID_PATTERN = /\bintake_[0-9a-hjkmnp-tv-z]{26}\b/giu
-const VISIT_PREP_TOKEN_PATTERN = /\bvp1_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/gu
+const VISIT_PREP_TOKEN_PATTERN = /vp1_[A-Za-z0-9_-]+/gu
 const LEGACY_EXAMPLE_NOTE_PATH_PATTERN =
   /\/internal\/v1\/notes\/upload-example\b/iu
 const LEGACY_EXAMPLE_NOTE_QUERY_PATTERN =
