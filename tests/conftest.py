@@ -66,6 +66,7 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "visit_prep_schedule_generation": "visit_prep_schedule_guard_mutation",
     "visit_prep_credential_generation": "visit_prep_credential_guard_mutation",
     "visit_prep_legal_hold": "visit_prep_legal_hold_guard_mutation",
+    "visit_prep_question_response": "visit_prep_response_guard_mutation",
 }
 
 

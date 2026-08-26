@@ -24,6 +24,7 @@ _DATABASE_ONLY_FILES = {
         Path(__file__).resolve().parent / "visit_prep_question_publish_lock_test.py"
     ).resolve(),
     (Path(__file__).resolve().parent / "visit_prep_commands_lock_test.py").resolve(),
+    (Path(__file__).resolve().parent / "visit_prep_responses_lock_test.py").resolve(),
 }
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 _CLERK_REQUIRED_FILES = frozenset(

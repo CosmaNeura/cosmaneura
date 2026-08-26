@@ -232,6 +232,12 @@ class VisitPrep(
             name="uq_visit_prep_id_owner",
         ),
         sa.UniqueConstraint(
+            "id",
+            "owner_practice_member_id",
+            "question_set_version_id",
+            name="uq_visit_prep_id_owner_question_version",
+        ),
+        sa.UniqueConstraint(
             "owner_practice_member_id",
             "creation_idempotency_key",
             name="uq_visit_prep_owner_creation_key",
