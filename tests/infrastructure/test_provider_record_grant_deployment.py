@@ -48,7 +48,7 @@ def test_production_grant_key_is_scoped_only_to_api_container_app() -> None:
     api = _hcl_block(main, 'resource "azurerm_container_app" "app"')
     assert api.count("var.python_api_only_secret_vars") == 2
 
-    for workload in ("scheduler", "worker", "job-monitor"):
+    for workload in ("scheduler", "worker"):
         block = _hcl_block(main, f'resource "azurerm_container_app" "{workload}"')
         assert "python_api_only_secret_vars" not in block
         assert GRANT_SECRET not in block

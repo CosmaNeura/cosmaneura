@@ -309,7 +309,7 @@ apply is in flight.
 `SOVEREIGN_RECORD_GRANT_SECRET` is a capability-bearing key used only by the
 HTTP API to mint short-lived synthetic Preview record grants. OpenTofu exposes
 it only to `cosmaneura-prod-app`; it is excluded from the worker, scheduler,
-job-monitor, and migration job. Staging's deployment script enforces the same
+and migration job. Staging's deployment script enforces the same
 API-only split for `cosmaneura-staging-app`. Staging remains off by default;
 provision its separate 1Password item first, then set the staging GitHub
 environment variable `ENABLE_SOVEREIGN_RECORD_GRANTS=true` only for the
@@ -327,7 +327,7 @@ source-controlled old/v2 secret selection, adoption-only live-state guard,
 cluster-database ACL audit, and value-free migration preflight. The current
 inline-secret model places encrypted values in protected OpenTofu state; moving
 them to Key Vault references remains a separate architecture change.
-OpenTofu owns the four long-running apps; the deploy script owns the already-
+OpenTofu owns the three long-running apps; the deploy script owns the already-
 provisioned migration job and now fails rather than creating it implicitly.
 
 ## Scribe workflow identity

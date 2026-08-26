@@ -38,7 +38,6 @@ WORKLOADS = (
     Workload("api", "cosmaneura-prod-app", ("containerapp",), True),
     Workload("worker", "cosmaneura-prod-worker", ("containerapp",)),
     Workload("scheduler", "cosmaneura-prod-scheduler", ("containerapp",)),
-    Workload("jmon", "cosmaneura-prod-app-jmon", ("containerapp",)),
     Workload("migration", "cosmaneura-prod-migrate", ("containerapp", "job")),
 )
 
