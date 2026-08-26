@@ -56,3 +56,10 @@ React Router 7.9 requires a function component as the route-module default.
 The existing provider higher-order component can return a class-or-function
 union, so the root route now exports a small function wrapper around the same
 provider composition. This is a type-compatibility change, not a new auth path.
+
+React Router 7.9 also loads the production Vite configuration during standalone
+type generation. The type-generation recipes now supply the explicit
+non-release identifier `typegen-dirty` only when no build commit was provided.
+The identifier is scoped to the type-generation process. Production builds
+still fail closed when `VITE_BUILD_COMMIT` is missing and continue to require a
+Sentry token for a clean, non-CI release build.

@@ -12,8 +12,9 @@ pnpm +PNPM_CMD:
 js_setup:
 	# frozen-lockfile is used on CI and when building for production, so we default so that mode
 	{{_pnpm}} install --frozen-lockfile
-	# TODO do we actually need this? Or will RR do this for us when building a preview + build?
-	{{_pnpm}} react-router typegen
+	# React Router 7.9 loads the production Vite configuration during type generation.
+	# Mark this non-release operation dirty without weakening the real build's release checks.
+	cd {{WEB_DIR}} && VITE_BUILD_COMMIT="${VITE_BUILD_COMMIT:-typegen-dirty}" pnpm ${PNPM_GLOBAL_FLAGS:-} react-router typegen
 
 js_clean:
 	rm -rf {{WEB_DIR}}/build {{WEB_DIR}}/client {{WEB_DIR}}/node_modules {{WEB_DIR}}/.react-router || true
@@ -92,7 +93,7 @@ _js_generate-openapi:
 	{{_pnpm}} run openapi
 
 	# generated route types can dependend on the openapi spec, so we need to regenerate it
-	{{_pnpm}} exec react-router typegen
+	cd {{WEB_DIR}} && VITE_BUILD_COMMIT="${VITE_BUILD_COMMIT:-typegen-dirty}" pnpm ${PNPM_GLOBAL_FLAGS:-} exec react-router typegen
 
 # TODO watch js files
 # react-router typegen
