@@ -155,7 +155,7 @@ def _decode_build_arguments(output: bytes) -> dict[str, str]:
 
 
 def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
     staging_start = workflow.index("\n  deploy-staging:")
 
@@ -169,7 +169,7 @@ def test_staging_provider_v7_switch_is_single_default_off_control() -> None:
 def test_frontend_workflow_resolvers_include_authority_flag_without_control_leak() -> (
     None
 ):
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     staging_start = workflow.index("\n  deploy-staging:")
     production_job = workflow[:staging_start]
     staging_job = workflow[staging_start:]
@@ -325,5 +325,5 @@ def test_provider_v7_control_does_not_leak_into_production_paths() -> None:
         assert CONTROL not in source
         assert PROVIDER_ORIGIN not in source
 
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     assert CONTROL not in workflow[: workflow.index("\n  deploy-staging:")]

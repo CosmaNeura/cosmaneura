@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_backend_ci_installs_only_default_suite_host_dependencies() -> None:
-    workflow = (ROOT / ".github/workflows/build_and_publish.yml").read_text(
+    workflow = (ROOT / ".github/workflows/build_and_publish_manual.yml").read_text(
         encoding="utf-8"
     )
     backend = workflow[workflow.index("  app:\n") : workflow.index("  web:\n")]
