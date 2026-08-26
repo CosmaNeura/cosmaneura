@@ -68,6 +68,9 @@ _APPEND_ONLY_TEST_TRIGGERS = {
     "visit_prep_legal_hold": "visit_prep_legal_hold_guard_mutation",
     "visit_prep_question_response": "visit_prep_response_guard_mutation",
 }
+_APPEND_ONLY_TEST_EXTRA_TRIGGERS = {
+    "visit_prep_question_response": "visit_prep_response_guard_truncate",
+}
 
 
 def database_reset_truncate_for_tests() -> None:
@@ -84,19 +87,29 @@ def database_reset_truncate_for_tests() -> None:
     engine = SessionManager.get_instance().get_engine()
     try:
         with engine.begin() as connection:
-            for table_name, trigger_name in _APPEND_ONLY_TEST_TRIGGERS.items():
-                connection.execute(
-                    text(
-                        f"ALTER TABLE {table_name} DISABLE TRIGGER {trigger_name}"
+            for trigger_map in (
+                _APPEND_ONLY_TEST_TRIGGERS,
+                _APPEND_ONLY_TEST_EXTRA_TRIGGERS,
+            ):
+                for table_name, trigger_name in trigger_map.items():
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table_name} DISABLE TRIGGER {trigger_name}"
+                        )
                     )
-                )
         database_reset_truncate()
     finally:
         with engine.begin() as connection:
-            for table_name, trigger_name in _APPEND_ONLY_TEST_TRIGGERS.items():
-                connection.execute(
-                    text(f"ALTER TABLE {table_name} ENABLE TRIGGER {trigger_name}")
-                )
+            for trigger_map in (
+                _APPEND_ONLY_TEST_TRIGGERS,
+                _APPEND_ONLY_TEST_EXTRA_TRIGGERS,
+            ):
+                for table_name, trigger_name in trigger_map.items():
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE {table_name} ENABLE TRIGGER {trigger_name}"
+                        )
+                    )
 
 log.info("multiprocess start method", start_method=multiprocessing.get_start_method())
 

@@ -42,7 +42,7 @@ class VisitPrepQuestionResponse(
         sa.CheckConstraint(
             "(response_kind = 'answered' "
             "AND answer_ciphertext IS NOT NULL "
-            "AND answer_format_version = 1 "
+            "AND answer_format_version IS NOT DISTINCT FROM 1 "
             "AND octet_length(answer_ciphertext) BETWEEN 1 AND 32768) OR "
             "(response_kind = 'skipped' "
             "AND answer_ciphertext IS NULL "

@@ -191,7 +191,7 @@ def test_response_schema_has_private_lineage_and_uniqueness_fences() -> None:
         "visit_prep_response_question_lineage_idx",
         "answer_ciphertext",
         "payload_hmac_sha256",
-        "answer_format_version = 1",
+        "answer_format_version IS NOT DISTINCT FROM 1",
         "submission_sequence BETWEEN 1 AND 5",
     ):
         assert required in source
@@ -214,6 +214,11 @@ def test_response_trigger_is_schema_hardened_and_append_only() -> None:
         "BEFORE INSERT OR UPDATE OR DELETE ON public.visit_prep_question_response"
         in source
     )
+    assert (
+        "CREATE FUNCTION public.cosmas_reject_visit_prep_response_truncate()" in source
+    )
+    assert "BEFORE TRUNCATE ON public.visit_prep_question_response" in source
+    assert "FOR EACH STATEMENT" in source
     assert "FOR UPDATE" in source
     assert "root_state <> 'in_progress'" in source
     assert "LIMIT 1 FOR UPDATE; event_at := clock_timestamp();" in source
@@ -231,15 +236,25 @@ def test_response_trigger_is_schema_hardened_and_append_only() -> None:
         '"visit_prep_question_response": "visit_prep_response_guard_mutation"'
         in conftest_source
     )
+    assert (
+        '"visit_prep_question_response": "visit_prep_response_guard_truncate"'
+        in conftest_source
+    )
 
 
 def test_response_downgrade_qualifies_objects_and_drops_dependency_first() -> None:
     downgrade = _source().split("def downgrade() -> None:", 1)[1]
 
-    trigger = downgrade.index("DROP TRIGGER IF EXISTS")
+    truncate_trigger = downgrade.index(
+        "DROP TRIGGER IF EXISTS visit_prep_response_guard_truncate"
+    )
+    mutation_trigger = downgrade.index(
+        "DROP TRIGGER IF EXISTS visit_prep_response_guard_mutation"
+    )
     table = downgrade.index(
         'op.drop_table("visit_prep_question_response", schema="public")'
     )
     root_key = downgrade.index('"uq_visit_prep_id_owner_question_version"')
-    assert trigger < table < root_key
+    assert truncate_trigger < mutation_trigger < table < root_key
+    assert "public.cosmas_reject_visit_prep_response_truncate()" in downgrade
     assert "public.cosmas_guard_visit_prep_response()" in downgrade

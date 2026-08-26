@@ -223,6 +223,10 @@ def test_shape_lineage_and_active_credential_are_database_fenced() -> None:
     malformed_skip.answer_format_version = 1
     _reject_insert(malformed_skip, "answer_shape")
 
+    missing_answer_format = _response(scope, question_index=0, sequence=1)
+    missing_answer_format.answer_format_version = None
+    _reject_insert(missing_answer_format, "answer_shape")
+
     wrong_question = _response(scope, question_index=0, sequence=1)
     wrong_question.question_id = other.question_ids[0]
     _reject_insert(wrong_question, "fk_visit_prep_response_question_lineage")

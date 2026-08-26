@@ -59,6 +59,20 @@ def test_concurrent_same_sequence_accepts_exactly_one_response() -> None:
         )
 
 
+def test_truncate_cannot_bypass_response_retention() -> None:
+    scope = _scope("truncate-guard")
+    _start(scope)
+    _response(scope, question_index=0, sequence=1).save()
+
+    with get_session() as session:
+        with pytest.raises(DBAPIError, match="responses cannot be truncated"):
+            session.execute(text("TRUNCATE TABLE public.visit_prep_question_response"))
+
+    with get_session() as session:
+        with pytest.raises(DBAPIError, match="responses cannot be truncated"):
+            session.execute(text("TRUNCATE TABLE public.visit_prep CASCADE"))
+
+
 def test_response_rechecks_expiry_after_waiting_for_root_lock() -> None:
     expiry_at = datetime.now(UTC) + timedelta(seconds=5)
     scheduled_at = expiry_at - timedelta(hours=72)
