@@ -106,6 +106,7 @@ def deidentify(phi_text: str) -> str:
     log.info(
         "deidentification provider request started",
         event_code="deidentification_request_started",
+        credential_mode=AZURE_DEID_AUTH_MODE,
     )
 
     # The supported API versions are: 2024-11-15, 2025-07-15-preview
@@ -125,12 +126,14 @@ def deidentify(phi_text: str) -> str:
         log.error(
             "deidentification provider request failed",
             event_code="deidentification_request_failed",
+            credential_mode=AZURE_DEID_AUTH_MODE,
         )
         raise
 
     log.info(
         "deidentification provider request completed",
         event_code="deidentification_request_completed",
+        credential_mode=AZURE_DEID_AUTH_MODE,
     )
 
     return result.output_text

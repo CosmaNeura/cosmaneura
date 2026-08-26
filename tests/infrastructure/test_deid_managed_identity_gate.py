@@ -71,6 +71,20 @@ def test_managed_identity_configuration_does_not_require_legacy_secret(
     assert configured.AZURE_DEID_CLIENT_SECRET == ""
 
 
+def test_managed_identity_configuration_rejects_non_uuid_client_id(
+    monkeypatch,
+) -> None:
+    _set_base_azure_environment(monkeypatch)
+    monkeypatch.setenv("AZURE_DEID_AUTH_MODE", "managed_identity")
+    monkeypatch.setenv("AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID", "not-a-uuid")
+
+    with pytest.raises(
+        ValueError,
+        match="AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID must be a canonical UUID",
+    ):
+        _load_azure_configuration()
+
+
 def test_legacy_configuration_remains_the_default_rollback(monkeypatch) -> None:
     _set_base_azure_environment(monkeypatch)
     monkeypatch.delenv("AZURE_DEID_AUTH_MODE", raising=False)
@@ -96,7 +110,9 @@ def test_configuration_rejects_ambiguous_auth_mode(monkeypatch) -> None:
 
 def _query(*, enabled: str = "true") -> dict[str, str]:
     return {
+        "compatible_worker_image_tag": "a" * 40,
         "enabled": enabled,
+        "expected_deid_endpoint": "https://deid.example.invalid",
         "identity_name": IDENTITY_NAME,
         "resource_group": RESOURCE_GROUP,
         "service_name": SERVICE_NAME,
@@ -115,6 +131,7 @@ def _resources() -> dict[str, Any]:
         "resource": {
             "id": DEID_ID,
             "name": SERVICE_NAME,
+            "properties": {"serviceUrl": "https://deid.example.invalid/"},
             "type": guard.DEID_RESOURCE_TYPE,
         },
         "worker": {
@@ -132,12 +149,30 @@ def _resources() -> dict[str, Any]:
                                     "name": guard.MANAGED_IDENTITY_CLIENT_ID_ENV,
                                     "value": CLIENT_ID,
                                 },
+                                {
+                                    "name": "AZURE_DEID_ENDPOINT",
+                                    "secretRef": "azure-deid-endpoint",
+                                },
                             ]
                         }
                     ]
                 }
             },
         },
+        "revisions": [
+            {
+                "properties": {
+                    "active": True,
+                    "healthState": "Healthy",
+                    "provisioningState": "Provisioned",
+                    "template": {
+                        "containers": [
+                            {"image": f"registry.example/core:{'a' * 40}"}
+                        ]
+                    },
+                }
+            }
+        ],
         "assignments": [
             {
                 "principalId": PRINCIPAL_ID,
@@ -157,6 +192,8 @@ def _runner(resources: dict[str, Any], calls: list[tuple[str, ...]]):
             return json.dumps(resources["resource"])
         if arguments[:2] == ("containerapp", "show"):
             return json.dumps(resources["worker"])
+        if arguments[:3] == ("containerapp", "revision", "list"):
+            return json.dumps(resources["revisions"])
         if arguments[:3] == ("role", "assignment", "list"):
             return json.dumps(resources["assignments"])
         raise AssertionError(f"unexpected command: {arguments}")
@@ -180,8 +217,14 @@ def test_activation_requires_exact_identity_resource_worker_and_role() -> None:
 
     result = guard.verify_live_state(_query(), runner=_runner(_resources(), calls))
 
-    assert result == {"check_count": "5", "result": "verified"}
-    assert len(calls) == 4
+    assert result == {"check_count": "8", "result": "verified"}
+    assert len(calls) == 5
+    role_query = calls[-1]
+    assert role_query[:3] == ("role", "assignment", "list")
+    assert role_query[role_query.index("--scope") + 1] == DEID_ID
+    assert "--include-inherited" in role_query
+    assert role_query[role_query.index("--fill-principal-name") + 1] == "false"
+    assert "--all" not in role_query
 
 
 @pytest.mark.parametrize(
@@ -194,6 +237,18 @@ def test_activation_requires_exact_identity_resource_worker_and_role() -> None:
         lambda state: state["worker"]["properties"]["template"]["containers"][0]["env"][
             1
         ].update({"value": "33333333-3333-3333-3333-333333333333"}),
+        lambda state: state["worker"]["properties"]["template"]["containers"][0]["env"][
+            2
+        ].update({"secretRef": "unexpected-endpoint"}),
+        lambda state: state["resource"]["properties"].update(
+            {"serviceUrl": "https://other.example.invalid"}
+        ),
+        lambda state: state["revisions"][0]["properties"]["template"]["containers"][
+            0
+        ].update({"image": f"registry.example/core:{'b' * 40}"}),
+        lambda state: state["revisions"][0]["properties"].update(
+            {"healthState": "Degraded"}
+        ),
         lambda state: state["assignments"][0].update(
             {"scope": f"/subscriptions/{SUBSCRIPTION_ID}"}
         ),
@@ -247,3 +302,4 @@ def test_terraform_models_default_off_adoption_and_exact_least_privilege() -> No
     assert "scope                = local.deid_service_resource_id" in main
     assert 'role_definition_name = "DeID Realtime Data User"' in main
     assert "data.external.deid_managed_identity_live_guard" in main
+    assert "deid_managed_identity_compatible_worker_image_tag" in variables

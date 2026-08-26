@@ -175,7 +175,8 @@ run "managed_identity_activation_static_plan" {
   command = plan
 
   variables {
-    enable_deid_managed_identity = true
+    deid_managed_identity_compatible_worker_image_tag = "1111111111111111111111111111111111111111"
+    enable_deid_managed_identity                      = true
   }
 
   assert {

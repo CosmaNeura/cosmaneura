@@ -68,6 +68,7 @@ def test_deidentification_logs_neither_input_nor_output() -> None:
         "deidentification_request_started",
         "deidentification_request_completed",
     ]
+    assert {entry.get("credential_mode") for entry in logs} == {"client_secret"}
 
 
 def test_deidentification_logs_no_provider_exception_details() -> None:
@@ -89,3 +90,4 @@ def test_deidentification_logs_no_provider_exception_details() -> None:
     assert input_text not in serialized
     assert provider_error not in serialized
     assert logs[-1]["event_code"] == "deidentification_request_failed"
+    assert logs[-1]["credential_mode"] == "client_secret"

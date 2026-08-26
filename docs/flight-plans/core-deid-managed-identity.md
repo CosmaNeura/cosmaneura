@@ -71,9 +71,9 @@
 | Rung | Change and hold point | Required evidence | Recovery |
 | --- | --- | --- | --- |
 | 0 | Merge compatibility code with the control default-off. Do not deploy or apply from the feature branch. | Focused Python tests, OpenTofu format/validate, provider-mocked plans, independent review of the final commit. | Revert the PR; deployed behavior is unchanged. |
-| 1 | From exact `master`, run the protected production plan and apply only the UAI attachment plus exact-resource realtime role replacement. Keep `client_secret` selected. | Attested plan; no unrelated replacement; read-only live preflight reports five checks verified. | Apply the previous attested configuration; the legacy credential remains usable. |
-| 2 | Deploy the compatible image while `client_secret` remains selected. | Healthy worker revision and one synthetic, non-PHI realtime DeID request with expected output and metadata-only success logs. | Redeploy the previous known-good digest. |
-| 3 | In a separate reviewed PR, set `enable_deid_managed_identity=true`; obtain a fresh protected plan. Its read-only preflight must verify the exact UAI ID, DeID resource ID, worker attachment, client-ID pin, and realtime role before planning the switch. | Successful plan/apply, healthy worker, synthetic success, and no credential-fallback or authorization failures. | Set the control false through the protected plan/apply path while the legacy secret is retained. |
+| 1 | From exact `master`, run the protected production plan, then complete the separately privileged RBAC bootstrap and state reconciliation below. The ordinary production workflow cannot write `Microsoft.Authorization` role assignments. Its final apply may attach the UAI and set the default-off environment only after the role replacement is adoption-only. Keep `client_secret` selected. | Pre/post state snapshots; privileged operator and expiry; exact old/new assignment IDs; an attested final plan with no RBAC create/delete and no unrelated replacement; post-apply live configuration. | Before the final apply, remove the newly created exact-scope assignment and restore the protected state snapshot if reconciliation cannot finish. After attachment, apply the previous attested configuration; the legacy credential remains usable. |
+| 2 | Deploy the compatible image while `client_secret` remains selected. Record its exact 40-character commit tag and registry manifest digest. | Healthy worker revision and one synthetic, non-PHI realtime DeID request with expected output and metadata-only success logs that identify `client_secret` mode. | Redeploy the previous known-good digest. |
+| 3 | In a separate reviewed PR, set `enable_deid_managed_identity=true` and set `deid_managed_identity_compatible_worker_image_tag` to the exact tag accepted in rung 2; obtain a fresh protected plan. Its read-only preflight must verify the exact UAI ID, DeID resource ID and endpoint, worker attachment, client-ID pin, active healthy image tag, and effective realtime role before planning the switch. | Successful plan/apply, healthy worker, synthetic success with `managed_identity` credential-mode telemetry, and no credential-fallback or authorization failures. | Set the control false through the protected plan/apply path while the legacy secret is retained. |
 | 4 | Observe for at least one normal de-identification cycle and 24 hours without authorization failures. Inventory every consumer of the legacy app registration. | Success/error counts only; no transcript, note, token, endpoint query, or patient identifiers in evidence. | Return to rung 3 rollback while the credential remains valid. |
 | 5 | Revoke both active legacy secrets, remove the expired credential, remove the legacy subscription-wide DeID role, and then remove old secret injection/configuration in a separate reviewed cleanup. Preserve the app registration because it also defines API audience and application-role contracts. | Secret consumer inventory is empty, managed path remains healthy, and Azure/1Password/runtime checks show no legacy credential. | Create a new narrowly scoped emergency credential only through an approved incident change; never restore subscription-wide access as routine rollback. |
 
@@ -85,12 +85,61 @@
 - Production plan, apply, and deployment remain founder-only and manual under
   the repository deployment doctrine.
 
+## Rung 1 privileged RBAC bootstrap and state reconciliation
+
+The protected production workflow authenticates as `cosmaneura-gha-prod`. Its
+resource-group Contributor and deployment roles permit resource reads and
+writes but explicitly do not permit `Microsoft.Authorization/*/Write` or
+`Microsoft.Authorization/*/Delete`. It therefore cannot replace the current
+Terraform-tracked ACR-scoped role assignment. Do not discover this during an
+apply and do not temporarily grant the workflow subscription Owner.
+
+Use a separately named, strongly authenticated privileged operator for one
+change window. Record the ticket, operator object ID, start/expiry time, exact
+source commit, and all value-free command results. Before any state operation,
+save an access-restricted `tofu state pull` snapshot. Then:
+
+1. Read the health-services identity and exact `AnonymizerAPI` resource IDs.
+   Inventory all of that identity's Azure role assignments with a privileged
+   subscription-wide read and record only assignment IDs, roles, and scopes.
+2. Create `DeID Realtime Data User` for that identity on the exact DeID resource
+   using `--assignee-object-id` and
+   `--assignee-principal-type ServicePrincipal`. Verify its assignment ID,
+   principal, role, and scope before continuing.
+3. Remove `azurerm_role_assignment.health_services_deid_access` from state only;
+   import the verified new assignment ID at that same address. These are state
+   reconciliation operations, not an Azure apply.
+4. Delete the obsolete ACR-scoped `DeID Batch Data Owner` assignment by its
+   previously recorded exact assignment ID. Re-run the privileged full
+   assignment inventory and require only the intended DeID access.
+5. Run a fresh protected production plan. It must show no role-assignment
+   create, delete, or replacement. Only then may the ordinary workflow apply
+   the reviewed worker identity attachment and default-off environment.
+6. End the temporary privileged session/eligibility and retain the state
+   snapshots, assignment metadata, plan, operator, and timestamps with the
+   change record.
+
+Abort on an unexpected principal, role, scope, assignment count, state address,
+or plan action. If failure occurs before the final apply, delete only the newly
+created exact-scope assignment by its verified ID and restore the protected
+state snapshot; do not guess at state or role targets.
+
 ## Security and recovery
 
 - The activation guard is read-only and value-free. When activation is off it
-  performs no Azure call, so pull-request tests remain secretless.
+  performs no Azure call, so pull-request tests remain secretless. When on, its
+  role query is scoped to the exact DeID resource and includes inherited
+  assignments, which the resource-group-scoped production runner can read. A
+  separate privileged full inventory in rung 1 proves there is no unrelated
+  assignment elsewhere in the subscription.
 - Managed mode uses `ManagedIdentityCredential` with the exact client ID. It
-  intentionally has no automatic client-secret fallback.
+  validates that ID as a canonical UUID at startup and intentionally has no
+  automatic client-secret fallback.
+- The guard requires the live healthy worker revision to run the exact reviewed
+  compatible commit tag and compares the configured DeID endpoint with the
+  live `AnonymizerAPI` service URL. Metadata-only request logs identify the
+  selected credential mode so the synthetic activation check cannot succeed
+  silently through the retained client secret.
 - The legacy secret is a temporary rollback control, not the finished state.
   Its revocation is blocked until consumer inventory confirms that no other
   workload depends on the shared registration.

@@ -13,12 +13,14 @@ import re
 import subprocess
 import sys
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 SUBSCRIPTION_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
 RESOURCE_NAME_RE = re.compile(r"^[A-Za-z0-9._()\-]{1,90}$")
 UUID_RE = SUBSCRIPTION_RE
+IMAGE_TAG_RE = re.compile(r"^[0-9a-f]{40}$")
 DEID_RESOURCE_TYPE = "Microsoft.HealthDataAIServices/deidServices"
 DEID_ROLE = "DeID Realtime Data User"
 MANAGED_IDENTITY_CLIENT_ID_ENV = "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID"
@@ -64,7 +66,9 @@ def read_query(stream: Any) -> dict[str, str]:
     except (json.JSONDecodeError, UnicodeError) as error:
         raise LiveGuardError("guard input is invalid JSON") from error
     expected_fields = {
+        "compatible_worker_image_tag",
         "enabled",
+        "expected_deid_endpoint",
         "identity_name",
         "resource_group",
         "service_name",
@@ -81,11 +85,17 @@ def read_query(stream: Any) -> dict[str, str]:
 def validate_query(query: dict[str, str]) -> None:
     if query["enabled"] not in {"true", "false"}:
         raise LiveGuardError("enabled flag is invalid")
+    if query["enabled"] == "true" and not IMAGE_TAG_RE.fullmatch(
+        query["compatible_worker_image_tag"]
+    ):
+        raise LiveGuardError("compatible worker image tag is invalid")
     if not SUBSCRIPTION_RE.fullmatch(query["subscription_id"].lower()):
         raise LiveGuardError("subscription ID is invalid")
     for field in ("identity_name", "resource_group", "service_name", "worker_name"):
         if not RESOURCE_NAME_RE.fullmatch(query[field]):
             raise LiveGuardError("Azure resource name is invalid")
+    if query["enabled"] == "true":
+        _normalized_https_origin(query["expected_deid_endpoint"])
 
 
 def _load_object(raw: str, label: str) -> dict[str, Any]:
@@ -149,6 +159,67 @@ def _one_plain_value(environment: list[dict[str, Any]], name: str) -> str:
     ):
         raise LiveGuardError("worker identity environment is invalid")
     return matches[0]["value"]
+
+
+def _one_secret_reference(environment: list[dict[str, Any]], name: str) -> str:
+    matches = [entry for entry in environment if entry.get("name") == name]
+    if (
+        len(matches) != 1
+        or not isinstance(matches[0].get("secretRef"), str)
+        or matches[0].get("value") not in (None, "")
+    ):
+        raise LiveGuardError("worker secret environment is invalid")
+    return matches[0]["secretRef"]
+
+
+def _normalized_https_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise LiveGuardError("DeID service endpoint is invalid")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise LiveGuardError("DeID service endpoint is invalid") from error
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise LiveGuardError("DeID service endpoint is invalid")
+    port_suffix = f":{port}" if port is not None else ""
+    return f"https://{parsed.hostname.lower()}{port_suffix}"
+
+
+def _active_worker_image(revisions: list[Any]) -> str:
+    active = [
+        revision
+        for revision in revisions
+        if isinstance(revision, dict)
+        and isinstance(revision.get("properties"), dict)
+        and revision["properties"].get("active") is True
+    ]
+    if len(active) != 1:
+        raise LiveGuardError("worker must have exactly one active revision")
+    properties = active[0]["properties"]
+    if (
+        properties.get("healthState") != "Healthy"
+        or properties.get("provisioningState") != "Provisioned"
+    ):
+        raise LiveGuardError("active worker revision is not healthy")
+    try:
+        containers = properties["template"]["containers"]
+    except (KeyError, TypeError) as error:
+        raise LiveGuardError("active worker revision is incomplete") from error
+    if not isinstance(containers, list) or len(containers) != 1:
+        raise LiveGuardError("active worker revision must have one container")
+    image = containers[0].get("image") if isinstance(containers[0], dict) else None
+    if not isinstance(image, str) or not image:
+        raise LiveGuardError("active worker image is invalid")
+    return image
 
 
 def verify_live_state(
@@ -217,6 +288,14 @@ def verify_live_state(
         or str(service.get("type", "")).lower() != DEID_RESOURCE_TYPE.lower()
     ):
         raise LiveGuardError("DeID resource identity is unexpected")
+    try:
+        service_url = service["properties"]["serviceUrl"]
+    except (KeyError, TypeError) as error:
+        raise LiveGuardError("DeID resource endpoint is missing") from error
+    if _normalized_https_origin(service_url) != _normalized_https_origin(
+        query["expected_deid_endpoint"]
+    ):
+        raise LiveGuardError("configured DeID endpoint is unexpected")
 
     worker = _load_object(
         runner(
@@ -247,11 +326,35 @@ def verify_live_state(
     environment = _worker_environment(worker)
     if _one_plain_value(environment, MANAGED_IDENTITY_CLIENT_ID_ENV) != client_id:
         raise LiveGuardError("worker managed identity client ID is unexpected")
+    if _one_secret_reference(environment, "AZURE_DEID_ENDPOINT") != "azure-deid-endpoint":
+        raise LiveGuardError("worker DeID endpoint reference is unexpected")
     if _one_plain_value(environment, AUTH_MODE_ENV) not in {
         "client_secret",
         "managed_identity",
     }:
         raise LiveGuardError("worker DeID auth mode is invalid")
+
+    revisions = _load_list(
+        runner(
+            (
+                "containerapp",
+                "revision",
+                "list",
+                "--name",
+                query["worker_name"],
+                "--resource-group",
+                resource_group,
+                "--subscription",
+                subscription_id,
+                "--output",
+                "json",
+            )
+        ),
+        "worker revision",
+    )
+    image = _active_worker_image(revisions)
+    if not image.endswith(f":{query['compatible_worker_image_tag']}"):
+        raise LiveGuardError("active worker image is not the approved compatible build")
 
     assignments = _load_list(
         runner(
@@ -261,7 +364,11 @@ def verify_live_state(
                 "list",
                 "--assignee-object-id",
                 principal_id,
-                "--all",
+                "--scope",
+                deid_resource_id,
+                "--include-inherited",
+                "--fill-principal-name",
+                "false",
                 "--subscription",
                 subscription_id,
                 "--output",
@@ -283,7 +390,7 @@ def verify_live_state(
             "managed identity role assignments exceed exact DeID access"
         )
 
-    return {"check_count": "5", "result": "verified"}
+    return {"check_count": "8", "result": "verified"}
 
 
 def main() -> int:

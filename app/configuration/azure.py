@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from decouple import config
 
 AZURE_UPLOADS_ACCOUNT_NAME = config("AZURE_UPLOADS_ACCOUNT_NAME", cast=str)
@@ -21,7 +23,17 @@ if AZURE_DEID_AUTH_MODE not in {"client_secret", "managed_identity"}:
 if AZURE_DEID_AUTH_MODE == "managed_identity":
     AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID = config(
         "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID", cast=str
-    )
+    ).strip()
+    try:
+        if (
+            str(UUID(AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID))
+            != AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID.lower()
+        ):
+            raise ValueError
+    except ValueError as error:
+        raise ValueError(
+            "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID must be a canonical UUID"
+        ) from error
     AZURE_DEID_TENANT_ID = config("AZURE_DEID_TENANT_ID", default="", cast=str)
     AZURE_DEID_CLIENT_ID = config("AZURE_DEID_CLIENT_ID", default="", cast=str)
     AZURE_DEID_CLIENT_SECRET = config("AZURE_DEID_CLIENT_SECRET", default="", cast=str)
