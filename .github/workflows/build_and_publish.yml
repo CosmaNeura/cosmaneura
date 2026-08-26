@@ -53,7 +53,11 @@ env:
 jobs:
   authorize-production:
     name: Authorize production promotion
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master'
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -80,6 +84,42 @@ jobs:
           fi
           if [[ "$PROMOTION_TRIGGERING_ACTOR" != "JohnClem" ]]; then
             echo "::error::Production promotion reruns are restricted to the founder account."
+            exit 1
+          fi
+
+  authorize-staging:
+    name: Authorize staging deployment
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/staging'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require founder-authorized manual deployment from staging
+        env:
+          DEPLOYMENT_ACTOR: ${{ github.actor }}
+          DEPLOYMENT_EVENT: ${{ github.event_name }}
+          DEPLOYMENT_REF: ${{ github.ref }}
+          DEPLOYMENT_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          if [[ "$DEPLOYMENT_EVENT" != "workflow_dispatch" ]]; then
+            echo "::error::Staging deployment must be started manually with workflow_dispatch."
+            exit 1
+          fi
+          if [[ "$DEPLOYMENT_REF" != "refs/heads/staging" ]]; then
+            echo "::error::Staging deployment must target the exact staging branch."
+            exit 1
+          fi
+          if [[ "$DEPLOYMENT_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Staging deployment is restricted to the founder account."
+            exit 1
+          fi
+          if [[ "$DEPLOYMENT_TRIGGERING_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Staging deployment reruns are restricted to the founder account."
             exit 1
           fi
 
@@ -400,8 +440,15 @@ jobs:
     name: 🚀 Deploy Staging
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: [web, app]
-    if: ${{ github.ref == 'refs/heads/staging' && github.event_name == 'push' }}
+    needs: [web, app, authorize-staging]
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/staging' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize-staging.result == 'success'
+      }}
     environment: staging
     env:
       ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}

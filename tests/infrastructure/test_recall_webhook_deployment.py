@@ -345,7 +345,8 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
     assert "github.ref == 'refs/heads/master'" in production
     assert "environment: production" in production
     assert "github.ref == 'refs/heads/staging'" in staging
-    assert "github.event_name == 'push'" in staging
+    assert "github.event_name == 'workflow_dispatch'" in staging
+    assert "github.event_name == 'push'" not in staging
     assert "environment: staging" in staging
     for protected_job in protected_jobs.values():
         assert "id-token: write" in protected_job
