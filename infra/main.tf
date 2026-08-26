@@ -121,9 +121,9 @@ terraform {
       version = ">=2.3.4"
     }
 
-    # used for the job-monitor (flower) password that used to come from
-    # an onepassword_item resource — see note above the random_password
-    # block on why we no longer sync the password to 1Password from TF.
+    # Transitional state dependency: the removed Flower password remains in
+    # production state until the approved removal plan is applied. Keep this
+    # provider and its lock entry for that destroy, then remove both afterward.
     random = {
       source  = "hashicorp/random"
       version = ">=3.6.0"
@@ -1035,182 +1035,6 @@ resource "azurerm_container_app" "worker" {
 # https://github.com/microsoft/azure-container-apps/issues/938
 
 
-# Flower (job-monitor) dashboard password. Used to be synced to 1Password
-# via an onepassword_item with a password_recipe, but the CI service
-# account lacks write access to OP_PROD_VAULT — every `tofu apply` from
-# CI failed trying to create that item (see PR 42 / 2026-05-21 incident).
-#
-# `random_password` keeps the value stable across applies (it lives in
-# TF state) and avoids the OP roundtrip. If/when the SA gets vault
-# write permission, this can move back to onepassword_item.
-resource "random_password" "job_monitor_flower" {
-  length  = 30
-  special = false
-}
-
-# onepassword_item.session_secret removed 2026-05-21 — see note above.
-
-resource "azurerm_container_app" "job-monitor" {
-  resource_group_name = azurerm_resource_group.main.name
-  # NOTE location is determined automatically by the resource group
-
-  # jmon = job monitor to avoid revision name limits in azure
-  name                         = "${azurerm_resource_group.main.name}-app-jmon"
-  container_app_environment_id = azurerm_container_app_environment.main.id
-
-  # https://learn.microsoft.com/en-us/azure/container-apps/application-lifecycle-management
-  # > When in single revision mode, Container Apps handles the automatic switch between revisions to support zero downtime deployment.
-  revision_mode = "Single"
-
-  ingress {
-    external_enabled = true
-    target_port      = 80
-
-    traffic_weight {
-      percentage = 100
-      # "If a traffic splitting rule is configured with latestRevision set to true, traffic doesn't switch to the latest revision until it's ready"
-      latest_revision = true
-    }
-  }
-
-  template {
-    # without this, if the container fails, it will not be restarted even if tf config is updated
-    min_replicas = 1
-
-    container {
-      name = "${local.base_name}-app-jmon"
-
-      # great starter image to just get something running
-      # https://github.com/crccheck/docker-hello-world/blob/master/Dockerfile
-      # image = "crccheck/hello-world:latest"
-
-      # the amount of time I wasted realizing that private images must be fully qualified, but public images do not need to be is embarrassing
-      # https://github.com/hashicorp/terraform-provider-azurerm/issues/22459
-      image = "${azurerm_container_registry.main.login_server}/cosmaneura/cosmaneura:latest"
-
-      # the docs state that these probes are automatically setup with the ingress port, so it's unclear why they need
-      # to be defined here. Additionally, the defaults used by terraform for these probes are not the same as the azure
-      # documentation.args =
-      readiness_probe {
-        port      = 80
-        transport = "TCP"
-      }
-
-      # Default startup probe gives 3 × 10s = 30s for flower to bind. flower
-      # has to import app (sentry + alembic + celery), connect to the redis
-      # broker, then start tornado on FLOWER_PORT — that's 30-60s on a cold
-      # boot. With the defaults the container is restarted before flower
-      # ever opens port 80, and Azure escalates to Persistent Failure /
-      # exit 137. Same pattern (and timings) as the worker startup_probe.
-      startup_probe {
-        port                    = 80
-        transport               = "TCP"
-        failure_count_threshold = 30
-        interval_seconds        = 2
-        timeout                 = 10
-      }
-
-      liveness_probe {
-        port      = 80
-        transport = "TCP"
-      }
-
-      # https://learn.microsoft.com/en-us/azure/container-apps/health-probes?tabs=arm-template
-
-      args = [data.external.procfile.result["job_monitor"]]
-
-      env {
-        name  = "FLOWER_PORT"
-        value = "80"
-      }
-
-      env {
-        name  = "FLOWER_PASSWORD"
-        value = random_password.job_monitor_flower.result
-      }
-
-      dynamic "env" {
-        for_each = var.python_public_vars
-
-        content {
-          name  = env.key
-          value = data.external.secrets.result[env.key]
-        }
-      }
-
-      dynamic "env" {
-        for_each = var.python_secret_vars
-
-        content {
-          name        = env.key
-          secret_name = env.key == "DATABASE_URL" ? local.database_url_secret_name : replace(lower(env.key), "_", "-")
-        }
-      }
-
-      # yes, memory is defined as a string and CPU is defined as a float
-      cpu    = 0.25
-      memory = "0.5Gi"
-    }
-  }
-
-  dynamic "secret" {
-    for_each = var.python_secret_vars
-
-    content {
-      name  = replace(lower(secret.key), "_", "-")
-      value = data.external.secrets.result[secret.key]
-    }
-  }
-
-  dynamic "secret" {
-    for_each = local.database_url_v2_secret_values
-
-    content {
-      name  = secret.key
-      value = secret.value
-    }
-  }
-
-  # TODO could use identity based login in the future, but the Basic tier of acr doesn't support this
-  # https://github.com/microsoft/NubesGen/blob/0d5d4896f5f2c93d1baca01807527bee56ff49b8/terraform/modules/container-apps/main.tf#L91
-  registry {
-    # unlike other registry configs, this does NOT contain a protocol
-    server   = azurerm_container_registry.main.login_server
-    username = azurerm_container_registry.main.admin_username
-
-    # why is the password stored in a separate secret block? No idea. But, This is The Way.
-    password_secret_name = "registry-secret"
-  }
-
-  secret {
-    name  = "registry-secret"
-    value = azurerm_container_registry.main.admin_password
-  }
-
-  # build_and_publish_manual.yml deploys SHA-pinned images via
-  # `az containerapp update --set-image SHA`; without this block tofu
-  # apply reverts the live image back to ":latest", which silently rolls
-  # the running revision to whatever ":latest" points to. Image lifecycle
-  # is owned by the deploy pipeline, not Terraform.
-  lifecycle {
-    precondition {
-      condition     = local.database_url_configuration_valid
-      error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
-    }
-
-    precondition {
-      condition     = local.database_url_live_guard_valid
-      error_message = "live DATABASE_URL state must already match the source-controlled selector"
-    }
-
-    ignore_changes = [
-      template[0].container[0].image,
-    ]
-  }
-
-  tags = var.tags
-}
-
 ####################
 # Hosting Metadata
 #
@@ -1301,12 +1125,6 @@ resource "azurerm_role_assignment" "github_container_apps_operator" {
 
 resource "azurerm_role_assignment" "github_container_app_1_operator" {
   scope                = azurerm_container_app.app.id
-  role_definition_name = "Contributor"
-  principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
-}
-
-resource "azurerm_role_assignment" "github_container_app_2_operator" {
-  scope                = azurerm_container_app.job-monitor.id
   role_definition_name = "Contributor"
   principal_id         = azurerm_user_assigned_identity.ghactions.principal_id
 }

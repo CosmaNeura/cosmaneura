@@ -8,5 +8,4 @@ api: python main.py
 # execution, and a worker crash doesn't pause the schedule.
 worker: celery -A app.celery.celery_app worker
 scheduler: celery -A app.celery.celery_app beat --scheduler redbeat.RedBeatScheduler
-job_monitor: celery -A app.celery.celery_app flower --basic-auth=:$FLOWER_PASSWORD --port=$FLOWER_PORT --enable_events=False --persistent=False --tasks_columns=name,uuid,state,received,started,runtime,worker
 console: bash -l

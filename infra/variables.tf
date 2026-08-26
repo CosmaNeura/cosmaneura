@@ -42,7 +42,7 @@ variable "python_secret_vars" {
 }
 
 # Secrets used only by the HTTP API. Keep capability-bearing values out of
-# worker, scheduler, job-monitor, and migration workloads.
+# worker, scheduler, and migration workloads.
 variable "python_api_only_secret_vars" {
   description = "Secret ENV vars exposed only to the API Container App"
   type        = set(string)
@@ -54,7 +54,7 @@ variable "python_api_only_secret_vars" {
 
 # Stripe's maintenance key is needed by the API and worker, while the webhook
 # signing secret is API-only. Neither capability belongs in migrations,
-# scheduler, or job-monitor.
+# scheduler.
 variable "python_billing_secret_vars" {
   description = "Stripe secret ENV vars exposed only to API and worker"
   type        = set(string)
@@ -286,7 +286,7 @@ data "external" "secrets" {
 # This read-only guard makes the selector an adoption mechanism, never a bulk
 # cutover mechanism.  Phase A may add the unused v2 value while all workloads
 # still select database-url.  Selecting v2 is accepted only after the staged
-# operator has already moved all five live workloads and retained the old
+# operator has already moved all four live workloads and retained the old
 # rollback secret.
 data "external" "database_url_live_guard" {
   program = ["python", "${path.module}/database_url_live_guard.py"]

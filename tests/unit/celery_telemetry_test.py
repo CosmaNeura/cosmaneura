@@ -2,7 +2,6 @@ import json
 import logging
 from importlib import import_module
 from io import StringIO
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -422,20 +421,3 @@ def test_sensitive_worker_inspection_commands_return_fixed_metadata() -> None:
     assert panel.data["report"](None) == {"ok": "metadata_only"}
     assert "ping" in panel.data
     assert "revoke" in panel.data
-
-
-def test_flower_is_non_persistent_and_has_no_payload_columns() -> None:
-    procfile = (Path(__file__).resolve().parents[2] / "Procfile").read_text(
-        encoding="utf-8"
-    )
-    job_monitor = next(
-        line for line in procfile.splitlines() if line.startswith("job_monitor:")
-    )
-
-    assert "--enable_events=False" in job_monitor
-    assert "--persistent=False" in job_monitor
-    assert "--persistent=True" not in job_monitor
-    assert "--db=" not in job_monitor
-    assert "args" not in job_monitor.split("--tasks_columns=", 1)[1].split(",")
-    assert "kwargs" not in job_monitor.split("--tasks_columns=", 1)[1].split(",")
-    assert "result" not in job_monitor.split("--tasks_columns=", 1)[1].split(",")

@@ -33,7 +33,7 @@ environment. The configured and tested region is `us-west-2`.
   signatures are accepted.
 - Zoom also fails closed when its signing secret is missing and uses the same
   256 KiB streaming body limit.
-- Only the API receives `RECALL_WEBHOOK_SECRET`. Worker, scheduler, Flower, and
+- Only the API receives `RECALL_WEBHOOK_SECRET`. Worker, scheduler, and
   migration workloads must have neither the environment entry nor the Azure
   secret object. The production deploy live guard checks names and references
   without querying values.
@@ -69,13 +69,13 @@ environment. The configured and tested region is `us-west-2`.
   descriptions/data/tags, exception text, locals, and identity context before
   transmission. Celery publishes fixed
   redacted argument representations, has no result backend, emits no task
-  events, and reduces framework logs to fixed metadata. Flower neither enables
-  task events nor persists state and displays no args, kwargs, or results;
-  application-owned task lifecycle logs contain only a hashed task reference,
-  task name, state, retry count, and exception class. Worker `conf`/`report`
-  inspection returns fixed privacy-mode metadata because extension
+  events, and reduces framework logs to fixed metadata. No web-based Celery
+  administration surface is deployed. Application-owned task lifecycle logs
+  contain only a hashed task reference, task name, state, retry count, and
+  exception class. Worker `conf`/`report` inspection from an approved internal
+  operator context returns fixed privacy-mode metadata because extension
   configuration can contain URLs that Celery's built-in censor does not
-  recognize; ping, safe task inspection, and revoke remain available.
+  recognize; ping, safe task inspection, and revoke remain available there.
 - Payload ciphertext is deleted immediately after success and no later than six
   hours after receipt. Expired work is dead-lettered without payload.
 - Recall Create Bot keeps `recording_config: null` for manual control. POST
@@ -111,18 +111,20 @@ path. A protected environment variable with any non-empty value other than
    if any required workload or the checked-in Procfile scheduler command is
    absent.
 4. For production application deployment, run migrations first; update and
-   verify the worker and scheduler before exposing the API revision; update and
-   verify Job Monitor last. Stop the rollout at the first failed verification.
+   verify the worker and scheduler before exposing the API revision. Stop the
+   rollout at the first failed verification. Confirm no Flower/Job Monitor
+   resource or deployment path is introduced.
 5. Verify the production API-only secret live guard. It must report `verified`;
    it must not print or fetch a secret value.
 6. Verify the scheduler is running the checked-in `scheduler` Procfile command
    and that the 30-second `external_webhook_inbox_reconcile` beat entry fires.
-7. Inspect Celery active/reserved/scheduled task names and states and wait until
-   legacy `app.jobs.webhooks.perform` work is empty. Arguments, results, and
-   exception details are deliberately unavailable in Flower. Do not purge
-   Redis queues. The compatibility consumer converts any already-queued legacy
-   payload into the PostgreSQL inbox before handling it.
-8. After every old worker and Job Monitor revision is gone, inventory and
+7. From an approved internal operator context, inspect Celery
+   active/reserved/scheduled task names and states and wait until legacy
+   `app.jobs.webhooks.perform` work is empty. Arguments, results, and exception
+   details remain deliberately unavailable. Do not purge Redis queues. The
+   compatibility consumer converts any already-queued legacy payload into the
+   PostgreSQL inbox before handling it.
+8. After every old worker revision is gone, inventory and
    remove only legacy Celery result keys (`celery-task-meta-*` and
    `celery-taskset-meta-*`) under an approved change record. Never use
    `FLUSHDB`, and do not touch queue, unacked, redbeat, session, or application
