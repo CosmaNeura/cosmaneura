@@ -1,0 +1,47 @@
+name: Change budget
+
+on:
+  # Use the trusted default-branch workflow; never execute pull-request code.
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions: {}
+
+jobs:
+  change-budget:
+    name: change-budget
+    runs-on: ubuntu-latest
+    env:
+      ADDITIONS: ${{ github.event.pull_request.additions }}
+      DELETIONS: ${{ github.event.pull_request.deletions }}
+      CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+      MAX_CHANGED_LINES: '2000'
+      MAX_CHANGED_FILES: '50'
+    steps:
+      - name: Require a reviewable change
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for metric_name in ADDITIONS DELETIONS CHANGED_FILES; do
+            metric_value="${!metric_name:-}"
+            if [[ ! "${metric_value}" =~ ^[0-9]+$ ]]; then
+              echo "::error::Missing or invalid pull-request metric: ${metric_name}"
+              exit 1
+            fi
+          done
+
+          changed_lines=$((ADDITIONS + DELETIONS))
+
+          {
+            echo '### Change budget'
+            echo
+            echo "- Changed lines: ${changed_lines}/${MAX_CHANGED_LINES}"
+            echo "- Changed files: ${CHANGED_FILES}/${MAX_CHANGED_FILES}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if (( changed_lines > MAX_CHANGED_LINES || CHANGED_FILES > MAX_CHANGED_FILES )); then
+            echo '::error::This pull request is too large for one reliable review and deployment decision.'
+            echo '::error::Split it into dependency-ordered pull requests with one independently deployable outcome each.'
+            exit 1
+          fi
