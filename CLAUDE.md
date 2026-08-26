@@ -84,7 +84,8 @@ just js_generate-openapi
   `tests/migrations_graph_test.py` verifica el grafo (IDs únicos, sin ciclos, un solo head).
 - Worker y scheduler corren en **contenedores separados** a propósito.
 - Env se gestiona **exclusivamente vía direnv** (`.envrc` + `.env.*`), no en el Justfile.
-- Auto-deploy vía GitHub Actions: push a `main` y `staging` despliegan al build exitoso.
+- Los pushes a `master` y `staging` ejecutan validación, pero no despliegan. Los despliegues de
+  ambos entornos requieren una ejecución manual iniciada por el fundador desde la rama exacta.
 - Aliases de paths frontend: `~/*` y `@/*` → `web/app/*`.
 
 ## Config

@@ -1,7 +1,7 @@
 name: Terraform Production Plan
 
 # This workflow is deliberately separate from the pull-request plan. It reads
-# production state and credentials only after a trusted operator starts it on
+# production state and credentials only after the founder starts it on
 # master and the protected production environment admits the job. The saved
 # plan never leaves the ephemeral runner: only a nonsecret, immutable digest
 # attestation is uploaded for the separately approved apply workflow.
@@ -18,9 +18,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize-production:
+    name: Authorize production infrastructure plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require founder-authorized manual plan from master
+        env:
+          PLAN_ACTOR: ${{ github.actor }}
+          PLAN_EVENT: ${{ github.event_name }}
+          PLAN_REF: ${{ github.ref }}
+          PLAN_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          if [[ "$PLAN_EVENT" != "workflow_dispatch" ]]; then
+            echo "::error::Production infrastructure planning must be started manually with workflow_dispatch."
+            exit 1
+          fi
+          if [[ "$PLAN_REF" != "refs/heads/master" ]]; then
+            echo "::error::Production infrastructure planning must target the exact master branch."
+            exit 1
+          fi
+          if [[ "$PLAN_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production infrastructure planning is restricted to the founder account."
+            exit 1
+          fi
+          if [[ "$PLAN_TRIGGERING_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production infrastructure plan reruns are restricted to the founder account."
+            exit 1
+          fi
+
   plan:
     name: Terraform production plan
-    if: github.ref == 'refs/heads/master'
+    needs: authorize-production
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize-production.result == 'success'
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: production

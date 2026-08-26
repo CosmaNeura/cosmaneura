@@ -345,7 +345,8 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
     assert "github.ref == 'refs/heads/master'" in production
     assert "environment: production" in production
     assert "github.ref == 'refs/heads/staging'" in staging
-    assert "github.event_name == 'push'" in staging
+    assert "github.event_name == 'workflow_dispatch'" in staging
+    assert "github.event_name == 'push'" not in staging
     assert "environment: staging" in staging
     for protected_job in protected_jobs.values():
         assert "id-token: write" in protected_job
@@ -491,7 +492,8 @@ def test_production_apply_is_manual_and_bound_to_exact_plan_and_master() -> None
     assert "production_plan_run_id:" in trigger
     assert "production_plan_artifact_digest:" in trigger
     assert "required: true" in trigger
-    assert "if: github.ref == 'refs/heads/master'" in apply_job
+    assert "github.ref == 'refs/heads/master'" in apply_job
+    assert "needs.authorize-production.result == 'success'" in apply_job
     assert "environment: production" in apply_job
     assert "actions: read" in apply_job
     assert "actions: write" not in apply_job

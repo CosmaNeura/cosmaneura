@@ -1,9 +1,10 @@
 name: Terraform Apply
 
 # Production apply is deliberately manual. Pull requests receive secretless
-# validation and a provider-mocked static plan. A trusted operator must then
+# validation and a provider-mocked static plan. The founder must then
 # run infra_production_plan.yml on the exact current master commit and supply
-# that successful run ID and immutable attestation digest here. This workflow
+# that successful run ID and immutable attestation digest here. Only the
+# founder account may start or rerun either production workflow. This workflow
 # independently recomputes a saved plan and applies it only when its canonical
 # digest, configuration, provider lock, and state identity exactly match the
 # reviewed attestation. The sensitive plan binary never leaves its runner.
@@ -36,9 +37,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  authorize-production:
+    name: Authorize production infrastructure apply
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require founder-authorized manual apply from master
+        env:
+          APPLY_ACTOR: ${{ github.actor }}
+          APPLY_EVENT: ${{ github.event_name }}
+          APPLY_REF: ${{ github.ref }}
+          APPLY_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          if [[ "$APPLY_EVENT" != "workflow_dispatch" ]]; then
+            echo "::error::Production infrastructure apply must be started manually with workflow_dispatch."
+            exit 1
+          fi
+          if [[ "$APPLY_REF" != "refs/heads/master" ]]; then
+            echo "::error::Production infrastructure apply must target the exact master branch."
+            exit 1
+          fi
+          if [[ "$APPLY_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production infrastructure apply is restricted to the founder account."
+            exit 1
+          fi
+          if [[ "$APPLY_TRIGGERING_ACTOR" != "JohnClem" ]]; then
+            echo "::error::Production infrastructure apply reruns are restricted to the founder account."
+            exit 1
+          fi
+
   apply:
     name: Terraform Apply
-    if: github.ref == 'refs/heads/master'
+    needs: authorize-production
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' &&
+        github.ref == 'refs/heads/master' &&
+        github.actor == 'JohnClem' &&
+        github.triggering_actor == 'JohnClem' &&
+        needs.authorize-production.result == 'success'
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
