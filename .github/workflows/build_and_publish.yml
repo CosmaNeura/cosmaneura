@@ -471,6 +471,20 @@ jobs:
             exit 1
           fi
 
+      - name: Reverify current staging before binding credentials
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_staging_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/staging" \
+            --jq '.object.sha')
+          if [[ "$current_staging_sha" != "$TARGET_SHA" ]]; then
+            echo "Staging advanced before deployment; refusing to publish or mutate Azure from a stale commit." >&2
+            exit 1
+          fi
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
@@ -525,6 +539,19 @@ jobs:
         env:
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/staging-frontend-build.json
         run: rm -f -- "$JAVASCRIPT_BUILD_ENV_JSON"
+      - name: Reverify current staging before publishing images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_staging_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/staging" \
+            --jq '.object.sha')
+          if [[ "$current_staging_sha" != "$TARGET_SHA" ]]; then
+            echo "Staging advanced before image publication; refusing to publish stale images." >&2
+            exit 1
+          fi
       - run: just build_push
         env:
           CONTAINER_REGISTRY_HOST: ${{ vars.CONTAINER_REGISTRY_HOST || secrets.CONTAINER_REGISTRY_HOST }}
@@ -534,6 +561,20 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Reverify current staging before Azure mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          current_staging_sha=$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/heads/staging" \
+            --jq '.object.sha')
+          if [[ "$current_staging_sha" != "$TARGET_SHA" ]]; then
+            echo "Staging advanced before deployment; refusing to mutate Azure from a stale commit." >&2
+            exit 1
+          fi
 
       - name: Deploy to Azure Staging
         env:

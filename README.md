@@ -11,7 +11,7 @@ This is the primary repo for cosmaneura.com.
 * The top-level [Justfile](./Justfile) contains all of build scripts (`just build` will do it all for you)
 * `infra/` contains all terraform logic. `cd infra && just install && just azure_apply` will setup infrastructure.
 - Pushes to `master` and `staging` run the backend and frontend checks; a push does not deploy either environment.
-- Deployments use a founder-started `Build & Publish` manual run on the exact target branch. A staging run still executes both checks before it can use staging-scoped credentials. Because production and staging currently share this dispatcher, GitHub requests the production-only inputs on a staging run; enter `staging` for the Terraform run ID and leave the callback attestation false. The staging job ignores both values.
+- Deployments use a founder-started `Build & Publish` manual run on the exact target branch. A staging run still executes both checks and verifies that its SHA remains the current `staging` head before checkout or credential use, image publication, and Azure mutation. Because production and staging currently share this dispatcher, GitHub requests the production-only inputs on a staging run; enter `staging` for the Terraform run ID and leave the callback attestation false. The staging job ignores both values.
 - A manual run is a real deployment, not a dry run. Before starting one, compare the target environment's deployed SHA, configuration, and schema with the branch and resolve any drift deliberately. This source gate does not prove that staging is synthetic-only or non-PHI.
 
 ---

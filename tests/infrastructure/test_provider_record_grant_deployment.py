@@ -237,6 +237,19 @@ def test_staging_deployment_requires_founder_manual_dispatch() -> None:
     assert "needs.authorize-staging.result == 'success'" in staging_job
     assert "github.event_name == 'push'" not in staging_job
     assert "environment: staging" in staging_job
+    assert staging_job.count("repos/$GITHUB_REPOSITORY/git/ref/heads/staging") == 3
+    assert 'current_staging_sha" != "$TARGET_SHA' in staging_job
+    early_recheck = staging_job.index(
+        "Reverify current staging before binding credentials"
+    )
+    publish_recheck = staging_job.index(
+        "Reverify current staging before publishing images"
+    )
+    azure_recheck = staging_job.index("Reverify current staging before Azure mutation")
+    assert early_recheck < staging_job.index("actions/checkout@")
+    assert early_recheck < staging_job.index("OP_STAGING_SERVICE_ACCOUNT_TOKEN")
+    assert publish_recheck < staging_job.index("- run: just build_push")
+    assert azure_recheck < staging_job.index("name: Deploy to Azure Staging")
 
 
 def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
