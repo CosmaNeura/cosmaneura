@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Event, Thread, current_thread
+from time import monotonic, sleep
 from typing import Any, cast
 from uuid import uuid4
 
@@ -34,6 +36,7 @@ from app.models.visit_prep import (
     VisitPrepCredentialGeneration,
     VisitPrepScheduleGeneration,
 )
+from sqlalchemy import text
 from sqlmodel import Session, select
 
 
@@ -354,3 +357,76 @@ def test_copy_holds_the_command_fence_against_concurrent_revoke(
     assert credentials[0].revocation_reason == "rotated"
     assert credentials[1].revoked_at is None
     assert credentials[1].token_hash == access_token_hash(results[0].access_token)
+
+
+def test_physician_command_matches_practice_first_security_lock_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC) + timedelta(seconds=2)
+    scope = _scope("practice-first", now=now)
+    original_get_session = visit_prep_service.get_session
+
+    @contextmanager
+    def tagged_service_session() -> Iterator[Session]:
+        with original_get_session() as session:
+            session.execute(
+                text(
+                    "SET LOCAL application_name = "
+                    "'visit_prep_physician_practice_lock_test'"
+                )
+            )
+            yield session
+
+    monkeypatch.setattr(visit_prep_service, "get_session", tagged_service_session)
+    request_started = Event()
+
+    def create() -> VisitPrepMutationResult:
+        request_started.set()
+        return _create_command(
+            scope,
+            idempotency_key=str(uuid4()),
+            now=now,
+            scheduled_at=now + timedelta(days=7),
+        )
+
+    with get_session() as security_session:
+        security_session.exec(
+            select(Practice).where(Practice.id == scope.practice.id).with_for_update()
+        ).one()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(create)
+            try:
+                assert request_started.wait(timeout=5)
+                wait_deadline = monotonic() + 5
+                blocked = False
+                while monotonic() < wait_deadline:
+                    blocked = security_session.execute(
+                        text(
+                            "SELECT EXISTS ("
+                            "SELECT 1 FROM pg_stat_activity "
+                            "WHERE application_name = "
+                            "'visit_prep_physician_practice_lock_test' "
+                            "AND wait_event_type = 'Lock')"
+                        )
+                    ).scalar_one()
+                    if blocked:
+                        break
+                    sleep(0.02)
+                assert blocked
+
+                # A member-first physician command would hold this row while
+                # waiting on Practice and form a cycle with offboarding.
+                security_session.exec(
+                    select(Doctor).where(Doctor.id == scope.doctor.id).with_for_update()
+                ).one()
+                security_session.exec(
+                    select(PracticeMember)
+                    .where(PracticeMember.id == scope.owner.id)
+                    .with_for_update()
+                ).one()
+            finally:
+                security_session.rollback()
+
+            result = future.result(timeout=10)
+
+    assert result.disposition == "created"
