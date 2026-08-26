@@ -12,9 +12,12 @@ from typing import Any, Literal, cast
 from uuid import uuid4
 
 import pytest
+from fastapi.testclient import TestClient
 
+import app.routes.visit_prep_interviews as interview_routes
 import app.services.visit_prep_interviews as interviews
 from app.configuration.visit_prep import VisitPrepSettings
+from app.server import api_app
 from app.services.visit_prep_interviews import (
     ResponseInput,
     VisitPrepInterviewConflict,
@@ -232,6 +235,58 @@ def test_confirmation_snapshots_clinical_retention_and_hides_identity(
         ).one()
         assert prep.confirmed_at == original_confirmed_at
         assert prep.retain_until == original_retain_until
+
+
+def test_public_http_path_uses_real_request_scoped_database_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(monkeypatch, "http-session")
+    monkeypatch.setattr(
+        interview_routes.rate_limits,
+        "enforce_network_rate_limit",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        interview_routes.rate_limits,
+        "enforce_credential_rate_limits",
+        lambda **_: None,
+    )
+    client = TestClient(api_app, base_url="https://api-test.cosma.localhost")
+    authorization = {"Authorization": f"Bearer {fixture.access_token}"}
+
+    invited = client.get("/external/v1/visit-prep", headers=authorization)
+    confirmed = client.post(
+        "/external/v1/visit-prep/confirm",
+        headers=authorization,
+        json={
+            "first_name": "  JOSE\N{COMBINING ACUTE ACCENT}  ",
+            "role": "patient",
+        },
+    )
+    answered = client.post(
+        "/external/v1/visit-prep/responses",
+        headers={**authorization, "Idempotency-Key": str(uuid4())},
+        json={
+            "question_key": "reason",
+            "response_kind": "answered",
+            "answer": "A synthetic reason",
+        },
+    )
+
+    assert invited.status_code == 200
+    assert invited.json()["status"] == "confirmation_required"
+    assert confirmed.status_code == 200
+    assert confirmed.json()["disposition"] == "confirmed"
+    assert answered.status_code == 200
+    assert answered.json()["disposition"] == "accepted"
+    assert answered.json()["interview"]["current_question"]["key"] == "medications"
+    with get_session() as session:
+        responses = session.exec(
+            select(VisitPrepQuestionResponse).where(
+                VisitPrepQuestionResponse.visit_prep_id == fixture.prep_id
+            )
+        ).all()
+    assert len(responses) == 1
 
 
 def test_retention_trigger_uses_utc_calendar_boundary_in_non_utc_session(

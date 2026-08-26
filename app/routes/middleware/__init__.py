@@ -9,6 +9,7 @@ from starlette.responses import Response
 
 from app import log
 from app.environments import is_development
+from app.routes.visit_prep_interviews import visit_prep_public_network_boundary
 
 from . import access_logging, logging_context
 
@@ -108,6 +109,11 @@ def add_middleware(app: FastAPI):
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Register this after CORS so it executes before CORS and covers preflight
+    # and extension methods. The route-level guard remains for isolated router
+    # mounts and observes the request-state marker to avoid double counting.
+    app.middleware("http")(visit_prep_public_network_boundary)
 
     # trusted hosts are not required for development, but reduces delta between prod & dev
     # include the API host in your trusted host list, this will be used as the `Host` when HTTP/2 is used (which does

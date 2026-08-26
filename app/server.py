@@ -22,6 +22,7 @@ from app.routes.api import external_api_app
 from app.routes.errors import EarlyResponseException
 from app.routes.recall_callbacks import recall_callbacks_app
 from app.routes.utils.openapi import simplify_operation_ids
+from app.routes.visit_prep_interviews import visit_prep_interviews_api_app
 from app.routes.webhooks import webhook_api_app
 from app.routes.zoom_auth import zoom_auth_app
 
@@ -83,6 +84,7 @@ api_app.include_router(service_api_app, include_in_schema=False)
 api_app.include_router(agent_api_app, include_in_schema=False)
 api_app.include_router(embed_context_api_app, include_in_schema=False)
 api_app.include_router(external_api_app)
+api_app.include_router(visit_prep_interviews_api_app)
 api_app.include_router(chat_api_app)
 api_app.include_router(webhook_api_app)
 api_app.include_router(zoom_auth_app)
