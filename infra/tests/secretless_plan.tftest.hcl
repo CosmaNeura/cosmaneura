@@ -60,16 +60,14 @@ mock_provider "azurerm" {
 
 mock_provider "external" {}
 mock_provider "onepassword" {}
-mock_provider "random" {}
 
 override_data {
   target = data.external.procfile
   values = {
     result = {
-      api         = "uv run uvicorn app.main:app"
-      job_monitor = "uv run celery --app app.celery flower --enable_events=False --persistent=False --tasks_columns=name,uuid,state,received,started,runtime,worker"
-      scheduler   = "uv run celery --app app.celery beat"
-      worker      = "uv run celery --app app.celery worker"
+      api       = "uv run uvicorn app.main:app"
+      scheduler = "uv run celery --app app.celery beat"
+      worker    = "uv run celery --app app.celery worker"
     }
   }
 }

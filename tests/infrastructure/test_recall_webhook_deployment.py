@@ -88,7 +88,7 @@ def test_recall_signing_secret_is_api_only_and_flag_is_public() -> None:
     production = _read("infra/main.tf")
     api = _hcl_block(production, 'resource "azurerm_container_app" "app"')
     assert api.count("var.python_api_only_secret_vars") == 2
-    for workload in ("scheduler", "worker", "job-monitor"):
+    for workload in ("scheduler", "worker"):
         block = _hcl_block(production, f'resource "azurerm_container_app" "{workload}"')
         assert "python_api_only_secret_vars" not in block
         assert SECRET not in block
@@ -100,7 +100,7 @@ def test_recall_signing_secret_is_api_only_and_flag_is_public() -> None:
     )
 
 
-def test_production_rollout_verifies_consumers_before_api_and_jmon() -> None:
+def test_production_rollout_verifies_consumers_before_api() -> None:
     deploy = _read("infra/deploy.sh")
 
     assert (
@@ -108,18 +108,14 @@ def test_production_rollout_verifies_consumers_before_api_and_jmon() -> None:
         'cosmaneura-prod-scheduler"' in deploy
     )
     assert 'API_CONTAINER="cosmaneura-prod-app"' in deploy
-    assert 'JMON_CONTAINER="cosmaneura-prod-app-jmon"' in deploy
 
     migration = deploy.index("\nrun_migrations\n")
     consumers = deploy.index("for container in $WORKER_SCHEDULER_CONTAINERS")
     consumer_check = deploy.index('check_deployment "$container" "$GIT_SHA"', consumers)
     api_start = deploy.index('initiate_deployment "$API_CONTAINER"', consumer_check)
     api_check = deploy.index('check_deployment "$API_CONTAINER"', api_start)
-    jmon_start = deploy.index('initiate_deployment "$JMON_CONTAINER"', api_check)
-    jmon_check = deploy.index('check_deployment "$JMON_CONTAINER"', jmon_start)
 
     assert migration < consumers < consumer_check < api_start < api_check
-    assert api_check < jmon_start < jmon_check
 
 
 def test_staging_scheduler_and_cutover_are_fail_closed_before_migrations() -> None:
