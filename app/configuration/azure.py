@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from decouple import config
 
 AZURE_UPLOADS_ACCOUNT_NAME = config("AZURE_UPLOADS_ACCOUNT_NAME", cast=str)
@@ -8,14 +10,40 @@ AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME = config(
     "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME", cast=str
 )
 
-# these credentials are all manually managed
-# https://github.com/Azure/azure-sdk-for-python/pull/38437/files#diff-4a6cd46fa852c722a5da15b423ecb2134efc9a12c0629e14924dc15544196e18R20-R23
-# it will automatically expire after some amount of time (6mo-2yrs). You'll have to generate a new one here:
-# https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Credentials/appId/af957741-0342-498b-8496-e93706af9e99/isMSAApp~/false
+AZURE_DEID_AUTH_MODE = (
+    config("AZURE_DEID_AUTH_MODE", default="client_secret", cast=str).strip().lower()
+)
+if AZURE_DEID_AUTH_MODE not in {"client_secret", "managed_identity"}:
+    raise ValueError("AZURE_DEID_AUTH_MODE must be client_secret or managed_identity")
 
-AZURE_DEID_TENANT_ID = config("AZURE_DEID_TENANT_ID", cast=str)
-AZURE_DEID_CLIENT_ID = config("AZURE_DEID_CLIENT_ID", cast=str)
-AZURE_DEID_CLIENT_SECRET = config("AZURE_DEID_CLIENT_SECRET", cast=str)
+# The legacy app registration remains available only as a controlled rollback
+# while the production worker moves to its user-assigned managed identity. In
+# managed-identity mode these values are deliberately optional so the old
+# credential can be removed after the observation window.
+if AZURE_DEID_AUTH_MODE == "managed_identity":
+    AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID = config(
+        "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID", cast=str
+    ).strip()
+    try:
+        if (
+            str(UUID(AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID))
+            != AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID.lower()
+        ):
+            raise ValueError
+    except ValueError as error:
+        raise ValueError(
+            "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID must be a canonical UUID"
+        ) from error
+    AZURE_DEID_TENANT_ID = config("AZURE_DEID_TENANT_ID", default="", cast=str)
+    AZURE_DEID_CLIENT_ID = config("AZURE_DEID_CLIENT_ID", default="", cast=str)
+    AZURE_DEID_CLIENT_SECRET = config("AZURE_DEID_CLIENT_SECRET", default="", cast=str)
+else:
+    AZURE_DEID_TENANT_ID = config("AZURE_DEID_TENANT_ID", cast=str)
+    AZURE_DEID_CLIENT_ID = config("AZURE_DEID_CLIENT_ID", cast=str)
+    AZURE_DEID_CLIENT_SECRET = config("AZURE_DEID_CLIENT_SECRET", cast=str)
+    AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID = config(
+        "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID", default="", cast=str
+    )
 AZURE_DEID_ENDPOINT = config("AZURE_DEID_ENDPOINT", cast=str)
 
 

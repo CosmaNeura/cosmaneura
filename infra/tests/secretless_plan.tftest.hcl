@@ -146,6 +146,16 @@ override_data {
   }
 }
 
+override_data {
+  target = data.external.deid_managed_identity_live_guard
+  values = {
+    result = {
+      check_count = "5"
+      result      = "verified"
+    }
+  }
+}
+
 # Override the built-in remote-state data source as well as every provider so
 # pull-request code cannot reach production state or cloud APIs.
 override_data {
@@ -157,4 +167,36 @@ override_data {
 
 run "secretless_static_plan" {
   command = plan
+}
+
+run "managed_identity_activation_static_plan" {
+  command = plan
+
+  variables {
+    deid_managed_identity_compatible_worker_image_tag = "1111111111111111111111111111111111111111"
+    enable_deid_managed_identity                      = true
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.health_services_deid_access.role_definition_name == "DeID Realtime Data User"
+    error_message = "the DeID identity must retain only the realtime-user role"
+  }
+
+  assert {
+    condition     = endswith(azurerm_role_assignment.health_services_deid_access.scope, "/providers/Microsoft.HealthDataAIServices/deidServices/AnonymizerAPI")
+    error_message = "the DeID role must be scoped to the exact AnonymizerAPI resource"
+  }
+
+  assert {
+    condition     = contains(azurerm_container_app.worker.identity[0].identity_ids, azurerm_user_assigned_identity.health_services.id)
+    error_message = "the production worker must attach the exact DeID user-assigned identity"
+  }
+
+  assert {
+    condition = length([
+      for setting in azurerm_container_app.worker.template[0].container[0].env : setting
+      if setting.name == "AZURE_DEID_AUTH_MODE" && setting.value == "managed_identity"
+    ]) == 1
+    error_message = "managed-identity activation must select the explicit worker auth mode"
+  }
 }

@@ -150,6 +150,23 @@ variable "scribe_service_timeout_seconds" {
   }
 }
 
+variable "enable_deid_managed_identity" {
+  description = "Switch the production worker from the retained client-secret rollback path to its preflight-verified DeID managed identity."
+  type        = bool
+  default     = false
+}
+
+variable "deid_managed_identity_compatible_worker_image_tag" {
+  description = "Exact reviewed Core commit tag that is live on the worker before managed-identity activation; leave not-deployed while the gate is off."
+  type        = string
+  default     = "not-deployed"
+
+  validation {
+    condition     = var.deid_managed_identity_compatible_worker_image_tag == "not-deployed" || can(regex("^[0-9a-f]{40}$", var.deid_managed_identity_compatible_worker_image_tag))
+    error_message = "deid_managed_identity_compatible_worker_image_tag must be not-deployed or an exact 40-character lowercase Git SHA"
+  }
+}
+
 variable "deploy_parallel_vnet_environment" {
   description = "Create the empty East US VNet-integrated platform foundation after a separately approved plan."
   type        = bool
@@ -278,5 +295,22 @@ data "external" "database_url_live_guard" {
     selected_secret = local.database_url_secret_name
     subscription_id = local.azure_subscription_id
     v2_enabled      = local.database_url_v2_enabled_text
+  }
+}
+
+# Activation is adoption-only. The first default-off apply attaches and grants
+# the identity; a later reviewed plan may switch authentication only after this
+# read-only guard verifies that exact live prerequisite state.
+data "external" "deid_managed_identity_live_guard" {
+  program = ["python", "${path.module}/deid_managed_identity_live_guard.py"]
+  query = {
+    compatible_worker_image_tag = var.deid_managed_identity_compatible_worker_image_tag
+    enabled                     = tostring(var.enable_deid_managed_identity)
+    expected_deid_endpoint      = data.external.secrets.result["AZURE_DEID_ENDPOINT"]
+    identity_name               = "${local.base_name}-health-services"
+    resource_group              = azurerm_resource_group.main.name
+    service_name                = local.deid_service_name
+    subscription_id             = local.azure_subscription_id
+    worker_name                 = "${local.base_name}-worker"
   }
 }

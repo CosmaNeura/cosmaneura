@@ -22,6 +22,7 @@ CONTEXT_TARGETS = (
 SAFE_LOG_FIELDS = {
     "count",
     "conflicting_doctor_ref",
+    "credential_mode",
     "admin_ref",
     "actor_ref",
     "clerk_ref",
