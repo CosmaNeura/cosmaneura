@@ -12,5 +12,3 @@ chat.cosma.localhost: 8205
 api-test.cosma.localhost: 8206
 # javascript server, for development only (not testing)
 cosma.localhost: 8207
-# job monitoring
-flower.cosma.localhost: 8208

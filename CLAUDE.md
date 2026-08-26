@@ -22,7 +22,7 @@ sincronizado vía copier (`.copier-answers.yml`).
 
 - **Backend** (Python 3.13, gestionado con `uv`): FastAPI + Uvicorn, SQLModel/SQLAlchemy 2.x
   + Alembic (PostgreSQL vía `psycopg`), capa custom `activemodel` (semántica tipo Rails) e
-  IDs `typeid-python`. Celery (worker + redbeat beat + Flower) sobre Redis. Clerk (auth),
+  IDs `typeid-python`. Celery (worker + redbeat beat) sobre Redis. Clerk (auth),
   OpenAI + AssemblyAI (transcripción/LLM), Azure (blob storage, identity, health de-id),
   PostHog, Sentry, structlog. CLI con Typer.
 - **Frontend** (`web/`, Node 22 / pnpm 9): React 19 + React Router 7 (framework mode, SSR),

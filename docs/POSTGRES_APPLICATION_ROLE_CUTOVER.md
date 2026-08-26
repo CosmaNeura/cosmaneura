@@ -34,7 +34,7 @@ administrator password is a later change, after the rollback window closes.
   stays on `database-url`. Its read-only live guard refuses to select v2 until
   all five workloads already use v2, so an apply can adopt but cannot perform
   the staged cutover.
-- The workload order is fixed: job monitor, worker, scheduler, API, migration
+- The workload order is fixed: worker, scheduler, API, migration
   job configuration. Rollback runs the reverse order.
 - Every production process imports application models and invokes Alembic at
   startup. The cutover must use an unchanged image with the database already at
@@ -188,11 +188,12 @@ Only the non-secret reference name is passed to Azure CLI when a new revision is
 created. Every Azure CLI show, update, and revision call pins the twice-confirmed
 subscription rather than relying on mutable CLI context.
 
-For job monitor, worker, scheduler, and API, the operator waits for the exact
-new revision to be `Provisioned`, `Healthy`, and running. Because each process
-runs Alembic before becoming healthy, this is also the per-step database-login
-gate. The migration job is last and its configuration is verified without
-starting a migration execution.
+For worker, scheduler, and API, the operator waits for the exact new revision
+to be `Provisioned`, `Healthy`, and running. Because each process runs Alembic
+before becoming healthy, this is also the per-step database-login gate. The
+migration job is last and its configuration is verified without starting a
+migration execution. Flower/Job Monitor is permanently excluded from this
+cutover and must not be recreated as an operational dependency.
 
 If any step fails, the current step and all completed steps are pointed back to
 `database-url` in reverse order. The versioned secret is retained for diagnosis.
@@ -213,7 +214,7 @@ python infra/database_url_cutover.py \
   --confirm-resource-group cosmaneura-prod
 ```
 
-The order is migration configuration, API, scheduler, worker, job monitor. Each
+The order is migration configuration, API, scheduler, then worker. Each
 revision is verified before proceeding. Unknown references or a missing old
 secret fail closed. Do not remove `database-url-v2` during incident response.
 Before ending the freeze, revert `DATABASE_URL_SECRET_NAME` to `database-url`
