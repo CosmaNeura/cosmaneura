@@ -213,7 +213,7 @@ COMMON_SECRET_VARS=(
 )
 
 # Capability-bearing secrets that only the HTTP API may receive. Never append
-# these to the migration, worker, scheduler, or job-monitor environments.
+# these to the migration, worker, or scheduler environments.
 API_ONLY_SECRET_VARS=(
 	RECALL_WEBHOOK_SECRET
 )

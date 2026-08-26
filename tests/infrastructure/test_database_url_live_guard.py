@@ -44,7 +44,7 @@ def test_old_selector_allows_phase_a_before_v2_exists() -> None:
 
     states = guard.verify_live_state(_query(enabled="true"), runner=runner)
 
-    assert len(states) == 5
+    assert len(states) == 4
     assert all(item["secret"] == "database-url" for item in states)
     assert all(
         "--subscription" in call
@@ -60,7 +60,7 @@ def test_v2_selector_requires_prior_staged_move_and_both_secrets() -> None:
     states = guard.verify_live_state(
         _query(selected="database-url-v2", enabled="true"), runner=runner
     )
-    assert len(states) == 5
+    assert len(states) == 4
 
     with pytest.raises(guard.LiveGuardError, match="v2 secret is missing"):
         guard.verify_live_state(

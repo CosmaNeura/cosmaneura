@@ -2,8 +2,7 @@
 
 from datetime import datetime, timezone
 from textwrap import dedent
-
-import pytz
+from zoneinfo import ZoneInfo
 
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
@@ -65,11 +64,11 @@ def seed_test_data():
     )
 
     # For testing different filetypes.
-    eastern_tz = pytz.timezone("America/New_York")
+    eastern_tz = ZoneInfo("America/New_York")
     hour = 13
     for file_type in ["mp4", "m4a", "mov", "avi", "wav"]:
         date_no_zone = datetime(2024, 11, 15, hour, 0, 0)
-        date_et = eastern_tz.localize(date_no_zone)
+        date_et = date_no_zone.replace(tzinfo=eastern_tz)
         hour += 1
         appt = Appointment.find_or_create_by(
             doctor_id=doctor.id, patient_id=patient.id, appointment_date=date_et

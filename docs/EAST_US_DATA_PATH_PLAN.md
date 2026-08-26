@@ -102,10 +102,9 @@ Azure and is therefore an explicit prerequisite rather than an assumed deployed 
 | Web API | After private database/storage paths and Redis decision | No custom domain; zero customer traffic; synthetic DB/storage/Scribe flow; managed identity attached |
 | Worker | After a queue migration plan | Must not consume the live Celery queue in parallel or double-execute tasks |
 | Scheduler | At traffic cutover only | Singleton: old and new schedulers must never both enqueue periodic work |
-| Job monitor | After target Redis exists | Read-only validation first; no public exposure or reused registry password |
 | Database migration job | Only against an approved target database | Saved migration plan, backup/restore evidence, one manual execution, reversible schema boundary |
 
-The current four production applications remain in their North Central environment throughout
+The current three long-running production applications remain in their North Central environment throughout
 synthetic validation. No `app.cosmaneura.com` or `chat.cosmaneura.com` certificate or DNS binding is
 defined on the parallel environment.
 
