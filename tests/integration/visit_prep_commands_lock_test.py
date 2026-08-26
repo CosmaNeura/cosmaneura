@@ -37,6 +37,7 @@ from app.models.visit_prep import (
     VisitPrepScheduleGeneration,
 )
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 
@@ -400,6 +401,7 @@ def test_physician_command_matches_practice_first_security_lock_order(
                 wait_deadline = monotonic() + 5
                 blocked = False
                 while monotonic() < wait_deadline:
+                    security_session.execute(text("SELECT pg_stat_clear_snapshot()"))
                     blocked = security_session.execute(
                         text(
                             "SELECT EXISTS ("
@@ -430,3 +432,33 @@ def test_physician_command_matches_practice_first_security_lock_order(
             result = future.result(timeout=10)
 
     assert result.disposition == "created"
+
+
+def test_physician_command_fails_fast_against_doctor_then_practice_lock_order() -> None:
+    now = datetime.now(UTC) + timedelta(seconds=2)
+    scope = _scope("doctor-practice-inversion", now=now)
+
+    with get_session() as inverse_session:
+        inverse_session.exec(
+            select(Doctor).where(Doctor.id == scope.doctor.id).with_for_update()
+        ).one()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                _create_command,
+                scope,
+                idempotency_key=str(uuid4()),
+                now=now,
+                scheduled_at=now + timedelta(days=7),
+            )
+            with pytest.raises(OperationalError) as caught:
+                future.result(timeout=5)
+
+        assert getattr(caught.value.orig, "sqlstate", None) == "55P03"
+
+        # The failed command rolled back its Practice lock, so the inverse
+        # holder can complete D -> P without a deadlock.
+        inverse_session.exec(
+            select(Practice)
+            .where(Practice.id == scope.practice.id)
+            .with_for_update(nowait=True)
+        ).one()

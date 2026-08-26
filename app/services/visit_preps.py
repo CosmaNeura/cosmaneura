@@ -17,6 +17,8 @@ import json
 import re
 import secrets
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
@@ -40,7 +42,7 @@ from app.models.visit_prep import (
 )
 from app.models.visit_prep_question_set import VisitPrepQuestionSetVersion
 from sqlalchemy import DateTime, func, literal
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session, select
 
 RecipientRole = Literal["patient", "caregiver"]
@@ -69,6 +71,7 @@ _TOKEN_BODY = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _UNUSED_PURGE_AFTER = timedelta(days=30)
 _UNUSED_HARD_PURGE_AFTER = timedelta(days=90)
 _CREDENTIAL_AFTER_APPOINTMENT = timedelta(hours=72)
+_LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 
 
 class VisitPrepError(Exception):
@@ -89,6 +92,19 @@ class VisitPrepConflict(VisitPrepError):
 
 class VisitPrepUnavailable(VisitPrepError):
     """A required cryptographic or persistence prerequisite is unavailable."""
+
+
+@contextmanager
+def _visit_prep_session() -> Iterator[Session]:
+    """Roll back fail-fast identity-lock contention before surfacing a 503."""
+
+    with get_session() as session:
+        try:
+            yield session
+        except OperationalError as exc:
+            if getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE_SQLSTATE:
+                session.rollback()
+            raise
 
 
 @dataclass(frozen=True)
@@ -379,7 +395,7 @@ def _lock_owner_scope(
     doctor = session.exec(
         select(Doctor)
         .where(Doctor.id == owner_doctor_id)
-        .with_for_update()
+        .with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     ).one_or_none()
     if doctor is None or doctor.deleted_at is not None:
@@ -392,7 +408,7 @@ def _lock_owner_scope(
             PracticeMember.doctor_id == doctor.id,
             PracticeMember.practice_id == practice.id,
         )
-        .with_for_update()
+        .with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     ).one_or_none()
     if (
@@ -754,7 +770,7 @@ def create_visit_prep(
         require_future=False,
     )
 
-    with get_session() as session:
+    with _visit_prep_session() as session:
         _owner, practice = _lock_owner_scope(
             session,
             owner_practice_member_id=owner_practice_member_id,
@@ -937,7 +953,7 @@ def rotate_visit_prep_credential(
     """Revoke the current bearer and return one fresh generation after commit."""
 
     effective_at = _aware_utc(now, message="rotation time is invalid")
-    with get_session() as session:
+    with _visit_prep_session() as session:
         _lock_owner_scope(
             session,
             owner_practice_member_id=owner_practice_member_id,
@@ -1015,7 +1031,7 @@ def revoke_visit_prep(
         "appointment_cancelled",
     }:
         raise VisitPrepValidation("revocation reason is invalid")
-    with get_session() as session:
+    with _visit_prep_session() as session:
         _lock_owner_scope(
             session,
             owner_practice_member_id=owner_practice_member_id,
@@ -1107,7 +1123,7 @@ def reschedule_visit_prep(
         timezone_name,
         now=effective_at,
     )
-    with get_session() as session:
+    with _visit_prep_session() as session:
         _lock_owner_scope(
             session,
             owner_practice_member_id=owner_practice_member_id,
@@ -1230,7 +1246,7 @@ def reconcile_visit_prep(
     effective_at = _aware_utc(now, message="reconciliation time is invalid")
     if patient_id is None and appointment_id is None:
         raise VisitPrepValidation("a canonical record is required")
-    with get_session() as session:
+    with _visit_prep_session() as session:
         _lock_owner_scope(
             session,
             owner_practice_member_id=owner_practice_member_id,

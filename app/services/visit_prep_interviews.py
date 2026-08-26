@@ -13,6 +13,8 @@ import hmac
 import json
 import re
 import unicodedata
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal, cast
@@ -47,7 +49,7 @@ from app.models.visit_prep_question_set import (
 )
 from app.models.visit_prep_response import VisitPrepQuestionResponse
 from sqlalchemy import func
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlmodel import Session, select
 
 InterviewStatus = Literal[
@@ -66,6 +68,7 @@ MAX_ANSWER_CHARACTERS = 2_000
 
 _QUESTION_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _RESPONSE_HMAC_CONTEXT = "visit-prep-response-payload-v1"
+_LOCK_NOT_AVAILABLE_SQLSTATE = "55P03"
 
 
 class VisitPrepInterviewError(Exception):
@@ -82,6 +85,30 @@ class VisitPrepInterviewValidation(VisitPrepInterviewError, ValueError):
 
 class VisitPrepInterviewConflict(VisitPrepInterviewError):
     """A valid request conflicts with durable interview state."""
+
+
+def public_interview_api_enabled() -> bool:
+    """Return the independent fail-closed public-surface release decision."""
+
+    settings = visit_prep_access.VISIT_PREP_SETTINGS
+    return (
+        settings.configuration_valid
+        and settings.enabled
+        and settings.public_api_enabled
+    )
+
+
+@contextmanager
+def _visit_prep_session() -> Iterator[Session]:
+    """Roll back fail-fast identity-lock contention before surfacing a 503."""
+
+    with get_session() as session:
+        try:
+            yield session
+        except OperationalError as exc:
+            if getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE_SQLSTATE:
+                session.rollback()
+            raise
 
 
 @dataclass(frozen=True)
@@ -189,6 +216,8 @@ def _lock_authorized_interview(
 ) -> _AuthorizedInterview:
     """Resolve and recheck a bearer using the canonical public lock order."""
 
+    if not public_interview_api_enabled():
+        raise VisitPrepInterviewUnavailable("Visit Prep link is unavailable")
     token_hash = _canonical_token_hash(access_token)
     locator = _credential_locator(session, token_hash=token_hash)
 
@@ -207,7 +236,7 @@ def _lock_authorized_interview(
     doctor = session.exec(
         select(Doctor)
         .where(Doctor.id == locator.owner_doctor_id)
-        .with_for_update()
+        .with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     ).one_or_none()
     if doctor is None:
@@ -220,7 +249,7 @@ def _lock_authorized_interview(
             PracticeMember.practice_id == practice.id,
             PracticeMember.doctor_id == doctor.id,
         )
-        .with_for_update()
+        .with_for_update(nowait=True)
         .execution_options(populate_existing=True)
     ).one_or_none()
     if owner is None:
@@ -613,8 +642,9 @@ def _recipient_identity(visit_prep: VisitPrep) -> tuple[str, str]:
 
 
 def _calendar_years_after(value: datetime, years: int) -> datetime:
-    """Match PostgreSQL's leap-day behavior for an exact calendar-year term."""
+    """Match the database's UTC-anchored calendar-year retention term."""
 
+    value = value.astimezone(UTC)
     try:
         return value.replace(year=value.year + years)
     except ValueError:
@@ -735,7 +765,7 @@ def _commit(session: Session) -> None:
 def get_interview(*, access_token: str) -> InterviewState:
     """Resume one currently authorized Visit Prep without returning prior answers."""
 
-    with get_session() as session:
+    with _visit_prep_session() as session:
         authorized = _lock_authorized_interview(session, access_token=access_token)
         state = _interview_state(session, authorized=authorized)
         _commit(session)
@@ -754,7 +784,7 @@ def confirm_interview(
     if role not in {"patient", "caregiver"}:
         raise VisitPrepInterviewValidation("confirmation is invalid")
 
-    with get_session() as session:
+    with _visit_prep_session() as session:
         authorized = _lock_authorized_interview(session, access_token=access_token)
         visit_prep = authorized.visit_prep
         expected_name, expected_role = _recipient_identity(visit_prep)
@@ -807,7 +837,7 @@ def submit_response(
 
     canonical_key = _canonical_idempotency_key(idempotency_key)
     submitted_response = _validated_response_input(response)
-    with get_session() as session:
+    with _visit_prep_session() as session:
         authorized = _lock_authorized_interview(session, access_token=access_token)
         visit_prep = authorized.visit_prep
         questions = _questions(session, visit_prep=visit_prep)
@@ -911,7 +941,7 @@ def submit_response(
 def complete_interview(*, access_token: str) -> InterviewMutationResult:
     """Explicitly complete an interview only after all applicable questions."""
 
-    with get_session() as session:
+    with _visit_prep_session() as session:
         authorized = _lock_authorized_interview(session, access_token=access_token)
         visit_prep = authorized.visit_prep
         if visit_prep.lifecycle_state == "completed":

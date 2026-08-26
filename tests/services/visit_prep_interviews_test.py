@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import secrets
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, cast
@@ -38,7 +40,7 @@ from app.models.visit_prep_question_set import VisitPrepQuestion
 from app.models.visit_prep_response import VisitPrepQuestionResponse
 from sqlalchemy import text, update
 from sqlalchemy.exc import DBAPIError
-from sqlmodel import SQLModel, select
+from sqlmodel import Session, SQLModel, select
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ def _enable(monkeypatch: pytest.MonkeyPatch, doctor: Doctor) -> None:
         "VISIT_PREP_SETTINGS",
         VisitPrepSettings(
             enabled=True,
+            public_api_enabled=True,
             enabled_doctor_ids=frozenset({str(doctor.id)}),
         ),
     )
@@ -160,6 +163,29 @@ def _respond(
     )
 
 
+def test_public_api_gate_precedes_token_hash_and_database_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        interviews.visit_prep_access,
+        "VISIT_PREP_SETTINGS",
+        VisitPrepSettings(enabled=True, public_api_enabled=False),
+    )
+    token_hash_calls: list[str] = []
+    monkeypatch.setattr(
+        interviews,
+        "_canonical_token_hash",
+        lambda value: token_hash_calls.append(value) or "unused",
+    )
+
+    with pytest.raises(VisitPrepInterviewUnavailable):
+        interviews.get_interview(
+            access_token="vp1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        )
+
+    assert token_hash_calls == []
+
+
 def test_confirmation_snapshots_clinical_retention_and_hides_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -232,6 +258,40 @@ def test_retention_trigger_uses_utc_calendar_boundary_in_non_utc_session(
         ).scalar_one()
 
     assert stored == expected
+
+
+def test_confirmation_computes_retention_from_utc_in_non_utc_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This instant is 01:30 EDT. Seven local calendar years later it is 01:30
+    # EST, one hour later in UTC, so local-time arithmetic would violate the
+    # database's immutable UTC retention rule.
+    scheduled_at = datetime(2027, 11, 7, 5, 30, tzinfo=UTC)
+    fixture = _fixture(
+        monkeypatch,
+        "confirmation-retention-timezone",
+        scheduled_at=scheduled_at,
+    )
+    original_get_session = interviews.get_session
+
+    @contextmanager
+    def non_utc_service_session() -> Iterator[Session]:
+        with original_get_session() as session:
+            session.execute(
+                text("SELECT set_config('TimeZone', 'America/New_York', true)")
+            )
+            yield session
+
+    monkeypatch.setattr(interviews, "get_session", non_utc_service_session)
+
+    confirmed = _confirm(fixture)
+
+    assert confirmed.disposition == "confirmed"
+    with get_session() as session:
+        prep = session.exec(
+            select(VisitPrep).where(VisitPrep.id == fixture.prep_id)
+        ).one()
+    assert prep.retain_until == datetime(2034, 11, 7, 5, 30, tzinfo=UTC)
 
 
 def test_retention_trigger_rejects_one_microsecond_short(
@@ -480,6 +540,7 @@ def test_response_hmac_is_scoped_to_one_visit_prep(
         "VISIT_PREP_SETTINGS",
         VisitPrepSettings(
             enabled=True,
+            public_api_enabled=True,
             enabled_doctor_ids=frozenset({str(first.doctor.id), str(second.doctor.id)}),
         ),
     )
@@ -662,7 +723,7 @@ def test_every_request_rechecks_the_exact_rollout_cohort(
     monkeypatch.setattr(
         interviews.visit_prep_access,
         "VISIT_PREP_SETTINGS",
-        VisitPrepSettings(enabled=True),
+        VisitPrepSettings(enabled=True, public_api_enabled=True),
     )
 
     with pytest.raises(VisitPrepInterviewUnavailable):

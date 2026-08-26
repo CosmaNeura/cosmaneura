@@ -105,6 +105,7 @@ def test_configuration_defaults_every_capability_off():
     ("name", "value"),
     [
         ("FF_VISIT_PREP_202608", "sometimes"),
+        ("VISIT_PREP_PUBLIC_API_ENABLED", "sometimes"),
         ("VISIT_PREP_EMAIL_SEND_ENABLED", "enabled"),
         ("VISIT_PREP_SMS_SEND_ENABLED", object()),
         ("VISIT_PREP_ENABLED_DOCTOR_IDS", str(TypeID("practice"))),
@@ -115,6 +116,7 @@ def test_configuration_defaults_every_capability_off():
 def test_malformed_configuration_disables_every_capability(name, value):
     values = {
         "FF_VISIT_PREP_202608": "true",
+        "VISIT_PREP_PUBLIC_API_ENABLED": "true",
         "VISIT_PREP_ENABLED_DOCTOR_IDS": str(TypeID("doctor")),
         "VISIT_PREP_ENABLED_PRACTICE_IDS": str(TypeID("practice")),
         "VISIT_PREP_EMAIL_SEND_ENABLED": "true",
@@ -126,6 +128,7 @@ def test_malformed_configuration_disables_every_capability(name, value):
 
     assert settings.configuration_valid is False
     assert settings.enabled is False
+    assert settings.public_api_enabled is False
     assert settings.enabled_doctor_ids == frozenset()
     assert settings.enabled_practice_ids == frozenset()
     assert settings.email_send_enabled is False

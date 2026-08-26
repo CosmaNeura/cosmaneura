@@ -34,6 +34,7 @@ from app.models.practice import Practice, PracticeMember
 from app.models.visit_prep import VisitPrep
 from app.models.visit_prep_response import VisitPrepQuestionResponse
 from sqlalchemy import func, text
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, select
 
 
@@ -103,6 +104,7 @@ def _fixture(
         "VISIT_PREP_SETTINGS",
         VisitPrepSettings(
             enabled=True,
+            public_api_enabled=True,
             enabled_doctor_ids=frozenset({str(doctor.id)}),
         ),
     )
@@ -216,6 +218,36 @@ def test_concurrent_divergent_reuse_accepts_one_response_and_conflicts_other(
     assert len(errors) == 1
     assert isinstance(errors[0], VisitPrepInterviewConflict)
     assert str(errors[0]) == "idempotency key belongs to a different response"
+    assert _response_count(fixture.visit_prep_id) == 1
+
+
+def test_concurrent_distinct_keys_for_current_question_have_one_winner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(monkeypatch, "distinct-key-race")
+    _confirm(fixture)
+
+    def submit(answer: str) -> InterviewMutationResult:
+        return interviews.submit_response(
+            access_token=fixture.access_token,
+            idempotency_key=str(uuid4()),
+            response=ResponseInput(
+                question_key="reason",
+                response_kind="answered",
+                answer=answer,
+            ),
+        )
+
+    results, errors = _race(
+        lambda: submit("Synthetic answer alpha"),
+        lambda: submit("Synthetic answer beta"),
+    )
+
+    assert len(results) == 1
+    assert results[0].disposition == "accepted"
+    assert len(errors) == 1
+    assert isinstance(errors[0], VisitPrepInterviewConflict)
+    assert str(errors[0]) == "question is not current"
     assert _response_count(fixture.visit_prep_id) == 1
 
 
@@ -334,6 +366,7 @@ def test_public_request_matches_practice_first_security_lock_order(
                 wait_deadline = monotonic() + 5
                 blocked = False
                 while monotonic() < wait_deadline:
+                    security_session.execute(text("SELECT pg_stat_clear_snapshot()"))
                     blocked = security_session.execute(
                         text(
                             "SELECT EXISTS ("
@@ -360,3 +393,38 @@ def test_public_request_matches_practice_first_security_lock_order(
             result = future.result(timeout=10)
 
     assert result.status == "confirmation_required"
+
+
+def test_public_request_fails_fast_against_member_then_doctor_lock_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(monkeypatch, "member-doctor-inversion")
+
+    with get_session() as inverse_session:
+        inverse_session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.id == fixture.owner.id)
+            .with_for_update()
+        ).one()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                interviews.get_interview,
+                access_token=fixture.access_token,
+            )
+            with pytest.raises(OperationalError) as caught:
+                future.result(timeout=5)
+
+        assert getattr(caught.value.orig, "sqlstate", None) == "55P03"
+
+        # The failed request rolled back its Practice and Doctor locks, so the
+        # inverse holder can finish instead of forming M -> D / D -> M cycle.
+        inverse_session.exec(
+            select(Doctor)
+            .where(Doctor.id == fixture.doctor.id)
+            .with_for_update(nowait=True)
+        ).one()
+        inverse_session.exec(
+            select(Practice)
+            .where(Practice.id == fixture.practice.id)
+            .with_for_update(nowait=True)
+        ).one()

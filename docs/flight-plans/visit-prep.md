@@ -115,6 +115,13 @@ index enforces at most one default set version per physician.
 
 - **Eligibility flag:** `ff_visit_prep_202608` (backend environment key:
   `FF_VISIT_PREP_202608`)
+- **Public API gate:** `VISIT_PREP_PUBLIC_API_ENABLED`, independently false by
+  default. It is checked after the network limit and before any bearer parsing
+  or credential lookup, so physician DIY cohorts can be exercised while the
+  patient-facing surface remains dark. It stays false until the proxy,
+  maintenance-exclusion, and public-path activation evidence is accepted.
+  Managed Azure configuration wiring is intentionally deferred to that later
+  activation layer, so this API cannot be enabled by the current deployment.
 - **Owner:** John
 - **Expiry:** remove within 30 days after full rollout, no later than 2026-12-31
   unless this plan records a renewed date.
@@ -170,11 +177,16 @@ index enforces at most one default set version per physician.
   rate limits must distinguish two external clients while ignoring a forged
   forwarding header; it must not collapse every patient into one ingress-peer
   bucket or trust a caller-controlled address.
-- Public activation is also blocked while identity-maintenance commands can lock
-  a doctor or membership before its practice. Layer 10 and physician Visit Prep
-  commands use `Practice` → `Doctor` → `PracticeMember`; either normalize the
-  remaining maintenance commands to that order or place them behind a verified
-  maintenance exclusion before live patient traffic.
+- Layer 10 and physician Visit Prep commands take the practice as their only
+  blocking identity lock, then acquire `Doctor` and `PracticeMember` with
+  `NOWAIT`. This fails transient contention closed as a generic 503 instead of
+  deadlocking against older identity-maintenance commands that use an inverse
+  order. Visit Prep lineage locks may then block in their canonical
+  `VisitPrep` → schedule → credential order; no such path may later acquire a
+  practice, doctor, or membership lock. Public activation remains blocked until
+  the inverse maintenance commands are normalized or placed behind a verified
+  maintenance exclusion, because routine maintenance must not make the patient
+  interview intermittently unavailable.
 - One answer per request; at most five answered question identities; free text is
   bounded to 2,000 Unicode characters per answer and 10 KiB per request. Public
   reads and writes are rate-limited by a privacy-safe combination of token hash
