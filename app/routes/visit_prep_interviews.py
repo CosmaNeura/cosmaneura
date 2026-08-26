@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from datetime import datetime
 from typing import Annotated, Any, Literal, TypeVar
 
@@ -66,6 +66,42 @@ def _privacy_headers() -> dict[str, str]:
     }
 
 
+def _boundary_cors_headers(request: Request) -> dict[str, str]:
+    """Mirror the configured CORS origin on errors emitted outside CORS."""
+
+    origins = request.headers.getlist("origin")
+    allowed_origins = getattr(
+        request.app.state,
+        "visit_prep_allowed_origins",
+        frozenset(),
+    )
+    if len(origins) != 1 or origins[0] not in allowed_origins:
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origins[0],
+        "Access-Control-Allow-Credentials": "true",
+        "Vary": "Origin",
+    }
+
+
+def _boundary_error_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: str,
+    headers: Mapping[str, str] | None = None,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail},
+        headers={
+            **_privacy_headers(),
+            **_boundary_cors_headers(request),
+            **(headers or {}),
+        },
+    )
+
+
 class _SensitivePublicVisitPrepRoute(APIRoute):
     """Bound bodies and redact all validation output for the public surface."""
 
@@ -81,6 +117,7 @@ class _SensitivePublicVisitPrepRoute(APIRoute):
                 rate_limits.RateLimited,
                 rate_limits.RateLimitUnavailable,
             ) as exc:
+                _record_rate_limit_failure(exc, stage="network")
                 public_error = _rate_limit_error(exc)
                 return JSONResponse(
                     status_code=public_error.status_code,
@@ -89,6 +126,16 @@ class _SensitivePublicVisitPrepRoute(APIRoute):
                         **_privacy_headers(),
                         **(public_error.headers or {}),
                     },
+                )
+            except Exception:
+                log.warning(
+                    "Visit Prep public network limiter failed unexpectedly",
+                    action="visit_prep.public_network_limit_unexpected_failure",
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"detail": _TEMPORARY_DETAIL},
+                    headers=_privacy_headers(),
                 )
             if request.query_params:
                 return JSONResponse(
@@ -153,6 +200,16 @@ class _SensitivePublicVisitPrepRoute(APIRoute):
             except HTTPException as exc:
                 exc.headers = {**_privacy_headers(), **(exc.headers or {})}
                 raise
+            except Exception:
+                log.warning(
+                    "Visit Prep public request failed unexpectedly",
+                    action="visit_prep.public_unexpected_failure",
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"detail": _TEMPORARY_DETAIL},
+                    headers=_privacy_headers(),
+                )
             response.headers.update(_privacy_headers())
             return response
 
@@ -285,6 +342,22 @@ def _rate_limit_error(exc: Exception) -> HTTPException:
     )
 
 
+def _record_rate_limit_failure(
+    exc: Exception,
+    *,
+    stage: Literal["network", "credential"],
+) -> None:
+    if isinstance(exc, rate_limits.RateLimited):
+        message = "Visit Prep public request rate limited"
+        action = "visit_prep.public_rate_limited"
+    else:
+        message = "Visit Prep public rate-limit store unavailable"
+        action = "visit_prep.public_rate_limit_store_unavailable"
+    # This event deliberately excludes the network signal and bearer. The stage
+    # is a fixed code value, not request data.
+    log.warning(message, action=action, stage=stage)
+
+
 def _enforce_network_rate_limit_once(request: Request) -> None:
     if getattr(request.state, "visit_prep_network_rate_limited", False):
         return
@@ -309,16 +382,36 @@ async def visit_prep_public_network_boundary(
         rate_limits.RateLimited,
         rate_limits.RateLimitUnavailable,
     ) as exc:
+        _record_rate_limit_failure(exc, stage="network")
         public_error = _rate_limit_error(exc)
-        return JSONResponse(
+        return _boundary_error_response(
+            request,
             status_code=public_error.status_code,
-            content={"detail": public_error.detail},
-            headers={
-                **_privacy_headers(),
-                **(public_error.headers or {}),
-            },
+            detail=str(public_error.detail),
+            headers=public_error.headers,
         )
-    response = await call_next(request)
+    except Exception:
+        log.warning(
+            "Visit Prep public network limiter failed unexpectedly",
+            action="visit_prep.public_network_limit_unexpected_failure",
+        )
+        return _boundary_error_response(
+            request,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_TEMPORARY_DETAIL,
+        )
+    try:
+        response = await call_next(request)
+    except Exception:
+        log.warning(
+            "Visit Prep public boundary failed unexpectedly",
+            action="visit_prep.public_boundary_unexpected_failure",
+        )
+        return _boundary_error_response(
+            request,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=_TEMPORARY_DETAIL,
+        )
     response.headers.update(_privacy_headers())
     return response
 
@@ -339,7 +432,14 @@ def require_public_visit_prep_bearer(
         rate_limits.RateLimited,
         rate_limits.RateLimitUnavailable,
     ) as exc:
+        _record_rate_limit_failure(exc, stage="network")
         raise _rate_limit_error(exc) from exc
+
+    if not interview_service.public_interview_api_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=_UNAVAILABLE_DETAIL,
+        )
 
     network_signal = _network_signal(request)
     access_token = _bearer_from_request(request)
@@ -354,6 +454,7 @@ def require_public_visit_prep_bearer(
             rate_limits.RateLimited,
             rate_limits.RateLimitUnavailable,
         ) as exc:
+            _record_rate_limit_failure(exc, stage="credential")
             raise _rate_limit_error(exc) from exc
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -370,6 +471,7 @@ def require_public_visit_prep_bearer(
         rate_limits.RateLimited,
         rate_limits.RateLimitUnavailable,
     ) as exc:
+        _record_rate_limit_failure(exc, stage="credential")
         raise _rate_limit_error(exc) from exc
     return access_token
 

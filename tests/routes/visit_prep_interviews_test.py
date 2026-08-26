@@ -33,6 +33,15 @@ SCHEDULED_AT = datetime(2026, 9, 25, 14, 30, tzinfo=UTC)
 IDEMPOTENCY_KEY = "123e4567-e89b-12d3-a456-426614174000"
 
 
+@pytest.fixture(autouse=True)
+def enable_public_interview_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        route.interview_service,
+        "public_interview_api_enabled",
+        lambda: True,
+    )
+
+
 def _state(
     *,
     status: str = "in_progress",
@@ -122,7 +131,7 @@ def _client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
 
 
 def _assert_private(response: Any) -> None:
-    assert response.headers["Cache-Control"] == "no-store"
+    assert "no-store" in response.headers["Cache-Control"]
     assert response.headers["Referrer-Policy"] == "no-referrer"
 
 
@@ -681,6 +690,31 @@ def test_domain_and_persistence_errors_map_to_bounded_public_responses(
     _assert_private(response)
 
 
+def test_unexpected_public_failure_is_generic_and_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(**_: object) -> InterviewState:
+        raise RuntimeError("sensitive unexpected detail")
+
+    monkeypatch.setattr(route.interview_service, "get_interview", fail)
+    _install_happy_seams(monkeypatch)
+    client = TestClient(
+        api_app,
+        base_url=allowed_hosts(with_scheme=True)[0],
+        raise_server_exceptions=False,
+    )
+
+    response = client.get(
+        "/external/v1/visit-prep",
+        headers={"Authorization": AUTHORIZATION},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Visit Prep is temporarily unavailable."}
+    assert "sensitive" not in response.text.lower()
+    _assert_private(response)
+
+
 def test_unknown_canonical_bearer_is_generic_and_rate_limited_as_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -703,6 +737,38 @@ def test_unknown_canonical_bearer_is_generic_and_rate_limited_as_unknown(
     assert response.status_code == 404
     assert response.json() == {"detail": "Visit Prep link is unavailable."}
     assert rate_calls[-1]["access_token"] == ACCESS_TOKEN
+    _assert_private(response)
+
+
+def test_public_api_gate_stops_before_bearer_or_credential_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rate_calls = _install_happy_seams(monkeypatch)
+    service_calls: list[str] = []
+    monkeypatch.setattr(
+        route.interview_service,
+        "public_interview_api_enabled",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        route.interview_service,
+        "get_interview",
+        lambda **_: service_calls.append("called") or _state(),
+    )
+    app = FastAPI()
+    app.include_router(route.visit_prep_interviews_api_app)
+    app.dependency_overrides[route.aglobal_session] = lambda: None
+    client = TestClient(app)
+
+    response = client.get(
+        "/external/v1/visit-prep",
+        headers={"Authorization": AUTHORIZATION},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Visit Prep link is unavailable."}
+    assert [call["kind"] for call in rate_calls] == ["network"]
+    assert service_calls == []
     _assert_private(response)
 
 
@@ -796,6 +862,42 @@ def test_network_rate_limit_maps_to_429_before_token_lookup(
     _assert_private(response)
 
 
+def test_unexpected_network_limiter_failure_is_generic_and_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_calls: list[str] = []
+
+    def fail(**_: object) -> None:
+        raise RuntimeError("sensitive limiter detail")
+
+    monkeypatch.setattr(route.rate_limits, "enforce_network_rate_limit", fail)
+    monkeypatch.setattr(
+        route.interview_service,
+        "get_interview",
+        lambda **_: service_calls.append("called") or _state(),
+    )
+    isolated_app = FastAPI()
+    isolated_app.include_router(route.visit_prep_interviews_api_app)
+    isolated_app.dependency_overrides[route.aglobal_session] = lambda: None
+    origin = allowed_hosts(with_scheme=True)[0]
+    clients = (
+        TestClient(isolated_app, raise_server_exceptions=False),
+        TestClient(api_app, base_url=origin, raise_server_exceptions=False),
+    )
+
+    for client in clients:
+        response = client.get(
+            "/external/v1/visit-prep",
+            headers={"Authorization": AUTHORIZATION, "Origin": origin},
+        )
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Visit Prep is temporarily unavailable."}
+        assert "sensitive" not in response.text.lower()
+        _assert_private(response)
+
+    assert service_calls == []
+
+
 @pytest.mark.parametrize("stage", ["network", "credential"])
 def test_rate_limit_store_unavailability_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
@@ -878,3 +980,64 @@ def test_full_app_cors_preflight_crosses_public_network_boundary(
     assert [call["kind"] for call in rate_calls] == ["network"]
     assert "no-store" in response.headers["Cache-Control"]
     assert response.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_full_app_happy_path_counts_network_and_credential_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rate_calls = _install_happy_seams(monkeypatch)
+    monkeypatch.setattr(
+        route.interview_service,
+        "get_interview",
+        lambda **_: _state(),
+    )
+    origin = allowed_hosts(with_scheme=True)[0]
+    client = TestClient(api_app, base_url=origin)
+
+    response = client.get(
+        "/external/v1/visit-prep",
+        headers={"Authorization": AUTHORIZATION},
+    )
+
+    assert response.status_code == 200
+    assert [call["kind"] for call in rate_calls] == ["network", "credential"]
+    _assert_private(response)
+
+
+def test_full_app_network_limit_error_preserves_allowed_origin_cors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[dict[str, object]] = []
+
+    def limit(**_: object) -> None:
+        raise route.rate_limits.RateLimited
+
+    monkeypatch.setattr(route.rate_limits, "enforce_network_rate_limit", limit)
+    monkeypatch.setattr(
+        route.log,
+        "warning",
+        lambda message, **values: events.append({"message": message, **values}),
+    )
+    origin = allowed_hosts(with_scheme=True)[0]
+    client = TestClient(api_app, base_url=origin)
+
+    response = client.get(
+        "/external/v1/visit-prep",
+        headers={
+            "Authorization": AUTHORIZATION,
+            "Origin": origin,
+        },
+    )
+
+    assert response.status_code == 429
+    assert response.headers["Access-Control-Allow-Origin"] == origin
+    assert response.headers["Access-Control-Allow-Credentials"] == "true"
+    assert response.headers["Vary"] == "Origin"
+    assert events == [
+        {
+            "message": "Visit Prep public request rate limited",
+            "action": "visit_prep.public_rate_limited",
+            "stage": "network",
+        }
+    ]
+    _assert_private(response)

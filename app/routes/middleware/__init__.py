@@ -96,6 +96,7 @@ def add_middleware(app: FastAPI):
 
     # CORS require that a specific scheme is used for the request
     allowed_hosts_with_schemes = allowed_hosts(True)
+    app.state.visit_prep_allowed_origins = frozenset(allowed_hosts_with_schemes)
 
     log.info("allowed_origins", allowed_origins=allowed_hosts_with_schemes)
 
