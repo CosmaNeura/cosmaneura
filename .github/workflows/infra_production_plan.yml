@@ -184,7 +184,8 @@ jobs:
               Justfile just Procfile .github/actions \
               .github/workflows/infra_production_plan.yml \
               .github/workflows/infra_apply.yml \
-              .github/workflows/build_and_publish.yml |
+              .github/workflows/build_and_publish.yml \
+              .github/workflows/build_and_publish_manual.yml |
               LC_ALL=C sort -z |
               xargs -0 -I{} sha256sum "../{}" |
               sha256sum |

@@ -279,7 +279,7 @@ def test_pull_request_plan_is_secretless_and_cannot_read_production_state() -> N
 
 def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
     workflow = _read(".github/workflows/pull_request_checks.yml")
-    publish_workflow = _read(".github/workflows/build_and_publish.yml")
+    publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
     pull_request_jobs = {name: _workflow_job(workflow, name) for name in ("app", "web")}
     protected_jobs = {
@@ -431,7 +431,7 @@ def test_secret_sources_are_references_or_protected_workflow_values() -> None:
     assert "    environment: production" in plan_job
     assert plan_job.count(protected_reference) == 1
 
-    publish_workflow = _read(".github/workflows/build_and_publish.yml")
+    publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = publish_workflow[
         publish_workflow.index("  deploy:\n") : publish_workflow.index(
             "  deploy-staging:\n"
@@ -448,7 +448,7 @@ def test_cutover_flag_is_source_locked_false_across_plan_apply_and_deploy() -> N
     plan_workflow = _read(".github/workflows/infra_plan.yml")
     production_plan = _read(".github/workflows/infra_production_plan.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
-    publish_workflow = _read(".github/workflows/build_and_publish.yml")
+    publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = publish_workflow[
         publish_workflow.index("  deploy:\n") : publish_workflow.index(
             "  deploy-staging:\n"
@@ -639,7 +639,7 @@ def test_production_plan_uploads_only_nonsecret_immutable_attestation() -> None:
 def test_changed_workflow_actions_are_immutably_pinned() -> None:
     for path in (
         ".github/actions/common-setup/action.yml",
-        ".github/workflows/build_and_publish.yml",
+        ".github/workflows/build_and_publish_manual.yml",
         ".github/workflows/infra_apply.yml",
         ".github/workflows/infra_plan.yml",
         ".github/workflows/infra_production_plan.yml",
@@ -657,7 +657,7 @@ def test_changed_workflow_actions_are_immutably_pinned() -> None:
 def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
     installer = _read(".github/actions/install-nixpacks/action.yml")
     build_recipe = _read("just/build.just")
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
     staging_deploy = _workflow_job(publish, "deploy-staging")
 
@@ -698,12 +698,14 @@ def test_privileged_build_uses_only_checksum_verified_pinned_nixpacks() -> None:
         configuration_scope = source[hash_start:hash_end]
         assert "Justfile just Procfile .github/actions" in configuration_scope
         assert ".github/workflows/build_and_publish.yml" in configuration_scope
+        assert ".github/workflows/build_and_publish_manual.yml" in configuration_scope
 
     privileged_paths = (
         ".github/actions/common-setup/action.yml",
         ".github/actions/install-nixpacks/action.yml",
         ".github/actions/install-op/action.yml",
         ".github/workflows/build_and_publish.yml",
+        ".github/workflows/build_and_publish_manual.yml",
         ".github/workflows/infra_apply.yml",
         ".github/workflows/infra_production_plan.yml",
         "infra/deploy.sh",
@@ -773,7 +775,7 @@ def test_onepassword_cli_installer_is_exact_and_checksum_verified(
 
 
 def test_production_deploy_rechecks_current_master_before_mutation() -> None:
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
 
     publish_check = production_deploy.index(
@@ -854,7 +856,7 @@ def test_protected_environment_files_use_only_their_own_vault() -> None:
 
 
 def test_protected_build_resolves_locally_then_drops_credential_capabilities() -> None:
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
     staging_deploy = _workflow_job(publish, "deploy-staging")
     build_recipe = _read("just/build.just")
@@ -1044,7 +1046,7 @@ def test_production_and_staging_vault_credentials_are_distinct_and_scoped() -> N
         for path in (
             ".github/workflows/infra_production_plan.yml",
             ".github/workflows/infra_apply.yml",
-            ".github/workflows/build_and_publish.yml",
+            ".github/workflows/build_and_publish_manual.yml",
         )
     )
     production_plan = _workflow_job(
@@ -1053,7 +1055,7 @@ def test_production_and_staging_vault_credentials_are_distinct_and_scoped() -> N
     production_apply = _workflow_job(
         _read(".github/workflows/infra_apply.yml"), "apply"
     )
-    publish = _read(".github/workflows/build_and_publish.yml")
+    publish = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = _workflow_job(publish, "deploy")
     staging_deploy = _workflow_job(publish, "deploy-staging")
 
@@ -1089,7 +1091,7 @@ def test_azure_oidc_trust_is_bound_to_protected_environments() -> None:
     assert ":ref:refs/heads/" not in production
     assert ":ref:refs/heads/" not in staging
 
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     assert "environment: production" in _workflow_job(workflow, "deploy")
     assert "environment: staging" in _workflow_job(workflow, "deploy-staging")
 

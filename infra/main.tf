@@ -670,7 +670,7 @@ resource "azurerm_container_app" "app" {
     value = azurerm_container_registry.main.admin_password
   }
 
-  # build_and_publish.yml deploys SHA-pinned images via
+  # build_and_publish_manual.yml deploys SHA-pinned images via
   # `az containerapp update --set-image SHA`; without this block tofu
   # apply reverts the live image back to ":latest", which silently rolls
   # the running revision to whatever ":latest" points to. Image lifecycle
@@ -800,7 +800,7 @@ resource "azurerm_container_app" "scheduler" {
     value = azurerm_container_registry.main.admin_password
   }
 
-  # build_and_publish.yml deploys SHA-pinned images via
+  # build_and_publish_manual.yml deploys SHA-pinned images via
   # `az containerapp update --set-image SHA`; without this block tofu
   # apply reverts the live image back to ":latest", which silently rolls
   # the running revision to whatever ":latest" points to. Image lifecycle
@@ -972,7 +972,7 @@ resource "azurerm_container_app" "worker" {
     value = azurerm_container_registry.main.admin_password
   }
 
-  # build_and_publish.yml deploys SHA-pinned images via
+  # build_and_publish_manual.yml deploys SHA-pinned images via
   # `az containerapp update --set-image SHA`; without this block tofu
   # apply reverts the live image back to ":latest", which silently rolls
   # the running revision to whatever ":latest" points to. Image lifecycle
@@ -1157,7 +1157,7 @@ resource "azurerm_container_app" "job-monitor" {
     value = azurerm_container_registry.main.admin_password
   }
 
-  # build_and_publish.yml deploys SHA-pinned images via
+  # build_and_publish_manual.yml deploys SHA-pinned images via
   # `az containerapp update --set-image SHA`; without this block tofu
   # apply reverts the live image back to ":latest", which silently rolls
   # the running revision to whatever ":latest" points to. Image lifecycle

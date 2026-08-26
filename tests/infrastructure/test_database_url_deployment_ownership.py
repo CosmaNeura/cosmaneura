@@ -121,7 +121,7 @@ def test_deploy_adopts_selection_and_never_recreates_migration_job() -> None:
     assert '"database-url": .DATABASE_URL' not in migrations
     assert '"database-url-v2": .DATABASE_URL_V2' in migrations
 
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     production_deploy = workflow[
         workflow.index("  deploy:\n") : workflow.index("  deploy-staging:\n")
     ]

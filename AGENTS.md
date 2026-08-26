@@ -62,7 +62,7 @@ highest tier and should be split when concerns can deploy independently.
 
 - Preserve the repository's current GitHub PR approval settings. These
   documents add or remove no required human approvals.
-- Production promotion is founder-only and manual. `Build & Publish` permits
+- Production promotion is founder-only and manual. `Build & Publish (manual)` permits
   the production job only for a manual run of the exact `master` ref when both
   the original actor and any rerun actor are `JohnClem`; ordinary pushes,
   including documentation-only pushes, cannot enter that job. The run records
