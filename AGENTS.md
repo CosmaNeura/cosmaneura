@@ -122,8 +122,9 @@ highest tier and should be split when concerns can deploy independently.
 - Obey the repository-specific blocking change-budget check once installed.
   Its numeric threshold belongs in a small, separately reviewed policy
   workflow; an oversized PR cannot waive its own limit by label or checkbox.
-  No such tracked check exists today, so automated enforcement remains an
-  adoption gap and reviewers must require decomposition meanwhile.
+  The tracked `change-budget` workflow enforces at most 2,000 changed lines and
+  50 changed files. Keep that exact context required in the `master` ruleset;
+  until the ruleset is configured, reviewers must require decomposition.
 - Every PR records its tier, tests, exact recovery, independent agent-review
   evidence, and only the conditional controls that apply.
 - Documentation-only changes must not build or deploy production artifacts.
