@@ -1,6 +1,5 @@
 import importlib.util
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -19,24 +18,6 @@ def _migration_module():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-class _Result:
-    def __init__(self, value: bool) -> None:
-        self.value = value
-
-    def scalar_one(self) -> bool:
-        return self.value
-
-
-class _Connection:
-    def __init__(self, *, populated: bool = False) -> None:
-        self.populated = populated
-        self.statements: list[str] = []
-
-    def execute(self, statement) -> _Result:
-        self.statements.append(str(statement))
-        return _Result(self.populated)
 
 
 def _source() -> str:
@@ -97,64 +78,12 @@ def test_clinical_retention_migration_does_not_weaken_response_guards() -> None:
     assert "DROP COLUMN" not in source
 
 
-def test_clinical_retention_downgrade_fails_closed_offline_or_populated() -> None:
+def test_clinical_retention_downgrade_is_always_forward_only() -> None:
     migration = _migration_module()
-    setattr(
-        migration,
-        "op",
-        SimpleNamespace(
-            get_context=lambda: SimpleNamespace(as_sql=True),
-            get_bind=lambda: pytest.fail("offline guard requested a connection"),
-        ),
-    )
-    with pytest.raises(RuntimeError, match="unsupported in offline mode"):
-        migration._refuse_populated_or_offline_downgrade()
 
-    connection = _Connection(populated=True)
-    setattr(
-        migration,
-        "op",
-        SimpleNamespace(
-            get_context=lambda: SimpleNamespace(as_sql=False),
-            get_bind=lambda: connection,
-        ),
-    )
-    with pytest.raises(RuntimeError, match="durable aggregates exist"):
-        migration._refuse_populated_or_offline_downgrade()
-    assert connection.statements == [
-        'LOCK TABLE public."visit_prep" IN ACCESS EXCLUSIVE MODE',
-        'SELECT EXISTS (SELECT 1 FROM public."visit_prep" LIMIT 1)',
-    ]
+    with pytest.raises(RuntimeError, match="forward-fix only"):
+        migration.downgrade()
 
-
-def test_clinical_retention_downgrade_allows_only_empty_online_schema() -> None:
-    migration = _migration_module()
-    connection = _Connection()
-    setattr(
-        migration,
-        "op",
-        SimpleNamespace(
-            get_context=lambda: SimpleNamespace(as_sql=False),
-            get_bind=lambda: connection,
-        ),
-    )
-
-    migration._refuse_populated_or_offline_downgrade()
-
-    assert connection.statements == [
-        'LOCK TABLE public."visit_prep" IN ACCESS EXCLUSIVE MODE',
-        'SELECT EXISTS (SELECT 1 FROM public."visit_prep" LIMIT 1)',
-    ]
-
-
-def test_clinical_retention_downgrade_removes_only_its_trigger_and_function() -> None:
     downgrade = _source().split("def downgrade() -> None:", 1)[1]
-
-    assert "_refuse_populated_or_offline_downgrade()" in downgrade
-    trigger = downgrade.index(
-        "DROP TRIGGER IF EXISTS visit_prep_enforce_clinical_retention"
-    )
-    function = downgrade.index("public.cosmas_enforce_visit_prep_clinical_retention()")
-    assert trigger < function
-    assert "DROP TABLE" not in downgrade
-    assert "DROP COLUMN" not in downgrade
+    assert "_refuse_downgrade()" in downgrade
+    assert "DROP " not in downgrade

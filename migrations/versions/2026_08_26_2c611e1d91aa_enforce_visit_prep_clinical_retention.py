@@ -8,7 +8,6 @@ Create Date: 2026-08-26 03:43:03.182447
 
 from typing import Sequence, Union
 
-import sqlalchemy as sa
 from alembic import op
 
 
@@ -19,25 +18,12 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def _refuse_populated_or_offline_downgrade() -> None:
-    """Do not remove the retention rule after any aggregate can depend on it."""
+def _refuse_downgrade() -> None:
+    """Keep this additive retention control in place for forward recovery."""
 
-    if op.get_context().as_sql:
-        raise RuntimeError(
-            "Visit Prep clinical-retention downgrade is unsupported in offline mode"
-        )
-
-    connection = op.get_bind()
-    connection.execute(
-        sa.text('LOCK TABLE public."visit_prep" IN ACCESS EXCLUSIVE MODE')
+    raise RuntimeError(
+        "Visit Prep clinical-retention downgrade is unsupported; forward-fix only"
     )
-    if connection.execute(
-        sa.text('SELECT EXISTS (SELECT 1 FROM public."visit_prep" LIMIT 1)')
-    ).scalar_one():
-        raise RuntimeError(
-            "Visit Prep clinical-retention downgrade refused because durable "
-            "aggregates exist"
-        )
 
 
 def upgrade() -> None:
@@ -130,12 +116,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    _refuse_populated_or_offline_downgrade()
-    op.execute(
-        "DROP TRIGGER IF EXISTS visit_prep_enforce_clinical_retention "
-        "ON public.visit_prep"
-    )
-    op.execute(
-        "DROP FUNCTION IF EXISTS "
-        "public.cosmas_enforce_visit_prep_clinical_retention()"
-    )
+    _refuse_downgrade()
