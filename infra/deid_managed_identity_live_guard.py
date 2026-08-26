@@ -326,7 +326,10 @@ def verify_live_state(
     environment = _worker_environment(worker)
     if _one_plain_value(environment, MANAGED_IDENTITY_CLIENT_ID_ENV) != client_id:
         raise LiveGuardError("worker managed identity client ID is unexpected")
-    if _one_secret_reference(environment, "AZURE_DEID_ENDPOINT") != "azure-deid-endpoint":
+    if (
+        _one_secret_reference(environment, "AZURE_DEID_ENDPOINT")
+        != "azure-deid-endpoint"
+    ):
         raise LiveGuardError("worker DeID endpoint reference is unexpected")
     if _one_plain_value(environment, AUTH_MODE_ENV) not in {
         "client_secret",

@@ -166,9 +166,7 @@ def _resources() -> dict[str, Any]:
                     "healthState": "Healthy",
                     "provisioningState": "Provisioned",
                     "template": {
-                        "containers": [
-                            {"image": f"registry.example/core:{'a' * 40}"}
-                        ]
+                        "containers": [{"image": f"registry.example/core:{'a' * 40}"}]
                     },
                 }
             }
