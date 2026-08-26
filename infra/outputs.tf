@@ -20,6 +20,16 @@ output "scribe_workflow_managed_identity_principal_id" {
   value       = azurerm_user_assigned_identity.scribe_workflow.principal_id
 }
 
+output "deid_managed_identity_client_id" {
+  description = "Non-secret client ID pinned by the production worker for Azure DeID calls."
+  value       = azurerm_user_assigned_identity.health_services.client_id
+}
+
+output "deid_managed_identity_principal_id" {
+  description = "Object ID holding the realtime-only role at the AnonymizerAPI resource."
+  value       = azurerm_user_assigned_identity.health_services.principal_id
+}
+
 output "parallel_platform_virtual_network_id" {
   description = "Non-secret VNet ID supplied to the separately reviewed Scribe connectivity plan."
   value       = var.deploy_parallel_vnet_environment ? azurerm_virtual_network.parallel_platform[0].id : null

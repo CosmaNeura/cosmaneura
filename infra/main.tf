@@ -21,6 +21,14 @@ locals {
   base_name = azurerm_resource_group.main.name
   # azure requires alpha numeric chars only in many places
   base_name_alphanumeric = replace(local.base_name, "/[^a-zA-Z0-9]/", "")
+  deid_service_name      = "AnonymizerAPI"
+  deid_service_resource_id = (
+    "${azurerm_resource_group.main.id}/providers/Microsoft.HealthDataAIServices/deidServices/${local.deid_service_name}"
+  )
+  deid_managed_identity_live_guard_valid = (
+    !var.enable_deid_managed_identity ||
+    try(data.external.deid_managed_identity_live_guard.result["result"] == "verified", false)
+  )
 
   # DATABASE_URL rollover is a two-phase, source-controlled operation.  Both
   # values can be staged while every workload still references database-url;
@@ -834,6 +842,13 @@ resource "azurerm_container_app" "worker" {
   # required for blue/green deployments
   revision_mode = "Single"
 
+  # Only the worker performs transcript de-identification. Pin its exact
+  # user-assigned identity rather than permitting an ambient credential chain.
+  identity {
+    type         = "UserAssigned"
+    identity_ids = [azurerm_user_assigned_identity.health_services.id]
+  }
+
   template {
     # without this, if the container fails, it will not be restarted even if tf config is updated
     min_replicas = 1
@@ -917,6 +932,16 @@ resource "azurerm_container_app" "worker" {
         }
       }
 
+      env {
+        name  = "AZURE_DEID_AUTH_MODE"
+        value = var.enable_deid_managed_identity ? "managed_identity" : "client_secret"
+      }
+
+      env {
+        name  = "AZURE_DEID_MANAGED_IDENTITY_CLIENT_ID"
+        value = azurerm_user_assigned_identity.health_services.client_id
+      }
+
       dynamic "env" {
         for_each = setunion(
           var.python_secret_vars,
@@ -978,6 +1003,11 @@ resource "azurerm_container_app" "worker" {
   # the running revision to whatever ":latest" points to. Image lifecycle
   # is owned by the deploy pipeline, not Terraform.
   lifecycle {
+    precondition {
+      condition     = local.deid_managed_identity_live_guard_valid
+      error_message = "managed-identity activation requires the exact production worker identity, AnonymizerAPI resource, and realtime-only role assignment to exist first"
+    }
+
     precondition {
       condition     = local.database_url_configuration_valid
       error_message = "DATABASE_URL rollover configuration must select one configured database-url secret"
@@ -1214,11 +1244,14 @@ resource "azurerm_user_assigned_identity" "health_services" {
   name     = "${local.base_name}-health-services"
 }
 
-# 'DeID Batch Data Owner' pulled from `az role definition list | ov` on `deid` related permissions
+# The worker uses only the realtime de-identification action. Scope that single
+# data action to the existing AnonymizerAPI resource rather than to the ACR or
+# subscription. The DeID service itself remains externally managed.
 resource "azurerm_role_assignment" "health_services_deid_access" {
-  scope                = azurerm_container_registry.main.id
-  role_definition_name = "DeID Batch Data Owner"
+  scope                = local.deid_service_resource_id
+  role_definition_name = "DeID Realtime Data User"
   principal_id         = azurerm_user_assigned_identity.health_services.principal_id
+  principal_type       = "ServicePrincipal"
 }
 
 ####################
