@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -105,6 +107,34 @@ def test_network_limit_allows_300_and_rejects_301(
     assert raised.value.retry_after_seconds == 15 * 60
     assert len(redis.expirations) == 1
     assert set(redis.expirations.values()) == {15 * 60}
+
+
+def test_atomic_fixed_window_script_against_real_redis() -> None:
+    client: Any = rate_limits.get_rate_limit_redis()
+    namespace = uuid4().hex
+    keys = (
+        f"visit-prep:rate:test:{namespace}:first",
+        f"visit-prep:rate:test:{namespace}:second",
+    )
+    client.delete(*keys)
+    try:
+        rate_limits._increment(keys, (2, 3))
+        assert [int(value) for value in client.mget(keys)] == [1, 1]
+
+        # Give each existing bucket a distinctive shorter TTL. The second Lua
+        # invocation must increment atomically without refreshing either one.
+        assert client.expire(keys[0], 37)
+        assert client.expire(keys[1], 41)
+        rate_limits._increment(keys, (2, 3))
+        assert [int(value) for value in client.mget(keys)] == [2, 2]
+        assert 0 < client.ttl(keys[0]) <= 37
+        assert 0 < client.ttl(keys[1]) <= 41
+
+        with pytest.raises(rate_limits.RateLimited):
+            rate_limits._increment(keys, (2, 3))
+        assert [int(value) for value in client.mget(keys)] == [3, 3]
+    finally:
+        client.delete(*keys)
 
 
 def test_canonical_token_stage_uses_pseudonymous_context_separated_keys(
