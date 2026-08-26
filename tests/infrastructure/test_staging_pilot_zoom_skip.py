@@ -12,7 +12,7 @@ def _read(path: str) -> str:
 
 
 def test_staging_pilot_zoom_skip_build_control_is_default_off() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     setting = f"{CONTROL}: ${{{{ vars.{CONTROL} || 'false' }}}}"
     staging_job_start = workflow.index("\n  deploy-staging:")
     assert setting not in workflow[:staging_job_start]

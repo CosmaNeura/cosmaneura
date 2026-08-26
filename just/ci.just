@@ -2,7 +2,7 @@
 # CI Management
 #######################
 
-GHA_YML_NAME := "build_and_publish.yml"
+GHA_YML_NAME := "build_and_publish_manual.yml"
 
 # TODO should scope to the current users runs
 # rerun last failed CI run

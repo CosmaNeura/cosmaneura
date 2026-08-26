@@ -113,7 +113,7 @@ def test_staging_grant_key_is_scoped_only_to_api_container_app() -> None:
 
 
 def test_production_application_requires_manual_plan_and_apply() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     apply_workflow = _read(".github/workflows/infra_apply.yml")
     plan_workflow = _read(".github/workflows/infra_plan.yml")
     production_plan_workflow = _read(".github/workflows/infra_production_plan.yml")
@@ -127,7 +127,7 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
     assert workflow.count("Justfile just Procfile .github/actions") == 2
     assert workflow.count(".github/workflows/infra_apply.yml") >= 2
     assert workflow.count(".github/workflows/infra_production_plan.yml") >= 2
-    assert workflow.count(".github/workflows/build_and_publish.yml") >= 2
+    assert workflow.count(".github/workflows/build_and_publish_manual.yml") >= 2
     assert "needs: [web, app, deployment-scope, authorize-production]" in workflow
     assert "needs.deployment-scope.outputs.production_infra_changed" not in workflow
     assert "github.event_name == 'workflow_dispatch'" in workflow
@@ -181,7 +181,7 @@ def test_production_application_requires_manual_plan_and_apply() -> None:
 
 
 def test_production_promotion_requires_founder_manual_dispatch() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
 
     authorization_start = workflow.index("\n  authorize-production:")
     staging_authorization_start = workflow.index("\n  authorize-staging:")
@@ -212,7 +212,7 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
 
 
 def test_staging_deployment_requires_founder_manual_dispatch() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
 
     authorization_start = workflow.index("\n  authorize-staging:")
@@ -285,7 +285,7 @@ def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
 
 
 def test_application_deploys_cannot_be_cancelled_mid_rollout_and_have_time() -> None:
-    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow = _read(".github/workflows/build_and_publish_manual.yml")
     production_start = workflow.index("\n  deploy:")
     staging_start = workflow.index("\n  deploy-staging:")
     production_job = workflow[production_start:staging_start]
