@@ -32,7 +32,7 @@ administrator password is a later change, after the rollback window closes.
   deleted or overwritten by the cutover operator.
 - OpenTofu can declare both secret names while the source-controlled selector
   stays on `database-url`. Its read-only live guard refuses to select v2 until
-  all five workloads already use v2, so an apply can adopt but cannot perform
+  all four workloads already use v2, so an apply can adopt but cannot perform
   the staged cutover.
 - The workload order is fixed: worker, scheduler, API, migration
   job configuration. Rollback runs the reverse order.
@@ -55,7 +55,7 @@ separately reviewed change window:
    that requires the separate Key Vault/managed-identity design.
 4. Hold `infra/deploy.sh` during the staged switch. Its database URLs now travel
    only over stdin to an authenticated ARM request, and its value-free guard
-   requires all five live references to match the checked-in selector. Other
+   requires all four live references to match the checked-in selector. Other
    legacy migration-job and registry secrets still use Azure CLI arguments and
    remain separate hardening work.
 5. Confirm the direct ARM `listSecrets`/PATCH behavior in a non-production
@@ -77,7 +77,7 @@ model. The cutover operator performs the staged switch; the selector is changed
 only afterward so the next plan is adoption-only. Both database values enter
 the protected OpenTofu state while v2 is enabled. A future Key Vault-reference
 design can remove inline secret values from state, but it is not implied here.
-OpenTofu owns the four long-running Container Apps. The existing migration job
+OpenTofu owns the three long-running Container Apps. The existing migration job
 remains deploy-owned: deploy refuses to create it, reconciles only its database
 v2 secret through ARM/stdin, requires the existing old rollback secret without
 replacing its value, and adopts the same checked-in selector. Importing that
@@ -147,7 +147,7 @@ and include `sslmode=require`.
 
 ## 2. Read-only Azure plan
 
-The plan checks all five workload configurations and confirms that the old
+The plan checks all four workload configurations and confirms that the old
 secret still exists. It never reads the new URL:
 
 ```bash
@@ -198,7 +198,7 @@ cutover and must not be recreated as an operational dependency.
 If any step fails, the current step and all completed steps are pointed back to
 `database-url` in reverse order. The versioned secret is retained for diagnosis.
 
-After all five workloads are verified on v2, change only
+After all four workloads are verified on v2, change only
 `DATABASE_URL_SECRET_NAME` to `database-url-v2`. The live guard makes the plan
 fail if any workload is still old or mixed; a valid phase-B plan adopts the
 already-live state and retains `database-url` for rollback.
