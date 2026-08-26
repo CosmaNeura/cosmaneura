@@ -30,6 +30,7 @@ from app.utils.encryption import EncryptionError, encrypt_value, pseudonymous_di
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
 from app.models.appointment import Appointment
+from app.models.doctor import Doctor
 from app.models.patient import Patient
 from app.models.practice import Practice, PracticeMember
 from app.models.visit_prep import (
@@ -364,27 +365,39 @@ def _lock_owner_scope(
     practice_id: TypeIDType,
     now: datetime,
 ) -> tuple[PracticeMember, Practice]:
-    owner = session.exec(
-        select(PracticeMember)
-        .where(
-            PracticeMember.id == owner_practice_member_id,
-            PracticeMember.doctor_id == owner_doctor_id,
-            PracticeMember.practice_id == practice_id,
-        )
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).one_or_none()
-    if owner is None or owner.access_revoked_at is not None:
-        raise VisitPrepNotFound("Visit Prep owner is unavailable")
-
+    # Match organization access and public interview transactions so an
+    # offboarding operation cannot form a PracticeMember -> Practice cycle.
     practice = session.exec(
         select(Practice)
         .where(Practice.id == practice_id)
         .with_for_update()
         .execution_options(populate_existing=True)
     ).one_or_none()
+    if practice is None:
+        raise VisitPrepNotFound("Visit Prep owner is unavailable")
+
+    doctor = session.exec(
+        select(Doctor)
+        .where(Doctor.id == owner_doctor_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
+    if doctor is None or doctor.deleted_at is not None:
+        raise VisitPrepNotFound("Visit Prep owner is unavailable")
+
+    owner = session.exec(
+        select(PracticeMember)
+        .where(
+            PracticeMember.id == owner_practice_member_id,
+            PracticeMember.doctor_id == doctor.id,
+            PracticeMember.practice_id == practice.id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).one_or_none()
     if (
-        practice is None
+        owner is None
+        or owner.access_revoked_at is not None
         or not practice.baa_in_force(at=now)
         or not practice.entitled(at=now)
         or (practice.organization_id is None and owner.attested_at is None)
