@@ -14,7 +14,7 @@ js_setup:
 	{{_pnpm}} install --frozen-lockfile
 	# React Router 7.9 loads the production Vite configuration during type generation.
 	# Mark this non-release operation dirty without weakening the real build's release checks.
-	cd {{WEB_DIR}} && VITE_BUILD_COMMIT="${VITE_BUILD_COMMIT:-typegen-dirty}" pnpm ${PNPM_GLOBAL_FLAGS:-} react-router typegen
+	{{_pnpm}} run typegen
 
 js_clean:
 	rm -rf {{WEB_DIR}}/build {{WEB_DIR}}/client {{WEB_DIR}}/node_modules {{WEB_DIR}}/.react-router || true
@@ -93,7 +93,7 @@ _js_generate-openapi:
 	{{_pnpm}} run openapi
 
 	# generated route types can dependend on the openapi spec, so we need to regenerate it
-	cd {{WEB_DIR}} && VITE_BUILD_COMMIT="${VITE_BUILD_COMMIT:-typegen-dirty}" pnpm ${PNPM_GLOBAL_FLAGS:-} exec react-router typegen
+	{{_pnpm}} run typegen
 
 # TODO watch js files
 # react-router typegen

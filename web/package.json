@@ -8,8 +8,9 @@
     "test": "pnpm run openapi && vitest run",
     "start": "react-router-serve ./build/server/index.js",
     "openapi": "pnpm --package=@hey-api/openapi-ts@0.97.3 --package=typescript@5.8.2 dlx openapi-ts",
-    "typecheck": "react-router typegen && tsc",
-    "typegen:watch": "react-router typegen --watch"
+    "typecheck": "pnpm run typegen && tsc",
+    "typegen": "VITE_BUILD_COMMIT=${VITE_BUILD_COMMIT:-typegen-dirty} react-router typegen",
+    "typegen:watch": "VITE_BUILD_COMMIT=${VITE_BUILD_COMMIT:-typegen-dirty} react-router typegen --watch"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.8.6",
