@@ -184,14 +184,15 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
     workflow = _read(".github/workflows/build_and_publish.yml")
 
     authorization_start = workflow.index("\n  authorize-production:")
-    deployment_scope_start = workflow.index("\n  deployment-scope:")
-    authorization_job = workflow[authorization_start:deployment_scope_start]
+    staging_authorization_start = workflow.index("\n  authorize-staging:")
+    authorization_job = workflow[authorization_start:staging_authorization_start]
 
     production_start = workflow.index("\n  deploy:")
     staging_start = workflow.index("\n  deploy-staging:")
     production_job = workflow[production_start:staging_start]
 
-    assert "if: ${{ github.event_name == 'workflow_dispatch' }}" in authorization_job
+    assert "github.event_name == 'workflow_dispatch'" in authorization_job
+    assert "github.ref == 'refs/heads/master'" in authorization_job
     assert "permissions: {}" in authorization_job
     assert "PROMOTION_ACTOR: ${{ github.actor }}" in authorization_job
     assert (
@@ -208,6 +209,47 @@ def test_production_promotion_requires_founder_manual_dispatch() -> None:
     assert "github.actor == 'JohnClem'" in production_job
     assert "github.triggering_actor == 'JohnClem'" in production_job
     assert "needs.authorize-production.result == 'success'" in production_job
+
+
+def test_staging_deployment_requires_founder_manual_dispatch() -> None:
+    workflow = _read(".github/workflows/build_and_publish.yml")
+    workflow_scope = workflow[: workflow.index("jobs:\n")]
+
+    authorization_start = workflow.index("\n  authorize-staging:")
+    deployment_scope_start = workflow.index("\n  deployment-scope:")
+    authorization_job = workflow[authorization_start:deployment_scope_start]
+    staging_job = workflow[workflow.index("\n  deploy-staging:") :]
+
+    # Pushes still run validation, but they cannot satisfy either deployment job.
+    assert "branches: [master, staging]" in workflow_scope
+    assert "github.event_name == 'workflow_dispatch'" in authorization_job
+    assert "github.ref == 'refs/heads/staging'" in authorization_job
+    assert "permissions: {}" in authorization_job
+    assert '"$DEPLOYMENT_REF" != "refs/heads/staging"' in authorization_job
+    assert '"$DEPLOYMENT_ACTOR" != "JohnClem"' in authorization_job
+    assert '"$DEPLOYMENT_TRIGGERING_ACTOR" != "JohnClem"' in authorization_job
+
+    assert "needs: [web, app, authorize-staging]" in staging_job
+    assert "github.event_name == 'workflow_dispatch'" in staging_job
+    assert "github.ref == 'refs/heads/staging'" in staging_job
+    assert "github.actor == 'JohnClem'" in staging_job
+    assert "github.triggering_actor == 'JohnClem'" in staging_job
+    assert "needs.authorize-staging.result == 'success'" in staging_job
+    assert "github.event_name == 'push'" not in staging_job
+    assert "environment: staging" in staging_job
+    assert staging_job.count("repos/$GITHUB_REPOSITORY/git/ref/heads/staging") == 3
+    assert 'current_staging_sha" != "$TARGET_SHA' in staging_job
+    early_recheck = staging_job.index(
+        "Reverify current staging before binding credentials"
+    )
+    publish_recheck = staging_job.index(
+        "Reverify current staging before publishing images"
+    )
+    azure_recheck = staging_job.index("Reverify current staging before Azure mutation")
+    assert early_recheck < staging_job.index("actions/checkout@")
+    assert early_recheck < staging_job.index("OP_STAGING_SERVICE_ACCOUNT_TOKEN")
+    assert publish_recheck < staging_job.index("- run: just build_push")
+    assert azure_recheck < staging_job.index("name: Deploy to Azure Staging")
 
 
 def test_production_infrastructure_requires_founder_manual_dispatch() -> None:
