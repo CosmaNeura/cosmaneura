@@ -35,6 +35,7 @@ class _Scope:
     question_set_version_id: TypeIDType
     question_ids: tuple[TypeIDType, ...]
     credential_generation: int
+    scheduled_at: datetime
 
 
 def _scope(
@@ -95,6 +96,7 @@ def _scope(
         question_set_version_id=seeded.version.id,
         question_ids=tuple(question.id for question in seeded.version.questions),
         credential_generation=created.visit_prep.credential_generation,
+        scheduled_at=effective_schedule,
     )
 
 
@@ -111,7 +113,9 @@ def _start(scope: _Scope, *, at: datetime | None = None) -> None:
         visit_prep.confirmed_at = confirmed_at
         visit_prep.confirmed_by_role = "patient"
         visit_prep.retention_policy_version = "clinical.v1"
-        visit_prep.retain_until = confirmed_at + timedelta(days=365 * 7)
+        visit_prep.retain_until = scope.scheduled_at.replace(
+            year=scope.scheduled_at.year + 7
+        )
         session.add(visit_prep)
         session.flush()
         visit_prep.lifecycle_state = "in_progress"

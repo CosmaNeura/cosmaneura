@@ -147,14 +147,15 @@ def _schedule(
     purge_hours: int = 720,
     hard_purge_hours: int = 2160,
 ) -> VisitPrepScheduleGeneration:
+    scheduled_utc = scheduled_at.astimezone(UTC)
     return VisitPrepScheduleGeneration(
         visit_prep_id=prep.id,
         owner_practice_member_id=prep.owner_practice_member_id,
         generation=generation,
-        scheduled_at=scheduled_at,
+        scheduled_at=scheduled_utc,
         timezone_name="America/New_York",
-        unused_purge_at=scheduled_at + timedelta(hours=purge_hours),
-        unused_hard_purge_at=scheduled_at + timedelta(hours=hard_purge_hours),
+        unused_purge_at=scheduled_utc + timedelta(hours=purge_hours),
+        unused_hard_purge_at=scheduled_utc + timedelta(hours=hard_purge_hours),
     )
 
 
@@ -330,6 +331,8 @@ def test_revocation_cannot_attach_canonical_links_in_the_same_update() -> None:
     prep = _new_prep(scope).save()
     assert prep.created_at is not None
     event_at = prep.created_at + timedelta(minutes=1)
+    scheduled_at = event_at + timedelta(days=14)
+    _schedule(prep, generation=1, scheduled_at=scheduled_at).save()
 
     _reject_update(
         "visit_prep",
@@ -356,7 +359,7 @@ def test_revocation_cannot_attach_canonical_links_in_the_same_update() -> None:
             "confirmed_at": event_at,
             "confirmed_by_role": "patient",
             "retention_policy_version": "clinical.v1",
-            "retain_until": event_at + timedelta(days=365 * 7),
+            "retain_until": scheduled_at.replace(year=scheduled_at.year + 7),
             "revoked_at": event_at,
             "revoked_by_ref": "actor:synthetic-physician",
             "revocation_reason": "appointment_cancelled",
@@ -372,7 +375,9 @@ def test_lifecycle_and_retention_are_monotonic_and_quarantine_is_terminal() -> N
     confirmed_at = prep.created_at + timedelta(minutes=1)
     started_at = confirmed_at + timedelta(minutes=1)
     completed_at = started_at + timedelta(minutes=1)
-    retain_until = confirmed_at + timedelta(days=365 * 7)
+    scheduled_at = confirmed_at + timedelta(days=14)
+    _schedule(prep, generation=1, scheduled_at=scheduled_at).save()
+    retain_until = scheduled_at.replace(year=scheduled_at.year + 7)
     table = SQLModel.metadata.tables["visit_prep"]
 
     _reject_update(
