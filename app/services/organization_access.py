@@ -16,13 +16,27 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from app.services.public_entitlements import (
+    ActiveClinicianSeatLimitReached,
+    ClinicianSeatPolicyError,
+    activate_existing_clinician_seat,
+    lock_practice_for_active_seat_mutation,
+    record_active_clinician_seat_quantity,
+    require_active_clinician_seat_capacity,
+)
+
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.organization_access import (
     OrganizationRosterApproval,
     ProviderOrganization,
 )
-from app.models.practice import Practice, PracticeMember, PracticeRole
+from app.models.practice import (
+    ClinicianSeatState,
+    Practice,
+    PracticeMember,
+    PracticeRole,
+)
 from app.models.practice_access_audit import (
     PracticeAccessAction,
     PracticeAccessAudit,
@@ -1033,7 +1047,10 @@ def member_authorization_basis(
 ) -> str | None:
     """Return the live authorization basis without manufacturing attestation."""
 
-    if member.access_revoked_at is not None:
+    if (
+        member.access_revoked_at is not None
+        or member.seat_state != ClinicianSeatState.active.value
+    ):
         return None
     practice = Practice.get(id=member.practice_id)
     if practice is None:
@@ -1429,11 +1446,10 @@ def claim_roster_access(
         # All organization-access mutations take the practice lock first. This
         # serializes import, claim, rotation, and offboarding and avoids lock
         # cycles between those workflows.
-        practice = session.exec(
-            select(Practice)
-            .where(Practice.id == opportunity.practice.id)
-            .with_for_update()
-        ).one()
+        practice = lock_practice_for_active_seat_mutation(
+            session,
+            opportunity.practice.id,
+        )
         organization = session.exec(
             select(ProviderOrganization)
             .where(ProviderOrganization.id == opportunity.organization.id)
@@ -1496,6 +1512,14 @@ def claim_roster_access(
                     "account already belongs to another practice"
                 )
             if member.organization_roster_approval_id is None:
+                try:
+                    activate_existing_clinician_seat(session, practice, member)
+                except ActiveClinicianSeatLimitReached as exc:
+                    raise OrganizationAccessError(str(exc)) from None
+                except ClinicianSeatPolicyError:
+                    raise OrganizationAccessError(
+                        "organization access is not available"
+                    ) from None
                 grant_required = True
             elif (
                 member.organization_roster_approval_id == approval.id
@@ -1509,6 +1533,10 @@ def claim_roster_access(
                     "account has a conflicting organization authorization"
                 )
         else:
+            try:
+                require_active_clinician_seat_capacity(session, practice)
+            except ActiveClinicianSeatLimitReached as exc:
+                raise OrganizationAccessError(str(exc)) from None
             member = PracticeMember(
                 practice_id=practice.id,
                 doctor_id=locked_doctor.id,
@@ -1538,6 +1566,7 @@ def claim_roster_access(
             session.add(member)
             session.add(locked_doctor)
             session.flush()
+            record_active_clinician_seat_quantity(session, practice)
             session.add(
                 PracticeAccessAudit(
                     practice_id=practice.id,
@@ -1555,12 +1584,6 @@ def claim_roster_access(
             session.refresh(practice)
             session.refresh(member)
 
-    if practice.stripe_subscription_id:
-        # Persist a seat-count reconciliation obligation; this performs no
-        # external Stripe request on the enrollment path.
-        from app.services import stripe_billing
-
-        stripe_billing.mark_quantity_sync_required(practice)
     return practice, member
 
 

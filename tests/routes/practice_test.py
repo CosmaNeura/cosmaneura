@@ -9,9 +9,10 @@ from fastapi.exceptions import HTTPException
 from fastapi.testclient import TestClient
 
 from app.configuration.redis import get_redis
-from app.routes import internal
+from app.routes import internal, public_onboarding
 from app.server import api_app
 from app.services import stripe_billing
+from app.services.public_legal import CURRENT_LEGAL_DOCUMENTS
 from app.utils.email_domain import extract_email_domain
 
 from activemodel.session_manager import get_session
@@ -24,7 +25,7 @@ from sqlalchemy import delete, update
 from sqlalchemy.exc import DBAPIError
 from sqlmodel import SQLModel
 
-from tests.routes.utils import get_clerk_dev_user
+from tests.routes.utils import FakeClerkUser, FakeEmailAddress, get_clerk_dev_user
 
 
 def _authed_doctor() -> Doctor:
@@ -59,6 +60,27 @@ def _accept_baa(client: TestClient) -> dict:
     return resp.json()
 
 
+def _accept_public_legal(client: TestClient) -> dict:
+    response = client.post(
+        api_app.url_path_for("accept_public_legal"),
+        json={
+            "signature_name": "Pat Owner",
+            "signature_title": "Physician / owner",
+            "authority_confirmed": True,
+            "documents": [
+                {
+                    "kind": document.kind.value,
+                    "version": document.version,
+                    "sha256": document.sha256,
+                }
+                for document in CURRENT_LEGAL_DOCUMENTS
+            ],
+        },
+    )
+    assert response.status_code == status.HTTP_200_OK, response.text
+    return response.json()
+
+
 def _own_practice(doctor: Doctor) -> Practice:
     """The practice this test's doctor belongs to. Never query practices or
     acceptances globally: the session seeds provision their own practice."""
@@ -80,6 +102,15 @@ def _verified_clerk_email_matches_bound_doctor(
         return (doctor.email or "").strip().lower() if doctor else None
 
     monkeypatch.setattr(internal, "verified_primary_email", current_email)
+    monkeypatch.setattr(public_onboarding, "verified_primary_email", current_email)
+    monkeypatch.setattr(
+        "app.routes.dependencies.doctor.verified_primary_email",
+        current_email,
+    )
+    monkeypatch.setattr(
+        "app.services.doctor_access.verified_primary_email",
+        current_email,
+    )
 
 
 def _grant_pilot_access(
@@ -169,6 +200,8 @@ def test_grandfathered_practice_payload_keeps_facts_and_exposes_bypass(
     doctor = _authed_doctor()
     _create_practice(bare_authenticated_client)
     practice = _own_practice(doctor)
+    practice.public_onboarding_required = False
+    practice.save()
     _grant_pilot_access(doctor, practice=practice)
     monkeypatch.setattr(
         "app.routes.dependencies.doctor.verified_primary_email",
@@ -201,15 +234,17 @@ def test_create_practice_stamps_email_domain(bare_authenticated_client: TestClie
     assert practice.join_code
 
 
-def test_group_practice_exposes_join_code_for_owned_domain(
+def test_public_group_practice_hides_legacy_join_code(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
 
     body = _create_practice(bare_authenticated_client, is_solo=False)
 
-    assert body["join_code"]
-    assert _own_practice(doctor).is_solo is False
+    assert body["join_code"] is None
+    practice = _own_practice(doctor)
+    assert practice.is_solo is False
+    assert practice.join_code
 
 
 def test_public_email_domain_can_only_create_solo_practice(
@@ -248,6 +283,43 @@ def test_public_email_solo_hides_join_code_and_cannot_enable_future_pack(
     assert body["pastoral_pack"] is False
     assert practice.join_code
     assert practice.pastoral_pack is False
+
+
+def test_practice_owned_domain_reuses_the_existing_public_tenant_boundary(
+    bare_authenticated_client: TestClient,
+):
+    owner = _authed_doctor()
+    domain = f"practice-{secrets.token_hex(4)}.example.com"
+    owner.email = f"owner@{domain}"
+    owner.save()
+    _create_practice(bare_authenticated_client)
+
+    second_email = f"clinician@{domain}"
+    second_user = FakeClerkUser(
+        id=f"user_{secrets.token_hex(8)}",
+        email_addresses=[FakeEmailAddress(email_address=second_email)],
+    )
+    second = Doctor(
+        clerk_id=second_user.id,
+        email=second_email,
+        biography="",
+    ).save()
+    bare_authenticated_client.override_user(second_user)  # type: ignore[attr-defined]
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("create_practice"),
+        json={
+            "legal_name": "Duplicate Domain Practice, PLLC",
+            "is_solo": False,
+            "channel": "direct",
+            "pastoral_pack": False,
+        },
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "single-use invitation" in response.json()["detail"]
+    assert Practice.where(Practice.email_domain == domain).count() == 1
+    assert PracticeMember.get(doctor_id=second.id) is None
 
 
 def test_create_practice_rejects_a_stale_bound_email(
@@ -399,10 +471,42 @@ def test_owner_baa_then_complete(bare_authenticated_client: TestClient):
     assert accepted["baa_accepted"] is True
     assert accepted["attested"] is True
 
+    legal_blocked = bare_authenticated_client.post(
+        api_app.url_path_for("complete_onboarding")
+    )
+    assert legal_blocked.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Terms and Privacy" in legal_blocked.json()["detail"]
+
+    _accept_public_legal(bare_authenticated_client)
+    checkout_blocked = bare_authenticated_client.post(
+        api_app.url_path_for("complete_onboarding")
+    )
+    assert checkout_blocked.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Finish Checkout and card collection" in checkout_blocked.json()["detail"]
+
+    practice = _own_practice(doctor)
+    practice.stripe_checkout_session_id = "cs_test_public_onboarding_complete"
+    practice.save()
+    card_pending = bare_authenticated_client.post(
+        api_app.url_path_for("complete_onboarding")
+    )
+    assert card_pending.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Finish Checkout" in card_pending.json()["detail"]
+
+    practice.subscription_status = "trialing"
+    practice.save()
     done = bare_authenticated_client.post(api_app.url_path_for("complete_onboarding"))
     assert done.status_code == status.HTTP_200_OK
     doctor.refresh()
     assert doctor.onboarding_completed_at is not None
+    completed_at = doctor.onboarding_completed_at
+
+    retried = bare_authenticated_client.post(
+        api_app.url_path_for("complete_onboarding")
+    )
+    assert retried.status_code == status.HTTP_200_OK
+    doctor.refresh()
+    assert doctor.onboarding_completed_at == completed_at
 
 
 def test_baa_acceptance_requires_checkbox(bare_authenticated_client: TestClient):
@@ -881,9 +985,12 @@ def test_practice_gate_blocks_doctor_without_practice_even_if_onboarded(
 def test_baa_acceptance_starts_trial_and_opens_the_gate(
     bare_authenticated_client: TestClient,
 ):
-    _authed_doctor()
+    doctor = _authed_doctor()
 
     created = _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    practice.public_onboarding_required = False
+    practice.save()
     assert created["trial_ends_at"] is None
     assert created["entitled"] is False
 
@@ -910,6 +1017,7 @@ def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
     doctor = _authed_doctor()
     _create_practice(bare_authenticated_client)
     practice = _own_practice(doctor)
+    practice.public_onboarding_required = False
     practice.billing_exempt = True
     practice.billing_exempt_until = datetime.now(timezone.utc) - timedelta(days=1)
     practice.save()
@@ -924,9 +1032,10 @@ def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
 ):
     doctor = _authed_doctor()
     _create_practice(bare_authenticated_client)
-    _accept_baa(bare_authenticated_client)
-
     practice = _own_practice(doctor)
+    practice.public_onboarding_required = False
+    practice.save()
+    _accept_baa(bare_authenticated_client)
 
     practice.trial_ends_at = datetime.now(timezone.utc) - timedelta(days=1)
     practice.save()
@@ -965,6 +1074,7 @@ def test_negotiated_baa_on_file_satisfies_the_gate(
     assert blocked.status_code == status.HTTP_403_FORBIDDEN
 
     practice = _own_practice(doctor)
+    practice.public_onboarding_required = False
     practice.negotiated_baa_on_file = True
     practice.negotiated_baa_effective_date = datetime.now(timezone.utc)
     practice.negotiated_baa_reference = "CN-BAA-CUST v2.2 — countersigned"
@@ -989,6 +1099,7 @@ def test_future_negotiated_baa_does_not_open_phi_gate(
     doctor = _authed_doctor()
     _create_practice(bare_authenticated_client)
     practice = _own_practice(doctor)
+    practice.public_onboarding_required = False
     practice.negotiated_baa_on_file = True
     practice.negotiated_baa_effective_date = datetime.now(timezone.utc) + timedelta(
         days=1
