@@ -27,6 +27,11 @@ class PracticeRole(str, Enum):
     workforce = "workforce"
 
 
+class ClinicianSeatState(str, Enum):
+    active = "active"
+    inactive = "inactive"
+
+
 class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     """Covered entity. The BAA principal for Cosmas — not the individual clinician."""
 
@@ -229,6 +234,10 @@ class PracticeMember(
             name="ck_practice_member_role",
         ),
         sa.CheckConstraint(
+            "seat_state IN ('active', 'inactive')",
+            name="ck_practice_member_seat_state",
+        ),
+        sa.CheckConstraint(
             "(organization_roster_approval_id IS NULL "
             "AND organization_authorized_at IS NULL) OR "
             "(organization_roster_approval_id IS NOT NULL "
@@ -260,6 +269,8 @@ class PracticeMember(
     doctor: Doctor = Relationship()
 
     role: str
+    seat_state: str = Field(default=ClinicianSeatState.active.value)
+    "Only active, non-revoked memberships occupy a clinician seat."
     attested_at: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
