@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cosmaneura.com/contracts/public-entitlements/v1/capability-entitlement.schema.json",
+  "title": "CosmaNeura public capability entitlement",
+  "description": "Server-authoritative, PHI-free access decision for one authenticated actor in one practice.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "policy_revision",
+    "generated_at",
+    "actor",
+    "gates",
+    "seats",
+    "capabilities"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "public-capability-entitlements.v1"
+    },
+    "policy_revision": {
+      "const": "2026-08-27"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor_id", "practice_id", "role", "membership_state"],
+      "properties": {
+        "actor_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "practice_id": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "role": { "enum": ["owner", "workforce"] },
+        "membership_state": { "enum": ["active", "inactive", "revoked"] }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "email_verified",
+        "baa_accepted",
+        "terms_accepted",
+        "privacy_accepted",
+        "subscription_state",
+        "credential_required",
+        "credential_state"
+      ],
+      "properties": {
+        "email_verified": { "type": "boolean" },
+        "baa_accepted": { "type": "boolean" },
+        "terms_accepted": { "type": "boolean" },
+        "privacy_accepted": { "type": "boolean" },
+        "subscription_state": {
+          "enum": [
+            "none",
+            "incomplete",
+            "incomplete_expired",
+            "pending_verification",
+            "invalid",
+            "trialing",
+            "active",
+            "past_due",
+            "unpaid",
+            "paused",
+            "canceled"
+          ]
+        },
+        "credential_required": { "type": "boolean" },
+        "credential_state": {
+          "enum": ["pending", "approved", "rejected", "needs_review"]
+        }
+      }
+    },
+    "seats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_clinician_seats",
+        "maximum_active_clinician_seats",
+        "pending_invitations",
+        "stripe_quantity_sync_required"
+      ],
+      "properties": {
+        "active_clinician_seats": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20
+        },
+        "maximum_active_clinician_seats": { "const": 20 },
+        "pending_invitations": { "type": "integer", "minimum": 0 },
+        "stripe_quantity_sync_required": { "type": "boolean" }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["soap_note", "intake_prep", "session_prep", "scribe", "cab"],
+      "properties": {
+        "soap_note": { "$ref": "#/$defs/capabilityDecision" },
+        "intake_prep": { "$ref": "#/$defs/capabilityDecision" },
+        "session_prep": { "$ref": "#/$defs/capabilityDecision" },
+        "scribe": { "$ref": "#/$defs/capabilityDecision" },
+        "cab": { "$ref": "#/$defs/capabilityDecision" }
+      }
+    }
+  },
+  "$defs": {
+    "capabilityDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "data_mode", "rollout", "operation_mode", "reason_codes"],
+      "properties": {
+        "decision": { "enum": ["allowed", "denied"] },
+        "data_mode": { "enum": ["none", "synthetic_only", "real_phi"] },
+        "rollout": { "enum": ["disabled", "cohort", "enabled"] },
+        "operation_mode": {
+          "enum": ["standard", "read_only", "web_pwa_first", "advisory_only"]
+        },
+        "reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "allowed",
+              "email_unverified",
+              "membership_inactive",
+              "membership_revoked",
+              "legal_incomplete",
+              "subscription_inactive",
+              "credential_pending",
+              "credential_needs_review",
+              "credential_rejected",
+              "cohort_ineligible",
+              "rollout_disabled",
+              "policy_unavailable"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
