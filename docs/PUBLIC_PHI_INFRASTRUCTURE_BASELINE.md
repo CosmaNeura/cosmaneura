@@ -102,7 +102,7 @@ The owner proposes the following minimization schedule. It is a design input, no
 
 | Data class | Proposed retention/deletion rule | Current evidence gap |
 |---|---|---|
-| Raw audio, video, and provider payloads | Delete immediately after successful transcript and integrity validation. Retries have a six-hour hard ceiling; at the ceiling, delete the raw material and surface a PHI-free failed-work item rather than retaining it indefinitely. | The observed upload lifecycle is 10 days and is not success-triggered. End-to-end provider and derivative deletion evidence is absent. |
+| Raw audio, video, and provider payloads | Retain only for the minimum time needed to complete transcript and integrity validation, then delete immediately. Retries have a six-hour hard ceiling; six hours is a maximum, never a target holding period. At the ceiling, delete the raw material and surface a PHI-free failed-work item rather than retaining it indefinitely. | The observed upload lifecycle is 10 days and is not success-triggered. End-to-end provider and derivative deletion evidence is absent. |
 | Identifiable raw transcript | Delete after 14 days. | Eligibility/cleanup behavior and derivative inventory are not accepted as enforcement evidence. |
 | Draft clinical artifacts | Delete after 30 days. | Draft classification, deletion coverage, legal-hold handling, and proof are absent. |
 | PHI-free operational logs | Retain 90 days. | Production Log Analytics is observed at 30 days; access, export, downstream copies, and approved PHI-free samples remain unproved. |

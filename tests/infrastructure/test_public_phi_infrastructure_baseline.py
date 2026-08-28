@@ -139,7 +139,9 @@ def test_public_phi_owner_and_retention_proposals_remain_blocked() -> None:
     assert "contact mechanisms" in baseline
 
     for retention_rule in (
+        "Retain only for the minimum time needed",
         "six-hour hard retry ceiling",
+        "never a target holding period",
         "Identifiable raw transcript",
         "14 days",
         "Draft clinical artifacts",
@@ -167,6 +169,7 @@ def test_incident_advisor_is_design_only_and_non_authoritative() -> None:
     assert "Azure Incident Response Advisor" in incident
     assert "internal CosmaNeura design name, not a Microsoft product" in incident
     assert "default-off service" in incident
+    assert "advisory-only, read-only, and simulation-only" in incident
     assert "creates no agent, webhook, queue, identity, alert route" in incident
     assert "additional to independent human notification" in incident
     assert "cannot lower severity" in incident
