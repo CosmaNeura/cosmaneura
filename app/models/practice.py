@@ -299,6 +299,11 @@ class PracticeMember(
             "practice_member_access_records_retain_until_idx",
             "access_records_retain_until",
         ),
+        sa.Index(
+            "practice_member_practice_seat_state_idx",
+            "practice_id",
+            "seat_state",
+        ),
     )
 
     practice_id: TypeIDType = Practice.foreign_key()
@@ -309,7 +314,7 @@ class PracticeMember(
 
     role: str
     seat_state: str = Field(default=ClinicianSeatState.active.value)
-    "Only active, non-revoked memberships occupy a clinician seat."
+    "Active, non-revoked memberships occupy one clinician seat; inactive memberships do not."
     credential_state: str = Field(default=CredentialState.pending.value)
     "Public PHI access remains denied until independently approved."
     credential_reviewed_at: datetime | None = Field(
