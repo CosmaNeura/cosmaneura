@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 from fastapi import (
@@ -15,6 +15,7 @@ from fastapi import (
     status,
 )
 from pydantic import BaseModel, Field, computed_field, model_validator
+from redis.exceptions import RedisError
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -22,12 +23,14 @@ import app.jobs.extract
 import app.jobs.extract_labs as extract_labs_job
 import app.jobs.extract_medications as extract_medications_job
 import app.jobs.fetch_drug_reference as fetch_drug_reference_job
+import app.jobs.start_zoom_capture as start_zoom_capture_job
 import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
 import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
+import app.services.zoom_capture_authorization as zoom_capture_authorization
 import app.services.zoom_oauth_state as zoom_oauth_state
 from app import log
 from app.commands.uploads.sas import UploadType
@@ -150,7 +153,7 @@ from .admin import admin_api_app
 from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
-from .dependencies.view_as import apply_view_as
+from .dependencies.view_as import apply_view_as, deny_view_as_browser_activity
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -2183,10 +2186,12 @@ class ZoomMeetingResponse(BaseModel, extra="forbid"):
     join_url: str | None
     status: ZoomMeetingStatus
     appointment_id: str | None
+    capture_authorized: bool
 
 
 class ScheduleResponse(BaseModel, extra="forbid"):
     zoom_connected: bool
+    capture_available: bool
     meetings: list[ZoomMeetingResponse]
 
 
@@ -2196,7 +2201,11 @@ def schedule_list(request: Request) -> ScheduleResponse:
 
     zoom_integration = get_zoom_integration(doctor)
     if not zoom_integration:
-        return ScheduleResponse(zoom_connected=False, meetings=[])
+        return ScheduleResponse(
+            zoom_connected=False,
+            capture_available=False,
+            meetings=[],
+        )
 
     # A support view may inspect the already-synchronized schedule, but it
     # must not trigger provider-side reconciliation or any write-like work.
@@ -2220,6 +2229,10 @@ def schedule_list(request: Request) -> ScheduleResponse:
 
     return ScheduleResponse(
         zoom_connected=True,
+        capture_available=(
+            request.state.view_as is None
+            and zoom_capture_authorization.capture_available_for_doctor(doctor)
+        ),
         meetings=[
             ZoomMeetingResponse(
                 id=str(m.id),
@@ -2230,9 +2243,70 @@ def schedule_list(request: Request) -> ScheduleResponse:
                 join_url=m.join_url if request.state.view_as is None else None,
                 status=m.status,
                 appointment_id=str(m.appointment_id) if m.appointment_id else None,
+                capture_authorized=zoom_capture_authorization.capture_is_authorized(m),
             )
             for m in cast(list[ZoomMeeting], list(meetings))
         ],
+    )
+
+
+class AuthorizeZoomCaptureRequest(BaseModel, extra="forbid"):
+    appointment_id: str = Field(min_length=1, max_length=128)
+
+
+class ZoomCaptureAuthorizationResponse(BaseModel, extra="forbid"):
+    appointment_id: str
+    state: Literal["pending", "armed"]
+
+
+@internal_api_app.post(
+    "/schedule/{zoom_meeting_id}/authorize-capture",
+    name="authorize_zoom_capture",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Meeting unavailable"},
+        status.HTTP_409_CONFLICT: {"description": "Capture cannot be authorized"},
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "Authorization service unavailable"
+        },
+    },
+)
+def authorize_zoom_capture(
+    request: Request,
+    zoom_meeting_id: Annotated[str, Path()],
+    data: AuthorizeZoomCaptureRequest,
+) -> ZoomCaptureAuthorizationResponse:
+    """Bind a provider-selected appointment and arm this meeting's bot once."""
+
+    deny_view_as_browser_activity(request)
+    doctor: Doctor = request.state.doctor
+    try:
+        result = zoom_capture_authorization.authorize_capture_for_appointment(
+            doctor_id=doctor.id,
+            zoom_meeting_id=zoom_meeting_id,
+            appointment_id=data.appointment_id,
+        )
+    except zoom_capture_authorization.ZoomCaptureAuthorizationNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found",
+        ) from None
+    except zoom_capture_authorization.ZoomCaptureAuthorizationConflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This meeting cannot be enabled for capture.",
+        ) from None
+    except RedisError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Meeting bot authorization is temporarily unavailable.",
+        ) from None
+
+    if result.armed:
+        start_zoom_capture_job.queue(result.meeting_record_id)
+
+    return ZoomCaptureAuthorizationResponse(
+        appointment_id=result.appointment_id,
+        state="armed" if result.armed else "pending",
     )
 
 
