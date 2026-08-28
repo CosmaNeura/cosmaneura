@@ -14,7 +14,7 @@ from app.models.practice import ClinicianSeatState, Practice, PracticeMember
 from sqlalchemy import func, or_
 from sqlmodel import Session, col, select
 
-PUBLIC_ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v1"
+PUBLIC_ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v2"
 PUBLIC_ENTITLEMENT_POLICY_REVISION = "2026-08-27"
 MAX_ACTIVE_CLINICIAN_SEATS = 20
 # Priority 1 persists this exact provenance only after a hosted Checkout Session

@@ -10,10 +10,10 @@ import base64
 import hashlib
 import hmac
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
 from fastapi import APIRouter, Header, HTTPException, Path, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.routes.middleware import SESSION_SECRET_KEY
 from app.services.clerk_identity import verified_primary_email
@@ -200,8 +200,8 @@ class InvitationResponse(BaseModel, extra="forbid"):
     role: Literal["workforce"]
     issued_at: datetime
     expires_at: datetime
-    invite_token: str | None = None
-    reused_idempotency_key: bool = False
+    invite_token: str | None
+    reused_idempotency_key: bool
 
 
 class PracticeMemberResponse(BaseModel, extra="forbid"):
@@ -236,13 +236,49 @@ class CapabilityDecisionResponse(BaseModel, extra="forbid"):
     operation_mode: Literal["standard", "read_only", "web_pwa_first", "advisory_only"]
     reason_codes: list[CapabilityReasonCode]
 
+    @model_validator(mode="after")
+    def validate_disabled_rollout(self) -> Self:
+        if self.rollout == "disabled" and (
+            self.decision != "denied"
+            or self.data_mode != "none"
+            or "rollout_disabled" not in self.reason_codes
+            or "allowed" in self.reason_codes
+        ):
+            raise ValueError(
+                "A disabled capability must deny access with no data and a "
+                "rollout_disabled reason."
+            )
+        return self
+
+
+class CabCapabilityDecisionResponse(BaseModel, extra="forbid"):
+    decision: Literal["allowed", "denied"]
+    data_mode: Literal["none", "synthetic_only", "real_phi"]
+    rollout: Literal["disabled", "cohort", "enabled"]
+    operation_mode: Literal["advisory_only"]
+    reason_codes: list[CapabilityReasonCode]
+
+    @model_validator(mode="after")
+    def validate_disabled_rollout(self) -> Self:
+        if self.rollout == "disabled" and (
+            self.decision != "denied"
+            or self.data_mode != "none"
+            or "rollout_disabled" not in self.reason_codes
+            or "allowed" in self.reason_codes
+        ):
+            raise ValueError(
+                "A disabled capability must deny access with no data and a "
+                "rollout_disabled reason."
+            )
+        return self
+
 
 class CapabilityMapResponse(BaseModel, extra="forbid"):
     soap_note: CapabilityDecisionResponse
     intake_prep: CapabilityDecisionResponse
     session_prep: CapabilityDecisionResponse
     scribe: CapabilityDecisionResponse
-    cab: CapabilityDecisionResponse
+    cab: CabCapabilityDecisionResponse
 
 
 class CapabilityActorResponse(BaseModel, extra="forbid"):
@@ -282,7 +318,7 @@ class CapabilitySeatsResponse(BaseModel, extra="forbid"):
 
 
 class CapabilityEntitlementResponse(BaseModel, extra="forbid"):
-    contract_version: Literal["public-capability-entitlements.v1"]
+    contract_version: Literal["public-capability-entitlements.v2"]
     policy_revision: Literal["2026-08-27"]
     generated_at: datetime
     actor: CapabilityActorResponse

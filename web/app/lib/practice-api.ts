@@ -150,8 +150,12 @@ export type CapabilityDecision = {
   >
 }
 
+export type CabCapabilityDecision = CapabilityDecision & {
+  operation_mode: "advisory_only"
+}
+
 export type PublicCapabilityEntitlement = {
-  contract_version: "public-capability-entitlements.v1"
+  contract_version: "public-capability-entitlements.v2"
   policy_revision: "2026-08-27"
   generated_at: string
   actor: {
@@ -180,7 +184,7 @@ export type PublicCapabilityEntitlement = {
     intake_prep: CapabilityDecision
     session_prep: CapabilityDecision
     scribe: CapabilityDecision
-    cab: CapabilityDecision
+    cab: CabCapabilityDecision
   }
 }
 

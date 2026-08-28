@@ -1,8 +1,16 @@
+import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from app.routes.public_onboarding import CapabilityEntitlementResponse
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_DIR = ROOT / "contracts" / "public-entitlements" / "v1"
+V2_CONTRACT_DIR = ROOT / "contracts" / "public-entitlements" / "v2"
 
 
 def _property_names(value: object) -> set[str]:
@@ -66,3 +74,64 @@ def test_v1_intentionally_excludes_npi_from_every_contract_object() -> None:
     )
 
     assert "npi" not in _property_names(schema)
+
+
+def test_v1_schema_remains_byte_pinned() -> None:
+    content = (CONTRACT_DIR / "capability-entitlement.schema.json").read_bytes()
+
+    assert hashlib.sha256(content).hexdigest() == (
+        "a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578"
+    )
+
+
+def test_v2_schema_pins_disabled_and_cab_semantics() -> None:
+    schema = json.loads(
+        (V2_CONTRACT_DIR / "capability-entitlement.schema.json").read_text()
+    )
+    fixture = json.loads(
+        (V2_CONTRACT_DIR / "synthetic-credential-pending.json").read_text()
+    )
+
+    assert fixture["contract_version"] == "public-capability-entitlements.v2"
+    assert schema["properties"]["contract_version"]["const"] == (
+        "public-capability-entitlements.v2"
+    )
+    assert schema["properties"]["capabilities"]["properties"]["cab"] == {
+        "$ref": "#/$defs/cabCapabilityDecision"
+    }
+    cab_constraints = schema["$defs"]["cabCapabilityDecision"]["allOf"][1]
+    assert cab_constraints["properties"]["operation_mode"] == {"const": "advisory_only"}
+    disabled_then = schema["$defs"]["capabilityDecision"]["allOf"][0]["then"][
+        "properties"
+    ]
+    assert disabled_then["decision"] == {"const": "denied"}
+    assert disabled_then["data_mode"] == {"const": "none"}
+    assert disabled_then["reason_codes"]["contains"] == {"const": "rollout_disabled"}
+    assert disabled_then["reason_codes"]["not"] == {"contains": {"const": "allowed"}}
+    assert "npi" not in _property_names(schema)
+
+    CapabilityEntitlementResponse.model_validate(fixture)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    (
+        ("operation_mode", "standard"),
+        ("decision", "allowed"),
+        ("data_mode", "real_phi"),
+        ("reason_codes", ["credential_pending"]),
+        ("reason_codes", ["allowed", "rollout_disabled"]),
+    ),
+)
+def test_v2_runtime_schema_rejects_incoherent_disabled_cab_payloads(
+    field: str,
+    invalid_value: object,
+) -> None:
+    fixture = json.loads(
+        (V2_CONTRACT_DIR / "synthetic-credential-pending.json").read_text()
+    )
+    payload = deepcopy(fixture)
+    payload["capabilities"]["cab"][field] = invalid_value
+
+    with pytest.raises(ValidationError):
+        CapabilityEntitlementResponse.model_validate(payload)

@@ -3194,6 +3194,72 @@
         ],
         "title": "BillingSessionUrl"
       },
+      "CabCapabilityDecisionResponse": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "denied"
+            ],
+            "title": "Decision"
+          },
+          "data_mode": {
+            "type": "string",
+            "enum": [
+              "none",
+              "synthetic_only",
+              "real_phi"
+            ],
+            "title": "Data Mode"
+          },
+          "rollout": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "cohort",
+              "enabled"
+            ],
+            "title": "Rollout"
+          },
+          "operation_mode": {
+            "type": "string",
+            "const": "advisory_only",
+            "title": "Operation Mode"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "allowed",
+                "email_unverified",
+                "membership_inactive",
+                "membership_revoked",
+                "legal_incomplete",
+                "subscription_inactive",
+                "credential_pending",
+                "credential_needs_review",
+                "credential_rejected",
+                "cohort_ineligible",
+                "rollout_disabled",
+                "policy_unavailable"
+              ]
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision",
+          "data_mode",
+          "rollout",
+          "operation_mode",
+          "reason_codes"
+        ],
+        "title": "CabCapabilityDecisionResponse"
+      },
       "CapabilityActorResponse": {
         "properties": {
           "actor_id": {
@@ -3311,7 +3377,7 @@
         "properties": {
           "contract_version": {
             "type": "string",
-            "const": "public-capability-entitlements.v1",
+            "const": "public-capability-entitlements.v2",
             "title": "Contract Version"
           },
           "policy_revision": {
@@ -3428,7 +3494,7 @@
             "$ref": "#/components/schemas/CapabilityDecisionResponse"
           },
           "cab": {
-            "$ref": "#/components/schemas/CapabilityDecisionResponse"
+            "$ref": "#/components/schemas/CabCapabilityDecisionResponse"
           }
         },
         "additionalProperties": false,
@@ -4474,8 +4540,7 @@
           },
           "reused_idempotency_key": {
             "type": "boolean",
-            "title": "Reused Idempotency Key",
-            "default": false
+            "title": "Reused Idempotency Key"
           }
         },
         "additionalProperties": false,
@@ -4486,7 +4551,9 @@
           "status",
           "role",
           "issued_at",
-          "expires_at"
+          "expires_at",
+          "invite_token",
+          "reused_idempotency_key"
         ],
         "title": "InvitationResponse"
       },

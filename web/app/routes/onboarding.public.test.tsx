@@ -72,7 +72,7 @@ const allowedRealPhi: CapabilityDecision = {
 
 function capabilityContract(): PublicCapabilityEntitlement {
   return {
-    contract_version: "public-capability-entitlements.v1",
+    contract_version: "public-capability-entitlements.v2",
     policy_revision: "2026-08-27",
     generated_at: "2026-08-27T12:00:00Z",
     actor: {

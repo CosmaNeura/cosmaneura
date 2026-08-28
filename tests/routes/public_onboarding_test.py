@@ -31,6 +31,16 @@ from tests.routes.utils import FakeClerkUser, FakeEmailAddress, get_clerk_dev_us
 ROOT = Path(__file__).parents[2]
 
 
+def test_invitation_wire_response_requires_compatibility_fields() -> None:
+    schema = public_onboarding.InvitationResponse.model_json_schema()
+
+    assert {"invite_token", "reused_idempotency_key"} <= set(schema["required"])
+    assert schema["properties"]["invite_token"]["anyOf"] == [
+        {"type": "string"},
+        {"type": "null"},
+    ]
+
+
 @pytest.mark.parametrize(
     ("session_id", "status_value", "trial_end", "policy", "expected"),
     [
@@ -956,7 +966,7 @@ def test_capability_contract_denies_pending_credentials_and_dark_tools(
     )
     assert response.status_code == status.HTTP_200_OK, response.text
     payload = response.json()
-    assert payload["contract_version"] == "public-capability-entitlements.v1"
+    assert payload["contract_version"] == "public-capability-entitlements.v2"
     assert tuple(payload["capabilities"]) == (
         "soap_note",
         "intake_prep",
@@ -1008,7 +1018,7 @@ def test_capability_endpoint_matches_pending_credential_contract_fixture(
             ROOT
             / "contracts"
             / "public-entitlements"
-            / "v1"
+            / "v2"
             / "synthetic-credential-pending.json"
         ).read_text()
     )
