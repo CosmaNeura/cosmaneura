@@ -8,7 +8,7 @@ from app.models.practice_access_audit import (
     PracticeAccessAction,
     PracticeAccessAudit,
 )
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 
 class PracticeAccessChangeError(ValueError):
@@ -50,30 +50,54 @@ def set_billing_exemption(
             "billing exemption expiry must be in the future"
         )
 
-    if clear:
-        practice.billing_exempt = False
-        practice.billing_exempt_until = None
-        action = PracticeAccessAction.billing_exemption_cleared
-        audit_expiry = None
-    else:
-        practice.billing_exempt = True
-        practice.billing_exempt_until = expires_at
-        action = PracticeAccessAction.billing_exemption_set
-        audit_expiry = expires_at
-
-    audit = PracticeAccessAudit(
-        practice_id=practice.id,
-        action=action.value,
-        operator_ref=operator,
-        reason=explanation,
-        effective_at=current,
-        expires_at=audit_expiry,
-    )
     with get_session() as session:
         _attach(session, practice)
+        # Serialize managed-billing changes with Checkout request creation. The
+        # locked row is authoritative even if the caller brought a stale model.
+        locked = session.exec(
+            select(Practice)
+            .where(Practice.id == practice.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one()
+        if not clear:
+            from app.services import stripe_billing
+
+            if (
+                locked.stripe_checkout_request_json is not None
+                or locked.stripe_checkout_session_id is not None
+            ):
+                raise PracticeAccessChangeError(
+                    "an existing Stripe checkout must be resolved before setting "
+                    "a billing exemption"
+                )
+            if stripe_billing.has_nonterminal_subscription(locked):
+                raise PracticeAccessChangeError(
+                    "an existing Stripe subscription must be resolved before "
+                    "setting a billing exemption"
+                )
+            locked.billing_exempt = True
+            locked.billing_exempt_until = expires_at
+            action = PracticeAccessAction.billing_exemption_set
+            audit_expiry = expires_at
+        else:
+            locked.billing_exempt = False
+            locked.billing_exempt_until = None
+            action = PracticeAccessAction.billing_exemption_cleared
+            audit_expiry = None
+
+        audit = PracticeAccessAudit(
+            practice_id=locked.id,
+            action=action.value,
+            operator_ref=operator,
+            reason=explanation,
+            effective_at=current,
+            expires_at=audit_expiry,
+        )
+        session.add(locked)
         session.add(audit)
         session.commit()
-        session.refresh(practice)
+        session.refresh(locked)
         session.refresh(audit)
     return audit
 

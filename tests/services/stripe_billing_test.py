@@ -7,11 +7,14 @@ import secrets
 import time
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone, tzinfo
+from typing import Any
 
 import httpx
 import pytest
+from typer.testing import CliRunner
 
 import app.configuration.stripe as stripe_config
+from app.cli import app as cli_app
 from app.services import stripe_billing
 from app.services.organization_access import (
     RosterApprovalInput,
@@ -29,6 +32,7 @@ from app.models.practice import (
     PracticeMember,
     PracticeRole,
 )
+from app.models.practice_access_audit import PracticeAccessAudit
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
 
@@ -72,6 +76,8 @@ class FakeStripe:
             return {"id": self.account_id}
         if path.startswith("/prices/"):
             return deepcopy(self.price)
+        if path == "/checkout/sessions" and method == "GET":
+            return {"data": list(deepcopy(self.sessions).values()), "has_more": False}
         if path == "/checkout/sessions":
             assert data
             session = {
@@ -331,6 +337,55 @@ def _frozen_paid_pilot_checkout_request(
         "subscription_data[trial_settings][end_behavior]"
         "[missing_payment_method]": "pause",
         "customer_email": "owner@example.com",
+    }
+
+
+def _store_frozen_paid_pilot_checkout_request(
+    practice: Practice,
+    *,
+    contract: str = stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION,
+) -> dict[str, str]:
+    frozen = _frozen_paid_pilot_checkout_request(practice, contract=contract)
+    practice.acquisition_source = PracticeAcquisitionSource.public_self_service.value
+    practice.stripe_checkout_request_json = json.dumps(
+        frozen, sort_keys=True, separators=(",", ":")
+    )
+    practice.stripe_checkout_request_created_at = NOW
+    practice.stripe_checkout_entitlement_contract = contract
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.stripe_checkout_state_version += 1
+    practice.stripe_state_version += 1
+    practice.save()
+    return frozen
+
+
+def _paid_pilot_checkout_session(
+    practice: Practice,
+    frozen: dict[str, str],
+    *,
+    session_id: str = "cs_recovery",
+    status: str = "open",
+) -> dict[str, Any]:
+    return {
+        "id": session_id,
+        "url": (
+            f"https://checkout.stripe.com/c/pay/{session_id}"
+            if status == "open"
+            else None
+        ),
+        "expires_at": int((NOW + timedelta(hours=24)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": status,
+        "subscription": None,
+        "customer": frozen.get("customer"),
+        "payment_method_collection": "always",
+        "metadata": {
+            key.removeprefix("metadata[").removesuffix("]"): value
+            for key, value in frozen.items()
+            if key.startswith("metadata[")
+        },
     }
 
 
@@ -2286,6 +2341,348 @@ def test_checkout_completion_before_session_cache_fails_closed(
         stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
     )
     assert practice.stripe_checkout_session_id is None
+
+
+def test_operator_recovery_expires_discovered_open_checkout_and_audits(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    frozen = _store_frozen_paid_pilot_checkout_request(practice)
+    remote.sessions["cs_recovery"] = _paid_pilot_checkout_session(practice, frozen)
+    recovery_args: dict[str, Any] = {
+        "operator_ref": "ticket-CHECKOUT-RECOVERY-1",
+        "reason": "Resolve the retained Session before rotating the attempt",
+        "evidence_reference": "evidence://stripe/checkout-recovery-1.json",
+        "evidence_sha256": "a" * 64,
+        "now": NOW + stripe_billing.CHECKOUT_REQUEST_REPLAY_WINDOW,
+    }
+
+    assert stripe_billing.reconcile_frozen_checkout_request(
+        practice, **recovery_args
+    ) == ("would_expire_open_session", None)
+    practice.refresh()
+    assert practice.stripe_checkout_request_json is not None
+    assert remote.sessions["cs_recovery"]["status"] == "open"
+
+    outcome, audit_id = stripe_billing.reconcile_frozen_checkout_request(
+        practice, apply=True, **recovery_args
+    )
+
+    assert outcome == "operator_expired_open_session"
+    assert audit_id is not None
+    audit = PracticeAccessAudit.get(id=audit_id)
+    assert audit is not None
+    assert audit.action == "stripe_checkout_recovery_started"
+    assert audit.operator_ref == recovery_args["operator_ref"]
+    assert audit.document_reference == recovery_args["evidence_reference"]
+    assert audit.evidence_sha256 == recovery_args["evidence_sha256"]
+    practice.refresh()
+    assert remote.sessions["cs_recovery"]["status"] == "expired"
+    assert practice.stripe_checkout_request_json is None
+    assert practice.stripe_checkout_session_id is None
+    assert practice.stripe_checkout_attempt == 1
+    # The trial begins only after Stripe authoritatively reports completion.
+    assert practice.trial_ends_at is None
+
+
+def test_operator_recovery_absence_requires_interlocks_and_evidence(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    _store_frozen_paid_pilot_checkout_request(practice)
+    recovery_args: dict[str, Any] = {
+        "operator_ref": "ticket-CHECKOUT-RECOVERY-2",
+        "reason": "Provider inventory contains no matching Session",
+        "evidence_reference": "evidence://stripe/checkout-recovery-2.json",
+        "evidence_sha256": "b" * 64,
+    }
+    recovery_boundary = (
+        NOW
+        + stripe_billing.CHECKOUT_REQUEST_REPLAY_WINDOW
+        + stripe_billing.CHECKOUT_RECOVERY_TRANSPORT_SAFETY
+    )
+
+    assert stripe_billing.reconcile_frozen_checkout_request(
+        practice, now=recovery_boundary, **recovery_args
+    ) == ("no_matching_session", None)
+    with pytest.raises(stripe_billing.StripeCheckoutReconciliationRequired):
+        stripe_billing.reconcile_frozen_checkout_request(
+            practice, apply=True, now=recovery_boundary, **recovery_args
+        )
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="disable Checkout"):
+        stripe_billing.reconcile_frozen_checkout_request(
+            practice,
+            confirm_absent=True,
+            apply=True,
+            now=recovery_boundary,
+            **recovery_args,
+        )
+    monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", False)
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="safety window"):
+        stripe_billing.reconcile_frozen_checkout_request(
+            practice,
+            confirm_absent=True,
+            apply=True,
+            now=recovery_boundary - timedelta(seconds=1),
+            **recovery_args,
+        )
+
+    outcome, audit_id = stripe_billing.reconcile_frozen_checkout_request(
+        practice,
+        confirm_absent=True,
+        apply=True,
+        now=recovery_boundary,
+        **recovery_args,
+    )
+
+    assert outcome == "operator_confirmed_absent"
+    assert PracticeAccessAudit.get(id=audit_id)
+    practice.refresh()
+    assert practice.stripe_checkout_request_json is None
+    assert practice.stripe_checkout_attempt == 1
+    assert practice.trial_ends_at is None
+
+
+def test_operator_absence_never_shortens_the_full_transport_boundary(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    trial_end = NOW + timedelta(hours=50)
+    practice.trial_ends_at = trial_end
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_checkout_request_created_at = NOW
+    frozen = _frozen_paid_pilot_checkout_request(practice)
+    frozen["metadata[trial_clock]"] = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    frozen["subscription_data[metadata][trial_clock]"] = (
+        stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    )
+    frozen.pop("metadata[trial_days]")
+    frozen.pop("subscription_data[metadata][trial_days]")
+    frozen.pop("subscription_data[trial_period_days]")
+    frozen["subscription_data[trial_end]"] = str(int(trial_end.timestamp()))
+    practice.stripe_checkout_request_json = json.dumps(
+        frozen, sort_keys=True, separators=(",", ":")
+    )
+    practice.stripe_checkout_state_version += 1
+    practice.stripe_state_version += 1
+    practice.save()
+    monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", False)
+
+    # The legacy trial lead stops automatic replay after two hours, but absence
+    # cannot be attested until the full idempotency transport boundary passes.
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="safety window"):
+        stripe_billing.reconcile_frozen_checkout_request(
+            practice,
+            operator_ref="ticket-CHECKOUT-RECOVERY-LEGACY",
+            reason="Do not shorten the provider absence window",
+            evidence_reference="evidence://stripe/checkout-recovery-legacy.json",
+            evidence_sha256="c" * 64,
+            confirm_absent=True,
+            apply=True,
+            now=NOW + timedelta(hours=2, minutes=5),
+        )
+
+    practice.refresh()
+    assert practice.stripe_checkout_request_json is not None
+    assert practice.stripe_checkout_attempt == 0
+
+
+@pytest.mark.parametrize("inventory_shape", ["partial", "duplicate"])
+def test_operator_recovery_rejects_ambiguous_inventory_without_mutation(
+    remote: FakeStripe,
+    inventory_shape: str,
+):
+    practice = _practice()
+    frozen = _store_frozen_paid_pilot_checkout_request(practice)
+    exact = _paid_pilot_checkout_session(practice, frozen)
+    if inventory_shape == "partial":
+        exact["metadata"].pop("checkout_attempt")
+        remote.sessions[exact["id"]] = exact
+        error = "ambiguous"
+    else:
+        remote.sessions[exact["id"]] = exact
+        second = deepcopy(exact)
+        second["id"] = "cs_recovery_duplicate"
+        remote.sessions[second["id"]] = second
+        error = "multiple"
+
+    with pytest.raises(stripe_billing.StripeStateConflict, match=error):
+        stripe_billing.reconcile_frozen_checkout_request(
+            practice,
+            operator_ref="ticket-CHECKOUT-RECOVERY-AMBIGUOUS",
+            reason="Refuse ambiguous provider inventory",
+            now=NOW + stripe_billing.CHECKOUT_REQUEST_REPLAY_WINDOW,
+        )
+
+    practice.refresh()
+    assert practice.stripe_checkout_request_json is not None
+    assert practice.stripe_checkout_attempt == 0
+
+
+def test_operator_recovery_rejects_wrong_bound_customer(remote: FakeStripe):
+    practice = _practice()
+    practice.stripe_customer_id = "cus_expected"
+    practice.save()
+    frozen = _store_frozen_paid_pilot_checkout_request(practice)
+    frozen.pop("customer_email")
+    frozen["customer"] = "cus_expected"
+    practice.stripe_checkout_request_json = json.dumps(
+        frozen, sort_keys=True, separators=(",", ":")
+    )
+    practice.save()
+    session = _paid_pilot_checkout_session(practice, frozen)
+    session["customer"] = "cus_wrong"
+    remote.sessions[session["id"]] = session
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="customer binding"):
+        stripe_billing.reconcile_frozen_checkout_request(
+            practice,
+            operator_ref="ticket-CHECKOUT-RECOVERY-CUSTOMER",
+            reason="Refuse a mismatched customer binding",
+            now=NOW + stripe_billing.CHECKOUT_REQUEST_REPLAY_WINDOW,
+        )
+
+    practice.refresh()
+    assert practice.stripe_checkout_request_json is not None
+
+
+def test_operator_recovery_binds_completion_during_expiration(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    frozen = _store_frozen_paid_pilot_checkout_request(practice)
+    session = _paid_pilot_checkout_session(practice, frozen)
+    remote.sessions[session["id"]] = session
+    subscription = _subscription(practice, status="trialing")
+    subscription["metadata"].update(
+        entitlement_contract=(
+            stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+        ),
+        trial_clock=stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY,
+        trial_days="14",
+    )
+    subscription["trial_start"] = int(NOW.timestamp())
+    subscription["trial_end"] = int((NOW + timedelta(days=14)).timestamp())
+    remote.subscriptions[subscription["id"]] = subscription
+    original_request = remote.__call__
+
+    def complete_during_expiration(method, path, data=None, *, idempotency_key=None):
+        if path == "/checkout/sessions/cs_recovery/expire":
+            remote.calls.append((method, path, data, idempotency_key))
+            remote.sessions["cs_recovery"].update(
+                status="complete", subscription=subscription["id"], url=None
+            )
+            return deepcopy(remote.sessions["cs_recovery"])
+        return original_request(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", complete_during_expiration)
+    outcome, audit_id = stripe_billing.reconcile_frozen_checkout_request(
+        practice,
+        operator_ref="ticket-CHECKOUT-RECOVERY-COMPLETE",
+        reason="Bind completion raced with retirement",
+        evidence_reference="evidence://stripe/checkout-recovery-complete.json",
+        evidence_sha256="d" * 64,
+        apply=True,
+        now=NOW + stripe_billing.CHECKOUT_REQUEST_REPLAY_WINDOW,
+    )
+
+    assert outcome == "operator_bound_completed_subscription"
+    assert PracticeAccessAudit.get(id=audit_id)
+    practice.refresh()
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.subscription_status == "trialing"
+    assert practice.trial_ends_at == NOW + timedelta(days=14)
+    assert practice.stripe_checkout_session_id is None
+
+
+def test_checkout_inventory_recovery_paginates_to_exact_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    frozen = _store_frozen_paid_pilot_checkout_request(practice)
+    exact = _paid_pilot_checkout_session(practice, frozen)
+    unrelated = deepcopy(exact)
+    unrelated["id"] = "cs_unrelated"
+    unrelated["client_reference_id"] = "practice_other"
+    unrelated["metadata"]["practice_id"] = "practice_other"
+    observed: list[dict[str, str]] = []
+
+    def paginated_request(
+        method: str,
+        path: str,
+        data: dict[str, str] | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        assert method == "GET"
+        assert path == "/checkout/sessions"
+        assert idempotency_key is None
+        assert data is not None
+        observed.append(data)
+        if len(observed) == 1:
+            return {"data": [unrelated], "has_more": True}
+        return {"data": [exact], "has_more": False}
+
+    monkeypatch.setattr(stripe_billing, "_request", paginated_request)
+    matches, ambiguous = stripe_billing._matching_frozen_checkout_sessions(
+        practice,
+        checkout_attempt=practice.stripe_checkout_attempt,
+        entitlement_contract=(
+            stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+        ),
+        request_created_at=NOW,
+    )
+
+    assert [match["id"] for match in matches] == ["cs_recovery"]
+    assert ambiguous == []
+    assert observed[1]["starting_after"] == "cs_unrelated"
+
+
+def test_checkout_recovery_cli_defaults_to_dry_run_and_guards_confirmation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    observed_apply: list[bool] = []
+
+    def fake_recovery(*_args, apply=False, **_kwargs):
+        observed_apply.append(apply)
+        return "would_expire_open_session", None
+
+    monkeypatch.setattr(
+        stripe_billing, "reconcile_frozen_checkout_request", fake_recovery
+    )
+    arguments = [
+        "reconcile-stripe-checkout",
+        "--practice-id",
+        str(practice.id),
+        "--operator-ref",
+        "ticket-CHECKOUT-RECOVERY-DRY-RUN",
+        "--reason",
+        "Preview the exact recovery action",
+        "--evidence-reference",
+        "evidence://stripe/checkout-recovery-dry-run.json",
+        "--evidence-sha256",
+        "f" * 64,
+    ]
+
+    result = CliRunner().invoke(cli_app, arguments)
+    assert result.exit_code == 0
+    assert "mode=dry-run" in result.output
+    assert observed_apply == [False]
+
+    rejected = CliRunner().invoke(cli_app, [*arguments, "--confirm-absent"])
+    assert rejected.exit_code != 0
+    assert observed_apply == [False]
+
+    applied = CliRunner().invoke(cli_app, [*arguments, "--apply"])
+    assert applied.exit_code == 0
+    assert "mode=applied" in applied.output
+    assert observed_apply == [False, True]
 
 
 def test_new_writer_rejects_unversioned_subscription_completion(
