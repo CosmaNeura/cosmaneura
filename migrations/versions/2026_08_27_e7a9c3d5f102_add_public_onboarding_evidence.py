@@ -113,6 +113,17 @@ def upgrade() -> None:
             comment="Whether the public legal/credential gates apply to this practice.",
         ),
     )
+    # The temporary default backfills every pre-existing practice as managed.
+    # Remove it in the same migration transaction so a pre-gate binary, which
+    # cannot supply this discriminator, fails closed on every new practice
+    # insert during a migrate-before-code rollout.
+    op.alter_column(
+        "practice",
+        "public_onboarding_required",
+        existing_type=sa.Boolean(),
+        existing_nullable=False,
+        server_default=None,
+    )
     op.create_check_constraint(
         "ck_practice_public_onboarding_no_npi",
         "practice",
