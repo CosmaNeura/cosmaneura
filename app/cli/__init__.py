@@ -896,6 +896,77 @@ def set_billing_exempt(
         )
 
 
+@app.command("reconcile-stripe-checkout")
+def reconcile_stripe_checkout(
+    join_code: str | None = typer.Option(
+        None, help="Legacy practice join code; mutually exclusive with --practice-id."
+    ),
+    practice_id: str | None = typer.Option(
+        None, help="Stable practice TypeID; preferred for recovery workflows."
+    ),
+    confirm_absent: bool = typer.Option(
+        False,
+        "--confirm-absent",
+        help=(
+            "Advance only when the exact attempt is absent from the provider "
+            "inventory captured by the supplied evidence."
+        ),
+    ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply the displayed recovery action; omission is read-only.",
+    ),
+    operator_ref: str = typer.Option(
+        ..., help="Durable operator/ticket reference for this privileged recovery."
+    ),
+    reason: str = typer.Option(..., help="Why Checkout recovery is being performed."),
+    evidence_reference: str = typer.Option(
+        ..., help="PHI-free reference to the retained Stripe inventory evidence."
+    ),
+    evidence_sha256: str = typer.Option(
+        ..., help="SHA-256 of the retained Stripe inventory evidence."
+    ),
+) -> None:
+    """Resolve one frozen Checkout attempt without blindly creating another."""
+
+    from app.services.stripe_billing import (
+        StripeCheckoutReconciliationRequired,
+        StripeStateConflict,
+        StripeStateInvalid,
+        reconcile_frozen_checkout_request,
+    )
+
+    with global_session():
+        practice = _practice_by_selector(
+            practice_id=practice_id,
+            join_code=join_code,
+        )
+        if confirm_absent and not apply:
+            raise typer.BadParameter("--confirm-absent requires --apply")
+        try:
+            outcome, audit_id = reconcile_frozen_checkout_request(
+                practice,
+                operator_ref=operator_ref,
+                reason=reason,
+                evidence_reference=evidence_reference,
+                evidence_sha256=evidence_sha256,
+                confirm_absent=confirm_absent,
+                apply=apply,
+            )
+        except (
+            StripeCheckoutReconciliationRequired,
+            StripeStateConflict,
+            StripeStateInvalid,
+        ) as exc:
+            raise typer.BadParameter(str(exc) or type(exc).__name__) from exc
+        mode = "applied" if apply else "dry-run"
+        typer.echo(
+            f"{practice.legal_name}: mode={mode} outcome={outcome} "
+            f"audit={audit_id or '—'}"
+        )
+
+
 @app.command("set-negotiated-baa")
 def set_negotiated_baa(
     join_code: str | None = typer.Option(

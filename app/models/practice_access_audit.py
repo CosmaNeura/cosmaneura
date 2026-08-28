@@ -22,6 +22,7 @@ class PracticeAccessAction(str, Enum):
     provider_practice_bootstrapped = "provider_practice_bootstrapped"
     billing_exemption_set = "billing_exemption_set"
     billing_exemption_cleared = "billing_exemption_cleared"
+    stripe_checkout_recovery_started = "stripe_checkout_recovery_started"
     negotiated_baa_recorded = "negotiated_baa_recorded"
     provider_organization_configured = "provider_organization_configured"
     organization_code_rotated = "organization_code_rotated"

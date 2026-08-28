@@ -70,6 +70,10 @@ def test_production_scopes_stripe_capabilities_to_api_and_worker() -> None:
         'startswith(trimspace(try(data.external.secrets.result["STRIPE_SECRET_KEY"], "")), "rk_live_")'
         in main
     )
+    assert (
+        'startswith(trimspace(try(data.external.secrets.result["STRIPE_PORTAL_CONFIGURATION_ID"], "")), "bpc_")'
+        in main
+    )
 
 
 def test_backend_envs_are_default_off_and_resolve_no_guessed_coordinate() -> None:
@@ -84,6 +88,7 @@ def test_backend_envs_are_default_off_and_resolve_no_guessed_coordinate() -> Non
             "STRIPE_WEBHOOK_SECRET",
             "STRIPE_ACCOUNT_ID",
             "STRIPE_PRICE_ID",
+            "STRIPE_PORTAL_CONFIGURATION_ID",
             "STRIPE_API_VERSION",
         ):
             assert f"export {name}=" in source
@@ -120,3 +125,10 @@ def test_staging_deploy_owns_and_revokes_exact_stripe_scope() -> None:
     assert 'update_args+=(--args "$SCHEDULER_COMMAND")' in deploy
     assert "Staging Stripe mode must remain explicitly false" in deploy
     assert "rk_test_" in deploy
+    assert "STRIPE_PORTAL_CONFIGURATION_ID:bpc_" in deploy
+    assert (
+        _shell_array(deploy, "BILLING_PUBLIC_VARS").count(
+            "STRIPE_PORTAL_CONFIGURATION_ID"
+        )
+        == 1
+    )

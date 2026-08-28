@@ -21,16 +21,18 @@ from typeid.errors import TypeIDException
 
 from app import log
 from app.configuration import stripe as stripe_config
+from app.services.external_webhook_inbox import provider_log_ref
+from app.services.public_entitlements import (
+    MAX_ACTIVE_CLINICIAN_SEATS,
+    PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+    active_clinician_seat_count,
+)
 
 from activemodel.session_manager import SessionManager, get_session
-from app.models.organization_access import (
-    OrganizationRosterApproval,
-    ProviderOrganization,
-)
-from app.models.practice import ENTITLED_SUBSCRIPTION_STATUSES, Practice, PracticeMember
+from app.models.practice import ENTITLED_SUBSCRIPTION_STATUSES, TRIAL_LENGTH, Practice
 from app.models.stripe_event_inbox import StripeEventInbox
 from app.models.stripe_event_receipt import StripeEventReceipt
-from sqlalchemy import and_, func, or_
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
@@ -41,6 +43,11 @@ MINIMUM_CHECKOUT_TRIAL_LEAD = timedelta(hours=48)
 # A small buffer prevents an otherwise-valid 48-hour timestamp from falling
 # below that minimum while the Checkout Session request is in flight.
 CHECKOUT_TRIAL_LEAD_SAFETY = timedelta(minutes=5)
+# Stripe may prune idempotency results once they are 24 hours old. Stop replay
+# slightly before that boundary and require an operator to reconcile the
+# provider-side result before Core can authorize another attempt.
+CHECKOUT_REQUEST_REPLAY_WINDOW = timedelta(hours=23, minutes=55)
+CHECKOUT_RECOVERY_TRANSPORT_SAFETY = timedelta(minutes=5)
 EXPECTED_PRICE_CURRENCY = "usd"
 EXPECTED_PRICE_UNIT_AMOUNT = 8_900
 EXPECTED_PRICE_INTERVAL = "month"
@@ -49,8 +56,11 @@ CHECKOUT_PAYMENT_METHOD_COLLECTION = "always"
 # permanently conflicts with any pre-change request retained by Stripe. Keep an
 # explicit policy generation in the key so a successful old request whose local
 # cache write was interrupted cannot block the card-required rollout.
-CHECKOUT_IDEMPOTENCY_POLICY_VERSION = "card-required-v1"
+CHECKOUT_IDEMPOTENCY_POLICY_VERSION = "paid-pilot-v2"
+CHECKOUT_TRIAL_CLOCK_POLICY = "checkout-14-day-v1"
+LEGACY_TRIAL_CLOCK_POLICY = "legacy-baa-carryover-v1"
 MAX_STATE_APPLY_ATTEMPTS = 3
+REMOTE_QUANTITY_OUT_OF_RANGE_ERROR = "remote_seat_quantity_out_of_range"
 
 MIRRORED_EVENT_TYPES = {
     "checkout.session.completed",
@@ -85,12 +95,21 @@ class StripeStateConflict(Exception):
     """Authoritative state changed too often to apply a safe snapshot."""
 
 
+class StripeSeatLimitExceeded(StripeStateInvalid):
+    """Core's authoritative active-clinician count is outside pilot bounds."""
+
+
+class StripeManagedBilling(StripeStateInvalid):
+    """The public paid-pilot Checkout is unavailable to a managed practice."""
+
+
 class StripeSubscriptionContractInvalid(StripeStateInvalid):
     """A fetched subscription is authentic enough to revoke, but not to trust."""
 
-    def __init__(self, subscription: dict[str, Any], message: str):
+    def __init__(self, subscription: dict[str, Any], reason: StripeStateInvalid):
         self.subscription = subscription
-        super().__init__(message)
+        self.reason = reason
+        super().__init__(str(reason))
 
 
 class StripeTrialCarryoverDeferred(Exception):
@@ -110,6 +129,56 @@ class StripeCheckoutAlreadyCompleted(Exception):
 
 class StripeCheckoutRetirementPending(Exception):
     """An expired legacy Checkout still has a nonterminal subscription."""
+
+
+class StripeCheckoutReconciliationRequired(Exception):
+    """A frozen Checkout request is no longer safe to replay automatically."""
+
+
+def _public_checkout_is_managed(
+    practice: Practice, *, at: datetime | None = None
+) -> bool:
+    """Return whether a practice is outside public self-service billing."""
+
+    return bool(
+        practice.negotiated_baa_required
+        or practice.organization_id is not None
+        or practice.billing_exemption_active(at=at)
+    )
+
+
+def _emit_billing_metric(
+    metric: str,
+    *,
+    outcome: str,
+    practice_id: object | None = None,
+    subscription_status: str | None = None,
+    seat_quantity: int | None = None,
+    webhook_lag_seconds: int | None = None,
+    attempts: int | None = None,
+) -> None:
+    """Emit one metadata-only billing signal suitable for aggregate alerts.
+
+    The fixed field set is deliberate: billing provider ids, URLs, customer
+    details, email addresses, and clinical values cannot accidentally enter
+    this operational event.
+    """
+
+    fields: dict[str, object] = {
+        "metric": metric,
+        "outcome": outcome,
+    }
+    if practice_id is not None:
+        fields["practice_ref"] = provider_log_ref(f"practice:{practice_id}")
+    if subscription_status is not None:
+        fields["subscription_status"] = subscription_status
+    if seat_quantity is not None:
+        fields["seat_quantity"] = seat_quantity
+    if webhook_lag_seconds is not None:
+        fields["webhook_lag_seconds"] = webhook_lag_seconds
+    if attempts is not None:
+        fields["attempts"] = attempts
+    log.info("billing lifecycle metric", **fields)
 
 
 def _isolated_state_session() -> Session:
@@ -203,8 +272,22 @@ def _hosted_url(value: object, *, hostname: str) -> str:
     return value
 
 
-def _subscription_item(subscription: dict[str, Any]) -> dict[str, Any]:
-    items = (subscription.get("items") or {}).get("data") or []
+def _stripe_timestamp(value: object, *, source: str) -> datetime:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise StripeStateInvalid(f"{source} is invalid")
+    try:
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise StripeStateInvalid(f"{source} is out of range") from exc
+
+
+def _subscription_item(
+    subscription: dict[str, Any], *, enforce_quantity_bounds: bool = True
+) -> dict[str, Any]:
+    items_container = subscription.get("items")
+    if not isinstance(items_container, dict):
+        raise StripeStateInvalid("subscription items container is invalid")
+    items = items_container.get("data")
     if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
         raise StripeStateInvalid("subscription must contain exactly one price item")
     item = cast(dict[str, Any], items[0])
@@ -212,9 +295,81 @@ def _subscription_item(subscription: dict[str, Any]) -> dict[str, Any]:
     price_id = price.get("id") if isinstance(price, dict) else price
     if price_id != stripe_config.STRIPE_PRICE_ID:
         raise StripeStateInvalid("subscription does not use the configured price")
-    if not isinstance(item.get("id"), str) or not isinstance(item.get("quantity"), int):
+    quantity = item.get("quantity")
+    if (
+        not isinstance(item.get("id"), str)
+        or not isinstance(quantity, int)
+        or isinstance(quantity, bool)
+    ):
         raise StripeStateInvalid("subscription item is missing id or quantity")
+    if enforce_quantity_bounds and not 1 <= quantity <= MAX_ACTIVE_CLINICIAN_SEATS:
+        raise StripeSeatLimitExceeded(
+            "subscription quantity is outside the 1-20 paid-pilot limit"
+        )
     return item
+
+
+def _subscription_trial_clock_policy(subscription: dict[str, Any]) -> str | None:
+    """Validate reserved billing metadata and classify legacy subscriptions."""
+
+    metadata = subscription.get("metadata")
+    if metadata is None:
+        return None
+    if not isinstance(metadata, dict):
+        raise StripeStateInvalid("subscription metadata is invalid")
+
+    policy = metadata.get("checkout_policy")
+    reserved_keys = {"entitlement_contract", "trial_clock", "trial_days"}
+    if policy is None:
+        if any(key in metadata for key in reserved_keys):
+            raise StripeStateInvalid("subscription policy metadata is incomplete")
+        return None
+    if policy != CHECKOUT_IDEMPOTENCY_POLICY_VERSION:
+        raise StripeStateInvalid("subscription checkout policy is unknown")
+    if metadata.get("entitlement_contract") != PUBLIC_ENTITLEMENT_CONTRACT_VERSION:
+        raise StripeStateInvalid("subscription entitlement contract is invalid")
+
+    trial_clock = metadata.get("trial_clock")
+    if trial_clock == CHECKOUT_TRIAL_CLOCK_POLICY:
+        if metadata.get("trial_days") != str(TRIAL_LENGTH.days):
+            raise StripeStateInvalid("subscription trial policy is invalid")
+    elif trial_clock == LEGACY_TRIAL_CLOCK_POLICY:
+        if "trial_days" in metadata:
+            raise StripeStateInvalid("legacy subscription has new-trial metadata")
+    else:
+        raise StripeStateInvalid("subscription trial clock policy is unknown")
+    return cast(str, trial_clock)
+
+
+def _subscription_uses_current_policy(subscription: dict[str, Any]) -> bool:
+    return _subscription_trial_clock_policy(subscription) is not None
+
+
+def _trial_end_from_subscription(subscription: dict[str, Any]) -> datetime | None:
+    """Validate and return Stripe's authoritative paid-pilot trial end."""
+
+    trial_start = subscription.get("trial_start")
+    trial_end = subscription.get("trial_end")
+    trial_clock_policy = _subscription_trial_clock_policy(subscription)
+    checkout_clock = trial_clock_policy == CHECKOUT_TRIAL_CLOCK_POLICY
+    if trial_start is None and trial_end is None:
+        if subscription.get("status") == "trialing" or checkout_clock:
+            raise StripeStateInvalid("subscription is missing its required trial clock")
+        return None
+    if (
+        not isinstance(trial_start, int)
+        or isinstance(trial_start, bool)
+        or not isinstance(trial_end, int)
+        or isinstance(trial_end, bool)
+        or trial_end <= trial_start
+    ):
+        raise StripeStateInvalid("subscription trial clock is invalid")
+    if checkout_clock and trial_end - trial_start != int(TRIAL_LENGTH.total_seconds()):
+        raise StripeStateInvalid("subscription trial is not exactly 14 days")
+    try:
+        return datetime.fromtimestamp(trial_end, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise StripeStateInvalid("subscription trial clock is out of range") from exc
 
 
 def _validate_subscription(subscription: dict[str, Any]) -> dict[str, Any]:
@@ -228,10 +383,11 @@ def _validate_subscription(subscription: dict[str, Any]) -> dict[str, Any]:
     if status not in KNOWN_SUBSCRIPTION_STATUSES:
         raise StripeStateInvalid("subscription status is unknown")
     _validate_livemode(subscription.get("livemode"), source="subscription")
-    _subscription_item(subscription)
     metadata = subscription.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
         raise StripeStateInvalid("subscription metadata is invalid")
+    _subscription_item(subscription)
+    _trial_end_from_subscription(subscription)
     pause_collection = subscription.get("pause_collection")
     if pause_collection is not None and not isinstance(pause_collection, dict):
         raise StripeStateInvalid("subscription pause_collection is invalid")
@@ -263,7 +419,7 @@ def _retrieve_subscription(
     try:
         return _validate_subscription(subscription)
     except StripeStateInvalid as exc:
-        raise StripeSubscriptionContractInvalid(subscription, str(exc)) from exc
+        raise StripeSubscriptionContractInvalid(subscription, exc) from exc
 
 
 def _contract_snapshot_matches_binding(
@@ -340,10 +496,27 @@ def _fail_closed_invalid_bound_subscription(
             session.commit()
             return False
 
+        repair_target: int | None = None
+        if isinstance(invalid.reason, StripeSeatLimitExceeded):
+            try:
+                repair_target = _authorized_member_count(session, row)
+            except StripeSeatLimitExceeded:
+                repair_target = None
         row.subscription_status = "invalid"
         row.stripe_state_version += 1
-        row.stripe_quantity_sync_required = False
-        row.stripe_quantity_sync_error = str(invalid)[:512]
+        if repair_target is not None:
+            if (
+                not row.stripe_quantity_sync_required
+                or row.stripe_quantity_sync_target != repair_target
+            ):
+                row.stripe_quantity_sync_version += 1
+            row.stripe_quantity_sync_required = True
+            row.stripe_quantity_sync_target = repair_target
+            row.stripe_quantity_sync_error = REMOTE_QUANTITY_OUT_OF_RANGE_ERROR
+        else:
+            row.stripe_quantity_sync_required = False
+            row.stripe_quantity_sync_target = None
+            row.stripe_quantity_sync_error = str(invalid)[:512]
         if event_created_at is not None:
             assert event_id and event_type
             row.stripe_last_event_created_at = event_created_at
@@ -361,8 +534,8 @@ def _fail_closed_invalid_bound_subscription(
     practice.refresh()
     log.error(
         "bound Stripe subscription violated the commercial contract; access revoked",
-        practice_id=str(practice.id),
-        subscription_id=subscription_id,
+        practice_ref=provider_log_ref(f"practice:{practice.id}"),
+        subscription_ref=provider_log_ref(subscription_id),
         error=str(invalid),
     )
     return True
@@ -395,8 +568,8 @@ def _assert_subscription_belongs_to_practice(
         # unique id, missing/drifted metadata must not redirect a cancellation.
         log.error(
             "stripe subscription metadata drift",
-            practice_id=str(practice.id),
-            subscription_id=subscription["id"],
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            subscription_ref=provider_log_ref(subscription["id"]),
             metadata_matches=False,
         )
     elif metadata_practice_id not in (None, str(practice.id)):
@@ -413,6 +586,7 @@ def _apply_authoritative_subscription(
     clear_checkout: bool = False,
     require_practice_metadata: bool = False,
     allow_terminal_rebind: bool = False,
+    trusted_checkout_session_id: str | None = None,
     deleted_fallback: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, bool]:
     """Fetch outside a transaction, then apply through a short optimistic lock.
@@ -434,9 +608,46 @@ def _apply_authoritative_subscription(
                 if receipt is not None:
                     return None, False
             snapshot = session.exec(
-                select(Practice).where(Practice.id == practice.id)
+                select(Practice).where(Practice.id == practice.id).with_for_update()
             ).one()
+            if (
+                event_id is not None
+                and snapshot.stripe_subscription_id not in (None, subscription_id)
+                and not clear_checkout
+            ):
+                if event_created_at is None or event_type is None:
+                    raise StripeStateInvalid(
+                        "Stripe event receipt metadata is incomplete"
+                    )
+                session.add(
+                    _event_receipt(
+                        event_id=event_id,
+                        event_type=event_type,
+                        event_created_at=event_created_at,
+                        practice_id=snapshot.id,
+                    )
+                )
+                session.commit()
+                return None, False
+            if (
+                event_created_at is not None
+                and snapshot.stripe_subscription_id == subscription_id
+                and snapshot.stripe_last_event_created_at is not None
+                and event_created_at < snapshot.stripe_last_event_created_at
+            ):
+                assert event_id and event_type
+                session.add(
+                    _event_receipt(
+                        event_id=event_id,
+                        event_type=event_type,
+                        event_created_at=event_created_at,
+                        practice_id=snapshot.id,
+                    )
+                )
+                session.commit()
+                return None, False
             snapshot_version = snapshot.stripe_state_version
+            session.commit()
 
         try:
             subscription = _retrieve_subscription(
@@ -489,6 +700,36 @@ def _apply_authoritative_subscription(
                 session.commit()
                 continue
 
+            same_subscription = row.stripe_subscription_id == subscription["id"]
+            if not same_subscription and _public_checkout_is_managed(row):
+                raise StripeManagedBilling
+            trusted_pending_checkout = bool(
+                trusted_checkout_session_id is not None
+                and row.stripe_checkout_session_id == trusted_checkout_session_id
+            )
+            if (
+                clear_checkout
+                and (
+                    row.stripe_checkout_request_json is not None
+                    or row.stripe_checkout_session_id is not None
+                )
+                and not trusted_pending_checkout
+            ):
+                raise StripeStateConflict(
+                    "Checkout completion does not match the pending session"
+                )
+            if (
+                not same_subscription
+                and (
+                    row.stripe_checkout_request_json is not None
+                    or row.stripe_checkout_session_id is not None
+                )
+                and not trusted_pending_checkout
+            ):
+                raise StripeStateConflict(
+                    "an unrelated subscription arrived while Checkout was pending"
+                )
+
             contract_error: StripeStateInvalid | None = None
             try:
                 _assert_subscription_belongs_to_practice(
@@ -505,6 +746,33 @@ def _apply_authoritative_subscription(
                 "practice_id"
             ) == str(row.id)
             mirrored_status = _mirrored_subscription_status(subscription)
+            trial_clock_policy = _subscription_trial_clock_policy(subscription)
+            metadata = subscription.get("metadata")
+            unversioned_legacy_checkout = bool(
+                trial_clock_policy is None
+                and metadata == {"practice_id": str(row.id)}
+                and (
+                    (
+                        same_subscription
+                        and row.stripe_trial_clock_policy
+                        in (None, LEGACY_TRIAL_CLOCK_POLICY)
+                    )
+                    or (
+                        trusted_checkout_session_id is not None
+                        and row.stripe_checkout_session_id
+                        == trusted_checkout_session_id
+                        and row.stripe_trial_clock_policy is None
+                    )
+                )
+            )
+            if unversioned_legacy_checkout:
+                # The release immediately before paid-pilot v2 wrote only the
+                # practice id onto subscriptions. Trust that exact legacy shape
+                # only when it is already bound or when the completing Session
+                # is the immutable id cached locally before the rollout drain.
+                trial_clock_policy = LEGACY_TRIAL_CLOCK_POLICY
+            mirrored_trial_end = _trial_end_from_subscription(subscription)
+            previous_status = row.subscription_status
             if require_practice_metadata and not metadata_matches:
                 if row.stripe_subscription_id == subscription["id"]:
                     contract_error = StripeStateInvalid(
@@ -515,13 +783,74 @@ def _apply_authoritative_subscription(
                         "subscription practice metadata is missing"
                     )
             if (
-                row.stripe_subscription_id == subscription["id"]
+                require_practice_metadata
+                and row.stripe_subscription_id != subscription["id"]
+                and mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
+                and trial_clock_policy
+                != (
+                    CHECKOUT_TRIAL_CLOCK_POLICY
+                    if row.trial_ends_at is None
+                    else LEGACY_TRIAL_CLOCK_POLICY
+                )
+            ):
+                raise StripeStateInvalid(
+                    "new subscription trial policy does not match Core state"
+                )
+            if (
+                not same_subscription
+                and mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
+                and not trusted_pending_checkout
+            ):
+                raise StripeStateConflict(
+                    "initial subscription binding requires exact Checkout completion"
+                )
+            if (
+                same_subscription
                 and not metadata_matches
                 and mirrored_status in ENTITLED_SUBSCRIPTION_STATUSES
             ):
                 contract_error = StripeStateInvalid(
                     "bound subscription metadata cannot grant entitlement"
                 )
+            if (
+                same_subscription
+                and row.stripe_trial_clock_policy is not None
+                and trial_clock_policy != row.stripe_trial_clock_policy
+            ):
+                contract_error = StripeStateInvalid(
+                    "bound subscription trial policy cannot change"
+                )
+            if (
+                same_subscription
+                and row.stripe_trial_clock_policy is None
+                and trial_clock_policy == CHECKOUT_TRIAL_CLOCK_POLICY
+            ):
+                # No deployed legacy release could have created this policy.
+                # Refuse to infer paid-pilot provenance for an already-bound
+                # row because mutable Stripe metadata cannot establish it.
+                contract_error = StripeStateInvalid(
+                    "bound paid-pilot trial policy has no durable provenance"
+                )
+            if (
+                same_subscription
+                and row.stripe_trial_clock_policy == CHECKOUT_TRIAL_CLOCK_POLICY
+                and trial_clock_policy == CHECKOUT_TRIAL_CLOCK_POLICY
+                and row.trial_ends_at is not None
+                and mirrored_trial_end != row.trial_ends_at
+            ):
+                contract_error = StripeStateInvalid(
+                    "bound paid-pilot trial clock cannot be reset or extended"
+                )
+
+            target: int | None = None
+            if mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES:
+                try:
+                    target = _authorized_member_count(session, row)
+                except StripeSeatLimitExceeded as exc:
+                    # Membership mutation paths own prevention. Billing still
+                    # fails closed if drift or an older path violates the seat
+                    # invariant, without leaving a stale active entitlement.
+                    contract_error = exc
 
             if contract_error is not None:
                 row.subscription_status = "invalid"
@@ -544,9 +873,9 @@ def _apply_authoritative_subscription(
                 session.commit()
                 practice.refresh()
                 log.error(
-                    "bound Stripe subscription identity drift; access revoked",
-                    practice_id=str(practice.id),
-                    subscription_id=subscription_id,
+                    "bound Stripe subscription contract invalid; access revoked",
+                    practice_ref=provider_log_ref(f"practice:{practice.id}"),
+                    subscription_ref=provider_log_ref(subscription_id),
                     error=str(contract_error),
                 )
                 return subscription, True
@@ -554,6 +883,20 @@ def _apply_authoritative_subscription(
             row.stripe_customer_id = subscription["customer"]
             row.stripe_subscription_id = subscription["id"]
             row.subscription_status = mirrored_status
+            if not same_subscription:
+                row.stripe_trial_clock_policy = trial_clock_policy
+            elif (
+                row.stripe_trial_clock_policy is None
+                and trial_clock_policy == LEGACY_TRIAL_CLOCK_POLICY
+            ):
+                # This additive marker may be adopted for the legacy policy;
+                # unlike the new clock, it cannot grant a fresh trial.
+                row.stripe_trial_clock_policy = trial_clock_policy
+            if mirrored_trial_end is not None:
+                # This value comes only from a freshly retrieved, validated
+                # Stripe subscription. A success URL or browser assertion can
+                # never create or extend the local trial clock.
+                row.trial_ends_at = mirrored_trial_end
             row.stripe_state_version += 1
             if event_created_at is not None:
                 assert event_id and event_type
@@ -567,15 +910,11 @@ def _apply_authoritative_subscription(
                         practice_id=row.id,
                     )
                 )
-            if clear_checkout:
+            if clear_checkout and trusted_pending_checkout:
                 _clear_checkout_session(row, advance=True)
 
-            target = _authorized_member_count(session, row)
             item = _subscription_item(subscription)
-            quantity_sync_required = (
-                mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES
-                and item["quantity"] != target
-            )
+            quantity_sync_required = target is not None and item["quantity"] != target
             if quantity_sync_required and (
                 not row.stripe_quantity_sync_required
                 or row.stripe_quantity_sync_target != target
@@ -593,6 +932,30 @@ def _apply_authoritative_subscription(
             session.add(row)
             session.commit()
         practice.refresh()
+        _emit_billing_metric(
+            "entitlement_reconciliation",
+            outcome="applied",
+            practice_id=practice.id,
+            subscription_status=mirrored_status,
+            seat_quantity=target,
+        )
+        if mirrored_status == "canceled":
+            _emit_billing_metric(
+                "subscription_cancellation",
+                outcome="applied",
+                practice_id=practice.id,
+                subscription_status=mirrored_status,
+            )
+        if (
+            previous_status in {"past_due", "unpaid", "paused", "pending_verification"}
+            and mirrored_status in ENTITLED_SUBSCRIPTION_STATUSES
+        ):
+            _emit_billing_metric(
+                "payment_recovery",
+                outcome="restored",
+                practice_id=practice.id,
+                subscription_status=mirrored_status,
+            )
         return subscription, True
 
     raise StripeStateConflict(
@@ -609,47 +972,14 @@ def attested_member_count(practice: Practice) -> int:
 
 
 def _authorized_member_count(session: Session, practice: Practice) -> int:
-    """Count live attestation or exact-roster authorization bases consistently."""
+    """Consume the canonical v1 active-seat policy and enforce pilot bounds."""
 
-    current = datetime.now(timezone.utc)
-    authorization_bases: list[Any] = [
-        and_(
-            col(PracticeMember.organization_authorized_at).is_not(None),
-            col(OrganizationRosterApproval.revoked_at).is_(None),
-            or_(
-                col(OrganizationRosterApproval.expires_at).is_(None),
-                col(OrganizationRosterApproval.expires_at) > current,
-            ),
-            col(OrganizationRosterApproval.claimed_doctor_id)
-            == col(PracticeMember.doctor_id),
-            col(OrganizationRosterApproval.target_practice_id)
-            == col(PracticeMember.practice_id),
-            col(OrganizationRosterApproval.organization_id) == practice.organization_id,
-            col(ProviderOrganization.status) == "active",
+    count = active_clinician_seat_count(session, practice.id)
+    if not 1 <= count <= MAX_ACTIVE_CLINICIAN_SEATS:
+        raise StripeSeatLimitExceeded(
+            "authoritative active-clinician count is outside the 1-20 pilot limit"
         )
-    ]
-    if practice.organization_id is None:
-        authorization_bases.append(col(PracticeMember.attested_at).is_not(None))
-    count = session.exec(
-        select(func.count())
-        .select_from(PracticeMember)
-        .outerjoin(
-            OrganizationRosterApproval,
-            col(OrganizationRosterApproval.id)
-            == col(PracticeMember.organization_roster_approval_id),
-        )
-        .outerjoin(
-            ProviderOrganization,
-            col(ProviderOrganization.id)
-            == col(OrganizationRosterApproval.organization_id),
-        )
-        .where(
-            PracticeMember.practice_id == practice.id,
-            col(PracticeMember.access_revoked_at).is_(None),
-            or_(*authorization_bases),
-        )
-    ).one()
-    return max(1, int(count))
+    return count
 
 
 def checkout_deferred_until(
@@ -669,13 +999,13 @@ def checkout_deferred_until(
 def checkout_trial_end(
     practice: Practice, *, now: datetime | None = None
 ) -> datetime | None:
-    """Return the safe Stripe trial end without shortening platform access.
+    """Return a safe end for a legacy pre-Checkout platform trial.
 
-    Stripe Checkout requires a subscription ``trial_end`` at least 48 hours in
-    the future. A platform trial with more lead time keeps its exact end. A
-    shorter active trial is extended just enough to satisfy Stripe plus a small
-    request-processing buffer. An expired trial has no Stripe trial, so payment
-    can begin immediately without charging before platform entitlement ends.
+    New paid-pilot trials use Stripe's stable ``trial_period_days=14`` request
+    and begin only when Checkout creates the subscription. Older rows may have
+    a BAA-era trial clock; preserve rather than silently reset that promise.
+    Stripe requires an absolute legacy ``trial_end`` at least 48 hours ahead,
+    so a shorter live legacy window is extended only to that safe minimum.
     """
 
     current = now or datetime.now(timezone.utc)
@@ -715,10 +1045,11 @@ def refresh_subscription_state(practice: Practice) -> dict[str, Any] | None:
     return subscription
 
 
-def _checkout_idempotency_key(practice: Practice) -> str:
+def _checkout_idempotency_key(practice: Practice, *, attempt: int | None = None) -> str:
+    checkout_attempt = practice.stripe_checkout_attempt if attempt is None else attempt
     raw = (
         f"cosmas-checkout:{CHECKOUT_IDEMPOTENCY_POLICY_VERSION}:"
-        f"{practice.id}:{practice.stripe_checkout_attempt}"
+        f"{practice.id}:{checkout_attempt}"
     )
     return f"cosmas-checkout-{hashlib.sha256(raw.encode()).hexdigest()}"
 
@@ -728,25 +1059,269 @@ def _checkout_expire_idempotency_key(session_id: str) -> str:
     return f"cosmas-checkout-expire-{hashlib.sha256(raw.encode()).hexdigest()}"
 
 
+def _checkout_request_replay_deadline(
+    frozen_data: dict[str, str], *, created_at: datetime
+) -> datetime:
+    if created_at.tzinfo is None:
+        raise StripeStateInvalid("stored Checkout request timestamp is invalid")
+    deadline = created_at.astimezone(timezone.utc) + CHECKOUT_REQUEST_REPLAY_WINDOW
+    raw_trial_end = frozen_data.get("subscription_data[trial_end]")
+    if raw_trial_end is not None:
+        try:
+            trial_end_value = int(raw_trial_end)
+        except ValueError as exc:
+            raise StripeStateInvalid("stored Checkout trial end is invalid") from exc
+        trial_end = _stripe_timestamp(
+            trial_end_value, source="stored Checkout trial end"
+        )
+        deadline = min(deadline, trial_end - MINIMUM_CHECKOUT_TRIAL_LEAD)
+    return deadline
+
+
 def _clear_checkout_session(practice: Practice, *, advance: bool) -> None:
     if advance:
         practice.stripe_checkout_attempt += 1
     practice.stripe_checkout_session_id = None
     practice.stripe_checkout_session_url = None
     practice.stripe_checkout_session_expires_at = None
+    practice.stripe_checkout_request_json = None
+    practice.stripe_checkout_request_created_at = None
     practice.stripe_checkout_state_version += 1
 
 
-def _checkout_cache_snapshot(practice_id: Any) -> tuple[int, str | None]:
+def _checkout_cache_snapshot(
+    practice_id: Any,
+) -> tuple[int, int, str | None, int, str | None, str | None, str | None]:
     with _isolated_state_session() as session:
         row = session.exec(select(Practice).where(Practice.id == practice_id)).one()
-        return row.stripe_checkout_state_version, row.stripe_checkout_session_id
+        return (
+            row.stripe_checkout_state_version,
+            row.stripe_state_version,
+            row.stripe_checkout_session_id,
+            row.stripe_checkout_attempt,
+            row.stripe_trial_clock_policy,
+            row.stripe_subscription_id,
+            row.subscription_status,
+        )
+
+
+def _checkout_redirect_is_safe(value: str, *, outcome: str) -> bool:
+    parsed = urlparse(value)
+    return bool(
+        parsed.scheme == "https"
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.fragment
+        and "\\" not in value
+        and parsed.query in ("", f"billing={outcome}")
+    )
+
+
+def _validate_frozen_checkout_request(
+    frozen_data: dict[str, str],
+    *,
+    practice: Practice,
+    trial_clock_policy: str,
+) -> None:
+    """Validate the exact provider-bound commercial request on every replay."""
+
+    if frozen_data.get("line_items[0][price]") != stripe_config.STRIPE_PRICE_ID:
+        raise StripeCheckoutReconciliationRequired
+    raw_quantity = frozen_data.get("line_items[0][quantity]")
+    try:
+        quantity = int(raw_quantity or "")
+    except ValueError as exc:
+        raise StripeStateInvalid("stored Checkout quantity is invalid") from exc
+    if str(quantity) != raw_quantity or not 1 <= quantity <= MAX_ACTIVE_CLINICIAN_SEATS:
+        raise StripeStateInvalid("stored Checkout quantity is outside pilot bounds")
+
+    expected: dict[str, str] = {
+        "mode": "subscription",
+        "line_items[0][price]": stripe_config.STRIPE_PRICE_ID,
+        "line_items[0][quantity]": raw_quantity,
+        "client_reference_id": str(practice.id),
+        "success_url": frozen_data.get("success_url", ""),
+        "cancel_url": frozen_data.get("cancel_url", ""),
+        "payment_method_collection": CHECKOUT_PAYMENT_METHOD_COLLECTION,
+        "metadata[checkout_policy]": CHECKOUT_IDEMPOTENCY_POLICY_VERSION,
+        "metadata[checkout_attempt]": str(practice.stripe_checkout_attempt),
+        "metadata[practice_id]": str(practice.id),
+        "metadata[entitlement_contract]": PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+        "metadata[trial_clock]": trial_clock_policy,
+        "subscription_data[metadata][practice_id]": str(practice.id),
+        "subscription_data[metadata][checkout_policy]": (
+            CHECKOUT_IDEMPOTENCY_POLICY_VERSION
+        ),
+        "subscription_data[metadata][entitlement_contract]": (
+            PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+        ),
+        "subscription_data[metadata][trial_clock]": trial_clock_policy,
+    }
+    if not _checkout_redirect_is_safe(expected["success_url"], outcome="success"):
+        raise StripeStateInvalid("stored Checkout success URL is invalid")
+    if not _checkout_redirect_is_safe(expected["cancel_url"], outcome="cancelled"):
+        raise StripeStateInvalid("stored Checkout cancel URL is invalid")
+
+    if practice.stripe_customer_id is not None:
+        if (
+            frozen_data.get("customer") != practice.stripe_customer_id
+            or "customer_email" in frozen_data
+        ):
+            raise StripeStateConflict(
+                "Core customer binding changed after Checkout request construction"
+            )
+        expected["customer"] = practice.stripe_customer_id
+    else:
+        if "customer" in frozen_data:
+            raise StripeStateConflict(
+                "Core customer binding changed after Checkout request construction"
+            )
+        customer_email = frozen_data.get("customer_email")
+        if customer_email is not None:
+            expected["customer_email"] = customer_email
+
+    if trial_clock_policy == CHECKOUT_TRIAL_CLOCK_POLICY:
+        expected.update(
+            {
+                "subscription_data[trial_period_days]": str(TRIAL_LENGTH.days),
+                "metadata[trial_days]": str(TRIAL_LENGTH.days),
+                "subscription_data[metadata][trial_days]": str(TRIAL_LENGTH.days),
+                "subscription_data[trial_settings][end_behavior]"
+                "[missing_payment_method]": "pause",
+            }
+        )
+    elif trial_clock_policy == LEGACY_TRIAL_CLOCK_POLICY:
+        raw_trial_end = frozen_data.get("subscription_data[trial_end]")
+        if raw_trial_end is not None:
+            expected["subscription_data[trial_end]"] = raw_trial_end
+            expected[
+                "subscription_data[trial_settings][end_behavior]"
+                "[missing_payment_method]"
+            ] = "pause"
+    else:
+        raise StripeStateInvalid("stored Checkout trial policy is invalid")
+
+    if frozen_data != expected:
+        raise StripeStateInvalid("stored Checkout request violates policy")
+
+
+def _checkout_request_snapshot(
+    practice: Practice,
+    proposed_data: dict[str, Any],
+    *,
+    current: datetime,
+) -> tuple[int, int, str | None, int, dict[str, str]]:
+    """Durably freeze a Checkout request before Stripe can create its Session."""
+
+    proposed_json = json.dumps(proposed_data, sort_keys=True, separators=(",", ":"))
+    with _isolated_state_session() as session:
+        row = session.exec(
+            select(Practice).where(Practice.id == practice.id).with_for_update()
+        ).one()
+        if _public_checkout_is_managed(row, at=current):
+            raise StripeManagedBilling
+        if row.stripe_subscription_id is not None and (
+            row.subscription_status not in TERMINAL_SUBSCRIPTION_STATUSES
+        ):
+            raise StripeCheckoutAlreadyCompleted
+        if row.stripe_subscription_id is None and row.subscription_status is not None:
+            raise StripeStateInvalid(
+                "unbound billing state must be reconciled before Checkout"
+            )
+        if row.stripe_checkout_session_id is not None:
+            session.commit()
+            raise StripeStateConflict(
+                "Checkout session appeared before request creation"
+            )
+        if row.stripe_checkout_request_json is None:
+            locked_seat_quantity = _authorized_member_count(session, row)
+            expected_trial_clock_policy = (
+                CHECKOUT_TRIAL_CLOCK_POLICY
+                if row.trial_ends_at is None
+                else LEGACY_TRIAL_CLOCK_POLICY
+            )
+            expected_trial_end = checkout_trial_end(row, now=current)
+            proposed_trial_end = proposed_data.get("subscription_data[trial_end]")
+            if (
+                proposed_data.get("line_items[0][quantity]")
+                != str(locked_seat_quantity)
+                or proposed_data.get("metadata[trial_clock]")
+                != expected_trial_clock_policy
+                or proposed_data.get("subscription_data[metadata][trial_clock]")
+                != expected_trial_clock_policy
+                or proposed_trial_end
+                != (
+                    str(math.ceil(expected_trial_end.timestamp()))
+                    if expected_trial_end is not None
+                    else None
+                )
+            ):
+                raise StripeStateConflict(
+                    "Core billing state changed before Checkout request creation"
+                )
+            _validate_frozen_checkout_request(
+                cast(dict[str, str], proposed_data),
+                practice=row,
+                trial_clock_policy=expected_trial_clock_policy,
+            )
+            row.stripe_checkout_request_json = proposed_json
+            row.stripe_checkout_request_created_at = current
+            row.stripe_trial_clock_policy = expected_trial_clock_policy
+            row.stripe_checkout_state_version += 1
+            row.stripe_state_version += 1
+            session.add(row)
+            session.commit()
+        try:
+            frozen_data = json.loads(row.stripe_checkout_request_json)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise StripeCheckoutReconciliationRequired from exc
+        if (
+            not isinstance(frozen_data, dict)
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in frozen_data.items()
+            )
+            or frozen_data.get("metadata[trial_clock]") != row.stripe_trial_clock_policy
+            or frozen_data.get("subscription_data[metadata][trial_clock]")
+            != row.stripe_trial_clock_policy
+        ):
+            raise StripeCheckoutReconciliationRequired
+        if row.stripe_trial_clock_policy is None:
+            raise StripeCheckoutReconciliationRequired
+        try:
+            _validate_frozen_checkout_request(
+                cast(dict[str, str], frozen_data),
+                practice=row,
+                trial_clock_policy=row.stripe_trial_clock_policy,
+            )
+        except (StripeStateConflict, StripeStateInvalid) as exc:
+            raise StripeCheckoutReconciliationRequired from exc
+        request_created_at = row.stripe_checkout_request_created_at
+        if request_created_at is None:
+            raise StripeCheckoutReconciliationRequired
+        try:
+            replay_deadline = _checkout_request_replay_deadline(
+                cast(dict[str, str], frozen_data), created_at=request_created_at
+            )
+        except StripeStateInvalid as exc:
+            raise StripeCheckoutReconciliationRequired from exc
+        if current >= replay_deadline:
+            raise StripeCheckoutReconciliationRequired
+        return (
+            row.stripe_checkout_state_version,
+            row.stripe_state_version,
+            row.stripe_checkout_session_id,
+            row.stripe_checkout_attempt,
+            cast(dict[str, str], frozen_data),
+        )
 
 
 def _persist_checkout_cache(
     practice: Practice,
     *,
     expected_version: int,
+    expected_billing_version: int | None = None,
     expected_session_id: str | None,
     session_id: str | None,
     url: str | None,
@@ -762,14 +1337,23 @@ def _persist_checkout_cache(
         if (
             row.stripe_checkout_state_version != expected_version
             or row.stripe_checkout_session_id != expected_session_id
+            or (
+                expected_billing_version is not None
+                and row.stripe_state_version != expected_billing_version
+            )
         ):
             session.commit()
             raise StripeStateConflict("Checkout session state changed while in flight")
+        if session_id is not None and _public_checkout_is_managed(row):
+            session.commit()
+            raise StripeManagedBilling
         if advance:
             row.stripe_checkout_attempt += 1
         row.stripe_checkout_session_id = session_id
         row.stripe_checkout_session_url = url
         row.stripe_checkout_session_expires_at = expires_at
+        row.stripe_checkout_request_json = None
+        row.stripe_checkout_request_created_at = None
         row.stripe_checkout_state_version += 1
         session.add(row)
         session.commit()
@@ -777,10 +1361,9 @@ def _persist_checkout_cache(
 
 
 def _checkout_session_expiry(session: dict[str, Any]) -> datetime:
-    expires_at = session.get("expires_at")
-    if not isinstance(expires_at, int):
-        raise StripeStateInvalid("checkout session expiry is invalid")
-    return datetime.fromtimestamp(expires_at, tz=timezone.utc)
+    return _stripe_timestamp(
+        session.get("expires_at"), source="checkout session expiry"
+    )
 
 
 def _validate_checkout_session_binding(
@@ -802,20 +1385,29 @@ def _checkout_session_uses_current_policy(
     session: dict[str, Any],
     practice: Practice,
     *,
-    require_metadata: bool,
+    expected_attempt: int,
+    expected_trial_clock: str | None,
 ) -> bool:
     if session.get("payment_method_collection") != CHECKOUT_PAYMENT_METHOD_COLLECTION:
         return False
     metadata = session.get("metadata")
-    if metadata is None or metadata == {}:
-        # `always` sessions from the immediately preceding revision remain
-        # safe to resume even though policy metadata was not written yet.
-        # Stripe serializes an unset metadata map as `{}` on retrieval.
-        return not require_metadata
+    if expected_trial_clock not in {
+        CHECKOUT_TRIAL_CLOCK_POLICY,
+        LEGACY_TRIAL_CLOCK_POLICY,
+    }:
+        return False
     return bool(
         isinstance(metadata, dict)
         and metadata.get("checkout_policy") == CHECKOUT_IDEMPOTENCY_POLICY_VERSION
+        and metadata.get("checkout_attempt") == str(expected_attempt)
         and metadata.get("practice_id") == str(practice.id)
+        and metadata.get("entitlement_contract") == PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+        and metadata.get("trial_clock") == expected_trial_clock
+        and (
+            metadata.get("trial_days") == str(TRIAL_LENGTH.days)
+            if expected_trial_clock == CHECKOUT_TRIAL_CLOCK_POLICY
+            else "trial_days" not in metadata
+        )
     )
 
 
@@ -831,6 +1423,7 @@ def _recover_completed_checkout_session(
         clear_checkout=True,
         require_practice_metadata=True,
         allow_terminal_rebind=True,
+        trusted_checkout_session_id=cast(str, session["id"]),
     )
     assert subscription is not None
     raise StripeCheckoutAlreadyCompleted
@@ -861,6 +1454,7 @@ def _resolve_expired_checkout_subscription(
         subscription_id,
         require_practice_metadata=True,
         allow_terminal_rebind=True,
+        trusted_checkout_session_id=cast(str, session["id"]),
     )
     assert subscription is not None
     _persist_checkout_cache(
@@ -886,6 +1480,7 @@ def _retire_open_checkout_session(
     session: dict[str, Any],
     *,
     expected_version: int,
+    expected_billing_version: int | None = None,
     expected_session_id: str | None,
 ) -> None:
     """Expire an open session before rotating its local idempotency attempt.
@@ -924,12 +1519,36 @@ def _retire_open_checkout_session(
     _persist_checkout_cache(
         practice,
         expected_version=expected_version,
+        expected_billing_version=expected_billing_version,
         expected_session_id=expected_session_id,
         session_id=None,
         url=None,
         expires_at=None,
         advance=True,
     )
+
+
+def _retire_unpersisted_checkout_session(
+    practice: Practice, checkout_session: dict[str, Any]
+) -> None:
+    """Expire a just-created Session that lost its local billing-state fence."""
+
+    session_id = checkout_session.get("id")
+    if not isinstance(session_id, str) or not session_id.startswith("cs_"):
+        raise StripeStateInvalid("new checkout session id is invalid")
+    try:
+        resolved = _request(
+            "POST",
+            f"/checkout/sessions/{session_id}/expire",
+            idempotency_key=_checkout_expire_idempotency_key(session_id),
+        )
+    except httpx.HTTPError:
+        resolved = _request("GET", f"/checkout/sessions/{session_id}")
+    _validate_checkout_session_binding(resolved, practice, expected_id=session_id)
+    if resolved.get("status") != "expired" or resolved.get("subscription") is not None:
+        raise StripeStateConflict(
+            "a concurrent billing change left a Checkout session needing review"
+        )
 
 
 def _recover_checkout_session(practice: Practice, *, current: datetime) -> str | None:
@@ -940,24 +1559,42 @@ def _recover_checkout_session(practice: Practice, *, current: datetime) -> str |
     and bind any resulting subscription before a new attempt is allowed.
     """
 
-    expected_version, session_id = _checkout_cache_snapshot(practice.id)
+    (
+        expected_version,
+        expected_billing_version,
+        session_id,
+        expected_attempt,
+        expected_trial_clock,
+        bound_subscription_id,
+        bound_subscription_status,
+    ) = _checkout_cache_snapshot(practice.id)
     if not session_id:
         return None
+    if bound_subscription_id is None and bound_subscription_status is not None:
+        raise StripeStateInvalid(
+            "unbound billing state must be reconciled before Checkout resume"
+        )
+    if (
+        bound_subscription_id is not None
+        and bound_subscription_status not in TERMINAL_SUBSCRIPTION_STATUSES
+        and bound_subscription_status != "incomplete"
+    ):
+        raise StripeCheckoutAlreadyCompleted
     session = _request("GET", f"/checkout/sessions/{session_id}")
     _validate_checkout_session_binding(session, practice, expected_id=session_id)
     session_status = session.get("status")
     if session_status == "open":
         session_subscription = session.get("subscription")
-        if practice.subscription_status == "incomplete" and (
-            session_subscription != practice.stripe_subscription_id
+        if bound_subscription_status == "incomplete" and (
+            session_subscription != bound_subscription_id
         ):
             raise StripeStateInvalid(
                 "open checkout does not match the incomplete subscription"
             )
         if (
             isinstance(session_subscription, str)
-            and practice.stripe_subscription_id
-            and session_subscription != practice.stripe_subscription_id
+            and bound_subscription_id
+            and session_subscription != bound_subscription_id
         ):
             raise StripeStateInvalid("checkout subscription binding changed")
         expiry = _checkout_session_expiry(session)
@@ -966,12 +1603,16 @@ def _recover_checkout_session(practice: Practice, *, current: datetime) -> str |
                 "Stripe reports an open but expired checkout session"
             )
         if not _checkout_session_uses_current_policy(
-            session, practice, require_metadata=False
+            session,
+            practice,
+            expected_attempt=expected_attempt,
+            expected_trial_clock=expected_trial_clock,
         ):
             _retire_open_checkout_session(
                 practice,
                 session,
                 expected_version=expected_version,
+                expected_billing_version=expected_billing_version,
                 expected_session_id=session_id,
             )
             return None
@@ -979,10 +1620,16 @@ def _recover_checkout_session(practice: Practice, *, current: datetime) -> str |
         _persist_checkout_cache(
             practice,
             expected_version=expected_version,
+            expected_billing_version=expected_billing_version,
             expected_session_id=session_id,
             session_id=session_id,
             url=url,
             expires_at=expiry,
+        )
+        _emit_billing_metric(
+            "checkout_creation",
+            outcome="resumed",
+            practice_id=practice.id,
         )
         return url
     if session_status == "complete":
@@ -1005,8 +1652,367 @@ def _recover_checkout_session(practice: Practice, *, current: datetime) -> str |
             expires_at=None,
             advance=True,
         )
+        _emit_billing_metric(
+            "checkout_recovery",
+            outcome="abandoned_session_cleared",
+            practice_id=practice.id,
+        )
         return None
     raise StripeStateInvalid("checkout session status is unknown")
+
+
+def _frozen_checkout_recovery_snapshot(
+    practice: Practice,
+) -> tuple[int, int, int, str, datetime, datetime]:
+    with _isolated_state_session() as session:
+        row = session.exec(
+            select(Practice).where(Practice.id == practice.id).with_for_update()
+        ).one()
+        if row.stripe_checkout_session_id is not None:
+            raise StripeStateConflict(
+                "the Checkout Session is already cached; use normal recovery"
+            )
+        if (
+            row.stripe_checkout_request_json is None
+            or row.stripe_checkout_request_created_at is None
+            or row.stripe_trial_clock_policy is None
+        ):
+            raise StripeStateInvalid("there is no frozen Checkout request to recover")
+        try:
+            frozen = json.loads(row.stripe_checkout_request_json)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise StripeStateInvalid("stored Checkout request is invalid") from exc
+        if (
+            not isinstance(frozen, dict)
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in frozen.items()
+            )
+            or frozen.get("client_reference_id") != str(row.id)
+            or frozen.get("metadata[practice_id]") != str(row.id)
+            or frozen.get("metadata[checkout_policy]")
+            != CHECKOUT_IDEMPOTENCY_POLICY_VERSION
+            or frozen.get("metadata[checkout_attempt]")
+            != str(row.stripe_checkout_attempt)
+            or frozen.get("metadata[entitlement_contract]")
+            != PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+            or frozen.get("metadata[trial_clock]") != row.stripe_trial_clock_policy
+        ):
+            raise StripeStateInvalid("stored Checkout recovery identity is invalid")
+        replay_deadline = _checkout_request_replay_deadline(
+            cast(dict[str, str], frozen),
+            created_at=row.stripe_checkout_request_created_at,
+        )
+        return (
+            row.stripe_checkout_state_version,
+            row.stripe_state_version,
+            row.stripe_checkout_attempt,
+            row.stripe_trial_clock_policy,
+            row.stripe_checkout_request_created_at,
+            replay_deadline,
+        )
+
+
+def _matching_frozen_checkout_sessions(
+    practice: Practice,
+    *,
+    checkout_attempt: int,
+    request_created_at: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    matches: list[dict[str, Any]] = []
+    ambiguous: list[dict[str, Any]] = []
+    starting_after: str | None = None
+    created_gte = max(0, int(request_created_at.timestamp()) - 300)
+    for _page_number in range(10):
+        params = {"limit": "100", "created[gte]": str(created_gte)}
+        if starting_after is not None:
+            params["starting_after"] = starting_after
+        page = _request("GET", "/checkout/sessions", params)
+        sessions = page.get("data")
+        has_more = page.get("has_more")
+        if not isinstance(sessions, list) or not isinstance(has_more, bool):
+            raise StripeStateInvalid("Stripe Checkout recovery listing is invalid")
+        for candidate in sessions:
+            if not isinstance(candidate, dict):
+                raise StripeStateInvalid(
+                    "Stripe Checkout recovery listing contains an invalid Session"
+                )
+            metadata = candidate.get("metadata")
+            exact_match = (
+                candidate.get("client_reference_id") == str(practice.id)
+                and isinstance(metadata, dict)
+                and metadata.get("practice_id") == str(practice.id)
+                and metadata.get("checkout_policy")
+                == CHECKOUT_IDEMPOTENCY_POLICY_VERSION
+                and metadata.get("checkout_attempt") == str(checkout_attempt)
+                and metadata.get("entitlement_contract")
+                == PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+            )
+            if exact_match:
+                matches.append(candidate)
+            elif candidate.get("client_reference_id") == str(practice.id) or (
+                isinstance(metadata, dict)
+                and metadata.get("practice_id") == str(practice.id)
+            ):
+                # Metadata is mutable in Stripe. A Session that still carries
+                # either durable practice identifier but fails the full exact
+                # identity cannot prove absence and must be resolved manually.
+                ambiguous.append(candidate)
+        if not has_more:
+            return matches, ambiguous
+        if not sessions:
+            raise StripeStateInvalid("Stripe Checkout recovery pagination is invalid")
+        last_id = sessions[-1].get("id")
+        if not isinstance(last_id, str) or not last_id.startswith("cs_"):
+            raise StripeStateInvalid("Stripe Checkout recovery cursor is invalid")
+        starting_after = last_id
+    raise StripeStateInvalid("Stripe Checkout recovery exceeded its page limit")
+
+
+def _record_checkout_recovery_attempt(
+    practice: Practice,
+    *,
+    operator_ref: str,
+    reason: str,
+    evidence_reference: str,
+    evidence_sha256: str,
+    current: datetime,
+) -> str:
+    from app.models.practice_access_audit import (
+        PracticeAccessAction,
+        PracticeAccessAudit,
+    )
+
+    operator = operator_ref.strip()
+    explanation = reason.strip()
+    reference = evidence_reference.strip()
+    digest = evidence_sha256.strip().lower()
+    if not operator or len(operator) > 255:
+        raise StripeStateInvalid("checkout recovery operator reference is invalid")
+    if not explanation or len(explanation) > 512:
+        raise StripeStateInvalid("checkout recovery reason is invalid")
+    if not reference or len(reference) > 255:
+        raise StripeStateInvalid("checkout recovery evidence reference is invalid")
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise StripeStateInvalid("checkout recovery evidence digest is invalid")
+    audit = PracticeAccessAudit(
+        practice_id=practice.id,
+        action=PracticeAccessAction.stripe_checkout_recovery_started.value,
+        operator_ref=operator,
+        reason=explanation,
+        effective_at=current,
+        document_reference=reference,
+        evidence_sha256=digest,
+    )
+    with _isolated_state_session() as session:
+        session.add(audit)
+        session.commit()
+        session.refresh(audit)
+    return str(audit.id)
+
+
+def reconcile_frozen_checkout_request(
+    practice: Practice,
+    *,
+    operator_ref: str,
+    reason: str,
+    evidence_reference: str | None = None,
+    evidence_sha256: str | None = None,
+    confirm_absent: bool = False,
+    apply: bool = False,
+    now: datetime | None = None,
+) -> tuple[str, str | None]:
+    """Plan or audit/apply recovery without ever creating a replacement."""
+
+    current = now or datetime.now(timezone.utc)
+    _validate_runtime_configuration()
+    (
+        expected_version,
+        expected_billing_version,
+        checkout_attempt,
+        trial_clock_policy,
+        request_created_at,
+        replay_deadline,
+    ) = _frozen_checkout_recovery_snapshot(practice)
+    matches, ambiguous = _matching_frozen_checkout_sessions(
+        practice,
+        checkout_attempt=checkout_attempt,
+        request_created_at=request_created_at,
+    )
+    if ambiguous:
+        raise StripeStateConflict(
+            "ambiguous Stripe Checkout Sessions require manual provider resolution"
+        )
+    if len(matches) > 1:
+        raise StripeStateConflict(
+            "multiple Stripe Checkout Sessions match one Core attempt"
+        )
+    if not matches:
+        if not apply:
+            return "no_matching_session", None
+        if not confirm_absent:
+            raise StripeCheckoutReconciliationRequired
+        if stripe_config.STRIPE_BILLING_ENABLED:
+            raise StripeStateInvalid(
+                "disable Checkout acquisition before confirming a Session absent"
+            )
+        if current < replay_deadline + CHECKOUT_RECOVERY_TRANSPORT_SAFETY:
+            raise StripeStateInvalid(
+                "the Checkout recovery transport-safety window has not elapsed"
+            )
+        audit_id = _record_checkout_recovery_attempt(
+            practice,
+            operator_ref=operator_ref,
+            reason=reason,
+            evidence_reference=evidence_reference or "",
+            evidence_sha256=evidence_sha256 or "",
+            current=current,
+        )
+        _persist_checkout_cache(
+            practice,
+            expected_version=expected_version,
+            expected_billing_version=expected_billing_version,
+            expected_session_id=None,
+            session_id=None,
+            url=None,
+            expires_at=None,
+            advance=True,
+        )
+        _emit_billing_metric(
+            "checkout_recovery",
+            outcome="operator_confirmed_absent",
+            practice_id=practice.id,
+        )
+        return "operator_confirmed_absent", audit_id
+
+    listed_session = matches[0]
+    session_id = listed_session.get("id")
+    if not isinstance(session_id, str) or not session_id.startswith("cs_"):
+        raise StripeStateInvalid("matched Checkout Session id is invalid")
+    remote_session = _request("GET", f"/checkout/sessions/{session_id}")
+    _validate_checkout_session_binding(remote_session, practice, expected_id=session_id)
+    if not _checkout_session_uses_current_policy(
+        remote_session,
+        practice,
+        expected_attempt=checkout_attempt,
+        expected_trial_clock=trial_clock_policy,
+    ):
+        raise StripeStateInvalid("matched Checkout Session violates policy")
+
+    session_status = remote_session.get("status")
+    if session_status not in {"complete", "expired"}:
+        if session_status != "open":
+            raise StripeStateInvalid("matched Checkout Session status is invalid")
+    subscription_id = remote_session.get("subscription")
+    if subscription_id is not None and (
+        not isinstance(subscription_id, str) or not subscription_id.startswith("sub_")
+    ):
+        raise StripeStateInvalid("matched Checkout subscription id is invalid")
+    if session_status == "complete" and subscription_id is None:
+        raise StripeStateInvalid("completed Checkout Session has no subscription")
+
+    expiry = _checkout_session_expiry(remote_session)
+    hosted_url = (
+        _hosted_url(remote_session.get("url"), hostname="checkout.stripe.com")
+        if session_status == "open"
+        else None
+    )
+    planned_outcome = {
+        "open": "would_expire_open_session",
+        "complete": "would_bind_completed_session",
+        "expired": (
+            "would_resolve_expired_subscription"
+            if subscription_id is not None
+            else "would_clear_expired_session"
+        ),
+    }[cast(str, session_status)]
+    if not apply:
+        return planned_outcome, None
+
+    audit_id = _record_checkout_recovery_attempt(
+        practice,
+        operator_ref=operator_ref,
+        reason=reason,
+        evidence_reference=evidence_reference or "",
+        evidence_sha256=evidence_sha256 or "",
+        current=current,
+    )
+    # Cache the exact discovered Session under both fences before any provider
+    # mutation. If this process crashes or expiration races completion, normal
+    # recovery can trust only this Session and can never create a replacement.
+    _persist_checkout_cache(
+        practice,
+        expected_version=expected_version,
+        expected_billing_version=expected_billing_version,
+        expected_session_id=None,
+        session_id=session_id,
+        url=hosted_url,
+        expires_at=expiry,
+    )
+    (
+        recovered_version,
+        recovered_billing_version,
+        recovered_session_id,
+        _,
+        _,
+        _,
+        _,
+    ) = _checkout_cache_snapshot(practice.id)
+    if session_status == "open":
+        try:
+            _retire_open_checkout_session(
+                practice,
+                remote_session,
+                expected_version=recovered_version,
+                expected_billing_version=recovered_billing_version,
+                expected_session_id=recovered_session_id,
+            )
+        except StripeCheckoutRetirementPending:
+            return "operator_bound_incomplete_subscription", audit_id
+        except StripeCheckoutAlreadyCompleted:
+            return "operator_bound_completed_subscription", audit_id
+        _emit_billing_metric(
+            "checkout_recovery",
+            outcome="operator_expired_open_session",
+            practice_id=practice.id,
+        )
+        return "operator_expired_open_session", audit_id
+    if session_status == "expired" and subscription_id is None:
+        _persist_checkout_cache(
+            practice,
+            expected_version=recovered_version,
+            expected_billing_version=recovered_billing_version,
+            expected_session_id=recovered_session_id,
+            session_id=None,
+            url=None,
+            expires_at=None,
+            advance=True,
+        )
+        _emit_billing_metric(
+            "checkout_recovery",
+            outcome="operator_cleared_expired_session",
+            practice_id=practice.id,
+        )
+        return "operator_cleared_expired_session", audit_id
+    if session_status == "complete":
+        try:
+            _recover_completed_checkout_session(practice, remote_session)
+        except StripeCheckoutAlreadyCompleted:
+            return "operator_bound_completed_session", audit_id
+        raise StripeStateInvalid("completed Checkout Session was not bound")
+
+    try:
+        _resolve_expired_checkout_subscription(
+            practice,
+            remote_session,
+            expected_version=recovered_version,
+            expected_session_id=recovered_session_id,
+        )
+    except StripeCheckoutRetirementPending:
+        return "operator_bound_incomplete_subscription", audit_id
+    except StripeCheckoutAlreadyCompleted:
+        return "operator_resolved_expired_subscription", audit_id
+    return "operator_resolved_expired_subscription", audit_id
 
 
 def create_checkout_session(
@@ -1020,6 +2026,9 @@ def create_checkout_session(
     """Get or create one idempotent hosted Checkout Session for the practice."""
 
     current = now or datetime.now(timezone.utc)
+    if _public_checkout_is_managed(practice, at=current):
+        raise StripeManagedBilling
+
     # A previously-created session is not a new sale. Revalidate and
     # return it before applying new-session trial/active-price gates, otherwise
     # a later price archive would strand payment completion.
@@ -1046,21 +2055,37 @@ def create_checkout_session(
         # is measured from as near as practical to Checkout Session creation.
         current = datetime.now(timezone.utc)
 
+    seat_quantity = attested_member_count(practice)
+    new_paid_pilot_trial = practice.trial_ends_at is None
+    trial_clock_policy = (
+        CHECKOUT_TRIAL_CLOCK_POLICY
+        if new_paid_pilot_trial
+        else LEGACY_TRIAL_CLOCK_POLICY
+    )
     data: dict[str, Any] = {
         "mode": "subscription",
         "line_items[0][price]": stripe_config.STRIPE_PRICE_ID,
-        "line_items[0][quantity]": str(attested_member_count(practice)),
+        "line_items[0][quantity]": str(seat_quantity),
         "client_reference_id": str(practice.id),
         "success_url": success_url,
         "cancel_url": cancel_url,
-        "allow_promotion_codes": "true",
         # Existing pilots bypass Checkout through explicit grants/exemptions.
         # Public self-serve Checkout must collect a payment method so the
         # subscription can continue when its free trial ends.
         "payment_method_collection": CHECKOUT_PAYMENT_METHOD_COLLECTION,
         "metadata[checkout_policy]": CHECKOUT_IDEMPOTENCY_POLICY_VERSION,
+        "metadata[checkout_attempt]": str(practice.stripe_checkout_attempt),
         "metadata[practice_id]": str(practice.id),
+        "metadata[entitlement_contract]": PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+        "metadata[trial_clock]": trial_clock_policy,
         "subscription_data[metadata][practice_id]": str(practice.id),
+        "subscription_data[metadata][checkout_policy]": (
+            CHECKOUT_IDEMPOTENCY_POLICY_VERSION
+        ),
+        "subscription_data[metadata][entitlement_contract]": (
+            PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+        ),
+        "subscription_data[metadata][trial_clock]": trial_clock_policy,
     }
     if practice.stripe_customer_id:
         data["customer"] = practice.stripe_customer_id
@@ -1068,70 +2093,141 @@ def create_checkout_session(
         data["customer_email"] = customer_email
 
     stripe_trial_end = checkout_trial_end(practice, now=current)
-    if stripe_trial_end:
+    if new_paid_pilot_trial:
+        # The stable relative period keeps concurrent/retried Checkout requests
+        # byte-for-byte idempotent. Stripe starts the clock when it creates the
+        # subscription at successful Checkout; Core mirrors the signed,
+        # freshly retrieved trial end before granting any billing entitlement.
+        data["subscription_data[trial_period_days]"] = str(TRIAL_LENGTH.days)
+        data["metadata[trial_days]"] = str(TRIAL_LENGTH.days)
+        data["subscription_data[metadata][trial_days]"] = str(TRIAL_LENGTH.days)
+    elif stripe_trial_end:
+        # Preserve an explicitly promised legacy BAA-era trial instead of
+        # silently replacing it with a second 14-day offer.
         data["subscription_data[trial_end]"] = str(
             math.ceil(stripe_trial_end.timestamp())
         )
+    if practice.trial_ends_at is None or stripe_trial_end:
         data[
             "subscription_data[trial_settings][end_behavior][missing_payment_method]"
         ] = "pause"
 
-    expected_version, expected_session_id = _checkout_cache_snapshot(practice.id)
-    session = _request(
-        "POST",
-        "/checkout/sessions",
-        data,
-        idempotency_key=_checkout_idempotency_key(practice),
-    )
-    _validate_checkout_session_binding(session, practice)
-    if session.get("status") != "open":
-        raise StripeStateInvalid("new checkout session is not open")
-    session_id = cast(str, session["id"])
-    expiry = _checkout_session_expiry(session)
-    if expiry <= current:
-        raise StripeStateInvalid("checkout session was already expired")
-    if not _checkout_session_uses_current_policy(
-        session, practice, require_metadata=True
-    ):
-        _retire_open_checkout_session(
-            practice,
-            session,
-            expected_version=expected_version,
-            expected_session_id=expected_session_id,
-        )
-        raise StripeStateInvalid(
-            "new checkout session did not enforce payment method collection"
-        )
-    url = _hosted_url(session.get("url"), hostname="checkout.stripe.com")
-
     try:
-        _persist_checkout_cache(
-            practice,
-            expected_version=expected_version,
-            expected_session_id=expected_session_id,
-            session_id=session_id,
-            url=url,
-            expires_at=expiry,
+        (
+            expected_version,
+            expected_billing_version,
+            expected_session_id,
+            checkout_attempt,
+            frozen_data,
+        ) = _checkout_request_snapshot(practice, data, current=current)
+        session = _request(
+            "POST",
+            "/checkout/sessions",
+            frozen_data,
+            idempotency_key=_checkout_idempotency_key(
+                practice, attempt=checkout_attempt
+            ),
         )
-    except StripeStateConflict:
-        practice.refresh()
-        if practice.stripe_checkout_session_id:
-            recovered_url = _recover_checkout_session(practice, current=current)
-            if recovered_url:
-                return recovered_url
-        if has_nonterminal_subscription(practice):
-            raise StripeCheckoutAlreadyCompleted
+        _validate_checkout_session_binding(session, practice)
+        session_status = session.get("status")
+        if session_status == "complete":
+            _recover_completed_checkout_session(practice, session)
+        if session_status == "expired":
+            if session.get("subscription") is not None:
+                _resolve_expired_checkout_subscription(
+                    practice,
+                    session,
+                    expected_version=expected_version,
+                    expected_session_id=expected_session_id,
+                )
+            else:
+                _persist_checkout_cache(
+                    practice,
+                    expected_version=expected_version,
+                    expected_session_id=expected_session_id,
+                    session_id=None,
+                    url=None,
+                    expires_at=None,
+                    advance=True,
+                )
+            raise StripeStateConflict(
+                "A recovered Checkout request had expired; retry with a new attempt"
+            )
+        if session_status != "open":
+            raise StripeStateInvalid("new checkout session is not open")
+        session_id = cast(str, session["id"])
+        expiry = _checkout_session_expiry(session)
+        if expiry <= current:
+            raise StripeStateInvalid("checkout session was already expired")
+        if not _checkout_session_uses_current_policy(
+            session,
+            practice,
+            expected_attempt=checkout_attempt,
+            expected_trial_clock=frozen_data.get("metadata[trial_clock]"),
+        ):
+            _retire_open_checkout_session(
+                practice,
+                session,
+                expected_version=expected_version,
+                expected_billing_version=expected_billing_version,
+                expected_session_id=expected_session_id,
+            )
+            raise StripeStateInvalid(
+                "new checkout session did not enforce paid-pilot policy"
+            )
+        url = _hosted_url(session.get("url"), hostname="checkout.stripe.com")
+
+        try:
+            _persist_checkout_cache(
+                practice,
+                expected_version=expected_version,
+                expected_billing_version=expected_billing_version,
+                expected_session_id=expected_session_id,
+                session_id=session_id,
+                url=url,
+                expires_at=expiry,
+            )
+        except (StripeStateConflict, StripeManagedBilling):
+            practice.refresh()
+            if practice.stripe_checkout_session_id == session_id:
+                recovered_url = _recover_checkout_session(practice, current=current)
+                if recovered_url:
+                    return recovered_url
+            _retire_unpersisted_checkout_session(practice, session)
+            practice.refresh()
+            if has_nonterminal_subscription(practice):
+                raise StripeCheckoutAlreadyCompleted
+            raise
+    except Exception:
+        _emit_billing_metric(
+            "checkout_creation",
+            outcome="failed",
+            practice_id=practice.id,
+            seat_quantity=seat_quantity,
+        )
         raise
+    _emit_billing_metric(
+        "checkout_creation",
+        outcome="created",
+        practice_id=practice.id,
+        seat_quantity=seat_quantity,
+    )
     return url
 
 
 def create_portal_session(practice: Practice, *, return_url: str) -> str:
     assert practice.stripe_customer_id
+    if not stripe_config.stripe_portal_configured():
+        raise StripeNotConfigured
     _validate_runtime_configuration()
     session = _request(
         "POST",
         "/billing_portal/sessions",
-        {"customer": practice.stripe_customer_id, "return_url": return_url},
+        {
+            "configuration": stripe_config.STRIPE_PORTAL_CONFIGURATION_ID,
+            "customer": practice.stripe_customer_id,
+            "return_url": return_url,
+        },
     )
     return _hosted_url(session.get("url"), hostname="billing.stripe.com")
 
@@ -1151,7 +2247,29 @@ def _quantity_sync_snapshot(
             session.add(row)
             session.commit()
             return None
-        target = _authorized_member_count(session, row)
+        if row.subscription_status in TERMINAL_SUBSCRIPTION_STATUSES:
+            row.stripe_quantity_sync_required = False
+            row.stripe_quantity_sync_target = None
+            row.stripe_quantity_sync_error = None
+            session.add(row)
+            session.commit()
+            return None
+        try:
+            target = _authorized_member_count(session, row)
+        except StripeSeatLimitExceeded:
+            row.subscription_status = "invalid"
+            row.stripe_state_version += 1
+            row.stripe_quantity_sync_required = False
+            row.stripe_quantity_sync_target = None
+            row.stripe_quantity_sync_error = "active_seat_count_out_of_range"
+            session.add(row)
+            session.commit()
+            _emit_billing_metric(
+                "seat_reconciliation",
+                outcome="invalid_local_seat_count",
+                practice_id=practice_id,
+            )
+            raise
         if (
             force_new_version
             or not row.stripe_quantity_sync_required
@@ -1190,13 +2308,26 @@ def _finish_quantity_sync(
             # The practice was rebound while the old subscription request was
             # in flight. Never clear or poison the new subscription's repair.
             session.commit()
+            _emit_billing_metric(
+                "seat_reconciliation",
+                outcome="superseded_subscription",
+                practice_id=practice_id,
+                seat_quantity=target,
+            )
             return False
         if error is not None:
             row.stripe_quantity_sync_required = True
             row.stripe_quantity_sync_attempts += 1
-            row.stripe_quantity_sync_error = str(error)[:512] or type(error).__name__
+            row.stripe_quantity_sync_error = type(error).__name__
             session.add(row)
             session.commit()
+            _emit_billing_metric(
+                "seat_reconciliation",
+                outcome="failed",
+                practice_id=practice_id,
+                seat_quantity=target,
+                attempts=row.stripe_quantity_sync_attempts,
+            )
             return False
         if row.stripe_quantity_sync_version != version:
             # A join/leave landed while Stripe was in flight. Never let this
@@ -1204,6 +2335,12 @@ def _finish_quantity_sync(
             row.stripe_quantity_sync_required = True
             session.add(row)
             session.commit()
+            _emit_billing_metric(
+                "seat_reconciliation",
+                outcome="superseded_target",
+                practice_id=practice_id,
+                seat_quantity=target,
+            )
             return False
         row.stripe_quantity_sync_required = False
         row.stripe_quantity_sync_target = (
@@ -1215,6 +2352,12 @@ def _finish_quantity_sync(
         row.stripe_quantity_synced_at = datetime.now(timezone.utc)
         session.add(row)
         session.commit()
+        _emit_billing_metric(
+            "seat_reconciliation",
+            outcome="succeeded",
+            practice_id=practice_id,
+            seat_quantity=target,
+        )
         return True
 
 
@@ -1223,7 +2366,13 @@ def sync_subscription_quantity(
 ) -> bool:
     """Reconcile the paid quantity, leaving durable retry state on failure."""
 
-    snapshot = _quantity_sync_snapshot(practice.id, force_new_version=False)
+    try:
+        snapshot = _quantity_sync_snapshot(practice.id, force_new_version=False)
+    except StripeSeatLimitExceeded:
+        practice.refresh()
+        if raise_on_error:
+            raise
+        return False
     if snapshot is None:
         return True
     target, version, subscription_id = snapshot
@@ -1233,8 +2382,17 @@ def sync_subscription_quantity(
         subscription = refresh_subscription_state(practice)
         assert subscription is not None
         practice.refresh()
-        if (
+        repairing_remote_quantity = bool(
             practice.subscription_status == "invalid"
+            and practice.stripe_quantity_sync_required
+            and practice.stripe_quantity_sync_error
+            == REMOTE_QUANTITY_OUT_OF_RANGE_ERROR
+        )
+        if (
+            (
+                practice.subscription_status == "invalid"
+                and not repairing_remote_quantity
+            )
             or practice.stripe_subscription_id != subscription_id
             or subscription["id"] != subscription_id
             or subscription["customer"] != practice.stripe_customer_id
@@ -1250,7 +2408,10 @@ def sync_subscription_quantity(
                 target=target,
             )
         else:
-            item = _subscription_item(subscription)
+            item = _subscription_item(
+                subscription,
+                enforce_quantity_bounds=not repairing_remote_quantity,
+            )
             if item["quantity"] != target:
                 key_source = f"quantity:{subscription['id']}:{target}:version:{version}"
                 _request(
@@ -1270,6 +2431,20 @@ def sync_subscription_quantity(
                     raise StripeStateInvalid(
                         "Stripe did not confirm the requested subscription quantity"
                     )
+            if repairing_remote_quantity:
+                # A concurrent operator/Stripe repair may have corrected the
+                # quantity before our POST. Either way, only a fresh strict
+                # reconciliation may restore the local entitlement.
+                restored = refresh_subscription_state(practice)
+                if restored is None:
+                    raise StripeStateInvalid(
+                        "corrected Stripe subscription could not be reconciled"
+                    )
+                practice.refresh()
+                if practice.subscription_status == "invalid":
+                    raise StripeStateInvalid(
+                        "corrected Stripe subscription remained invalid"
+                    )
             return _finish_quantity_sync(
                 practice.id,
                 subscription_id=subscription_id,
@@ -1286,9 +2461,9 @@ def sync_subscription_quantity(
         )
         log.warning(
             "failed to sync stripe subscription quantity",
-            practice_id=str(practice.id),
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
             target=target,
-            exc_info=True,
+            error_code=type(exc).__name__,
         )
         if raise_on_error:
             raise
@@ -1343,10 +2518,7 @@ def verify_webhook_signature(
 
 
 def _event_created_at(event: dict[str, Any]) -> datetime:
-    created = event.get("created")
-    if not isinstance(created, int):
-        raise StripeStateInvalid("Stripe event creation time is missing")
-    return datetime.fromtimestamp(created, tz=timezone.utc)
+    return _stripe_timestamp(event.get("created"), source="Stripe event creation time")
 
 
 def _event_subscription_id(event_type: str, obj: dict[str, Any]) -> str:
@@ -1366,7 +2538,7 @@ def validate_stripe_event_envelope(
     """Validate signed fields that require no Stripe network call."""
 
     event_type = event.get("type")
-    if event_type not in MIRRORED_EVENT_TYPES:
+    if not isinstance(event_type, str) or event_type not in MIRRORED_EVENT_TYPES:
         return None
     event_id = event.get("id")
     if not isinstance(event_id, str) or not event_id.startswith("evt_"):
@@ -1379,7 +2551,10 @@ def validate_stripe_event_envelope(
         raise StripeStateInvalid("Stripe Connect event account does not match")
     _validate_livemode(event.get("livemode"), source="event")
     event_created_at = _event_created_at(event)
-    obj = (event.get("data") or {}).get("object")
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        raise StripeStateInvalid("Stripe event data is invalid")
+    obj = event_data.get("object")
     if not isinstance(obj, dict):
         raise StripeStateInvalid("Stripe event object is invalid")
     subscription_id = _event_subscription_id(event_type, obj)
@@ -1408,7 +2583,11 @@ def _minimal_stripe_event(event: dict[str, Any], obj: dict[str, Any]) -> dict[st
         }
     else:
         items: list[dict[str, Any]] = []
-        for item in (obj.get("items") or {}).get("data") or []:
+        raw_items = obj.get("items")
+        raw_item_data = raw_items.get("data") if isinstance(raw_items, dict) else []
+        if not isinstance(raw_item_data, list):
+            raw_item_data = []
+        for item in raw_item_data:
             if isinstance(item, dict):
                 price = item.get("price")
                 items.append(
@@ -1424,6 +2603,21 @@ def _minimal_stripe_event(event: dict[str, Any], obj: dict[str, Any]) -> dict[st
         metadata: dict[str, Any] = (
             raw_metadata if isinstance(raw_metadata, dict) else {}
         )
+        minimal_metadata = {
+            key: metadata[key]
+            for key in (
+                "practice_id",
+                "checkout_policy",
+                "entitlement_contract",
+                "trial_clock",
+                "trial_days",
+            )
+            if key in metadata
+        }
+        if "practice_id" in minimal_metadata:
+            minimal_metadata["practice_id"] = practice_hint(
+                minimal_metadata["practice_id"]
+            )
         customer = obj.get("customer")
         customer_id = customer.get("id") if isinstance(customer, dict) else customer
         pause_collection = obj.get("pause_collection")
@@ -1440,9 +2634,11 @@ def _minimal_stripe_event(event: dict[str, Any], obj: dict[str, Any]) -> dict[st
             "customer": customer_id,
             "status": obj.get("status"),
             "livemode": obj.get("livemode"),
-            "metadata": {"practice_id": practice_hint(metadata.get("practice_id"))},
+            "metadata": minimal_metadata,
             "items": {"data": items},
             "pause_collection": minimal_pause,
+            "trial_start": obj.get("trial_start"),
+            "trial_end": obj.get("trial_end"),
         }
     return {
         "id": event["id"],
@@ -1462,6 +2658,10 @@ def enqueue_stripe_event(event: dict[str, Any]) -> tuple[Any | None, bool]:
     if envelope is None:
         return None, False
     event_type, event_id, event_created_at, obj, subscription_id = envelope
+    webhook_lag_seconds = max(
+        0,
+        int((datetime.now(timezone.utc) - event_created_at).total_seconds()),
+    )
     payload_json = json.dumps(
         _minimal_stripe_event(event, obj), separators=(",", ":"), sort_keys=True
     )
@@ -1472,6 +2672,11 @@ def enqueue_stripe_event(event: dict[str, Any]) -> tuple[Any | None, bool]:
                 select(StripeEventInbox).where(StripeEventInbox.event_id == event_id)
             ).one_or_none()
             if existing is not None:
+                _emit_billing_metric(
+                    "webhook_delivery",
+                    outcome="duplicate",
+                    webhook_lag_seconds=webhook_lag_seconds,
+                )
                 return existing.id, True
 
             # A signed non-entitling or contract-invalid payload can safely
@@ -1488,7 +2693,12 @@ def enqueue_stripe_event(event: dict[str, Any]) -> tuple[Any | None, bool]:
                         _validate_subscription(obj)
                     except StripeStateInvalid:
                         payload_contract_invalid = True
-                    payload_metadata_id = (obj.get("metadata") or {}).get("practice_id")
+                    raw_metadata = obj.get("metadata")
+                    payload_metadata_id = (
+                        raw_metadata.get("practice_id")
+                        if isinstance(raw_metadata, dict)
+                        else None
+                    )
                     payload_identity_invalid = bool(
                         obj.get("customer") != practice.stripe_customer_id
                         or payload_metadata_id != str(practice.id)
@@ -1515,6 +2725,11 @@ def enqueue_stripe_event(event: dict[str, Any]) -> tuple[Any | None, bool]:
             session.add(inbox)
             session.commit()
             session.refresh(inbox)
+            _emit_billing_metric(
+                "webhook_delivery",
+                outcome="accepted",
+                webhook_lag_seconds=webhook_lag_seconds,
+            )
             return inbox.id, False
     except IntegrityError:
         # Concurrent deliveries race only on the unique event id; the winner's
@@ -1523,6 +2738,11 @@ def enqueue_stripe_event(event: dict[str, Any]) -> tuple[Any | None, bool]:
             existing = session.exec(
                 select(StripeEventInbox).where(StripeEventInbox.event_id == event_id)
             ).one()
+            _emit_billing_metric(
+                "webhook_delivery",
+                outcome="duplicate",
+                webhook_lag_seconds=webhook_lag_seconds,
+            )
             return existing.id, True
 
 
@@ -1549,13 +2769,19 @@ def process_stripe_event_inbox(inbox_id: Any) -> bool:
                 return True
             inbox.state = "pending"
             inbox.attempts += 1
-            inbox.last_error = (str(exc) or type(exc).__name__)[:512]
+            inbox.last_error = type(exc).__name__
             backoff_minutes = min(2 ** min(inbox.attempts, 6), 60)
             inbox.next_attempt_at = datetime.now(timezone.utc) + timedelta(
                 minutes=backoff_minutes
             )
+            attempts = inbox.attempts
             session.add(inbox)
             session.commit()
+        _emit_billing_metric(
+            "webhook_processing",
+            outcome="failed",
+            attempts=attempts,
+        )
         raise
 
     with _isolated_state_session() as session:
@@ -1570,8 +2796,14 @@ def process_stripe_event_inbox(inbox_id: Any) -> bool:
         inbox.next_attempt_at = None
         inbox.processed_at = datetime.now(timezone.utc)
         inbox.payload_json = "{}"
+        attempts = inbox.attempts
         session.add(inbox)
         session.commit()
+    _emit_billing_metric(
+        "webhook_processing",
+        outcome="succeeded",
+        attempts=attempts,
+    )
     return True
 
 
@@ -1603,12 +2835,12 @@ def reconcile_pending_stripe_events() -> tuple[int, int]:
     for inbox_id in pending_ids:
         try:
             succeeded += int(process_stripe_event_inbox(inbox_id))
-        except Exception:
+        except Exception as exc:
             failed += 1
             log.warning(
                 "durable Stripe inbox reconciliation failed",
-                inbox_id=str(inbox_id),
-                exc_info=True,
+                inbox_ref=provider_log_ref(str(inbox_id)),
+                error_code=type(exc).__name__,
             )
     return succeeded, failed
 
@@ -1664,6 +2896,12 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
             event_type == "checkout.session.completed" or resolved_from_metadata
         ),
         allow_terminal_rebind=event_type == "checkout.session.completed",
+        trusted_checkout_session_id=(
+            cast(str, obj["id"])
+            if event_type == "checkout.session.completed"
+            and isinstance(obj.get("id"), str)
+            else None
+        ),
         deleted_fallback=(
             obj if event_type == "customer.subscription.deleted" else None
         ),
@@ -1671,16 +2909,16 @@ def apply_stripe_event(event: dict[str, Any]) -> bool:
     if not applied:
         log.info(
             "ignored stale stripe event",
-            event_id=event_id,
-            practice_id=str(practice.id),
+            event_ref=provider_log_ref(event_id),
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
         )
         return False
     assert subscription is not None
     log.info(
         "stripe event mirrored",
         event_type=event_type,
-        event_id=event_id,
-        practice_id=str(practice.id),
+        event_ref=provider_log_ref(event_id),
+        practice_ref=provider_log_ref(f"practice:{practice.id}"),
         subscription_status=practice.subscription_status,
     )
     return True

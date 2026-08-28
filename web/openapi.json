@@ -3152,15 +3152,15 @@
         "properties": {
           "success_path": {
             "type": "string",
-            "maxLength": 200,
+            "const": "/settings?billing=success",
             "title": "Success Path",
-            "default": "/settings"
+            "default": "/settings?billing=success"
           },
           "cancel_path": {
             "type": "string",
-            "maxLength": 200,
+            "const": "/settings?billing=cancelled",
             "title": "Cancel Path",
-            "default": "/settings"
+            "default": "/settings?billing=cancelled"
           }
         },
         "additionalProperties": false,
@@ -3171,7 +3171,7 @@
         "properties": {
           "return_path": {
             "type": "string",
-            "maxLength": 200,
+            "const": "/settings",
             "title": "Return Path",
             "default": "/settings"
           }

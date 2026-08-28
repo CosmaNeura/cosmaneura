@@ -143,7 +143,7 @@ if [[ "$(echo "$ENV_JSON" | jq -r '.STRIPE_LIVE_MODE // empty')" != "false" ]]; 
 	exit 1
 fi
 if [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]; then
-	for var in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_ACCOUNT_ID STRIPE_PRICE_ID STRIPE_API_VERSION; do
+	for var in STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET STRIPE_ACCOUNT_ID STRIPE_PRICE_ID STRIPE_PORTAL_CONFIGURATION_ID STRIPE_API_VERSION; do
 		if [[ -z "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" ]]; then
 			echo "$var is required when Stripe integration is enabled."
 			exit 1
@@ -154,7 +154,7 @@ if [[ "$STRIPE_INTEGRATION_ENABLED" == "true" ]]; then
 		echo "Staging Stripe key must be a test-mode secret or restricted key."
 		exit 1
 	fi
-	for spec in "STRIPE_WEBHOOK_SECRET:whsec_" "STRIPE_ACCOUNT_ID:acct_" "STRIPE_PRICE_ID:price_"; do
+	for spec in "STRIPE_WEBHOOK_SECRET:whsec_" "STRIPE_ACCOUNT_ID:acct_" "STRIPE_PRICE_ID:price_" "STRIPE_PORTAL_CONFIGURATION_ID:bpc_"; do
 		var=${spec%%:*}
 		prefix=${spec#*:}
 		if [[ "$(echo "$ENV_JSON" | jq -r ".\"$var\" // empty")" != "$prefix"* ]]; then
@@ -228,7 +228,7 @@ BILLING_API_ONLY_SECRET_VARS=(
 
 BILLING_PUBLIC_VARS=(
 	STRIPE_INTEGRATION_ENABLED STRIPE_BILLING_ENABLED STRIPE_ACCOUNT_ID
-	STRIPE_PRICE_ID STRIPE_API_VERSION STRIPE_LIVE_MODE
+	STRIPE_PRICE_ID STRIPE_PORTAL_CONFIGURATION_ID STRIPE_API_VERSION STRIPE_LIVE_MODE
 )
 
 # Must match variables.tf python_public_vars

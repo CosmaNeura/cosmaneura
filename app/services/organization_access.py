@@ -107,7 +107,10 @@ def require_pilot_organization_prerequisites(
     # subscription could continue charging in parallel.
     from app.services import stripe_billing
 
-    if practice.stripe_checkout_session_id is not None:
+    if (
+        practice.stripe_checkout_request_json is not None
+        or practice.stripe_checkout_session_id is not None
+    ):
         raise OrganizationAccessError(
             "an existing Stripe checkout must be resolved before organization setup"
         )

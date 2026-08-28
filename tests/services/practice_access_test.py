@@ -112,6 +112,61 @@ def test_billing_exemption_changes_append_operator_evidence():
     assert {record.id for record in records} == {set_audit.id, clear_audit.id}
 
 
+@pytest.mark.parametrize(
+    "billing_state",
+    ["frozen_checkout", "cached_checkout", "nonterminal_subscription"],
+)
+def test_billing_exemption_requires_existing_stripe_state_to_be_resolved(
+    billing_state: str,
+):
+    practice = _practice()
+    if billing_state == "frozen_checkout":
+        practice.stripe_checkout_request_json = "{}"
+        practice.stripe_checkout_request_created_at = NOW
+    elif billing_state == "cached_checkout":
+        practice.stripe_checkout_session_id = "cs_pending_exemption"
+    else:
+        practice.stripe_subscription_id = "sub_pending_exemption"
+        practice.subscription_status = "active"
+    practice.save()
+
+    with pytest.raises(PracticeAccessChangeError, match="must be resolved"):
+        set_billing_exemption(
+            practice,
+            operator_ref="ticket-PILOT-blocked",
+            reason="Comp must not race a Stripe obligation",
+            expires_at=None,
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert not practice.billing_exempt
+    assert not PracticeAccessAudit.where(
+        PracticeAccessAudit.practice_id == practice.id
+    ).first()
+
+
+def test_clearing_billing_exemption_does_not_require_stripe_resolution():
+    practice = _practice()
+    practice.billing_exempt = True
+    practice.stripe_checkout_session_id = "cs_existing_while_clearing"
+    practice.save()
+
+    audit = set_billing_exemption(
+        practice,
+        operator_ref="ticket-PILOT-clear",
+        reason="Remove exemption without altering Stripe state",
+        expires_at=None,
+        clear=True,
+        now=NOW,
+    )
+
+    practice.refresh()
+    assert not practice.billing_exempt
+    assert practice.stripe_checkout_session_id == "cs_existing_while_clearing"
+    assert audit.action == PracticeAccessAction.billing_exemption_cleared.value
+
+
 def test_practice_access_audit_database_rejects_update_and_delete():
     practice = _practice()
     audit = set_billing_exemption(

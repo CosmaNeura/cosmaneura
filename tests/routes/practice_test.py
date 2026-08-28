@@ -609,7 +609,7 @@ def test_baa_acceptance_writes_append_only_record(
     assert acceptance_count() == 1
 
 
-def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
+def test_baa_acceptance_retry_repairs_legal_gate_without_starting_trial(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -625,7 +625,7 @@ def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
     original_accepted_at = acceptance.accepted_at_utc
 
     # Simulate the historical partial-commit failure: legal evidence exists,
-    # but the denormalized gate/trial and owner attestation are absent.
+    # but the denormalized legal gate and owner attestation are absent.
     practice.baa_version = None
     practice.baa_accepted_at = None
     practice.baa_accepted_by_doctor_id = None
@@ -642,7 +642,7 @@ def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
     member.refresh()
     assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 1
     assert practice.baa_accepted_at == original_accepted_at
-    assert practice.trial_ends_at == original_accepted_at + timedelta(days=14)
+    assert practice.trial_ends_at is None
     assert practice.baa_in_force()
     assert member.attested_at == original_accepted_at
     assert member.attestation_name == acceptance.accepted_by_name
@@ -1002,7 +1002,7 @@ def test_practice_gate_blocks_doctor_without_practice_even_if_onboarded(
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_baa_acceptance_starts_trial_and_opens_the_gate(
+def test_baa_acceptance_does_not_start_trial_or_open_billing_gate(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -1019,19 +1019,15 @@ def test_baa_acceptance_starts_trial_and_opens_the_gate(
     assert blocked.status_code == status.HTTP_403_FORBIDDEN
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["entitled"] is True
+    assert body["entitled"] is False
     assert body["billing_exempt"] is False
-    assert body["trial_ends_at"] is not None
+    assert body["trial_ends_at"] is None
 
-    trial_ends_at = datetime.fromisoformat(body["trial_ends_at"])
-    trial_left = trial_ends_at - datetime.now(timezone.utc)
-    assert timedelta(days=13) < trial_left <= timedelta(days=14)
-
-    opened = bare_authenticated_client.get(api_app.url_path_for("note_list"))
-    assert opened.status_code == status.HTTP_200_OK
+    still_closed = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+    assert still_closed.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
 
-def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
+def test_expired_timed_comp_does_not_make_baa_acceptance_entitling(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -1043,8 +1039,8 @@ def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
     practice.save()
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["trial_ends_at"] is not None
-    assert body["entitled"] is True
+    assert body["trial_ends_at"] is None
+    assert body["entitled"] is False
 
 
 def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
@@ -1074,11 +1070,30 @@ def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
     ended = bare_authenticated_client.get(api_app.url_path_for("note_list"))
     assert ended.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
-    # an active subscription (mirrored from Stripe) is the third source
+    # a bound active subscription (mirrored from Stripe) is the third source
+    practice.stripe_subscription_id = "sub_route_gate_test"
     practice.subscription_status = "active"
     practice.save()
     subscribed = bare_authenticated_client.get(api_app.url_path_for("note_list"))
     assert subscribed.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.parametrize("subscription_status", ["trialing", "active"])
+def test_unbound_entitled_subscription_status_fails_closed(
+    bare_authenticated_client: TestClient,
+    subscription_status: str,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    _accept_baa(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    practice.subscription_status = subscription_status
+    practice.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=14)
+    practice.save()
+
+    response = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+
+    assert response.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
 
 def test_negotiated_baa_on_file_satisfies_the_gate(

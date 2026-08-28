@@ -10,7 +10,7 @@ from sqlmodel import Column, Field, Relationship
 from .doctor import Doctor
 
 TRIAL_LENGTH = timedelta(days=14)
-"Every practice starts on a free trial, stamped when the BAA is accepted."
+"Public paid-pilot trials start when Stripe creates the Checkout subscription."
 
 ENTITLED_SUBSCRIPTION_STATUSES = {"trialing", "active"}
 "Stripe subscription statuses that keep a practice entitled."
@@ -109,7 +109,7 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    "Stamped as now + TRIAL_LENGTH the first time the BAA is accepted."
+    "Authoritative Stripe trial end, or a preserved pre-activation legacy trial."
 
     billing_exempt: bool = False
     "Comped access (early-adopter pilots, future centrally invoiced groups)."
@@ -153,6 +153,21 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    stripe_checkout_request_json: str | None = Field(
+        default=None,
+        sa_column=Column(sa.Text(), nullable=True),
+    )
+    """Durable exact Stripe request body for crash-safe idempotent retries."""
+    stripe_checkout_request_created_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    """Start of the bounded Stripe idempotency replay window."""
+    stripe_trial_clock_policy: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
+    """Durable provenance preventing a bound paid-pilot clock downgrade."""
 
     # Membership changes are recorded durably before the best-effort Stripe
     # call. A periodic reconciler keeps retrying until the expected quantity is
@@ -220,8 +235,26 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         now = at or datetime.now(timezone.utc)
         if self.billing_exemption_active(at=now):
             return True
-        if self.subscription_status in ENTITLED_SUBSCRIPTION_STATUSES:
+        if (
+            self.stripe_subscription_id is not None
+            and self.subscription_status == "active"
+        ):
             return True
+        if (
+            self.stripe_subscription_id is not None
+            and self.subscription_status == "trialing"
+            and self.trial_ends_at is not None
+            and self.trial_ends_at > now
+        ):
+            return True
+        # Any explicit billing state outranks a mirrored or legacy trial clock.
+        # This includes fail-closed states recorded before an initial Stripe id
+        # can be safely bound, plus unknown future states.
+        if (
+            self.subscription_status is not None
+            or self.stripe_subscription_id is not None
+        ):
+            return False
         return self.trial_ends_at is not None and self.trial_ends_at > now
 
 

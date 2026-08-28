@@ -1,7 +1,7 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 from fastapi import (
@@ -34,7 +34,7 @@ from app.commands.uploads.sas import UploadType
 from app.configuration.redis import get_redis
 from app.configuration.stripe import (
     stripe_billing_configured,
-    stripe_runtime_configured,
+    stripe_portal_configured,
     stripe_webhook_configured,
 )
 from app.services import lab_ranges as lab_ranges_service
@@ -50,6 +50,7 @@ from app.services.biomarkers import (
 )
 from app.services.clerk_identity import verified_primary_email
 from app.services.doctor_access import DoctorAccessDecision, resolve_doctor_access
+from app.services.external_webhook_inbox import provider_log_ref
 from app.services.managed_organization_access import (
     ManagedOrganizationAccessState,
     resolve_managed_organization_access,
@@ -133,7 +134,6 @@ from app.models.patient_medication import (
     PatientMedication,
 )
 from app.models.practice import (
-    TRIAL_LENGTH,
     OriginChannel,
     Practice,
     PracticeMember,
@@ -1081,7 +1081,7 @@ def _practice_payload(
         billing_exempt_until=practice.billing_exempt_until,
         billing_exempt_active=practice.billing_exemption_active(),
         billing_enabled=stripe_billing_configured(),
-        billing_management_enabled=stripe_runtime_configured(),
+        billing_management_enabled=stripe_portal_configured(),
         billing_portal_available=practice.stripe_customer_id is not None,
         billing_checkout_resumable=(
             stripe_webhook_configured()
@@ -1542,9 +1542,8 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         )
     version = _current_baa_version()
     # Serialize acceptance per practice. The legal execution record, its gate
-    # mirror, promised trial, and owner attestation commit atomically. Retrying
-    # an execution that predates this invariant repairs mirrors from the
-    # original acceptance timestamp instead of creating a second record.
+    # mirror, and owner attestation commit atomically. Billing owns the trial
+    # clock: accepting legal terms alone must never begin or grant a trial.
     with get_session() as session:
         practice = session.exec(
             select(Practice).where(Practice.id == member.practice_id).with_for_update()
@@ -1590,9 +1589,6 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         practice.baa_accepted_by_doctor_id = acceptance.accepted_by_doctor_id
         practice.baa_signature_name = acceptance.accepted_by_name
         practice.baa_signature_title = acceptance.accepted_by_title
-        if practice.trial_ends_at is None:
-            practice.trial_ends_at = accepted_at + TRIAL_LENGTH
-
         locked_member.attested_at = locked_member.attested_at or accepted_at
         locked_member.attestation_name = (
             locked_member.attestation_name or acceptance.accepted_by_name
@@ -1724,7 +1720,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
             billing_exempt_until=practice.billing_exempt_until,
             billing_exempt_active=practice.billing_exemption_active(),
             billing_enabled=stripe_billing_configured(),
-            billing_management_enabled=stripe_runtime_configured(),
+            billing_management_enabled=stripe_portal_configured(),
             billing_portal_available=practice.stripe_customer_id is not None,
             billing_checkout_resumable=(
                 stripe_webhook_configured()
@@ -1985,13 +1981,18 @@ def complete_onboarding(request: Request) -> None:
         doctor.save()
 
 
+CHECKOUT_SUCCESS_PATH = "/settings?billing=success"
+CHECKOUT_CANCEL_PATH = "/settings?billing=cancelled"
+PORTAL_RETURN_PATH = "/settings"
+
+
 class BillingCheckoutBody(BaseModel, extra="forbid"):
-    success_path: str = Field(default="/settings", max_length=200)
-    cancel_path: str = Field(default="/settings", max_length=200)
+    success_path: Literal["/settings?billing=success"] = CHECKOUT_SUCCESS_PATH
+    cancel_path: Literal["/settings?billing=cancelled"] = CHECKOUT_CANCEL_PATH
 
 
 class BillingPortalBody(BaseModel, extra="forbid"):
-    return_path: str = Field(default="/settings", max_length=200)
+    return_path: Literal["/settings"] = PORTAL_RETURN_PATH
 
 
 class BillingSessionUrl(BaseModel, extra="forbid"):
@@ -2029,12 +2030,6 @@ def _validated_web_origin(request: Request) -> str:
     )
 
 
-def _safe_redirect_path(path: str) -> str:
-    if not path.startswith("/") or path.startswith("//"):
-        return "/settings"
-    return path
-
-
 @internal_api_app.post("/practice/billing/checkout", name="create_billing_checkout")
 def create_billing_checkout(
     request: Request, data: BillingCheckoutBody
@@ -2047,6 +2042,9 @@ def create_billing_checkout(
     """
     doctor: Doctor = request.state.doctor
     practice = _owner_practice_for_billing(doctor)
+    # Reject untrusted browser origins before disclosing any practice-specific
+    # billing or entitlement state and before performing provider I/O.
+    origin = _validated_web_origin(request)
 
     access_decision = resolve_doctor_access(doctor)
     if access_decision.allowed and access_decision.authorization_basis == "pilot_grant":
@@ -2058,10 +2056,19 @@ def create_billing_checkout(
             ),
         )
 
-    if practice.organization_id is not None and practice.billing_exemption_active():
+    if practice.negotiated_baa_required or practice.organization_id is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Billing for this practice is managed by its organization.",
+        )
+
+    if practice.billing_exemption_active():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This practice has an active billing exemption and cannot start "
+                "a public paid-pilot subscription."
+            ),
         )
 
     resumable = stripe_billing.has_resumable_checkout(practice)
@@ -2077,8 +2084,8 @@ def create_billing_checkout(
     except stripe_billing.StripeStateConflict as exc:
         log.warning(
             "stripe subscription changed repeatedly before checkout",
-            practice_id=str(practice.id),
-            exc_info=True,
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            error_code=type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2087,8 +2094,8 @@ def create_billing_checkout(
     except (httpx.HTTPError, stripe_billing.StripeStateInvalid) as exc:
         log.warning(
             "stripe subscription refresh failed before checkout",
-            practice_id=str(practice.id),
-            exc_info=True,
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            error_code=type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -2109,13 +2116,12 @@ def create_billing_checkout(
             ),
         )
 
-    origin = _validated_web_origin(request)
     try:
         url = stripe_billing.create_checkout_session(
             practice,
             customer_email=doctor.email,
-            success_url=f"{origin}{_safe_redirect_path(data.success_path)}",
-            cancel_url=f"{origin}{_safe_redirect_path(data.cancel_path)}",
+            success_url=f"{origin}{data.success_path}",
+            cancel_url=f"{origin}{data.cancel_path}",
         )
     except stripe_billing.StripeNotConfigured as exc:
         raise HTTPException(
@@ -2143,16 +2149,36 @@ def create_billing_checkout(
             status_code=status.HTTP_409_CONFLICT,
             detail=CHECKOUT_RETIREMENT_PENDING_DETAIL,
         ) from exc
+    except stripe_billing.StripeCheckoutReconciliationRequired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The previous Checkout attempt needs billing-operator "
+                "reconciliation before it can be retried."
+            ),
+        ) from exc
     except stripe_billing.StripeStateConflict as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The current Stripe subscription is changing. Try again shortly.",
         ) from exc
+    except stripe_billing.StripeSeatLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A paid-pilot practice may have at most 20 active clinicians.",
+        ) from exc
+    except stripe_billing.StripeManagedBilling as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Billing for this practice is managed outside the public paid pilot."
+            ),
+        ) from exc
     except stripe_billing.StripeStateInvalid as exc:
         log.error(
             "stripe checkout state validation failed",
-            practice_id=str(practice.id),
-            exc_info=True,
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            error_code=type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -2161,8 +2187,8 @@ def create_billing_checkout(
     except httpx.HTTPError as exc:
         log.warning(
             "stripe checkout session creation failed",
-            practice_id=str(practice.id),
-            exc_info=True,
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            error_code=type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -2183,7 +2209,7 @@ def create_billing_portal(
     practice = _owner_practice_for_billing(doctor)
 
     # Acquisition can be paused without stranding existing customers.
-    if not stripe_runtime_configured():
+    if not stripe_portal_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
@@ -2198,7 +2224,7 @@ def create_billing_portal(
     try:
         url = stripe_billing.create_portal_session(
             practice,
-            return_url=f"{origin}{_safe_redirect_path(data.return_path)}",
+            return_url=f"{origin}{data.return_path}",
         )
     except stripe_billing.StripeNotConfigured as exc:
         raise HTTPException(
@@ -2208,8 +2234,8 @@ def create_billing_portal(
     except stripe_billing.StripeStateInvalid as exc:
         log.error(
             "stripe portal state validation failed",
-            practice_id=str(practice.id),
-            exc_info=True,
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            error_code=type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -2218,8 +2244,8 @@ def create_billing_portal(
     except httpx.HTTPError as exc:
         log.warning(
             "stripe portal session creation failed",
-            practice_id=str(practice.id),
-            exc_info=True,
+            practice_ref=provider_log_ref(f"practice:{practice.id}"),
+            error_code=type(exc).__name__,
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
