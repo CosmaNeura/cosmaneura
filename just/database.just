@@ -55,17 +55,7 @@ db_lint:
 	fi
 	echo "Linting $(echo "$new_migrations" | wc -l | tr -d ' ') new migration(s) from $prev_rev to head"
 
-	squawk_report=$(mktemp)
-	LOG_LEVEL=error uv run alembic upgrade "${prev_rev}:head" --sql | \
-		uv run squawk --reporter=json --exclude=prefer-text-field > "$squawk_report" || true
-	if [ -n "${CI:-}" ]; then
-		jq -r '.[] | "::\(if .level == "Error" then "error" else "warning" end) file=\(.file),line=\(.line),col=\(.column),title=\(.rule_name)::\(.messages[0].Note)"' "$squawk_report"
-	else
-		jq -r '.[] | "\(.file):\(.line):\(.column): \(.level) [\(.rule_name)] \(.messages[0].Note)"' "$squawk_report"
-	fi
-	error_count=$(jq '[.[] | select(.level == "Error")] | length' "$squawk_report")
-	rm -f "$squawk_report"
-	[ "$error_count" -eq 0 ]
+	zsh scripts/squawk_migration_lint.sh "$prev_rev"
 
 # open the database in the default macos GUI
 [macos]

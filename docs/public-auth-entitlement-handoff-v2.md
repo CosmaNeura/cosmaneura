@@ -7,23 +7,25 @@ cohort activation, credential approval, or real-PHI processing.
 
 ## Release identity
 
-| Field                      | Value                                                                                                                                                     |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capability                 | Core-owned public authentication, practice onboarding, active-clinician seat policy, and server-authoritative capability decisions                        |
-| Governing architecture     | ADRs 0022–0024 in [architecture PR #10](https://github.com/CosmaNeura/cosmaneura-architecture/pull/10), commit `5451df63e2fbeaf386ca5517d762e6d1359b053c` |
-| Runtime contract           | `contracts/public-entitlements/v2/capability-entitlement.schema.json`                                                                                     |
-| Runtime version            | `public-capability-entitlements.v2`                                                                                                                       |
-| Runtime schema SHA-256     | `a51843ed0810a2b43fd16cf6e66eb2830717c8381aa7fea3f8d05b9e55cb1bad`                                                                                        |
-| Compatibility contract     | `contracts/public-entitlements/v1/capability-entitlement.schema.json` remains byte-pinned                                                                 |
-| V1 schema SHA-256          | `a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578`                                                                                        |
-| Code implementation parent | `27e480ee4898c985aa64d38578afa474c045b643` on `codex/public-onboarding-11-review-hardening-20260827`                                                      |
-| Implementation PR          | [#199](https://github.com/CosmaNeura/cosmaneura/pull/199), based on PR #196 / `dccbf9dc8eee36a6eee52ed2ed17c2ddd7d41c8b`                                  |
-| BAA                        | `app/assets/baa/baa_cn-baa-cust-cw_v2.2.html`, unchanged SHA-256 `13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e`                       |
+| Field                         | Value                                                                                                                                                     |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capability                    | Core-owned public authentication, practice onboarding, active-clinician seat policy, and server-authoritative capability decisions                        |
+| Governing architecture        | ADRs 0022–0024 in [architecture PR #10](https://github.com/CosmaNeura/cosmaneura-architecture/pull/10), commit `5451df63e2fbeaf386ca5517d762e6d1359b053c` |
+| Runtime contract              | `contracts/public-entitlements/v2/capability-entitlement.schema.json`                                                                                     |
+| Runtime version               | `public-capability-entitlements.v2`                                                                                                                       |
+| Runtime schema SHA-256        | `a51843ed0810a2b43fd16cf6e66eb2830717c8381aa7fea3f8d05b9e55cb1bad`                                                                                        |
+| Compatibility contract        | `contracts/public-entitlements/v1/capability-entitlement.schema.json` remains byte-pinned                                                                 |
+| V1 schema SHA-256             | `a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578`                                                                                        |
+| Reviewed application baseline | `27e480ee4898c985aa64d38578afa474c045b643` on `codex/public-onboarding-11-review-hardening-20260827`                                                      |
+| Final receiver                | Externally attested final PR #199 head containing this packet and the fail-closed migration-lint runner                                                   |
+| Implementation PR             | [#199](https://github.com/CosmaNeura/cosmaneura/pull/199), based on PR #196 / `dccbf9dc8eee36a6eee52ed2ed17c2ddd7d41c8b`                                  |
+| BAA                           | `app/assets/baa/baa_cn-baa-cust-cw_v2.2.html`, unchanged SHA-256 `13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e`                       |
 
 The documentation commit cannot safely name its own SHA. Consumers must pin the
-externally attested final PR #199 head that contains this packet, not the code
-parent above. That immutable reviewed SHA must travel with this packet when the
-receiver is handed off.
+externally attested final PR #199 head that contains this packet and the
+fail-closed migration-lint runner, not the application baseline above. That
+immutable reviewed SHA must travel with this packet when the receiver is handed
+off.
 
 ### Ordered receiver stack
 
@@ -215,7 +217,7 @@ seat mutations retain metadata-only audit evidence.
 
 ## Validation evidence and remaining gates
 
-Current local evidence on exact code implementation parent
+Current application behavior evidence on exact reviewed baseline
 `27e480ee4898c985aa64d38578afa474c045b643`:
 
 - full backend excluding only the host PostgreSQL patch-pin assertion: `1,761`
@@ -230,6 +232,13 @@ Current local evidence on exact code implementation parent
 - post-regeneration scans found no NPI in the public form, handwritten request,
   backend public request/persistence path, OpenAPI, or generated TypeScript
   client. V1, v2, and BAA hashes matched the values above.
+
+On the final receiver tree, 24 focused migration-lint tests prove that Alembic
+SQL-generation and Squawk execution failures propagate nonzero, malformed or
+unknown reports fail closed, Warning findings remain advisory, Error findings
+fail, and a clean schema passes. Exact `just db_lint` generated and linted the
+two new migrations, reported the 10 explicitly advisory Squawk warnings, and
+exited zero without masking a producer or tool failure.
 
 The workstation runs PostgreSQL `16.15`; source pins `16.9`, which is the sole
 deselected host-version assertion. As of 2026-08-28, PR #199's Backend,

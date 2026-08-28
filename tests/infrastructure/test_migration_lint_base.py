@@ -98,5 +98,6 @@ def test_db_lint_uses_ancestry_helper_instead_of_filename_order() -> None:
     db_lint = recipe[recipe.index("db_lint:") : recipe.index("# open the database")]
 
     assert "scripts/migration_lint_base.py" in db_lint
+    assert 'zsh scripts/squawk_migration_lint.sh "$prev_rev"' in db_lint
+    assert "|| true" not in db_lint[db_lint.index("Linting ") :]
     assert 'oldest=$(echo "$new_migrations" | head -1)' not in db_lint
-    assert 'alembic upgrade "${prev_rev}:head" --sql' in db_lint
