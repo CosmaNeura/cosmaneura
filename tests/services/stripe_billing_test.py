@@ -289,6 +289,53 @@ def _bind_verified_public_subscription(
     practice.save()
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        " https://checkout.stripe.com/c/pay/test",
+        "https://checkout.stripe.com/c/pay/test ",
+        "https://evil.example\\@checkout.stripe.com/c/pay/test",
+        "https://user@checkout.stripe.com/c/pay/test",
+        "https://checkout.stripe.com:443/c/pay/test",
+        "https://checkout.stripe.com./c/pay/test",
+        "https://checkout.stripe.com/\x00test",
+        "https://[invalid",
+    ],
+)
+def test_hosted_url_requires_exact_provider_authority(value: str):
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="unexpected origin"):
+        stripe_billing._hosted_url(value, hostname="checkout.stripe.com")
+
+    assert (
+        stripe_billing._hosted_url(
+            "https://checkout.stripe.com/c/pay/test",
+            hostname="checkout.stripe.com",
+        )
+        == "https://checkout.stripe.com/c/pay/test"
+    )
+
+
+@pytest.mark.parametrize("value", [None, True, 10**100, -(10**100)])
+def test_checkout_expiry_rejects_noncanonical_timestamps(value: object):
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="session expiry"):
+        stripe_billing._checkout_session_expiry({"expires_at": value})
+
+
+@pytest.mark.parametrize("value", [None, True, 10**100, -(10**100)])
+def test_event_created_at_rejects_noncanonical_timestamps(value: object):
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="creation time"):
+        stripe_billing._event_created_at({"created": value})
+
+
+def test_subscription_trial_end_rejects_out_of_range_timestamp():
+    subscription = _subscription(_practice(), status="trialing")
+    subscription["trial_start"] = int(NOW.timestamp())
+    subscription["trial_end"] = 10**100
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="out of range"):
+        stripe_billing._trial_end_from_subscription(subscription)
+
+
 def test_signature_verification_rejects_tampering_replay_and_wrong_secret(
     monkeypatch: pytest.MonkeyPatch,
 ):
