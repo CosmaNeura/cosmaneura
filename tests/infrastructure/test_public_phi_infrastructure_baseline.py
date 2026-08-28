@@ -54,6 +54,44 @@ def test_staging_database_source_cannot_reintroduce_allow_all() -> None:
     assert "default" not in egress_variable
 
 
+def test_production_database_source_cannot_reintroduce_allow_all() -> None:
+    source = _read("infra/main.tf")
+    assert (
+        'resource "azurerm_postgresql_flexible_server_firewall_rule" "all"'
+        not in source
+    )
+    assert 'name             = "aca-prod-egress"' in source
+    assert "start_ip_address = var.production_container_apps_egress_ipv4" in source
+    assert "one(azurerm_container_app.scheduler.outbound_ip_addresses)" in source
+    assert "azurerm_postgresql_flexible_server_firewall_rule.aca_prod_egress" in source
+    assert "var.adopt_existing_production_postgres_egress_rule" in source
+
+    egress_variable = _hcl_block(
+        _read("infra/variables.tf"),
+        'variable "production_container_apps_egress_ipv4"',
+    )
+    assert "default" not in egress_variable
+
+    adoption_variable = _hcl_block(
+        _read("infra/variables.tf"),
+        'variable "adopt_existing_production_postgres_egress_rule"',
+    )
+    assert "default     = true" in adoption_variable
+
+    for workflow in (
+        ".github/workflows/infra_production_plan.yml",
+        ".github/workflows/infra_apply.yml",
+    ):
+        workflow_source = _read(workflow)
+        assert "Resolve exact production Container Apps egress" in workflow_source
+        assert "cosmaneura-prod-scheduler" in workflow_source
+        assert "properties.outboundIpAddresses" in workflow_source
+        assert (
+            'echo "TF_VAR_production_container_apps_egress_ipv4=$production_egress"'
+            in workflow_source
+        )
+
+
 def test_observability_is_default_off_and_aggregate_only() -> None:
     for path in ("infra/variables.tf", "infra-staging/variables.tf"):
         source = _read(path)

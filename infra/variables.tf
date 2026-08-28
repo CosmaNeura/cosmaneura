@@ -46,6 +46,25 @@ variable "onepassword_tags" {
   ]
 }
 
+variable "production_container_apps_egress_ipv4" {
+  description = "Operator-supplied outbound IPv4 address shared by the production Container Apps; required for each plan and checked against refreshed scheduler state."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}$", var.production_container_apps_egress_ipv4)) &&
+      can(cidrhost("${var.production_container_apps_egress_ipv4}/32", 0))
+    )
+    error_message = "production_container_apps_egress_ipv4 must be a valid IPv4 address"
+  }
+}
+
+variable "adopt_existing_production_postgres_egress_rule" {
+  description = "Adopt the exact production ACA PostgreSQL firewall rule created before the broad live rule was removed. Disable only in provider-mocked tests, where imports are unsupported."
+  type        = bool
+  default     = true
+}
+
 # variables which should be exposed publicly in the azure ui
 variable "python_secret_vars" {
   description = "ENV vars which need to remain secret"

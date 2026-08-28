@@ -17,7 +17,8 @@ mock_provider "azurerm" {
 
   mock_resource "azurerm_container_app" {
     defaults = {
-      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.App/containerApps/mock"
+      id                    = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.App/containerApps/mock"
+      outbound_ip_addresses = ["198.51.100.10"]
     }
   }
 
@@ -204,6 +205,11 @@ override_data {
 run "secretless_static_plan" {
   command = plan
 
+  variables {
+    adopt_existing_production_postgres_egress_rule = false
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+  }
+
   assert {
     condition     = length(module.public_phi_observability) == 0
     error_message = "public-PHI observability must remain disabled by default"
@@ -214,9 +220,11 @@ run "public_phi_observability_static_plan" {
   command = plan
 
   variables {
-    enable_public_phi_observability = true
-    public_phi_alert_email          = "launch-ops@example.invalid"
-    public_phi_support_owner        = "platform-on-call"
+    adopt_existing_production_postgres_egress_rule = false
+    enable_public_phi_observability                = true
+    production_container_apps_egress_ipv4          = "198.51.100.10"
+    public_phi_alert_email                         = "launch-ops@example.invalid"
+    public_phi_support_owner                       = "platform-on-call"
   }
 
   assert {
@@ -254,8 +262,10 @@ run "managed_identity_activation_static_plan" {
   command = plan
 
   variables {
+    adopt_existing_production_postgres_egress_rule    = false
     deid_managed_identity_compatible_worker_image_tag = "1111111111111111111111111111111111111111"
     enable_deid_managed_identity                      = true
+    production_container_apps_egress_ipv4             = "198.51.100.10"
   }
 
   assert {
