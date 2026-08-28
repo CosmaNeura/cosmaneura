@@ -15,6 +15,12 @@ decision; they never reproduce or relax the policy.
 - A pending clinician may use only a separately enabled, explicitly synthetic
   non-PHI sandbox. `data_mode: synthetic_only` is not permission to process
   real PHI, and `decision: denied` remains the protected-route result.
+- NPI is intentionally absent from public signup, onboarding, and this wire
+  contract. It is not authentication, identity or licensure proof, credential
+  evidence, payment state, entitlement, or tenant authority. Existing nullable
+  storage is legacy-only. Collection may be designed later only at a separately
+  approved, just-in-time boundary for an enabled payer-facing HIPAA-standard
+  transaction or integration that demonstrably requires the identifier.
 - The trial begins when Checkout starts, before credential approval. Credential
   state does not pause or reset the clock. The still-undecided behavior when the
   trial expires before approval is not represented as an entitlement.
@@ -30,9 +36,14 @@ decision; they never reproduce or relax the policy.
   and atomically reject an active-seat count above 20. A Stripe failure cannot
   turn a rejected 21st seat into an active membership or silently clear the
   durable reconciliation obligation.
+- Deactivation, managed-roster revocation, and provider-account closure record
+  the resulting quantity obligation in the same database transaction. A zero
+  active-seat result retains a no-target reconciliation marker for explicit
+  subscription cancellation; it is never sent to Stripe as quantity `0`.
 - `session_prep` is read-only. `scribe` is web/PWA first and retains one
   client-neutral authority contract for later clients. `cab` is advisory-only;
-  it never authorizes an EHR write or claim submission.
+  it never authorizes an EHR write, 837P generation/submission, clearinghouse
+  enrollment/submission, or any other claim submission.
 
 ## Read and seat-policy APIs
 

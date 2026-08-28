@@ -13,7 +13,7 @@ import app.commands.intake.chat
 import app.commands.intake.create
 from app.routes.dependencies.view_as import deny_view_as_browser_activity
 from app.routes.errors import EarlyResponseException
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 
 from activemodel.session_manager import aglobal_session
 from app.models.ai_visit_transcript import PydanticBaseModel
@@ -43,7 +43,7 @@ def process_intake(intake_id: str = Path(title="Intake ID")) -> Intake | JSONRes
         )
 
     doctor = Doctor.get(id=intake.doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "intake_prep"):
         # The opaque intake URL is a bearer credential. Return the same
         # response as an unknown token after offboarding so it cannot be used
         # to read or append PHI.

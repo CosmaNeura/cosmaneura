@@ -7,7 +7,7 @@ from uuid import UUID
 
 import app.jobs.score_engagement
 import app.jobs.transcribe
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 
 from activemodel.session_manager import get_session
 from activemodel.types import TypeIDType
@@ -133,7 +133,7 @@ def _perform(
         raise EncounterNotFoundError
 
     doctor = session.get(Doctor, appointment.doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "scribe"):
         raise DoctorAccessNotInForceError
 
     receipt = _matching_receipt(

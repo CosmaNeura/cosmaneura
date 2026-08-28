@@ -5,6 +5,20 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_DIR = ROOT / "contracts" / "public-entitlements" / "v1"
 
 
+def _property_names(value: object) -> set[str]:
+    if isinstance(value, dict):
+        names = set(value.get("properties", {}))
+        for child in value.values():
+            names.update(_property_names(child))
+        return names
+    if isinstance(value, list):
+        names: set[str] = set()
+        for child in value:
+            names.update(_property_names(child))
+        return names
+    return set()
+
+
 def test_v1_fixture_pins_catalog_and_fail_closed_credential_policy() -> None:
     schema = json.loads(
         (CONTRACT_DIR / "capability-entitlement.schema.json").read_text()
@@ -44,3 +58,11 @@ def test_v1_preserves_fail_closed_billing_incident_states() -> None:
     )
 
     assert {"pending_verification", "invalid"} <= states
+
+
+def test_v1_intentionally_excludes_npi_from_every_contract_object() -> None:
+    schema = json.loads(
+        (CONTRACT_DIR / "capability-entitlement.schema.json").read_text()
+    )
+
+    assert "npi" not in _property_names(schema)

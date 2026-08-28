@@ -12,7 +12,7 @@ from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 from app.services.patient_context import days_since, latest_note_for_patient
 from app.services.terminology import terminology_terms
@@ -55,7 +55,7 @@ def perform(intake_id: str | TypeID | TypeIDType):
 
     intake = Intake.one(id=intake_id)
     doctor = Doctor.get(id=intake.doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "intake_prep"):
         log.info(
             "intake summarization skipped: access unavailable",
             event_code="intake_summarization_access_not_in_force",

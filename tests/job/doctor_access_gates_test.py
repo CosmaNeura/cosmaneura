@@ -83,7 +83,11 @@ def test_summarize_denial_skips_llm_and_note_write(monkeypatch):
         note_type="Access gate test",
         fields={"CC": "Chief complaint"},
     ).save()
-    _deny(monkeypatch, summarize)
+    monkeypatch.setattr(
+        summarize,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: False,
+    )
     monkeypatch.setattr(summarize, "generate_clinical_note", _unexpected)
 
     summarize.perform(transcript.id, schema.id)

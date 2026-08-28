@@ -17,7 +17,9 @@ def test_question_generation_denial_skips_cleaning_and_model_calls(monkeypatch):
         cleaned_external_intake_data=None,
     ).save()
     monkeypatch.setattr(
-        generate_questions, "doctor_access_in_force", lambda _doctor: False
+        generate_questions,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: False,
     )
     monkeypatch.setattr(generate_questions, "extract_intake_data", _unexpected)
     monkeypatch.setattr(generate_questions, "generate_intake_questions", _unexpected)
@@ -40,7 +42,11 @@ def test_intake_summarization_denial_skips_model_and_write(monkeypatch):
         intake_questions=[answered],
         summary=None,
     ).save()
-    monkeypatch.setattr(summarize, "doctor_access_in_force", lambda _doctor: False)
+    monkeypatch.setattr(
+        summarize,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: False,
+    )
     monkeypatch.setattr(summarize, "generate_intake_summary", _unexpected)
 
     summarize.perform(intake.id)

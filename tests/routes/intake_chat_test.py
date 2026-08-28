@@ -35,11 +35,15 @@ from tests.routes.utils import (
 
 @pytest.fixture(autouse=True)
 def _allow_doctor_access(monkeypatch):
-    monkeypatch.setattr(app.routes.chat, "doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        app.routes.chat,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: True,
+    )
     monkeypatch.setattr(
         app.jobs.intake.summarize,
-        "doctor_access_in_force",
-        lambda _doctor: True,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: True,
     )
 
 
@@ -63,7 +67,9 @@ def test_revoked_doctor_makes_public_intake_unavailable(
     intake = SimpleIncompleteIntakeFactory.build().save()
     initial_questions = intake.intake_questions
     monkeypatch.setattr(
-        app.routes.chat, "doctor_access_in_force", lambda _doctor: False
+        app.routes.chat,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: False,
     )
 
     get_response = client.get(
