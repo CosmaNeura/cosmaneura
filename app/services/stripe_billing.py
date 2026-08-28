@@ -54,6 +54,11 @@ CHECKOUT_TRIAL_LEAD_SAFETY = timedelta(minutes=5)
 # slightly before that boundary and require an operator to reconcile the
 # provider-side result before Core can authorize another attempt.
 CHECKOUT_REQUEST_REPLAY_WINDOW = timedelta(hours=23, minutes=55)
+# After Stripe's documented idempotency-retention boundary, leave a small
+# transport margin before an operator may attest that no Session exists and
+# rotate the local attempt. This closes the five-minute gap between Core's
+# automatic replay cutoff and Stripe's 24-hour boundary.
+CHECKOUT_RECOVERY_TRANSPORT_SAFETY = timedelta(minutes=5)
 EXPECTED_PRICE_CURRENCY = "usd"
 EXPECTED_PRICE_UNIT_AMOUNT = 8_900
 EXPECTED_PRICE_INTERVAL = "month"
@@ -184,6 +189,20 @@ def _public_checkout_is_managed(
         or practice.organization_id is not None
         or practice.billing_exemption_active(at=at)
     )
+
+
+def _emit_billing_metric(
+    metric: str,
+    *,
+    outcome: str,
+    practice_id: object | None = None,
+) -> None:
+    """Emit a PHI-free, allowlisted billing lifecycle signal."""
+
+    fields: dict[str, object] = {"metric": metric, "outcome": outcome}
+    if practice_id is not None:
+        fields["practice_ref"] = provider_log_ref(f"practice:{practice_id}")
+    log.info("billing lifecycle metric", **fields)
 
 
 def _isolated_state_session() -> Session:
@@ -1996,6 +2015,418 @@ def _recover_checkout_session(practice: Practice, *, current: datetime) -> str |
         )
         return None
     raise StripeStateInvalid("checkout session status is unknown")
+
+
+def _frozen_checkout_recovery_snapshot(
+    practice: Practice,
+) -> tuple[int, int, int, str, str, datetime, datetime, str | None]:
+    """Lock and validate the exact Core state an operator may reconcile."""
+
+    with _isolated_state_session() as session:
+        row = session.exec(
+            select(Practice).where(Practice.id == practice.id).with_for_update()
+        ).one()
+        if _public_checkout_is_managed(row):
+            raise StripeManagedBilling
+        if row.stripe_checkout_session_id is not None:
+            raise StripeStateConflict(
+                "the Checkout Session is already cached; use normal recovery"
+            )
+        if (
+            row.stripe_checkout_request_json is None
+            or row.stripe_checkout_request_created_at is None
+            or row.stripe_trial_clock_policy is None
+        ):
+            raise StripeStateInvalid("there is no frozen Checkout request to recover")
+        try:
+            frozen = json.loads(row.stripe_checkout_request_json)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise StripeStateInvalid("stored Checkout request is invalid") from exc
+        entitlement_contract = (
+            frozen.get("metadata[entitlement_contract]")
+            if isinstance(frozen, dict)
+            else None
+        )
+        if (
+            not isinstance(frozen, dict)
+            or not all(
+                isinstance(key, str) and isinstance(value, str)
+                for key, value in frozen.items()
+            )
+            or frozen.get("client_reference_id") != str(row.id)
+            or frozen.get("metadata[practice_id]") != str(row.id)
+            or frozen.get("metadata[checkout_policy]")
+            != PAID_PILOT_CHECKOUT_POLICY_VERSION
+            or frozen.get("metadata[checkout_attempt]")
+            != str(row.stripe_checkout_attempt)
+            or not isinstance(entitlement_contract, str)
+            or entitlement_contract
+            not in SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS
+            or row.stripe_checkout_entitlement_contract != entitlement_contract
+            or frozen.get("metadata[trial_clock]") != row.stripe_trial_clock_policy
+        ):
+            raise StripeStateInvalid("stored Checkout recovery identity is invalid")
+        _validate_frozen_checkout_request(
+            cast(dict[str, str], frozen),
+            practice=row,
+            trial_clock_policy=row.stripe_trial_clock_policy,
+            request_created_at=row.stripe_checkout_request_created_at,
+        )
+        replay_deadline = _checkout_request_replay_deadline(
+            cast(dict[str, str], frozen),
+            created_at=row.stripe_checkout_request_created_at,
+        )
+        return (
+            row.stripe_checkout_state_version,
+            row.stripe_state_version,
+            row.stripe_checkout_attempt,
+            row.stripe_trial_clock_policy,
+            entitlement_contract,
+            row.stripe_checkout_request_created_at,
+            replay_deadline,
+            cast(str | None, frozen.get("customer")),
+        )
+
+
+def _matching_frozen_checkout_sessions(
+    practice: Practice,
+    *,
+    checkout_attempt: int,
+    entitlement_contract: str,
+    request_created_at: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """List the bounded provider inventory for one frozen Checkout attempt."""
+
+    matches: list[dict[str, Any]] = []
+    ambiguous: list[dict[str, Any]] = []
+    starting_after: str | None = None
+    created_gte = max(0, int(request_created_at.timestamp()) - 300)
+    for _page_number in range(10):
+        params = {"limit": "100", "created[gte]": str(created_gte)}
+        if starting_after is not None:
+            params["starting_after"] = starting_after
+        page = _request("GET", "/checkout/sessions", params)
+        sessions = page.get("data")
+        has_more = page.get("has_more")
+        if not isinstance(sessions, list) or not isinstance(has_more, bool):
+            raise StripeStateInvalid("Stripe Checkout recovery listing is invalid")
+        for candidate in sessions:
+            if not isinstance(candidate, dict):
+                raise StripeStateInvalid(
+                    "Stripe Checkout recovery listing contains an invalid Session"
+                )
+            metadata = candidate.get("metadata")
+            exact_match = (
+                candidate.get("client_reference_id") == str(practice.id)
+                and isinstance(metadata, dict)
+                and metadata.get("practice_id") == str(practice.id)
+                and metadata.get("checkout_policy")
+                == PAID_PILOT_CHECKOUT_POLICY_VERSION
+                and metadata.get("checkout_attempt") == str(checkout_attempt)
+                and metadata.get("entitlement_contract") == entitlement_contract
+            )
+            if exact_match:
+                matches.append(candidate)
+            elif candidate.get("client_reference_id") == str(practice.id) or (
+                isinstance(metadata, dict)
+                and metadata.get("practice_id") == str(practice.id)
+            ):
+                ambiguous.append(candidate)
+        if not has_more:
+            return matches, ambiguous
+        if not sessions:
+            raise StripeStateInvalid("Stripe Checkout recovery pagination is invalid")
+        last_id = sessions[-1].get("id")
+        if not isinstance(last_id, str) or not last_id.startswith("cs_"):
+            raise StripeStateInvalid("Stripe Checkout recovery cursor is invalid")
+        starting_after = last_id
+    raise StripeStateInvalid("Stripe Checkout recovery exceeded its page limit")
+
+
+def _checkout_session_matches_frozen_policy(
+    session: dict[str, Any],
+    *,
+    practice: Practice,
+    checkout_attempt: int,
+    trial_clock_policy: str,
+    entitlement_contract: str,
+) -> bool:
+    """Compare a remotely retrieved Session to immutable frozen policy fields."""
+
+    if session.get("payment_method_collection") != CHECKOUT_PAYMENT_METHOD_COLLECTION:
+        return False
+    metadata = session.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    return bool(
+        metadata.get("checkout_policy") == PAID_PILOT_CHECKOUT_POLICY_VERSION
+        and metadata.get("checkout_attempt") == str(checkout_attempt)
+        and metadata.get("practice_id") == str(practice.id)
+        and metadata.get("entitlement_contract") == entitlement_contract
+        and metadata.get("trial_clock") == trial_clock_policy
+        and (
+            metadata.get("trial_days") == str(TRIAL_LENGTH.days)
+            if trial_clock_policy == CHECKOUT_TRIAL_CLOCK_POLICY
+            else "trial_days" not in metadata
+        )
+    )
+
+
+def _record_checkout_recovery_attempt(
+    practice: Practice,
+    *,
+    operator_ref: str,
+    reason: str,
+    evidence_reference: str,
+    evidence_sha256: str,
+    current: datetime,
+) -> str:
+    """Append PHI-free evidence before applying a privileged recovery action."""
+
+    from app.models.practice_access_audit import (
+        PracticeAccessAction,
+        PracticeAccessAudit,
+    )
+
+    operator = operator_ref.strip()
+    explanation = reason.strip()
+    reference = evidence_reference.strip()
+    digest = evidence_sha256.strip().lower()
+    if not operator or len(operator) > 255:
+        raise StripeStateInvalid("checkout recovery operator reference is invalid")
+    if not explanation or len(explanation) > 512:
+        raise StripeStateInvalid("checkout recovery reason is invalid")
+    if not reference or len(reference) > 255:
+        raise StripeStateInvalid("checkout recovery evidence reference is invalid")
+    if len(digest) != 64 or any(ch not in "0123456789abcdef" for ch in digest):
+        raise StripeStateInvalid("checkout recovery evidence digest is invalid")
+    audit = PracticeAccessAudit(
+        practice_id=practice.id,
+        action=PracticeAccessAction.stripe_checkout_recovery_started.value,
+        operator_ref=operator,
+        reason=explanation,
+        effective_at=current,
+        document_reference=reference,
+        evidence_sha256=digest,
+    )
+    with _isolated_state_session() as session:
+        session.add(audit)
+        session.commit()
+        session.refresh(audit)
+    return str(audit.id)
+
+
+def reconcile_frozen_checkout_request(
+    practice: Practice,
+    *,
+    operator_ref: str,
+    reason: str,
+    evidence_reference: str | None = None,
+    evidence_sha256: str | None = None,
+    confirm_absent: bool = False,
+    apply: bool = False,
+    now: datetime | None = None,
+) -> tuple[str, str | None]:
+    """Plan or audit/apply recovery without creating a replacement Session."""
+
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise StripeStateInvalid("Checkout recovery timestamp is invalid")
+    current = current.astimezone(timezone.utc)
+    _validate_runtime_configuration()
+    (
+        expected_version,
+        expected_billing_version,
+        checkout_attempt,
+        trial_clock_policy,
+        entitlement_contract,
+        request_created_at,
+        replay_deadline,
+        expected_customer_id,
+    ) = _frozen_checkout_recovery_snapshot(practice)
+    matches, ambiguous = _matching_frozen_checkout_sessions(
+        practice,
+        checkout_attempt=checkout_attempt,
+        entitlement_contract=entitlement_contract,
+        request_created_at=request_created_at,
+    )
+    if ambiguous:
+        raise StripeStateConflict(
+            "ambiguous Stripe Checkout Sessions require manual provider resolution"
+        )
+    if len(matches) > 1:
+        raise StripeStateConflict(
+            "multiple Stripe Checkout Sessions match one Core attempt"
+        )
+    if not matches:
+        if not apply:
+            return "no_matching_session", None
+        if not confirm_absent:
+            raise StripeCheckoutReconciliationRequired
+        if stripe_config.STRIPE_BILLING_ENABLED:
+            raise StripeStateInvalid(
+                "disable Checkout acquisition before confirming a Session absent"
+            )
+        absence_not_before = (
+            request_created_at.astimezone(timezone.utc)
+            + CHECKOUT_REQUEST_REPLAY_WINDOW
+            + CHECKOUT_RECOVERY_TRANSPORT_SAFETY
+        )
+        if current < absence_not_before:
+            raise StripeStateInvalid(
+                "the Checkout recovery transport-safety window has not elapsed"
+            )
+        audit_id = _record_checkout_recovery_attempt(
+            practice,
+            operator_ref=operator_ref,
+            reason=reason,
+            evidence_reference=evidence_reference or "",
+            evidence_sha256=evidence_sha256 or "",
+            current=current,
+        )
+        _persist_checkout_cache(
+            practice,
+            expected_version=expected_version,
+            expected_billing_version=expected_billing_version,
+            expected_session_id=None,
+            session_id=None,
+            url=None,
+            expires_at=None,
+            advance=True,
+        )
+        _emit_billing_metric(
+            "checkout_recovery",
+            outcome="operator_confirmed_absent",
+            practice_id=practice.id,
+        )
+        return "operator_confirmed_absent", audit_id
+
+    listed_session = matches[0]
+    session_id = listed_session.get("id")
+    if not isinstance(session_id, str) or not session_id.startswith("cs_"):
+        raise StripeStateInvalid("matched Checkout Session id is invalid")
+    remote_session = _request("GET", f"/checkout/sessions/{session_id}")
+    _validate_checkout_session_binding(
+        remote_session,
+        practice,
+        expected_id=session_id,
+        expected_customer_id=expected_customer_id,
+    )
+    if not _checkout_session_matches_frozen_policy(
+        remote_session,
+        practice=practice,
+        checkout_attempt=checkout_attempt,
+        trial_clock_policy=trial_clock_policy,
+        entitlement_contract=entitlement_contract,
+    ):
+        raise StripeStateInvalid("matched Checkout Session violates policy")
+
+    session_status = remote_session.get("status")
+    if session_status not in {"open", "complete", "expired"}:
+        raise StripeStateInvalid("matched Checkout Session status is invalid")
+    subscription_id = remote_session.get("subscription")
+    if subscription_id is not None and (
+        not isinstance(subscription_id, str) or not subscription_id.startswith("sub_")
+    ):
+        raise StripeStateInvalid("matched Checkout subscription id is invalid")
+    if session_status == "complete" and subscription_id is None:
+        raise StripeStateInvalid("completed Checkout Session has no subscription")
+
+    expiry = _checkout_session_expiry(remote_session)
+    hosted_url = (
+        _hosted_url(remote_session.get("url"), hostname="checkout.stripe.com")
+        if session_status == "open"
+        else None
+    )
+    planned_outcome = {
+        "open": "would_expire_open_session",
+        "complete": "would_bind_completed_session",
+        "expired": (
+            "would_resolve_expired_subscription"
+            if subscription_id is not None
+            else "would_clear_expired_session"
+        ),
+    }[cast(str, session_status)]
+    if not apply:
+        return planned_outcome, None
+    if current < replay_deadline:
+        raise StripeStateInvalid(
+            "the frozen Checkout request is still safely replayable"
+        )
+
+    audit_id = _record_checkout_recovery_attempt(
+        practice,
+        operator_ref=operator_ref,
+        reason=reason,
+        evidence_reference=evidence_reference or "",
+        evidence_sha256=evidence_sha256 or "",
+        current=current,
+    )
+    _persist_checkout_cache(
+        practice,
+        expected_version=expected_version,
+        expected_billing_version=expected_billing_version,
+        expected_session_id=None,
+        session_id=session_id,
+        url=hosted_url,
+        expires_at=expiry,
+    )
+    recovered_version, recovered_session_id = _checkout_cache_snapshot(practice.id)
+    if session_status == "open":
+        try:
+            _retire_open_checkout_session(
+                practice,
+                remote_session,
+                expected_version=recovered_version,
+                expected_billing_version=expected_billing_version,
+                expected_session_id=recovered_session_id,
+            )
+        except StripeCheckoutRetirementPending:
+            return "operator_bound_incomplete_subscription", audit_id
+        except StripeCheckoutAlreadyCompleted:
+            return "operator_bound_completed_subscription", audit_id
+        _emit_billing_metric(
+            "checkout_recovery",
+            outcome="operator_expired_open_session",
+            practice_id=practice.id,
+        )
+        return "operator_expired_open_session", audit_id
+    if session_status == "expired" and subscription_id is None:
+        _persist_checkout_cache(
+            practice,
+            expected_version=recovered_version,
+            expected_billing_version=expected_billing_version,
+            expected_session_id=recovered_session_id,
+            session_id=None,
+            url=None,
+            expires_at=None,
+            advance=True,
+        )
+        _emit_billing_metric(
+            "checkout_recovery",
+            outcome="operator_cleared_expired_session",
+            practice_id=practice.id,
+        )
+        return "operator_cleared_expired_session", audit_id
+    if session_status == "complete":
+        try:
+            _recover_completed_checkout_session(practice, remote_session)
+        except StripeCheckoutAlreadyCompleted:
+            return "operator_bound_completed_session", audit_id
+        raise StripeStateInvalid("completed Checkout Session was not bound")
+
+    try:
+        _resolve_expired_checkout_subscription(
+            practice,
+            remote_session,
+            expected_version=recovered_version,
+            expected_session_id=recovered_session_id,
+        )
+    except StripeCheckoutRetirementPending:
+        return "operator_bound_incomplete_subscription", audit_id
+    except StripeCheckoutAlreadyCompleted:
+        return "operator_resolved_expired_subscription", audit_id
+    return "operator_resolved_expired_subscription", audit_id
 
 
 def create_checkout_session(

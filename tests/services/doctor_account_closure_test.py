@@ -294,6 +294,53 @@ def test_closure_refuses_owner_while_another_active_member_remains():
     assert owner_member.access_revoked_at is None
 
 
+@pytest.mark.parametrize("checkout_state", ["frozen_request", "cached_session"])
+def test_closure_refuses_unresolved_stripe_checkout(checkout_state: str):
+    doctor, practice, member = _scope()
+    if checkout_state == "frozen_request":
+        practice.stripe_checkout_request_json = '{"mode":"subscription"}'
+        practice.stripe_checkout_request_created_at = datetime(
+            2026, 8, 24, 12, 0, tzinfo=UTC
+        )
+    else:
+        practice.stripe_checkout_session_id = "cs_test_closure_pending"
+    practice.save()
+
+    with pytest.raises(DoctorAccountClosureError, match="Checkout must be reconciled"):
+        plan_doctor_account_closure(
+            doctor_id=doctor.id,
+            operator_ref="change:checkout-closure-test",
+            reason="Refuse closure while a hosted Checkout can still complete",
+        )
+
+    doctor.refresh()
+    member.refresh()
+    assert doctor.deleted_at is None
+    assert member.access_revoked_at is None
+
+
+def test_closure_refuses_final_owner_with_nonterminal_subscription():
+    doctor, practice, member = _scope()
+    practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
+    practice.subscription_status = "active"
+    practice.save()
+
+    with pytest.raises(
+        DoctorAccountClosureError,
+        match="nonterminal Stripe subscription must be resolved",
+    ):
+        plan_doctor_account_closure(
+            doctor_id=doctor.id,
+            operator_ref="change:subscription-closure-test",
+            reason="Refuse final-owner closure while recurring billing remains live",
+        )
+
+    doctor.refresh()
+    member.refresh()
+    assert doctor.deleted_at is None
+    assert member.access_revoked_at is None
+
+
 def test_closure_permits_non_owner_and_leaves_owner_active():
     owner, practice, _ = _scope(is_solo=False)
     workforce = Doctor(
@@ -445,7 +492,9 @@ def test_closure_retry_refuses_missing_grant_evidence():
 
 
 def test_closure_retry_repairs_a_failed_stripe_reconciliation_queue(monkeypatch):
-    doctor, practice, _ = _scope()
+    # A final owner cannot be closed while recurring billing is live; exercise
+    # the post-closure quantity handoff with a workforce seat instead.
+    doctor, practice, _ = _scope(role="workforce")
     practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
     practice.save()
     args = {

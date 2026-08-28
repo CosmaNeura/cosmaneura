@@ -150,14 +150,22 @@ def test_organization_configuration_requires_baa_and_billing_preconditions(
 
 
 @pytest.mark.parametrize(
-    ("checkout_session_id", "subscription_id", "subscription_status", "message"),
+    (
+        "checkout_session_id",
+        "checkout_request_json",
+        "subscription_id",
+        "subscription_status",
+        "message",
+    ),
     [
-        ("cs_existing", None, None, "Stripe checkout"),
-        (None, "sub_existing", "active", "Stripe subscription"),
+        ("cs_existing", None, None, None, "Stripe checkout"),
+        (None, "{}", None, None, "Stripe checkout"),
+        (None, None, "sub_existing", "active", "Stripe subscription"),
     ],
 )
 def test_organization_configuration_rejects_parallel_stripe_billing(
     checkout_session_id,
+    checkout_request_json,
     subscription_id,
     subscription_status,
     message,
@@ -175,6 +183,7 @@ def test_organization_configuration_rejects_parallel_stripe_billing(
         negotiated_baa_reference="executed-baa:test",
         billing_exempt=True,
         stripe_checkout_session_id=checkout_session_id,
+        stripe_checkout_request_json=checkout_request_json,
         stripe_subscription_id=subscription_id,
         subscription_status=subscription_status,
     ).save()
