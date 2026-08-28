@@ -491,7 +491,9 @@ def test_closure_retry_refuses_missing_grant_evidence():
 
 
 def test_closure_and_zero_seat_reconciliation_evidence_commit_atomically(monkeypatch):
-    doctor, practice, _ = _scope()
+    # Exercise a workforce-seat closure. A final owner with a nonterminal
+    # subscription is deliberately blocked earlier by the wind-down guard.
+    doctor, practice, _ = _scope(role="workforce")
     practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
     practice.save()
     args = {

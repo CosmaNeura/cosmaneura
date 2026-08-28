@@ -134,6 +134,7 @@ from app.models.patient_medication import (
     PatientMedication,
 )
 from app.models.practice import (
+    TRIAL_LENGTH,
     OriginChannel,
     Practice,
     PracticeMember,
@@ -1541,9 +1542,9 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
             detail="Only the practice owner can accept the BAA.",
         )
     version = _current_baa_version()
-    # Serialize acceptance per practice. The legal execution record, its gate
-    # mirror, and owner attestation commit atomically. Billing owns the trial
-    # clock: accepting legal terms alone must never begin or grant a trial.
+    # Serialize acceptance per practice. Public paid-pilot billing owns its
+    # Checkout-start clock; managed/legacy practices retain the existing
+    # BAA-time trial behavior for compatibility.
     with get_session() as session:
         practice = session.exec(
             select(Practice).where(Practice.id == member.practice_id).with_for_update()
@@ -1589,6 +1590,8 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         practice.baa_accepted_by_doctor_id = acceptance.accepted_by_doctor_id
         practice.baa_signature_name = acceptance.accepted_by_name
         practice.baa_signature_title = acceptance.accepted_by_title
+        if not practice.public_onboarding_required and practice.trial_ends_at is None:
+            practice.trial_ends_at = accepted_at + TRIAL_LENGTH
         locked_member.attested_at = locked_member.attested_at or accepted_at
         locked_member.attestation_name = (
             locked_member.attestation_name or acceptance.accepted_by_name
@@ -1983,12 +1986,20 @@ def complete_onboarding(request: Request) -> None:
 
 CHECKOUT_SUCCESS_PATH = "/settings?billing=success"
 CHECKOUT_CANCEL_PATH = "/settings?billing=cancelled"
+CHECKOUT_ONBOARDING_SUCCESS_PATH = "/settings?billing=success&returnTo=%2Fonboarding"
+CHECKOUT_ONBOARDING_CANCEL_PATH = "/settings?billing=cancelled&returnTo=%2Fonboarding"
 PORTAL_RETURN_PATH = "/settings"
 
 
 class BillingCheckoutBody(BaseModel, extra="forbid"):
-    success_path: Literal["/settings?billing=success"] = CHECKOUT_SUCCESS_PATH
-    cancel_path: Literal["/settings?billing=cancelled"] = CHECKOUT_CANCEL_PATH
+    success_path: Literal[
+        "/settings?billing=success",
+        "/settings?billing=success&returnTo=%2Fonboarding",
+    ] = CHECKOUT_SUCCESS_PATH
+    cancel_path: Literal[
+        "/settings?billing=cancelled",
+        "/settings?billing=cancelled&returnTo=%2Fonboarding",
+    ] = CHECKOUT_CANCEL_PATH
 
 
 class BillingPortalBody(BaseModel, extra="forbid"):

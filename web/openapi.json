@@ -3152,13 +3152,19 @@
         "properties": {
           "success_path": {
             "type": "string",
-            "const": "/settings?billing=success",
+            "enum": [
+              "/settings?billing=success",
+              "/settings?billing=success&returnTo=%2Fonboarding"
+            ],
             "title": "Success Path",
             "default": "/settings?billing=success"
           },
           "cancel_path": {
             "type": "string",
-            "const": "/settings?billing=cancelled",
+            "enum": [
+              "/settings?billing=cancelled",
+              "/settings?billing=cancelled&returnTo=%2Fonboarding"
+            ],
             "title": "Cancel Path",
             "default": "/settings?billing=cancelled"
           }

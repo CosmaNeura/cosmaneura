@@ -21,7 +21,8 @@ type BillingReturnState =
 
 function stripeSubscriptionConfirmed(practice: PracticeStatus | null) {
   return Boolean(
-    practice?.billing_subscription_manageable &&
+    practice?.entitled &&
+      practice.billing_subscription_manageable &&
       (practice.subscription_status === "active" ||
         practice.subscription_status === "trialing"),
   )
@@ -105,6 +106,7 @@ export function BillingReturnNotice({
     onPracticeChange,
     pollRun,
     practice?.billing_subscription_manageable,
+    practice?.entitled,
     practice?.subscription_status,
     result,
   ])

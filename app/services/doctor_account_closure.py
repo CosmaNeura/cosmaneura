@@ -973,15 +973,6 @@ def close_doctor_account(
             for integration in evaluated.video_integrations:
                 session.delete(integration)
 
-            if evaluated.plan.stripe_follow_up_required:
-                # The membership revocation and Stripe repair obligation must
-                # commit together. Remote I/O remains asynchronous and is
-                # fenced by the obligation version.
-                record_active_clinician_seat_quantity(
-                    session,
-                    evaluated.practice,
-                )
-
             if evaluated.authority_scope is not None:
                 scope = evaluated.authority_scope
                 scope.identity.revoked_at = current
