@@ -18,7 +18,9 @@ from tests.integration.server import (  # noqa: F401
 _LOCALIAS_READY = True
 _CLERK_READY = True
 _DATABASE_ONLY_FILES = {
+    (Path(__file__).resolve().parent / "active_clinician_seat_cap_test.py").resolve(),
     (Path(__file__).resolve().parent / "authority_closure_lock_test.py").resolve(),
+    (Path(__file__).resolve().parent / "public_practice_domain_test.py").resolve(),
     (Path(__file__).resolve().parent / "stripe_billing_state_race_test.py").resolve(),
 }
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
