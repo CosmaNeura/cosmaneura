@@ -302,25 +302,17 @@ def test_create_practice_rechecks_live_email_while_rows_are_locked(
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
-@pytest.mark.parametrize(
-    ("npi", "message"),
-    [
-        ("12345678901", "exactly 10 digits"),
-        ("12345A7893", "exactly 10 digits"),
-        ("1234567890", "checksum is invalid"),
-    ],
-)
-def test_create_practice_rejects_invalid_npi_without_truncating(
+@pytest.mark.parametrize("npi", ["1234567893", "12345678901", "12345A7893"])
+def test_public_create_practice_rejects_npi_as_an_unknown_field_without_writing(
     bare_authenticated_client: TestClient,
     npi: str,
-    message: str,
 ):
     doctor = _authed_doctor()
 
     response = bare_authenticated_client.post(
         api_app.url_path_for("create_practice"),
         json={
-            "legal_name": "NPI Validation Practice",
+            "legal_name": "NPI-Free Public Practice",
             "npi": npi,
             "is_solo": True,
             "channel": "direct",
@@ -329,16 +321,22 @@ def test_create_practice_rejects_invalid_npi_without_truncating(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert message in response.text
+    assert "extra_forbidden" in response.text
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
-def test_create_practice_accepts_valid_npi(bare_authenticated_client: TestClient):
+def test_public_create_practice_completes_with_npi_absent(
+    bare_authenticated_client: TestClient,
+):
     doctor = _authed_doctor()
 
-    _create_practice(bare_authenticated_client, npi="1234567893")
+    _create_practice(bare_authenticated_client)
 
-    assert _own_practice(doctor).npi == "1234567893"
+    assert _own_practice(doctor).npi is None
+
+
+def test_public_create_practice_contract_does_not_expose_npi() -> None:
+    assert "npi" not in internal.CreatePracticeBody.model_json_schema()["properties"]
 
 
 @pytest.mark.parametrize("reservation", ["bootstrap", "organization"])

@@ -1,4 +1,4 @@
-import { getClient } from "~/configuration/clerk"
+import { getSessionToken } from "~/configuration/clerk"
 import { internalApiFetch, safeBillingReturnTo } from "~/lib/billing-recovery"
 import { requireEnv } from "~/utils/environment"
 
@@ -46,9 +46,146 @@ export type OrganizationAccessOpportunity = {
   email_domain: string
 }
 
+export type PublicOnboardingStep =
+  | "account"
+  | "practice"
+  | "baa"
+  | "legal"
+  | "checkout"
+  | "credential"
+
+export type PublicOnboardingCurrentStep =
+  | Exclude<PublicOnboardingStep, "account">
+  | "complete"
+
+export type PublicSubscriptionState =
+  | "none"
+  | "incomplete"
+  | "incomplete_expired"
+  | "pending_verification"
+  | "invalid"
+  | "trialing"
+  | "active"
+  | "past_due"
+  | "unpaid"
+  | "paused"
+  | "canceled"
+
+export type CredentialState =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "needs_review"
+
+export type PublicOnboardingState = {
+  contract_version: "public-onboarding.v1"
+  managed_path: boolean
+  completed_steps: PublicOnboardingStep[]
+  current_step: PublicOnboardingCurrentStep
+  practice: {
+    legal_name: string
+    role: "owner" | "workforce"
+  } | null
+  baa_accepted: boolean
+  terms_accepted: boolean
+  privacy_accepted: boolean
+  checkout_started: boolean
+  subscription_state: PublicSubscriptionState
+  trial_ends_at: string | null
+  credential_required: boolean
+  credential_state: CredentialState
+  phi_access_allowed: boolean
+}
+
+export type PublicLegalDocument = {
+  kind: "terms" | "privacy"
+  version: string
+  sha256: string
+  path: string
+}
+
+export type PublicLegalDocuments = {
+  contract_version: "public-legal-documents.v1"
+  documents: PublicLegalDocument[]
+}
+
+export type PublicPracticeInvitation = {
+  invitation_id: string
+  invitee_email: string
+  status: "pending" | "accepted" | "revoked" | "expired"
+  role: "workforce"
+  issued_at: string
+  expires_at: string
+  invite_token: string | null
+  reused_idempotency_key: boolean
+}
+
+export type PublicPracticeMember = {
+  member_id: string
+  email: string | null
+  role: "owner" | "workforce"
+  seat_state: "active" | "inactive"
+  credential_state: CredentialState
+  access_revoked: boolean
+}
+
+export type CapabilityDecision = {
+  decision: "allowed" | "denied"
+  data_mode: "none" | "synthetic_only" | "real_phi"
+  rollout: "disabled" | "cohort" | "enabled"
+  operation_mode: "standard" | "read_only" | "web_pwa_first" | "advisory_only"
+  reason_codes: Array<
+    | "allowed"
+    | "email_unverified"
+    | "membership_inactive"
+    | "membership_revoked"
+    | "legal_incomplete"
+    | "subscription_inactive"
+    | "credential_pending"
+    | "credential_needs_review"
+    | "credential_rejected"
+    | "cohort_ineligible"
+    | "rollout_disabled"
+    | "policy_unavailable"
+  >
+}
+
+export type PublicCapabilityEntitlement = {
+  contract_version: "public-capability-entitlements.v1"
+  policy_revision: "2026-08-27"
+  generated_at: string
+  actor: {
+    actor_id: string
+    practice_id: string
+    role: "owner" | "workforce"
+    membership_state: "active" | "inactive" | "revoked"
+  }
+  gates: {
+    email_verified: boolean
+    baa_accepted: boolean
+    terms_accepted: boolean
+    privacy_accepted: boolean
+    subscription_state: PublicSubscriptionState
+    credential_required: boolean
+    credential_state: CredentialState
+  }
+  seats: {
+    active_clinician_seats: number
+    maximum_active_clinician_seats: 20
+    pending_invitations: number
+    stripe_quantity_sync_required: boolean
+  }
+  capabilities: {
+    soap_note: CapabilityDecision
+    intake_prep: CapabilityDecision
+    session_prep: CapabilityDecision
+    scribe: CapabilityDecision
+    cab: CapabilityDecision
+  }
+}
+
 async function authHeaders(): Promise<HeadersInit> {
-  const clerk = await getClient()
-  const token = await clerk!.session!.getToken()
+  const token = await getSessionToken()
   return {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -111,6 +248,87 @@ export function getOrganizationAccessOpportunity() {
   )
 }
 
+export function getPublicOnboarding() {
+  return practiceRequest<PublicOnboardingState>("/public-onboarding")
+}
+
+export function getCurrentLegalDocuments() {
+  return practiceRequest<PublicLegalDocuments>("/legal/current")
+}
+
+export function acceptPracticeLegal(body: {
+  signature_name: string
+  signature_title: string
+  authority_confirmed: true
+  documents: Array<Pick<PublicLegalDocument, "kind" | "version" | "sha256">>
+}) {
+  return practiceRequest<PublicOnboardingState>("/practice/legal", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export function getPublicCapabilities() {
+  return practiceRequest<PublicCapabilityEntitlement>("/capabilities")
+}
+
+export function getPublicPracticeInvitations() {
+  return practiceRequest<PublicPracticeInvitation[]>("/practice/invitations")
+}
+
+export function createPublicPracticeInvitation(
+  body: { email: string; expires_in_days: number },
+  idempotencyKey: string,
+) {
+  return practiceRequest<PublicPracticeInvitation>("/practice/invitations", {
+    method: "POST",
+    headers: { "Idempotency-Key": idempotencyKey },
+    body: JSON.stringify(body),
+  })
+}
+
+export function revokePublicPracticeInvitation(
+  invitationId: string,
+  reason: string,
+) {
+  return practiceRequest<PublicPracticeInvitation>(
+    `/practice/invitations/${encodeURIComponent(invitationId)}/revoke`,
+    {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    },
+  )
+}
+
+export function acceptPublicPracticeInvitation(body: {
+  token: string
+  attestation_name: string
+  checks: string[]
+}) {
+  return practiceRequest<PublicPracticeMember>("/practice/invitations/accept", {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+}
+
+export function getPublicPracticeMembers() {
+  return practiceRequest<PublicPracticeMember[]>("/practice/members")
+}
+
+export function deactivatePublicPracticeMember(memberId: string) {
+  return practiceRequest<PublicPracticeMember>(
+    `/practice/members/${encodeURIComponent(memberId)}/deactivate`,
+    { method: "POST" },
+  )
+}
+
+export function reactivatePublicPracticeMember(memberId: string) {
+  return practiceRequest<PublicPracticeMember>(
+    `/practice/members/${encodeURIComponent(memberId)}/reactivate`,
+    { method: "POST" },
+  )
+}
+
 export function claimOrganizationAccess(accessCode: string) {
   return practiceRequest<PracticeStatus>(
     "/practice/organization-access/claim",
@@ -123,7 +341,6 @@ export function claimOrganizationAccess(accessCode: string) {
 
 export function createPractice(body: {
   legal_name: string
-  npi?: string | null
   city?: string | null
   region?: string | null
   is_solo: boolean

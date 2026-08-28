@@ -113,6 +113,11 @@ highest tier and should be split when concerns can deploy independently.
   `app/configuration/clerk.py` and `app/configuration/service_auth.py`; domain
   code consumes a normalized principal. Existing direct Clerk imports are known
   debt: add none, and reduce them in separate reviewable work.
+- Public signup, practice onboarding, Checkout, trial activation, credential
+  state, and entitlement must work with NPI absent. NPI is public registry
+  data—not authentication, licensure or credential proof, tenant authority, or
+  an access-control signal. A future payer-facing standard transaction may
+  collect the appropriate NPI only at its separately approved setup boundary.
 - Preserve `main.py` as the production entrypoint, import-time fail-fast setup,
   separate worker/scheduler containers, and OpenAPI operation IDs.
 - Never invent Alembic revision IDs. Generate them with the verified recipe;

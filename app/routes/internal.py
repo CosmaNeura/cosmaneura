@@ -66,6 +66,13 @@ from app.services.organization_access import (
     member_access_in_force,
     member_authorization_basis,
 )
+from app.services.public_entitlements import (
+    ActiveClinicianSeatLimitReached,
+    lock_practice_for_active_seat_mutation,
+    public_subscription_in_force,
+    record_active_clinician_seat_quantity,
+    require_active_clinician_seat_capacity,
+)
 from app.services.reference_links import (
     PROVIDER_RESOURCE_DIRECTORY,
     ResourceLink,
@@ -89,7 +96,6 @@ from app.utils.email_domain import (
     is_mcd_email,
     is_public_email_domain,
 )
-from app.utils.npi import is_valid_npi
 
 from activemodel.session_manager import aglobal_session, get_session
 from activemodel.types import TypeIDType
@@ -145,6 +151,7 @@ from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as
+from .public_onboarding import public_onboarding_api_app
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -180,6 +187,7 @@ internal_api_app = APIRouter(
 
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
+internal_api_app.include_router(public_onboarding_api_app)
 
 
 class IntakeList(BaseModel, extra="forbid"):
@@ -1053,6 +1061,7 @@ def _practice_payload(
             if not include_join_code
             or practice.is_solo
             or is_public_email_domain(practice.email_domain)
+            or practice.public_onboarding_required
             or practice.organization_id is not None
             or practice.negotiated_baa_required
             else practice.join_code
@@ -1082,7 +1091,11 @@ def _practice_payload(
             practice
         ),
         billing_checkout_available_at=stripe_billing.checkout_deferred_until(practice),
-        entitled=practice.entitled(),
+        entitled=(
+            public_subscription_in_force(practice)
+            if practice.public_onboarding_required
+            else practice.entitled()
+        ),
         subscription_status=practice.subscription_status,
     )
 
@@ -1240,31 +1253,18 @@ def claim_organization_access(
 
 class CreatePracticeBody(BaseModel, extra="forbid"):
     legal_name: str = Field(min_length=3, max_length=160)
-    npi: str | None = Field(default=None, max_length=10)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=40)
     is_solo: bool = True
     channel: str = "direct"
     pastoral_pack: bool = False
 
-    @field_validator("npi", mode="before")
+    @field_validator("legal_name")
     @classmethod
-    def validate_npi(cls, value: object) -> object:
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise ValueError("NPI must be exactly 10 digits.")
+    def validate_legal_name(cls, value: str) -> str:
         normalized = value.strip()
-        if not normalized:
-            return None
-        if (
-            len(normalized) != 10
-            or not normalized.isascii()
-            or not normalized.isdigit()
-        ):
-            raise ValueError("NPI must be exactly 10 digits.")
-        if not is_valid_npi(normalized):
-            raise ValueError("NPI checksum is invalid.")
+        if len(normalized) < 3:
+            raise ValueError("Practice legal name must contain visible characters.")
         return normalized
 
 
@@ -1348,6 +1348,31 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
     with get_session() as session:
         lock_roster_enrollment_email(session, normalized_email)
         lock_provider_practice_domain(session, email_domain)
+        locked_doctor = session.exec(
+            select(Doctor).where(Doctor.id == doctor.id).with_for_update()
+        ).one()
+        if (locked_doctor.email or "").strip().lower() != normalized_email:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The account email changed during enrollment. Please retry.",
+            )
+        # Recheck Clerk and membership only after acquiring both enrollment
+        # locks. A retry from another tab must return the practice created by
+        # the winning request before the same-domain collision guard runs.
+        _verified_legacy_enrollment_email(locked_doctor)
+        existing = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.doctor_id == locked_doctor.id)
+            .with_for_update()
+        ).one_or_none()
+        if existing is not None:
+            session.commit()
+            session.refresh(existing)
+            existing_practice = Practice.get(id=existing.practice_id)
+            payload = _practice_payload(existing_practice, existing)
+            assert payload
+            return payload
+
         reserved_organization = session.exec(
             select(ProviderOrganization).where(
                 ProviderOrganization.email_domain == email_domain
@@ -1367,29 +1392,23 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
                     "Use that enrollment path."
                 ),
             )
-        locked_doctor = session.exec(
-            select(Doctor).where(Doctor.id == doctor.id).with_for_update()
-        ).one()
-        if (locked_doctor.email or "").strip().lower() != normalized_email:
+        existing_public_practice = session.exec(
+            select(Practice).where(
+                func.lower(func.btrim(Practice.email_domain)) == email_domain,
+                Practice.public_onboarding_required == True,  # noqa: E712
+            )
+        ).first()
+        if existing_public_practice is not None and not is_public_email_domain(
+            email_domain
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="The account email changed during enrollment. Please retry.",
+                detail=(
+                    "A practice already exists for this work email domain. "
+                    "Ask its owner for a single-use invitation, or contact "
+                    "Cosmaneura support if the practice identity is incorrect."
+                ),
             )
-        # Recheck Clerk after acquiring the database lock so a stale local
-        # email cannot authorize practice creation during an identity change.
-        _verified_legacy_enrollment_email(locked_doctor)
-        existing = session.exec(
-            select(PracticeMember)
-            .where(PracticeMember.doctor_id == locked_doctor.id)
-            .with_for_update()
-        ).one_or_none()
-        if existing is not None:
-            session.commit()
-            session.refresh(existing)
-            existing_practice = Practice.get(id=existing.practice_id)
-            payload = _practice_payload(existing_practice, existing)
-            assert payload
-            return payload
         if doctor_has_managed_roster_assignment(
             locked_doctor,
             session=session,
@@ -1415,7 +1434,6 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
 
         practice = Practice(
             legal_name=data.legal_name.strip(),
-            npi=data.npi,
             city=(data.city or "").strip() or None,
             region=(data.region or "").strip() or None,
             is_solo=data.is_solo,
@@ -1471,6 +1489,16 @@ class AcceptBaaBody(BaseModel, extra="forbid"):
     signature_name: str = Field(min_length=2, max_length=120)
     signature_title: str = Field(min_length=2, max_length=120)
     checks: list[str]
+
+    @field_validator("signature_name", "signature_title")
+    @classmethod
+    def validate_signature_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError(
+                "Signature name and title must contain visible characters."
+            )
+        return normalized
 
 
 @internal_api_app.post("/practice/baa", name="accept_practice_baa")
@@ -1592,13 +1620,11 @@ def practice_baa_acceptances(request: Request) -> list[BaaAcceptanceRecord]:
     member = _membership_for(doctor)
     if not member:
         return []
-    practice = Practice.get(id=member.practice_id)
-    if practice is not None and practice.organization_id is not None:
-        if not member_access_in_force(member):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Organization access must be claimed before viewing records.",
-            )
+    if not member_access_in_force(member):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active practice authorization is required to view records.",
+        )
     records = cast(
         list[BaaAcceptance],
         BaaAcceptance.where(BaaAcceptance.practice_id == member.practice_id)
@@ -1661,6 +1687,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
         not practice
         or practice.is_solo
         or is_public_email_domain(practice.email_domain)
+        or practice.public_onboarding_required
         or practice.organization_id is not None
         or practice.negotiated_baa_required
     ):
@@ -1714,6 +1741,14 @@ class JoinPracticeBody(BaseModel, extra="forbid"):
     join_code: str = Field(min_length=4, max_length=16)
     attestation_name: str = Field(min_length=2, max_length=120)
     checks: list[str]
+
+    @field_validator("attestation_name")
+    @classmethod
+    def validate_attestation_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if len(normalized) < 2:
+            raise ValueError("Attestation name must contain visible characters.")
+        return normalized
 
 
 @internal_api_app.post("/practice/join", name="join_practice")
@@ -1776,6 +1811,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
     if requested_practice is not None and (
         requested_practice.is_solo
         or is_public_email_domain(requested_practice.email_domain)
+        or requested_practice.public_onboarding_required
     ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1786,6 +1822,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         not practice
         or practice.is_solo
         or is_public_email_domain(practice.email_domain)
+        or practice.public_onboarding_required
         or practice.organization_id is not None
         or practice.negotiated_baa_required
     ):
@@ -1797,9 +1834,10 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         # Serialize against organization conversion. A lookup that began while
         # this was a standalone practice must not complete a legacy join after
         # the practice becomes roster-managed.
-        locked_practice = session.exec(
-            select(Practice).where(Practice.id == practice.id).with_for_update()
-        ).one()
+        locked_practice = lock_practice_for_active_seat_mutation(
+            session,
+            practice.id,
+        )
         normalized_email = (doctor.email or "").strip().lower()
         lock_roster_enrollment_email(session, normalized_email)
         locked_doctor = session.exec(
@@ -1843,6 +1881,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         if (
             locked_practice.is_solo
             or is_public_email_domain(locked_practice.email_domain)
+            or locked_practice.public_onboarding_required
             or locked_practice.organization_id is not None
             or locked_practice.negotiated_baa_required
         ):
@@ -1866,6 +1905,13 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
             )
+        try:
+            require_active_clinician_seat_capacity(session, locked_practice)
+        except ActiveClinicianSeatLimitReached as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from None
         member = PracticeMember(
             practice_id=locked_practice.id,
             doctor_id=locked_doctor.id,
@@ -1874,14 +1920,11 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             attestation_name=data.attestation_name.strip(),
         )
         session.add(member)
+        record_active_clinician_seat_quantity(session, locked_practice)
         session.commit()
         session.refresh(locked_practice)
         session.refresh(member)
         practice = locked_practice
-    # Persist the desired $89/clinician quantity and return immediately. The
-    # 15-minute reconciler performs all Stripe I/O; onboarding must never wait
-    # through multiple external 20-second timeouts.
-    stripe_billing.mark_quantity_sync_required(practice)
     payload = _practice_payload(practice, member)
     assert payload
     return payload
@@ -1892,7 +1935,11 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
 )
 def complete_onboarding(request: Request) -> None:
     doctor: Doctor = request.state.doctor
-    decision = resolve_doctor_access(doctor, require_entitlement=False)
+    decision = resolve_doctor_access(
+        doctor,
+        require_entitlement=False,
+        require_credential=False,
+    )
     if (
         not decision.allowed
         and decision.denial_reason == "practice_membership_required"
@@ -1902,12 +1949,35 @@ def complete_onboarding(request: Request) -> None:
             detail="Name or join a practice and accept the BAA before using Cosmas.",
         )
     if not decision.allowed:
+        if decision.denial_reason == "public_legal_not_in_force":
+            detail = "Accept the current Terms and Privacy Policy before continuing."
+        else:
+            detail = (
+                "The Cosmaneura Inc BAA must be in force before Cosmas will "
+                "process PHI."
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The Cosmaneura Inc BAA must be in force before Cosmas will process PHI.",
+            detail=detail,
         )
-    doctor.onboarding_completed_at = datetime.now(timezone.utc)
-    doctor.save()
+    member = _membership_for(doctor)
+    practice = Practice.get(id=member.practice_id) if member is not None else None
+    if (
+        practice is not None
+        and practice.public_onboarding_required
+        and not public_subscription_in_force(practice)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Finish Checkout and card collection before completing onboarding. "
+                "The 14-day trial begins when Checkout is created; credential review "
+                "remains separate."
+            ),
+        )
+    if doctor.onboarding_completed_at is None:
+        doctor.onboarding_completed_at = datetime.now(timezone.utc)
+        doctor.save()
 
 
 class BillingCheckoutBody(BaseModel, extra="forbid"):

@@ -207,6 +207,444 @@
         ]
       }
     },
+    "/internal/v1/public-onboarding": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Public Onboarding State",
+        "operationId": "public_onboarding_state",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicOnboardingState"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/legal/current": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Public Legal Current",
+        "operationId": "public_legal_current",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalDocumentsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/legal": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Accept Public Legal",
+        "operationId": "accept_public_legal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptPublicLegalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicOnboardingState"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/invitations": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Invitations",
+        "operationId": "practice_invitations",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/InvitationResponse"
+                  },
+                  "title": "Response Practice Invitations Internal V1 Practice Invitations Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Create Practice Invitation",
+        "operationId": "create_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 8,
+              "maxLength": 255,
+              "title": "Idempotency-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInvitationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/invitations/accept": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Accept Practice Invitation",
+        "operationId": "accept_practice_invitation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptInvitationBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeMemberResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/invitations/{invitation_id}/revoke": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Revoke Practice Invitation",
+        "operationId": "revoke_practice_invitation",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "invitation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Invitation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeInvitationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/members": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Practice Members",
+        "operationId": "practice_members",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PracticeMemberResponse"
+                  },
+                  "type": "array",
+                  "title": "Response Practice Members Internal V1 Practice Members Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/practice/members/{member_id}/deactivate": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Deactivate Practice Member",
+        "operationId": "deactivate_practice_member",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Member Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeMemberResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/practice/members/{member_id}/reactivate": {
+      "post": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Reactivate Practice Member",
+        "operationId": "reactivate_practice_member",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "member_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Member Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeMemberResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/v1/capabilities": {
+      "get": {
+        "tags": [
+          "private"
+        ],
+        "summary": "Public Capabilities",
+        "operationId": "public_capabilities",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityEntitlementResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/internal/v1/intake": {
       "get": {
         "tags": [
@@ -2435,6 +2873,76 @@
         ],
         "title": "AcceptBaaBody"
       },
+      "AcceptInvitationBody": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 32,
+            "title": "Token"
+          },
+          "attestation_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Attestation Name"
+          },
+          "checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Checks"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "token",
+          "attestation_name",
+          "checks"
+        ],
+        "title": "AcceptInvitationBody"
+      },
+      "AcceptPublicLegalBody": {
+        "properties": {
+          "signature_name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Signature Name"
+          },
+          "signature_title": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 2,
+            "title": "Signature Title"
+          },
+          "authority_confirmed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Authority Confirmed"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/LegalDocumentSubmission"
+            },
+            "type": "array",
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Documents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "signature_name",
+          "signature_title",
+          "authority_confirmed",
+          "documents"
+        ],
+        "title": "AcceptPublicLegalBody"
+      },
       "Appointment": {
         "properties": {
           "id": {
@@ -2686,6 +3194,287 @@
         ],
         "title": "BillingSessionUrl"
       },
+      "CapabilityActorResponse": {
+        "properties": {
+          "actor_id": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Actor Id"
+          },
+          "practice_id": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Practice Id"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "workforce"
+            ],
+            "title": "Role"
+          },
+          "membership_state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive",
+              "revoked"
+            ],
+            "title": "Membership State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "actor_id",
+          "practice_id",
+          "role",
+          "membership_state"
+        ],
+        "title": "CapabilityActorResponse"
+      },
+      "CapabilityDecisionResponse": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "denied"
+            ],
+            "title": "Decision"
+          },
+          "data_mode": {
+            "type": "string",
+            "enum": [
+              "none",
+              "synthetic_only",
+              "real_phi"
+            ],
+            "title": "Data Mode"
+          },
+          "rollout": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "cohort",
+              "enabled"
+            ],
+            "title": "Rollout"
+          },
+          "operation_mode": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "read_only",
+              "web_pwa_first",
+              "advisory_only"
+            ],
+            "title": "Operation Mode"
+          },
+          "reason_codes": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "allowed",
+                "email_unverified",
+                "membership_inactive",
+                "membership_revoked",
+                "legal_incomplete",
+                "subscription_inactive",
+                "credential_pending",
+                "credential_needs_review",
+                "credential_rejected",
+                "cohort_ineligible",
+                "rollout_disabled",
+                "policy_unavailable"
+              ]
+            },
+            "type": "array",
+            "title": "Reason Codes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision",
+          "data_mode",
+          "rollout",
+          "operation_mode",
+          "reason_codes"
+        ],
+        "title": "CapabilityDecisionResponse"
+      },
+      "CapabilityEntitlementResponse": {
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "const": "public-capability-entitlements.v1",
+            "title": "Contract Version"
+          },
+          "policy_revision": {
+            "type": "string",
+            "const": "2026-08-27",
+            "title": "Policy Revision"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/CapabilityActorResponse"
+          },
+          "gates": {
+            "$ref": "#/components/schemas/CapabilityGatesResponse"
+          },
+          "seats": {
+            "$ref": "#/components/schemas/CapabilitySeatsResponse"
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/CapabilityMapResponse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "contract_version",
+          "policy_revision",
+          "generated_at",
+          "actor",
+          "gates",
+          "seats",
+          "capabilities"
+        ],
+        "title": "CapabilityEntitlementResponse"
+      },
+      "CapabilityGatesResponse": {
+        "properties": {
+          "email_verified": {
+            "type": "boolean",
+            "title": "Email Verified"
+          },
+          "baa_accepted": {
+            "type": "boolean",
+            "title": "Baa Accepted"
+          },
+          "terms_accepted": {
+            "type": "boolean",
+            "title": "Terms Accepted"
+          },
+          "privacy_accepted": {
+            "type": "boolean",
+            "title": "Privacy Accepted"
+          },
+          "subscription_state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "incomplete",
+              "incomplete_expired",
+              "pending_verification",
+              "invalid",
+              "trialing",
+              "active",
+              "past_due",
+              "unpaid",
+              "paused",
+              "canceled"
+            ],
+            "title": "Subscription State"
+          },
+          "credential_required": {
+            "type": "boolean",
+            "title": "Credential Required"
+          },
+          "credential_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "needs_review"
+            ],
+            "title": "Credential State"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email_verified",
+          "baa_accepted",
+          "terms_accepted",
+          "privacy_accepted",
+          "subscription_state",
+          "credential_required",
+          "credential_state"
+        ],
+        "title": "CapabilityGatesResponse"
+      },
+      "CapabilityMapResponse": {
+        "properties": {
+          "soap_note": {
+            "$ref": "#/components/schemas/CapabilityDecisionResponse"
+          },
+          "intake_prep": {
+            "$ref": "#/components/schemas/CapabilityDecisionResponse"
+          },
+          "session_prep": {
+            "$ref": "#/components/schemas/CapabilityDecisionResponse"
+          },
+          "scribe": {
+            "$ref": "#/components/schemas/CapabilityDecisionResponse"
+          },
+          "cab": {
+            "$ref": "#/components/schemas/CapabilityDecisionResponse"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "soap_note",
+          "intake_prep",
+          "session_prep",
+          "scribe",
+          "cab"
+        ],
+        "title": "CapabilityMapResponse"
+      },
+      "CapabilitySeatsResponse": {
+        "properties": {
+          "active_clinician_seats": {
+            "type": "integer",
+            "maximum": 20.0,
+            "minimum": 0.0,
+            "title": "Active Clinician Seats"
+          },
+          "maximum_active_clinician_seats": {
+            "type": "integer",
+            "const": 20,
+            "title": "Maximum Active Clinician Seats"
+          },
+          "pending_invitations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Pending Invitations"
+          },
+          "stripe_quantity_sync_required": {
+            "type": "boolean",
+            "title": "Stripe Quantity Sync Required"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "active_clinician_seats",
+          "maximum_active_clinician_seats",
+          "pending_invitations",
+          "stripe_quantity_sync_required"
+        ],
+        "title": "CapabilitySeatsResponse"
+      },
       "ClaimOrganizationAccessBody": {
         "properties": {
           "access_code": {
@@ -2756,6 +3545,29 @@
           "High"
         ],
         "title": "ConfidenceBand"
+      },
+      "CreateInvitationBody": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "maxLength": 320,
+            "minLength": 3,
+            "title": "Email"
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Expires In Days",
+            "default": 7
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "title": "CreateInvitationBody"
       },
       "CreateLabPanel": {
         "properties": {
@@ -2829,18 +3641,6 @@
             "maxLength": 160,
             "minLength": 3,
             "title": "Legal Name"
-          },
-          "npi": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 10
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npi"
           },
           "city": {
             "anyOf": [
@@ -3626,6 +4426,70 @@
         ],
         "title": "IntakeStatus"
       },
+      "InvitationResponse": {
+        "properties": {
+          "invitation_id": {
+            "type": "string",
+            "title": "Invitation Id"
+          },
+          "invitee_email": {
+            "type": "string",
+            "title": "Invitee Email"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "revoked",
+              "expired"
+            ],
+            "title": "Status"
+          },
+          "role": {
+            "type": "string",
+            "const": "workforce",
+            "title": "Role"
+          },
+          "issued_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Issued At"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "invite_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Token"
+          },
+          "reused_idempotency_key": {
+            "type": "boolean",
+            "title": "Reused Idempotency Key",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "invitation_id",
+          "invitee_email",
+          "status",
+          "role",
+          "issued_at",
+          "expires_at"
+        ],
+        "title": "InvitationResponse"
+      },
       "JoinCodeBody": {
         "properties": {
           "join_code": {
@@ -4070,6 +4934,93 @@
           "registration_token"
         ],
         "title": "LabUploadComplete"
+      },
+      "LegalDocumentResponse": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "terms",
+              "privacy"
+            ],
+            "title": "Kind"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "version",
+          "sha256",
+          "path"
+        ],
+        "title": "LegalDocumentResponse"
+      },
+      "LegalDocumentSubmission": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "terms",
+              "privacy"
+            ],
+            "title": "Kind"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Version"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "version",
+          "sha256"
+        ],
+        "title": "LegalDocumentSubmission"
+      },
+      "LegalDocumentsResponse": {
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "const": "public-legal-documents.v1",
+            "title": "Contract Version"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/LegalDocumentResponse"
+            },
+            "type": "array",
+            "title": "Documents"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "contract_version",
+          "documents"
+        ],
+        "title": "LegalDocumentsResponse"
       },
       "ManagedOrganizationAccessResponse": {
         "properties": {
@@ -4525,6 +5476,29 @@
         ],
         "title": "NutrientDepletionPanel"
       },
+      "OnboardingPractice": {
+        "properties": {
+          "legal_name": {
+            "type": "string",
+            "title": "Legal Name"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "workforce"
+            ],
+            "title": "Role"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "legal_name",
+          "role"
+        ],
+        "title": "OnboardingPractice"
+      },
       "OpenSandboxRecord": {
         "properties": {
           "record_ref": {
@@ -4723,6 +5697,66 @@
         "type": "object",
         "title": "PracticeLookupResult"
       },
+      "PracticeMemberResponse": {
+        "properties": {
+          "member_id": {
+            "type": "string",
+            "title": "Member Id"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "owner",
+              "workforce"
+            ],
+            "title": "Role"
+          },
+          "seat_state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "inactive"
+            ],
+            "title": "Seat State"
+          },
+          "credential_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "needs_review"
+            ],
+            "title": "Credential State"
+          },
+          "access_revoked": {
+            "type": "boolean",
+            "title": "Access Revoked"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "member_id",
+          "email",
+          "role",
+          "seat_state",
+          "credential_state",
+          "access_revoked"
+        ],
+        "title": "PracticeMemberResponse"
+      },
       "PracticeStatus": {
         "properties": {
           "legal_name": {
@@ -4905,6 +5939,138 @@
         ],
         "title": "PronounStyle"
       },
+      "PublicOnboardingState": {
+        "properties": {
+          "contract_version": {
+            "type": "string",
+            "const": "public-onboarding.v1",
+            "title": "Contract Version"
+          },
+          "managed_path": {
+            "type": "boolean",
+            "title": "Managed Path"
+          },
+          "completed_steps": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "account",
+                "practice",
+                "baa",
+                "legal",
+                "checkout",
+                "credential"
+              ]
+            },
+            "type": "array",
+            "title": "Completed Steps"
+          },
+          "current_step": {
+            "type": "string",
+            "enum": [
+              "practice",
+              "baa",
+              "legal",
+              "checkout",
+              "credential",
+              "complete"
+            ],
+            "title": "Current Step"
+          },
+          "practice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OnboardingPractice"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "baa_accepted": {
+            "type": "boolean",
+            "title": "Baa Accepted"
+          },
+          "terms_accepted": {
+            "type": "boolean",
+            "title": "Terms Accepted"
+          },
+          "privacy_accepted": {
+            "type": "boolean",
+            "title": "Privacy Accepted"
+          },
+          "checkout_started": {
+            "type": "boolean",
+            "title": "Checkout Started"
+          },
+          "subscription_state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "incomplete",
+              "incomplete_expired",
+              "pending_verification",
+              "invalid",
+              "trialing",
+              "active",
+              "past_due",
+              "unpaid",
+              "paused",
+              "canceled"
+            ],
+            "title": "Subscription State"
+          },
+          "trial_ends_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trial Ends At"
+          },
+          "credential_required": {
+            "type": "boolean",
+            "title": "Credential Required"
+          },
+          "credential_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "needs_review"
+            ],
+            "title": "Credential State"
+          },
+          "phi_access_allowed": {
+            "type": "boolean",
+            "title": "Phi Access Allowed"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "contract_version",
+          "managed_path",
+          "completed_steps",
+          "current_step",
+          "practice",
+          "baa_accepted",
+          "terms_accepted",
+          "privacy_accepted",
+          "checkout_started",
+          "subscription_state",
+          "trial_ends_at",
+          "credential_required",
+          "credential_state",
+          "phi_access_allowed"
+        ],
+        "title": "PublicOnboardingState"
+      },
       "RecentAppointmentRow": {
         "properties": {
           "created_at": {
@@ -4978,6 +6144,22 @@
           "source"
         ],
         "title": "ResourceLink"
+      },
+      "RevokeInvitationBody": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 3,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "RevokeInvitationBody"
       },
       "ScheduleResponse": {
         "properties": {

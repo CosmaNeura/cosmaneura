@@ -9,7 +9,16 @@ import {
   PracticeForm,
   canLeaveOnboarding,
 } from "./onboarding"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+
+const apiMocks = vi.hoisted(() => ({
+  createPractice: vi.fn(),
+}))
+
+vi.mock("~/lib/practice-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("~/lib/practice-api")>()
+  return { ...actual, createPractice: apiMocks.createPractice }
+})
 
 describe("onboarding view-as safety", () => {
   it("renders only the verification interstitial when status is unavailable", () => {
@@ -177,10 +186,12 @@ describe("PracticeForm onboarding guardrails", () => {
     ).toBeDisabled()
   })
 
-  it("shows a clear NPI error instead of truncating input", () => {
+  it("never renders or submits NPI during public practice creation", async () => {
+    apiMocks.createPractice.mockReset().mockResolvedValueOnce({})
+    const onPractice = vi.fn()
     render(
       <PracticeForm
-        onPractice={vi.fn()}
+        onPractice={onPractice}
         onBack={vi.fn()}
         channel="direct"
         mismatch={null}
@@ -188,13 +199,28 @@ describe("PracticeForm onboarding guardrails", () => {
       />,
     )
 
-    const input = screen.getByLabelText("Organizational NPI (optional)")
-    fireEvent.change(input, { target: { value: "12345678901" } })
+    expect(screen.queryByLabelText(/NPI/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/NPI/i)).not.toBeInTheDocument()
 
-    expect(input).toHaveValue("12345678901")
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "NPI must be exactly 10 digits.",
+    fireEvent.change(
+      screen.getByLabelText("Legal name of the covered entity"),
+      {
+        target: { value: "NPI-Free Practice, PLLC" },
+      },
     )
+    fireEvent.click(
+      screen.getByRole("button", { name: /Continue to the BAA/i }),
+    )
+
+    await waitFor(() => expect(onPractice).toHaveBeenCalledOnce())
+    expect(apiMocks.createPractice).toHaveBeenCalledWith({
+      legal_name: "NPI-Free Practice, PLLC",
+      city: "",
+      region: "",
+      is_solo: true,
+      channel: "direct",
+      pastoral_pack: false,
+    })
   })
 })
 
