@@ -19,7 +19,7 @@ packet and the ordered Priority 1 billing restack.
 | Contract freeze commit                     | `3bde3ae155423947d870f636ee907135949fafcb`                                                                                                                                         |
 | Contract SHA-256                           | `a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578`                                                                                                                 |
 | Receiver branch                            | `codex/public-onboarding-10-receiver-handoff-20260827`                                                                                                                             |
-| Reviewed implementation commit             | `be05f28aec5630887d002ef2cd9fe680faee2382`                                                                                                                                         |
+| Reviewed implementation commit             | `19884c3b2e3b8fadff4649051dcd642ae1cdaaa4`                                                                                                                                         |
 | Receiver PR stack                          | [#185](https://github.com/CosmaNeura/cosmaneura/pull/185), [#188–#197](https://github.com/CosmaNeura/cosmaneura/pull/188)                                                       |
 | Billing consumer                           | Priority 1 branch `codex/public-paid-pilot-stripe-restacked-20260827`; its final SHA/PR remains pending the ordered restack and stacked reconciliation matrix                      |
 | Other consumers                            | Tasks 5–10: provider home, SOAP, Intake Prep, Session Prep, Scribe, and CAB; each must pin the final reviewed receiver SHA before implementation or activation                     |
@@ -34,15 +34,15 @@ and the resulting access decision.
 | Order | PR | Head commit | Base |
 | ----- | -- | ----------- | ---- |
 | 1 | [#185](https://github.com/CosmaNeura/cosmaneura/pull/185) contract freeze | `3bde3ae155423947d870f636ee907135949fafcb` | `master` / `711682eb28180c2421689d589b5a74919c454644` |
-| 2 | [#188](https://github.com/CosmaNeura/cosmaneura/pull/188) evidence schema | `b781eb269f3a0ad150a7bbef0113ca51b0bb172d` | `codex/public-auth-onboarding-20260827` |
-| 3 | [#189](https://github.com/CosmaNeura/cosmaneura/pull/189) capability policy | `fa9a15bd0ae2265889e5e409e0abd692db9272df` | `codex/public-onboarding-evidence-20260827` |
-| 4 | [#190](https://github.com/CosmaNeura/cosmaneura/pull/190) atomic seats | `f00234f2fe4d1735f4e719176a3a226c86ca5d17` | `codex/public-onboarding-02-capability-policy-20260827` |
-| 5 | [#191](https://github.com/CosmaNeura/cosmaneura/pull/191) web auth boundary | `e0238a45f1ec228ce633da21f6f05edcbfea6d5c` | `codex/public-onboarding-03-atomic-seats-20260827` |
-| 6 | [#192](https://github.com/CosmaNeura/cosmaneura/pull/192) dormant routes | `45b0408304812659c08a42a89fce105336a047c0` | `codex/public-onboarding-04-web-auth-boundary-20260827` |
-| 7 | [#193](https://github.com/CosmaNeura/cosmaneura/pull/193) NPI-free API | `f890927ebb86bd8dcfd764b0cce3f131e7f5fd67` | `codex/public-onboarding-05-public-route-core-20260827` |
-| 8 | [#194](https://github.com/CosmaNeura/cosmaneura/pull/194) public UI | `bd481f32a66c70ddc85dd30e9b76f01793acb5a4` | `codex/public-onboarding-06-npi-free-api-20260827` |
-| 9 | [#195](https://github.com/CosmaNeura/cosmaneura/pull/195) browser proof | `8b89b0a2fc1649d473861c39ec46620b8756e498` | `codex/public-onboarding-07-public-ui-20260827` |
-| 10 | [#196](https://github.com/CosmaNeura/cosmaneura/pull/196) fail-closed activation | `be05f28aec5630887d002ef2cd9fe680faee2382` | `codex/public-onboarding-08-web-proof-20260827` |
+| 2 | [#188](https://github.com/CosmaNeura/cosmaneura/pull/188) evidence schema | `ee9b039b35c76729bc66183d43be2b5ba2603ef4` | `codex/public-auth-onboarding-20260827` |
+| 3 | [#189](https://github.com/CosmaNeura/cosmaneura/pull/189) capability policy | `8acd5933c23461b5d991de058235692e224da0f9` | `codex/public-onboarding-evidence-20260827` |
+| 4 | [#190](https://github.com/CosmaNeura/cosmaneura/pull/190) atomic seats | `b7561816a3a353a3c58a8b91e9ad7dd2a5f8604c` | `codex/public-onboarding-02-capability-policy-20260827` |
+| 5 | [#191](https://github.com/CosmaNeura/cosmaneura/pull/191) web auth boundary | `ee5ed2c708e8977bc5637de55ed89816611a5038` | `codex/public-onboarding-03-atomic-seats-20260827` |
+| 6 | [#192](https://github.com/CosmaNeura/cosmaneura/pull/192) dormant routes | `62eaca1aa0775184126e4813eccf620c914d3e57` | `codex/public-onboarding-04-web-auth-boundary-20260827` |
+| 7 | [#193](https://github.com/CosmaNeura/cosmaneura/pull/193) NPI-free API | `72de13c3161518bc755b05611f81a0332cfa53d0` | `codex/public-onboarding-05-public-route-core-20260827` |
+| 8 | [#194](https://github.com/CosmaNeura/cosmaneura/pull/194) public UI | `430bef328465085d2b8843b53a2f7d86057660a8` | `codex/public-onboarding-06-npi-free-api-20260827` |
+| 9 | [#195](https://github.com/CosmaNeura/cosmaneura/pull/195) browser proof | `3fecdebcf9db322f49ece6587741dae75af2670e` | `codex/public-onboarding-07-public-ui-20260827` |
+| 10 | [#196](https://github.com/CosmaNeura/cosmaneura/pull/196) fail-closed activation | `19884c3b2e3b8fadff4649051dcd642ae1cdaaa4` | `codex/public-onboarding-08-web-proof-20260827` |
 | 11 | [#197](https://github.com/CosmaNeura/cosmaneura/pull/197) handoff record | this branch | `codex/public-onboarding-09-activation-20260827` |
 
 The implementation commit above is the exact code receiver for downstream
