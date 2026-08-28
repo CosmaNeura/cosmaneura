@@ -23,7 +23,7 @@ from app.routes.dependencies.view_as import (
     view_as_browser_session_present,
 )
 from app.services import zoom_oauth_state
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.session_manager import get_session
@@ -138,7 +138,7 @@ def zoom_oauth_callback(
             event_code="zoom_oauth_doctor_unavailable",
         )
         return _clear_browser_binding(_authorization_error_response())
-    if not doctor_access_in_force(doctor):
+    if not doctor_capability_access_in_force(doctor, "soap_note"):
         log.warning(
             "zoom oauth callback rejected",
             event_code="zoom_oauth_access_not_in_force",
@@ -201,6 +201,14 @@ def zoom_oauth_callback(
             log.warning(
                 "zoom oauth callback rejected",
                 event_code="zoom_oauth_doctor_unavailable_after_exchange",
+                doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
+            )
+            return _clear_browser_binding(_authorization_error_response())
+        if not doctor_capability_access_in_force(locked_doctor, "soap_note"):
+            session.rollback()
+            log.warning(
+                "zoom oauth callback rejected",
+                event_code="zoom_oauth_capability_not_in_force_after_exchange",
                 doctor_ref=provider_log_ref(f"doctor:{doctor.id}"),
             )
             return _clear_browser_binding(_authorization_error_response())

@@ -19,10 +19,13 @@ from structlog.testing import capture_logs
 
 from app.configuration.redis import get_redis
 from app.server import api_app
+from app.services import doctor_access as doctor_access_service
 from app.services import zoom_oauth_state
+from app.services.public_capabilities import DEFAULT_CAPABILITY_ROLLOUTS
 
 from app.models.doctor import Doctor
 from app.models.doctor_video_integration import DoctorVideoIntegration, VideoProvider
+from app.models.practice import Practice, PracticeMember
 from app.models.superadmin_capability import (
     SuperadminCapabilityEnvironment,
     SuperadminCapabilityKind,
@@ -67,6 +70,36 @@ def _issue_oauth_state(client: TestClient) -> tuple[str, str]:
 def _assert_authorization_failed(response: Response) -> None:
     assert response.status_code == status.HTTP_302_FOUND
     assert response.headers["location"].endswith("?zoom_error=authorization_failed")
+
+
+def _configure_public_soap_rollout(
+    monkeypatch: pytest.MonkeyPatch,
+    doctor: Doctor,
+    *,
+    rollout: str,
+    public_pilot_cohort: bool,
+) -> None:
+    """Exercise the real capability helper while isolating its rollout layer."""
+
+    member = PracticeMember.get(doctor_id=doctor.id)
+    assert member is not None
+    practice = Practice.get(id=member.practice_id)
+    assert practice is not None
+    practice.public_onboarding_required = True
+    practice.public_pilot_cohort = public_pilot_cohort
+    practice.save()
+    monkeypatch.setitem(DEFAULT_CAPABILITY_ROLLOUTS, "soap_note", rollout)
+    monkeypatch.setattr(
+        doctor_access_service,
+        "resolve_doctor_access",
+        lambda *_args, **_kwargs: doctor_access_service.DoctorAccessDecision(
+            allowed=True,
+            authorization_basis="workforce_attestation",
+            denial_reason=None,
+            baa_in_force=True,
+            entitlement_in_force=True,
+        ),
+    )
 
 
 # --- zoom-auth-url ---
@@ -219,6 +252,129 @@ def test_zoom_oauth_callback_updates_existing_integration(
     )
     assert integration is not None
     assert integration.provider_user_id == "new_zoom_id"
+
+
+@pytest.mark.parametrize(
+    ("rollout", "public_pilot_cohort"),
+    [
+        ("disabled", True),
+        ("cohort", False),
+    ],
+)
+def test_zoom_oauth_callback_real_public_rollout_denial_consumes_state(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    rollout: str,
+    public_pilot_cohort: bool,
+):
+    """Disabled and cohort-ineligible public callbacks fail before exchange."""
+
+    doctor = _get_or_create_doctor()
+    _, state_value = _issue_oauth_state(authenticated_client)
+    _configure_public_soap_rollout(
+        monkeypatch,
+        doctor,
+        rollout=rollout,
+        public_pilot_cohort=public_pilot_cohort,
+    )
+
+    with (
+        patch("app.routes.zoom_auth._exchange_code_for_tokens") as exchange,
+        patch("app.routes.zoom_auth._get_zoom_user_id") as get_user,
+    ):
+        response = authenticated_client.get(
+            api_app.url_path_for("zoom_oauth_callback"),
+            params={"code": "must-not-be-exchanged", "state": state_value},
+            follow_redirects=False,
+        )
+
+    _assert_authorization_failed(response)
+    exchange.assert_not_called()
+    get_user.assert_not_called()
+    assert not zoom_oauth_state.is_issued_zoom_oauth_state(state_value)
+    assert (
+        DoctorVideoIntegration.get(
+            doctor_id=doctor.id,
+            provider=VideoProvider.zoom,
+        )
+        is None
+    )
+
+
+def test_zoom_oauth_callback_real_public_cohort_eligible_writes_integration(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The real helper permits an otherwise-authorized cohort member."""
+
+    doctor = _get_or_create_doctor()
+    _, state_value = _issue_oauth_state(authenticated_client)
+    _configure_public_soap_rollout(
+        monkeypatch,
+        doctor,
+        rollout="cohort",
+        public_pilot_cohort=True,
+    )
+
+    with (
+        patch(
+            "app.routes.zoom_auth._exchange_code_for_tokens", return_value=_FAKE_TOKENS
+        ),
+        patch("app.routes.zoom_auth._get_zoom_user_id", return_value="zoom_cohort"),
+    ):
+        response = authenticated_client.get(
+            api_app.url_path_for("zoom_oauth_callback"),
+            params={"code": "cohort-code", "state": state_value},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == status.HTTP_302_FOUND
+    integration = DoctorVideoIntegration.get(
+        doctor_id=doctor.id,
+        provider=VideoProvider.zoom,
+    )
+    assert integration is not None
+    assert integration.provider_user_id == "zoom_cohort"
+
+
+def test_zoom_oauth_callback_rechecks_capability_after_provider_exchange(
+    authenticated_client: TestClient,
+):
+    """An in-flight rollout revocation cannot persist returned credentials."""
+
+    doctor = _get_or_create_doctor()
+    _, state_value = _issue_oauth_state(authenticated_client)
+
+    with (
+        patch(
+            "app.routes.zoom_auth.doctor_capability_access_in_force",
+            side_effect=[True, False],
+        ) as capability_access,
+        patch(
+            "app.routes.zoom_auth._exchange_code_for_tokens", return_value=_FAKE_TOKENS
+        ) as exchange,
+        patch(
+            "app.routes.zoom_auth._get_zoom_user_id", return_value="zoom_revoked"
+        ) as get_user,
+    ):
+        response = authenticated_client.get(
+            api_app.url_path_for("zoom_oauth_callback"),
+            params={"code": "in-flight-code", "state": state_value},
+            follow_redirects=False,
+        )
+
+    _assert_authorization_failed(response)
+    assert capability_access.call_count == 2
+    exchange.assert_called_once_with("in-flight-code")
+    get_user.assert_called_once_with("new_access")
+    assert not zoom_oauth_state.is_issued_zoom_oauth_state(state_value)
+    assert (
+        DoctorVideoIntegration.get(
+            doctor_id=doctor.id,
+            provider=VideoProvider.zoom,
+        )
+        is None
+    )
 
 
 def test_zoom_oauth_callback_without_app_cookie_cannot_write_during_view_as(

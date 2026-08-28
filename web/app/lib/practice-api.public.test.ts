@@ -87,6 +87,37 @@ describe("public onboarding practice API", () => {
     )
   })
 
+  it("omits the optional invitation expiry so the API default can apply", async () => {
+    mocks.fetch.mockResolvedValueOnce(
+      jsonResponse(
+        {
+          invitation_id: "invitation_default_expiry",
+          invitee_email: "clinician@example.test",
+          status: "pending",
+          role: "workforce",
+          issued_at: "2026-08-27T12:00:00Z",
+          expires_at: "2026-09-03T12:00:00Z",
+          invite_token: "a".repeat(43),
+          reused_idempotency_key: false,
+        },
+        201,
+      ),
+    )
+
+    await createPublicPracticeInvitation(
+      { email: "clinician@example.test" },
+      "request-key-default-expiry",
+    )
+
+    expect(mocks.fetch).toHaveBeenCalledWith(
+      "https://api.example/internal/v1/practice/invitations",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ email: "clinician@example.test" }),
+      }),
+    )
+  })
+
   it("uses only the canonical invitation and seat mutation routes", async () => {
     mocks.fetch
       .mockResolvedValueOnce(jsonResponse(memberResponse))

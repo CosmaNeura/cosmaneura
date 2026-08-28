@@ -281,7 +281,7 @@ export function getPublicPracticeInvitations() {
 }
 
 export function createPublicPracticeInvitation(
-  body: { email: string; expires_in_days: number },
+  body: { email: string; expires_in_days?: number },
   idempotencyKey: string,
 ) {
   return practiceRequest<PublicPracticeInvitation>("/practice/invitations", {
