@@ -5,6 +5,7 @@ import {
   checkAuthenticatedViewAsStatus,
   checkViewAsStatus,
 } from "./view-as-api"
+import { ViewAsControlRequestError } from "./view-as-binding"
 
 const inactiveStatus: ViewAsStatus = {
   request_binding: "inactive",
@@ -35,7 +36,7 @@ describe("checkViewAsStatus", () => {
 
     await expect(
       checkAuthenticatedViewAsStatus(
-        vi.fn().mockResolvedValue(false),
+        vi.fn().mockResolvedValue(null),
         readStatus,
       ),
     ).resolves.toEqual({ state: "signed_out", status: null })
@@ -43,11 +44,23 @@ describe("checkViewAsStatus", () => {
   })
 
   it("checks view-as for an authenticated visitor on a public route", async () => {
+    const readStatus = vi.fn().mockResolvedValue(inactiveStatus)
+
     await expect(
       checkAuthenticatedViewAsStatus(
-        vi.fn().mockResolvedValue(true),
-        vi.fn().mockResolvedValue(inactiveStatus),
+        vi.fn().mockResolvedValue("current-session-token"),
+        readStatus,
       ),
     ).resolves.toEqual({ state: "ready", status: inactiveStatus })
+    expect(readStatus).toHaveBeenCalledWith("current-session-token")
+  })
+
+  it("keeps a backend 401 fail closed when Clerk still returned a token", async () => {
+    await expect(
+      checkAuthenticatedViewAsStatus(
+        vi.fn().mockResolvedValue("expired-session-token"),
+        vi.fn().mockRejectedValue(new ViewAsControlRequestError(401)),
+      ),
+    ).resolves.toEqual({ state: "unavailable", status: null })
   })
 })

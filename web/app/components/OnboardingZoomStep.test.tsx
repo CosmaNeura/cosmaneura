@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest"
 import { OnboardingZoomStep } from "./OnboardingZoomStep"
 import { fireEvent, render, screen } from "@testing-library/react"
 
-const getClient = vi.hoisted(() => vi.fn())
+const getSessionToken = vi.hoisted(() => vi.fn())
 
-vi.mock("~/configuration/clerk", () => ({ getClient }))
+vi.mock("~/configuration/clerk", () => ({ getSessionToken }))
 
 describe("OnboardingZoomStep", () => {
   it("offers an explicit skip to an eligible staging pilot", () => {
@@ -22,7 +22,7 @@ describe("OnboardingZoomStep", () => {
       screen.getByRole("button", { name: "Continue without Zoom" }),
     )
     expect(onComplete).toHaveBeenCalledOnce()
-    expect(getClient).not.toHaveBeenCalled()
+    expect(getSessionToken).not.toHaveBeenCalled()
   })
 
   it("keeps the existing Zoom-required flow when the switch is off", () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react"
 
-import { getClient } from "~/configuration/clerk"
+import { getClient, getSessionToken } from "~/configuration/clerk"
 import { getViewAsStatus } from "~/lib/view-as-api"
 
 import {
@@ -184,12 +184,7 @@ function loadPinnedPanel(): Promise<PanelApi> {
 
 async function platformSessionToken(): Promise<string> {
   const clerk = await getClient()
-  if (!clerk?.user || !clerk.session) {
-    throw new Error("Provider session unavailable")
-  }
-  const token = await clerk.session.getToken()
-  if (!token) throw new Error("Provider session unavailable")
-  return token
+  return getSessionToken(undefined, clerk)
 }
 
 function parseMountContextCredential(

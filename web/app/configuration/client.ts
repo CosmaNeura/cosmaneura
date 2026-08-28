@@ -3,8 +3,7 @@ import { internalApiFetch } from "~/lib/billing-recovery"
 import { isDevelopment, requireEnv } from "~/utils/environment"
 
 import * as Sentry from "@sentry/react"
-import { getClient } from "./clerk"
-import { invariant } from "@epic-web/invariant"
+import { getClient, getSessionToken } from "./clerk"
 import { client } from "client/client.gen"
 
 // goal here is to avoid having any application code rely on this directly
@@ -34,11 +33,7 @@ client.setConfig({
   // automatically set bearer auth when requested
   auth: async () => {
     const client = await getClient()
-    invariant(client && client.session, "client and session should exist")
-    invariant(client.user, "client user should exist")
-
-    const token = await client.session.getToken()
-    invariant(token, "token should exist")
+    const token = await getSessionToken(undefined, client)
 
     // Keep error correlation pseudonymous. Email and display names are not
     // needed for diagnostics and must not be copied into telemetry. During

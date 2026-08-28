@@ -1,3 +1,4 @@
+import { redirectToLocalSignIn } from "~/configuration/clerk"
 import {
   bindInternalApiRequest,
   enforceViewAsBindingResponse,
@@ -88,6 +89,9 @@ export function handleInternalApiResponse(
   currentUrl: string,
   navigate: (target: string) => void,
 ) {
+  if (response.status === 401) {
+    redirectToLocalSignIn(new URL(currentUrl), navigate)
+  }
   if (response.status !== 402 || isSettingsLocation(currentUrl)) {
     return response
   }

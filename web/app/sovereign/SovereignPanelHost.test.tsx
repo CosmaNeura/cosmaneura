@@ -17,7 +17,16 @@ import {
 } from "./SovereignPanelHost"
 import { act, render, waitFor } from "@testing-library/react"
 
-vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: vi.fn(),
+  getSessionToken: vi.fn(
+    async (
+      options: { template?: string } | undefined,
+      client: ReturnType<typeof signedInClerk>,
+    ) =>
+      options ? client.session.getToken(options) : client.session.getToken(),
+  ),
+}))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 const inactiveViewAs = {

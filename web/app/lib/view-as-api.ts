@@ -30,12 +30,24 @@ export type ViewAsStatusCheck =
   | { state: "signed_out"; status: null }
   | { state: "unavailable"; status: null }
 
-async function viewAsRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  return rawViewAsControlRequest<T>(path, init)
+async function viewAsRequest<T>(
+  path: string,
+  init?: RequestInit,
+  sessionToken?: string,
+): Promise<T> {
+  return rawViewAsControlRequest<T>(
+    path,
+    init,
+    sessionToken ? { sessionToken, redirectOnUnauthorized: false } : undefined,
+  )
 }
 
-export async function getViewAsStatus() {
-  const status = await viewAsRequest<ViewAsStatus>("/status")
+export async function getViewAsStatus(sessionToken?: string) {
+  const status = await viewAsRequest<ViewAsStatus>(
+    "/status",
+    undefined,
+    sessionToken,
+  )
   return observeViewAsStatusBinding(status)
 }
 
@@ -48,7 +60,9 @@ export async function getViewAsStatus() {
  * testable without initializing Clerk.
  */
 export async function checkViewAsStatus(
-  readStatus: () => Promise<ViewAsStatus> = getViewAsStatus,
+  readStatus: (
+    sessionToken?: string,
+  ) => Promise<ViewAsStatus> = getViewAsStatus,
 ): Promise<ViewAsStatusCheck> {
   try {
     return { state: "ready", status: await readStatus() }
@@ -57,22 +71,25 @@ export async function checkViewAsStatus(
   }
 }
 
-/** Check view-as only when Clerk already has an authenticated browser user. */
+/** Check view-as only when Clerk can issue a current token, without redirecting. */
 export async function checkAuthenticatedViewAsStatus(
-  hasAuthenticatedSession: () => Promise<boolean> = async () => {
-    const { getOptionalClient } = await import("~/configuration/clerk")
-    return Boolean((await getOptionalClient())?.session)
+  readSessionToken: () => Promise<string | null> = async () => {
+    const { getOptionalSessionToken } = await import("~/configuration/clerk")
+    return getOptionalSessionToken()
   },
-  readStatus: () => Promise<ViewAsStatus> = getViewAsStatus,
+  readStatus: (sessionToken: string) => Promise<ViewAsStatus> = getViewAsStatus,
 ): Promise<ViewAsStatusCheck> {
   try {
-    if (!(await hasAuthenticatedSession())) {
+    const sessionToken = await readSessionToken()
+    if (!sessionToken) {
       return { state: "signed_out", status: null }
     }
+    return { state: "ready", status: await readStatus(sessionToken) }
   } catch {
+    // A backend 401 with a non-null Clerk token does not prove the browser is
+    // signed out, and exposing account controls could create a redirect loop.
     return { state: "unavailable", status: null }
   }
-  return checkViewAsStatus(readStatus)
 }
 
 export async function getViewAsTargets() {

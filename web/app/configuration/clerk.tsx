@@ -41,6 +41,67 @@ type ClerkClient = {
   redirectToSignIn: () => Promise<void>
 }
 
+type AuthenticatedClerkClient = ClerkClient & {
+  user: ClerkUser
+}
+
+type SessionTokenOptions = {
+  template?: string
+}
+
+export class SignInRedirectInProgressError extends Error {
+  readonly redirectUrl: string
+
+  constructor(redirectUrl: string) {
+    super("Authentication is unavailable. Redirecting to sign in.")
+    this.name = "SignInRedirectInProgressError"
+    this.redirectUrl = redirectUrl
+  }
+}
+
+export class SignedOutSessionError extends Error {
+  constructor() {
+    super("No authenticated session is available.")
+    this.name = "SignedOutSessionError"
+  }
+}
+
+export function isSignedOutSessionError(
+  error: unknown,
+): error is SignedOutSessionError {
+  return (
+    error instanceof SignedOutSessionError ||
+    Boolean(
+      error &&
+        typeof error === "object" &&
+        "name" in error &&
+        error.name === "SignedOutSessionError",
+    )
+  )
+}
+
+export function localSignInRedirectUrl(
+  location: Pick<Location, "pathname" | "search"> = window.location,
+) {
+  const returnTo = `${location.pathname}${location.search}`
+  return `/sign-in?redirect_url=${encodeURIComponent(returnTo)}`
+}
+
+export function redirectToLocalSignIn(
+  location: Pick<Location, "pathname" | "search"> = window.location,
+  navigate: (target: string) => void = (target) =>
+    window.location.replace(target),
+): never {
+  const pathname = location.pathname.replace(/\/+$/, "") || "/"
+  if (pathname === "/sign-in" || pathname === "/sign-up") {
+    throw new SignedOutSessionError()
+  }
+
+  const redirectUrl = localSignInRedirectUrl(location)
+  navigate(redirectUrl)
+  throw new SignInRedirectInProgressError(redirectUrl)
+}
+
 // Test-only auth bypass. Playwright integration tests inject
 // `window.__TEST_AUTH__ = { userId }` via add_init_script; we return a
 // stub Clerk client whose getToken yields a sentinel `test:<userId>`
@@ -57,7 +118,7 @@ function readTestAuth(): TestAuth | null {
   return w.__TEST_AUTH__ ?? null
 }
 
-function makeTestClerkClient(userId: string): ClerkClient {
+function makeTestClerkClient(userId: string): AuthenticatedClerkClient {
   return {
     loaded: true,
     load: async () => {},
@@ -78,7 +139,7 @@ function makeTestClerkClient(userId: string): ClerkClient {
 // /v1/client per page load (Sentry N+1) and occasionally leaving the SDK in
 // a state that hangs React Router hydration ("Loading application…").
 let loadedClerkClientPromise: Promise<ClerkClient> | null = null
-let clerkClientPromise: Promise<ClerkClient | undefined> | null = null
+let clerkClientPromise: Promise<AuthenticatedClerkClient> | null = null
 
 /** Load Clerk without redirecting a signed-out visitor. */
 export async function getOptionalClient(): Promise<ClerkClient | undefined> {
@@ -91,7 +152,7 @@ export async function getOptionalClient(): Promise<ClerkClient | undefined> {
   return clerk.user ? clerk : undefined
 }
 
-export function getClient(): Promise<ClerkClient | undefined> {
+export function getClient(): Promise<AuthenticatedClerkClient> {
   const testAuth = readTestAuth()
   if (testAuth) {
     return Promise.resolve(makeTestClerkClient(testAuth.userId))
@@ -126,7 +187,7 @@ async function resolveLoadedClient(): Promise<ClerkClient> {
   return clerk
 }
 
-async function resolveClient(): Promise<ClerkClient | undefined> {
+async function resolveClient(): Promise<AuthenticatedClerkClient> {
   const clerk = await getOptionalClient()
 
   // protect users from hitting the internal API if they aren't authenticated.
@@ -135,19 +196,32 @@ async function resolveClient(): Promise<ClerkClient | undefined> {
   // would otherwise bounce to the hosted account portal instead of the
   // embedded /sign-in route.
   if (!clerk) {
-    const redirectUrl = encodeURIComponent(
-      window.location.pathname + window.location.search,
-    )
-    window.location.replace(`/sign-in?redirect_url=${redirectUrl}`)
-    return
+    redirectToLocalSignIn()
   }
 
-  return clerk
+  return clerk as AuthenticatedClerkClient
+}
+
+export async function getSessionToken(
+  options?: SessionTokenOptions,
+  client?: AuthenticatedClerkClient,
+): Promise<string> {
+  const token = await getOptionalSessionToken(options, client)
+  if (!token) redirectToLocalSignIn()
+  return token
+}
+
+/** Check token validity without navigating; public identity guards use this. */
+export async function getOptionalSessionToken(
+  options?: SessionTokenOptions,
+  client?: ClerkClient,
+): Promise<string | null> {
+  const optionalClient = client ?? (await getOptionalClient())
+  return (await optionalClient?.session?.getToken(options)) ?? null
 }
 
 export async function getUserId() {
   const client = await getClient()
-  invariant(client && client.user, "client should exist")
   return client.user.id
 }
 

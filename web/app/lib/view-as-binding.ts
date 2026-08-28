@@ -34,6 +34,16 @@ export class ViewAsBindingStaleError extends Error {
   }
 }
 
+export class ViewAsControlRequestError extends Error {
+  readonly status: number
+
+  constructor(status: number) {
+    super("View-as is unavailable")
+    this.name = "ViewAsControlRequestError"
+    this.status = status
+  }
+}
+
 export function isViewAsRequestBinding(
   value: unknown,
 ): value is ViewAsRequestBinding {
@@ -47,11 +57,12 @@ function apiBase() {
   return requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
 }
 
-async function authHeaders(): Promise<HeadersInit> {
-  const { getClient } = await import("~/configuration/clerk")
-  const clerk = await getClient()
-  const token = await clerk?.session?.getToken()
-  if (!token) throw new Error("Provider session unavailable")
+async function authHeaders(sessionToken?: string): Promise<HeadersInit> {
+  let token = sessionToken
+  if (!token) {
+    const { getSessionToken } = await import("~/configuration/clerk")
+    token = await getSessionToken()
+  }
   return {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -164,8 +175,9 @@ export function commitViewAsControlTransition<T extends BindingStatus>(
 export async function rawViewAsControlRequest<T>(
   path: string,
   init?: RequestInit,
+  auth?: { sessionToken: string; redirectOnUnauthorized?: boolean },
 ): Promise<T> {
-  const headers = new Headers(await authHeaders())
+  const headers = new Headers(await authHeaders(auth?.sessionToken))
   new Headers(init?.headers).forEach((value, key) => headers.set(key, value))
   const response = await globalThis.fetch(
     `${apiBase()}/internal/v1/view-as${path}`,
@@ -176,7 +188,11 @@ export async function rawViewAsControlRequest<T>(
       headers,
     },
   )
-  if (!response.ok) throw new Error("View-as is unavailable")
+  if (response.status === 401 && auth?.redirectOnUnauthorized !== false) {
+    const { redirectToLocalSignIn } = await import("~/configuration/clerk")
+    redirectToLocalSignIn()
+  }
+  if (!response.ok) throw new ViewAsControlRequestError(response.status)
   return (await response.json()) as T
 }
 

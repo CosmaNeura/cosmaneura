@@ -2,7 +2,7 @@ import { useState } from "react"
 
 import { Icons } from "~/components/icons"
 import { Button } from "~/components/ui/button"
-import { getClient } from "~/configuration/clerk"
+import { getSessionToken } from "~/configuration/clerk"
 import { internalApiFetch } from "~/lib/billing-recovery"
 import { requireEnv } from "~/utils/environment"
 
@@ -21,8 +21,7 @@ export function OnboardingZoomStep({
 
   async function connectZoom() {
     setLoading(true)
-    const clerk = await getClient()
-    const token = await clerk!.session!.getToken()
+    const token = await getSessionToken()
     const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
     const res = await internalApiFetch(`${base}/internal/v1/zoom-auth-url`, {
       headers: { Authorization: `Bearer ${token}` },

@@ -15,19 +15,17 @@ import {
 } from "./view-as-binding"
 
 const ACTIVE_BINDING = `vab1.${"a".repeat(64)}` as const
-const getClient = vi.fn()
+const getSessionToken = vi.fn()
 
 vi.mock("~/configuration/clerk", () => ({
-  getClient: (...args: unknown[]) => getClient(...args),
+  getSessionToken: (...args: unknown[]) => getSessionToken(...args),
 }))
 
 beforeEach(() => {
   window.sessionStorage.clear()
   window.localStorage.clear()
   resetViewAsBindingStateForTests()
-  getClient.mockReset().mockResolvedValue({
-    session: { getToken: vi.fn().mockResolvedValue("test-token") },
-  })
+  getSessionToken.mockReset().mockResolvedValue("test-token")
 })
 
 afterEach(() => {
@@ -151,6 +149,25 @@ describe("view-as request binding", () => {
     const headers = new Headers(init.headers)
     expect(headers.get("Authorization")).toBe("Bearer test-token")
     expect(headers.has(VIEW_AS_REQUEST_BINDING_HEADER)).toBe(false)
+  })
+
+  it("uses a supplied public-probe token without invoking redirecting auth", async () => {
+    vi.stubEnv("VITE_PYTHON_URL", "https://api.example")
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ request_binding: "inactive" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    vi.stubGlobal("fetch", fetchMock)
+
+    await rawViewAsControlRequest("/status", undefined, {
+      sessionToken: "public-probe-token",
+    })
+
+    expect(getSessionToken).not.toHaveBeenCalled()
+    const headers = new Headers(fetchMock.mock.calls[0][1].headers)
+    expect(headers.get("Authorization")).toBe("Bearer public-probe-token")
   })
 
   it("recognizes only the four binding-exempt control endpoints", () => {

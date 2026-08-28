@@ -9,7 +9,20 @@ import { SOVEREIGN_PANEL_ASSET_PATH } from "./SovereignPanelAsset"
 import { SovereignPanelHost } from "./SovereignPanelHost"
 import { render, waitFor } from "@testing-library/react"
 
-vi.mock("~/configuration/clerk", () => ({ getClient: vi.fn() }))
+vi.mock("~/configuration/clerk", () => ({
+  getClient: vi.fn(),
+  getSessionToken: vi.fn(
+    async (
+      options: { template?: string } | undefined,
+      client: {
+        session: {
+          getToken: (options?: { template?: string }) => Promise<string | null>
+        }
+      },
+    ) =>
+      options ? client.session.getToken(options) : client.session.getToken(),
+  ),
+}))
 vi.mock("~/lib/view-as-api", () => ({ getViewAsStatus: vi.fn() }))
 
 const inactiveViewAs = {

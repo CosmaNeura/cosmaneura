@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { SignInRedirectInProgressError } from "~/configuration/clerk"
+
 import {
   BillingRecoveryRedirectError,
   billingRecoveryLocation,
@@ -24,6 +26,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe("billing recovery settings mode", () => {
@@ -138,6 +141,30 @@ describe("billing recovery routing", () => {
 })
 
 describe("bound internal API fetch", () => {
+  it("recovers an internal API 401 through local sign-in without forwarding fragments", async () => {
+    window.history.replaceState(
+      {},
+      "",
+      "/notes/note_123?tab=soap#private-fragment",
+    )
+    commitViewAsControlTransition({ request_binding: "inactive" })
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(null, { status: 401 })),
+    )
+    const replace = vi
+      .spyOn(window.location, "replace")
+      .mockImplementation(() => {})
+
+    await expect(
+      internalApiFetch("/internal/v1/notes/note_123"),
+    ).rejects.toBeInstanceOf(SignInRedirectInProgressError)
+    expect(replace).toHaveBeenCalledWith(
+      "/sign-in?redirect_url=%2Fnotes%2Fnote_123%3Ftab%3Dsoap",
+    )
+    expect(replace.mock.calls[0][0]).not.toContain("private-fragment")
+  })
+
   it("adds the current tab binding without dropping request headers", async () => {
     commitViewAsControlTransition({ request_binding: "inactive" })
     const response = new Response(null, { status: 200 })
