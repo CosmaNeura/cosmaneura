@@ -361,6 +361,34 @@ def test_expired_comp_is_reported_inactive_and_can_reactivate(
     )
 
 
+@pytest.mark.usefixtures("stripe_configured")
+def test_checkout_accepts_only_the_fixed_public_onboarding_return(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={
+            "success_path": "/settings?billing=success&returnTo=%2Fonboarding",
+            "cancel_path": "/settings?billing=cancelled&returnTo=%2Fonboarding",
+        },
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    checkout_call = next(
+        call for call in route_stripe.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    assert checkout_call[2]["success_url"] == (
+        f"{VALID_ORIGIN}/settings?billing=success&returnTo=%2Fonboarding"
+    )
+    assert checkout_call[2]["cancel_url"] == (
+        f"{VALID_ORIGIN}/settings?billing=cancelled&returnTo=%2Fonboarding"
+    )
 
 
 @pytest.mark.usefixtures("stripe_configured")

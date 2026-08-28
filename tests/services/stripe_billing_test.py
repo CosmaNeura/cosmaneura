@@ -418,6 +418,20 @@ def test_signature_verification_rejects_tampering_replay_and_wrong_secret(
     assert not stripe_billing.verify_webhook_signature(payload, _sign(payload))
 
 
+def test_stripe_writer_pins_exact_v1_and_v2_entitlement_contracts():
+    assert stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION == (
+        "public-capability-entitlements.v1"
+    )
+    assert stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION == (
+        "public-capability-entitlements.v2"
+    )
+    assert stripe_billing.PUBLIC_ENTITLEMENT_CONTRACT_VERSION == (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    assert stripe_billing.SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS == {
+        "public-capability-entitlements.v1",
+        "public-capability-entitlements.v2",
+    }
 
 
 def test_event_api_version_must_match_source_pin(remote: FakeStripe):
@@ -878,12 +892,194 @@ def test_cached_checkout_above_minimum_trial_lead_remains_resumable(
     assert practice.trial_ends_at == fixed_end
 
 
+@pytest.mark.parametrize(
+    ("contract_version", "resumable"),
+    [
+        (stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION, True),
+        (stripe_billing.PUBLIC_ENTITLEMENT_CONTRACT_VERSION, True),
+        ("public-capability-entitlements.v99", False),
+    ],
+)
+def test_cached_checkout_accepts_only_supported_contract_versions(
+    remote: FakeStripe,
+    contract_version: str,
+    resumable: bool,
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    practice.stripe_checkout_session_id = "cs_contract_compatibility"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/contract-compatibility"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.trial_ends_at = NOW + timedelta(days=14)
+    practice.stripe_checkout_entitlement_contract = (
+        contract_version
+        if contract_version
+        in stripe_billing.SUPPORTED_STRIPE_ENTITLEMENT_CONTRACT_VERSIONS
+        else stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.save()
+    metadata = _current_checkout_metadata(practice)
+    metadata["entitlement_contract"] = contract_version
+    metadata["trial_days"] = "14"
+    remote.sessions["cs_contract_compatibility"] = {
+        "id": "cs_contract_compatibility",
+        "url": "https://checkout.stripe.com/c/pay/contract-compatibility",
+        "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": None,
+        "payment_method_collection": "always",
+        "metadata": metadata,
+    }
+
+    recovered = stripe_billing._recover_checkout_session(practice, current=NOW)
+
+    assert bool(recovered) is resumable
+    practice.refresh()
+    if resumable:
+        assert recovered == ("https://checkout.stripe.com/c/pay/contract-compatibility")
+        assert practice.stripe_checkout_session_id == "cs_contract_compatibility"
+        assert remote.sessions["cs_contract_compatibility"]["status"] == "open"
+    else:
+        assert practice.stripe_checkout_session_id is None
+        assert remote.sessions["cs_contract_compatibility"]["status"] == "expired"
 
 
+def test_historical_v1_checkout_preserves_the_fixed_trial_clock(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    fixed_end = NOW + timedelta(days=14)
+    practice.stripe_checkout_session_id = "cs_historical_v1"
+    practice.stripe_checkout_entitlement_contract = (
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.trial_ends_at = fixed_end
+    practice.save()
+    subscription = _paid_pilot_subscription(practice)
+    subscription["metadata"]["entitlement_contract"] = (
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+
+    assert stripe_billing.apply_stripe_event(
+        {
+            "id": "evt_historical_v1_complete",
+            "type": "checkout.session.completed",
+            "created": int((NOW + timedelta(hours=1)).timestamp()),
+            "api_version": "2025-09-30.clover",
+            "livemode": False,
+            "data": {
+                "object": {
+                    "id": "cs_historical_v1",
+                    "client_reference_id": str(practice.id),
+                    "subscription": subscription["id"],
+                }
+            },
+        }
+    )
+
+    practice.refresh()
+    assert practice.stripe_subscription_entitlement_contract == (
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    )
+    assert practice.trial_ends_at == fixed_end
+    assert practice.subscription_status == "trialing"
 
 
+@pytest.mark.parametrize(
+    ("checkout_contract", "subscription_contract"),
+    [
+        (
+            stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+            stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION,
+        ),
+        (
+            stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION,
+            stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+        ),
+    ],
+)
+def test_checkout_completion_rejects_entitlement_contract_substitution(
+    remote: FakeStripe,
+    checkout_contract: str,
+    subscription_contract: str,
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    practice.stripe_checkout_session_id = "cs_contract_substitution"
+    practice.stripe_checkout_entitlement_contract = checkout_contract
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.trial_ends_at = NOW + timedelta(days=14)
+    practice.save()
+    subscription = _paid_pilot_subscription(practice)
+    subscription["metadata"]["entitlement_contract"] = subscription_contract
+    remote.subscriptions[subscription["id"]] = subscription
+
+    with pytest.raises(
+        stripe_billing.StripeStateInvalid,
+        match="contract cannot change",
+    ):
+        stripe_billing.apply_stripe_event(
+            {
+                "id": f"evt_contract_substitution_{checkout_contract[-2:]}",
+                "type": "checkout.session.completed",
+                "created": int(NOW.timestamp()),
+                "api_version": "2025-09-30.clover",
+                "livemode": False,
+                "data": {
+                    "object": {
+                        "id": "cs_contract_substitution",
+                        "client_reference_id": str(practice.id),
+                        "subscription": subscription["id"],
+                    }
+                },
+            }
+        )
+
+    practice.refresh()
+    assert practice.stripe_subscription_id is None
+    assert practice.stripe_checkout_session_id == "cs_contract_substitution"
+    assert practice.stripe_checkout_entitlement_contract == checkout_contract
 
 
+@pytest.mark.parametrize(
+    ("bound_contract", "remote_contract"),
+    [
+        (
+            stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+            stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION,
+        ),
+        (
+            stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION,
+            stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+        ),
+    ],
+)
+def test_bound_subscription_contract_version_cannot_change(
+    remote: FakeStripe,
+    bound_contract: str,
+    remote_contract: str,
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    subscription["metadata"]["entitlement_contract"] = bound_contract
+    _bind_verified_public_subscription(practice, subscription)
+    subscription["metadata"]["entitlement_contract"] = remote_contract
+    remote.subscriptions[subscription["id"]] = subscription
+
+    stripe_billing.refresh_subscription_state(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_entitlement_contract == bound_contract
 
 
 def test_provider_created_session_consumes_clock_after_local_version_race(
@@ -1402,10 +1598,166 @@ def test_checkout_post_response_validation_failure_emits_metric(
     assert ("checkout_creation", "failed") in emitted
 
 
+def test_new_v2_checkout_rejects_v1_provider_response(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    practice.save()
+    original_request = stripe_billing._request
+
+    def downgrade_response(method, path, data=None, *, idempotency_key=None):
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path == "/checkout/sessions":
+            response["metadata"]["entitlement_contract"] = (
+                stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+            )
+        return response
+
+    monkeypatch.setattr(stripe_billing, "_request", downgrade_response)
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="paid-pilot policy"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+
+    assert remote.sessions["cs_test_idempotent"]["status"] == "expired"
+    practice.refresh()
+    assert practice.stripe_checkout_session_id is None
 
 
+def test_historical_v1_frozen_checkout_replays_identical_bytes_and_key(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    practice.save()
+    current_contract = stripe_billing.PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    monkeypatch.setattr(
+        stripe_billing,
+        "PUBLIC_ENTITLEMENT_CONTRACT_VERSION",
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION",
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+    )
+    original_request = stripe_billing._request
+    lost_once = False
+
+    def lose_first_response(method, path, data=None, *, idempotency_key=None):
+        nonlocal lost_once
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path == "/checkout/sessions" and not lost_once:
+            lost_once = True
+            raise httpx.ReadTimeout("historical response lost after Stripe committed")
+        return response
+
+    monkeypatch.setattr(stripe_billing, "_request", lose_first_response)
+    with pytest.raises(httpx.ReadTimeout):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+    first_post = next(
+        call
+        for call in remote.calls
+        if call[0] == "POST" and call[1] == "/checkout/sessions"
+    )
+    assert first_post[2] is not None
+    assert first_post[2]["metadata[entitlement_contract]"] == (
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    )
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "PUBLIC_ENTITLEMENT_CONTRACT_VERSION",
+        current_contract,
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION",
+        current_contract,
+    )
+    url = stripe_billing.create_checkout_session(
+        practice,
+        customer_email="changed@example.com",
+        success_url="https://app.example/settings?billing=success",
+        cancel_url="https://app.example/settings?billing=cancelled",
+        now=NOW + timedelta(minutes=1),
+    )
+
+    posts = [
+        call
+        for call in remote.calls
+        if call[0] == "POST" and call[1] == "/checkout/sessions"
+    ]
+    assert url == "https://checkout.stripe.com/c/pay/test"
+    assert len(posts) == 2
+    assert posts[0][2] == posts[1][2]
+    assert posts[0][3] == posts[1][3]
 
 
+def test_unknown_frozen_checkout_contract_never_reaches_stripe(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    original_request = stripe_billing._request
+
+    def lose_response(method, path, data=None, *, idempotency_key=None):
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path == "/checkout/sessions":
+            raise httpx.ReadTimeout("response lost after Stripe committed")
+        return response
+
+    monkeypatch.setattr(stripe_billing, "_request", lose_response)
+    with pytest.raises(httpx.ReadTimeout):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+    practice.refresh()
+    frozen = json.loads(practice.stripe_checkout_request_json or "{}")
+    frozen["metadata[entitlement_contract]"] = "public-capability-entitlements.v99"
+    frozen["subscription_data[metadata][entitlement_contract]"] = (
+        "public-capability-entitlements.v99"
+    )
+    practice.stripe_checkout_request_json = json.dumps(frozen)
+    practice.save()
+    posts_before_retry = len(
+        [call for call in remote.calls if call[:2] == ("POST", "/checkout/sessions")]
+    )
+
+    with pytest.raises(stripe_billing.StripeCheckoutReconciliationRequired):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW + timedelta(minutes=1),
+        )
+
+    assert (
+        len(
+            [
+                call
+                for call in remote.calls
+                if call[:2] == ("POST", "/checkout/sessions")
+            ]
+        )
+        == posts_before_retry
+    )
 
 
 def test_checkout_retry_reuses_frozen_request_after_lost_response(
@@ -1698,6 +2050,72 @@ def test_operator_recovery_refuses_partially_matching_checkout_inventory(
     assert practice.stripe_checkout_attempt == 0
 
 
+def test_operator_recovery_matches_the_exact_historical_v1_contract(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    current_contract = stripe_billing.PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    monkeypatch.setattr(
+        stripe_billing,
+        "PUBLIC_ENTITLEMENT_CONTRACT_VERSION",
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION",
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+    )
+    original_request = stripe_billing._request
+
+    def lose_response(method, path, data=None, *, idempotency_key=None):
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path == "/checkout/sessions":
+            raise httpx.ReadTimeout("historical response lost after Stripe committed")
+        return response
+
+    monkeypatch.setattr(stripe_billing, "_request", lose_response)
+    with pytest.raises(httpx.ReadTimeout):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+    monkeypatch.setattr(
+        stripe_billing,
+        "PUBLIC_ENTITLEMENT_CONTRACT_VERSION",
+        current_contract,
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION",
+        current_contract,
+    )
+    monkeypatch.setattr(stripe_billing, "_request", remote)
+    remote.sessions["cs_test_idempotent"]["metadata"]["entitlement_contract"] = (
+        current_contract
+    )
+
+    with pytest.raises(stripe_billing.StripeStateConflict, match="ambiguous"):
+        stripe_billing.reconcile_frozen_checkout_request(
+            practice,
+            operator_ref="ticket-CHECKOUT-RECOVERY-V1",
+            reason="Match only the exact frozen historical contract",
+            now=NOW + stripe_billing.CHECKOUT_REQUEST_REPLAY_WINDOW,
+        )
+
+    remote.sessions["cs_test_idempotent"]["metadata"]["entitlement_contract"] = (
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    )
+    outcome, audit_id = stripe_billing.reconcile_frozen_checkout_request(
+        practice,
+        operator_ref="ticket-CHECKOUT-RECOVERY-V1",
+        reason="Match only the exact frozen historical contract",
+        now=NOW + stripe_billing.CHECKOUT_REQUEST_REPLAY_WINDOW,
+    )
+    assert outcome == "would_expire_open_session"
+    assert audit_id is None
 
 
 def test_operator_recovery_binds_checkout_that_completes_during_expiration(
@@ -2199,10 +2617,100 @@ def test_signed_paid_pilot_subscription_mirrors_exact_trial_clock(
     assert public_subscription_in_force(practice, at=NOW)
 
 
+@pytest.mark.parametrize("status", ["active", "trialing"])
+def test_bound_historical_v1_subscription_remains_supported(
+    remote: FakeStripe,
+    status: str,
+):
+    practice = _practice()
+    trial_end = NOW + timedelta(days=7) if status == "trialing" else None
+    subscription = _subscription(practice, status=status)
+    if trial_end is not None:
+        subscription["trial_start"] = int(NOW.timestamp())
+        subscription["trial_end"] = int(trial_end.timestamp())
+    assert subscription["metadata"]["entitlement_contract"] == (
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    )
+    _bind_verified_public_subscription(
+        practice,
+        subscription,
+        status=status,
+        trial_ends_at=trial_end,
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    remote.subscriptions[subscription["id"]] = subscription
+
+    refreshed = stripe_billing.refresh_subscription_state(practice)
+
+    assert refreshed is not None
+    practice.refresh()
+    assert practice.subscription_status == status
+    assert public_subscription_in_force(practice, at=NOW)
 
 
+@pytest.mark.parametrize(
+    "contract_value",
+    [None, 7, "public-capability-entitlements.v99"],
+)
+def test_unknown_contract_version_revokes_bound_public_subscription(
+    remote: FakeStripe,
+    contract_value: object,
+):
+    practice = _practice()
+    subscription = _subscription(practice, status="active")
+    _bind_verified_public_subscription(practice, subscription)
+    if contract_value is None:
+        subscription["metadata"].pop("entitlement_contract")
+    else:
+        subscription["metadata"]["entitlement_contract"] = contract_value
+    remote.subscriptions[subscription["id"]] = subscription
+
+    assert stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id=f"evt_unknown_contract_{secrets.token_hex(4)}",
+            created=int(NOW.timestamp()),
+        )
+    )
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert not public_subscription_in_force(practice, at=NOW)
 
 
+@pytest.mark.parametrize(
+    "contract_value",
+    [None, 7, "public-capability-entitlements.v99"],
+)
+def test_unknown_contract_version_never_binds_public_subscription(
+    remote: FakeStripe,
+    contract_value: object,
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    practice.save()
+    subscription = _paid_pilot_subscription(practice, status="active")
+    if contract_value is None:
+        subscription["metadata"].pop("entitlement_contract")
+    else:
+        subscription["metadata"]["entitlement_contract"] = contract_value
+    remote.subscriptions[subscription["id"]] = subscription
+
+    with pytest.raises(stripe_billing.StripeStateInvalid):
+        stripe_billing.apply_stripe_event(
+            _checkout_completed_event(
+                practice,
+                subscription,
+                event_id=f"evt_unbound_unknown_contract_{secrets.token_hex(4)}",
+                created=int(NOW.timestamp()),
+            )
+        )
+
+    practice.refresh()
+    assert practice.stripe_subscription_id is None
+    assert not public_subscription_in_force(practice, at=NOW)
 
 
 def test_new_paid_pilot_rejects_trial_extending_beyond_fixed_window(
@@ -2256,6 +2764,49 @@ def test_new_paid_pilot_rejects_missing_or_unrepresentable_trial_clock(
         )
 
 
+@pytest.mark.parametrize(
+    "metadata_patch",
+    [
+        {
+            "practice_id": "preserve",
+            "checkout_policy": "unknown-v9",
+            "entitlement_contract": "public-capability-entitlements.v1",
+            "trial_clock": stripe_billing.LEGACY_TRIAL_CLOCK_POLICY,
+        },
+        {
+            "practice_id": "preserve",
+            "checkout_policy": stripe_billing.CHECKOUT_IDEMPOTENCY_POLICY_VERSION,
+            "entitlement_contract": "public-capability-entitlements.v1",
+            "trial_clock": stripe_billing.LEGACY_TRIAL_CLOCK_POLICY,
+        },
+        {"practice_id": "preserve"},
+    ],
+)
+def test_initial_bind_requires_exact_checkout_completion(
+    remote: FakeStripe, metadata_patch: dict[str, str]
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    subscription["metadata"] = {
+        key: (str(practice.id) if value == "preserve" else value)
+        for key, value in metadata_patch.items()
+    }
+    remote.subscriptions[subscription["id"]] = subscription
+
+    with pytest.raises(
+        (stripe_billing.StripeStateInvalid, stripe_billing.StripeStateConflict)
+    ):
+        stripe_billing.apply_stripe_event(
+            _event(
+                "customer.subscription.created",
+                subscription,
+                event_id=f"evt_policy_{secrets.token_hex(4)}",
+                created=int(NOW.timestamp()),
+            )
+        )
+    practice.refresh()
+    assert practice.stripe_subscription_id is None
+    assert not public_subscription_in_force(practice, at=NOW)
 
 
 def test_initial_legacy_trial_rejects_checkout_clock_policy(remote: FakeStripe):
@@ -2810,8 +3361,59 @@ def test_verified_event_is_durable_and_deduplicated_before_stripe_io(
     assert practice.subscription_status == "canceled"
 
 
+@pytest.mark.parametrize(
+    "contract_version",
+    [
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+        stripe_billing.PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+    ],
+)
+def test_event_sanitizer_preserves_only_supported_contract_versions(
+    contract_version: str,
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    subscription["metadata"]["entitlement_contract"] = contract_version
+    event = _event(
+        "customer.subscription.updated",
+        subscription,
+        event_id=f"evt_sanitize_contract_{secrets.token_hex(4)}",
+        created=int(NOW.timestamp()),
+    )
+
+    minimal = stripe_billing._minimal_stripe_event(
+        event,
+        event["data"]["object"],
+    )
+
+    assert minimal["data"]["object"]["metadata"]["entitlement_contract"] == (
+        contract_version
+    )
 
 
+@pytest.mark.parametrize(
+    "contract_version",
+    [None, 7, "public-capability-entitlements.v99"],
+)
+def test_event_sanitizer_marks_unknown_contract_versions_invalid(
+    contract_version: object,
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    subscription["metadata"]["entitlement_contract"] = contract_version
+    event = _event(
+        "customer.subscription.updated",
+        subscription,
+        event_id=f"evt_sanitize_unknown_contract_{secrets.token_hex(4)}",
+        created=int(NOW.timestamp()),
+    )
+
+    minimal = stripe_billing._minimal_stripe_event(
+        event,
+        event["data"]["object"],
+    )
+
+    assert minimal["data"]["object"]["metadata"]["entitlement_contract"] == ("invalid")
 
 
 @pytest.mark.parametrize(
@@ -3163,8 +3765,100 @@ def test_deleted_subscription_fallback_preserves_paid_pilot_policy(
     assert StripeEventReceipt.get(event_id="evt_stale_after_hard_delete")
 
 
+@pytest.mark.parametrize(
+    ("terminal_status", "via_event"),
+    [("canceled", False), ("incomplete_expired", True)],
+)
+def test_exact_bound_terminal_subscription_with_retired_offer_can_restart_checkout(
+    remote: FakeStripe,
+    terminal_status: str,
+    via_event: bool,
+):
+    practice = _practice()
+    subscription = _subscription(practice, status="active")
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription)
+
+    subscription["status"] = terminal_status
+    subscription["items"]["data"][0]["price"] = {"id": "price_retired"}
+    subscription["items"]["data"][0]["quantity"] = 37
+    subscription["metadata"] = {}
+    subscription["trial_end"] = int((NOW + timedelta(days=90)).timestamp())
+    remote.subscriptions[subscription["id"]] = subscription
+    if via_event:
+        assert stripe_billing.apply_stripe_event(
+            _event(
+                "customer.subscription.updated",
+                subscription,
+                event_id="evt_terminal_retired_offer",
+                created=int(NOW.timestamp()),
+            )
+        )
+    else:
+        stripe_billing.refresh_subscription_state(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == terminal_status
+    assert not public_subscription_in_force(practice, at=NOW)
+
+    remote.calls.clear()
+    checkout_url = stripe_billing.create_checkout_session(
+        practice,
+        customer_email="owner@example.com",
+        success_url="https://app.example/onboarding",
+        cancel_url="https://app.example/onboarding",
+        now=NOW,
+    )
+
+    assert checkout_url == "https://checkout.stripe.com/c/pay/test"
+    assert any(
+        method == "POST" and path == "/checkout/sessions"
+        for method, path, _data, _key in remote.calls
+    )
 
 
+@pytest.mark.parametrize("incoherent_status", ["active", "trialing"])
+def test_deleted_subscription_fallback_rejects_entitled_status(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+    incoherent_status: str,
+):
+    practice = _practice()
+    subscription = _paid_pilot_subscription(practice, status=incoherent_status)
+    remote.subscriptions[subscription["id"]] = subscription
+    assert stripe_billing.apply_stripe_event(
+        _checkout_completed_event(
+            practice,
+            subscription,
+            event_id=f"evt_bind_before_bad_delete_{incoherent_status}",
+            created=int(NOW.timestamp()),
+        )
+    )
+    event = _event(
+        "customer.subscription.deleted",
+        subscription,
+        event_id=f"evt_bad_deleted_fallback_{incoherent_status}",
+        created=int((NOW + timedelta(seconds=1)).timestamp()),
+    )
+    original_request = stripe_billing._request
+
+    def return_not_found(method, path, data=None, *, idempotency_key=None):
+        if path == f"/subscriptions/{subscription['id']}":
+            request = httpx.Request("GET", f"https://api.stripe.com/v1{path}")
+            response = httpx.Response(404, request=request)
+            raise httpx.HTTPStatusError(
+                "subscription no longer retrievable",
+                request=request,
+                response=response,
+            )
+        return original_request(method, path, data, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(stripe_billing, "_request", return_not_found)
+
+    assert stripe_billing.apply_stripe_event(event)
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert not public_subscription_in_force(practice, at=NOW)
 
 
 def test_wrong_checkout_completion_cannot_clear_current_cached_session(
@@ -3701,6 +4395,47 @@ def test_delete_wins_and_delayed_older_active_event_cannot_restore_access(
     assert not public_subscription_in_force(practice, at=NOW + timedelta(seconds=10))
 
 
+def test_terminal_subscription_metadata_cannot_create_an_initial_binding(
+    remote: FakeStripe,
+):
+    actual_owner = _practice()
+    metadata_target = _practice()
+    initial_target_state = (
+        metadata_target.stripe_customer_id,
+        metadata_target.stripe_subscription_id,
+        metadata_target.stripe_subscription_entitlement_contract,
+        metadata_target.subscription_status,
+        metadata_target.stripe_state_version,
+        metadata_target.stripe_last_event_id,
+        metadata_target.stripe_last_event_created_at,
+    )
+    canceled = _subscription(actual_owner, status="canceled")
+    canceled["metadata"]["practice_id"] = str(metadata_target.id)
+    remote.subscriptions[canceled["id"]] = canceled
+
+    with pytest.raises(
+        stripe_billing.StripeStateConflict,
+        match="exact Checkout completion",
+    ):
+        stripe_billing.apply_stripe_event(
+            _event(
+                "customer.subscription.deleted",
+                canceled,
+                event_id="evt_cross_tenant_metadata_cancel",
+                created=int(NOW.timestamp()),
+            )
+        )
+
+    metadata_target.refresh()
+    assert (
+        metadata_target.stripe_customer_id,
+        metadata_target.stripe_subscription_id,
+        metadata_target.stripe_subscription_entitlement_contract,
+        metadata_target.subscription_status,
+        metadata_target.stripe_state_version,
+        metadata_target.stripe_last_event_id,
+        metadata_target.stripe_last_event_created_at,
+    ) == initial_target_state
 
 
 def test_bound_subscription_id_outranks_drifted_metadata_on_cancel(
@@ -5091,10 +5826,140 @@ def test_stale_quantity_sync_completion_preserves_superseding_obligation(
     ) == superseding_obligation
 
 
+def test_quantity_completion_requires_same_contract_provenance():
+    practice = _practice()
+    subscription = _subscription(practice)
+    _bind_verified_public_subscription(practice, subscription)
+    practice.stripe_quantity_sync_required = True
+    practice.stripe_quantity_sync_target = 1
+    practice.stripe_quantity_sync_version = 7
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.save()
+
+    assert not stripe_billing._finish_quantity_sync(
+        practice.id,
+        subscription_id=subscription["id"],
+        customer_id=subscription["customer"],
+        state_version=practice.stripe_state_version,
+        subscription_status=practice.subscription_status or "active",
+        entitlement_contract=(
+            stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+        ),
+        version=7,
+        target=1,
+    )
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required
+    assert practice.stripe_quantity_sync_target == 1
+    assert practice.stripe_quantity_sync_version == 7
+    assert practice.stripe_quantity_synced_at is None
 
 
+def test_quantity_success_cannot_clear_a_concurrent_contract_invalidation(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_quantity_contract_race",
+        customer_id="cus_quantity_contract_race",
+        quantity=2,
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription)
+    original_request = remote.__call__
+
+    def invalidate_contract_after_quantity_post(
+        method, path, data=None, *, idempotency_key=None
+    ):
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path.startswith("/subscription_items/"):
+            with stripe_billing._isolated_state_session() as session:
+                row = session.get(Practice, practice.id)
+                assert row is not None
+                row.stripe_subscription_entitlement_contract = (
+                    stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+                )
+                row.stripe_state_version += 1
+                row.subscription_status = "invalid"
+                row.stripe_quantity_sync_required = True
+                row.stripe_quantity_sync_error = "concurrent_contract_invalidation"
+                session.add(row)
+                session.commit()
+        return response
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_request",
+        invalidate_contract_after_quantity_post,
+    )
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_error == (
+        "subscription entitlement contract cannot change"
+    )
+    assert practice.stripe_quantity_synced_at is None
 
 
+def test_quantity_sync_does_not_post_an_already_superseded_target(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_quantity_prewrite_fence",
+        customer_id="cus_quantity_prewrite_fence",
+        quantity=2,
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription)
+    stripe_billing.mark_quantity_sync_required(practice)
+    practice.refresh()
+    original_version = practice.stripe_quantity_sync_version
+    original_refresh = stripe_billing.refresh_subscription_state
+    superseded = False
+
+    def supersede_during_authoritative_refresh(bound_practice: Practice):
+        nonlocal superseded
+        refreshed = original_refresh(bound_practice)
+        if not superseded:
+            superseded = True
+            with stripe_billing._isolated_state_session() as session:
+                row = session.get(Practice, practice.id)
+                assert row is not None
+                row.stripe_quantity_sync_required = True
+                row.stripe_quantity_sync_target = 2
+                row.stripe_quantity_sync_version = original_version + 1
+                row.stripe_quantity_sync_error = "newer_seat_obligation"
+                session.add(row)
+                session.commit()
+        return refreshed
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "refresh_subscription_state",
+        supersede_during_authoritative_refresh,
+    )
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target == 2
+    assert practice.stripe_quantity_sync_version == original_version + 1
+    assert practice.stripe_quantity_sync_error == "newer_seat_obligation"
+    assert not any(
+        method == "POST" and path.startswith("/subscription_items/")
+        for method, path, _data, _key in remote.calls
+    )
 
 
 def test_over_cap_quantity_marker_is_preserved_without_stripe_io(
@@ -5144,6 +6009,118 @@ def test_over_cap_quantity_marker_is_preserved_without_stripe_io(
     )
 
 
+def test_legacy_over_cap_22_to_21_to_20_posts_only_the_valid_target(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    members: list[PracticeMember] = []
+    for ordinal in range(21):
+        doctor = Doctor(
+            clerk_id=f"user_over_cap_repair_{ordinal}_{secrets.token_hex(5)}",
+            email=f"over-cap-repair-{ordinal}-{secrets.token_hex(3)}@example.com",
+            biography="",
+        ).save()
+        members.append(
+            PracticeMember(
+                practice_id=practice.id,
+                doctor_id=doctor.id,
+                role=PracticeRole.workforce.value,
+                attested_at=NOW,
+            ).save()
+        )
+    subscription = _subscription(practice, quantity=19)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+    )
+    practice.subscription_status = "active"
+    practice.stripe_state_version = 1
+    practice.stripe_quantity_sync_required = True
+    practice.stripe_quantity_sync_target = None
+    practice.stripe_quantity_sync_version = 1
+    practice.stripe_quantity_sync_error = (
+        stripe_billing.LOCAL_SEAT_COUNT_OUT_OF_RANGE_ERROR
+    )
+    practice.save()
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert not any(
+        method == "POST" and path.startswith("/subscription_items/")
+        for method, path, _data, _key in remote.calls
+    )
+
+    with get_session() as session:
+        locked_practice = lock_practice_for_active_seat_mutation(
+            session,
+            practice.id,
+        )
+        first = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.id == members[0].id)
+            .with_for_update()
+        ).one()
+        first.seat_state = "inactive"
+        session.add(first)
+        assert (
+            record_active_clinician_seat_quantity(
+                session,
+                locked_practice,
+                previous_active_count=22,
+            )
+            == 21
+        )
+        session.commit()
+    assert not stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert not any(
+        method == "POST" and path.startswith("/subscription_items/")
+        for method, path, _data, _key in remote.calls
+    )
+
+    with get_session() as session:
+        locked_practice = lock_practice_for_active_seat_mutation(
+            session,
+            practice.id,
+        )
+        second = session.exec(
+            select(PracticeMember)
+            .where(PracticeMember.id == members[1].id)
+            .with_for_update()
+        ).one()
+        second.seat_state = "inactive"
+        session.add(second)
+        assert (
+            record_active_clinician_seat_quantity(
+                session,
+                locked_practice,
+                previous_active_count=21,
+            )
+            == 20
+        )
+        assert (
+            locked_practice.stripe_quantity_sync_error
+            == stripe_billing.LOCAL_SEAT_COUNT_OUT_OF_RANGE_ERROR
+        )
+        session.commit()
+    assert stripe_billing.sync_subscription_quantity(practice)
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is False
+    assert practice.stripe_quantity_sync_target == 20
+    quantity_posts = [
+        call
+        for call in remote.calls
+        if call[0] == "POST" and call[1].startswith("/subscription_items/")
+    ]
+    assert len(quantity_posts) == 1
+    assert quantity_posts[0][2] == {"quantity": "20"}
+    assert subscription["items"]["data"][0]["quantity"] == 20
 
 
 def test_quantity_sync_fails_closed_when_canonical_seat_ledger_is_invalid(
