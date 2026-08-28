@@ -110,7 +110,7 @@ def upgrade() -> None:
             sa.Boolean(),
             server_default=sa.false(),
             nullable=False,
-            comment="Whether public legal and credential gates apply.",
+            comment="Whether the public legal/credential gates apply to this practice.",
         ),
     )
     op.create_check_constraint(
@@ -125,7 +125,7 @@ def upgrade() -> None:
             sa.Boolean(),
             server_default=sa.false(),
             nullable=False,
-            comment="Explicit public-pilot rollout cohort membership.",
+            comment="Explicit public-pilot rollout cohort; false preserves managed practices.",
         ),
     )
 
@@ -136,7 +136,7 @@ def upgrade() -> None:
             sa.String(),
             server_default="pending",
             nullable=False,
-            comment="Fail-closed public clinician credential state.",
+            comment="Public PHI access remains denied until independently approved.",
         ),
     )
     op.add_column(
@@ -244,7 +244,7 @@ def upgrade() -> None:
             "content_sha256",
             name="uq_public_legal_acceptance_document",
         ),
-        comment="Append-only public Terms or Privacy acceptance evidence.",
+        comment="Append-only acceptance of one exact public legal document edition.",
     )
     op.create_index(
         "public_legal_acceptance_practice_kind_idx",
@@ -319,7 +319,7 @@ def upgrade() -> None:
             "event_digest",
             name=op.f("credential_review_audit_event_digest_key"),
         ),
-        comment="Append-only evidence for credential-state transitions.",
+        comment="Append-only evidence for one independent credential-state transition.",
     )
     op.create_index(
         "credential_review_audit_member_time_idx",
@@ -430,7 +430,7 @@ def upgrade() -> None:
             "idempotency_key_digest",
             name="uq_practice_invitation_idempotency_key",
         ),
-        comment="Hashed, single-use public practice invitation.",
+        comment="Hashed, single-use invitation with immutable terminal evidence.",
     )
     op.create_index(
         "practice_invitation_practice_email_idx",
