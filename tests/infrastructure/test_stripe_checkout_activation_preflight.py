@@ -444,12 +444,108 @@ def test_attached_subscription_is_ambiguous_and_never_expired() -> None:
     assert not any(call[1].endswith("/expire") for call in fake.calls)
 
 
+@pytest.mark.parametrize(
+    "line_items",
+    [
+        {
+            "data": [
+                {"price": {"id": "price_test_x"}, "quantity": 1},
+                {"price": {"id": "price_unrelated"}, "quantity": 1},
+            ]
+        },
+        {"data": [{"price": {"id": "price_test_x"}, "quantity": 0}]},
+    ],
+)
+def test_direct_inventoried_session_with_unsafe_shape_is_ambiguous(
+    line_items: dict[str, Any],
+) -> None:
+    preflight = _load_preflight()
+    session = _session("cs_unsafe_direct", reference=None)
+    session["line_items"] = line_items
+
+    evidence = preflight.run_preflight(
+        FakeStripe([session]),
+        **_common(),
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert evidence["eligible_cosmaneura_open_sessions"] == 0
+    assert evidence["ambiguous_cosmaneura_open_sessions"] == 1
+    assert evidence["ready_for_acquisition"] is False
 
 
+@pytest.mark.parametrize("session_status", ["open", "expired"])
+def test_unattributed_session_with_unexpanded_line_items_is_ambiguous(
+    session_status: str,
+) -> None:
+    preflight = _load_preflight()
+    session = _session("cs_unknown_shape", reference=None)
+    session["status"] = session_status
+    session["line_items"] = {"url": "/v1/checkout/sessions/cs_unknown_shape/line_items"}
+
+    evidence = preflight.run_preflight(
+        FakeStripe([session]),
+        **_common(),
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    key = (
+        "ambiguous_cosmaneura_open_sessions"
+        if session_status == "open"
+        else "ambiguous_expired_cosmaneura_sessions"
+    )
+    assert evidence[key] == 1
+    assert evidence["ready_for_acquisition"] is False
 
 
+def test_recovery_enabled_open_and_expired_sessions_block_activation() -> None:
+    preflight = _load_preflight()
+    open_session = _session("cs_open_recovery", reference=None)
+    open_session["after_expiration"] = {"recovery": {"enabled": True}}
+    expired_session = _session("cs_expired_recovery", reference=None)
+    expired_session["status"] = "expired"
+    expired_session["after_expiration"] = {
+        "recovery": {
+            "enabled": True,
+            "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+            "url": "https://checkout.stripe.com/c/pay/recovery-sensitive",
+        }
+    }
+
+    evidence = preflight.run_preflight(
+        FakeStripe([open_session, expired_session]),
+        **_common(),
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert evidence["ambiguous_cosmaneura_open_sessions"] == 1
+    assert evidence["recoverable_expired_cosmaneura_sessions"] == 1
+    assert evidence["ready_for_acquisition"] is False
+    assert "recovery-sensitive" not in json.dumps(evidence)
 
 
+def test_active_paid_pilot_payment_link_blocks_activation() -> None:
+    preflight = _load_preflight()
+    payment_link = {
+        "id": "plink_sensitive_identifier",
+        "active": True,
+        "line_items": {"data": [{"price": {"id": "price_test_x"}, "quantity": 1}]},
+        "url": "https://buy.stripe.com/sensitive",
+    }
+
+    evidence = preflight.run_preflight(
+        FakeStripe([], live_mode=True, payment_links=[payment_link]),
+        **_common(live_mode=True),
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert evidence["active_paid_pilot_payment_links"] == 1
+    assert evidence["ready_for_acquisition"] is False
+    assert "plink_sensitive" not in json.dumps(evidence)
 
 
 def test_zero_open_sessions_still_requires_full_maximum_lifetime_drain() -> None:
@@ -469,3 +565,507 @@ def test_zero_open_sessions_still_requires_full_maximum_lifetime_drain() -> None
     assert evidence["eligible_cosmaneura_open_sessions"] == 0
     assert evidence["drain_satisfied"] is False
     assert evidence["ready_for_acquisition"] is False
+
+
+def test_apply_cannot_expire_sessions_before_full_drain() -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe([_session("cs_pre_drain")])
+    common = {
+        **_common(),
+        "drain_started_at": NOW - timedelta(hours=23),
+    }
+    dry_run = preflight.run_preflight(
+        fake,
+        **common,
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    with pytest.raises(preflight.PreflightError, match="full Checkout Session drain"):
+        preflight.run_preflight(
+            fake,
+            **common,
+            apply=True,
+            confirmed_plan_sha256=dry_run["plan_sha256"],
+        )
+
+    assert not any(call[1].endswith("/expire") for call in fake.calls)
+
+
+@pytest.mark.parametrize(
+    ("override", "failed_prerequisite"),
+    [
+        ({"secret_configuration_confirmed": False}, "secret_configuration_confirmed"),
+        (
+            {"founder_owner_approval_confirmed": False},
+            "founder_owner_approval_recorded",
+        ),
+        ({"owner_approval_ref": ""}, "founder_owner_approval_recorded"),
+        (
+            {"pending_credential_trial_expiry_policy": None},
+            "pending_credential_trial_expiry_policy_resolved",
+        ),
+        (
+            {"policy_implementation_evidence_ref": ""},
+            "pending_credential_trial_expiry_policy_implemented",
+        ),
+        ({"deployed_source_sha": "b" * 40}, "reviewed_source_matches_deployed"),
+        ({"acquisition_disabled_confirmed": False}, "acquisition_disabled_confirmed"),
+        ({"old_code_stopped_confirmed": False}, "card_required_code_confirmed"),
+        ({"price_inventory_confirmed": False}, "price_inventory_confirmed"),
+        (
+            {"completed_session_reconciliation_confirmed": False},
+            "completed_session_reconciliation_recorded",
+        ),
+        (
+            {"completed_session_reconciliation_ref": ""},
+            "completed_session_reconciliation_recorded",
+        ),
+        (
+            {"completed_session_reconciliation_at": NOW - timedelta(hours=26)},
+            "completed_session_reconciliation_recorded",
+        ),
+        (
+            {"completed_session_reconciliation_sha256": ""},
+            "completed_session_reconciliation_recorded",
+        ),
+        ({"test_mode_lifecycle_confirmed": False}, "test_mode_lifecycle_evidenced"),
+        (
+            {"test_mode_lifecycle_evidence_ref": ""},
+            "test_mode_lifecycle_evidenced",
+        ),
+        (
+            {"test_mode_lifecycle_evidence_sha256": ""},
+            "test_mode_lifecycle_evidenced",
+        ),
+        (
+            {"observability_ready_confirmed": False},
+            "observability_readiness_evidenced",
+        ),
+        (
+            {"observability_evidence_ref": ""},
+            "observability_readiness_evidenced",
+        ),
+        (
+            {"observability_evidence_sha256": ""},
+            "observability_readiness_evidenced",
+        ),
+    ],
+)
+def test_missing_explicit_prerequisite_keeps_activation_not_ready(
+    override: dict[str, Any], failed_prerequisite: str
+) -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe([], live_mode=True)
+    common = {**_common(live_mode=True), **override}
+
+    evidence = preflight.run_preflight(
+        fake,
+        **common,
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert evidence["activation_prerequisites"][failed_prerequisite] is False
+    assert evidence["ready_for_acquisition"] is False
+
+
+@pytest.mark.parametrize(
+    "policy", ["charge_scheduled", "extend_trial", "hold_conversion"]
+)
+def test_each_explicit_owner_policy_can_satisfy_the_policy_gate(policy: str) -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe([], live_mode=True)
+    common = {
+        **_common(live_mode=True),
+        "pending_credential_trial_expiry_policy": policy,
+    }
+
+    evidence = preflight.run_preflight(
+        fake,
+        **common,
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert evidence["pending_credential_trial_expiry_policy"] == policy
+    assert evidence["ready_for_acquisition"] is True
+
+
+def test_omitted_policy_is_the_parser_default_and_never_inferred() -> None:
+    preflight = _load_preflight()
+
+    args = preflight._parser().parse_args(
+        [
+            "--operator-ref",
+            "CHANGE-123",
+            "--drain-started-at",
+            "2026-08-24T12:00:00Z",
+            "--expected-mode",
+            "live",
+        ]
+    )
+
+    assert args.pending_credential_trial_expiry_policy is None
+
+
+def test_unknown_pending_credential_policy_fails_before_stripe_calls() -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe([], live_mode=True)
+    common = {
+        **_common(live_mode=True),
+        "pending_credential_trial_expiry_policy": "invented_policy",
+    }
+
+    with pytest.raises(preflight.PreflightError, match="not an allowed value"):
+        preflight.run_preflight(
+            fake,
+            **common,
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize(
+    "price_override",
+    [
+        {"unit_amount": 8_800},
+        {"currency": "eur"},
+        {
+            "recurring": {
+                "interval": "year",
+                "interval_count": 1,
+                "usage_type": "licensed",
+            }
+        },
+        {
+            "recurring": {
+                "interval": "month",
+                "interval_count": 1,
+                "usage_type": "metered",
+            }
+        },
+        {"billing_scheme": "tiered"},
+        {"active": False},
+    ],
+)
+def test_current_price_must_exactly_match_the_89_dollar_licensed_monthly_offer(
+    price_override: dict[str, Any],
+) -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe(
+        [],
+        live_mode=True,
+        price_overrides={"price_test_x": price_override},
+    )
+
+    with pytest.raises(preflight.PreflightError, match="paid-pilot offer"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+def test_every_retired_price_must_be_exactly_inventoried_and_inactive() -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe(
+        [],
+        live_mode=True,
+        price_overrides={"price_retired": {"active": True}},
+        account_price_ids=("price_test_x", "price_retired"),
+    )
+    common = {**_common(live_mode=True), "legacy_price_ids": ("price_retired",)}
+
+    with pytest.raises(preflight.PreflightError, match="Retired Stripe price"):
+        preflight.run_preflight(
+            fake,
+            **common,
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+def test_retired_price_may_belong_to_a_separately_inventoried_product() -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe(
+        [],
+        live_mode=True,
+        price_overrides={
+            "price_retired": {
+                "active": False,
+                "product": "prod_retired_website",
+            }
+        },
+        account_price_ids=("price_test_x", "price_retired"),
+    )
+    common = {**_common(live_mode=True), "legacy_price_ids": ("price_retired",)}
+
+    evidence = preflight.run_preflight(
+        fake,
+        **common,
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert evidence["products_verified"] == 2
+    assert evidence["product_price_count"] == 2
+
+
+def test_account_wide_price_scan_rejects_an_uninventoried_product_price() -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe(
+        [],
+        live_mode=True,
+        account_price_ids=("price_test_x", "price_uninventoried"),
+    )
+
+    with pytest.raises(preflight.PreflightError, match="inventory is incomplete"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+    inventory_calls = [call for call in fake.calls if call[1] == "/prices"]
+    assert len(inventory_calls) == 2
+
+
+@pytest.mark.parametrize(
+    "product_override",
+    [
+        {"active": False},
+        {"default_price": "price_different"},
+        {"livemode": False},
+    ],
+)
+def test_product_must_match_the_exact_active_paid_pilot_product(
+    product_override: dict[str, Any],
+) -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe(
+        [],
+        live_mode=True,
+        product_overrides=product_override,
+    )
+
+    with pytest.raises(preflight.PreflightError, match="Stripe product"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+@pytest.mark.parametrize(
+    "endpoint_override",
+    [
+        {"status": "disabled"},
+        {"livemode": False},
+        {"api_version": "2024-06-20"},
+        {"enabled_events": [*EXPECTED_WEBHOOK_EVENTS, "invoice.finalized"]},
+        {"enabled_events": EXPECTED_WEBHOOK_EVENTS[:-1]},
+    ],
+)
+def test_webhook_must_be_active_in_expected_mode_with_exact_event_coverage(
+    endpoint_override: dict[str, Any],
+) -> None:
+    preflight = _load_preflight()
+    endpoint = {
+        "id": WEBHOOK_ID,
+        "api_version": "2025-09-30.clover",
+        "enabled_events": EXPECTED_WEBHOOK_EVENTS,
+        "livemode": True,
+        "status": "enabled",
+        "url": WEBHOOK_URL,
+        **endpoint_override,
+    }
+    fake = FakeStripe([], live_mode=True, webhook_endpoints=[endpoint])
+
+    with pytest.raises(preflight.PreflightError, match="webhook endpoint"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+def test_expected_webhook_url_must_match_exactly_once() -> None:
+    preflight = _load_preflight()
+    endpoint = {
+        "id": WEBHOOK_ID,
+        "api_version": "2025-09-30.clover",
+        "enabled_events": EXPECTED_WEBHOOK_EVENTS,
+        "livemode": True,
+        "status": "enabled",
+        "url": "https://different.example.test/external/v1/webhooks/stripe",
+    }
+    fake = FakeStripe([], live_mode=True, webhook_endpoints=[endpoint])
+
+    with pytest.raises(preflight.PreflightError, match="uniquely configured"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+def test_secret_key_mode_must_match_the_explicit_expected_mode() -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe([], live_mode=True)
+    common = {**_common(live_mode=True), "secret_key": "sk_test_not_printed"}
+
+    with pytest.raises(preflight.PreflightError, match="mode"):
+        preflight.run_preflight(
+            fake,
+            **common,
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+    assert fake.calls == []
+
+
+def test_account_must_match_the_exact_expected_account() -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe(
+        [],
+        live_mode=True,
+        returned_account_id="acct_different",
+    )
+
+    with pytest.raises(preflight.PreflightError, match="wrong account"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+@pytest.mark.parametrize(
+    "account_overrides",
+    [
+        {"charges_enabled": False},
+        {"payouts_enabled": False},
+        {"details_submitted": False},
+        {"requirements": {"disabled_reason": "requirements.past_due"}},
+        {"requirements": {"disabled_reason": None, "currently_due": ["tos"]}},
+    ],
+)
+def test_live_account_must_be_ready_for_billing(
+    account_overrides: dict[str, Any],
+) -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe([], live_mode=True, account_overrides=account_overrides)
+
+    with pytest.raises(preflight.PreflightError, match="not ready for live billing"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+@pytest.mark.parametrize(
+    "feature_override",
+    [
+        {"payment_method_update": {"enabled": False}},
+        {"subscription_cancel": {"enabled": True, "mode": "immediately"}},
+        {"subscription_pause": {"enabled": True}},
+        {"subscription_update": {"enabled": True}},
+        {"customer_update": {"enabled": True}},
+    ],
+)
+def test_portal_configuration_rejects_unsafe_feature_policy(
+    feature_override: dict[str, Any],
+) -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe(
+        [],
+        live_mode=True,
+        portal_configuration_overrides={"features": feature_override},
+    )
+
+    with pytest.raises(preflight.PreflightError, match="restricted to safe controls"):
+        preflight.run_preflight(
+            fake,
+            **_common(live_mode=True),
+            apply=False,
+            confirmed_plan_sha256=None,
+        )
+
+
+def test_main_wires_documented_environment_and_activation_arguments(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    preflight = _load_preflight()
+    fake = FakeStripe([], live_mode=True)
+    monkeypatch.setattr(preflight, "_stripe_request", fake)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_not_printed")
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_test_cosmaneura")
+    monkeypatch.setenv("STRIPE_PRODUCT_ID", PRODUCT_ID)
+    monkeypatch.setenv("STRIPE_PRICE_ID", "price_test_x")
+    monkeypatch.setenv("STRIPE_PORTAL_CONFIGURATION_ID", PORTAL_CONFIGURATION_ID)
+    monkeypatch.setenv("STRIPE_RETIRED_PRICE_IDS", "")
+    monkeypatch.delenv("STRIPE_LEGACY_PRICE_IDS", raising=False)
+    monkeypatch.setenv("STRIPE_WEBHOOK_ENDPOINT_URL", WEBHOOK_URL)
+
+    result = preflight.main(
+        [
+            "--operator-ref",
+            "CHANGE-123",
+            "--drain-started-at",
+            "2026-08-24T12:00:00Z",
+            "--expected-mode",
+            "live",
+            "--confirm-acquisition-disabled",
+            "--confirm-old-code-stopped",
+            "--confirm-price-inventory-complete",
+            "--confirm-secret-configuration",
+            "--confirm-completed-session-reconciliation",
+            "--completed-session-reconciliation-at",
+            "2026-08-26T12:00:00Z",
+            "--completed-session-reconciliation-ref",
+            "CHANGE-COMPLETED-789",
+            "--completed-session-reconciliation-sha256",
+            EVIDENCE_SHA256,
+            "--confirm-test-mode-lifecycle",
+            "--test-mode-lifecycle-evidence-ref",
+            "CHANGE-TEST-LIFECYCLE-234",
+            "--test-mode-lifecycle-evidence-sha256",
+            EVIDENCE_SHA256,
+            "--confirm-observability-ready",
+            "--observability-evidence-ref",
+            "CHANGE-OBSERVABILITY-345",
+            "--observability-evidence-sha256",
+            EVIDENCE_SHA256,
+            "--confirm-founder-owner-approval",
+            "--owner-approval-ref",
+            "APPROVAL-123",
+            "--pending-credential-trial-expiry-policy",
+            "hold_conversion",
+            "--policy-implementation-evidence-ref",
+            "CHANGE-IMPLEMENTATION-456",
+            "--reviewed-source-sha",
+            SOURCE_SHA,
+            "--deployed-source-sha",
+            SOURCE_SHA,
+        ]
+    )
+
+    evidence = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert evidence["ready_for_acquisition"] is True
+    assert evidence["stripe_product_id"] == PRODUCT_ID
+    assert evidence["stripe_portal_configuration_id"] == PORTAL_CONFIGURATION_ID
+    assert WEBHOOK_URL not in json.dumps(evidence)
+    assert WEBHOOK_ID not in json.dumps(evidence)
