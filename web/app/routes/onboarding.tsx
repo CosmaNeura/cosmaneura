@@ -56,7 +56,6 @@ import {
   exampleNoteUploadErrorCopy,
   submitExampleNote,
 } from "~/lib/example-note-upload"
-import { isValidNpi } from "~/lib/npi"
 import {
   type BaaDocument,
   type JoinMismatch,
@@ -593,27 +592,14 @@ export function PracticeForm({
   const [legalName, setLegalName] = useState("")
   const [city, setCity] = useState("")
   const [region, setRegion] = useState("")
-  const [npi, setNpi] = useState("")
   const [isSolo, setIsSolo] = useState(formChannel !== "mcd")
   const [domainConfirmed, setDomainConfirmed] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const controllingDomain = mcdOk ? MCD_EMAIL_DOMAIN : extractEmailDomain(email)
   const publicEmailDomain = isPublicEmailDomain(controllingDomain)
-  const normalizedNpi = npi.trim()
-  const npiError =
-    normalizedNpi && !/^\d{10}$/.test(normalizedNpi)
-      ? "NPI must be exactly 10 digits."
-      : normalizedNpi && !isValidNpi(normalizedNpi)
-        ? "NPI checksum is invalid."
-        : null
-
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (npiError) {
-      setError(npiError)
-      return
-    }
     if (!isSolo && !domainConfirmed) {
       setError(`Confirm @${controllingDomain} before continuing.`)
       return
@@ -625,7 +611,6 @@ export function PracticeForm({
         legal_name: legalName,
         city,
         region,
-        npi: normalizedNpi,
         is_solo: isSolo,
         channel: formChannel,
         pastoral_pack: false,
@@ -712,22 +697,6 @@ export function PracticeForm({
             />
           </Field>
         </div>
-        <Field label="Organizational NPI (optional)" htmlFor="npi">
-          <Input
-            id="npi"
-            inputMode="numeric"
-            value={npi}
-            onChange={(e) => setNpi(e.target.value)}
-            aria-invalid={Boolean(npiError)}
-            aria-describedby={npiError ? "npi-error" : undefined}
-            placeholder="10 digits"
-          />
-          {npiError ? (
-            <p id="npi-error" role="alert" className="text-destructive text-xs">
-              {npiError}
-            </p>
-          ) : null}
-        </Field>
         <fieldset className="grid gap-2">
           <legend className="text-sm font-medium">Who practices here?</legend>
           <label className={choiceClass(isSolo)}>
@@ -793,7 +762,7 @@ export function PracticeForm({
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
         <Button
           type="submit"
-          disabled={busy || Boolean(npiError) || (!isSolo && !domainConfirmed)}
+          disabled={busy || (!isSolo && !domainConfirmed)}
           size="lg"
         >
           {busy ? "Saving…" : "Continue to the BAA"}

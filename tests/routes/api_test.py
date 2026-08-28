@@ -85,7 +85,9 @@ def test_authorized_api_credentials(client: TestClient):
     assert response.json() == {"status": "ok"}
 
 
-def test_grandfather_grant_allows_api_credentials(client: TestClient):
+def test_grandfather_grant_cannot_bypass_practice_for_api_credentials(
+    client: TestClient,
+):
     user = DoctorFactory.build(email="grandfather-api@example.com")
     user.generate_api_key()
     user.save()
@@ -96,7 +98,7 @@ def test_grandfather_grant_allows_api_credentials(client: TestClient):
         headers={"Authorization": f"Bearer {user.api_key}"},
     )
 
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 def test_revoked_grandfather_grant_denies_api_credentials(client: TestClient):

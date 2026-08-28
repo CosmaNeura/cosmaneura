@@ -14,7 +14,7 @@ from fastapi import (
     Response,
     status,
 )
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 import app.commands.uploads.sas
 import app.commands.uploads.upload_visit_audio_file
@@ -89,7 +89,6 @@ from app.utils.email_domain import (
     is_mcd_email,
     is_public_email_domain,
 )
-from app.utils.npi import is_valid_npi
 
 from activemodel.session_manager import aglobal_session, get_session
 from activemodel.types import TypeIDType
@@ -130,6 +129,7 @@ from app.models.practice import (
     TRIAL_LENGTH,
     OriginChannel,
     Practice,
+    PracticeAcquisitionSource,
     PracticeMember,
     PracticeRole,
 )
@@ -1240,32 +1240,11 @@ def claim_organization_access(
 
 class CreatePracticeBody(BaseModel, extra="forbid"):
     legal_name: str = Field(min_length=3, max_length=160)
-    npi: str | None = Field(default=None, max_length=10)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=40)
     is_solo: bool = True
     channel: str = "direct"
     pastoral_pack: bool = False
-
-    @field_validator("npi", mode="before")
-    @classmethod
-    def validate_npi(cls, value: object) -> object:
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise ValueError("NPI must be exactly 10 digits.")
-        normalized = value.strip()
-        if not normalized:
-            return None
-        if (
-            len(normalized) != 10
-            or not normalized.isascii()
-            or not normalized.isdigit()
-        ):
-            raise ValueError("NPI must be exactly 10 digits.")
-        if not is_valid_npi(normalized):
-            raise ValueError("NPI checksum is invalid.")
-        return normalized
 
 
 @internal_api_app.post("/practice", name="create_practice")
@@ -1415,7 +1394,7 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
 
         practice = Practice(
             legal_name=data.legal_name.strip(),
-            npi=data.npi,
+            npi=None,
             city=(data.city or "").strip() or None,
             region=(data.region or "").strip() or None,
             is_solo=data.is_solo,
@@ -1425,6 +1404,7 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
             # The future feature flag remains in the schema, but onboarding
             # must not imply that a not-yet-built capability is active.
             pastoral_pack=False,
+            acquisition_source=PracticeAcquisitionSource.public_self_service.value,
         )
         session.add(practice)
         session.flush()

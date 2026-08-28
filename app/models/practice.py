@@ -27,6 +27,18 @@ class PracticeRole(str, Enum):
     workforce = "workforce"
 
 
+class ClinicianSeatState(str, Enum):
+    active = "active"
+    inactive = "inactive"
+
+
+class PracticeAcquisitionSource(str, Enum):
+    """Enrollment provenance only; never an authorization decision."""
+
+    managed = "managed"
+    public_self_service = "public_self_service"
+
+
 class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     """Covered entity. The BAA principal for Cosmas — not the individual clinician."""
 
@@ -51,6 +63,14 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
             "AND trial_ends_at IS NULL)",
             name="ck_practice_negotiated_baa_required_no_clickwrap",
         ),
+        sa.CheckConstraint(
+            "acquisition_source IN ('managed', 'public_self_service')",
+            name="ck_practice_acquisition_source",
+        ),
+        sa.CheckConstraint(
+            "acquisition_source <> 'public_self_service' OR npi IS NULL",
+            name="ck_practice_public_self_service_no_npi",
+        ),
         sa.Index("practice_organization_id_idx", "organization_id"),
     )
 
@@ -70,6 +90,13 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
 
     origin_channel: str = Field(default="direct")
     pastoral_pack: bool = False
+    acquisition_source: str = Field(
+        default=PracticeAcquisitionSource.managed.value,
+        max_length=32,
+    )
+    """Enrollment provenance for migration fencing; authorization-neutral."""
+    public_pilot_cohort: bool = False
+    """Explicit capability-rollout cohort; false is the safe default."""
 
     baa_version: str | None = None
     baa_accepted_at: datetime | None = Field(
@@ -229,6 +256,10 @@ class PracticeMember(
             name="ck_practice_member_role",
         ),
         sa.CheckConstraint(
+            "seat_state IN ('active', 'inactive')",
+            name="ck_practice_member_seat_state",
+        ),
+        sa.CheckConstraint(
             "(organization_roster_approval_id IS NULL "
             "AND organization_authorized_at IS NULL) OR "
             "(organization_roster_approval_id IS NOT NULL "
@@ -251,6 +282,11 @@ class PracticeMember(
             "practice_member_access_records_retain_until_idx",
             "access_records_retain_until",
         ),
+        sa.Index(
+            "practice_member_practice_seat_state_idx",
+            "practice_id",
+            "seat_state",
+        ),
     )
 
     practice_id: TypeIDType = Practice.foreign_key()
@@ -260,6 +296,8 @@ class PracticeMember(
     doctor: Doctor = Relationship()
 
     role: str
+    seat_state: str = Field(default=ClinicianSeatState.active.value)
+    "Active, non-revoked memberships occupy one clinician seat; inactive memberships do not."
     attested_at: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore

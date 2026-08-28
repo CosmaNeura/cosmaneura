@@ -123,7 +123,6 @@ export function claimOrganizationAccess(accessCode: string) {
 
 export function createPractice(body: {
   legal_name: string
-  npi?: string | null
   city?: string | null
   region?: string | null
   is_solo: boolean

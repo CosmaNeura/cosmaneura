@@ -2,9 +2,11 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.services.doctor_access import resolve_doctor_access
 
-from app.models.doctor import Doctor, DoctorRole
+from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
 
@@ -64,39 +66,60 @@ def _practice(
     return practice, member
 
 
-def test_active_pilot_grant_allows_access_without_mutating_identity_or_tenant():
+def test_active_pilot_grant_does_not_bypass_membership():
     doctor = _doctor("grant")
     _grant(doctor)
 
     decision = resolve_doctor_access(doctor)
 
-    assert decision.allowed is True
-    assert decision.authorization_basis == "pilot_grant"
-    assert decision.denial_reason is None
+    assert decision.allowed is False
+    assert decision.authorization_basis is None
+    assert decision.denial_reason == "practice_membership_required"
     assert decision.baa_in_force is False
     assert decision.entitlement_in_force is False
     doctor.refresh()
-    assert doctor.role == DoctorRole.normal
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
-def test_active_pilot_grant_preserves_existing_unready_membership():
+def test_active_pilot_grant_does_not_bypass_membership_authorization():
     doctor = _doctor("existing-member")
     practice, member = _practice(doctor, attested=False)
     _grant(doctor, practice=practice)
 
     decision = resolve_doctor_access(doctor)
 
-    assert decision.allowed is True
-    assert decision.authorization_basis == "pilot_grant"
+    assert decision.allowed is False
+    assert decision.authorization_basis is None
+    assert decision.denial_reason == "practice_access_not_authorized"
     assert decision.baa_in_force is False
-    assert decision.entitlement_in_force is False
+    assert decision.entitlement_in_force is True
     member.refresh()
-    doctor.refresh()
     assert member.practice_id == practice.id
     assert member.role == "workforce"
     assert member.attested_at is None
-    assert doctor.role == DoctorRole.normal
+
+
+def test_practice_bound_pilot_grant_is_entitlement_only_after_other_gates():
+    doctor = _doctor("bound-grant")
+    practice, _ = _practice(doctor)
+    _grant(doctor, practice=practice)
+
+    no_baa = resolve_doctor_access(doctor)
+    assert no_baa.allowed is False
+    assert no_baa.denial_reason == "baa_not_in_force"
+
+    practice.negotiated_baa_on_file = True
+    practice.negotiated_baa_effective_date = datetime.now(timezone.utc) - timedelta(
+        minutes=1
+    )
+    practice.negotiated_baa_reference = "Test BAA"
+    practice.save()
+
+    entitled = resolve_doctor_access(doctor)
+    assert entitled.allowed is True
+    assert entitled.authorization_basis == "pilot_grant"
+    assert entitled.baa_in_force is True
+    assert entitled.entitlement_in_force is True
 
 
 def test_revoked_membership_outranks_active_pilot_grant():
@@ -114,6 +137,20 @@ def test_revoked_membership_outranks_active_pilot_grant():
 
     assert decision.allowed is False
     assert decision.denial_reason == "practice_membership_revoked"
+    assert decision.authorization_basis is None
+
+
+def test_inactive_membership_outranks_active_pilot_grant():
+    doctor = _doctor("inactive-member")
+    practice, member = _practice(doctor)
+    member.seat_state = "inactive"
+    member.save()
+    _grant(doctor, practice=practice)
+
+    decision = resolve_doctor_access(doctor)
+
+    assert decision.allowed is False
+    assert decision.denial_reason == "practice_membership_inactive"
     assert decision.authorization_basis is None
 
 
@@ -162,3 +199,25 @@ def test_normal_practice_path_keeps_baa_and_entitlement_rules():
     assert entitled.authorization_basis == "workforce_attestation"
     assert entitled.baa_in_force is True
     assert entitled.entitlement_in_force is True
+
+
+@pytest.mark.parametrize("acquisition_source", ["managed", "public_self_service"])
+def test_acquisition_provenance_is_authorization_neutral(
+    acquisition_source: str,
+) -> None:
+    doctor = _doctor(f"provenance-{acquisition_source}")
+    practice, _ = _practice(doctor)
+    practice.acquisition_source = acquisition_source
+    practice.negotiated_baa_on_file = True
+    practice.negotiated_baa_effective_date = datetime.now(timezone.utc) - timedelta(
+        minutes=1
+    )
+    practice.negotiated_baa_reference = "Test BAA"
+    practice.billing_exempt = True
+    practice.save()
+
+    decision = resolve_doctor_access(doctor)
+
+    assert decision.allowed is True
+    assert decision.authorization_basis == "workforce_attestation"
+    assert not hasattr(PracticeMember, "credential_state")

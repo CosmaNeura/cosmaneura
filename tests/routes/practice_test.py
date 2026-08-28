@@ -116,7 +116,7 @@ def test_complete_onboarding_requires_practice(
     assert "practice" in resp.json()["detail"].lower()
 
 
-def test_grandfathered_doctor_can_complete_without_practice(
+def test_pilot_grant_cannot_complete_onboarding_without_practice(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -131,20 +131,20 @@ def test_grandfathered_doctor_can_complete_without_practice(
 
     settings = bare_authenticated_client.get(api_app.url_path_for("settings_data"))
     assert settings.status_code == status.HTTP_200_OK
-    assert settings.json()["onboarding_completed"] is True
-    assert settings.json()["practice_ready"] is True
+    assert settings.json()["onboarding_completed"] is False
+    assert settings.json()["practice_ready"] is False
     assert settings.json()["billing_recovery_required"] is False
 
     notes = bare_authenticated_client.get(api_app.url_path_for("note_list"))
-    assert notes.status_code == status.HTTP_200_OK
+    assert notes.status_code == status.HTTP_403_FORBIDDEN
 
     resp = bare_authenticated_client.post(api_app.url_path_for("complete_onboarding"))
-    assert resp.status_code == status.HTTP_200_OK
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
     doctor.refresh()
-    assert doctor.onboarding_completed_at is not None
+    assert doctor.onboarding_completed_at is None
 
 
-def test_continuity_granted_legacy_admin_can_reach_clinical_dashboard(
+def test_legacy_role_and_pilot_grant_cannot_bypass_membership(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -159,10 +159,10 @@ def test_continuity_granted_legacy_admin_can_reach_clinical_dashboard(
 
     response = bare_authenticated_client.get(api_app.url_path_for("note_list"))
 
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_grandfathered_practice_payload_keeps_facts_and_exposes_bypass(
+def test_pilot_grant_does_not_activate_before_practice_gates(
     bare_authenticated_client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -179,7 +179,7 @@ def test_grandfathered_practice_payload_keeps_facts_and_exposes_bypass(
 
     assert response.status_code == status.HTTP_200_OK
     payload = response.json()
-    assert payload["pilot_access_grant_active"] is True
+    assert payload["pilot_access_grant_active"] is False
     assert payload["baa_accepted"] is False
     assert payload["access_authorized"] is False
     assert payload["entitled"] is False
@@ -302,26 +302,16 @@ def test_create_practice_rechecks_live_email_while_rows_are_locked(
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
 
-@pytest.mark.parametrize(
-    ("npi", "message"),
-    [
-        ("12345678901", "exactly 10 digits"),
-        ("12345A7893", "exactly 10 digits"),
-        ("1234567890", "checksum is invalid"),
-    ],
-)
-def test_create_practice_rejects_invalid_npi_without_truncating(
+def test_create_practice_rejects_npi_and_never_persists_it(
     bare_authenticated_client: TestClient,
-    npi: str,
-    message: str,
 ):
     doctor = _authed_doctor()
 
     response = bare_authenticated_client.post(
         api_app.url_path_for("create_practice"),
         json={
-            "legal_name": "NPI Validation Practice",
-            "npi": npi,
+            "legal_name": "NPI-Free Practice",
+            "npi": "1234567893",
             "is_solo": True,
             "channel": "direct",
             "pastoral_pack": False,
@@ -329,16 +319,13 @@ def test_create_practice_rejects_invalid_npi_without_truncating(
     )
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert message in response.text
+    assert "extra_forbidden" in response.text
     assert PracticeMember.get(doctor_id=doctor.id) is None
 
-
-def test_create_practice_accepts_valid_npi(bare_authenticated_client: TestClient):
-    doctor = _authed_doctor()
-
-    _create_practice(bare_authenticated_client, npi="1234567893")
-
-    assert _own_practice(doctor).npi == "1234567893"
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    assert practice.npi is None
+    assert practice.acquisition_source == "public_self_service"
 
 
 @pytest.mark.parametrize("reservation", ["bootstrap", "organization"])
