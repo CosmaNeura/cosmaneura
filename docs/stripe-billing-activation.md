@@ -22,6 +22,25 @@ Do not describe `STRIPE_BILLING_ENABLED=false` as a hard stop. The integration
 and webhook must remain enabled for subscription maintenance, and existing
 hosted sessions remain usable until they complete or expire.
 
+Billing Portal maintenance is independent of the new-acquisition switch, but
+not of webhook verification. Core must not create a Portal Session while its
+Stripe signing secret is unavailable: payment-method or cancellation changes
+would otherwise occur without a trustworthy path back into the authoritative
+subscription projection. Portal access also requires a complete Core binding
+(`cus_` customer and `sub_` subscription) that still matches the remotely
+retrieved subscription; a customer ID alone is not authority. Public rows also
+require a positive Stripe state version. A pre-receiver managed/legacy row may
+start at version zero, but only its exact remotely verified customer and
+subscription identity can be used.
+
+That ownership check validates the stable subscription/customer/account
+identity, not the current offer shape. A legitimately bound canceled or
+incomplete-expired subscription may use a retired price or legacy metadata and
+must still be able to open the Portal or start a replacement Checkout. Core
+binding changes are version-fenced before a hosted URL is returned. Partial or
+malformed Core bindings are a local reconciliation conflict, not represented as
+a Stripe-originated failure.
+
 The production offer is one active recurring price: USD $89.00 per licensed
 active-clinician seat each month (`unit_amount=8900`, `usage_type=licensed`,
 `billing_scheme=per_unit`, no quantity transform). The practice seat ceiling is
@@ -40,8 +59,8 @@ does not inspect it, and it is neither authentication nor credential proof. A
 future enabled payer-facing HIPAA-standard transaction or integration may
 collect it just in time only when that transaction demonstrably requires it.
 CAB remains billing-intelligence/advisory only: it has no EHR-write,
-837P/claim-submission, or clearinghouse scope, and those capabilities are not on
-the roadmap.
+837P/claim-submission, clearinghouse, or payer-enrollment scope, and those
+capabilities are not on the roadmap.
 
 The byte-pinned `CN-BAA-CUST-CW` v2.2 text nevertheless contains the phrase
 “claims preparation and submission support.” This runbook does not amend or
@@ -49,9 +68,9 @@ reinterpret that language. Its canonical SHA-256 remains
 `13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e`, and
 public promotion must remain blocked until counsel supplies a written
 reconciliation of that exact agreement with the advisory-only, no-EHR-write,
-no-837P, no-claim-submission, and no-clearinghouse product boundary. If counsel
-requires different text, publish a new agreement version and obtain a new
-acceptance record; never edit v2.2 in place.
+no-837P, no-claim-submission, no-clearinghouse, and no-payer-enrollment product
+boundary. If counsel requires different text, publish a new agreement version
+and obtain a new acceptance record; never edit v2.2 in place.
 
 This branch still inherits a legacy nullable Core NPI API/OpenAPI surface from
 its current receiver base. It is not policy-conformant and must not merge or
@@ -220,7 +239,7 @@ non-sensitive and artifact digests must be lowercase SHA-256 values.
 | Stripe test lifecycle | Test-mode results for card-required Checkout, the exact 14-day trial, customer/practice binding, quantities 1–20 and rejection of 21, signed/replayed/reordered webhooks, reconciliation, pinned Portal launch, cancellation, past-due/payment recovery, deletion, and stale/abandoned Checkout recovery. | `--confirm-test-mode-lifecycle`, `--test-mode-lifecycle-evidence-ref`, `--test-mode-lifecycle-evidence-sha256` |
 | Observability | PHI-free metric/dashboard and alert-delivery evidence for Checkout failures, webhook lag and processing failures, entitlement mismatches, cancellation/recovery, and seat reconciliation. | `--confirm-observability-ready`, `--observability-evidence-ref`, `--observability-evidence-sha256` |
 | NPI-free Core receiver | Exact reviewed 40-hex receiver commit, with generated OpenAPI/client artifacts and tests proving public onboarding rejects and never sends NPI and billing never receives or inspects it. | `--confirm-npi-free-core-receiver`, `--npi-free-core-receiver-sha` |
-| Counsel BAA scope reconciliation | Counsel's written reconciliation of byte-pinned `CN-BAA-CUST-CW` v2.2 (SHA-256 `13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e`) with CAB's advisory-only/no-write/no-submit scope. | `--confirm-counsel-baa-scope-reconciliation`, `--counsel-baa-scope-reconciliation-ref`, `--counsel-baa-scope-reconciliation-sha256` |
+| Counsel BAA scope reconciliation | Counsel's written reconciliation of byte-pinned `CN-BAA-CUST-CW` v2.2 (SHA-256 `13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e`) with CAB's advisory-only/no-EHR-write/no-837P/no-claim-submission/no-clearinghouse/no-payer-enrollment scope. | `--confirm-counsel-baa-scope-reconciliation`, `--counsel-baa-scope-reconciliation-ref`, `--counsel-baa-scope-reconciliation-sha256` |
 | Seat-change billing policy | Owner-approved and deployed treatment of mid-cycle activation/deactivation, including proration or credits and invoice timing, with Stripe test-mode evidence for increases and decreases. | `--confirm-seat-change-billing-policy-implemented`, `--seat-change-billing-policy-implementation-evidence-ref` |
 
 Do not set a confirmation from source tests alone when the gate requires a real

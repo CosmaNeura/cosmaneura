@@ -2080,7 +2080,23 @@ def create_billing_checkout(
             detail="Billing is not configured in this environment.",
         )
     try:
-        stripe_billing.refresh_subscription_state(practice)
+        # A terminal binding is verified by the Checkout service using only
+        # stable Stripe identity. Running the current-offer validator first
+        # would strand a legitimate customer whose canceled subscription uses
+        # a retired price or legacy metadata.
+        if (
+            practice.subscription_status
+            not in stripe_billing.TERMINAL_SUBSCRIPTION_STATUSES
+        ):
+            stripe_billing.refresh_subscription_state(practice)
+    except stripe_billing.StripeCoreBindingInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The Core billing account is incomplete and requires "
+                "operator reconciliation."
+            ),
+        ) from exc
     except stripe_billing.StripeStateConflict as exc:
         log.warning(
             "stripe subscription changed repeatedly before checkout",
@@ -2166,6 +2182,14 @@ def create_billing_checkout(
                 "reconciliation before it can be retried."
             ),
         ) from exc
+    except stripe_billing.StripeCoreBindingInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The Core billing account is incomplete and requires "
+                "operator reconciliation."
+            ),
+        ) from exc
     except stripe_billing.StripeStateConflict as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2239,6 +2263,19 @@ def create_billing_portal(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Billing is not configured in this environment.",
+        ) from exc
+    except stripe_billing.StripeCoreBindingInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The Core billing account is incomplete and requires "
+                "operator reconciliation."
+            ),
+        ) from exc
+    except stripe_billing.StripeStateConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The current Stripe subscription is changing. Try again shortly.",
         ) from exc
     except stripe_billing.StripeStateInvalid as exc:
         log.error(

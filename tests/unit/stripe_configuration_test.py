@@ -10,6 +10,7 @@ def _configure_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stripe_config, "STRIPE_SECRET_KEY", "sk_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_ACCOUNT_ID", "acct_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_PRICE_ID", "price_test_x")
+    monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", "whsec_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_API_VERSION", "2025-09-30.clover")
     monkeypatch.setattr(stripe_config, "STRIPE_LIVE_MODE", False)
 
@@ -41,6 +42,16 @@ def test_portal_configuration_does_not_enable_disabled_integration(
     _configure_runtime(monkeypatch)
     monkeypatch.setattr(stripe_config, "STRIPE_INTEGRATION_ENABLED", False)
     monkeypatch.setattr(stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", "bpc_test_x")
+
+    assert not stripe_config.stripe_portal_configured()
+
+
+def test_portal_configuration_requires_webhook_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_runtime(monkeypatch)
+    monkeypatch.setattr(stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", "bpc_test_x")
+    monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", "")
 
     assert not stripe_config.stripe_portal_configured()
 

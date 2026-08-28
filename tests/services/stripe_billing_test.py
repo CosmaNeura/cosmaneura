@@ -96,6 +96,7 @@ class FakeStripe:
                 "mode": "subscription",
                 "status": "open",
                 "subscription": None,
+                "customer": data.get("customer"),
                 "payment_method_collection": data["payment_method_collection"],
                 "metadata": {
                     "checkout_policy": data["metadata[checkout_policy]"],
@@ -429,12 +430,14 @@ def test_acquisition_requires_webhook_but_maintenance_survives_kill_switch(
     monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", "")
     assert stripe_config.stripe_runtime_configured()
     assert not stripe_config.stripe_webhook_configured()
+    assert not stripe_config.stripe_portal_configured()
     assert not stripe_config.stripe_billing_configured()
 
     monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setattr(stripe_config, "STRIPE_BILLING_ENABLED", False)
     assert stripe_config.stripe_runtime_configured()
     assert stripe_config.stripe_webhook_configured()
+    assert stripe_config.stripe_portal_configured()
     assert not stripe_config.stripe_billing_configured()
 
 
@@ -554,6 +557,7 @@ def test_cached_checkout_cannot_resume_over_nonterminal_subscription(
     practice.stripe_customer_id = "cus_existing_active"
     practice.stripe_subscription_id = "sub_existing_active"
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.stripe_checkout_session_id = "cs_stale_over_active"
     practice.stripe_checkout_session_url = "https://checkout.stripe.com/c/pay/stale"
     practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
@@ -877,10 +881,178 @@ def test_active_billing_exemption_cannot_enter_public_paid_pilot_checkout(
     assert remote.calls == []
 
 
+@pytest.mark.parametrize(
+    ("customer_id", "subscription_id", "state_version"),
+    [
+        ("cus_unbound", None, 1),
+        (None, "sub_unbound", 1),
+        ("customer_untrusted", "sub_bound", 1),
+        ("cus_bound", "subscription_untrusted", 1),
+        ("cus_bound", "sub_bound", 0),
+    ],
+)
+def test_checkout_rejects_incomplete_core_binding_before_stripe_io(
+    remote: FakeStripe,
+    customer_id: str | None,
+    subscription_id: str | None,
+    state_version: int,
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    practice.stripe_customer_id = customer_id
+    practice.stripe_subscription_id = subscription_id
+    practice.subscription_status = "canceled" if subscription_id else None
+    practice.stripe_state_version = state_version
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeCoreBindingInvalid, match="authoritative"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+
+    assert remote.calls == []
+
+
+def test_checkout_rejects_status_only_core_projection_before_stripe_io(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    practice.public_onboarding_required = True
+    practice.subscription_status = "active"
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeCoreBindingInvalid, match="authoritative"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+
+    assert remote.calls == []
+
+
+def test_legacy_zero_version_binding_can_be_authoritatively_refreshed(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_legacy_zero_version",
+        customer_id="cus_legacy_zero_version",
+        status="past_due",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.public_onboarding_required = False
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "past_due"
+    practice.stripe_state_version = 0
+    practice.save()
+
+    stripe_billing.refresh_subscription_state(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "past_due"
+    assert practice.stripe_state_version == 1
+
+
+def test_checkout_reuses_verified_customer_from_terminal_legacy_subscription(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_terminal_legacy",
+        customer_id="cus_terminal_legacy",
+        status="canceled",
+        price_id="price_retired",
+        quantity=37,
+    )
+    subscription["metadata"] = {"practice_id": str(practice.id)}
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription, status="canceled")
+
+    assert (
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+        == "https://checkout.stripe.com/c/pay/test"
+    )
+
+    checkout_call = next(
+        call for call in remote.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    assert checkout_call[2]["customer"] == "cus_terminal_legacy"
+
+
+def test_new_open_checkout_with_subscription_is_retired_before_url_return(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    original_request = stripe_billing._request
+
+    def return_open_session_with_subscription(
+        method, path, data=None, *, idempotency_key=None
+    ):
+        result = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path == "/checkout/sessions":
+            result["subscription"] = "sub_unexpected_open_checkout"
+        return result
+
+    retired: list[str] = []
+
+    def record_retirement(_practice, session, **_kwargs):
+        retired.append(session["id"])
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "_request",
+        return_open_session_with_subscription,
+    )
+    monkeypatch.setattr(
+        stripe_billing,
+        "_retire_open_checkout_session",
+        record_retirement,
+    )
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="unexpectedly created"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+
+    assert retired == ["cs_test_idempotent"]
+
+
 def test_portal_session_uses_pinned_restricted_configuration(remote: FakeStripe):
     practice = _practice()
-    practice.stripe_customer_id = "cus_portal"
-    practice.save()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_portal",
+        customer_id="cus_portal",
+        status="past_due",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(
+        practice,
+        subscription,
+        status="past_due",
+    )
 
     url = stripe_billing.create_portal_session(
         practice, return_url="https://app.example/settings"
@@ -895,6 +1067,130 @@ def test_portal_session_uses_pinned_restricted_configuration(remote: FakeStripe)
         "customer": "cus_portal",
         "return_url": "https://app.example/settings",
     }
+
+
+def test_portal_session_accepts_verified_terminal_legacy_subscription_identity(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_portal_legacy",
+        customer_id="cus_portal_legacy",
+        status="canceled",
+        price_id="price_retired",
+        quantity=37,
+    )
+    subscription["metadata"] = {"practice_id": str(practice.id)}
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(
+        practice,
+        subscription,
+        status="canceled",
+    )
+
+    assert (
+        stripe_billing.create_portal_session(
+            practice, return_url="https://app.example/settings"
+        )
+        == "https://billing.stripe.com/p/session/test"
+    )
+
+
+def test_portal_accepts_remotely_verified_legacy_zero_version_binding(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_portal_zero_version",
+        customer_id="cus_portal_zero_version",
+        status="past_due",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.public_onboarding_required = False
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "past_due"
+    practice.stripe_state_version = 0
+    practice.save()
+
+    assert (
+        stripe_billing.create_portal_session(
+            practice, return_url="https://app.example/settings"
+        )
+        == "https://billing.stripe.com/p/session/test"
+    )
+
+
+def test_portal_session_rejects_customer_only_binding_before_stripe_io(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    practice.stripe_customer_id = "cus_unbound"
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeCoreBindingInvalid, match="authoritative"):
+        stripe_billing.create_portal_session(
+            practice, return_url="https://app.example/settings"
+        )
+
+    assert remote.calls == []
+
+
+def test_portal_session_rejects_remote_customer_mismatch(remote: FakeStripe):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_portal_mismatch",
+        customer_id="cus_expected",
+        status="past_due",
+    )
+    _bind_verified_public_subscription(
+        practice,
+        subscription,
+        status="past_due",
+    )
+    subscription["customer"] = "cus_other"
+    remote.subscriptions[subscription["id"]] = subscription
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="binding changed"):
+        stripe_billing.create_portal_session(
+            practice, return_url="https://app.example/settings"
+        )
+
+    assert not any(call[1] == "/billing_portal/sessions" for call in remote.calls)
+
+
+def test_portal_does_not_return_session_after_core_binding_race(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_portal_before_race",
+        customer_id="cus_portal_stable",
+        status="past_due",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription, status="past_due")
+    original_request = stripe_billing._request
+
+    def rebind_during_portal_creation(method, path, data=None, *, idempotency_key=None):
+        result = original_request(method, path, data, idempotency_key=idempotency_key)
+        if path == "/billing_portal/sessions":
+            practice.stripe_subscription_id = "sub_portal_after_race"
+            practice.stripe_state_version += 1
+            practice.save()
+        return result
+
+    monkeypatch.setattr(stripe_billing, "_request", rebind_during_portal_creation)
+
+    with pytest.raises(stripe_billing.StripeStateConflict, match="during Portal"):
+        stripe_billing.create_portal_session(
+            practice, return_url="https://app.example/settings"
+        )
 
 
 def test_portal_session_fails_closed_without_pinned_configuration(
@@ -1520,14 +1816,23 @@ def test_checkout_request_rejects_customer_binding_race_before_stripe_io(
     original_snapshot = stripe_billing._checkout_request_snapshot
 
     def bind_terminal_subscription_before_snapshot(
-        row: Practice, proposed_data: dict, *, current: datetime
+        row: Practice,
+        proposed_data: dict,
+        *,
+        current: datetime,
+        verified_binding: tuple[str, str, int] | None = None,
     ):
         row.stripe_customer_id = "cus_bound_during_checkout"
         row.stripe_subscription_id = "sub_terminal_during_checkout"
         row.subscription_status = "canceled"
         row.stripe_state_version += 1
         row.save()
-        return original_snapshot(row, proposed_data, current=current)
+        return original_snapshot(
+            row,
+            proposed_data,
+            current=current,
+            verified_binding=verified_binding,
+        )
 
     monkeypatch.setattr(
         stripe_billing,
@@ -1535,7 +1840,48 @@ def test_checkout_request_rejects_customer_binding_race_before_stripe_io(
         bind_terminal_subscription_before_snapshot,
     )
 
-    with pytest.raises(stripe_billing.StripeStateConflict, match="customer binding"):
+    with pytest.raises(stripe_billing.StripeStateConflict, match="Stripe binding"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+
+    assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
+def test_checkout_rejects_same_customer_rebind_after_remote_verification(
+    remote: FakeStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    practice = _practice()
+    old_subscription = _subscription(
+        practice,
+        subscription_id="sub_terminal_old",
+        customer_id="cus_stable",
+        status="canceled",
+    )
+    remote.subscriptions[old_subscription["id"]] = old_subscription
+    _bind_verified_public_subscription(
+        practice,
+        old_subscription,
+        status="canceled",
+    )
+    original_request = stripe_billing._request
+
+    def rebind_after_subscription_get(method, path, data=None, *, idempotency_key=None):
+        result = original_request(method, path, data, idempotency_key=idempotency_key)
+        if path == "/subscriptions/sub_terminal_old":
+            practice.stripe_subscription_id = "sub_terminal_new"
+            practice.stripe_state_version += 1
+            practice.save()
+        return result
+
+    monkeypatch.setattr(stripe_billing, "_request", rebind_after_subscription_get)
+
+    with pytest.raises(stripe_billing.StripeStateConflict, match="Stripe binding"):
         stripe_billing.create_checkout_session(
             practice,
             customer_email="owner@example.com",
@@ -1577,6 +1923,12 @@ def test_checkout_retry_rejects_customer_bound_after_lost_response(
     practice.subscription_status = "canceled"
     practice.stripe_state_version += 1
     practice.save()
+    remote.subscriptions["sub_terminal_after_timeout"] = _subscription(
+        practice,
+        subscription_id="sub_terminal_after_timeout",
+        customer_id="cus_bound_after_timeout",
+        status="canceled",
+    )
     checkout_calls_before_retry = len(
         [call for call in remote.calls if call[1] == "/checkout/sessions"]
     )
@@ -1920,6 +2272,7 @@ def test_bound_legacy_subscription_preserves_valid_historical_trial(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "pending_verification"
+    practice.stripe_state_version = 1
     practice.save()
 
     stripe_billing.refresh_subscription_state(practice)
@@ -3016,6 +3369,7 @@ def test_bound_remote_quantity_above_pilot_limit_revokes_entitlement(
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "active"
     practice.trial_ends_at = NOW + timedelta(days=14)
+    practice.stripe_state_version = 1
     practice.save()
 
     stripe_billing.refresh_subscription_state(practice)
@@ -3043,6 +3397,7 @@ def test_refresh_revokes_stale_entitlement_when_canonical_seat_ledger_is_invalid
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.save()
     monkeypatch.setattr(
         stripe_billing,
@@ -3069,6 +3424,7 @@ def test_webhook_revokes_stale_entitlement_when_canonical_seat_ledger_is_invalid
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.save()
     monkeypatch.setattr(
         stripe_billing,
@@ -3107,6 +3463,7 @@ def test_zero_local_seats_fail_closed_but_do_not_block_cancellation(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.save()
 
     stripe_billing.refresh_subscription_state(practice)
@@ -3347,6 +3704,7 @@ def test_incomplete_subscription_resumes_exact_open_checkout_session(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "incomplete"
+    practice.stripe_state_version = 1
     practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
     practice.stripe_checkout_session_id = "cs_resume"
     practice.stripe_checkout_session_url = "https://checkout.stripe.com/c/pay/resume"
@@ -3362,6 +3720,7 @@ def test_incomplete_subscription_resumes_exact_open_checkout_session(
         "mode": "subscription",
         "status": "open",
         "subscription": subscription["id"],
+        "customer": subscription["customer"],
         "payment_method_collection": "always",
         "metadata": _current_checkout_metadata(practice),
     }
@@ -3377,6 +3736,133 @@ def test_incomplete_subscription_resumes_exact_open_checkout_session(
         == "https://checkout.stripe.com/c/pay/resume"
     )
     assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
+def test_cached_checkout_rejects_customer_mismatch_before_resuming(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    practice.trial_ends_at = NOW + timedelta(hours=1)
+    subscription = _subscription(practice, status="incomplete")
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(
+        practice,
+        subscription,
+        status="incomplete",
+        trial_ends_at=practice.trial_ends_at,
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.stripe_checkout_session_id = "cs_resume_wrong_customer"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/resume-wrong-customer"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+    remote.sessions["cs_resume_wrong_customer"] = {
+        "id": "cs_resume_wrong_customer",
+        "url": "https://checkout.stripe.com/c/pay/resume-wrong-customer",
+        "expires_at": int((NOW + timedelta(hours=1)).timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": subscription["id"],
+        "customer": "cus_other",
+        "payment_method_collection": "always",
+        "metadata": _current_checkout_metadata(practice),
+    }
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="customer binding"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    assert not any(
+        method == "POST" and path == "/checkout/sessions"
+        for method, path, _data, _key in remote.calls
+    )
+
+
+def test_cached_checkout_rejects_remote_nonterminal_subscription_over_stale_terminal(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_remote_active_over_stale_terminal",
+        customer_id="cus_remote_active_over_stale_terminal",
+        status="active",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(
+        practice,
+        subscription,
+        status="canceled",
+    )
+    practice.stripe_checkout_session_id = "cs_must_not_resume_over_remote_active"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/must-not-resume"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.save()
+
+    with pytest.raises(stripe_billing.StripeCheckoutAlreadyCompleted):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    assert not any(
+        path.startswith("/checkout/sessions")
+        for _method, path, _data, _key in remote.calls
+    )
+
+
+def test_cached_open_checkout_rejects_subscription_without_core_binding(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    practice.stripe_checkout_session_id = "cs_open_with_unbound_subscription"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/open-with-unbound-subscription"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=1)
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    remote.sessions[practice.stripe_checkout_session_id] = {
+        "id": practice.stripe_checkout_session_id,
+        "url": practice.stripe_checkout_session_url,
+        "expires_at": int(practice.stripe_checkout_session_expires_at.timestamp()),
+        "client_reference_id": str(practice.id),
+        "livemode": False,
+        "mode": "subscription",
+        "status": "open",
+        "subscription": "sub_unbound_open_checkout",
+        "customer": "cus_unbound_open_checkout",
+        "payment_method_collection": "always",
+        "metadata": _current_checkout_metadata(practice),
+    }
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="unbound subscription"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    assert not any(
+        method == "POST" and path == "/checkout/sessions"
+        for method, path, _data, _key in remote.calls
+    )
 
 
 def test_cached_pre_v2_checkout_is_retired_when_acquisition_is_off(
@@ -3534,6 +4020,7 @@ def test_legacy_open_checkout_with_incomplete_subscription_waits_for_terminal_st
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "incomplete"
+    practice.stripe_state_version = 1
     practice.stripe_checkout_session_id = "cs_legacy_incomplete"
     practice.stripe_checkout_session_url = (
         "https://checkout.stripe.com/c/pay/legacy-incomplete"
@@ -3549,6 +4036,7 @@ def test_legacy_open_checkout_with_incomplete_subscription_waits_for_terminal_st
         "mode": "subscription",
         "status": "open",
         "subscription": subscription["id"],
+        "customer": subscription["customer"],
         "payment_method_collection": "if_required",
     }
 
@@ -3783,9 +4271,11 @@ def test_incomplete_expired_clears_stale_cache_before_new_checkout(
 ):
     practice = _practice()
     old = _subscription(practice, status="incomplete_expired")
+    remote.subscriptions[old["id"]] = old
     practice.stripe_customer_id = old["customer"]
     practice.stripe_subscription_id = old["id"]
     practice.subscription_status = "incomplete_expired"
+    practice.stripe_state_version = 1
     practice.stripe_checkout_session_id = "cs_expired_old"
     practice.stripe_checkout_session_url = "https://checkout.stripe.com/c/pay/old"
     practice.stripe_checkout_session_expires_at = NOW - timedelta(seconds=1)
@@ -3799,6 +4289,7 @@ def test_incomplete_expired_clears_stale_cache_before_new_checkout(
         "mode": "subscription",
         "status": "expired",
         "subscription": None,
+        "customer": old["customer"],
     }
 
     url = stripe_billing.create_checkout_session(
@@ -3880,9 +4371,17 @@ def test_completed_checkout_rebinds_after_terminal_old_subscription(
     practice.stripe_customer_id = "cus_test_123"
     practice.stripe_subscription_id = "sub_old_canceled"
     practice.subscription_status = "canceled"
+    practice.stripe_state_version = 1
     practice.stripe_checkout_session_id = "cs_new_complete"
     practice.trial_ends_at = NOW - timedelta(days=1)
     practice.save()
+    old = _subscription(
+        practice,
+        subscription_id="sub_old_canceled",
+        customer_id="cus_test_123",
+        status="canceled",
+    )
+    remote.subscriptions[old["id"]] = old
     new = _subscription(practice, subscription_id="sub_new_active")
     remote.subscriptions[new["id"]] = new
     remote.sessions["cs_new_complete"] = {
@@ -3894,6 +4393,7 @@ def test_completed_checkout_rebinds_after_terminal_old_subscription(
         "mode": "subscription",
         "status": "complete",
         "subscription": new["id"],
+        "customer": "cus_test_123",
     }
 
     with pytest.raises(stripe_billing.StripeCheckoutAlreadyCompleted):
@@ -4018,6 +4518,7 @@ def test_archived_expected_price_allows_maintenance_but_blocks_new_checkout(
     remote.subscriptions[subscription["id"]] = subscription
     practice.stripe_subscription_id = subscription["id"]
     practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_state_version = 1
     practice.save()
     remote.price["active"] = False
 
@@ -4170,6 +4671,7 @@ def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStrip
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.save()
 
     stripe_billing.mark_quantity_sync_required(practice)
@@ -4275,6 +4777,7 @@ def test_quantity_sync_never_mutates_a_bound_subscription_with_identity_drift(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.save()
     subscription["customer"] = "cus_wrong_customer"
     remote.subscriptions[subscription["id"]] = subscription
@@ -4299,6 +4802,7 @@ def test_repeated_quantity_target_uses_a_new_idempotency_key_per_obligation(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.save()
 
     stripe_billing.mark_quantity_sync_required(practice)
