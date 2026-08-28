@@ -10,7 +10,7 @@ from app.configuration.server import API_BASE_URL
 from app.environments import is_production, is_staging
 from app.jobs import merge_window
 from app.routes.recall_callbacks import zak_token_redis_key
-from app.services import recall, zoom_webhook_operations
+from app.services import recall, zoom_capture_authorization, zoom_webhook_operations
 from app.services import zoom as zoom_service
 from app.services.doctor_access import doctor_access_in_force
 from app.services.external_webhook_inbox import (
@@ -76,6 +76,17 @@ PROD_ZOOM_EMAILS = frozenset(
 
 
 SideEffectBoundary = Callable[[], None]
+
+
+def zoom_bot_email_allowed(email: str | None) -> bool:
+    normalized_email = (email or "").strip().lower()
+    if is_staging():
+        return normalized_email in STAGING_ZOOM_EMAILS
+    if is_production():
+        return normalized_email in PROD_ZOOM_EMAILS
+    # Development/test never dispatches a real bot unless the provider clients
+    # are explicitly substituted, so local integration tests stay ungated.
+    return True
 
 
 def _begin_side_effect(boundary: SideEffectBoundary | None) -> None:
@@ -147,23 +158,27 @@ def handle_meeting_started(
                 meeting_ref=provider_log_ref(meeting_id_str),
             )
             return
-        if (
+        duplicate_active_occurrence = bool(
             event_occurrence is not None
             and active_occurrence == event_occurrence
             and _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
-        ):
+        )
+        if duplicate_active_occurrence:
             log.info(
-                "duplicate meeting.started for active occurrence, skipping",
+                "duplicate meeting.started for active occurrence, rechecking authorization",
                 meeting_ref=provider_log_ref(meeting_id_str),
             )
-            return
-        if event_occurrence is None and not acquired_legacy_fence:
+        if (
+            not duplicate_active_occurrence
+            and event_occurrence is None
+            and not acquired_legacy_fence
+        ):
             log.info(
                 "legacy meeting.started duplicate within lock window, skipping",
                 meeting_ref=provider_log_ref(meeting_id_str),
             )
             return
-        if tracked_bot_id:
+        if not duplicate_active_occurrence and tracked_bot_id:
             # A duplicate meeting.started (or a reused PMR whose prior bot did
             # not confirm leave) is not authority to discard provider
             # ownership. Keep every key intact so meeting.ended, expiry, or an
@@ -174,12 +189,12 @@ def handle_meeting_started(
                 bot_ref=provider_log_ref(tracked_bot_id),
             )
             return
-        continuing_race = (
+        continuing_race = not duplicate_active_occurrence and (
             event_occurrence is not None
             and active_occurrence == event_occurrence
             and not _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
         )
-        if not continuing_race:
+        if not duplicate_active_occurrence and not continuing_race:
             _clear_meeting_keys(redis, meeting_id, preserve_lock=True)
             if event_occurrence is not None:
                 redis.set(
@@ -236,6 +251,15 @@ def handle_meeting_started(
         ttl = timedelta(hours=24)
         redis.set(f"recall:meeting:{meeting_id}:doctor_id", str(doctor.id), ex=ttl)
         redis.set(f"recall:meeting:{meeting_id}:host_id", host_id, ex=ttl)
+        occurrence_armed = (
+            event_occurrence is not None
+            and zoom_capture_authorization.arm_authorized_occurrence_locked(
+                redis=redis,
+                doctor_id=doctor.id,
+                zoom_meeting_id=meeting_id_str,
+                occurrence_digest=event_occurrence,
+            )
+        )
 
     log.info(
         "meeting session started, awaiting doctor",
@@ -247,6 +271,19 @@ def handle_meeting_started(
     if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
+
+    patient_count = _rget(redis, f"recall:meeting:{meeting_id}:patient_count")
+    if (
+        occurrence_armed
+        and zoom_mtg is not None
+        and redis.get(f"recall:meeting:{meeting_id}:doctor_present")
+        and patient_count is not None
+        and patient_count.isdigit()
+        and int(patient_count) > 0
+    ):
+        from app.jobs import start_zoom_capture as start_zoom_capture_job
+
+        start_zoom_capture_job.queue(str(zoom_mtg.id))
 
 
 def _rget(redis, key: str) -> str | None:
@@ -493,15 +530,7 @@ def _start_appointment_session(
         )
         return
 
-    email = (doctor.email or "").lower()
-    if is_staging():
-        bot_allowed = email in STAGING_ZOOM_EMAILS
-    elif is_production():
-        bot_allowed = email in PROD_ZOOM_EMAILS
-    else:
-        # dev/test: no email gating (real bots aren't dispatched there)
-        bot_allowed = True
-    if not bot_allowed:
+    if not zoom_bot_email_allowed(doctor.email):
         log.info(
             "zoom bot dispatch blocked (email not in environment allowlist)",
             doctor_ref=provider_log_ref(doctor_id),
@@ -1201,7 +1230,7 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
     # delivered after this cleanup. Resetting the counter would let that stale
     # task collide with generation 1 of the new session and release its bot.
     if not preserve_lock:
-        suffixes.append("starting_lock")
+        suffixes.extend(["starting_lock", "capture_authorization_pending"])
     for suffix in suffixes:
         redis.delete(f"recall:meeting:{meeting_id}:{suffix}")
 

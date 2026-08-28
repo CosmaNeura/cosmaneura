@@ -48,6 +48,7 @@ def clean_redis():
         "merge_generation",
         "merge_release_intent_id",
         "occurrence_digest",
+        "capture_authorization_pending",
         "lifecycle_lock",
     ]
     for s in suffixes:
@@ -81,9 +82,14 @@ def clean_redis():
 
 @pytest.fixture
 def allow_doctor_access(monkeypatch):
-    from app.services import zoom_webhooks
+    from app.services import zoom_capture_authorization, zoom_webhooks
 
     monkeypatch.setattr(zoom_webhooks, "doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        zoom_capture_authorization,
+        "doctor_access_in_force",
+        lambda _doctor: True,
+    )
 
 
 @pytest.fixture
@@ -379,6 +385,143 @@ def test_first_capture_fails_closed_without_occurrence_authorization(
     assert persisted is not None
     assert persisted.appointment_id == expected_appointment_id
     assert persisted.capture_authorization_consumed_at is None
+
+
+def test_clinician_binding_is_armed_by_signed_start_and_consumed_once(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+):
+    from app.services import zoom_capture_authorization, zoom_webhooks
+
+    zoom_mtg = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert zoom_mtg is not None
+    assert zoom_mtg.appointment_id is not None
+    appointment = Appointment.one(zoom_mtg.appointment_id)
+    zoom_mtg.capture_authorization_occurrence_digest = None
+    zoom_mtg.capture_authorization_expires_at = None
+    zoom_mtg.capture_authorization_consumed_at = None
+    zoom_mtg.save()
+
+    authorization = zoom_capture_authorization.authorize_capture_for_appointment(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+        appointment_id=str(appointment.id),
+    )
+    assert authorization.armed is False
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    armed = ZoomMeeting.one(zoom_mtg.id)
+    assert armed.capture_authorization_occurrence_digest == (
+        digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
+    )
+    assert armed.capture_authorization_expires_at is not None
+    assert armed.capture_authorization_consumed_at is None
+
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Patient A")
+    )
+
+    assert len(mock_recall["create_bot"]) == 1
+    consumed = ZoomMeeting.one(zoom_mtg.id)
+    assert consumed.capture_authorization_consumed_at is not None
+
+
+def test_duplicate_signed_start_retries_capture_when_participants_already_present(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.jobs import start_zoom_capture
+    from app.services import zoom_capture_authorization, zoom_webhooks
+
+    zoom_mtg = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert zoom_mtg is not None
+    assert zoom_mtg.appointment_id is not None
+    appointment = Appointment.one(zoom_mtg.appointment_id)
+    zoom_mtg.capture_authorization_occurrence_digest = None
+    zoom_mtg.capture_authorization_expires_at = None
+    zoom_mtg.capture_authorization_consumed_at = None
+    zoom_mtg.save()
+
+    authorization = zoom_capture_authorization.authorize_capture_for_appointment(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+        appointment_id=str(appointment.id),
+    )
+    assert authorization.armed is False
+
+    occurrence_digest = digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
+    clean_redis.set(_key("occurrence_digest"), occurrence_digest)
+    clean_redis.set(_key("doctor_id"), str(doctor_with_zoom.id))
+    clean_redis.set(_key("doctor_present"), "1")
+    clean_redis.set(_key("patient_count"), "1")
+    queued: list[str] = []
+    monkeypatch.setattr(start_zoom_capture, "queue", queued.append)
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+
+    assert queued == [str(zoom_mtg.id)]
+    assert (
+        ZoomMeeting.one(zoom_mtg.id).capture_authorization_occurrence_digest
+        == occurrence_digest
+    )
+
+
+def test_future_pending_binding_cannot_arm_an_earlier_pmr_occurrence(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+):
+    from app.services import zoom_capture_authorization, zoom_webhooks
+
+    zoom_mtg = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert zoom_mtg is not None
+    assert zoom_mtg.appointment_id is not None
+    appointment = Appointment.one(zoom_mtg.appointment_id)
+    zoom_mtg.start_time = datetime.now(timezone.utc) + timedelta(hours=2)
+    zoom_mtg.capture_authorization_occurrence_digest = None
+    zoom_mtg.capture_authorization_expires_at = None
+    zoom_mtg.capture_authorization_consumed_at = None
+    zoom_mtg.save()
+
+    authorization = zoom_capture_authorization.authorize_capture_for_appointment(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+        appointment_id=str(appointment.id),
+    )
+    assert authorization.armed is False
+
+    zoom_webhooks.handle_meeting_started(_started_payload("earlier-pmr-occurrence"))
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Patient A")
+    )
+
+    persisted = ZoomMeeting.one(zoom_mtg.id)
+    assert persisted.capture_authorization_occurrence_digest is None
+    assert persisted.capture_authorization_expires_at is None
+    assert persisted.capture_authorization_consumed_at is None
+    assert mock_recall["create_bot"] == []
 
 
 @pytest.mark.parametrize("authorization_state", ["wrong_occurrence", "expired"])
@@ -2173,13 +2316,17 @@ def test_prod_blocks_non_allowlisted_doctor(
     """In production, an email NOT on the prod allowlist never gets a bot."""
     from app.services import zoom_webhooks
 
-    _doctor_with_zoom_email("random.doctor@clinic.com")
+    doctor = _doctor_with_zoom_email("random.doctor@clinic.com")
     monkeypatch.setattr(zoom_webhooks, "is_production", lambda: True, raising=False)
 
     _run_meeting_flow(zoom_webhooks)
 
     assert mock_recall["create_bot"] == []
     assert clean_redis.get(_key("bot_id")) is None
+    meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=MEETING_ID)
+    assert meeting is not None
+    assert meeting.capture_authorization_occurrence_digest is not None
+    assert meeting.capture_authorization_consumed_at is None
 
 
 def test_prod_blocks_staging_test_account(
