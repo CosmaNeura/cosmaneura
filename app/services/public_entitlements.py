@@ -21,6 +21,9 @@ MAX_ACTIVE_CLINICIAN_SEATS = 20
 # is authoritatively created.  It is shared here so onboarding can recognize a
 # cleared/expired Session without treating legacy BAA-time timestamps as proof.
 CHECKOUT_TRIAL_CLOCK_POLICY = "checkout-fixed-14-day-v2"
+LEGACY_OVER_CAP_RECONCILIATION_ERROR = (
+    "active clinician seat count exceeds public pilot maximum"
+)
 
 CAPABILITY_KEYS = (
     "soap_note",
@@ -245,10 +248,22 @@ def record_active_clinician_seat_quantity(
             session.add(locked_practice)
         return count
     if locked_practice.stripe_subscription_id:
+        repairing_legacy_over_cap = bool(
+            locked_practice.subscription_status == "invalid"
+            and locked_practice.stripe_quantity_sync_error
+            == LEGACY_OVER_CAP_RECONCILIATION_ERROR
+        )
         locked_practice.stripe_quantity_sync_required = True
         locked_practice.stripe_quantity_sync_target = count
         locked_practice.stripe_quantity_sync_version += 1
-        locked_practice.stripe_quantity_sync_error = None
+        # A reconciliation attempt above the cap marks the subscription
+        # invalid. Preserve that recognized repair provenance through the
+        # canonical deactivation that first reaches 20; the reconciler needs
+        # it to safely refresh and repair the remote quantity. It clears the
+        # marker only after authoritative Stripe state has been reconciled.
+        locked_practice.stripe_quantity_sync_error = (
+            LEGACY_OVER_CAP_RECONCILIATION_ERROR if repairing_legacy_over_cap else None
+        )
         session.add(locked_practice)
     return count
 

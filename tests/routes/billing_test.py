@@ -213,6 +213,10 @@ def test_acquisition_kill_switch_keeps_existing_portal_and_webhooks_alive(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
     practice.subscription_status = "past_due"
     practice.save()
 
@@ -315,6 +319,10 @@ def test_legacy_incomplete_checkout_returns_retryable_conflict_then_recovers(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
     practice.subscription_status = "incomplete"
     practice.stripe_checkout_session_id = "cs_route_legacy_incomplete"
     practice.stripe_checkout_session_url = (
@@ -640,8 +648,28 @@ def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
         email_domain="example.com",
         origin_channel="direct",
     ).save()
+    owner = Doctor(
+        clerk_id=f"user_webhook_owner_{secrets.token_hex(8)}",
+        email=f"webhook-owner-{secrets.token_hex(4)}@example.com",
+        biography="",
+    ).save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=owner.id,
+        role="owner",
+        attested_at=datetime.now(timezone.utc),
+    ).save()
     subscription = _subscription(practice, status_value="active")
     route_stripe.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.subscription_status = "pending_verification"
+    practice.stripe_state_version = 1
+    practice.save()
     event_id = f"evt_{secrets.token_hex(8)}"
     body = json.dumps(
         {

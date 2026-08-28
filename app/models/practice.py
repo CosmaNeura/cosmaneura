@@ -245,8 +245,14 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         now = at or datetime.now(timezone.utc)
         if self.billing_exemption_active(at=now):
             return True
-        if self.subscription_status in ENTITLED_SUBSCRIPTION_STATUSES:
+        if self.subscription_status == "active":
             return True
+        if self.subscription_status == "trialing":
+            return self.trial_ends_at is not None and self.trial_ends_at > now
+        if self.subscription_status is not None:
+            # Once an explicit billing projection exists, a stale legacy trial
+            # timestamp cannot outrank its non-entitled state.
+            return False
         return self.trial_ends_at is not None and self.trial_ends_at > now
 
 

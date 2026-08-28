@@ -1006,6 +1006,7 @@ def test_capability_endpoint_matches_pending_credential_contract_fixture(
     practice.stripe_subscription_id = f"sub_test_{secrets.token_hex(8)}"
     practice.stripe_customer_id = f"cus_test_{secrets.token_hex(8)}"
     practice.stripe_state_version = 1
+    practice.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=14)
     practice.save()
 
     response = bare_authenticated_client.get(
