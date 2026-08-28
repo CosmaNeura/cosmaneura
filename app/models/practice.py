@@ -32,6 +32,15 @@ class ClinicianSeatState(str, Enum):
     inactive = "inactive"
 
 
+class CredentialState(str, Enum):
+    """Fail-closed clinician credential state for public onboarding."""
+
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    needs_review = "needs_review"
+
+
 class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
     """Covered entity. The BAA principal for Cosmas — not the individual clinician."""
 
@@ -56,6 +65,10 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
             "AND trial_ends_at IS NULL)",
             name="ck_practice_negotiated_baa_required_no_clickwrap",
         ),
+        sa.CheckConstraint(
+            "NOT public_onboarding_required OR npi IS NULL",
+            name="ck_practice_public_onboarding_no_npi",
+        ),
         sa.Index("practice_organization_id_idx", "organization_id"),
     )
 
@@ -75,6 +88,10 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
 
     origin_channel: str = Field(default="direct")
     pastoral_pack: bool = False
+    public_onboarding_required: bool = False
+    """Whether the public legal/credential gates apply to this practice."""
+    public_pilot_cohort: bool = False
+    """Explicit public-pilot rollout cohort; false preserves managed practices."""
 
     baa_version: str | None = None
     baa_accepted_at: datetime | None = Field(
@@ -238,6 +255,28 @@ class PracticeMember(
             name="ck_practice_member_seat_state",
         ),
         sa.CheckConstraint(
+            "credential_state IN ('pending', 'approved', 'rejected', 'needs_review')",
+            name="ck_practice_member_credential_state",
+        ),
+        sa.CheckConstraint(
+            "(credential_state = 'pending' "
+            "AND credential_reviewed_at IS NULL "
+            "AND credential_reviewer_ref IS NULL "
+            "AND credential_verification_method IS NULL "
+            "AND credential_evidence_sha256 IS NULL) OR "
+            "(credential_state <> 'pending' "
+            "AND credential_reviewed_at IS NOT NULL "
+            "AND credential_reviewer_ref IS NOT NULL "
+            "AND credential_verification_method IS NOT NULL "
+            "AND credential_evidence_sha256 IS NOT NULL)",
+            name="ck_practice_member_credential_evidence_complete",
+        ),
+        sa.CheckConstraint(
+            "credential_evidence_sha256 IS NULL OR "
+            "credential_evidence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_practice_member_credential_evidence_sha256",
+        ),
+        sa.CheckConstraint(
             "(organization_roster_approval_id IS NULL "
             "AND organization_authorized_at IS NULL) OR "
             "(organization_roster_approval_id IS NOT NULL "
@@ -271,6 +310,24 @@ class PracticeMember(
     role: str
     seat_state: str = Field(default=ClinicianSeatState.active.value)
     "Only active, non-revoked memberships occupy a clinician seat."
+    credential_state: str = Field(default=CredentialState.pending.value)
+    "Public PHI access remains denied until independently approved."
+    credential_reviewed_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    credential_reviewer_ref: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=255), nullable=True),
+    )
+    credential_verification_method: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=128), nullable=True),
+    )
+    credential_evidence_sha256: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
     attested_at: datetime | None = Field(
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
