@@ -39,9 +39,45 @@ mock_provider "azurerm" {
     }
   }
 
+  mock_resource "azurerm_monitor_action_group" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/actionGroups/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_activity_log_alert" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/activityLogAlerts/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_diagnostic_setting" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/providers/Microsoft.Insights/diagnosticSettings/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_metric_alert" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/metricAlerts/mock"
+    }
+  }
+
+  mock_resource "azurerm_monitor_scheduled_query_rules_alert_v2" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Insights/scheduledQueryRules/mock"
+    }
+  }
+
   mock_resource "azurerm_postgresql_flexible_server" {
     defaults = {
       id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.DBforPostgreSQL/flexibleServers/mock"
+    }
+  }
+
+  mock_resource "azurerm_redis_cache" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/mock/providers/Microsoft.Cache/Redis/mock"
     }
   }
 
@@ -167,6 +203,51 @@ override_data {
 
 run "secretless_static_plan" {
   command = plan
+
+  assert {
+    condition     = length(module.public_phi_observability) == 0
+    error_message = "public-PHI observability must remain disabled by default"
+  }
+}
+
+run "public_phi_observability_static_plan" {
+  command = plan
+
+  variables {
+    enable_public_phi_observability = true
+    public_phi_alert_email          = "launch-ops@example.invalid"
+    public_phi_support_owner        = "platform-on-call"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].diagnostic_setting_count == 3
+    error_message = "the activation plan must contain three metric-only data-service diagnostic settings"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].log_alert_count == 4
+    error_message = "the activation plan must contain four fixed-event aggregate log alerts"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].metric_alert_count == 5
+    error_message = "the activation plan must contain five dependency-health/capacity metric alerts"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].activity_log_alert_count == 1
+    error_message = "the activation plan must contain one PostgreSQL administrative-failure alert"
+  }
+
+  assert {
+    condition     = module.public_phi_observability[0].all_log_queries_are_aggregate_only
+    error_message = "every public-PHI log alert must emit only an aggregate count"
+  }
+
+  assert {
+    condition     = azurerm_storage_account.uploads.allow_nested_items_to_be_public == false
+    error_message = "the upload account must prohibit anonymous nested-item publication"
+  }
 }
 
 run "managed_identity_activation_static_plan" {

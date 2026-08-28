@@ -195,7 +195,14 @@ resource "azurerm_storage_account" "tfstate" {
   account_tier = "Standard"
   # locally redundant storage is the cheapest
   account_replication_type = "LRS"
-  tags                     = var.tags
+
+  # State must never be anonymously readable, even while the backend still
+  # uses its separately controlled shared-key compatibility path.
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+  min_tls_version                 = "TLS1_2"
+
+  tags = var.tags
 }
 
 resource "azurerm_storage_container" "tfstate" {
@@ -233,6 +240,16 @@ resource "azurerm_storage_account" "uploads" {
   account_tier = "Standard"
   # locally redundant storage is the cheapest
   account_replication_type = "LRS"
+
+  # Account-level public blob creation is safe to disable independently of the
+  # later managed-identity/private-network cutovers. Shared-key and public
+  # network access remain explicit compatibility blockers until those rungs
+  # have synthetic evidence and a separately approved plan.
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+  min_tls_version                 = "TLS1_2"
+  public_network_access_enabled   = true
+  shared_access_key_enabled       = true
 
   blob_properties {
     #

@@ -117,7 +117,12 @@ resource "azurerm_storage_account" "tfstate" {
   account_tier = "Standard"
   # locally redundant storage is the cheapest
   account_replication_type = "LRS"
-  tags                     = var.tags
+
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+  min_tls_version                 = "TLS1_2"
+
+  tags = var.tags
 }
 
 resource "azurerm_storage_container" "tfstate" {
@@ -155,6 +160,15 @@ resource "azurerm_storage_account" "uploads" {
   account_tier = "Standard"
   # locally redundant storage is the cheapest
   account_replication_type = "LRS"
+
+  # Keep the current connectivity path explicit while prohibiting anonymous
+  # blob publication. Shared-key and public network access are removed only
+  # after their independent managed-identity/private-network rehearsals.
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+  min_tls_version                 = "TLS1_2"
+  public_network_access_enabled   = true
+  shared_access_key_enabled       = true
 
   blob_properties {
     #
@@ -465,11 +479,30 @@ resource "azurerm_postgresql_flexible_server_firewall_rule" "azure" {
   end_ip_address   = "0.0.0.0"
 }
 
-resource "azurerm_postgresql_flexible_server_firewall_rule" "all" {
-  name             = "allow-all-ips"
+resource "azurerm_postgresql_flexible_server_firewall_rule" "aca_staging_egress" {
+  name             = "aca-staging-egress"
   server_id        = azurerm_postgresql_flexible_server.main.id
-  start_ip_address = "0.0.0.0"
-  end_ip_address   = "255.255.255.255"
+  start_ip_address = var.staging_container_apps_egress_ipv4
+  end_ip_address   = var.staging_container_apps_egress_ipv4
+
+  lifecycle {
+    precondition {
+      condition = try(
+        one(azurerm_container_app.scheduler.outbound_ip_addresses) == var.staging_container_apps_egress_ipv4,
+        false,
+      )
+      error_message = "staging_container_apps_egress_ipv4 does not exactly match the single refreshed scheduler outbound address; stop and reconcile live routing before continuing"
+    }
+  }
+}
+
+# The exact rule already exists in Azure but was created by the imperative
+# staging deployment path. Adopt it during the reviewed staging apply instead
+# of attempting a duplicate create. This is a state-only adoption; the address
+# is checked against the refreshed scheduler egress addresses before apply.
+import {
+  to = azurerm_postgresql_flexible_server_firewall_rule.aca_staging_egress
+  id = "${azurerm_postgresql_flexible_server.main.id}/firewallRules/aca-staging-egress"
 }
 
 ####################
