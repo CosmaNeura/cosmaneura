@@ -56,10 +56,10 @@ def stripe_webhook_configured() -> bool:
 
 
 def stripe_portal_configured() -> bool:
-    """Whether Billing Portal sessions can use the pinned configuration."""
+    """Whether Portal mutations can be verified and mirrored back into Core."""
 
     return bool(
-        stripe_runtime_configured()
+        stripe_webhook_configured()
         and STRIPE_PORTAL_CONFIGURATION_ID.startswith("bpc_")
     )
 

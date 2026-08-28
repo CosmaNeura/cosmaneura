@@ -86,6 +86,7 @@ class RouteStripe:
                 "mode": "subscription",
                 "status": "open",
                 "subscription": None,
+                "customer": data.get("customer"),
                 "payment_method_collection": data["payment_method_collection"],
                 "metadata": {
                     "checkout_policy": data["metadata[checkout_policy]"],
@@ -257,6 +258,7 @@ def test_acquisition_kill_switch_keeps_existing_portal_and_webhooks_alive(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "past_due"
+    practice.stripe_state_version = 1
     practice.save()
 
     body = authenticated_client.get(api_app.url_path_for("practice_status")).json()
@@ -389,6 +391,7 @@ def test_legacy_incomplete_checkout_returns_retryable_conflict_then_recovers(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "incomplete"
+    practice.stripe_state_version = 1
     practice.stripe_checkout_session_id = "cs_route_legacy_incomplete"
     practice.stripe_checkout_session_url = (
         "https://checkout.stripe.com/c/pay/route-legacy-incomplete"
@@ -408,6 +411,7 @@ def test_legacy_incomplete_checkout_returns_retryable_conflict_then_recovers(
         "mode": "subscription",
         "status": "open",
         "subscription": subscription["id"],
+        "customer": subscription["customer"],
         "payment_method_collection": "if_required",
     }
 
@@ -643,6 +647,7 @@ def test_past_due_subscription_uses_portal_instead_of_duplicate_checkout(
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
     practice.subscription_status = "past_due"
+    practice.stripe_state_version = 1
     practice.save()
 
     checkout = authenticated_client.post(
@@ -659,6 +664,73 @@ def test_past_due_subscription_uses_portal_instead_of_duplicate_checkout(
         headers={"origin": VALID_ORIGIN},
     )
     assert portal.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_terminal_retired_price_can_start_replacement_checkout(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+    subscription = _subscription(practice, status_value="canceled")
+    subscription["items"]["data"][0]["price"] = {"id": "price_retired"}
+    subscription["items"]["data"][0]["quantity"] = 37
+    subscription["metadata"] = {"practice_id": str(practice.id)}
+    route_stripe.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "canceled"
+    practice.stripe_state_version = 1
+    practice.save()
+
+    checkout = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert checkout.status_code == status.HTTP_200_OK, checkout.text
+    create_call = next(
+        call for call in route_stripe.calls if call[1] == "/checkout/sessions"
+    )
+    assert create_call[2]
+    assert create_call[2]["customer"] == subscription["customer"]
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_stale_terminal_projection_cannot_resume_checkout_over_remote_active(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+    subscription = _subscription(practice, status_value="active")
+    route_stripe.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "canceled"
+    practice.stripe_state_version = 1
+    practice.stripe_checkout_session_id = "cs_must_not_resume_over_remote_active"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/must-not-resume"
+    )
+    practice.stripe_checkout_session_expires_at = datetime.now(
+        timezone.utc
+    ) + timedelta(hours=1)
+    practice.save()
+
+    checkout = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert checkout.status_code == status.HTTP_409_CONFLICT
+    assert not any(
+        path.startswith("/checkout/sessions")
+        for _method, path, _data, _key in route_stripe.calls
+    )
 
 
 @pytest.mark.usefixtures("stripe_configured")
@@ -704,6 +776,54 @@ def test_checkout_requires_recognized_origin(authenticated_client: TestClient):
 
 
 @pytest.mark.usefixtures("stripe_configured")
+def test_checkout_rejects_incomplete_core_binding_before_stripe_io(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    practice.billing_exempt = False
+    practice.stripe_customer_id = "cus_unbound"
+    practice.save()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"] == (
+        "The Core billing account is incomplete and requires operator reconciliation."
+    )
+    assert route_stripe.calls == []
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_checkout_rejects_status_only_core_projection_as_local_conflict(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    practice.billing_exempt = False
+    practice.stripe_customer_id = None
+    practice.stripe_subscription_id = None
+    practice.subscription_status = "active"
+    practice.save()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"] == (
+        "The Core billing account is incomplete and requires operator reconciliation."
+    )
+    assert route_stripe.calls == []
+
+
+@pytest.mark.usefixtures("stripe_configured")
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -736,6 +856,46 @@ def test_portal_conflicts_without_billing_account(authenticated_client: TestClie
         headers={"origin": VALID_ORIGIN},
     )
     assert response.status_code == status.HTTP_409_CONFLICT
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_portal_rejects_customer_only_binding_before_stripe_io(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    practice.stripe_customer_id = "cus_unbound"
+    practice.save()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_portal"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"] == (
+        "The Core billing account is incomplete and requires operator reconciliation."
+    )
+    assert route_stripe.calls == []
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_portal_is_unavailable_without_webhook_verification(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", "")
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_portal"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert route_stripe.calls == []
 
 
 def test_stripe_webhook_unavailable_until_full_rollout_config(client: TestClient):
