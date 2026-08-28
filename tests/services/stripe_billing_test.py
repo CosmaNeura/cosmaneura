@@ -481,6 +481,35 @@ def test_checkout_is_idempotent_and_carries_exact_long_trial(remote: FakeStripe)
     assert idempotency_key and idempotency_key.startswith("cosmas-checkout-")
 
 
+def test_checkout_rejects_browser_parser_differential_hosted_url(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    original_request = stripe_billing._request
+
+    def return_hostile_url(method, path, data=None, *, idempotency_key=None):
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path == "/checkout/sessions":
+            response["url"] = (
+                "https://evil.example\\@checkout.stripe.com/c/pay/parser-differential"
+            )
+        return response
+
+    monkeypatch.setattr(stripe_billing, "_request", return_hostile_url)
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="unexpected origin"):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings?billing=success",
+            cancel_url="https://app.example/settings?billing=cancelled",
+            now=NOW,
+        )
+
+    practice.refresh()
+    assert practice.stripe_checkout_session_url is None
+
+
 def test_checkout_never_sends_or_inspects_legacy_npi(remote: FakeStripe):
     practice = _practice()
     practice.npi = "1234567893"
@@ -1067,6 +1096,36 @@ def test_portal_session_uses_pinned_restricted_configuration(remote: FakeStripe)
         "customer": "cus_portal",
         "return_url": "https://app.example/settings",
     }
+
+
+def test_portal_rejects_browser_parser_differential_hosted_url(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(
+        practice,
+        subscription_id="sub_portal_hostile_url",
+        customer_id="cus_portal_hostile_url",
+        status="past_due",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription, status="past_due")
+    original_request = stripe_billing._request
+
+    def return_hostile_url(method, path, data=None, *, idempotency_key=None):
+        response = original_request(method, path, data, idempotency_key=idempotency_key)
+        if method == "POST" and path == "/billing_portal/sessions":
+            response["url"] = (
+                "https://evil.example\\@billing.stripe.com/p/parser-differential"
+            )
+        return response
+
+    monkeypatch.setattr(stripe_billing, "_request", return_hostile_url)
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="unexpected origin"):
+        stripe_billing.create_portal_session(
+            practice, return_url="https://app.example/settings"
+        )
 
 
 def test_portal_session_accepts_verified_terminal_legacy_subscription_identity(
@@ -3285,6 +3344,33 @@ def test_past_due_is_nonterminal_and_not_entitled(remote: FakeStripe):
     assert not practice.entitled(at=NOW)
 
 
+def test_unpaid_remote_lifecycle_mirrors_non_entitled(remote: FakeStripe):
+    practice = _practice()
+    unpaid = _subscription(practice, status="unpaid")
+    _bind_verified_public_subscription(
+        practice,
+        unpaid,
+        status="active",
+        trial_ends_at=NOW - timedelta(days=1),
+    )
+    practice.stripe_trial_clock_policy = stripe_billing.LEGACY_TRIAL_CLOCK_POLICY
+    practice.save()
+    remote.subscriptions[unpaid["id"]] = unpaid
+
+    assert stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            unpaid,
+            event_id="evt_unpaid",
+            created=int(NOW.timestamp()),
+        )
+    )
+    practice.refresh()
+    assert practice.subscription_status == "unpaid"
+    assert stripe_billing.has_nonterminal_subscription(practice)
+    assert not practice.entitled(at=NOW)
+
+
 @pytest.mark.parametrize(
     "subscription_status, expected",
     [
@@ -4433,20 +4519,19 @@ def test_account_and_price_mismatch_fail_closed(remote: FakeStripe, mismatch: st
     assert practice.subscription_status is None
 
 
-@pytest.mark.parametrize("contract_break", ["wrong_price", "multiple_items"])
+@pytest.mark.parametrize(
+    "contract_break", ["wrong_price", "multiple_items", "unknown_status"]
+)
 def test_bound_invalid_subscription_contract_revokes_stale_active_access(
     remote: FakeStripe,
     contract_break: str,
 ):
     practice = _practice()
     subscription = _subscription(practice)
-    practice.stripe_customer_id = subscription["customer"]
-    practice.stripe_subscription_id = subscription["id"]
-    practice.subscription_status = "active"
-    practice.save()
+    _bind_verified_public_subscription(practice, subscription)
     if contract_break == "wrong_price":
         subscription["items"]["data"][0]["price"] = {"id": "price_other"}
-    else:
+    elif contract_break == "multiple_items":
         subscription["items"]["data"].append(
             {
                 "id": "si_extra",
@@ -4454,13 +4539,16 @@ def test_bound_invalid_subscription_contract_revokes_stale_active_access(
                 "price": {"id": "price_test_x"},
             }
         )
+    else:
+        subscription["status"] = "future_state"
     remote.subscriptions[subscription["id"]] = subscription
+    event_id = f"evt_contract_{contract_break}"
 
     assert stripe_billing.apply_stripe_event(
         _event(
             "customer.subscription.updated",
             subscription,
-            event_id=f"evt_contract_{contract_break}",
+            event_id=event_id,
             created=int(NOW.timestamp()),
         )
     )
@@ -4469,6 +4557,7 @@ def test_bound_invalid_subscription_contract_revokes_stale_active_access(
     assert practice.stripe_subscription_id == subscription["id"]
     assert practice.stripe_customer_id == subscription["customer"]
     assert not practice.entitled(at=NOW)
+    assert StripeEventReceipt.get(event_id=event_id) is not None
 
 
 def test_unbound_invalid_subscription_contract_never_binds(remote: FakeStripe):
@@ -4689,6 +4778,51 @@ def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStrip
     assert not practice.stripe_quantity_sync_required
     assert practice.stripe_quantity_synced_at is not None
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
+
+
+def test_reconcile_pending_quantity_syncs_continues_after_bound_row_failure(
+    remote: FakeStripe,
+):
+    healthy = _practice()
+    healthy_subscription = _subscription(
+        healthy,
+        subscription_id="sub_bulk_healthy",
+        customer_id="cus_bulk_healthy",
+        quantity=2,
+    )
+    remote.subscriptions[healthy_subscription["id"]] = healthy_subscription
+    _bind_verified_public_subscription(healthy, healthy_subscription)
+
+    failing = _practice()
+    failing_subscription = _subscription(
+        failing,
+        subscription_id="sub_bulk_failing",
+        customer_id="cus_bulk_failing",
+        quantity=2,
+    )
+    _bind_verified_public_subscription(failing, failing_subscription)
+
+    unbound = _practice()
+    unbound.stripe_quantity_sync_required = True
+    unbound.stripe_quantity_sync_target = 1
+    unbound.stripe_quantity_sync_version = 1
+    unbound.save()
+
+    assert not healthy.stripe_quantity_sync_required
+    assert not failing.stripe_quantity_sync_required
+    assert stripe_billing.reconcile_pending_quantity_syncs() == (1, 1)
+
+    healthy.refresh()
+    failing.refresh()
+    unbound.refresh()
+    assert not healthy.stripe_quantity_sync_required
+    assert healthy.stripe_quantity_sync_error is None
+    assert healthy_subscription["items"]["data"][0]["quantity"] == 1
+    assert failing.stripe_quantity_sync_required
+    assert failing.stripe_quantity_sync_attempts == 1
+    assert failing.stripe_quantity_sync_error
+    assert unbound.stripe_quantity_sync_required
+    assert unbound.stripe_quantity_sync_attempts == 0
 
 
 def test_over_cap_quantity_marker_is_preserved_without_stripe_io(
