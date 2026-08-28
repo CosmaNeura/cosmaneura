@@ -8,52 +8,51 @@ const getClient = vi.hoisted(() => vi.fn())
 vi.mock("~/configuration/clerk", () => ({ getClient }))
 
 describe("OnboardingZoomStep", () => {
-  it("offers an explicit skip to an eligible staging pilot", () => {
+  it("leads eligible beta users with the available recording workflow", () => {
     const onComplete = vi.fn()
 
-    render(
-      <OnboardingZoomStep onComplete={onComplete} zoomEnabled allowZoomSkip />,
-    )
+    render(<OnboardingZoomStep onComplete={onComplete} zoomEnabled />)
 
+    expect(
+      screen.getByRole("heading", { name: "Start with a visit recording" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText(/review and edit the generated note/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText("Beta access")).toBeInTheDocument()
     expect(
       screen.getByRole("button", { name: "Connect Zoom" }),
     ).toBeInTheDocument()
     fireEvent.click(
-      screen.getByRole("button", { name: "Continue without Zoom" }),
+      screen.getByRole("button", {
+        name: "Continue with recording uploads",
+      }),
     )
     expect(onComplete).toHaveBeenCalledOnce()
     expect(getClient).not.toHaveBeenCalled()
   })
 
-  it("keeps the existing Zoom-required flow when the switch is off", () => {
-    render(
-      <OnboardingZoomStep
-        onComplete={vi.fn()}
-        zoomEnabled
-        allowZoomSkip={false}
-      />,
-    )
-
-    expect(
-      screen.getByRole("button", { name: "Connect Zoom" }),
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "Continue without Zoom" }),
-    ).not.toBeInTheDocument()
-  })
-
-  it("preserves the existing coming-soon continuation", () => {
+  it("keeps the coming-soon continuation for non-allowlisted users", () => {
     const onComplete = vi.fn()
 
-    render(
-      <OnboardingZoomStep
-        onComplete={onComplete}
-        zoomEnabled={false}
-        allowZoomSkip={false}
-      />,
-    )
+    render(<OnboardingZoomStep onComplete={onComplete} zoomEnabled={false} />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }))
+    expect(
+      screen.getByText(
+        "The Zoom meeting bot is an optional beta and is coming soon for most accounts.",
+      ),
+    ).toBeInTheDocument()
+    expect(screen.getByText("Coming Soon")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Connect Zoom" }),
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Continue with recording uploads",
+      }),
+    )
     expect(onComplete).toHaveBeenCalledOnce()
+    expect(getClient).not.toHaveBeenCalled()
   })
 })

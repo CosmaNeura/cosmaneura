@@ -476,15 +476,16 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
     return (
       <section className="prose-headings prose w-1/2 space-y-4">
         <div className="flex items-center gap-2">
-          <h3 className="!mb-0">Zoom Integration</h3>
+          <h3 className="!mb-0">Zoom meeting bot</h3>
           <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
             Coming Soon
           </span>
         </div>
         <p className="text-muted-foreground text-sm">
-          Zoom integration is coming soon. You'll be able to connect your
-          account so Cosmas can automatically join your meetings and generate
-          visit notes.
+          You can start today by uploading a visit recording from Notes, then
+          reviewing and editing the generated note before pasting it into your
+          chart. The Zoom meeting bot is an optional beta and is coming soon for
+          most accounts.
         </p>
       </section>
     )
@@ -492,10 +493,11 @@ function ZoomConnect({ zoomConnected }: { zoomConnected: boolean }) {
 
   return (
     <section className="prose-headings prose w-1/2 space-y-4">
-      <h3>Zoom Integration</h3>
+      <h3>Zoom meeting bot (optional beta)</h3>
       <p className="text-muted-foreground text-sm">
-        Connect your Zoom account so Cosmas can automatically join your meetings
-        and generate visit notes.
+        Upload a visit recording from Notes, then review and edit the generated
+        note before pasting it into your chart. This account also has access to
+        the optional Zoom meeting bot beta.
       </p>
 
       {zoomConnected ? (

@@ -11,11 +11,9 @@ import { SiZoom } from "react-icons/si"
 export function OnboardingZoomStep({
   onComplete,
   zoomEnabled,
-  allowZoomSkip,
 }: {
   onComplete: () => void
   zoomEnabled: boolean
-  allowZoomSkip: boolean
 }) {
   const [loading, setLoading] = useState(false)
 
@@ -35,60 +33,74 @@ export function OnboardingZoomStep({
 
   if (!zoomEnabled) {
     return (
-      <div className="flex flex-col items-center gap-6 text-center">
-        <div className="space-y-1">
-          <div className="flex items-center justify-center gap-2">
-            <h2 className="text-2xl font-semibold">Connect Zoom</h2>
-            <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
-              Coming Soon
-            </span>
-          </div>
+      <div className="mx-auto flex max-w-lg flex-col items-center gap-6 text-center">
+        <div className="space-y-2">
+          <h2 className="text-2xl font-semibold">
+            Start with a visit recording
+          </h2>
           <p className="text-muted-foreground text-sm">
-            Zoom integration is coming soon. You'll be able to connect your
-            account so Cosma can automatically join your meetings and generate
-            visit notes after each session.
+            You can start today in Notes: upload a visit recording, then review
+            and edit the generated note before pasting it into your chart.
+          </p>
+          <p className="text-muted-foreground text-sm">
+            The Zoom meeting bot is an optional beta and is coming soon for most
+            accounts.
           </p>
         </div>
-        <Button onClick={onComplete}>Continue</Button>
+        <div className="flex items-center justify-center gap-2">
+          <h3 className="font-semibold">Zoom meeting bot</h3>
+          <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
+            Coming Soon
+          </span>
+        </div>
+        <Button onClick={onComplete}>Continue with recording uploads</Button>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col items-center gap-6 text-center">
-      <div className="space-y-1">
-        <h2 className="text-2xl font-semibold">Connect Zoom</h2>
+    <div className="mx-auto flex max-w-lg flex-col items-center gap-6 text-center">
+      <div className="space-y-2">
+        <h2 className="text-2xl font-semibold">Start with a visit recording</h2>
         <p className="text-muted-foreground text-sm">
-          Connect your Zoom account so Cosma can automatically join your
-          meetings and generate visit notes after each session.
+          You can start today in Notes: upload a visit recording, then review
+          and edit the generated note before pasting it into your chart.
+        </p>
+        <p className="text-muted-foreground text-sm">
+          The Zoom meeting bot is an optional beta and is coming soon for most
+          accounts.
         </p>
       </div>
-      <Button onClick={connectZoom} disabled={loading} size="lg">
-        {loading ? (
-          <>
-            <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-            Connecting...
-          </>
-        ) : (
-          <>
-            <span className="mr-2 flex h-6 w-6 items-center justify-center rounded-sm border border-white">
-              <SiZoom className="size-4 text-white" />
-            </span>
-            Connect Zoom
-          </>
-        )}
-      </Button>
-      {allowZoomSkip && (
-        <div className="border-border bg-muted/40 w-full space-y-3 rounded-md border p-4">
-          <p className="text-muted-foreground text-sm">
-            Staging pilot: you can continue now and connect Zoom later from
-            Settings.
-          </p>
-          <Button onClick={onComplete} variant="outline">
-            Continue without Zoom
-          </Button>
+      <div className="border-border bg-muted/40 w-full space-y-3 rounded-md border p-4">
+        <div className="flex items-center justify-center gap-2">
+          <h3 className="font-semibold">Zoom meeting bot</h3>
+          <span className="bg-background text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
+            Beta access
+          </span>
         </div>
-      )}
+        <p className="text-muted-foreground text-sm">
+          This account has beta access. Connecting Zoom is optional; you can
+          continue with recording uploads instead.
+        </p>
+        <Button onClick={connectZoom} disabled={loading} size="lg">
+          {loading ? (
+            <>
+              <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
+              Connecting...
+            </>
+          ) : (
+            <>
+              <span className="mr-2 flex h-6 w-6 items-center justify-center rounded-sm border border-white">
+                <SiZoom className="size-4 text-white" />
+              </span>
+              Connect Zoom
+            </>
+          )}
+        </Button>
+      </div>
+      <Button onClick={onComplete} variant="outline">
+        Continue with recording uploads
+      </Button>
     </div>
   )
 }

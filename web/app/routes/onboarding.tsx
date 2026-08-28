@@ -7,6 +7,7 @@ import { ArrowRight, Building2, UserRound } from "lucide-react"
 
 import type { Route } from "./+types/onboarding"
 
+import { OnboardingZoomStep } from "~/components/OnboardingZoomStep"
 import { ViewAsAccountControl } from "~/components/ViewAsAccountControl"
 import { ViewAsRouteGuard } from "~/components/ViewAsRouteGuard"
 import { BrandLogo } from "~/components/brand/BrandLogo"
@@ -44,7 +45,6 @@ import {
   baaAuthorityLine,
   baaCheckboxLabel,
 } from "~/lib/baa"
-import { internalApiFetch } from "~/lib/billing-recovery"
 import { type Channel, resolveChannel } from "~/lib/channel"
 import {
   MCD_EMAIL_DOMAIN,
@@ -73,13 +73,11 @@ import {
 } from "~/lib/practice-api"
 import { cn } from "~/lib/utils"
 import { checkViewAsStatus } from "~/lib/view-as-api"
-import { requireEnv } from "~/utils/environment"
 import { isZoomEnabled } from "~/utils/zoom-feature"
 
 import { invariant } from "@epic-web/invariant"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { motion } from "motion/react"
-import { SiZoom } from "react-icons/si"
 
 type Path = "undecided" | "owner" | "workforce"
 type OptionalStep = "choice" | "bio" | "notes" | "zoom" | "allset"
@@ -643,8 +641,7 @@ export function PracticeForm({
         </div>
       ) : channel === "mcd" && !mcdOk ? (
         <div className="mt-4 rounded-xl border border-[var(--brand-gold)] bg-[var(--brand-cream)] px-4 py-3 text-sm text-[var(--brand-navy-deep)]">
-          This is a Cosmas practice on your email, not an MCD tenant. The
-          conscience and pastoral pack will be available soon.
+          This is a Cosmas practice on your email, not an MCD tenant.
         </div>
       ) : null}
       <StepKicker n="02" label="Covered entity" />
@@ -747,18 +744,6 @@ export function PracticeForm({
             </span>
           </label>
         ) : null}
-        <label className="bg-muted/40 flex gap-3 rounded-lg border px-4 py-3 text-sm leading-snug">
-          <input
-            type="checkbox"
-            disabled
-            className="mt-0.5 size-4 accent-[var(--brand-navy-deep)]"
-          />
-          <span>
-            <span className="font-medium">Coming soon:</span> the conscience and
-            pastoral pack, including NFP terminology and parish correspondence
-            under per-event approval.
-          </span>
-        </label>
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
         <Button
           type="submit"
@@ -1071,7 +1056,7 @@ function WorkforceFlow({
   )
 }
 
-function OptionalSetup({
+export function OptionalSetup({
   biography,
   zoomEnabled,
   practice,
@@ -1088,8 +1073,10 @@ function OptionalSetup({
         <StepKicker n="04" label="Optional" />
         <DisplayTitle>Optional setup</DisplayTitle>
         <p className="text-muted-foreground max-w-md text-base">
-          The Cosmaneura Inc BAA is in force. Biography, an example note, and
-          Zoom can wait — they do not block Cosmas.
+          Your practice is ready. Start today in Notes by uploading a visit
+          recording, then review and edit the generated note before pasting it
+          into your chart. Biography, an example note, and the optional Zoom
+          beta can wait.
         </p>
         <div className="flex w-full flex-col gap-3 sm:flex-row sm:justify-center">
           <Button size="lg" onClick={() => setStep("allset")}>
@@ -1121,7 +1108,7 @@ function OptionalSetup({
   }
   if (step === "zoom") {
     return (
-      <ZoomStep
+      <OnboardingZoomStep
         onComplete={() => setStep("allset")}
         zoomEnabled={zoomEnabled}
       />
@@ -1269,7 +1256,7 @@ function NotesStep({
         <h2 className="text-2xl font-semibold">Upload an example note</h2>
         <p className="text-muted-foreground text-sm">
           Optional. Upload a high-quality example of a visit note you've written
-          so Cosmas can learn your style.
+          to use as a structure and formatting reference for this note type.
         </p>
       </div>
       <Form {...form}>
@@ -1347,79 +1334,6 @@ function NotesStep({
   )
 }
 
-function ZoomStep({
-  onComplete,
-  zoomEnabled,
-}: {
-  onComplete: () => void
-  zoomEnabled: boolean
-}) {
-  const [loading, setLoading] = useState(false)
-
-  async function connectZoom() {
-    setLoading(true)
-    const clerk = await getClient()
-    const token = await clerk!.session!.getToken()
-    const base = requireEnv("VITE_PYTHON_URL").replace(/\/$/, "")
-    const res = await internalApiFetch(`${base}/internal/v1/zoom-auth-url`, {
-      headers: { Authorization: `Bearer ${token}` },
-      credentials: "include",
-    })
-    const { url } = (await res.json()) as { url: string }
-    if (url) window.location.href = url
-    setLoading(false)
-  }
-
-  if (!zoomEnabled) {
-    return (
-      <div className="mx-auto flex max-w-lg flex-col items-center gap-6 text-center">
-        <div className="space-y-1">
-          <div className="flex items-center justify-center gap-2">
-            <h2 className="text-2xl font-semibold">Connect Zoom</h2>
-            <span className="bg-muted text-muted-foreground rounded-full px-2 py-0.5 text-xs font-medium">
-              Coming Soon
-            </span>
-          </div>
-          <p className="text-muted-foreground text-sm">
-            Zoom integration is coming soon. You can continue without it.
-          </p>
-        </div>
-        <Button onClick={onComplete}>Continue</Button>
-      </div>
-    )
-  }
-
-  return (
-    <div className="mx-auto flex max-w-lg flex-col items-center gap-6 text-center">
-      <div className="space-y-1">
-        <h2 className="text-2xl font-semibold">Connect Zoom</h2>
-        <p className="text-muted-foreground text-sm">
-          Optional. Connect your Zoom account so Cosmas can join meetings and
-          generate visit notes after each session.
-        </p>
-      </div>
-      <Button onClick={connectZoom} disabled={loading} size="lg">
-        {loading ? (
-          <>
-            <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-            Connecting...
-          </>
-        ) : (
-          <>
-            <span className="mr-2 flex h-6 w-6 items-center justify-center rounded-sm border border-white">
-              <SiZoom className="size-4 text-white" />
-            </span>
-            Connect Zoom
-          </>
-        )}
-      </Button>
-      <Button type="button" variant="ghost" onClick={onComplete}>
-        Skip for now
-      </Button>
-    </div>
-  )
-}
-
 function AllSetStep({ practice }: { practice: PracticeStatus }) {
   const [loading, setLoading] = useState(false)
 
@@ -1471,7 +1385,9 @@ function AllSetStep({ practice }: { practice: PracticeStatus }) {
       >
         <h2 className="text-3xl font-bold">You're all set!</h2>
         <p className="text-muted-foreground max-w-md text-base">
-          Your practice is on the Cosmaneura Inc BAA. Cosmas is ready.
+          Your practice is on the Cosmaneura Inc BAA. Open Notes to upload a
+          visit recording, review and edit the generated note, then paste it
+          into your chart.
         </p>
         <PracticeJoinPanel practice={practice} />
         <Button
@@ -1486,7 +1402,7 @@ function AllSetStep({ practice }: { practice: PracticeStatus }) {
               Loading...
             </>
           ) : (
-            "Go to Cosmas"
+            "Open Notes"
           )}
         </Button>
       </motion.div>

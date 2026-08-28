@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -332,16 +333,29 @@ export function UploadRecordingButton() {
         <Dialog open={open} onOpenChange={setOpen}>
           <TooltipTrigger asChild>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm" className="hidden md:flex">
-                <Upload className="mr-2 h-4 w-4" />
-                Upload Recording
+              <Button
+                aria-label="Upload Recording"
+                variant="outline"
+                size="sm"
+                className="flex shrink-0"
+              >
+                <Upload className="mr-1 h-4 w-4 sm:mr-2" />
+                <span className="sm:hidden">Upload</span>
+                <span className="hidden sm:inline">Upload Recording</span>
               </Button>
             </DialogTrigger>
           </TooltipTrigger>
           {/* onOpenAutoFocus is a very important line! Prevents the automatic date popup */}
-          <DialogContent onOpenAutoFocus={(e) => e.preventDefault()}>
+          <DialogContent
+            className="max-h-[calc(100dvh-2rem)] overflow-y-auto"
+            onOpenAutoFocus={(e) => e.preventDefault()}
+          >
             <DialogHeader>
               <DialogTitle>Upload Recording</DialogTitle>
+              <DialogDescription>
+                Upload an audio or video recording of a {t.patient} visit to
+                generate a note you can review and edit.
+              </DialogDescription>
             </DialogHeader>
             <VisitAudioUploadForm closeDialogBox={() => setOpen(false)} />
           </DialogContent>

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { vi } from "vitest"
 
+import type { PracticeStatus } from "~/lib/practice-api"
+
 import {
   AccountRecoveryRequired,
   ManagedOrganizationAccessNotice,
   default as OnboardingPage,
+  OptionalSetup,
   OrganizationAccessFlow,
   PracticeForm,
   canLeaveOnboarding,
@@ -14,6 +17,33 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 const apiMocks = vi.hoisted(() => ({
   createPractice: vi.fn(),
 }))
+
+const readyPractice = {
+  legal_name: "Riverside Family Practice, PLLC",
+  join_code: null,
+  email_domain: "clinic.example",
+  origin_channel: "direct",
+  pastoral_pack: false,
+  baa_accepted: true,
+  role: "owner",
+  attested: true,
+  access_authorized: true,
+  authorization_basis: "self_service_owner",
+  access_revoked: false,
+  pilot_access_grant_active: false,
+  trial_ends_at: null,
+  billing_exempt: true,
+  billing_exempt_until: null,
+  billing_exempt_active: true,
+  billing_enabled: false,
+  billing_management_enabled: false,
+  billing_portal_available: false,
+  billing_checkout_resumable: false,
+  billing_subscription_manageable: false,
+  billing_checkout_available_at: null,
+  entitled: true,
+  subscription_status: null,
+} satisfies PracticeStatus
 
 vi.mock("~/lib/practice-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/practice-api")>()
@@ -36,6 +66,46 @@ describe("onboarding view-as safety", () => {
     expect(
       screen.queryByText("How will this Cosmas account be used?"),
     ).not.toBeInTheDocument()
+  })
+})
+
+describe("optional onboarding", () => {
+  it("guides a new non-allowlisted user from recording-first setup to Notes", () => {
+    render(
+      <OptionalSetup
+        biography={null}
+        zoomEnabled={false}
+        practice={readyPractice}
+      />,
+    )
+
+    expect(
+      screen.getByText(/Start today in Notes by uploading a visit recording/i),
+    ).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Set these up now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }))
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }))
+
+    expect(
+      screen.getByRole("heading", { name: "Start with a visit recording" }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Connect Zoom" }),
+    ).not.toBeInTheDocument()
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Continue with recording uploads",
+      }),
+    )
+
+    expect(
+      screen.getByText(/Open Notes to upload a visit recording/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Open Notes" }),
+    ).toBeInTheDocument()
   })
 })
 
@@ -166,7 +236,7 @@ describe("PracticeForm onboarding guardrails", () => {
     ).not.toBeDisabled()
   })
 
-  it("keeps consumer-email practices solo and markets the pastoral pack as coming soon", () => {
+  it("keeps consumer-email practices solo without marketing unavailable packs", () => {
     render(
       <PracticeForm
         onPractice={vi.fn()}
@@ -180,10 +250,9 @@ describe("PracticeForm onboarding guardrails", () => {
     expect(
       screen.getByRole("radio", { name: /Group — I will invite workforce/i }),
     ).toBeDisabled()
-    expect(screen.getByText(/Coming soon:/i)).toBeInTheDocument()
     expect(
-      screen.getByRole("checkbox", { name: /Coming soon:/i }),
-    ).toBeDisabled()
+      screen.queryByText(/pastoral pack|conscience|NFP|parish/i),
+    ).not.toBeInTheDocument()
   })
 
   it("never renders or submits NPI during public practice creation", async () => {
