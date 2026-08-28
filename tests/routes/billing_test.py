@@ -84,10 +84,12 @@ class RouteStripe:
                 "mode": "subscription",
                 "status": "open",
                 "subscription": None,
+                "customer": data.get("customer"),
                 "payment_method_collection": data["payment_method_collection"],
                 "metadata": {
-                    "checkout_policy": data["metadata[checkout_policy]"],
-                    "practice_id": data["metadata[practice_id]"],
+                    key.removeprefix("metadata[").removesuffix("]"): value
+                    for key, value in data.items()
+                    if key.startswith("metadata[") and key.endswith("]")
                 },
             }
             self.sessions[session["id"]] = deepcopy(session)
@@ -306,6 +308,78 @@ def test_expired_comp_is_reported_inactive_and_can_reactivate(
     assert checkout.status_code == status.HTTP_200_OK, checkout.text
     assert checkout.json()["url"].startswith("https://checkout.stripe.com/")
     assert any(call[1] == "/checkout/sessions" for call in route_stripe.calls)
+
+
+@pytest.mark.usefixtures("stripe_configured")
+@pytest.mark.parametrize(
+    ("checkout_error", "detail"),
+    [
+        (
+            stripe_billing.StripeCheckoutReconciliationRequired(),
+            "requires reconciliation",
+        ),
+        (
+            stripe_billing.StripeCoreBindingInvalid("partial binding"),
+            "requires reconciliation",
+        ),
+        (
+            stripe_billing.StripeManagedBilling("managed during Checkout"),
+            "managed by its organization",
+        ),
+        (
+            stripe_billing.StripeTrialClockReconciliationRequired(
+                datetime(2026, 8, 28, tzinfo=timezone.utc)
+            ),
+            "requires reconciliation",
+        ),
+    ],
+)
+def test_checkout_reconciliation_states_return_actionable_conflict(
+    authenticated_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    checkout_error: Exception,
+    detail: str,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+
+    def require_reconciliation(*_args, **_kwargs):
+        raise checkout_error
+
+    monkeypatch.setattr(
+        stripe_billing,
+        "create_checkout_session",
+        require_reconciliation,
+    )
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert detail in response.json()["detail"]
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_partial_core_billing_binding_returns_conflict_before_provider_io(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+    practice.stripe_customer_id = "cus_partial_route"
+    practice.save()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "requires reconciliation" in response.json()["detail"]
+    assert route_stripe.calls == []
 
 
 @pytest.mark.usefixtures("stripe_configured")
