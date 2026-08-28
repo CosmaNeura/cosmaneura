@@ -151,7 +151,6 @@ from .dependencies.clerk import AuthenticateClerkRequest
 from .dependencies.doctor import inject_doctor_record
 from .dependencies.practice_gate import require_practice_in_force
 from .dependencies.view_as import apply_view_as
-from .public_onboarding import public_onboarding_api_app
 from .view_as import view_as_api_app
 
 # extract into variable for test import to easily override dependencies
@@ -187,7 +186,6 @@ internal_api_app = APIRouter(
 
 internal_api_app.include_router(admin_api_app)
 internal_api_app.include_router(view_as_api_app)
-internal_api_app.include_router(public_onboarding_api_app)
 
 
 class IntakeList(BaseModel, extra="forbid"):
