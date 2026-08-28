@@ -13,7 +13,11 @@ from tests.factories import DoctorFactory, PatientFactory
 
 @pytest.fixture(autouse=True)
 def _allow_doctor_access(monkeypatch):
-    monkeypatch.setattr(job, "doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        job,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: True,
+    )
 
 
 def _pending_upload_panel(doctor, patient) -> LabPanel:

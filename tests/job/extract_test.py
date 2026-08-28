@@ -33,7 +33,10 @@ requires_live_llm = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _allow_doctor_access(monkeypatch):
-    monkeypatch.setattr("app.jobs.extract.doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        "app.jobs.extract.doctor_capability_access_in_force",
+        lambda _doctor, _capability: True,
+    )
 
 
 class AssertionTracker:

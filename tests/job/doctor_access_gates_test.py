@@ -8,17 +8,21 @@ from app.jobs import (
     extract_medications,
     score_engagement,
     summarize,
+    sync_zoom_meetings,
     transcribe,
 )
 
 from app.models.ai_visit_note import AIVisitNote
 from app.models.ai_visit_transcript import AIVisitTranscript, TranscriptEntry
+from app.models.doctor_note_example import DoctorNoteExample
 from app.models.doctor_note_file import DoctorNoteFile
 from app.models.doctor_note_schema import DoctorNoteSchema
 from app.models.engagement_role import EngagementRole
 from app.models.lab_panel import LabPanel, LabPanelSource, LabPanelStatus
+from app.models.lab_result import LabResult
 from app.models.patient_medication import PatientMedication
 from app.models.visit_audio_file import VisitAudioFile
+from app.models.zoom_meeting import ZoomMeeting
 
 from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
@@ -32,10 +36,6 @@ def _visit():
         appointment_date=datetime.now(timezone.utc),
     ).save()
     return doctor, patient, appointment
-
-
-def _deny(monkeypatch, module) -> None:
-    monkeypatch.setattr(module, "doctor_access_in_force", lambda _doctor: False)
 
 
 def _deny_soap_note(monkeypatch, module) -> list[str]:
@@ -106,22 +106,27 @@ def test_summarize_denial_skips_llm_and_note_write(monkeypatch):
     assert AIVisitNote.get(ai_transcript_id=transcript.id) is None
 
 
-def test_example_note_extraction_denial_skips_blob_download(monkeypatch):
+def test_example_note_extraction_rollout_disabled_skips_phi_processing(monkeypatch):
     doctor = DoctorFactory.build().save()
     note = DoctorNoteFile(
         doctor_id=doctor.id,
         note_type="Access gate test",
         azure_file_name="private-note-sentinel.pdf",
     ).save()
-    _deny(monkeypatch, extract)
+    checked_capabilities = _deny_soap_note(monkeypatch, extract)
     monkeypatch.setattr(extract, "download_note", _unexpected)
+    monkeypatch.setattr(extract, "extract_note_fields", _unexpected)
 
     extract.perform(note.id)
 
     assert DoctorNoteSchema.get(doctor_id=doctor.id) is None
+    assert (
+        DoctorNoteExample.where(DoctorNoteExample.doctor_id == doctor.id).count() == 0
+    )
+    assert checked_capabilities == ["soap_note"]
 
 
-def test_lab_extraction_denial_leaves_upload_pending(monkeypatch):
+def test_lab_extraction_rollout_disabled_leaves_upload_pending(monkeypatch):
     doctor, patient, _appointment = _visit()
     panel = LabPanel(
         doctor_id=doctor.id,
@@ -130,13 +135,37 @@ def test_lab_extraction_denial_leaves_upload_pending(monkeypatch):
         status=LabPanelStatus.pending,
         azure_file_name="private-labs-sentinel.pdf",
     ).save()
-    _deny(monkeypatch, extract_labs)
+    checked_capabilities = _deny_soap_note(monkeypatch, extract_labs)
     monkeypatch.setattr(extract_labs, "download_pages", _unexpected)
+    monkeypatch.setattr(extract_labs, "extract_lab_values", _unexpected)
+    monkeypatch.setattr(extract_labs, "persist_results", _unexpected)
 
     extract_labs.perform(panel.id)
 
     panel.refresh()
     assert panel.status == LabPanelStatus.pending
+    assert LabResult.where(LabResult.lab_panel_id == panel.id).count() == 0
+    assert checked_capabilities == ["soap_note"]
+
+
+def test_zoom_sync_rollout_disabled_skips_provider_and_meeting_write(monkeypatch):
+    doctor = DoctorFactory.build().save()
+    checked_capabilities = _deny_soap_note(monkeypatch, sync_zoom_meetings)
+    monkeypatch.setattr(
+        sync_zoom_meetings.zoom_service,
+        "get_zoom_integration",
+        _unexpected,
+    )
+    monkeypatch.setattr(
+        sync_zoom_meetings.zoom_service,
+        "get_user_meetings",
+        _unexpected,
+    )
+
+    sync_zoom_meetings.perform(str(doctor.id))
+
+    assert ZoomMeeting.where(ZoomMeeting.doctor_id == doctor.id).count() == 0
+    assert checked_capabilities == ["soap_note"]
 
 
 def test_medication_extraction_denial_skips_processing(monkeypatch):

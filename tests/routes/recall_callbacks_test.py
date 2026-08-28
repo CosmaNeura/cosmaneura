@@ -137,6 +137,58 @@ def test_revoked_doctor_access_returns_404_without_fetching_zak(
     assert fresh_redis.get(zak_token_redis_key(token)) is None
 
 
+def test_disabled_soap_note_rollout_consumes_bearer_without_provider_action(
+    client: TestClient,
+    fresh_redis,
+    doctor_with_zoom,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.routes import recall_callbacks
+
+    observed_capabilities: list[str] = []
+
+    def deny_capability(_doctor, capability: str) -> bool:
+        observed_capabilities.append(capability)
+        return False
+
+    provider_calls: list[str] = []
+
+    def unexpected_get_zoom_integration(_doctor):
+        provider_calls.append("get_zoom_integration")
+        raise AssertionError("disabled rollout must stop before provider lookup")
+
+    def unexpected_get_zak_token(_doctor):
+        provider_calls.append("get_zak_token")
+        raise AssertionError("disabled rollout must stop before ZAK retrieval")
+
+    monkeypatch.setattr(
+        recall_callbacks,
+        "doctor_capability_access_in_force",
+        deny_capability,
+    )
+    monkeypatch.setattr(
+        zoom_service,
+        "get_zoom_integration",
+        unexpected_get_zoom_integration,
+    )
+    monkeypatch.setattr(zoom_service, "get_zak_token", unexpected_get_zak_token)
+
+    token = "token-disabled-soap-note-rollout"
+    fresh_redis.set(zak_token_redis_key(token), str(doctor_with_zoom.id))
+
+    response = client.get(f"/external/v1/recall/zak/{token}")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert fresh_redis.get(zak_token_redis_key(token)) is None
+    assert observed_capabilities == ["soap_note"]
+    assert provider_calls == []
+
+    replay = client.get(f"/external/v1/recall/zak/{token}")
+    assert replay.status_code == status.HTTP_404_NOT_FOUND
+    assert observed_capabilities == ["soap_note"]
+    assert provider_calls == []
+
+
 def test_atomic_consume_falls_back_to_lua_for_legacy_redis() -> None:
     from app.routes import recall_callbacks
 

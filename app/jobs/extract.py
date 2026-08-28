@@ -25,7 +25,7 @@ from typeid import TypeID
 from app import log
 from app.celery import celery_app
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.example_note_upload import (
     ExampleNoteBlobIntegrityError,
     download_registered_or_legacy_example_note,
@@ -68,7 +68,7 @@ def perform(doctor_note_file_id: str | TypeID | TypeIDType):
     note = DoctorNoteFile.one(id=doctor_note_file_id)
     doctor_ref = provider_log_ref(f"doctor:{note.doctor_id}")
     doctor = Doctor.get(id=note.doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.info(
             "clinical note extraction skipped: access unavailable",
             event_code="note_extraction_access_not_in_force",

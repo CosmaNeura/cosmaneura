@@ -31,7 +31,7 @@ from app.configuration.azure import (
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
 from app.environments import should_use_test_openai_fallback
 from app.services.biomarkers import default_unit, normalize_biomarker
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
@@ -146,7 +146,7 @@ def perform(lab_panel_id: str | TypeID | TypeIDType):
         return
 
     doctor = Doctor.get(id=panel.doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.info(
             "lab extraction skipped: access unavailable",
             event_code="lab_extraction_access_not_in_force",
