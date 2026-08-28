@@ -123,6 +123,7 @@ def _plan_sha256(
             "negotiated_baa_required": True,
             "origin_channel": "direct",
             "pastoral_pack": False,
+            "public_onboarding_required": False,
         },
         "legal_name": legal_name,
         "operator_ref": operator_ref,
@@ -196,6 +197,7 @@ def _applied_result(
         or practice.is_solo is not False
         or practice.origin_channel != "direct"
         or practice.pastoral_pack is not False
+        or practice.public_onboarding_required is not False
         or not practice.negotiated_baa_required
         or member.role != PracticeRole.owner.value
         or member.access_revoked_at is not None
@@ -534,6 +536,7 @@ def bootstrap_provider_practice(
             email_domain=plan.email_domain,
             origin_channel="direct",
             pastoral_pack=False,
+            public_onboarding_required=False,
             negotiated_baa_required=True,
         )
         session.add(practice)

@@ -1,10 +1,12 @@
 import secrets
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 
 from app.services.public_legal import CURRENT_LEGAL_DOCUMENTS
 
+import sqlalchemy as sa
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember
@@ -59,6 +61,59 @@ def test_database_forbids_npi_on_public_practices_but_preserves_legacy_storage()
     legacy_managed.refresh()
     assert public_practice.npi is None
     assert legacy_managed.npi == "1234567893"
+
+
+def test_public_onboarding_discriminator_has_no_database_default() -> None:
+    with get_session() as session:
+        column = session.execute(
+            sa.text(
+                """
+                SELECT is_nullable, column_default
+                  FROM information_schema.columns
+                 WHERE table_schema = current_schema()
+                   AND table_name = 'practice'
+                   AND column_name = 'public_onboarding_required'
+                """
+            )
+        ).one()
+
+    assert column.is_nullable == "NO"
+    assert column.column_default is None
+
+
+@pytest.mark.parametrize("npi", [None, "1234567893"])
+def test_database_fences_pre_gate_practice_insert_that_omits_discriminator(
+    npi: str | None,
+) -> None:
+    """Simulate the INSERT shape emitted by a binary built before the gate."""
+
+    domain = f"pre-gate-{secrets.token_hex(4)}.example.com"
+    with pytest.raises(DBAPIError) as exc_info:
+        with get_session() as session:
+            session.execute(
+                sa.text(
+                    """
+                    INSERT INTO practice (
+                        id, legal_name, npi, city, region, is_solo, join_code,
+                        email_domain, origin_channel, pastoral_pack
+                    ) VALUES (
+                        :id, 'Pre-gate Practice', :npi, NULL, NULL, TRUE,
+                        :join_code, :email_domain, 'direct', FALSE
+                    )
+                    """
+                ),
+                {
+                    "id": uuid4(),
+                    "npi": npi,
+                    "join_code": f"G{secrets.token_hex(4).upper()[:7]}",
+                    "email_domain": domain,
+                },
+            )
+            session.commit()
+
+    assert getattr(exc_info.value.orig, "sqlstate", None) == "23502"
+    assert "public_onboarding_required" in str(exc_info.value)
+    assert Practice.where(Practice.email_domain == domain).count() == 0
 
 
 def test_database_rejects_preapproved_membership_insert() -> None:

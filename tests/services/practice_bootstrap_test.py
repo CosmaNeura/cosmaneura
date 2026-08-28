@@ -75,6 +75,7 @@ def test_bootstrap_creates_closed_owner_practice_and_is_idempotent():
     assert result.practice.is_solo is False
     assert result.practice.origin_channel == "direct"
     assert result.practice.pastoral_pack is False
+    assert result.practice.public_onboarding_required is False
     assert result.practice.organization_id is None
     assert result.practice.baa_accepted_at is None
     assert result.practice.baa_accepted_by_doctor_id is None
@@ -254,6 +255,7 @@ def test_stale_concurrent_plan_fails_cleanly_after_reference_lock(monkeypatch):
         ("is_solo", True),
         ("origin_channel", "catholic"),
         ("pastoral_pack", True),
+        ("public_onboarding_required", True),
         ("negotiated_baa_required", False),
     ],
 )
