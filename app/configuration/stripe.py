@@ -10,6 +10,9 @@ STRIPE_BILLING_ENABLED = config("STRIPE_BILLING_ENABLED", default=False, cast=bo
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="", cast=str)
 STRIPE_ACCOUNT_ID = config("STRIPE_ACCOUNT_ID", default="", cast=str)
 STRIPE_PRICE_ID = config("STRIPE_PRICE_ID", default="", cast=str)
+STRIPE_PORTAL_CONFIGURATION_ID = config(
+    "STRIPE_PORTAL_CONFIGURATION_ID", default="", cast=str
+)
 STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="", cast=str)
 STRIPE_API_VERSION = config("STRIPE_API_VERSION", default="", cast=str)
 STRIPE_LIVE_MODE = config("STRIPE_LIVE_MODE", default=False, cast=bool)

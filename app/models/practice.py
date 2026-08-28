@@ -10,7 +10,7 @@ from sqlmodel import Column, Field, Relationship
 from .doctor import Doctor
 
 TRIAL_LENGTH = timedelta(days=14)
-"Every practice starts on a free trial, stamped when the BAA is accepted."
+"Duration shared by public Checkout and legacy managed trial policies."
 
 ENTITLED_SUBSCRIPTION_STATUSES = {"trialing", "active"}
 "Stripe subscription statuses that keep a practice entitled."
@@ -109,7 +109,7 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    "Stamped as now + TRIAL_LENGTH the first time the BAA is accepted."
+    "Fixed public Checkout trial end, authoritative Stripe end, or legacy BAA trial."
 
     billing_exempt: bool = False
     "Comped access (early-adopter pilots, future centrally invoiced groups)."
@@ -153,6 +153,31 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    stripe_checkout_request_json: str | None = Field(
+        default=None,
+        sa_column=Column(sa.Text(), nullable=True),
+    )
+    """Durable exact Stripe request body for crash-safe idempotent retries."""
+    stripe_checkout_request_created_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    """Start of the bounded Stripe idempotency replay window."""
+    stripe_checkout_entitlement_contract: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
+    """Exact entitlement contract stamped on the pending Checkout attempt."""
+    stripe_trial_clock_policy: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
+    """Durable provenance preventing a bound paid-pilot clock downgrade."""
+    stripe_subscription_entitlement_contract: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
+    """Exact entitlement contract bound to the authoritative subscription."""
 
     # Membership changes are recorded durably before the best-effort Stripe
     # call. A periodic reconciler keeps retrying until the expected quantity is
