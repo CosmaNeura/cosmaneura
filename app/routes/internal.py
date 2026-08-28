@@ -1440,6 +1440,11 @@ def create_practice(request: Request, data: CreatePracticeBody) -> PracticeStatu
             join_code=join_code,
             email_domain=email_domain,
             origin_channel=channel,
+            # MCD remains on its separately managed enrollment path. Every
+            # new self-service practice gets the public legal/credential gate
+            # and the deliberately bounded paid-pilot cohort bit.
+            public_onboarding_required=channel != OriginChannel.mcd.value,
+            public_pilot_cohort=channel != OriginChannel.mcd.value,
             # The future feature flag remains in the schema, but onboarding
             # must not imply that a not-yet-built capability is active.
             pastoral_pack=False,
