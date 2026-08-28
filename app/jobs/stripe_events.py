@@ -3,6 +3,7 @@
 from app import log
 from app.celery import celery_app
 from app.services.stripe_billing import (
+    StripeEventProcessingDeferred,
     process_stripe_event_inbox,
     reconcile_pending_stripe_events,
 )
@@ -10,12 +11,26 @@ from app.services.stripe_billing import (
 
 @celery_app.task
 def process(inbox_id: str) -> bool:
-    return process_stripe_event_inbox(inbox_id)
+    try:
+        return process_stripe_event_inbox(inbox_id)
+    except StripeEventProcessingDeferred:
+        raise
+    except Exception:
+        raise StripeEventProcessingDeferred(
+            "Stripe event processing is deferred for reconciliation"
+        ) from None
 
 
 @celery_app.task
 def perform() -> dict[str, int]:
-    succeeded, failed = reconcile_pending_stripe_events()
+    try:
+        succeeded, failed = reconcile_pending_stripe_events()
+    except StripeEventProcessingDeferred:
+        raise
+    except Exception:
+        raise StripeEventProcessingDeferred(
+            "Stripe event processing is deferred for reconciliation"
+        ) from None
     log.info(
         "stripe event inbox reconciliation completed",
         succeeded=succeeded,

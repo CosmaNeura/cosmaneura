@@ -22,10 +22,17 @@ Dry run:
       --confirm-old-code-stopped \
       --confirm-price-inventory-complete \
       --confirm-secret-configuration \
+      --confirm-npi-free-core-receiver \
+      --npi-free-core-receiver-sha '<reviewed-receiver-full-sha>' \
+      --confirm-counsel-baa-scope-reconciliation \
+      --counsel-baa-scope-reconciliation-ref '<counsel-record>' \
+      --counsel-baa-scope-reconciliation-sha256 '<lowercase-sha256>' \
       --confirm-founder-owner-approval \
       --owner-approval-ref '<approval-record>' \
       --pending-credential-trial-expiry-policy '<owner-approved-policy>' \
       --policy-implementation-evidence-ref '<implementation-record>' \
+      --confirm-seat-change-billing-policy-implemented \
+      --seat-change-billing-policy-implementation-evidence-ref '<implementation-record>' \
       --reviewed-source-sha '<reviewed-full-sha>' \
       --deployed-source-sha '<deployed-full-sha>'
 
@@ -54,12 +61,15 @@ from typing import Any, Callable
 STRIPE_API = "https://api.stripe.com/v1"
 STRIPE_API_VERSION = "2025-09-30.clover"
 CURRENT_PAYMENT_METHOD_COLLECTION = "always"
-ACTIVATION_POLICY_VERSION = "paid-pilot-v2"
+ACTIVATION_POLICY_VERSION = "paid-pilot-v3"
 ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v1"
 ENTITLEMENT_POLICY_REVISION = "2026-08-27"
 ENTITLEMENT_SCHEMA_SHA256 = (
     "a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578"
 )
+BAA_DOCUMENT_ID = "CN-BAA-CUST-CW"
+BAA_VERSION = "2.2"
+BAA_SHA256 = "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
 EXPECTED_PRICE_CURRENCY = "usd"
 EXPECTED_PRICE_UNIT_AMOUNT = 8_900
 EXPECTED_PRICE_INTERVAL = "month"
@@ -471,8 +481,15 @@ def _plan_digest(
     test_mode_lifecycle_evidence_sha256: str,
     observability_evidence_ref: str,
     observability_evidence_sha256: str,
+    npi_free_core_receiver_confirmed: bool,
+    npi_free_core_receiver_sha: str,
+    counsel_baa_scope_reconciliation_confirmed: bool,
+    counsel_baa_scope_reconciliation_ref: str,
+    counsel_baa_scope_reconciliation_sha256: str,
     owner_approval_ref: str,
     policy_implementation_evidence_ref: str,
+    seat_change_billing_policy_implemented_confirmed: bool,
+    seat_change_billing_policy_implementation_evidence_ref: str,
     reviewed_source_sha: str,
     deployed_source_sha: str,
     scan: SessionScan,
@@ -483,6 +500,11 @@ def _plan_digest(
     payload = {
         "activation_policy": ACTIVATION_POLICY_VERSION,
         "account_id": account_id,
+        "baa_contract": {
+            "document_id": BAA_DOCUMENT_ID,
+            "sha256": BAA_SHA256,
+            "version": BAA_VERSION,
+        },
         "checkout_policy": ACTIVATION_POLICY_VERSION,
         "completed_session_reconciliation_at": (
             completed_session_reconciliation_at.isoformat()
@@ -524,13 +546,28 @@ def _plan_digest(
         },
         "expected_webhook_events": sorted(EXPECTED_WEBHOOK_EVENTS),
         "live_mode": live_mode,
+        "npi_free_core_receiver_confirmed": npi_free_core_receiver_confirmed,
+        "npi_free_core_receiver_sha": npi_free_core_receiver_sha,
         "pending_credential_trial_expiry_policy": (
             pending_credential_trial_expiry_policy
+        ),
+        "counsel_baa_scope_reconciliation_confirmed": (
+            counsel_baa_scope_reconciliation_confirmed
+        ),
+        "counsel_baa_scope_reconciliation_ref": (counsel_baa_scope_reconciliation_ref),
+        "counsel_baa_scope_reconciliation_sha256": (
+            counsel_baa_scope_reconciliation_sha256
         ),
         "owner_approval_ref": owner_approval_ref,
         "observability_evidence_ref": observability_evidence_ref,
         "observability_evidence_sha256": observability_evidence_sha256,
         "policy_implementation_evidence_ref": policy_implementation_evidence_ref,
+        "seat_change_billing_policy_implemented_confirmed": (
+            seat_change_billing_policy_implemented_confirmed
+        ),
+        "seat_change_billing_policy_implementation_evidence_ref": (
+            seat_change_billing_policy_implementation_evidence_ref
+        ),
         "price_ids": price_ids,
         "product_id": product_id,
         "portal_configuration_id": portal_configuration_id,
@@ -883,10 +920,17 @@ def _evidence(
     observability_ready_confirmed: bool,
     observability_evidence_ref: str,
     observability_evidence_sha256: str,
+    npi_free_core_receiver_confirmed: bool,
+    npi_free_core_receiver_sha: str,
+    counsel_baa_scope_reconciliation_confirmed: bool,
+    counsel_baa_scope_reconciliation_ref: str,
+    counsel_baa_scope_reconciliation_sha256: str,
     founder_owner_approval_confirmed: bool,
     owner_approval_ref: str,
     pending_credential_trial_expiry_policy: str | None,
     policy_implementation_evidence_ref: str,
+    seat_change_billing_policy_implemented_confirmed: bool,
+    seat_change_billing_policy_implementation_evidence_ref: str,
     reviewed_source_sha: str,
     deployed_source_sha: str,
 ) -> dict[str, Any]:
@@ -910,8 +954,23 @@ def _evidence(
         test_mode_lifecycle_evidence_sha256=test_mode_lifecycle_evidence_sha256,
         observability_evidence_ref=observability_evidence_ref,
         observability_evidence_sha256=observability_evidence_sha256,
+        npi_free_core_receiver_confirmed=npi_free_core_receiver_confirmed,
+        npi_free_core_receiver_sha=npi_free_core_receiver_sha,
+        counsel_baa_scope_reconciliation_confirmed=(
+            counsel_baa_scope_reconciliation_confirmed
+        ),
+        counsel_baa_scope_reconciliation_ref=(counsel_baa_scope_reconciliation_ref),
+        counsel_baa_scope_reconciliation_sha256=(
+            counsel_baa_scope_reconciliation_sha256
+        ),
         owner_approval_ref=owner_approval_ref,
         policy_implementation_evidence_ref=policy_implementation_evidence_ref,
+        seat_change_billing_policy_implemented_confirmed=(
+            seat_change_billing_policy_implemented_confirmed
+        ),
+        seat_change_billing_policy_implementation_evidence_ref=(
+            seat_change_billing_policy_implementation_evidence_ref
+        ),
         reviewed_source_sha=reviewed_source_sha,
         deployed_source_sha=deployed_source_sha,
         scan=scan,
@@ -936,6 +995,15 @@ def _evidence(
         and SAFE_REFERENCE.fullmatch(observability_evidence_ref)
         and SHA256.fullmatch(observability_evidence_sha256)
     )
+    npi_free_core_receiver_evidenced = bool(
+        npi_free_core_receiver_confirmed
+        and GIT_SHA.fullmatch(npi_free_core_receiver_sha)
+    )
+    counsel_baa_scope_reconciliation_evidenced = bool(
+        counsel_baa_scope_reconciliation_confirmed
+        and SAFE_REFERENCE.fullmatch(counsel_baa_scope_reconciliation_ref)
+        and SHA256.fullmatch(counsel_baa_scope_reconciliation_sha256)
+    )
     owner_approval_recorded = bool(
         founder_owner_approval_confirmed
         and SAFE_REFERENCE.fullmatch(owner_approval_ref)
@@ -943,6 +1011,12 @@ def _evidence(
     policy_implementation_evidenced = bool(
         pending_credential_trial_expiry_policy is not None
         and SAFE_REFERENCE.fullmatch(policy_implementation_evidence_ref)
+    )
+    seat_change_billing_policy_implementation_evidenced = bool(
+        seat_change_billing_policy_implemented_confirmed
+        and SAFE_REFERENCE.fullmatch(
+            seat_change_billing_policy_implementation_evidence_ref
+        )
     )
     reviewed_source_sha_valid = bool(GIT_SHA.fullmatch(reviewed_source_sha))
     deployed_source_sha_valid = bool(GIT_SHA.fullmatch(deployed_source_sha))
@@ -959,6 +1033,9 @@ def _evidence(
             completed_session_reconciliation_recorded
         ),
         "current_offer_verified": True,
+        "counsel_baa_scope_reconciliation_evidenced": (
+            counsel_baa_scope_reconciliation_evidenced
+        ),
         "drain_satisfied": drain_satisfied,
         "founder_owner_approval_recorded": owner_approval_recorded,
         "no_ambiguous_open_sessions": not scan.ambiguous,
@@ -967,6 +1044,7 @@ def _evidence(
         "no_recoverable_expired_sessions": not recovery_scan.recoverable,
         "no_ambiguous_active_payment_links": not payment_link_scan.ambiguous,
         "no_active_paid_pilot_payment_links": not payment_link_scan.relevant,
+        "npi_free_core_receiver_evidenced": npi_free_core_receiver_evidenced,
         "observability_readiness_evidenced": observability_readiness_evidenced,
         "pending_credential_trial_expiry_policy_implemented": (
             policy_implementation_evidenced
@@ -980,6 +1058,9 @@ def _evidence(
         "retired_price_inventory_verified": True,
         "reviewed_source_matches_deployed": reviewed_source_deployed,
         "secret_configuration_confirmed": secret_configuration_confirmed,
+        "seat_change_billing_policy_implementation_evidenced": (
+            seat_change_billing_policy_implementation_evidenced
+        ),
         "test_mode_lifecycle_evidenced": test_mode_lifecycle_evidenced,
         "webhook_endpoint_and_events_verified": True,
     }
@@ -993,6 +1074,11 @@ def _evidence(
         "activation_prerequisites": prerequisites,
         "ambiguous_cosmaneura_open_sessions": len(scan.ambiguous),
         "applied": applied,
+        "baa_contract": {
+            "document_id": BAA_DOCUMENT_ID,
+            "sha256": BAA_SHA256,
+            "version": BAA_VERSION,
+        },
         "checkout_policy": ACTIVATION_POLICY_VERSION,
         "checkout_price_ids": price_ids,
         "checked_at": checked_at.isoformat(),
@@ -1024,6 +1110,22 @@ def _evidence(
         },
         "current_offer_verified": True,
         "current_price_id": price_id,
+        "counsel_baa_scope_reconciliation_confirmed": (
+            counsel_baa_scope_reconciliation_confirmed
+        ),
+        "counsel_baa_scope_reconciliation_evidence_ref": (
+            counsel_baa_scope_reconciliation_ref
+            if counsel_baa_scope_reconciliation_evidenced
+            else None
+        ),
+        "counsel_baa_scope_reconciliation_evidence_sha256": (
+            counsel_baa_scope_reconciliation_sha256
+            if counsel_baa_scope_reconciliation_evidenced
+            else None
+        ),
+        "counsel_baa_scope_reconciliation_evidenced": (
+            counsel_baa_scope_reconciliation_evidenced
+        ),
         "entitlement_contract": {
             "policy_revision": ENTITLEMENT_POLICY_REVISION,
             "schema_sha256": ENTITLEMENT_SCHEMA_SHA256,
@@ -1042,6 +1144,11 @@ def _evidence(
         "owner_approval_ref": owner_approval_ref if owner_approval_recorded else None,
         "legacy_cosmaneura_open_sessions": scan.legacy_count,
         "live_mode": live_mode,
+        "npi_free_core_receiver_confirmed": npi_free_core_receiver_confirmed,
+        "npi_free_core_receiver_sha": (
+            npi_free_core_receiver_sha if npi_free_core_receiver_evidenced else None
+        ),
+        "npi_free_core_receiver_evidenced": npi_free_core_receiver_evidenced,
         "open_session_id_sha256": _session_id_digest((*scan.eligible, *scan.ambiguous)),
         "open_sessions_scanned": scan.total_open,
         "active_payment_links_scanned": payment_link_scan.total_active,
@@ -1070,6 +1177,17 @@ def _evidence(
             else None
         ),
         "policy_implementation_evidenced": policy_implementation_evidenced,
+        "seat_change_billing_policy_implemented_confirmed": (
+            seat_change_billing_policy_implemented_confirmed
+        ),
+        "seat_change_billing_policy_implementation_evidence_ref": (
+            seat_change_billing_policy_implementation_evidence_ref
+            if seat_change_billing_policy_implementation_evidenced
+            else None
+        ),
+        "seat_change_billing_policy_implementation_evidenced": (
+            seat_change_billing_policy_implementation_evidenced
+        ),
         "plan_sha256": plan_sha256,
         "price_inventory_confirmed": price_inventory_confirmed,
         "price_inventory_pages_scanned": price_inventory_verification.pages,
@@ -1141,10 +1259,17 @@ def run_preflight(
     observability_ready_confirmed: bool = False,
     observability_evidence_ref: str = "",
     observability_evidence_sha256: str = "",
+    npi_free_core_receiver_confirmed: bool = False,
+    npi_free_core_receiver_sha: str = "",
+    counsel_baa_scope_reconciliation_confirmed: bool = False,
+    counsel_baa_scope_reconciliation_ref: str = "",
+    counsel_baa_scope_reconciliation_sha256: str = "",
     founder_owner_approval_confirmed: bool = False,
     owner_approval_ref: str = "",
     pending_credential_trial_expiry_policy: str | None = None,
     policy_implementation_evidence_ref: str = "",
+    seat_change_billing_policy_implemented_confirmed: bool = False,
+    seat_change_billing_policy_implementation_evidence_ref: str = "",
     reviewed_source_sha: str = "",
     deployed_source_sha: str = "",
 ) -> dict[str, Any]:
@@ -1256,10 +1381,25 @@ def run_preflight(
         observability_ready_confirmed=observability_ready_confirmed,
         observability_evidence_ref=observability_evidence_ref,
         observability_evidence_sha256=observability_evidence_sha256,
+        npi_free_core_receiver_confirmed=npi_free_core_receiver_confirmed,
+        npi_free_core_receiver_sha=npi_free_core_receiver_sha,
+        counsel_baa_scope_reconciliation_confirmed=(
+            counsel_baa_scope_reconciliation_confirmed
+        ),
+        counsel_baa_scope_reconciliation_ref=(counsel_baa_scope_reconciliation_ref),
+        counsel_baa_scope_reconciliation_sha256=(
+            counsel_baa_scope_reconciliation_sha256
+        ),
         founder_owner_approval_confirmed=founder_owner_approval_confirmed,
         owner_approval_ref=owner_approval_ref,
         pending_credential_trial_expiry_policy=(pending_credential_trial_expiry_policy),
         policy_implementation_evidence_ref=policy_implementation_evidence_ref,
+        seat_change_billing_policy_implemented_confirmed=(
+            seat_change_billing_policy_implemented_confirmed
+        ),
+        seat_change_billing_policy_implementation_evidence_ref=(
+            seat_change_billing_policy_implementation_evidence_ref
+        ),
         reviewed_source_sha=reviewed_source_sha,
         deployed_source_sha=deployed_source_sha,
     )
@@ -1353,10 +1493,25 @@ def run_preflight(
         observability_ready_confirmed=observability_ready_confirmed,
         observability_evidence_ref=observability_evidence_ref,
         observability_evidence_sha256=observability_evidence_sha256,
+        npi_free_core_receiver_confirmed=npi_free_core_receiver_confirmed,
+        npi_free_core_receiver_sha=npi_free_core_receiver_sha,
+        counsel_baa_scope_reconciliation_confirmed=(
+            counsel_baa_scope_reconciliation_confirmed
+        ),
+        counsel_baa_scope_reconciliation_ref=(counsel_baa_scope_reconciliation_ref),
+        counsel_baa_scope_reconciliation_sha256=(
+            counsel_baa_scope_reconciliation_sha256
+        ),
         founder_owner_approval_confirmed=founder_owner_approval_confirmed,
         owner_approval_ref=owner_approval_ref,
         pending_credential_trial_expiry_policy=(pending_credential_trial_expiry_policy),
         policy_implementation_evidence_ref=policy_implementation_evidence_ref,
+        seat_change_billing_policy_implemented_confirmed=(
+            seat_change_billing_policy_implemented_confirmed
+        ),
+        seat_change_billing_policy_implementation_evidence_ref=(
+            seat_change_billing_policy_implementation_evidence_ref
+        ),
         reviewed_source_sha=reviewed_source_sha,
         deployed_source_sha=deployed_source_sha,
     )
@@ -1385,6 +1540,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm-observability-ready", action="store_true")
     parser.add_argument("--observability-evidence-ref", default="")
     parser.add_argument("--observability-evidence-sha256", default="")
+    parser.add_argument("--confirm-npi-free-core-receiver", action="store_true")
+    parser.add_argument("--npi-free-core-receiver-sha", default="")
+    parser.add_argument(
+        "--confirm-counsel-baa-scope-reconciliation", action="store_true"
+    )
+    parser.add_argument("--counsel-baa-scope-reconciliation-ref", default="")
+    parser.add_argument("--counsel-baa-scope-reconciliation-sha256", default="")
     parser.add_argument("--confirm-founder-owner-approval", action="store_true")
     parser.add_argument("--owner-approval-ref", default="")
     parser.add_argument(
@@ -1392,6 +1554,12 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(sorted(PENDING_CREDENTIAL_TRIAL_EXPIRY_POLICIES)),
     )
     parser.add_argument("--policy-implementation-evidence-ref", default="")
+    parser.add_argument(
+        "--confirm-seat-change-billing-policy-implemented", action="store_true"
+    )
+    parser.add_argument(
+        "--seat-change-billing-policy-implementation-evidence-ref", default=""
+    )
     parser.add_argument("--reviewed-source-sha", default="")
     parser.add_argument("--deployed-source-sha", default="")
     parser.add_argument("--apply", action="store_true")
@@ -1494,6 +1662,17 @@ def main(argv: list[str] | None = None) -> int:
             observability_ready_confirmed=args.confirm_observability_ready,
             observability_evidence_ref=args.observability_evidence_ref,
             observability_evidence_sha256=(args.observability_evidence_sha256.lower()),
+            npi_free_core_receiver_confirmed=(args.confirm_npi_free_core_receiver),
+            npi_free_core_receiver_sha=args.npi_free_core_receiver_sha.lower(),
+            counsel_baa_scope_reconciliation_confirmed=(
+                args.confirm_counsel_baa_scope_reconciliation
+            ),
+            counsel_baa_scope_reconciliation_ref=(
+                args.counsel_baa_scope_reconciliation_ref
+            ),
+            counsel_baa_scope_reconciliation_sha256=(
+                args.counsel_baa_scope_reconciliation_sha256.lower()
+            ),
             founder_owner_approval_confirmed=(args.confirm_founder_owner_approval),
             owner_approval_ref=args.owner_approval_ref,
             pending_credential_trial_expiry_policy=(
@@ -1501,6 +1680,12 @@ def main(argv: list[str] | None = None) -> int:
             ),
             policy_implementation_evidence_ref=(
                 args.policy_implementation_evidence_ref
+            ),
+            seat_change_billing_policy_implemented_confirmed=(
+                args.confirm_seat_change_billing_policy_implemented
+            ),
+            seat_change_billing_policy_implementation_evidence_ref=(
+                args.seat_change_billing_policy_implementation_evidence_ref
             ),
             reviewed_source_sha=args.reviewed_source_sha.lower(),
             deployed_source_sha=args.deployed_source_sha.lower(),

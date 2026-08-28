@@ -109,7 +109,7 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    "Authoritative Stripe trial end, or a preserved pre-activation legacy trial."
+    "Fixed hosted-Checkout trial end, authoritative Stripe end, or legacy trial."
 
     billing_exempt: bool = False
     "Comped access (early-adopter pilots, future centrally invoiced groups)."
@@ -255,6 +255,11 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
             self.subscription_status is not None
             or self.stripe_subscription_id is not None
         ):
+            return False
+        if self.public_onboarding_required:
+            # A public Checkout-start timestamp is never billing authority by
+            # itself. Only a verified bound subscription (or an explicit
+            # exemption above) can entitle the public paid path.
             return False
         return self.trial_ends_at is not None and self.trial_ends_at > now
 

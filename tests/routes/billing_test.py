@@ -115,6 +115,31 @@ class RouteStripe:
         raise AssertionError(f"unexpected Stripe request: {method} {path}")
 
 
+@pytest.mark.parametrize(
+    ("task", "dependency"),
+    [
+        (app.jobs.stripe_events.process, "process_stripe_event_inbox"),
+        (app.jobs.stripe_events.perform, "reconcile_pending_stripe_events"),
+    ],
+)
+def test_stripe_worker_tasks_sanitize_unexpected_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    task,
+    dependency: str,
+) -> None:
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("sensitive provider failure")
+
+    monkeypatch.setattr(app.jobs.stripe_events, dependency, fail)
+    args = ("inbox_sensitive",) if dependency == "process_stripe_event_inbox" else ()
+
+    with pytest.raises(stripe_billing.StripeEventProcessingDeferred) as raised:
+        task.run(*args)
+
+    assert str(raised.value) == "Stripe event processing is deferred for reconciliation"
+    assert "sensitive" not in str(raised.value).lower()
+
+
 def _dev_doctor() -> Doctor:
     _, _, clerk_user = get_clerk_dev_user()
     doctor = Doctor.get(clerk_id=clerk_user.id)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -20,6 +21,7 @@ PORTAL_CONFIGURATION_ID = "bpc_cosmaneura_paid_pilot"
 WEBHOOK_URL = "https://app.example.test/external/v1/webhooks/stripe"
 WEBHOOK_ID = "we_sensitive_endpoint_identifier"
 SOURCE_SHA = "a" * 40
+RECEIVER_SHA = "c" * 40
 EVIDENCE_SHA256 = "b" * 64
 EXPECTED_WEBHOOK_EVENTS = [
     "checkout.session.completed",
@@ -29,6 +31,14 @@ EXPECTED_WEBHOOK_EVENTS = [
     "customer.subscription.paused",
     "customer.subscription.resumed",
 ]
+
+
+def test_baa_v22_bytes_match_activation_pin() -> None:
+    preflight = _load_preflight()
+    baa_path = ROOT / "app" / "assets" / "baa" / "baa_cn-baa-cust-cw_v2.2.html"
+    actual_sha256 = hashlib.sha256(baa_path.read_bytes()).hexdigest()
+
+    assert actual_sha256 == preflight.BAA_SHA256
 
 
 def _load_preflight() -> ModuleType:
@@ -289,10 +299,19 @@ def _common(*, live_mode: bool = False) -> dict[str, Any]:
         "observability_ready_confirmed": True,
         "observability_evidence_ref": "CHANGE-OBSERVABILITY-345",
         "observability_evidence_sha256": EVIDENCE_SHA256,
+        "npi_free_core_receiver_confirmed": True,
+        "npi_free_core_receiver_sha": RECEIVER_SHA,
+        "counsel_baa_scope_reconciliation_confirmed": True,
+        "counsel_baa_scope_reconciliation_ref": "COUNSEL-BAA-SCOPE-678",
+        "counsel_baa_scope_reconciliation_sha256": EVIDENCE_SHA256,
         "founder_owner_approval_confirmed": True,
         "owner_approval_ref": "APPROVAL-123",
         "pending_credential_trial_expiry_policy": "hold_conversion",
         "policy_implementation_evidence_ref": "CHANGE-IMPLEMENTATION-456",
+        "seat_change_billing_policy_implemented_confirmed": True,
+        "seat_change_billing_policy_implementation_evidence_ref": (
+            "CHANGE-SEAT-BILLING-IMPLEMENTATION-567"
+        ),
         "reviewed_source_sha": SOURCE_SHA,
         "deployed_source_sha": SOURCE_SHA,
     }
@@ -351,8 +370,13 @@ def test_preflight_fully_paginates_and_classifies_without_exposing_ids() -> None
         "unit_amount": 8_900,
         "usage_type": "licensed",
     }
-    assert evidence["activation_policy"] == "paid-pilot-v2"
-    assert evidence["checkout_policy"] == "paid-pilot-v2"
+    assert evidence["activation_policy"] == "paid-pilot-v3"
+    assert evidence["checkout_policy"] == "paid-pilot-v3"
+    assert evidence["baa_contract"] == {
+        "document_id": "CN-BAA-CUST-CW",
+        "sha256": ("13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"),
+        "version": "2.2",
+    }
     assert evidence["entitlement_contract"] == {
         "policy_revision": "2026-08-27",
         "schema_sha256": (
@@ -366,6 +390,15 @@ def test_preflight_fully_paginates_and_classifies_without_exposing_ids() -> None
     assert evidence["stripe_product_verified"] is True
     assert evidence["completed_session_reconciliation_confirmed"] is True
     assert evidence["completed_session_reconciliation_ref"] == ("CHANGE-COMPLETED-789")
+    assert evidence["npi_free_core_receiver_evidenced"] is True
+    assert evidence["npi_free_core_receiver_sha"] == RECEIVER_SHA
+    assert evidence["counsel_baa_scope_reconciliation_evidenced"] is True
+    assert evidence["counsel_baa_scope_reconciliation_evidence_ref"] == (
+        "COUNSEL-BAA-SCOPE-678"
+    )
+    assert evidence["counsel_baa_scope_reconciliation_evidence_sha256"] == (
+        EVIDENCE_SHA256
+    )
     assert evidence["webhook_endpoint_verified"] is True
     assert evidence["webhook_event_count"] == len(EXPECTED_WEBHOOK_EVENTS)
     serialized = json.dumps(evidence)
@@ -600,6 +633,38 @@ def test_apply_cannot_expire_sessions_before_full_drain() -> None:
             {"founder_owner_approval_confirmed": False},
             "founder_owner_approval_recorded",
         ),
+        (
+            {"npi_free_core_receiver_confirmed": False},
+            "npi_free_core_receiver_evidenced",
+        ),
+        (
+            {"npi_free_core_receiver_sha": ""},
+            "npi_free_core_receiver_evidenced",
+        ),
+        (
+            {"npi_free_core_receiver_sha": "not-a-full-sha"},
+            "npi_free_core_receiver_evidenced",
+        ),
+        (
+            {"counsel_baa_scope_reconciliation_confirmed": False},
+            "counsel_baa_scope_reconciliation_evidenced",
+        ),
+        (
+            {"counsel_baa_scope_reconciliation_ref": ""},
+            "counsel_baa_scope_reconciliation_evidenced",
+        ),
+        (
+            {"counsel_baa_scope_reconciliation_ref": "unsafe ref"},
+            "counsel_baa_scope_reconciliation_evidenced",
+        ),
+        (
+            {"counsel_baa_scope_reconciliation_sha256": ""},
+            "counsel_baa_scope_reconciliation_evidenced",
+        ),
+        (
+            {"counsel_baa_scope_reconciliation_sha256": "not-a-sha256"},
+            "counsel_baa_scope_reconciliation_evidenced",
+        ),
         ({"owner_approval_ref": ""}, "founder_owner_approval_recorded"),
         (
             {"pending_credential_trial_expiry_policy": None},
@@ -608,6 +673,18 @@ def test_apply_cannot_expire_sessions_before_full_drain() -> None:
         (
             {"policy_implementation_evidence_ref": ""},
             "pending_credential_trial_expiry_policy_implemented",
+        ),
+        (
+            {"seat_change_billing_policy_implemented_confirmed": False},
+            "seat_change_billing_policy_implementation_evidenced",
+        ),
+        (
+            {"seat_change_billing_policy_implementation_evidence_ref": ""},
+            "seat_change_billing_policy_implementation_evidenced",
+        ),
+        (
+            {"seat_change_billing_policy_implementation_evidence_ref": "unsafe ref"},
+            "seat_change_billing_policy_implementation_evidenced",
         ),
         ({"deployed_source_sha": "b" * 40}, "reviewed_source_matches_deployed"),
         ({"acquisition_disabled_confirmed": False}, "acquisition_disabled_confirmed"),
@@ -707,6 +784,65 @@ def test_omitted_policy_is_the_parser_default_and_never_inferred() -> None:
     )
 
     assert args.pending_credential_trial_expiry_policy is None
+    assert args.confirm_npi_free_core_receiver is False
+    assert args.npi_free_core_receiver_sha == ""
+    assert args.confirm_counsel_baa_scope_reconciliation is False
+    assert args.counsel_baa_scope_reconciliation_ref == ""
+    assert args.counsel_baa_scope_reconciliation_sha256 == ""
+    assert args.confirm_seat_change_billing_policy_implemented is False
+    assert args.seat_change_billing_policy_implementation_evidence_ref == ""
+
+
+def test_seat_change_billing_policy_evidence_changes_plan_digest() -> None:
+    preflight = _load_preflight()
+    first = preflight.run_preflight(
+        FakeStripe([], live_mode=True),
+        **_common(live_mode=True),
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+    changed = {
+        **_common(live_mode=True),
+        "seat_change_billing_policy_implementation_evidence_ref": (
+            "CHANGE-SEAT-BILLING-IMPLEMENTATION-568"
+        ),
+    }
+    second = preflight.run_preflight(
+        FakeStripe([], live_mode=True),
+        **changed,
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert first["plan_sha256"] != second["plan_sha256"]
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"npi_free_core_receiver_sha": "d" * 40},
+        {"counsel_baa_scope_reconciliation_ref": "COUNSEL-BAA-SCOPE-679"},
+        {"counsel_baa_scope_reconciliation_sha256": "d" * 64},
+    ],
+)
+def test_architecture_gate_evidence_changes_plan_digest(
+    override: dict[str, Any],
+) -> None:
+    preflight = _load_preflight()
+    first = preflight.run_preflight(
+        FakeStripe([], live_mode=True),
+        **_common(live_mode=True),
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+    second = preflight.run_preflight(
+        FakeStripe([], live_mode=True),
+        **{**_common(live_mode=True), **override},
+        apply=False,
+        confirmed_plan_sha256=None,
+    )
+
+    assert first["plan_sha256"] != second["plan_sha256"]
 
 
 def test_unknown_pending_credential_policy_fails_before_stripe_calls() -> None:
@@ -1048,6 +1184,14 @@ def test_main_wires_documented_environment_and_activation_arguments(
             "CHANGE-OBSERVABILITY-345",
             "--observability-evidence-sha256",
             EVIDENCE_SHA256,
+            "--confirm-npi-free-core-receiver",
+            "--npi-free-core-receiver-sha",
+            RECEIVER_SHA,
+            "--confirm-counsel-baa-scope-reconciliation",
+            "--counsel-baa-scope-reconciliation-ref",
+            "COUNSEL-BAA-SCOPE-678",
+            "--counsel-baa-scope-reconciliation-sha256",
+            EVIDENCE_SHA256,
             "--confirm-founder-owner-approval",
             "--owner-approval-ref",
             "APPROVAL-123",
@@ -1055,6 +1199,9 @@ def test_main_wires_documented_environment_and_activation_arguments(
             "hold_conversion",
             "--policy-implementation-evidence-ref",
             "CHANGE-IMPLEMENTATION-456",
+            "--confirm-seat-change-billing-policy-implemented",
+            "--seat-change-billing-policy-implementation-evidence-ref",
+            "CHANGE-SEAT-BILLING-IMPLEMENTATION-567",
             "--reviewed-source-sha",
             SOURCE_SHA,
             "--deployed-source-sha",
@@ -1067,5 +1214,8 @@ def test_main_wires_documented_environment_and_activation_arguments(
     assert evidence["ready_for_acquisition"] is True
     assert evidence["stripe_product_id"] == PRODUCT_ID
     assert evidence["stripe_portal_configuration_id"] == PORTAL_CONFIGURATION_ID
+    assert evidence["npi_free_core_receiver_sha"] == RECEIVER_SHA
+    assert evidence["counsel_baa_scope_reconciliation_evidenced"] is True
+    assert evidence["seat_change_billing_policy_implementation_evidenced"] is True
     assert WEBHOOK_URL not in json.dumps(evidence)
     assert WEBHOOK_ID not in json.dumps(evidence)
