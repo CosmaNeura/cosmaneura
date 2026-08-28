@@ -14,7 +14,7 @@ from app.engagement.service import (
     reconstruct_patient_text,
     score_patient_text,
 )
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
@@ -34,7 +34,7 @@ def perform(transcript_id: str | TypeIDType):
     assert transcript
 
     doctor = Doctor.get(id=transcript.doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.info(
             "engagement scoring skipped: access unavailable",
             event_code="engagement_scoring_access_not_in_force",

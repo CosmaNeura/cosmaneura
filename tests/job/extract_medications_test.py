@@ -18,7 +18,11 @@ from tests.factories import AppointmentFactory, DoctorFactory, PatientFactory
 
 @pytest.fixture(autouse=True)
 def _allow_doctor_access(monkeypatch):
-    monkeypatch.setattr(job, "doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        job,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: capability == "soap_note",
+    )
 
 
 def _transcript(doctor, patient, lines: list[tuple[str, str]]) -> AIVisitTranscript:

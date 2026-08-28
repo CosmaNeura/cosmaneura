@@ -12,7 +12,7 @@ from app.jobs import merge_window
 from app.routes.recall_callbacks import zak_token_redis_key
 from app.services import recall, zoom_webhook_operations
 from app.services import zoom as zoom_service
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.external_webhook_inbox import (
     PermanentWebhookError,
     RetryableWebhookError,
@@ -208,7 +208,7 @@ def handle_meeting_started(
             .scalar_subquery()
         ).first(),
     )
-    if not doctor or not doctor_access_in_force(doctor):
+    if not doctor or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.info(
             "zoom session registration skipped: access unavailable",
             host_ref=provider_log_ref(host_id),
@@ -485,7 +485,7 @@ def _start_appointment_session(
         return
 
     doctor = cast(Doctor | None, Doctor.get(id=doctor_id))
-    if not doctor or not doctor_access_in_force(doctor):
+    if not doctor or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.warning(
             "cannot start appointment: access unavailable",
             doctor_ref=provider_log_ref(doctor_id),

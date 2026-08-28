@@ -46,8 +46,8 @@ def _allow_recording_mapping(monkeypatch, recording_id: str) -> None:
     )
     monkeypatch.setattr(
         recall_webhooks,
-        "doctor_access_in_force",
-        lambda _doctor: True,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: capability == "soap_note",
     )
 
 
@@ -100,8 +100,8 @@ def test_recording_done_denied_access_skips_provider_and_receipt(monkeypatch) ->
     _allow_recording_mapping(monkeypatch, recording_id)
     monkeypatch.setattr(
         recall_webhooks,
-        "doctor_access_in_force",
-        lambda _doctor: False,
+        "doctor_capability_access_in_force",
+        lambda _doctor, _capability: False,
     )
     calls: list[str] = []
     monkeypatch.setattr(
@@ -119,6 +119,102 @@ def test_recording_done_denied_access_skips_provider_and_receipt(monkeypatch) ->
         )
     )
     assert receipt is None
+
+
+def test_transcript_done_disabled_rollout_skips_provider_and_persistence(
+    monkeypatch,
+) -> None:
+    redis_values = {
+        "recall:recording:recording-private-sentinel:doctor_id": b"doctor-authorized",
+        "recall:recording:recording-private-sentinel:appointment_id": b"appointment-authorized",
+        "recall:recording:recording-private-sentinel:patient_id": b"patient-authorized",
+    }
+
+    class FakeRedis:
+        def get(self, key):
+            return redis_values.get(key)
+
+    checked_capabilities: list[str] = []
+    monkeypatch.setattr(recall_webhooks, "get_redis", lambda: FakeRedis())
+    monkeypatch.setattr(
+        recall_webhooks.recall_webhook_operations,
+        "confirm_transcript_creation",
+        lambda _recording_id: None,
+    )
+    monkeypatch.setattr(
+        recall_webhooks.recall_webhook_operations,
+        "find_ingested_transcript",
+        lambda _transcript_id: None,
+    )
+    monkeypatch.setattr(
+        recall_webhooks.Doctor,
+        "get",
+        lambda **_kwargs: SimpleNamespace(deleted_at=None),
+    )
+    monkeypatch.setattr(
+        recall_webhooks,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: checked_capabilities.append(capability) or False,
+    )
+    monkeypatch.setattr(
+        recall_webhooks.recall_service,
+        "get_transcript",
+        lambda _transcript_id: (_ for _ in ()).throw(
+            AssertionError("provider must not be called after rollout shutdown")
+        ),
+    )
+    monkeypatch.setattr(
+        recall_webhooks.recall_webhook_operations,
+        "persist_transcript",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("transcript must not persist after rollout shutdown")
+        ),
+    )
+
+    recall_webhooks.handle_transcript_done(_transcript_payload())
+
+    assert checked_capabilities == ["soap_note"]
+
+
+def test_transcript_replay_disabled_rollout_skips_pipeline_dispatch(
+    monkeypatch,
+) -> None:
+    replay = SimpleNamespace(
+        transcript=SimpleNamespace(doctor_id="doctor-authorized"),
+        operation_id="operation-authorized",
+    )
+    checked_capabilities: list[str] = []
+    dispatches: list[str] = []
+    monkeypatch.setattr(
+        recall_webhooks.recall_webhook_operations,
+        "confirm_transcript_creation",
+        lambda _recording_id: None,
+    )
+    monkeypatch.setattr(
+        recall_webhooks.recall_webhook_operations,
+        "find_ingested_transcript",
+        lambda _transcript_id: replay,
+    )
+    monkeypatch.setattr(
+        recall_webhooks.Doctor,
+        "get",
+        lambda **_kwargs: SimpleNamespace(deleted_at=None),
+    )
+    monkeypatch.setattr(
+        recall_webhooks,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: checked_capabilities.append(capability) or False,
+    )
+    monkeypatch.setattr(
+        recall_webhooks.recall_webhook_operations,
+        "dispatch_pipeline",
+        lambda operation_id: dispatches.append(operation_id),
+    )
+
+    recall_webhooks.handle_transcript_done(_transcript_payload())
+
+    assert checked_capabilities == ["soap_note"]
+    assert dispatches == []
 
 
 def test_recording_done_missing_tenant_mapping_does_not_reserve_operation(

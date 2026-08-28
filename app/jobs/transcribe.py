@@ -26,7 +26,7 @@ from app.configuration.azure import (
     AZURE_UPLOADS_CONTAINER_NAME,
 )
 from app.configuration.openai import DEFAULT_MULTI_MODAL_MODEL, openai
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.external_webhook_inbox import provider_log_ref
 
 from activemodel.types import TypeIDType
@@ -64,7 +64,7 @@ def perform(visit_audio_file_id: str | TypeIDType):
     log.local(doctor_ref=doctor_ref)
 
     doctor = Doctor.get(id=visit_audio_file.doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.info(
             "transcription skipped: access unavailable",
             event_code="transcription_access_not_in_force",

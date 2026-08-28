@@ -83,7 +83,11 @@ def clean_redis():
 def allow_doctor_access(monkeypatch):
     from app.services import zoom_webhooks
 
-    monkeypatch.setattr(zoom_webhooks, "doctor_access_in_force", lambda _doctor: True)
+    monkeypatch.setattr(
+        zoom_webhooks,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: capability == "soap_note",
+    )
 
 
 @pytest.fixture
@@ -284,13 +288,19 @@ def test_meeting_started_denied_access_does_not_register_or_dispatch(
 ):
     from app.services import zoom_webhooks
 
-    monkeypatch.setattr(zoom_webhooks, "doctor_access_in_force", lambda _doctor: False)
+    checked_capabilities: list[str] = []
+    monkeypatch.setattr(
+        zoom_webhooks,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: checked_capabilities.append(capability) or False,
+    )
 
     zoom_webhooks.handle_meeting_started(_started_payload())
 
     assert clean_redis.get(_key("doctor_id")) is None
     assert clean_redis.get(_key("host_id")) is None
     assert mock_recall["create_bot"] == []
+    assert checked_capabilities == ["soap_note"]
 
 
 def test_meeting_started_retains_unreleased_prior_bot(
@@ -919,6 +929,45 @@ def test_doctor_present_then_patient_joins_starts_session(
     assert consumed_meeting is not None
     assert consumed_meeting.appointment_id == appointment.id
     assert consumed_meeting.capture_authorization_consumed_at is not None
+
+
+def test_rollout_disabled_after_registration_blocks_capture(
+    clean_redis,
+    doctor_with_zoom,
+    mock_recall,
+    mock_zoom,
+    monkeypatch,
+):
+    from app.services import zoom_webhooks
+
+    bound_meeting = ZoomMeeting.get(
+        doctor_id=doctor_with_zoom.id,
+        zoom_meeting_id=MEETING_ID,
+    )
+    assert bound_meeting is not None
+    assert bound_meeting.capture_authorization_consumed_at is None
+
+    zoom_webhooks.handle_meeting_started(_started_payload())
+    checked_capabilities: list[str] = []
+    monkeypatch.setattr(
+        zoom_webhooks,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: checked_capabilities.append(capability) or False,
+    )
+
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload(HOST_ID, "Test Doctor")
+    )
+    zoom_webhooks.handle_participant_joined(
+        _participant_joined_payload("patient-a", "Juan Perez")
+    )
+
+    assert checked_capabilities == ["soap_note"]
+    assert mock_recall["create_bot"] == []
+    assert mock_recall["start_recording"] == []
+    assert clean_redis.get(_key("recording_active")) is None
+    bound_meeting.refresh()
+    assert bound_meeting.capture_authorization_consumed_at is None
 
 
 def test_consumed_binding_blocks_second_capture_after_redis_state_loss(

@@ -38,6 +38,16 @@ def _deny(monkeypatch, module) -> None:
     monkeypatch.setattr(module, "doctor_access_in_force", lambda _doctor: False)
 
 
+def _deny_soap_note(monkeypatch, module) -> list[str]:
+    checked_capabilities: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "doctor_capability_access_in_force",
+        lambda _doctor, capability: checked_capabilities.append(capability) or False,
+    )
+    return checked_capabilities
+
+
 def _unexpected(*_args, **_kwargs):
     raise AssertionError("PHI-processing side effect must not run after access denial")
 
@@ -67,12 +77,13 @@ def test_transcribe_denial_skips_provider_and_pipeline(monkeypatch):
         appointment_id=appointment.id,
         azure_file_name="private-audio-sentinel.wav",
     ).save()
-    _deny(monkeypatch, transcribe)
+    checked_capabilities = _deny_soap_note(monkeypatch, transcribe)
     monkeypatch.setattr(transcribe, "transcribe_audio", _unexpected)
 
     transcribe.perform(audio.id)
 
     assert AIVisitTranscript.get(appointment_id=appointment.id) is None
+    assert checked_capabilities == ["soap_note"]
 
 
 def test_summarize_denial_skips_llm_and_note_write(monkeypatch):
@@ -131,20 +142,22 @@ def test_lab_extraction_denial_leaves_upload_pending(monkeypatch):
 def test_medication_extraction_denial_skips_processing(monkeypatch):
     doctor, patient, appointment = _visit()
     transcript = _transcript(doctor, patient, appointment)
-    _deny(monkeypatch, extract_medications)
+    checked_capabilities = _deny_soap_note(monkeypatch, extract_medications)
     monkeypatch.setattr(extract_medications, "extract_from_text", _unexpected)
 
     extract_medications.perform(transcript.id)
 
     assert PatientMedication.get(appointment_id=appointment.id) is None
+    assert checked_capabilities == ["soap_note"]
 
 
 def test_engagement_scoring_denial_skips_processing(monkeypatch):
     doctor, patient, appointment = _visit()
     transcript = _transcript(doctor, patient, appointment)
-    _deny(monkeypatch, score_engagement)
+    checked_capabilities = _deny_soap_note(monkeypatch, score_engagement)
     monkeypatch.setattr(score_engagement, "score_patient_text", _unexpected)
 
     score_engagement.perform(transcript.id)
 
     assert EngagementRole.get(ai_transcript_id=transcript.id) is None
+    assert checked_capabilities == ["soap_note"]

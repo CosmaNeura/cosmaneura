@@ -7,7 +7,7 @@ from app import log
 from app.configuration.redis import get_redis
 from app.services import recall as recall_service
 from app.services import recall_webhook_operations
-from app.services.doctor_access import doctor_access_in_force
+from app.services.doctor_access import doctor_capability_access_in_force
 from app.services.external_webhook_inbox import (
     PermanentWebhookError,
     RetryableWebhookError,
@@ -46,7 +46,7 @@ def handle_recording_done(payload: dict[str, Any]) -> None:
         )
         raise RetryableWebhookError("tenant_mapping_unavailable")
     doctor = Doctor.get(id=doctor_id) if doctor_id else None
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.warning(
             "recall recording ignored: access unavailable",
             event_code="recall_recording_access_not_in_force",
@@ -96,7 +96,7 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
     replay = recall_webhook_operations.find_ingested_transcript(transcript_id)
     if replay is not None:
         doctor = Doctor.get(id=replay.transcript.doctor_id)
-        if doctor is None or not doctor_access_in_force(doctor):
+        if doctor is None or not doctor_capability_access_in_force(doctor, "soap_note"):
             log.warning(
                 "recall transcript replay ignored: access unavailable",
                 event_code="recall_transcript_access_not_in_force",
@@ -127,7 +127,7 @@ def handle_transcript_done(payload: dict[str, Any]) -> None:
         raise RetryableWebhookError("tenant_mapping_unavailable")
 
     doctor = Doctor.get(id=doctor_id)
-    if doctor is None or not doctor_access_in_force(doctor):
+    if doctor is None or not doctor_capability_access_in_force(doctor, "soap_note"):
         log.warning(
             "recall transcript ignored: access unavailable",
             event_code="recall_transcript_access_not_in_force",
