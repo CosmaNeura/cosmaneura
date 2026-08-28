@@ -254,10 +254,38 @@ def _validate_livemode(value: object, *, source: str) -> None:
 def _hosted_url(value: object, *, hostname: str) -> str:
     if not isinstance(value, str):
         raise StripeStateInvalid("Stripe hosted URL is missing")
-    parsed = urlparse(value)
-    if parsed.scheme != "https" or parsed.hostname != hostname:
+    if (
+        not value
+        or value != value.strip()
+        or "\\" in value
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
+        raise StripeStateInvalid("Stripe hosted URL has an unexpected origin")
+    try:
+        parsed = urlparse(value)
+    except ValueError as exc:
+        raise StripeStateInvalid("Stripe hosted URL has an unexpected origin") from exc
+    # Compare the exact authority, not only urllib's derived hostname. Browsers
+    # follow WHATWG parsing rules where a backslash can act as a slash; exact
+    # authority also rejects credentials, ports, and trailing dots.
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != hostname
+        or parsed.hostname != hostname
+    ):
         raise StripeStateInvalid("Stripe hosted URL has an unexpected origin")
     return value
+
+
+def _stripe_timestamp(value: object, *, source: str) -> datetime:
+    """Return one bounded, timezone-aware timestamp from a Stripe response."""
+
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise StripeStateInvalid(f"{source} is invalid")
+    try:
+        return datetime.fromtimestamp(value, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError) as exc:
+        raise StripeStateInvalid(f"{source} is out of range") from exc
 
 
 def _subscription_item(
@@ -345,10 +373,7 @@ def _trial_end_from_subscription(subscription: dict[str, Any]) -> datetime | Non
         raise StripeStateInvalid("subscription trial clock is invalid")
     if checkout_clock and trial_end - trial_start != int(TRIAL_LENGTH.total_seconds()):
         raise StripeStateInvalid("subscription trial is not the fixed 14 days")
-    try:
-        return datetime.fromtimestamp(trial_end, tz=timezone.utc)
-    except (OSError, OverflowError, ValueError) as exc:
-        raise StripeStateInvalid("subscription trial clock is out of range") from exc
+    return _stripe_timestamp(trial_end, source="subscription trial clock")
 
 
 def _validate_subscription(subscription: dict[str, Any]) -> dict[str, Any]:
@@ -1274,10 +1299,9 @@ def _persist_checkout_cache(
 
 
 def _checkout_session_expiry(session: dict[str, Any]) -> datetime:
-    expires_at = session.get("expires_at")
-    if not isinstance(expires_at, int):
-        raise StripeStateInvalid("checkout session expiry is invalid")
-    return datetime.fromtimestamp(expires_at, tz=timezone.utc)
+    return _stripe_timestamp(
+        session.get("expires_at"), source="checkout session expiry"
+    )
 
 
 def _validate_checkout_session_binding(
@@ -1865,10 +1889,7 @@ def verify_webhook_signature(
 
 
 def _event_created_at(event: dict[str, Any]) -> datetime:
-    created = event.get("created")
-    if not isinstance(created, int):
-        raise StripeStateInvalid("Stripe event creation time is missing")
-    return datetime.fromtimestamp(created, tz=timezone.utc)
+    return _stripe_timestamp(event.get("created"), source="Stripe event creation time")
 
 
 def _event_subscription_id(event_type: str, obj: dict[str, Any]) -> str:
