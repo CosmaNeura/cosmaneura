@@ -10,10 +10,24 @@ from sqlmodel import Column, Field, Relationship
 from .doctor import Doctor
 
 TRIAL_LENGTH = timedelta(days=14)
-"Every practice starts on a free trial, stamped when the BAA is accepted."
+"Duration shared by public Checkout and legacy managed trial policies."
 
 ENTITLED_SUBSCRIPTION_STATUSES = {"trialing", "active"}
 "Stripe subscription statuses that keep a practice entitled."
+
+KNOWN_SUBSCRIPTION_STATUSES = {
+    "incomplete",
+    "incomplete_expired",
+    "trialing",
+    "active",
+    "past_due",
+    "canceled",
+    "unpaid",
+    "paused",
+    "pending_verification",
+    "invalid",
+}
+"Subscription projections understood by the credential-neutral receiver."
 
 
 class OriginChannel(str, Enum):
@@ -114,7 +128,7 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-    "Stamped as now + TRIAL_LENGTH the first time the BAA is accepted."
+    "Fixed public Checkout trial end, authoritative Stripe end, or legacy BAA trial."
 
     billing_exempt: bool = False
     "Comped access (early-adopter pilots, future centrally invoiced groups)."
@@ -158,6 +172,31 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         default=None,
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
+    stripe_checkout_request_json: str | None = Field(
+        default=None,
+        sa_column=Column(sa.Text(), nullable=True),
+    )
+    """Durable exact Stripe request body for crash-safe idempotent retries."""
+    stripe_checkout_request_created_at: datetime | None = Field(
+        default=None,
+        sa_type=sa.DateTime(timezone=True),  # type: ignore
+    )
+    """Start of the bounded Stripe idempotency replay window."""
+    stripe_checkout_entitlement_contract: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
+    """Exact entitlement contract stamped on the pending Checkout attempt."""
+    stripe_trial_clock_policy: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
+    """Durable provenance preventing a bound paid-pilot clock downgrade."""
+    stripe_subscription_entitlement_contract: str | None = Field(
+        default=None,
+        sa_column=Column(sa.String(length=64), nullable=True),
+    )
+    """Exact entitlement contract bound to the authoritative subscription."""
 
     # Membership changes are recorded durably before the best-effort Stripe
     # call. A periodic reconciler keeps retrying until the expected quantity is
@@ -218,15 +257,60 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
             self.billing_exempt_until is None or self.billing_exempt_until > now
         )
 
+    def has_authoritative_stripe_subscription_binding(self) -> bool:
+        """Whether public billing state is bound to one verified Stripe object."""
+
+        subscription_id = self.stripe_subscription_id
+        customer_id = self.stripe_customer_id
+        state_version = self.stripe_state_version
+        return bool(
+            isinstance(subscription_id, str)
+            and subscription_id.startswith("sub_")
+            and len(subscription_id) > len("sub_")
+            and subscription_id.strip() == subscription_id
+            and isinstance(customer_id, str)
+            and customer_id.startswith("cus_")
+            and len(customer_id) > len("cus_")
+            and customer_id.strip() == customer_id
+            and isinstance(state_version, int)
+            and not isinstance(state_version, bool)
+            and state_version > 0
+        )
+
     def entitled(self, *, at: datetime | None = None) -> bool:
         """The platform is the system of record for entitlement; Stripe is one
         of several ways it gets set (ARCHITECTURE.md §8, ADR 0016). Fail closed."""
 
         now = at or datetime.now(timezone.utc)
+        status = self.subscription_status
+        if status is not None and status not in KNOWN_SUBSCRIPTION_STATUSES:
+            return False
+        if status in {"pending_verification", "invalid"}:
+            return False
         if self.billing_exemption_active(at=now):
             return True
-        if self.subscription_status in ENTITLED_SUBSCRIPTION_STATUSES:
+        if (
+            self.acquisition_source
+            == PracticeAcquisitionSource.public_self_service.value
+            and status in ENTITLED_SUBSCRIPTION_STATUSES
+            and not self.has_authoritative_stripe_subscription_binding()
+        ):
+            return False
+        if status == "active":
             return True
+        if status == "trialing":
+            return self.trial_ends_at is not None and self.trial_ends_at > now
+        if status is not None:
+            # Once an explicit billing projection exists, a stale legacy trial
+            # timestamp cannot outrank its non-entitled state.
+            return False
+        if (
+            self.acquisition_source
+            == PracticeAcquisitionSource.public_self_service.value
+        ):
+            # Public acquisition starts its trial at authoritative Checkout;
+            # a legacy BAA-time timestamp alone is never paid-pilot authority.
+            return False
         return self.trial_ends_at is not None and self.trial_ends_at > now
 
 

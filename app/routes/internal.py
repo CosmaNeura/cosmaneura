@@ -66,6 +66,12 @@ from app.services.organization_access import (
     member_access_in_force,
     member_authorization_basis,
 )
+from app.services.public_entitlements import (
+    ActiveClinicianSeatLimitReached,
+    lock_practice_for_active_seat_mutation,
+    record_active_clinician_seat_quantity,
+    require_active_clinician_seat_capacity,
+)
 from app.services.reference_links import (
     PROVIDER_RESOURCE_DIRECTORY,
     ResourceLink,
@@ -1489,9 +1495,11 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         )
     version = _current_baa_version()
     # Serialize acceptance per practice. The legal execution record, its gate
-    # mirror, promised trial, and owner attestation commit atomically. Retrying
-    # an execution that predates this invariant repairs mirrors from the
-    # original acceptance timestamp instead of creating a second record.
+    # mirror, any legacy managed-practice trial, and owner attestation commit
+    # atomically. Public self-service trials start only after card collection
+    # at Checkout. Retrying an execution that predates this invariant repairs
+    # mirrors from the original acceptance timestamp instead of creating a
+    # second record.
     with get_session() as session:
         practice = session.exec(
             select(Practice).where(Practice.id == member.practice_id).with_for_update()
@@ -1537,7 +1545,11 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
         practice.baa_accepted_by_doctor_id = acceptance.accepted_by_doctor_id
         practice.baa_signature_name = acceptance.accepted_by_name
         practice.baa_signature_title = acceptance.accepted_by_title
-        if practice.trial_ends_at is None:
+        if (
+            practice.acquisition_source
+            != PracticeAcquisitionSource.public_self_service.value
+            and practice.trial_ends_at is None
+        ):
             practice.trial_ends_at = accepted_at + TRIAL_LENGTH
 
         locked_member.attested_at = locked_member.attested_at or accepted_at
@@ -1777,9 +1789,7 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
         # Serialize against organization conversion. A lookup that began while
         # this was a standalone practice must not complete a legacy join after
         # the practice becomes roster-managed.
-        locked_practice = session.exec(
-            select(Practice).where(Practice.id == practice.id).with_for_update()
-        ).one()
+        locked_practice = lock_practice_for_active_seat_mutation(session, practice.id)
         normalized_email = (doctor.email or "").strip().lower()
         lock_roster_enrollment_email(session, normalized_email)
         locked_doctor = session.exec(
@@ -1846,6 +1856,13 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This practice has not accepted the Cosmaneura Inc BAA yet.",
             )
+        try:
+            require_active_clinician_seat_capacity(session, locked_practice)
+        except ActiveClinicianSeatLimitReached as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from None
         member = PracticeMember(
             practice_id=locked_practice.id,
             doctor_id=locked_doctor.id,
@@ -1854,14 +1871,11 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             attestation_name=data.attestation_name.strip(),
         )
         session.add(member)
+        record_active_clinician_seat_quantity(session, locked_practice)
         session.commit()
         session.refresh(locked_practice)
         session.refresh(member)
         practice = locked_practice
-    # Persist the desired $89/clinician quantity and return immediately. The
-    # 15-minute reconciler performs all Stripe I/O; onboarding must never wait
-    # through multiple external 20-second timeouts.
-    stripe_billing.mark_quantity_sync_required(practice)
     payload = _practice_payload(practice, member)
     assert payload
     return payload

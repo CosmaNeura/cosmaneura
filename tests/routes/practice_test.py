@@ -12,6 +12,10 @@ from app.configuration.redis import get_redis
 from app.routes import internal
 from app.server import api_app
 from app.services import stripe_billing
+from app.services.public_entitlements import (
+    MAX_ACTIVE_CLINICIAN_SEATS,
+    active_clinician_seat_count,
+)
 from app.utils.email_domain import extract_email_domain
 
 from activemodel.session_manager import get_session
@@ -491,7 +495,7 @@ def test_baa_acceptance_writes_append_only_record(
     assert acceptance_count() == 1
 
 
-def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
+def test_public_baa_acceptance_retry_repairs_legal_gate_without_starting_trial(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -507,7 +511,7 @@ def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
     original_accepted_at = acceptance.accepted_at_utc
 
     # Simulate the historical partial-commit failure: legal evidence exists,
-    # but the denormalized gate/trial and owner attestation are absent.
+    # but the denormalized legal gate and owner attestation are absent.
     practice.baa_version = None
     practice.baa_accepted_at = None
     practice.baa_accepted_by_doctor_id = None
@@ -524,7 +528,7 @@ def test_baa_acceptance_retry_repairs_gate_from_original_legal_timestamp(
     member.refresh()
     assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 1
     assert practice.baa_accepted_at == original_accepted_at
-    assert practice.trial_ends_at == original_accepted_at + timedelta(days=14)
+    assert practice.trial_ends_at is None
     assert practice.baa_in_force()
     assert member.attested_at == original_accepted_at
     assert member.attestation_name == acceptance.accepted_by_name
@@ -793,6 +797,9 @@ def test_join_persists_quantity_repair_without_waiting_for_stripe(
     monkeypatch.setattr(
         stripe_billing, "sync_subscription_quantity", forbidden_remote_sync
     )
+    monkeypatch.setattr(
+        stripe_billing, "mark_quantity_sync_required", forbidden_remote_sync
+    )
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
         json={
@@ -806,6 +813,61 @@ def test_join_persists_quantity_repair_without_waiting_for_stripe(
     practice.refresh()
     assert practice.stripe_quantity_sync_required is True
     assert practice.stripe_quantity_sync_target == 1
+
+
+def test_join_rejects_twenty_first_active_clinician_atomically(
+    bare_authenticated_client: TestClient,
+):
+    joining_doctor = _authed_doctor()
+    domain = extract_email_domain(joining_doctor.email)
+    assert domain
+    practice = Practice(
+        legal_name="Full Public Practice, PLLC",
+        join_code=f"F{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+        baa_accepted_at=datetime.now(timezone.utc),
+        baa_version="CN-BAA-CUST-CW v2.2",
+        stripe_subscription_id=f"sub_join_full_{secrets.token_hex(8)}",
+        stripe_quantity_sync_target=MAX_ACTIVE_CLINICIAN_SEATS,
+        stripe_quantity_sync_version=3,
+    ).save()
+    for ordinal in range(MAX_ACTIVE_CLINICIAN_SEATS):
+        doctor = Doctor(
+            clerk_id=f"user_full_join_{secrets.token_hex(8)}",
+            email=f"member-{ordinal}-{secrets.token_hex(3)}@{domain}",
+            biography="",
+        ).save()
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=doctor.id,
+            role="workforce",
+        ).save()
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("join_practice"),
+        json={
+            "join_code": practice.join_code,
+            "attestation_name": "Twenty First Clinician",
+            "checks": ["workforce", "not-party", "direction", "phi"],
+        },
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert response.json()["detail"] == (
+        "A practice may have at most 20 active clinicians."
+    )
+    assert PracticeMember.get(doctor_id=joining_doctor.id) is None
+    with get_session() as session:
+        assert (
+            active_clinician_seat_count(session, practice.id)
+            == MAX_ACTIVE_CLINICIAN_SEATS
+        )
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is False
+    assert practice.stripe_quantity_sync_target == MAX_ACTIVE_CLINICIAN_SEATS
+    assert practice.stripe_quantity_sync_version == 3
 
 
 def test_mcd_channel_without_mcd_email_coerces_to_catholic(
@@ -865,7 +927,7 @@ def test_practice_gate_blocks_doctor_without_practice_even_if_onboarded(
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_baa_acceptance_starts_trial_and_opens_the_gate(
+def test_public_baa_acceptance_does_not_start_trial_or_open_product_gate(
     bare_authenticated_client: TestClient,
 ):
     _authed_doctor()
@@ -879,19 +941,15 @@ def test_baa_acceptance_starts_trial_and_opens_the_gate(
     assert blocked.status_code == status.HTTP_403_FORBIDDEN
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["entitled"] is True
+    assert body["entitled"] is False
     assert body["billing_exempt"] is False
-    assert body["trial_ends_at"] is not None
+    assert body["trial_ends_at"] is None
 
-    trial_ends_at = datetime.fromisoformat(body["trial_ends_at"])
-    trial_left = trial_ends_at - datetime.now(timezone.utc)
-    assert timedelta(days=13) < trial_left <= timedelta(days=14)
-
-    opened = bare_authenticated_client.get(api_app.url_path_for("note_list"))
-    assert opened.status_code == status.HTTP_200_OK
+    still_blocked = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+    assert still_blocked.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
 
-def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
+def test_expired_timed_comp_does_not_create_public_baa_trial(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -902,11 +960,11 @@ def test_expired_timed_comp_does_not_suppress_trial_at_baa_acceptance(
     practice.save()
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["trial_ends_at"] is not None
-    assert body["entitled"] is True
+    assert body["trial_ends_at"] is None
+    assert body["entitled"] is False
 
 
-def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
+def test_public_subscription_gate_and_exemption_sources(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -933,6 +991,9 @@ def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
     assert ended.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
     # an active subscription (mirrored from Stripe) is the third source
+    practice.stripe_customer_id = "cus_authoritative_public"
+    practice.stripe_subscription_id = "sub_authoritative_public"
+    practice.stripe_state_version = 1
     practice.subscription_status = "active"
     practice.save()
     subscribed = bare_authenticated_client.get(api_app.url_path_for("note_list"))

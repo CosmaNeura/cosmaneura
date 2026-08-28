@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_DIR = ROOT / "contracts" / "public-entitlements" / "v1"
 SCHEMA_PATH = CONTRACT_DIR / "capability-entitlement.schema.json"
 FIXTURE_PATH = CONTRACT_DIR / "synthetic-authorized-preflight.json"
+OPENAPI_PATH = ROOT / "web" / "openapi.json"
 
 
 def _schema() -> dict:
@@ -159,4 +160,7 @@ def test_v1_schema_and_fixture_are_byte_pinned() -> None:
     )
     assert hashlib.sha256(FIXTURE_PATH.read_bytes()).hexdigest() == (
         "9695b1a93b0c422467e46a93f587af2224b5b8c40b3c4951fc3bfc432e678530"
+    )
+    assert hashlib.sha256(OPENAPI_PATH.read_bytes()).hexdigest() == (
+        "b4887500dbeba7f205a7daeef007438105a7ef77a5e813970a0cf68c71aaac98"
     )
