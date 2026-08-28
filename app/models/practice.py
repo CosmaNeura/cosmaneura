@@ -235,13 +235,14 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         now = at or datetime.now(timezone.utc)
         if self.billing_exemption_active(at=now):
             return True
-        if (
-            self.stripe_subscription_id is not None
-            and self.subscription_status == "active"
-        ):
+        subscription_is_bound = bool(
+            isinstance(self.stripe_subscription_id, str)
+            and self.stripe_subscription_id.startswith("sub_")
+        )
+        if subscription_is_bound and self.subscription_status == "active":
             return True
         if (
-            self.stripe_subscription_id is not None
+            subscription_is_bound
             and self.subscription_status == "trialing"
             and self.trial_ends_at is not None
             and self.trial_ends_at > now

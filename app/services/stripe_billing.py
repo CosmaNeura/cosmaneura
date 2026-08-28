@@ -25,6 +25,7 @@ from app.services.external_webhook_inbox import provider_log_ref
 from app.services.public_entitlements import (
     MAX_ACTIVE_CLINICIAN_SEATS,
     PUBLIC_ENTITLEMENT_CONTRACT_VERSION,
+    ClinicianSeatPolicyError,
     active_clinician_seat_count,
 )
 
@@ -97,6 +98,10 @@ class StripeStateConflict(Exception):
 
 class StripeSeatLimitExceeded(StripeStateInvalid):
     """Core's authoritative active-clinician count is outside pilot bounds."""
+
+
+class StripeSeatLedgerInvalid(StripeStateInvalid):
+    """Core cannot safely derive the authoritative active-clinician count."""
 
 
 class StripeManagedBilling(StripeStateInvalid):
@@ -500,7 +505,7 @@ def _fail_closed_invalid_bound_subscription(
         if isinstance(invalid.reason, StripeSeatLimitExceeded):
             try:
                 repair_target = _authorized_member_count(session, row)
-            except StripeSeatLimitExceeded:
+            except (StripeSeatLimitExceeded, StripeSeatLedgerInvalid):
                 repair_target = None
         row.subscription_status = "invalid"
         row.stripe_state_version += 1
@@ -846,7 +851,7 @@ def _apply_authoritative_subscription(
             if mirrored_status not in TERMINAL_SUBSCRIPTION_STATUSES:
                 try:
                     target = _authorized_member_count(session, row)
-                except StripeSeatLimitExceeded as exc:
+                except (StripeSeatLimitExceeded, StripeSeatLedgerInvalid) as exc:
                     # Membership mutation paths own prevention. Billing still
                     # fails closed if drift or an older path violates the seat
                     # invariant, without leaving a stale active entitlement.
@@ -974,7 +979,12 @@ def attested_member_count(practice: Practice) -> int:
 def _authorized_member_count(session: Session, practice: Practice) -> int:
     """Consume the canonical v1 active-seat policy and enforce pilot bounds."""
 
-    count = active_clinician_seat_count(session, practice.id)
+    try:
+        count = active_clinician_seat_count(session, practice.id)
+    except ClinicianSeatPolicyError as exc:
+        raise StripeSeatLedgerInvalid(
+            "authoritative active-clinician ledger is invalid"
+        ) from exc
     if not 1 <= count <= MAX_ACTIVE_CLINICIAN_SEATS:
         raise StripeSeatLimitExceeded(
             "authoritative active-clinician count is outside the 1-20 pilot limit"
@@ -2256,12 +2266,16 @@ def _quantity_sync_snapshot(
             return None
         try:
             target = _authorized_member_count(session, row)
-        except StripeSeatLimitExceeded:
+        except (StripeSeatLimitExceeded, StripeSeatLedgerInvalid) as exc:
             row.subscription_status = "invalid"
             row.stripe_state_version += 1
             row.stripe_quantity_sync_required = False
             row.stripe_quantity_sync_target = None
-            row.stripe_quantity_sync_error = "active_seat_count_out_of_range"
+            row.stripe_quantity_sync_error = (
+                "active_seat_count_out_of_range"
+                if isinstance(exc, StripeSeatLimitExceeded)
+                else "active_seat_ledger_invalid"
+            )
             session.add(row)
             session.commit()
             _emit_billing_metric(
@@ -2368,7 +2382,7 @@ def sync_subscription_quantity(
 
     try:
         snapshot = _quantity_sync_snapshot(practice.id, force_new_version=False)
-    except StripeSeatLimitExceeded:
+    except (StripeSeatLimitExceeded, StripeSeatLedgerInvalid):
         practice.refresh()
         if raise_on_error:
             raise
