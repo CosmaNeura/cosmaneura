@@ -483,11 +483,30 @@ resource "azurerm_postgresql_flexible_server_firewall_rule" "azure" {
   end_ip_address   = "0.0.0.0"
 }
 
-resource "azurerm_postgresql_flexible_server_firewall_rule" "all" {
-  name             = "allow-all-ips"
+resource "azurerm_postgresql_flexible_server_firewall_rule" "aca_prod_egress" {
+  name             = "aca-prod-egress"
   server_id        = azurerm_postgresql_flexible_server.main.id
-  start_ip_address = "0.0.0.0"
-  end_ip_address   = "255.255.255.255"
+  start_ip_address = var.production_container_apps_egress_ipv4
+  end_ip_address   = var.production_container_apps_egress_ipv4
+
+  lifecycle {
+    precondition {
+      condition = try(
+        one(azurerm_container_app.scheduler.outbound_ip_addresses) == var.production_container_apps_egress_ipv4,
+        false,
+      )
+      error_message = "production_container_apps_egress_ipv4 does not exactly match the single refreshed scheduler outbound address; stop and reconcile live routing before continuing"
+    }
+  }
+}
+
+# The exact rule is created imperatively before the broad production rule is
+# removed. Adopt it during the next reviewed production plan/apply instead of
+# attempting a duplicate create.
+import {
+  for_each = var.adopt_existing_production_postgres_egress_rule ? toset(["aca-prod-egress"]) : toset([])
+  to       = azurerm_postgresql_flexible_server_firewall_rule.aca_prod_egress
+  id       = "${azurerm_postgresql_flexible_server.main.id}/firewallRules/${each.value}"
 }
 
 ####################
