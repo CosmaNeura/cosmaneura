@@ -2883,6 +2883,18 @@ def _finish_quantity_sync(
                 seat_quantity=target,
             )
             return False
+        if row.stripe_quantity_sync_version != version:
+            # A join/leave landed while Stripe was in flight. Never let this
+            # older success or failure clear or poison the newer obligation;
+            # the next sweep repairs its exact target.
+            session.commit()
+            _emit_billing_metric(
+                "seat_reconciliation",
+                outcome="superseded_target",
+                practice_id=practice_id,
+                seat_quantity=target,
+            )
+            return False
         if error is not None:
             row.stripe_quantity_sync_required = True
             row.stripe_quantity_sync_attempts += 1
@@ -2895,19 +2907,6 @@ def _finish_quantity_sync(
                 practice_id=practice_id,
                 seat_quantity=target,
                 attempts=row.stripe_quantity_sync_attempts,
-            )
-            return False
-        if row.stripe_quantity_sync_version != version:
-            # A join/leave landed while Stripe was in flight. Never let this
-            # older response clear the newer target; the next sweep repairs it.
-            row.stripe_quantity_sync_required = True
-            session.add(row)
-            session.commit()
-            _emit_billing_metric(
-                "seat_reconciliation",
-                outcome="superseded_target",
-                practice_id=practice_id,
-                seat_quantity=target,
             )
             return False
         row.stripe_quantity_sync_required = False

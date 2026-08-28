@@ -4825,6 +4825,62 @@ def test_reconcile_pending_quantity_syncs_continues_after_bound_row_failure(
     assert unbound.stripe_quantity_sync_attempts == 0
 
 
+@pytest.mark.parametrize("failed", [False, True], ids=["success", "failure"])
+@pytest.mark.parametrize("rebound", [False, True], ids=["newer-target", "rebound"])
+def test_stale_quantity_sync_completion_preserves_superseding_obligation(
+    failed: bool,
+    rebound: bool,
+):
+    practice = _practice()
+    original_subscription = _subscription(
+        practice,
+        subscription_id="sub_stale_quantity_completion",
+        customer_id="cus_stale_quantity_completion",
+        quantity=1,
+    )
+    _bind_verified_public_subscription(practice, original_subscription)
+    practice.stripe_quantity_sync_required = True
+    practice.stripe_quantity_sync_target = 2
+    practice.stripe_quantity_sync_version = 9
+    practice.stripe_quantity_sync_attempts = 4
+    practice.stripe_quantity_sync_error = "newer_obligation_error"
+    practice.stripe_quantity_synced_at = NOW
+    if rebound:
+        practice.stripe_customer_id = "cus_superseding_binding"
+        practice.stripe_subscription_id = "sub_superseding_binding"
+    practice.save()
+    superseding_obligation = (
+        practice.stripe_customer_id,
+        practice.stripe_subscription_id,
+        practice.stripe_quantity_sync_required,
+        practice.stripe_quantity_sync_target,
+        practice.stripe_quantity_sync_version,
+        practice.stripe_quantity_sync_attempts,
+        practice.stripe_quantity_sync_error,
+        practice.stripe_quantity_synced_at,
+    )
+
+    assert not stripe_billing._finish_quantity_sync(
+        practice.id,
+        subscription_id=original_subscription["id"],
+        version=9 if rebound else 8,
+        target=1,
+        error=RuntimeError("stale request failed") if failed else None,
+    )
+
+    practice.refresh()
+    assert (
+        practice.stripe_customer_id,
+        practice.stripe_subscription_id,
+        practice.stripe_quantity_sync_required,
+        practice.stripe_quantity_sync_target,
+        practice.stripe_quantity_sync_version,
+        practice.stripe_quantity_sync_attempts,
+        practice.stripe_quantity_sync_error,
+        practice.stripe_quantity_synced_at,
+    ) == superseding_obligation
+
+
 def test_over_cap_quantity_marker_is_preserved_without_stripe_io(
     remote: FakeStripe,
 ):
