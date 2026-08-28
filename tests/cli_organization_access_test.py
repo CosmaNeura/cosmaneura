@@ -584,6 +584,48 @@ def test_access_code_cli_retains_secret_for_ambiguous_single_and_rotation(
     assert rotation_code_path.stat().st_mode & 0o777 == 0o600
 
 
+def test_single_practice_configuration_dry_run_rejects_public_conversion() -> None:
+    now = datetime.now(timezone.utc)
+    domain = f"public-cli-{secrets.token_hex(4)}.example.com"
+    practice = Practice(
+        legal_name="Public CLI Practice",
+        join_code=f"P{secrets.token_hex(4).upper()[:7]}",
+        email_domain=domain,
+        origin_channel="direct",
+        is_solo=False,
+        public_onboarding_required=True,
+        negotiated_baa_on_file=True,
+        negotiated_baa_effective_date=now - timedelta(days=1),
+        negotiated_baa_reference="test://public-cli-baa",
+        billing_exempt=True,
+    ).save()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "configure-provider-organization",
+            "--practice-id",
+            str(practice.id),
+            "--legal-name",
+            "Public CLI Organization",
+            "--slug",
+            f"public-cli-{secrets.token_hex(5)}",
+            "--email-domain",
+            domain,
+            "--operator-ref",
+            "change:public-cli-conversion",
+            "--reason",
+            "Prove dry-run and apply conversion parity",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "audited conversion" in _normalized_cli_output(result.output)
+    assert "DRY RUN" not in result.output
+    practice.refresh()
+    assert practice.organization_id is None
+
+
 def test_multi_practice_configuration_cli_dry_run_then_atomic_apply(
     tmp_path,
     monkeypatch,

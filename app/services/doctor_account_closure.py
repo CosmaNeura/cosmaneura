@@ -16,6 +16,11 @@ from typing import Any, cast
 
 from app.configuration.authority import AUTHORITY_KERNEL_SETTINGS
 from app.services.pilot_access_lock import lock_pilot_access_lineage
+from app.services.public_entitlements import (
+    ClinicianSeatPolicyError,
+    active_clinician_seat_count,
+    record_active_clinician_seat_quantity,
+)
 from app.services.superadmin_capability import (
     SuperadminCapabilityError,
     get_active_runtime_superadmin_capability_kinds,
@@ -874,6 +879,23 @@ def close_doctor_account(
         if evaluated.plan.already_applied:
             assert evaluated.receipt is not None
             assert evaluated.receipt.expires_at is not None
+            if (
+                evaluated.plan.stripe_follow_up_required
+                and evaluated.member.seat_state == "active"
+                and not evaluated.practice.stripe_quantity_sync_required
+            ):
+                # Repair a closure committed by an older release during the
+                # former post-commit queueing crash window. A retry deliberately
+                # records a harmless fresh reconciliation even after an older
+                # successful sync because no historical sync-version link exists.
+                active_count = active_clinician_seat_count(
+                    session, evaluated.practice.id
+                )
+                record_active_clinician_seat_quantity(
+                    session,
+                    evaluated.practice,
+                    previous_active_count=active_count + 1,
+                )
             session.commit()
             result = DoctorAccountClosureResult(
                 plan_sha256=evaluated.plan.plan_sha256,
@@ -886,6 +908,9 @@ def close_doctor_account(
         else:
             current = _aware(now)
             retain_until = _seven_years_after(current)
+            previous_active_count = active_clinician_seat_count(
+                session, evaluated.practice.id
+            )
             if any(current < grant.granted_at for grant in evaluated.pilot_grants):
                 raise DoctorAccountClosureError(
                     "closure timestamp cannot precede an active pilot grant"
@@ -978,6 +1003,15 @@ def close_doctor_account(
                 evidence_sha256=evaluated.plan.plan_sha256,
             )
             session.add(receipt)
+            if (
+                evaluated.plan.stripe_follow_up_required
+                and evaluated.member.seat_state == "active"
+            ):
+                record_active_clinician_seat_quantity(
+                    session,
+                    evaluated.practice,
+                    previous_active_count=previous_active_count,
+                )
             session.commit()
             result = DoctorAccountClosureResult(
                 plan_sha256=evaluated.plan.plan_sha256,
@@ -990,20 +1024,11 @@ def close_doctor_account(
     except DoctorAccountClosureError:
         session.rollback()
         raise
-    except SQLAlchemyError:
+    except (SQLAlchemyError, ClinicianSeatPolicyError):
         session.rollback()
         raise DoctorAccountClosureError(
-            "account closure database operation failed; verify state before retrying"
+            "account closure and billing seat reconciliation could not be recorded; "
+            "verify state before retrying"
         ) from None
-
-    if result.stripe_follow_up_required:
-        from app.services.stripe_billing import mark_quantity_sync_required
-
-        try:
-            mark_quantity_sync_required(evaluated.practice)
-        except Exception:
-            raise DoctorAccountClosureError(
-                "account closure is applied but Stripe seat reconciliation was not queued; verify account and billing state before retrying"
-            ) from None
 
     return result

@@ -6,6 +6,7 @@ from typing import cast
 
 import pytest
 
+import app.services.organization_access as organization_access
 from app.services.organization_access import (
     OrganizationAccessError,
     RosterApprovalInput,
@@ -187,6 +188,28 @@ def test_organization_configuration_rejects_parallel_stripe_billing(
             email_domain=domain,
             operator_ref="test-operator",
             reason="Prevent parallel pilot and Stripe billing",
+            now=now,
+        )
+
+    practice.refresh()
+    assert practice.organization_id is None
+
+
+def test_organization_configuration_rejects_public_onboarding_practice() -> None:
+    now = datetime(2026, 8, 27, 14, 0, tzinfo=timezone.utc)
+    domain = f"public-conversion-{secrets.token_hex(4)}.example.com"
+    practice = _unlinked_pilot_practice(domain, "Public", now=now)
+    practice.public_onboarding_required = True
+    practice.save()
+
+    with pytest.raises(OrganizationAccessError, match="audited conversion"):
+        configure_provider_organization(
+            practice,
+            legal_name="Public Conversion Organization",
+            slug=f"public-conversion-{secrets.token_hex(5)}",
+            email_domain=domain,
+            operator_ref="test-operator",
+            reason="Reject an implicit public-to-managed conversion",
             now=now,
         )
 
@@ -526,6 +549,124 @@ def test_offboarding_revokes_access_and_retains_authorization_records_for_seven_
         ).count()
         == 1
     )
+
+
+def test_offboarding_rolls_back_when_seat_reconciliation_cannot_be_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2028, 2, 1, 9, 0, tzinfo=timezone.utc)
+    domain = f"atomic-offboard-{secrets.token_hex(4)}.example.com"
+    doctor = _doctor(f"departing@{domain}")
+    practice, code = _configured_practice(domain, now=now)
+    _approve(practice, doctor.email or "", now=now)
+    _, member = claim_roster_access(
+        doctor,
+        supplied_code=code,
+        now=now + timedelta(minutes=1),
+    )
+    approval_id = member.organization_roster_approval_id
+    assert approval_id is not None
+    practice.stripe_subscription_id = f"sub_atomic_{secrets.token_hex(5)}"
+    practice.save()
+
+    def fail_record(*_args, **_kwargs) -> int:
+        raise RuntimeError("synthetic seat-ledger failure")
+
+    monkeypatch.setattr(
+        organization_access,
+        "record_active_clinician_seat_quantity",
+        fail_record,
+    )
+
+    with pytest.raises(RuntimeError, match="synthetic seat-ledger failure"):
+        revoke_roster_access(
+            practice,
+            doctor.email or "",
+            operator_ref="ticket-ATOMIC-OFFBOARD",
+            reason="Exercise atomic seat evidence",
+            now=now + timedelta(days=1),
+        )
+
+    member.refresh()
+    approval = OrganizationRosterApproval.get(id=approval_id)
+    assert approval is not None
+    assert member.access_revoked_at is None
+    assert approval.revoked_at is None
+    assert (
+        PracticeAccessAudit.where(
+            PracticeAccessAudit.practice_id == practice.id,
+            PracticeAccessAudit.action
+            == PracticeAccessAction.organization_access_revoked.value,
+        ).count()
+        == 0
+    )
+
+
+def test_offboarding_retry_repairs_legacy_post_commit_seat_queue_gap() -> None:
+    approved_at = datetime(2025, 2, 1, 9, 0, tzinfo=timezone.utc)
+    revoked_at = approved_at + timedelta(days=1)
+    domain = f"retry-seat-repair-{secrets.token_hex(4)}.example.com"
+    doctor = _doctor(f"departing@{domain}")
+    practice, code = _configured_practice(domain, now=approved_at)
+    _approve(practice, doctor.email or "", now=approved_at)
+    _, member = claim_roster_access(
+        doctor,
+        supplied_code=code,
+        now=approved_at + timedelta(minutes=1),
+    )
+    practice.stripe_subscription_id = f"sub_retry_{secrets.token_hex(5)}"
+    practice.save()
+
+    first = revoke_roster_access(
+        practice,
+        doctor.email or "",
+        operator_ref="ticket-RETRY-SEAT-REPAIR",
+        reason="Exercise legacy post-commit repair",
+        now=revoked_at,
+    )
+    practice.refresh()
+    first_version = practice.stripe_quantity_sync_version
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+
+    # Emulate an older release committing the revocation before its
+    # best-effort Stripe queue marker was durably written.
+    practice.stripe_quantity_sync_required = False
+    practice.stripe_quantity_sync_target = None
+    practice.stripe_quantity_sync_error = None
+    practice.stripe_quantity_synced_at = revoked_at + timedelta(minutes=1)
+    practice.save()
+
+    assert first.audit.created_at is not None
+    assert practice.stripe_quantity_synced_at < first.audit.created_at
+
+    repaired = revoke_roster_access(
+        practice,
+        doctor.email or "",
+        operator_ref="ticket-RETRY-SEAT-REPAIR",
+        reason="Exercise legacy post-commit repair",
+        now=revoked_at + timedelta(hours=1),
+    )
+    practice.refresh()
+    assert repaired.audit.id == first.audit.id
+    assert repaired.member is not None
+    assert repaired.member.id == member.id
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert practice.stripe_quantity_sync_version == first_version + 1
+    assert practice.stripe_quantity_sync_error == (
+        "active clinician seat count is zero; subscription cancellation required"
+    )
+
+    revoke_roster_access(
+        practice,
+        doctor.email or "",
+        operator_ref="ticket-RETRY-SEAT-REPAIR",
+        reason="Exercise legacy post-commit repair",
+        now=revoked_at + timedelta(hours=2),
+    )
+    practice.refresh()
+    assert practice.stripe_quantity_sync_version == first_version + 1
 
 
 def test_revoked_roster_history_is_a_global_authorization_tombstone():
@@ -911,6 +1052,71 @@ def test_multi_practice_configuration_is_atomic_and_routes_explicit_assignments(
     )
     assert claimed_workforce_practice.id == second.id
     assert workforce_member.role == "workforce"
+
+
+def test_multi_practice_configuration_rejects_public_onboarding_practice() -> None:
+    now = datetime(2028, 3, 1, 10, 30, tzinfo=timezone.utc)
+    domain = f"multi-public-{secrets.token_hex(4)}.example.com"
+    first = _unlinked_pilot_practice(domain, "First", now=now)
+    second = _unlinked_pilot_practice(domain, "Second", now=now)
+    second.public_onboarding_required = True
+    second.save()
+    first_owner = _doctor(f"first.owner@{domain}")
+    second_owner = _doctor(f"second.owner@{domain}")
+    PracticeMember(
+        practice_id=first.id,
+        doctor_id=first_owner.id,
+        role="owner",
+    ).save()
+    PracticeMember(
+        practice_id=second.id,
+        doctor_id=second_owner.id,
+        role="owner",
+    ).save()
+    assignments = [
+        RosterAssignmentInput(first_owner.email or "", first.id),
+        RosterAssignmentInput(second_owner.email or "", second.id),
+    ]
+    slug = f"multi-public-{secrets.token_hex(5)}"
+    plan_sha256 = provider_organization_with_roster_plan_sha256(
+        assignments,
+        organization_slug=slug,
+        email_domain=domain,
+        legal_name="Public Conversion Organization",
+        operator_ref="ticket-MULTI-PUBLIC",
+        reason="Reject an implicit public-to-managed conversion",
+        source_ref="test://multi-public-roster-v2",
+        roster_sha256="f" * 64,
+    )
+
+    with pytest.raises(OrganizationAccessError, match="audited conversion"):
+        configure_provider_organization_with_roster(
+            [first, second],
+            assignments,
+            legal_name="Public Conversion Organization",
+            slug=slug,
+            email_domain=domain,
+            operator_ref="ticket-MULTI-PUBLIC",
+            reason="Reject an implicit public-to-managed conversion",
+            source_ref="test://multi-public-roster-v2",
+            source_sha256="f" * 64,
+            plan_sha256=plan_sha256,
+            now=now,
+        )
+
+    first.refresh()
+    second.refresh()
+    assert first.organization_id is None
+    assert second.organization_id is None
+    assert ProviderOrganization.get(slug=slug) is None
+    assert (
+        PracticeAccessAudit.where(
+            PracticeAccessAudit.practice_id.in_([first.id, second.id]),
+            PracticeAccessAudit.action
+            == PracticeAccessAction.provider_organization_configured.value,
+        ).count()
+        == 0
+    )
 
 
 @pytest.mark.parametrize(

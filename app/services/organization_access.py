@@ -16,13 +16,28 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, cast
 
+from app.services.public_entitlements import (
+    ActiveClinicianSeatLimitReached,
+    ClinicianSeatPolicyError,
+    activate_existing_clinician_seat,
+    active_clinician_seat_count,
+    lock_practice_for_active_seat_mutation,
+    record_active_clinician_seat_quantity,
+    require_active_clinician_seat_capacity,
+)
+
 from activemodel.session_manager import get_session
 from app.models.doctor import Doctor
 from app.models.organization_access import (
     OrganizationRosterApproval,
     ProviderOrganization,
 )
-from app.models.practice import Practice, PracticeMember, PracticeRole
+from app.models.practice import (
+    ClinicianSeatState,
+    Practice,
+    PracticeMember,
+    PracticeRole,
+)
 from app.models.practice_access_audit import (
     PracticeAccessAction,
     PracticeAccessAudit,
@@ -72,11 +87,16 @@ class RosterImportResult:
     approval_ids: tuple[str, ...]
 
 
-def _require_pilot_organization_prerequisites(
+def require_pilot_organization_prerequisites(
     practice: Practice,
     *,
     at: datetime | None,
 ) -> None:
+    if practice.public_onboarding_required:
+        raise OrganizationAccessError(
+            "public onboarding practices require an audited conversion before "
+            "organization setup"
+        )
     if not practice.negotiated_baa_in_force(at=at):
         raise OrganizationAccessError("an in-force negotiated BAA is required")
     if not practice.billing_exemption_active(at=at):
@@ -135,7 +155,7 @@ def configure_provider_organization(
         )
     if practice.organization_id is not None:
         raise OrganizationAccessError("practice is already linked to an organization")
-    _require_pilot_organization_prerequisites(practice, at=now)
+    require_pilot_organization_prerequisites(practice, at=now)
 
     current = now or datetime.now(timezone.utc)
     code = _issued_access_code(access_code)
@@ -186,7 +206,7 @@ def configure_provider_organization(
             raise OrganizationAccessError(
                 "practice became linked to an organization during setup"
             )
-        _require_pilot_organization_prerequisites(locked_practice, at=current)
+        require_pilot_organization_prerequisites(locked_practice, at=current)
         session.add(organization)
         session.flush()
         locked_practice.organization_id = organization.id
@@ -539,7 +559,7 @@ def _lock_and_validate_multi_practice_configuration(
             raise OrganizationAccessError(
                 "organization domain must exactly match every target practice domain"
             )
-        _require_pilot_organization_prerequisites(practice, at=now)
+        require_pilot_organization_prerequisites(practice, at=now)
 
     locked_members: list[PracticeMember] = []
     for practice_id in practice_ids:
@@ -1033,7 +1053,10 @@ def member_authorization_basis(
 ) -> str | None:
     """Return the live authorization basis without manufacturing attestation."""
 
-    if member.access_revoked_at is not None:
+    if (
+        member.access_revoked_at is not None
+        or member.seat_state != ClinicianSeatState.active.value
+    ):
         return None
     practice = Practice.get(id=member.practice_id)
     if practice is None:
@@ -1429,11 +1452,10 @@ def claim_roster_access(
         # All organization-access mutations take the practice lock first. This
         # serializes import, claim, rotation, and offboarding and avoids lock
         # cycles between those workflows.
-        practice = session.exec(
-            select(Practice)
-            .where(Practice.id == opportunity.practice.id)
-            .with_for_update()
-        ).one()
+        practice = lock_practice_for_active_seat_mutation(
+            session,
+            opportunity.practice.id,
+        )
         organization = session.exec(
             select(ProviderOrganization)
             .where(ProviderOrganization.id == opportunity.organization.id)
@@ -1496,6 +1518,14 @@ def claim_roster_access(
                     "account already belongs to another practice"
                 )
             if member.organization_roster_approval_id is None:
+                try:
+                    activate_existing_clinician_seat(session, practice, member)
+                except ActiveClinicianSeatLimitReached as exc:
+                    raise OrganizationAccessError(str(exc)) from None
+                except ClinicianSeatPolicyError:
+                    raise OrganizationAccessError(
+                        "organization access is not available"
+                    ) from None
                 grant_required = True
             elif (
                 member.organization_roster_approval_id == approval.id
@@ -1509,6 +1539,10 @@ def claim_roster_access(
                     "account has a conflicting organization authorization"
                 )
         else:
+            try:
+                require_active_clinician_seat_capacity(session, practice)
+            except ActiveClinicianSeatLimitReached as exc:
+                raise OrganizationAccessError(str(exc)) from None
             member = PracticeMember(
                 practice_id=practice.id,
                 doctor_id=locked_doctor.id,
@@ -1538,6 +1572,7 @@ def claim_roster_access(
             session.add(member)
             session.add(locked_doctor)
             session.flush()
+            record_active_clinician_seat_quantity(session, practice)
             session.add(
                 PracticeAccessAudit(
                     practice_id=practice.id,
@@ -1555,12 +1590,6 @@ def claim_roster_access(
             session.refresh(practice)
             session.refresh(member)
 
-    if practice.stripe_subscription_id:
-        # Persist a seat-count reconciliation obligation; this performs no
-        # external Stripe request on the enrollment path.
-        from app.services import stripe_billing
-
-        stripe_billing.mark_quantity_sync_required(practice)
     return practice, member
 
 
@@ -1734,6 +1763,25 @@ def revoke_roster_access(
                 )
             retain_until = approval.retain_until
             audit = existing_audit
+            if (
+                member is not None
+                and member.seat_state == ClinicianSeatState.active.value
+                and locked_practice.stripe_subscription_id
+                and not locked_practice.stripe_quantity_sync_required
+            ):
+                # Repair revocations committed by an older release during the
+                # former post-commit queueing crash window. A retry deliberately
+                # records a harmless fresh reconciliation even after an older
+                # successful sync because no historical sync-version link exists.
+                # Treat this retained active-seat tombstone as the one-seat
+                # reduction it records so an already-over-cap practice can
+                # continue monotonic repair.
+                active_count = active_clinician_seat_count(session, locked_practice.id)
+                record_active_clinician_seat_quantity(
+                    session,
+                    locked_practice,
+                    previous_active_count=active_count + 1,
+                )
             session.commit()
             session.refresh(approval)
             if member is not None:
@@ -1742,6 +1790,13 @@ def revoke_roster_access(
                 session.refresh(locked_doctor)
             session.refresh(audit)
         else:
+            previous_active_count = (
+                active_clinician_seat_count(session, locked_practice.id)
+                if member is not None
+                and member.seat_state == ClinicianSeatState.active.value
+                and member.access_revoked_at is None
+                else None
+            )
             approval.revoked_at = current
             approval.revoked_by_ref = operator
             approval.revocation_reason = explanation
@@ -1755,6 +1810,12 @@ def revoke_roster_access(
                 locked_doctor.deleted_at = locked_doctor.deleted_at or current
                 session.add(member)
                 session.add(locked_doctor)
+                if previous_active_count is not None:
+                    record_active_clinician_seat_quantity(
+                        session,
+                        locked_practice,
+                        previous_active_count=previous_active_count,
+                    )
             audit = PracticeAccessAudit(
                 practice_id=locked_practice.id,
                 action=PracticeAccessAction.organization_access_revoked.value,
@@ -1775,10 +1836,6 @@ def revoke_roster_access(
 
         session.refresh(locked_practice)
 
-    if locked_practice.stripe_subscription_id:
-        from app.services import stripe_billing
-
-        stripe_billing.mark_quantity_sync_required(locked_practice)
     return RosterRevocationResult(
         approval=approval,
         member=member,

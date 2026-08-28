@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import app.services.doctor_account_closure as account_closure
-import app.services.stripe_billing as stripe_billing
 from app.configuration.authority import AuthorityKernelSettings
 from app.services.doctor_access import resolve_doctor_access
 from app.services.doctor_account_closure import (
@@ -444,7 +443,7 @@ def test_closure_retry_refuses_missing_grant_evidence():
         )
 
 
-def test_closure_retry_repairs_a_failed_stripe_reconciliation_queue(monkeypatch):
+def test_closure_and_zero_seat_reconciliation_evidence_commit_atomically(monkeypatch):
     doctor, practice, _ = _scope()
     practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
     practice.save()
@@ -456,32 +455,116 @@ def test_closure_retry_repairs_a_failed_stripe_reconciliation_queue(monkeypatch)
     plan = plan_doctor_account_closure(**args)
     assert plan.stripe_follow_up_required is True
 
-    def fail_queue(_: Practice) -> None:
-        raise RuntimeError("synthetic queue failure")
+    real_record = account_closure.record_active_clinician_seat_quantity
 
-    monkeypatch.setattr(stripe_billing, "mark_quantity_sync_required", fail_queue)
-    with pytest.raises(DoctorAccountClosureError, match="closure is applied"):
+    def fail_record(*_args, **_kwargs) -> int:
+        raise account_closure.ClinicianSeatPolicyError("synthetic ledger failure")
+
+    monkeypatch.setattr(
+        account_closure,
+        "record_active_clinician_seat_quantity",
+        fail_record,
+    )
+    with pytest.raises(DoctorAccountClosureError, match="could not be recorded"):
         close_doctor_account(
             **args,
             confirmed_plan_sha256=plan.plan_sha256,
             now=datetime(2026, 8, 24, 13, 30, tzinfo=UTC),
         )
     doctor.refresh()
-    assert doctor.deleted_at is not None
+    assert doctor.deleted_at is None
 
-    queued: list[str] = []
     monkeypatch.setattr(
-        stripe_billing,
-        "mark_quantity_sync_required",
-        lambda value: queued.append(str(value.id)),
+        account_closure,
+        "record_active_clinician_seat_quantity",
+        real_record,
     )
+    retry_plan = plan_doctor_account_closure(**args)
+    retry = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=retry_plan.plan_sha256,
+        now=datetime(2026, 8, 24, 13, 30, tzinfo=UTC),
+    )
+    assert retry.changed is True
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert practice.stripe_quantity_sync_version == 1
+    assert practice.stripe_quantity_sync_error == (
+        "active clinician seat count is zero; subscription cancellation required"
+    )
+
+    repeated_plan = plan_doctor_account_closure(**args)
+    repeated = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=repeated_plan.plan_sha256,
+    )
+    assert repeated.changed is False
+    practice.refresh()
+    assert practice.stripe_quantity_sync_version == 1
+
+
+def test_closure_retry_repairs_legacy_over_cap_post_commit_queue_gap() -> None:
+    doctor, practice, _ = _scope(is_solo=False, role="workforce")
+    for index in range(21):
+        suffix = secrets.token_hex(5)
+        peer = Doctor(
+            clerk_id=f"user_close_peer_{suffix}",
+            email=f"peer-{index}-{suffix}@example.com",
+            biography="",
+        ).save()
+        PracticeMember(
+            practice_id=practice.id,
+            doctor_id=peer.id,
+            role="workforce",
+        ).save()
+    practice.stripe_subscription_id = f"sub_overcap_closure_{secrets.token_hex(5)}"
+    practice.save()
+    args = {
+        "doctor_id": doctor.id,
+        "operator_ref": "change:overcap-stripe-closure-test",
+        "reason": "Close one legacy over-cap seat and preserve reconciliation",
+    }
+    closed_at = datetime(2026, 8, 24, 13, 30, tzinfo=UTC)
+
+    plan = plan_doctor_account_closure(**args)
+    result = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=closed_at,
+    )
+    assert result.changed is True
+    practice.refresh()
+    first_version = practice.stripe_quantity_sync_version
+    assert first_version == 1
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert practice.stripe_quantity_sync_error == (
+        "active clinician seat count exceeds public pilot maximum"
+    )
+
+    # Emulate a legacy post-commit queue failure. The historical sync timestamp
+    # cannot prove it covered this closure, so the explicit retry re-records the
+    # current over-cap snapshot without publishing an invalid Stripe target.
+    practice.stripe_quantity_sync_required = False
+    practice.stripe_quantity_sync_target = None
+    practice.stripe_quantity_sync_error = None
+    practice.stripe_quantity_synced_at = closed_at + timedelta(minutes=1)
+    practice.save()
+
     retry_plan = plan_doctor_account_closure(**args)
     retry = close_doctor_account(
         **args,
         confirmed_plan_sha256=retry_plan.plan_sha256,
     )
     assert retry.changed is False
-    assert queued == [str(practice.id)]
+    practice.refresh()
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target is None
+    assert practice.stripe_quantity_sync_version == first_version + 1
+    assert practice.stripe_quantity_sync_error == (
+        "active clinician seat count exceeds public pilot maximum"
+    )
 
 
 def test_closure_revokes_governed_authority_without_deleting_history(monkeypatch):

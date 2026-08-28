@@ -1050,6 +1050,7 @@ def configure_provider_organization_command(
     from app.services.organization_access import (
         OrganizationAccessError,
         configure_provider_organization,
+        require_pilot_organization_prerequisites,
     )
 
     from app.models.organization_access import ProviderOrganization
@@ -1097,20 +1098,10 @@ def configure_provider_organization_command(
             raise typer.BadParameter("organization slug is already in use")
         if ProviderOrganization.get(email_domain=normalized_domain) is not None:
             raise typer.BadParameter("organization email domain is already in use")
-        if not practice.negotiated_baa_in_force():
-            raise typer.BadParameter("an in-force negotiated BAA is required")
-        if not practice.billing_exemption_active():
-            raise typer.BadParameter("an active billing exemption is required")
-        if practice.stripe_checkout_session_id is not None:
-            raise typer.BadParameter(
-                "an existing Stripe checkout must be resolved before organization setup"
-            )
-        from app.services import stripe_billing
-
-        if stripe_billing.has_nonterminal_subscription(practice):
-            raise typer.BadParameter(
-                "an existing Stripe subscription must be resolved before organization setup"
-            )
+        try:
+            require_pilot_organization_prerequisites(practice, at=None)
+        except OrganizationAccessError as exc:
+            raise typer.BadParameter(str(exc)) from None
 
         if not apply:
             typer.echo(
