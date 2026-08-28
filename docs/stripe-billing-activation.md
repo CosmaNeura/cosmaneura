@@ -115,8 +115,11 @@ The accepted receiver is PR
 [#199](https://github.com/CosmaNeura/cosmaneura/pull/199) at exact commit
 `685e2cb84a63b02faf078a4aa9b06e4f581572bd`. Its full generated OpenAPI digest
 is `adff41bb2389f9f9aae34e1a0284605f35f28fb4e27f92de94abf020b432375e`.
-The Stripe consumer PR URL and branch must be recorded here after the branch is
-pushed and before independent review. The post-Stripe full OpenAPI SHA-256 is
+The Stripe consumer is PR
+[#212](https://github.com/CosmaNeura/cosmaneura/pull/212) on branch
+`codex/public-paid-pilot-stripe-stack-13-receiver-integration-20260828`; its
+change-budget stack begins at PR #200 and must be reviewed and merged in order.
+The post-Stripe full OpenAPI SHA-256 is
 `7e556528e811fb53712520c77b42b7aca54e75a7e53f439489c124cd2857ffec`; the
 immutable reviewed consumer head is recorded in the PR/reviewer handoff because
 a commit cannot self-identify its own hash. The receiver's canonical
