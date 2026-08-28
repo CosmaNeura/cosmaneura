@@ -1993,6 +1993,14 @@ def create_billing_checkout(
         )
     try:
         stripe_billing.refresh_subscription_state(practice)
+    except stripe_billing.StripeCoreBindingInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The billing account requires reconciliation before Checkout "
+                "can continue."
+            ),
+        ) from exc
     except stripe_billing.StripeStateConflict as exc:
         log.warning(
             "stripe subscription changed repeatedly before checkout",
@@ -2061,6 +2069,23 @@ def create_billing_checkout(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=CHECKOUT_RETIREMENT_PENDING_DETAIL,
+        ) from exc
+    except (
+        stripe_billing.StripeCheckoutReconciliationRequired,
+        stripe_billing.StripeCoreBindingInvalid,
+        stripe_billing.StripeTrialClockReconciliationRequired,
+    ) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The billing account requires reconciliation before Checkout "
+                "can continue."
+            ),
+        ) from exc
+    except stripe_billing.StripeManagedBilling as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Billing for this practice is managed by its organization.",
         ) from exc
     except stripe_billing.StripeStateConflict as exc:
         raise HTTPException(
