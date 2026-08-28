@@ -2,6 +2,7 @@
 
 Status: **NOT READY FOR PUBLIC-PHI ACTIVATION**
 Evidence snapshot: 2026-08-27 (America/New_York)
+Owner-policy revision: 2026-08-28
 Scope: Priority 4 only; Azure production and staging metadata, repository IaC, and operational controls
 Data used: redacted resource metadata and synthetic test requirements only
 
@@ -11,14 +12,16 @@ This document is an activation gate, not an authorization to apply infrastructur
 
 Public-PHI activation remains blocked. The live estate has configured database backups and some encrypted transport and alert evaluation, but it still relies on public data-service endpoints, a production PostgreSQL allow-all firewall rule, server-admin application database access, shared-key storage and Redis access, inline Container Apps secrets, incomplete diagnostics and alerts, and untested recovery. Production PostgreSQL high availability and geo-redundant backup are disabled. Alert receipt, escalation, and restore success have not been demonstrated.
 
-The gate score is **1 of 16 complete (6%)**. The score is intentionally binary: a partial control receives no activation credit. The completed configuration gate is verified PostgreSQL backup configuration. The NPI/CAB owner policy is authoritative but remains partial until the canonical onboarding, security, data-inventory, and retention controls are shown to match it. Backup configuration does **not** count as recovery evidence.
+The gate score is **1 of 16 complete (6%)**. The score is intentionally binary: a partial control receives no activation credit. The completed configuration gate is verified PostgreSQL backup configuration. The professional-credential/NPI/CAB owner policy is authoritative but remains partial until the canonical onboarding, security, data-inventory, and retention controls are shown to match it. Backup configuration does **not** count as recovery evidence.
 
-The next safe action is to provide a controlled staging-plan runner with its existing 1Password service-account credential, approve this worktree's reviewed `.envrc`, and regenerate the full staging plan. The provider-mocked module plan is clean, but it does not substitute for a credentialed state refresh. The accepted staging plan must contain no unreviewed delete or replace action and is followed by synthetic alert-delivery and restore rehearsals. Production remains unchanged until their evidence is accepted and the named owners below are assigned.
+The next safe action is for an authorized operator to use the controlled staging-plan runner and its existing 1Password service-account credential to regenerate the full staging plan from current `master`. Any required worktree environment approval remains operator-controlled. The provider-mocked module plan is clean, but it does not substitute for a credentialed state refresh. The accepted staging plan must contain no unreviewed delete or replace action and is followed by synthetic alert-delivery and restore rehearsals. Production remains unchanged until their evidence is accepted and the remaining ownership and coverage gaps below are closed.
 
-## Owner policy boundary: NPI, CAB, and claims
+## Owner policy boundary: authorization, NPI, CAB, and claims
 
+- Professional credential and licensure status are authorization-neutral. They do not gate continued platform use or real-PHI capabilities and are not authentication, identity, tenant, or entitlement proof.
 - NPI is not required during signup or onboarding.
-- NPI is not an authentication factor, identity proof, credential-proof control, or compensating security control.
+- NPI is not an authentication factor, identity proof, credential-proof control, tenant proof, entitlement proof, or compensating security control. It is authorization-neutral and does not gate continued platform use or real-PHI capabilities.
+- Access is governed instead by verified identity, valid practice membership and role, owner authority where applicable, current agreements and BAA, active subscription and entitlement, tenant isolation, feature-specific consent, and rollout state.
 - CAB is advisory billing intelligence only.
 - 837P generation or submission, claim submission, clearinghouse enrollment, and CAB-driven EHR writes are out of scope for the public paid pilot.
 - Future NPI collection is allowed only just in time for a specifically enabled payer-facing standard transaction or integration. Before collection, its purpose, lawful/contractual basis, authorized users, storage location, retention, deletion, disclosure path, and integration owner must be documented and approved.
@@ -26,19 +29,19 @@ The next safe action is to provide a controlled staging-plan runner with its exi
 
 This policy must remain consistent in the security/control matrix, data inventory, retention schedule, onboarding contract, and any future payer integration design.
 
-Canonical governance is captured in architecture PR [CosmaNeura/cosmaneura-architecture#10](https://github.com/CosmaNeura/cosmaneura-architecture/pull/10), commit `5451df63e2fbeaf386ca5517d762e6d1359b053c`, including ADR 0022 (purpose-bound just-in-time NPI), ADR 0023 (CAB is advisory and does not submit claims), and ADR 0024 (public trial starts at checkout with card). The PR was observed open on 2026-08-27, so merge status remains an activation check; the owner's stated policy applies to this work regardless. No Priority 4 infrastructure adds an NPI onboarding dependency or a CAB 837P, claim-submission, clearinghouse, or EHR-write path.
+Canonical NPI/CAB/trial governance is captured in merged architecture PR [CosmaNeura/cosmaneura-architecture#10](https://github.com/CosmaNeura/cosmaneura-architecture/pull/10), commit `5451df63e2fbeaf386ca5517d762e6d1359b053c`, including ADR 0022 (purpose-bound just-in-time NPI), ADR 0023 (CAB is advisory and does not submit claims), and ADR 0024 (public trial starts at checkout with card). Merge was verified read-only on 2026-08-28. The 2026-08-28 owner policy also makes professional credential/licensure status authorization-neutral. No Priority 4 infrastructure adds a professional-status or NPI onboarding dependency or a CAB 837P, claim-submission, clearinghouse, or EHR-write path.
 
 ## Core entitlement coordination handoff
 
-- **Capability and receiver:** Core remains the server-side identity, tenant, credential-state, and entitlement authority. The receiver is open Core PR [#185](https://github.com/CosmaNeura/cosmaneura/pull/185), observed at commit `3bde3ae155423947d870f636ee907135949fafcb`.
-- **Canonical contract:** `contracts/public-entitlements/v1/capability-entitlement.schema.json`, version `public-capability-entitlements.v1`, observed SHA-256 `a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578`. Consumers must pin the accepted Core SHA because the PR remains open.
-- **Consumer and boundary:** this infrastructure work consumes only the fail-closed capability decision and does not redefine onboarding, actor, tenant, role, credential review, billing state, or product entitlements. No infrastructure activation bypasses a denied or unavailable Core decision.
+- **Capability and receiver:** Core remains the server-side identity, membership/role, owner-authority, agreement/BAA, subscription/entitlement, tenant-isolation, consent, and rollout authority. No accepted public-entitlement receiver exists on current `master` after supersession of the earlier onboarding candidates; dependent public capabilities remain dark until a replacement receiver is accepted.
+- **Canonical contract:** a replacement contract must make professional credential/licensure status and NPI authorization-neutral. If legacy fields remain, consumers must not use them to grant, deny, or continue platform or real-PHI access. Consumers must pin the eventual accepted Core SHA and regenerated artifact digests.
+- **Consumer and boundary:** this infrastructure work consumes only the fail-closed decision over the actual access gates and does not redefine onboarding, actor, tenant, role, agreements, billing state, consent, rollout, or product entitlements. No infrastructure activation bypasses a denied or unavailable decision. Credential/licensure status and NPI are never substitute gates.
 - **Actor/tenant and idempotency:** caller-supplied actor or tenant data is never infrastructure authority. The entitlement read remains side-effect free; infrastructure changes use an exact reviewed plan digest/change record rather than an application idempotency key.
 - **PHI and schema:** operational evidence is control-plane metadata, fixed event codes, and aggregates only. This work adds no API schema and no NPI, claim, clinical-content, or EHR-write data path.
 - **Failure/retry and audit:** an unavailable/unknown entitlement stays denied; retries must not reuse a stale allowed result. Deployment/activation events are recorded by commit, plan digest, environment, fixed resource actions, approval, and rollback state without actor identifiers.
-- **Compatibility, flag, and fixtures:** observability is additive and default-off. Synthetic contract fixtures and PHI-free signals are the only permitted acceptance inputs; real-PHI access remains gated separately.
+- **Compatibility, flag, and fixtures:** observability is additive and default-off. Synthetic contract fixtures and PHI-free signals are the only permitted acceptance inputs; real-PHI access remains subject to the actual access gates above, never professional credential/licensure status or NPI.
 - **Activation order and rollback:** accept and deploy the Core receiver before any dependent public capability, then complete staging infrastructure rungs and evidence. Disable the relevant rollout/observability flag and reverse only the current infrastructure rung on failure; do not weaken the Core decision.
-- **Unresolved decisions:** credential-verification method/reviewer/SLA, support ownership, BAA/service scope, retention, RTO/RPO, HA/geo posture, and the remaining network/identity cutovers are still blockers.
+- **Unresolved decisions:** replacement Core receiver acceptance, secondary support coverage and routing, BAA/service scope, retention implementation, RTO/RPO, HA/geo posture, and the remaining network/identity cutovers are still blockers. Professional credential/licensure verification is not an authorization blocker.
 
 ## Read-only live reconciliation
 
@@ -72,8 +75,8 @@ The following statements describe observed Azure control-plane metadata. Secrets
 | Legacy workload | Current source no longer represents the legacy `app-jmon` Container App | `app-jmon` remains deployed | Determine ownership and traffic before a separately approved retirement. Do not delete it as incidental drift cleanup. |
 | Staging workloads | App, worker, and migration job are at least partly managed by imperative deployment scripts rather than the reviewed staging IaC | Resources exist live | Import or otherwise establish ownership before relying on an IaC plan as complete drift evidence. |
 | Parallel private path | Source contains disabled-by-default parallel VNet/private endpoint/workload scaffolding | Live environments remain public and non-VNet-integrated | This is intentional dormant source, not deployed hardening. Keep it additive until synthetic acceptance succeeds. |
-| Alerts and diagnostics | This review branch adds a default-off phase-one module with metric-only data-service diagnostics, one role-mailbox action group, four aggregate fixed-event log alerts, five dependency/capacity metric alerts, and one PostgreSQL administrative-failure activity alert | Two production log alerts exist; data-service diagnostic settings are absent | The module is not deployed and is not complete alert coverage. Add verified backup-rehearsal freshness, Container Apps restart/capacity, queue age/depth, scheduler heartbeat, database/Redis load, and storage-capacity signals; then prove the real staging plan, notification path, and response. |
-| Database role model | Source includes a staged application-role cutover foundation. This branch adds a code-level, default-on startup migration gate so a later staged cutover can disable runtime DDL, but deliberately does not propagate the variable in current deployment configuration | Live workloads use the server-admin database URL | The gate is a prerequisite, not least privilege. Add the flag only in the dedicated identity rung, then prove separate runtime DML and migration DDL identities before removing the administrative fallback. |
+| Alerts and diagnostics | Current source contains a default-off phase-one module with metric-only data-service diagnostics, one role-mailbox action group, four aggregate fixed-event log alerts, five dependency/capacity metric alerts, and one PostgreSQL administrative-failure activity alert | Two production log alerts exist; data-service diagnostic settings are absent | The module is not deployed and is not complete alert coverage. Add verified backup-rehearsal freshness, Container Apps restart/capacity, queue age/depth, scheduler heartbeat, database/Redis load, and storage-capacity signals; then prove the real staging plan, notification path, and response. |
+| Database role model | Current source includes a staged application-role cutover foundation and a code-level, default-on startup migration gate so a later staged cutover can disable runtime DDL, but deliberately does not propagate the variable in current deployment configuration | Live workloads use the server-admin database URL | The gate is a prerequisite, not least privilege. Add the flag only in the dedicated identity rung, then prove separate runtime DML and migration DDL identities before removing the administrative fallback. |
 | Storage/Redis credentials | Source and deployments rely on account/access keys | Live workloads reference those secrets | Add managed identity/RBAC as a dual-access bridge; retire keys only after synthetic proof and an observation window. |
 
 ## PHI-capable data inventory and retention decisions
@@ -87,10 +90,26 @@ The following statements describe observed Azure control-plane metadata. Secrets
 | Application, identity, entitlement, appointment, note, billing-advisory, and workflow state | PostgreSQL | PHI-capable or sensitive | Database backup retention is 30 days in production and 7 days in staging; record-level retention is unverified | Approve a record-retention schedule by data class. Backup retention is not record retention. |
 | CAB advisory output | PostgreSQL and application responses | PHI-capable when linked to a patient/workflow | Unverified | Keep advisory-only; define retention and deletion with the underlying encounter record. Do not use for 837P/claim submission. |
 | NPI | Not required or expected in signup/onboarding | Regulated identifier; not an authentication secret | Collection is out of scope | Do not collect. A future payer integration needs just-in-time purpose and retention approval before schema/UI work. |
+| Professional credential/licensure status | Legacy application fields, if retained | Sensitive professional metadata; authorization-neutral | Purpose and record-level retention are unverified | Do not use as authentication, identity, tenant, entitlement, continued-use, or real-PHI proof. Document a specific non-authorization purpose and deletion rule or remove the fields. |
 | Payer-facing standard transaction or CAB write payload | Not enabled | PHI-capable | Not applicable | 837P, claim submission, clearinghouse enrollment, and CAB-driven EHR writes remain out of scope. New activation review required. |
 | Redis cache/broker material | Redis | Treat as PHI-capable until payload inspection proves otherwise | TTL, persistence, and rehydration behavior unverified | Inventory key classes, minimize payloads, set TTLs, and prove synthetic rebuild/failover behavior. |
 | Application and platform telemetry | Log Analytics and Azure Monitor | Must be PHI-free | Production workspace retention observed at 30 days | Permit fixed event codes, route/status classes, aggregate counts, latency, capacity, and opaque correlation IDs only. Prohibit note text, transcript text, filenames, object keys, email, NPI, tokens, and request/response bodies. |
 | Application, database, storage, Redis, registry, and third-party credentials | Container Apps/Azure control plane and external secret source | Sensitive, not PHI by design | Inline secret references observed; rotation evidence absent | Assign owner and interval per credential, prove dual-secret/rollback behavior, and move supported access to managed identity/Key Vault references. |
+
+### Minimum-retention proposal — not yet approved or enforced
+
+The owner proposes the following minimization schedule. It is a design input, not evidence that deletion, legal hold, backup expiry, or downstream-provider deletion is implemented. Gate 3 remains `BLOCKED` until data/privacy/legal owners approve the schedule, every store and derivative is mapped, enforcement and deletion evidence exist, and the finalized-clinical-record schedule is resolved.
+
+| Data class | Proposed retention/deletion rule | Current evidence gap |
+|---|---|---|
+| Raw audio, video, and provider payloads | Retain only for the minimum time needed to complete transcript and integrity validation, then delete immediately. Retries have a six-hour hard ceiling; six hours is a maximum, never a target holding period. At the ceiling, delete the raw material and surface a PHI-free failed-work item rather than retaining it indefinitely. | The observed upload lifecycle is 10 days and is not success-triggered. End-to-end provider and derivative deletion evidence is absent. |
+| Identifiable raw transcript | Delete after 14 days. | Eligibility/cleanup behavior and derivative inventory are not accepted as enforcement evidence. |
+| Draft clinical artifacts | Delete after 30 days. | Draft classification, deletion coverage, legal-hold handling, and proof are absent. |
+| PHI-free operational logs | Retain 90 days. | Production Log Analytics is observed at 30 days; access, export, downstream copies, and approved PHI-free samples remain unproved. |
+| Backups | Retain 30 days. Restoring a copy must not reset the underlying record's deletion clock. | Production PostgreSQL is configured for 30 days and staging for 7 days, but restore, record-level expiry, blob protection, and downstream-copy behavior remain unproved. |
+| Synthetic test data | Delete after 7 days at most; shorter run-specific cleanup windows take precedence. | Test-container lifecycle deletion is not configured and cleanup evidence is absent. |
+| Minimum-necessary legal, billing, and compliance evidence | Retain 7 years, with access restriction and a documented evidence class; this does not authorize retaining source clinical payloads. | Record classification, access review, legal-hold interaction, and deletion evidence are absent. |
+| Finalized clinical record | No schedule approved. Counsel and applicable state requirements must determine retention and deletion before activation. | Legal/state analysis and an enforceable schedule are absent. |
 
 ## Activation gate sheet
 
@@ -99,8 +118,8 @@ Only `PASS` gates count toward the 6% score. `PARTIAL` and `BLOCKED` both preven
 | # | Gate | Status | Evidence required to pass | Owner role |
 |---:|---|---|---|---|
 | 1 | Cloud/vendor agreements, BAA, and covered-service configuration review | BLOCKED | Signed/accepted agreements plus a service matrix for Azure and every PHI-capable vendor covering enabled product/SKU, region, retention/training settings, subcontractor boundary, and responsibility owner | Compliance/legal + security |
-| 2 | NPI/CAB/claims scope boundary | PARTIAL | Owner policy in this document and matching canonical onboarding/security/data-retention controls | Product + privacy |
-| 3 | Approved data inventory and retention/deletion schedule | BLOCKED | Signed decisions for database rows, blobs, caches, logs, backups, legal hold, test data, and future NPI | Privacy + data owner |
+| 2 | Authorization-neutral credential/licensure and NPI; CAB/claims scope boundary | PARTIAL | Owner policy in this document and matching canonical onboarding/security/data-retention controls that do not use professional status or NPI as access proof | Product + privacy |
+| 3 | Approved data inventory and retention/deletion schedule | BLOCKED | Approved and enforced decisions for database rows, blobs, raw media/provider payloads, transcripts, drafts, caches, logs, backups, legal hold, synthetic data, finalized clinical records, and any future NPI | Privacy + data owner |
 | 4 | Encryption and key ownership | PARTIAL | Evidence for encryption in transit/at rest across every store; key/secret owner, rotation interval, and revocation test | Security/platform |
 | 5 | Production database private/tightly restricted access | BLOCKED | Private path or exact necessary egress only; no steady-state allow-all; rollback proof | Platform |
 | 6 | Separate least-privileged runtime and migration identities | BLOCKED | Grants diff, negative DDL test for runtime, successful synthetic migration, rotation and rollback evidence | Database/platform |
@@ -119,7 +138,8 @@ Only `PASS` gates count toward the 6% score. `PARTIAL` and `BLOCKED` both preven
 
 | Threat/control objective | Required preventive control | Required detective/recovery evidence | Current decision |
 |---|---|---|---|
-| Account impersonation or cross-tenant access | Canonical authentication plus organization/entitlement enforcement; least privilege at each service boundary | Fixed-code aggregate auth/authz alerts and negative cross-tenant tests | BLOCKED pending canonical evidence and alert rehearsal. NPI is explicitly not a control. |
+| Account impersonation or cross-tenant access | Verified identity, valid practice membership/role, owner authority where applicable, current agreements/BAA, active subscription/entitlement, tenant isolation, feature-specific consent, rollout state, and least privilege at each service boundary | Fixed-code aggregate auth/authz alerts and negative cross-tenant tests | BLOCKED pending canonical evidence and alert rehearsal. Professional credential/licensure status and NPI are explicitly authorization-neutral. |
+| Legacy professional-status metadata influences access | Credential/licensure fields, if retained, are excluded from authentication, tenant, entitlement, continued-use, and real-PHI decisions | Contract fixtures and negative tests proving status changes cannot grant or deny access | BLOCKED pending the accepted replacement Core contract and runtime evidence. |
 | Public data-service exposure | Private endpoints or exact required egress, default-deny storage, no steady-state PostgreSQL allow-all, no legacy public/key path after cutover | Read-only network inventory and negative unapproved-network tests | BLOCKED; current production data paths remain public. |
 | Runtime schema mutation or credential overreach | Separate runtime DML and migration DDL identities; startup migration disabled only after dedicated-job proof | Grants diff, runtime DDL denial, migration success, rotation and rollback | BLOCKED; the source gate is only a prerequisite. |
 | PHI leakage through telemetry | Fixed event codes and aggregate metrics only; no payload/object/query logging | Sample alert payload privacy review plus retention/access decision | BLOCKED; source queries are aggregate-only but have not run in staging. |
@@ -160,24 +180,24 @@ Data-service diagnostics should begin with metrics only. PostgreSQL query logs a
 
 Existing task-failure and Zoom-sync alert firing history is useful evaluation evidence, but notification delivery, acknowledgement, and on-call handling remain unproved.
 
-The module in this branch is only a phase-one baseline. Its PostgreSQL administrative-failure alert is not restore proof, and it does not yet cover rehearsal freshness, Container Apps restart/capacity, queue age/depth, scheduler heartbeat, PostgreSQL connection/CPU/memory, Redis server load, or storage capacity. Those signals need verified PHI-free telemetry and owner-approved thresholds before gate 11 can pass.
+The module in current source is only a phase-one baseline. Its PostgreSQL administrative-failure alert is not restore proof, and it does not yet cover rehearsal freshness, Container Apps restart/capacity, queue age/depth, scheduler heartbeat, PostgreSQL connection/CPU/memory, Redis server load, or storage capacity. Those signals need verified PHI-free telemetry and owner-approved thresholds before gate 11 can pass.
 
-## Named operational ownership required
+## Named operational ownership and coverage required
 
-Before alert delivery is tested, replace each placeholder with a person or staffed team and record an alternate:
+John Clemente, CEO, is the designated primary point of contact by role and name only for the functions below. This designation is not evidence of a working contact route, acknowledgement, availability, or authority for an individual production change. Before alert delivery is tested, assign an independent secondary for every function and record coverage and escalation details outside the repository.
 
 | Responsibility | Primary | Secondary | Evidence needed |
 |---|---|---|---|
-| Public-pilot incident commander | UNASSIGNED | UNASSIGNED | Roster acknowledgement and coverage hours |
-| Azure/platform responder | UNASSIGNED | UNASSIGNED | Action-group receipt and acknowledgement test |
-| Database/recovery operator | UNASSIGNED | UNASSIGNED | Restore rehearsal participation |
-| Application/workflow responder | UNASSIGNED | UNASSIGNED | Synthetic alert triage proof |
-| Security/privacy lead | UNASSIGNED | UNASSIGNED | Incident and breach assessment tabletop |
-| Customer support liaison | UNASSIGNED | UNASSIGNED | Customer escalation and handoff drill |
-| Customer communications approver | UNASSIGNED | UNASSIGNED | Approved message templates and contact tree |
-| Compliance/legal escalation | UNASSIGNED | UNASSIGNED | BAA and notification-decision workflow |
+| Public-pilot incident commander | John Clemente, CEO | UNASSIGNED | Roster acknowledgement and coverage hours |
+| Azure/platform responder | John Clemente, CEO | UNASSIGNED | Action-group receipt and acknowledgement test |
+| Database/recovery operator | John Clemente, CEO | UNASSIGNED | Restore rehearsal participation |
+| Application/workflow responder | John Clemente, CEO | UNASSIGNED | Synthetic alert triage proof |
+| Security/privacy lead | John Clemente, CEO | UNASSIGNED | Incident and breach assessment tabletop |
+| Customer support liaison | John Clemente, CEO | UNASSIGNED | Customer escalation and handoff drill |
+| Customer communications approver | John Clemente, CEO | UNASSIGNED | Approved message templates and contact tree |
+| Compliance/legal escalation | John Clemente, CEO | UNASSIGNED | BAA and notification-decision workflow |
 
-An email receiver configured in Azure is not support ownership. Evidence must show receipt, acknowledgement, escalation, and after-hours coverage.
+An email receiver configured in Azure is not support ownership. Secondary coverage, staffed hours, acknowledgement and response targets, contact mechanisms, action-group receipt, escalation, and a tested alternate remain unresolved. Gate 16 stays `BLOCKED`.
 
 ## Migration and rollback rungs
 
@@ -199,7 +219,7 @@ Each rung is separately reviewed. A saved plan must be created immediately befor
 
 ## Exact plan evidence and contract
 
-Evidence produced from this review branch:
+Evidence produced for the original infrastructure review and retained on current `master`:
 
 - Production IaC validation passed with AzureRM `4.73.0`; only pre-existing/deprecation warnings were reported.
 - Staging IaC validation passed with its pinned AzureRM `4.26.0`.
@@ -224,8 +244,8 @@ An exit code, “plan succeeded,” or aggregate add/change/destroy counts alone
 ## Current blockers and next approvals
 
 1. Compliance/legal and security must attach the Azure and PHI-capable vendor BAA/covered-service configuration matrix.
-2. Privacy and data owners must approve retention/deletion for database rows, blobs, cache/broker payloads, logs, backups, test containers, and any future just-in-time NPI.
-3. Operations must name primary/secondary owners and prove alert delivery and acknowledgement with synthetic, PHI-free signals.
+2. Privacy, legal, and data owners must approve the minimum-retention proposal, determine finalized-clinical-record retention under applicable counsel/state requirements, implement it across every copy and derivative, and prove deletion without PHI-bearing telemetry.
+3. The primary point of contact is assigned by role/name. Operations must still assign independent secondaries, approve staffed hours, acknowledgement/response targets and contact mechanisms, and prove alert receipt, escalation, and alternate routing with synthetic PHI-free signals.
 4. Database/platform owners must approve and execute the non-production restore rehearsal, then approve RTO/RPO targets.
 5. Platform/database/application owners must adopt and prove the new startup-migration switch, then finish the least-privilege role split in staging before administrative DSNs can be retired.
 6. Platform/security must validate managed-identity and parallel private-path rungs in staging before proposing public/shared-key retirement.

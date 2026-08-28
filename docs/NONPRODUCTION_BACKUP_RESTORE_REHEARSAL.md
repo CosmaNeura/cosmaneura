@@ -3,8 +3,11 @@
 Status: **PROCEDURE ONLY — NOT YET EXECUTED**
 Scope: synthetic data in an explicitly approved non-production Azure environment
 Production use: prohibited
+Owner-policy revision: 2026-08-28
 
 This procedure produces recovery evidence without touching production. A configured backup window, an Azure “earliest restore date,” or a successful control-plane restore operation is not sufficient on its own. Recovery is proven only when the restored service is isolated, least-privilege access works, forbidden access fails, and the application validates the synthetic fixture within an owner-approved RTO/RPO.
+
+John Clemente, CEO, is the primary incident, Azure/platform, and database/recovery point of contact by role and name only. That designation is not execution approval and does not supply secondary coverage, staffed hours, response targets, or a protected contact mechanism. A rehearsal remains blocked until a separately named operator, observer, cleanup approver, secondary incident contact, and approved RTO/RPO are recorded.
 
 ## Safety contract
 
@@ -15,7 +18,7 @@ Stop before any mutation unless every item is true:
 - The target name begins with the approved unique prefix, for example `restore-drill-`, and does not already exist.
 - The source and target Azure resource IDs, subscription, tenant, region, and UTC timestamp are copied into the change record and reviewed by a second operator.
 - Target networking is isolated. No `0.0.0.0` through `255.255.255.255` rule is allowed.
-- A database/recovery operator, observer, cleanup approver, and incident escalation contact are named.
+- A database/recovery operator, observer, cleanup approver, secondary incident escalation contact, and protected contact route are named. John Clemente’s primary POC designation alone does not satisfy this separation.
 - The evidence directory is outside the repository, access-restricted, and contains no secret, DSN, token, row value, object key, filename, email, NPI, transcript, note, or request/response body.
 - The rehearsal has a maximum lifetime and cleanup window. Cleanup is a separate reviewed action targeted only at the unique drill resource.
 
@@ -33,6 +36,18 @@ The business owner must supply targets before the run:
 | Cleanup deadline | UNAPPROVED | Restored server ready | Isolated drill resources removed after evidence acceptance | NOT MEASURED |
 
 Record both wall-clock UTC timestamps and Azure operation timestamps. Do not backfill a target after seeing the result.
+
+## Retention and cleanup boundary
+
+The minimum-retention schedule is an owner proposal, not a deployed control or permission to use real PHI in this rehearsal. The full proposal is in `docs/PUBLIC_PHI_INFRASTRUCTURE_BASELINE.md`. Restoration must not reset the deletion clock of an underlying record or derivative.
+
+- Synthetic drill fixtures and isolated restored drill resources must be deleted within 7 days at most; a shorter run-specific cleanup deadline takes precedence.
+- PHI-free operational logs are proposed for 90 days. Accepted minimum-necessary legal/compliance rehearsal evidence is proposed for 7 years, without fixture bodies or source clinical payloads.
+- Backup copies are proposed for 30 days. Backup expiry does not prove record-level deletion, and a restored copy must remain subject to the original record schedule.
+- Raw audio, video, and provider payloads are not valid restore fixtures. Their proposed rule is deletion after successful transcript/integrity validation with a six-hour hard retry ceiling; identifiable raw transcripts are proposed for 14 days and drafts for 30 days.
+- The finalized-clinical-record schedule remains unresolved pending counsel and applicable state requirements. No rehearsal may invent or extend it.
+
+The evidence approver must record the applicable class, planned deletion timestamp, and deletion verification method before the restore begins. A documented legal hold requires separate legal/privacy authority and cannot be inferred from an incident or failed cleanup.
 
 ## Phase 0 — preflight and immutable evidence
 
@@ -93,7 +108,7 @@ Use a restored-server migration identity for schema inspection/migration and a s
 3. Prove negative access:
    - runtime identity cannot create/drop/alter schema objects or assume the migration/owner role;
    - an unapproved network source cannot connect;
-   - a stale/invalid credential cannot authenticate;
+   - a stale/invalid database secret cannot authenticate;
    - restored server is not reachable through a production application route.
 4. Generate one approved PHI-free synthetic recovery/application alert. Record evaluation, receiver delivery, acknowledgement, escalation if configured, and resolution timestamps. A portal firing history without receiver proof fails this step.
 5. Record T2 when the application validation completes. Calculate:
@@ -114,7 +129,7 @@ Before a blob recovery drill, the privacy/data owner must decide whether uploads
 3. Delete or overwrite it according to the selected failure scenario.
 4. Recover it using the selected version/soft-delete/backup mechanism.
 5. Compare byte count and SHA-256; prove an unapproved identity/network cannot retrieve it.
-6. Record measured RTO/RPO and delete the synthetic object under normal retention after evidence acceptance.
+6. Record measured RTO/RPO and delete the synthetic object after evidence acceptance within the approved cleanup window and no later than 7 days after creation.
 
 Until that drill succeeds, do not claim upload/blob recovery.
 
@@ -139,7 +154,7 @@ For broker or workflow state, separately prove message redelivery/idempotency, d
 3. Operations records every failed/partial step, owner, due date, and whether it blocks activation.
 4. Evidence approver authorizes cleanup of the exact uniquely named drill resources.
 5. A second operator verifies the target resource ID, active connections, DNS/route absence, and evidence completeness before cleanup.
-6. Remove only the isolated drill resources under a separate change record. Do not delete shared networking, diagnostics, identities, DNS zones, or source backups as “cleanup.”
+6. Remove only the isolated drill resources under a separate change record, within the approved cleanup window and no later than 7 days after creation. Do not delete shared networking, diagnostics, identities, DNS zones, or source backups as “cleanup.”
 7. Perform a read-only post-cleanup inventory and record that the unique target no longer exists.
 
 Failed cleanup does not invalidate restore evidence, but it creates a cost/security incident that must be owned until resolved.
@@ -152,6 +167,7 @@ Status: NOT RUN | PASS | FAIL | PARTIAL
 Runbook commit and SHA-256:
 Start/end UTC:
 Operator / observer / approver roles:
+Primary / secondary incident contacts:
 Azure tenant/subscription (non-secret IDs):
 Non-production resource group:
 Source resource ID:
@@ -169,7 +185,7 @@ Measured infrastructure RTO / application RTO / RPO:
 Runtime positive test:
 Runtime DDL/role negative test:
 Unapproved-network negative test:
-Invalid-credential negative test:
+Invalid database-secret authentication negative test:
 Synthetic alert evaluation / delivery / acknowledgement / resolution timestamps:
 Blob recovery result (or approved not-applicable reason):
 Redis rebuild/failover result and classification:
@@ -177,9 +193,10 @@ Unexpected events and incident IDs:
 Evidence file names and SHA-256 digests:
 Target comparison and disposition:
 Cleanup approval / completion / post-cleanup inventory:
+Retention class / deletion due UTC / deletion verification:
 Reviewer decisions and signatures/acknowledgements:
 ```
 
 ## Current status
 
-No rehearsal described here has been executed. RTO and RPO are unapproved and unmeasured. PostgreSQL backup metadata proves that restore points are advertised; it does not prove that a usable application can be recovered. Alert delivery, blob recovery, Redis reconstruction, least-privilege restored access, and cleanup are also unproved and remain activation blockers.
+No rehearsal described here has been executed. John Clemente, CEO, is named as the primary point of contact, but secondary coverage, hours, targets, and contact mechanisms are unresolved. RTO and RPO are unapproved and unmeasured. PostgreSQL backup metadata proves that restore points are advertised; it does not prove that a usable application can be recovered. Alert delivery, blob recovery, Redis reconstruction, least-privilege restored access, retention enforcement, and cleanup are also unproved and remain activation blockers.
