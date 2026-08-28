@@ -10,9 +10,11 @@ import pytest
 import app.configuration.stripe as stripe_config
 from app.services import stripe_billing
 
-from activemodel.session_manager import get_session
+from activemodel.session_manager import SessionManager, get_session
 from app.models.doctor import Doctor
 from app.models.practice import Practice, PracticeMember, PracticeRole
+from app.models.stripe_event_inbox import StripeEventInbox
+from sqlalchemy import event as sqlalchemy_event
 from sqlmodel import select
 
 
@@ -489,3 +491,130 @@ def test_concurrent_checkout_callers_share_one_open_session(
     final = Practice.get(id=practice.id)
     assert final
     assert final.stripe_checkout_session_id == "cs_shared_checkout"
+
+
+def test_concurrent_duplicate_webhooks_share_one_durable_inbox_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name, value in {
+        "STRIPE_ACCOUNT_ID": "acct_test_cosmaneura",
+        "STRIPE_API_VERSION": "2025-09-30.clover",
+        "SUPPORTED_STRIPE_API_VERSION": "2025-09-30.clover",
+        "STRIPE_LIVE_MODE": False,
+    }.items():
+        monkeypatch.setattr(stripe_config, name, value)
+
+    initial_state_version = 7
+    practice = _practice_with_active_owner(
+        legal_name="Concurrent Webhook Inbox Practice, PLLC",
+        join_code=f"W{secrets.token_hex(4).upper()[:7]}",
+        email_domain="concurrent-webhook.example.com",
+        origin_channel="direct",
+        stripe_customer_id="cus_concurrent_webhook",
+        stripe_subscription_id="sub_concurrent_webhook",
+        subscription_status="active",
+        stripe_state_version=initial_state_version,
+    )
+    event_id = f"evt_concurrent_{secrets.token_hex(8)}"
+    event_payload = {
+        "id": event_id,
+        "type": "customer.subscription.updated",
+        "created": int(datetime.now(timezone.utc).timestamp()),
+        "api_version": "2025-09-30.clover",
+        "livemode": False,
+        "data": {
+            "object": {
+                "id": "sub_concurrent_webhook",
+                "customer": "cus_concurrent_webhook",
+                "status": "past_due",
+                "livemode": False,
+                "metadata": {"practice_id": str(practice.id)},
+                "items": {
+                    "data": [
+                        {
+                            "id": "si_concurrent_webhook",
+                            "quantity": 1,
+                            "price": {"id": "price_test_x"},
+                        }
+                    ]
+                },
+            }
+        },
+    }
+
+    initial_select_barrier = threading.Barrier(2)
+    synchronized_threads: set[str] = set()
+    synchronized_threads_lock = threading.Lock()
+    thread_name_prefix = "stripe-webhook-enqueue-"
+
+    def synchronize_initial_inbox_select(
+        _connection,
+        _cursor,
+        statement,
+        _parameters,
+        _context,
+        _executemany,
+    ) -> None:
+        thread_name = threading.current_thread().name
+        if (
+            not thread_name.startswith(thread_name_prefix)
+            or "from stripe_event_inbox" not in statement.lower()
+            or "stripe_event_inbox.event_id" not in statement.lower()
+        ):
+            return
+        with synchronized_threads_lock:
+            if thread_name in synchronized_threads:
+                return
+            synchronized_threads.add(thread_name)
+        initial_select_barrier.wait(timeout=10)
+
+    engine = SessionManager.get_instance().get_engine()
+    sqlalchemy_event.listen(
+        engine, "after_cursor_execute", synchronize_initial_inbox_select
+    )
+    results: list[tuple[object | None, bool]] = []
+    errors: list[BaseException] = []
+
+    def enqueue_duplicate() -> None:
+        try:
+            results.append(stripe_billing.enqueue_stripe_event(deepcopy(event_payload)))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [
+        threading.Thread(
+            target=enqueue_duplicate,
+            name=f"{thread_name_prefix}{index}",
+        )
+        for index in range(2)
+    ]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+    finally:
+        sqlalchemy_event.remove(
+            engine, "after_cursor_execute", synchronize_initial_inbox_select
+        )
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert errors == []
+    assert synchronized_threads == {
+        f"{thread_name_prefix}0",
+        f"{thread_name_prefix}1",
+    }
+    assert len(results) == 2
+    assert len({inbox_id for inbox_id, _duplicate in results}) == 1
+    assert sorted(duplicate for _inbox_id, duplicate in results) == [False, True]
+
+    with get_session() as session:
+        inbox_rows = session.exec(
+            select(StripeEventInbox).where(StripeEventInbox.event_id == event_id)
+        ).all()
+        final_practice = session.exec(
+            select(Practice).where(Practice.id == practice.id)
+        ).one()
+        assert len(inbox_rows) == 1
+        assert final_practice.subscription_status == "pending_verification"
+        assert final_practice.stripe_state_version == initial_state_version + 1

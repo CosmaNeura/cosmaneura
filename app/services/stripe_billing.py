@@ -291,8 +291,28 @@ def _validate_livemode(value: object, *, source: str) -> None:
 def _hosted_url(value: object, *, hostname: str) -> str:
     if not isinstance(value, str):
         raise StripeStateInvalid("Stripe hosted URL is missing")
-    parsed = urlparse(value)
-    if parsed.scheme != "https" or parsed.hostname != hostname:
+    if (
+        not value
+        or value != value.strip()
+        or "\\" in value
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+    ):
+        raise StripeStateInvalid("Stripe hosted URL has an unexpected origin")
+    try:
+        parsed = urlparse(value)
+    except ValueError as exc:
+        raise StripeStateInvalid("Stripe hosted URL has an unexpected origin") from exc
+    # Compare the exact authority, not only urllib's derived hostname. Browsers
+    # follow WHATWG parsing rules where a backslash can act as a slash; a value
+    # such as ``https://evil.example\\@checkout.stripe.com/...`` therefore has
+    # a different navigation origin even though ``urlparse().hostname`` reports
+    # ``checkout.stripe.com``. Exact authority also rejects credentials, ports,
+    # trailing dots, and other provider-origin ambiguity.
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != hostname
+        or parsed.hostname != hostname
+    ):
         raise StripeStateInvalid("Stripe hosted URL has an unexpected origin")
     return value
 
@@ -2863,6 +2883,18 @@ def _finish_quantity_sync(
                 seat_quantity=target,
             )
             return False
+        if row.stripe_quantity_sync_version != version:
+            # A join/leave landed while Stripe was in flight. Never let this
+            # older success or failure clear or poison the newer obligation;
+            # the next sweep repairs its exact target.
+            session.commit()
+            _emit_billing_metric(
+                "seat_reconciliation",
+                outcome="superseded_target",
+                practice_id=practice_id,
+                seat_quantity=target,
+            )
+            return False
         if error is not None:
             row.stripe_quantity_sync_required = True
             row.stripe_quantity_sync_attempts += 1
@@ -2875,19 +2907,6 @@ def _finish_quantity_sync(
                 practice_id=practice_id,
                 seat_quantity=target,
                 attempts=row.stripe_quantity_sync_attempts,
-            )
-            return False
-        if row.stripe_quantity_sync_version != version:
-            # A join/leave landed while Stripe was in flight. Never let this
-            # older response clear the newer target; the next sweep repairs it.
-            row.stripe_quantity_sync_required = True
-            session.add(row)
-            session.commit()
-            _emit_billing_metric(
-                "seat_reconciliation",
-                outcome="superseded_target",
-                practice_id=practice_id,
-                seat_quantity=target,
             )
             return False
         row.stripe_quantity_sync_required = False
