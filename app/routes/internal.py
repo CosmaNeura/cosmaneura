@@ -2136,6 +2136,15 @@ def create_billing_checkout(
                 f"{exc.available_at.isoformat()}; no trial time will be shortened."
             ),
         ) from exc
+    except stripe_billing.StripeTrialClockReconciliationRequired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The fixed paid-pilot trial clock ending at "
+                f"{exc.trial_ends_at.isoformat()} cannot be reset or extended. "
+                "Billing policy review is required before another Checkout."
+            ),
+        ) from exc
     except stripe_billing.StripeCheckoutAlreadyCompleted as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

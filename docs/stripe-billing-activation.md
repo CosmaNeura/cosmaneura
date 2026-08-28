@@ -13,7 +13,10 @@ properties that the flag itself cannot provide:
   the drain remains required so no pre-change cardless URL survives activation.
 
 The activation packet and its plan digest use policy namespace
-`paid-pilot-v2`; evidence from the older activation contract is not reusable.
+`paid-pilot-v3`; evidence from older activation contracts is not reusable.
+The governing product boundaries are architecture PR 10, ADRs 0022–0024, at
+reviewed head `5451df63e2fbeaf386ca5517d762e6d1359b053c`. If that head changes, review
+and record the replacement architecture commit before activation.
 
 Do not describe `STRIPE_BILLING_ENABLED=false` as a hard stop. The integration
 and webhook must remain enabled for subscription maintenance, and existing
@@ -27,6 +30,39 @@ The 14-day trial begins at Checkout before credential approval and does not
 pause or reset while credential review is pending. Real-PHI access remains
 fail-closed unless credential status is `approved`.
 
+For a new public practice, Core freezes one absolute trial end at the initial
+Checkout request and promotes it only after Stripe returns or recovery finds
+the matching hosted Session. Stripe receives that absolute end; completing,
+resuming, or replacing the Session cannot restart the clock. A hosted Session
+and its fixed clock do not grant entitlement without a verified subscription.
+Public signup and onboarding do not collect, validate, or submit NPI. Billing
+does not inspect it, and it is neither authentication nor credential proof. A
+future enabled payer-facing HIPAA-standard transaction or integration may
+collect it just in time only when that transaction demonstrably requires it.
+CAB remains billing-intelligence/advisory only: it has no EHR-write,
+837P/claim-submission, or clearinghouse scope, and those capabilities are not on
+the roadmap.
+
+The byte-pinned `CN-BAA-CUST-CW` v2.2 text nevertheless contains the phrase
+“claims preparation and submission support.” This runbook does not amend or
+reinterpret that language. Its canonical SHA-256 remains
+`13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e`, and
+public promotion must remain blocked until counsel supplies a written
+reconciliation of that exact agreement with the advisory-only, no-EHR-write,
+no-837P, no-claim-submission, and no-clearinghouse product boundary. If counsel
+requires different text, publish a new agreement version and obtain a new
+acceptance record; never edit v2.2 in place.
+
+This branch still inherits a legacy nullable Core NPI API/OpenAPI surface from
+its current receiver base. It is not policy-conformant and must not merge or
+activate until it is restacked onto the NPI-free Core receiver, or that public
+surface is safely removed here and the generated OpenAPI/client artifacts are
+regenerated and verified. Nullable historical storage may remain solely for
+legacy compatibility; public onboarding and billing must neither send nor
+inspect it. The activation packet therefore requires an explicit confirmation
+and exact 40-hex SHA for the reviewed NPI-free Core receiver consumed by the
+deployed source.
+
 The behavior at trial expiry while credential review is still pending is not
 yet approved. The preflight deliberately has no default. It accepts only an
 explicit owner-approved value: `charge_scheduled`, `extend_trial`, or
@@ -34,6 +70,12 @@ explicit owner-approved value: `charge_scheduled`, `extend_trial`, or
 implement or change billing behavior. Until the chosen policy is approved and
 implemented in the deployed release, omit the option and expect
 `ready_for_acquisition: false`.
+
+The mid-cycle seat-change charge/credit policy—including proration and invoice
+timing—is also unresolved. Stripe defaults are not policy evidence. Acquisition
+must remain disabled until an owner-approved behavior is explicitly implemented
+and evidenced; the current reconciler intentionally does not claim readiness
+for an implicit provider default.
 
 ## Canonical entitlement state contract
 
@@ -177,6 +219,9 @@ non-sensitive and artifact digests must be lowercase SHA-256 values.
 | Completed-session reconciliation | Post-drain query time, aggregate count, and disposition for completed legacy Checkout Sessions, including any subscription-to-practice reconciliation. | `--confirm-completed-session-reconciliation`, `--completed-session-reconciliation-at`, `--completed-session-reconciliation-ref`, `--completed-session-reconciliation-sha256` |
 | Stripe test lifecycle | Test-mode results for card-required Checkout, the exact 14-day trial, customer/practice binding, quantities 1–20 and rejection of 21, signed/replayed/reordered webhooks, reconciliation, pinned Portal launch, cancellation, past-due/payment recovery, deletion, and stale/abandoned Checkout recovery. | `--confirm-test-mode-lifecycle`, `--test-mode-lifecycle-evidence-ref`, `--test-mode-lifecycle-evidence-sha256` |
 | Observability | PHI-free metric/dashboard and alert-delivery evidence for Checkout failures, webhook lag and processing failures, entitlement mismatches, cancellation/recovery, and seat reconciliation. | `--confirm-observability-ready`, `--observability-evidence-ref`, `--observability-evidence-sha256` |
+| NPI-free Core receiver | Exact reviewed 40-hex receiver commit, with generated OpenAPI/client artifacts and tests proving public onboarding rejects and never sends NPI and billing never receives or inspects it. | `--confirm-npi-free-core-receiver`, `--npi-free-core-receiver-sha` |
+| Counsel BAA scope reconciliation | Counsel's written reconciliation of byte-pinned `CN-BAA-CUST-CW` v2.2 (SHA-256 `13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e`) with CAB's advisory-only/no-write/no-submit scope. | `--confirm-counsel-baa-scope-reconciliation`, `--counsel-baa-scope-reconciliation-ref`, `--counsel-baa-scope-reconciliation-sha256` |
+| Seat-change billing policy | Owner-approved and deployed treatment of mid-cycle activation/deactivation, including proration or credits and invoice timing, with Stripe test-mode evidence for increases and decreases. | `--confirm-seat-change-billing-policy-implemented`, `--seat-change-billing-policy-implementation-evidence-ref` |
 
 Do not set a confirmation from source tests alone when the gate requires a real
 Stripe test-mode run or deployed alert delivery. Missing evidence is expected
@@ -185,14 +230,17 @@ to produce `ready_for_acquisition: false`.
 The JSON evidence includes exact reviewed account and price IDs plus aggregate
 counts and contract digests. It never prints secrets, webhook URLs, webhook
 endpoint IDs, raw Checkout Session IDs, Checkout URLs, or practice identifiers.
-Use a non-sensitive deployment/change reference for `--operator-ref`.
+It also records the exact reviewed NPI-free Core receiver SHA and the immutable
+BAA document/version/hash bound to counsel's reconciliation. Use a non-sensitive
+deployment/change reference for `--operator-ref`.
 
 ## Read-only packet while the policy is unresolved
 
 The following test-mode form is safe for validating the packet shape. Omit the
-policy and approval confirmations while they remain unresolved. A successful
-audit exits `1` and records the failed gates; it cannot report production
-readiness.
+policy and approval confirmations while they remain unresolved. In particular,
+omit the NPI-free receiver and counsel-reconciliation confirmations until their
+exact evidence exists. A successful audit exits `1` and records the failed
+gates; it cannot report production readiness.
 
 ```sh
 STRIPE_SECRET_KEY='...' \
@@ -218,12 +266,18 @@ webhook-signing secret, account/price/portal configuration, API version,
 integration flag, and disabled acquisition flag have been independently
 reconciled. Do not add any completed-session, test-lifecycle, or observability
 confirmation until its redacted artifact and digest satisfy the table above.
-Do not add `--confirm-founder-owner-approval`, `--owner-approval-ref`, or a
-trial-expiry policy value until the owner has made and recorded those decisions.
-An allowed policy string is not implementation evidence. The packet also
-requires a non-sensitive implementation record, the full reviewed source SHA,
-and the exact deployed source SHA; the SHAs must match. Omit these arguments
-while policy behavior is not implemented and deployed.
+Do not add the NPI-free receiver confirmation until the Stripe branch has been
+restacked onto that exact reviewed receiver commit and its generated contract,
+type, and route tests pass. Do not add the counsel reconciliation confirmation
+unless a redacted record and digest exist for counsel's written reconciliation
+of the exact v2.2 hash above. Founder approval is not a substitute. Do not add
+`--confirm-founder-owner-approval`, `--owner-approval-ref`, a trial-expiry policy
+value, or the seat-change billing-policy confirmation until the owner has made
+and recorded those decisions. An allowed policy string and Stripe's default
+proration behavior are not implementation evidence. The packet also requires
+non-sensitive implementation records, the full reviewed source SHA, and the
+exact deployed source SHA; the SHAs must match. Omit these arguments while
+either policy behavior is not implemented and deployed.
 
 ```sh
 STRIPE_SECRET_KEY='...' \
@@ -251,10 +305,17 @@ python scripts/stripe_checkout_activation_preflight.py \
   --confirm-observability-ready \
   --observability-evidence-ref '<observability-record>' \
   --observability-evidence-sha256 '<lowercase-sha256>' \
+  --confirm-npi-free-core-receiver \
+  --npi-free-core-receiver-sha '<reviewed-receiver-full-git-sha>' \
+  --confirm-counsel-baa-scope-reconciliation \
+  --counsel-baa-scope-reconciliation-ref '<counsel-record>' \
+  --counsel-baa-scope-reconciliation-sha256 '<lowercase-sha256>' \
   --confirm-founder-owner-approval \
   --owner-approval-ref '<approval-record>' \
   --pending-credential-trial-expiry-policy "$OWNER_APPROVED_POLICY" \
   --policy-implementation-evidence-ref '<implementation-record>' \
+  --confirm-seat-change-billing-policy-implemented \
+  --seat-change-billing-policy-implementation-evidence-ref '<implementation-record>' \
   --reviewed-source-sha '<reviewed-full-git-sha>' \
   --deployed-source-sha '<matching-deployed-full-git-sha>'
 ```
@@ -298,10 +359,17 @@ python scripts/stripe_checkout_activation_preflight.py \
   --confirm-observability-ready \
   --observability-evidence-ref '<observability-record>' \
   --observability-evidence-sha256 '<lowercase-sha256>' \
+  --confirm-npi-free-core-receiver \
+  --npi-free-core-receiver-sha '<reviewed-receiver-full-git-sha>' \
+  --confirm-counsel-baa-scope-reconciliation \
+  --counsel-baa-scope-reconciliation-ref '<counsel-record>' \
+  --counsel-baa-scope-reconciliation-sha256 '<lowercase-sha256>' \
   --confirm-founder-owner-approval \
   --owner-approval-ref '<approval-record>' \
   --pending-credential-trial-expiry-policy "$OWNER_APPROVED_POLICY" \
   --policy-implementation-evidence-ref '<implementation-record>' \
+  --confirm-seat-change-billing-policy-implemented \
+  --seat-change-billing-policy-implementation-evidence-ref '<implementation-record>' \
   --reviewed-source-sha '<reviewed-full-git-sha>' \
   --deployed-source-sha '<matching-deployed-full-git-sha>' \
   --apply \
@@ -344,11 +412,17 @@ Activation is allowed only when the final evidence has all of:
   SHA-256, and the `test_mode_lifecycle_evidenced` prerequisite true
 - `observability_ready_confirmed: true`, with a non-null evidence reference and
   SHA-256, and the `observability_readiness_evidenced` prerequisite true
+- `npi_free_core_receiver_evidenced: true`, with the exact reviewed 40-hex
+  receiver SHA reported in `npi_free_core_receiver_sha`
+- `counsel_baa_scope_reconciliation_evidenced: true`, with a non-null evidence
+  reference and SHA-256 tied to the reported immutable v2.2 BAA contract
 - `founder_owner_approval_confirmed: true` and a non-null `owner_approval_ref`
 - `pending_credential_trial_expiry_policy_resolved: true`, with the recorded
   value matching the implemented owner-approved policy
 - `policy_implementation_evidenced: true`, with a non-null implementation
   evidence reference
+- `seat_change_billing_policy_implementation_evidenced: true`, with its
+  explicit confirmation and non-null implementation evidence reference
 - `reviewed_source_matches_deployed: true`; both full source SHAs are present
   and exactly equal
 - `drain_satisfied: true`

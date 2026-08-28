@@ -805,8 +805,9 @@ def list_pilot_doctors() -> None:
     """List pre-cutover doctors (onboarded, no practice membership yet).
 
     These are the early-adopter pilots: on next login the frontend routes
-    them through practice creation + BAA acceptance, which starts a 14-day
-    trial. Comp them with ``set-billing-exempt`` once their practice exists.
+    them through practice creation and BAA acceptance. A public paid-pilot
+    trial starts only when Stripe creates the hosted Checkout Session. Comp
+    them with ``set-billing-exempt`` once their practice exists.
     Practices are never created for them here — the covered entity's legal
     name on an acceptance record must be typed by the accepting owner.
     """
