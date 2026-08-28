@@ -17,9 +17,10 @@
 - **Generated OpenAPI SHA-256:** `b4887500dbeba7f205a7daeef007438105a7ef77a5e813970a0cf68c71aaac98`.
 - **Migration SHA-256:** `d0a4…` `14db2216f5afbd89676d6d596d13b4afd97f3897da28ea0f979ee79f17725895`; `e7a9…` `75d6efa8a4633b95b643e40367dbbca2ab29fd38e1ca09fe5069f83684dde62f`.
 - **BAA v2.2 SHA-256:** `13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e` (unchanged).
-- **PHI classification:** authorization metadata and opaque actor/practice
-  references only; no patient data, clinical content, email, token, NPI, or raw
-  payment data.
+- **Data classification:** the entitlement wire payload is PHI-free and uses
+  opaque actor/practice references. Onboarding evidence retains normalized
+  signer/invitee email as PII plus token digests, but no patient data, clinical
+  content, NPI, raw bearer token, or raw payment data.
 
 The exact commit and artifact digests are recorded in the immutable PR handoff
 and independent review. A documentation file cannot safely pin its own commit.
@@ -59,7 +60,8 @@ HTTP endpoint yet. The later producer is an authenticated
 idempotency `none`. Onboarding/membership mutations use `Idempotency-Key`; an
 exact replay returns the same logical result and conflicting reuse returns
 `409`. Named audit events are added atomically with their producers, not as
-unused enum values in this boundary.
+unused enum values in this boundary. Before activation, that producer must add
+executable fixture and malformed-payload validation against its runtime model.
 
 ## Failure and retry semantics
 
