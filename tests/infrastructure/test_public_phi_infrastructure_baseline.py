@@ -88,12 +88,87 @@ def test_startup_migration_switch_is_not_propagated_before_identity_rung() -> No
 def test_owner_policy_is_an_activation_control_not_an_auth_substitute() -> None:
     baseline = _read("docs/PUBLIC_PHI_INFRASTRUCTURE_BASELINE.md")
     incident = _read("docs/PUBLIC_PHI_INCIDENT_RESPONSE.md")
-    combined = baseline + incident
+    restore = _read("docs/NONPRODUCTION_BACKUP_RESTORE_REHEARSAL.md")
+    combined = baseline + incident + restore
 
     assert "NPI is not required during signup or onboarding" in combined
     assert "NPI is not an authentication" in combined
+    assert (
+        "Professional credential and licensure status are authorization-neutral"
+        in baseline
+    )
+    assert (
+        "Professional credential/licensure status and NPI are authorization-neutral"
+        in incident
+    )
+    assert "continued platform use or real-PHI capabilities" in combined
     assert "CAB is advisory" in combined
     assert "837P" in combined
     assert "EHR write" in combined
     assert "just in time" in combined
     assert "No infrastructure activation gate may be waived" in combined
+
+    for required_gate in (
+        "verified identity",
+        "valid practice membership and role",
+        "owner authority where applicable",
+        "current agreements and BAA",
+        "active subscription and entitlement",
+        "tenant isolation",
+        "feature-specific consent",
+        "rollout state",
+    ):
+        assert required_gate in baseline
+        assert required_gate in incident
+
+    assert "credential-state" not in baseline
+    assert "credential-verification method/reviewer/SLA" not in baseline
+
+
+def test_public_phi_owner_and_retention_proposals_remain_blocked() -> None:
+    baseline = _read("docs/PUBLIC_PHI_INFRASTRUCTURE_BASELINE.md")
+    incident = _read("docs/PUBLIC_PHI_INCIDENT_RESPONSE.md")
+    restore = _read("docs/NONPRODUCTION_BACKUP_RESTORE_REHEARSAL.md")
+    combined = baseline + incident + restore
+
+    assert baseline.count("| John Clemente, CEO | UNASSIGNED |") == 8
+    assert incident.count("| John Clemente, CEO | UNASSIGNED |") == 8
+    assert "John Clemente, CEO, is the primary" in restore
+    assert "Secondary coverage" in baseline
+    assert "response targets" in baseline
+    assert "contact mechanisms" in baseline
+
+    for retention_rule in (
+        "six-hour hard retry ceiling",
+        "Identifiable raw transcript",
+        "14 days",
+        "Draft clinical artifacts",
+        "30 days",
+        "PHI-free operational logs",
+        "90 days",
+        "Synthetic test data",
+        "7 days",
+        "legal, billing, and compliance evidence",
+        "7 years",
+        "Finalized clinical record",
+        "counsel",
+        "state requirements",
+    ):
+        assert retention_rule in combined
+
+    assert "The baseline’s proposal is not enforcement evidence" in incident
+    assert "Gate 3 remains `BLOCKED`" in baseline
+    assert "The gate score is **1 of 16 complete (6%)**" in baseline
+
+
+def test_incident_advisor_is_design_only_and_non_authoritative() -> None:
+    incident = _read("docs/PUBLIC_PHI_INCIDENT_RESPONSE.md")
+
+    assert "Azure Incident Response Advisor" in incident
+    assert "internal CosmaNeura design name, not a Microsoft product" in incident
+    assert "default-off service" in incident
+    assert "creates no agent, webhook, queue, identity, alert route" in incident
+    assert "additional to independent human notification" in incident
+    assert "cannot lower severity" in incident
+    assert "approve or execute an action" in incident
+    assert "earns no activation-gate credit" in incident

@@ -1,39 +1,46 @@
 # Public-PHI incident response
 
-Status: **DRAFT — OWNERS UNASSIGNED, REHEARSAL REQUIRED**
+Status: **DRAFT — PRIMARY POC ASSIGNED; SECONDARY/COVERAGE/REHEARSAL REQUIRED**
 Scope: public paid-pilot infrastructure and operations
 Telemetry rule: PHI-free metadata and aggregate evidence only
+Owner-policy revision: 2026-08-28
 
 This runbook is for suspected confidentiality, integrity, availability, authentication, billing/webhook, workload, dependency, backup/restore, capacity, or support incidents. It does not grant permission to change production. Emergency access and production containment still require the organization’s authorized incident commander and change procedure unless immediate action is required by an already approved break-glass policy.
 
-NPI is not an authentication, credential-proof, or compensating security control. It is not required at signup/onboarding. CAB is advisory only; 837P/claim submission/clearinghouse enrollment and CAB-driven EHR writes are outside the pilot. An NPI mismatch or absence is therefore not a security incident unless a future specifically approved payer integration defines a separate data-quality rule.
+Professional credential/licensure status and NPI are authorization-neutral. Neither gates continued platform use or real-PHI capabilities, and neither is authentication, identity, tenant, or entitlement proof. NPI is not required at signup/onboarding. Actual access gates are verified identity, valid practice membership and role, owner authority where applicable, current agreements and BAA, active subscription and entitlement, tenant isolation, feature-specific consent, and rollout state. CAB is advisory only; 837P/claim submission/clearinghouse enrollment and CAB-driven EHR writes are outside the pilot. A professional-status or NPI mismatch or absence is therefore not an access-control incident unless a future specifically approved workflow defines a separate, non-authorization data-quality rule.
+
+## Deferred Azure Incident Response Advisor design reference
+
+“Azure Incident Response Advisor” is an internal CosmaNeura design name, not a Microsoft product or a deployed control. If separately approved and implemented, the default-off service may use [Microsoft Foundry Agent Service](https://learn.microsoft.com/en-us/azure/foundry/agents/overview) and an [Azure Monitor secure-webhook action](https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/action-groups#secure-webhook) to correlate sanitized, PHI-free evidence and draft one bounded recovery proposal.
+
+This runbook creates no agent, webhook, queue, identity, alert route, model access, or execution authority. Any future advisor must receive only normalized PHI-free envelopes, keep raw provider payloads in memory only until rejection or normalization, use no workload credentials or mutation tools, and remain additional to independent human notification. It cannot lower severity, approve or execute an action, declare recovery or reportability, close an incident, communicate externally, or replace the named incident commander. Its output is untrusted advisory evidence subject to deterministic policy and human approval; it earns no activation-gate credit until separately implemented and rehearsed.
 
 ## Assign before activation
 
 | Role | Primary | Secondary | Required capability |
 |---|---|---|---|
-| Incident commander | UNASSIGNED | UNASSIGNED | Declares severity, assigns actions, maintains decision log |
-| Azure/platform responder | UNASSIGNED | UNASSIGNED | Network, identities, Container Apps, storage, Redis, monitoring |
-| Database/recovery responder | UNASSIGNED | UNASSIGNED | Access/grants, backups, isolated restoration |
-| Application/workflow responder | UNASSIGNED | UNASSIGNED | Auth, webhook, worker, uploads, transcription, note pipeline |
-| Security/privacy lead | UNASSIGNED | UNASSIGNED | Exposure assessment, evidence handling, notification analysis |
-| Support liaison | UNASSIGNED | UNASSIGNED | User reports, safe status collection, handoffs |
-| Customer communications approver | UNASSIGNED | UNASSIGNED | Status and direct-customer messages |
-| Compliance/legal escalation | UNASSIGNED | UNASSIGNED | Contract/BAA and notification obligations |
+| Incident commander | John Clemente, CEO | UNASSIGNED | Declares severity, assigns actions, maintains decision log |
+| Azure/platform responder | John Clemente, CEO | UNASSIGNED | Network, identities, Container Apps, storage, Redis, monitoring |
+| Database/recovery responder | John Clemente, CEO | UNASSIGNED | Access/grants, backups, isolated restoration |
+| Application/workflow responder | John Clemente, CEO | UNASSIGNED | Auth, webhook, worker, uploads, transcription, note pipeline |
+| Security/privacy lead | John Clemente, CEO | UNASSIGNED | Exposure assessment, evidence handling, notification analysis |
+| Support liaison | John Clemente, CEO | UNASSIGNED | User reports, safe status collection, handoffs |
+| Customer communications approver | John Clemente, CEO | UNASSIGNED | Status and direct-customer messages |
+| Compliance/legal escalation | John Clemente, CEO | UNASSIGNED | Contract/BAA and notification obligations |
 | Scribe/Core entitlement liaison | UNASSIGNED | UNASSIGNED | Cross-surface entitlement/onboarding impact without duplicating ownership |
 
-Activation requires each role’s acknowledgement, coverage hours, contact mechanism, escalation timer, and tested alternate. Do not place personal contact details in this repository.
+John Clemente, CEO, is designated by role/name only as the primary point of contact for the first eight functions. This does not supply a contact mechanism, concurrent-role coverage, or production-change authority. Activation still requires independent secondary coverage, staffed hours, acknowledgement and response targets, protected contact mechanisms, escalation timers, action-group receipt, and tested alternates. The separate Scribe/Core liaison is unassigned. Do not place personal contact details in this repository.
 
 ## Severity and paging
 
 | Severity | Examples | Initial acknowledgement target | Required leadership |
 |---|---|---|---|
-| SEV-0 | Confirmed or strongly suspected PHI/credential exfiltration; active cross-tenant access; destructive production corruption; inability to account for affected data | Use approved emergency target; currently UNAPPROVED | Incident commander, security/privacy, platform, legal immediately |
+| SEV-0 | Confirmed or strongly suspected PHI, authentication-secret, or token exfiltration; active cross-tenant access; destructive production corruption; inability to account for affected data | Use approved emergency target; currently UNAPPROVED | Incident commander, security/privacy, platform, legal immediately |
 | SEV-1 | Public data-service exposure beyond approved rule; production authentication outage; database/Redis/storage unavailable; failed recovery during an outage; broad webhook/workflow failure | Use approved urgent target; currently UNAPPROVED | Incident commander plus service owner and support |
 | SEV-2 | Degraded capacity, elevated task failures/backlog, isolated upload/transcription/note failures, alert-delivery failure, missed backup/rehearsal signal | Use approved operational target; currently UNAPPROVED | Operations/service owner |
 | SEV-3 | No-user-impact control drift, documentation gap, non-production rehearsal issue | Next staffed support window after owner assignment | Control owner |
 
-Because targets and owners are unapproved, the support gate is currently blocked. Severity may be raised as evidence changes; never lower it merely because an alert stopped firing.
+The primary point of contact is assigned, but secondary coverage, targets, contact routes, and alternates are unapproved, so the support gate remains blocked. Severity may be raised as evidence changes; never lower it merely because an alert stopped firing.
 
 ## PHI-free evidence rules
 
@@ -54,13 +61,19 @@ Forbidden:
 
 If sensitive evidence is essential, use the approved restricted evidence system and record only a reference in the incident timeline. Never paste it into chat, source control, an alert annotation, or a broadly accessible ticket.
 
+## Retention during an incident
+
+Incident response does not authorize indefinite preservation or broad export. The owner-proposed minimization schedule remains unapproved and must be implemented and evidenced before activation: raw audio, video, and provider payloads are deleted after successful transcript and integrity validation, with a six-hour hard retry ceiling; identifiable raw transcripts after 14 days; drafts after 30 days; PHI-free operational logs after 90 days; backups after 30 days; synthetic data after 7 days; and approved minimum-necessary legal, billing, or compliance evidence after 7 years. The finalized-clinical-record schedule remains dependent on counsel and applicable state requirements.
+
+A documented legal hold may pause a specific normal deletion only with legal/privacy authority, scope, custodian, review date, and release decision. It does not permit copying raw content into ordinary tickets or logs. Preserve PHI-free hashes, receipts, timestamps, correlation IDs, and control-plane metadata where those prove incident actions without preserving source content. The baseline’s proposal is not enforcement evidence and does not close the retention gate.
+
 ## Response sequence
 
 ### 1. Detect and acknowledge
 
 1. Record alert/report source, UTC receipt time, environment, fixed event code/signal, and affected component.
 2. Prove the environment from resource ID/subscription metadata before taking action. Do not assume a resource name means staging.
-3. Assign incident commander, severity, scribe, platform/service owners, and next update time.
+3. Assign the designated primary incident commander or an authorized delegate, severity, scribe, platform/service owners, and next update time.
 4. Confirm the alert receiver acknowledged it. Portal firing history alone is not notification evidence.
 
 ### 2. Bound impact without examining content
@@ -86,7 +99,7 @@ The incident commander chooses one bounded action at a time, records expected ef
 - disable a single exposed storage container/path or identity rather than the entire account when scope permits;
 - pause a webhook consumer or worker queue using an existing safe operational control while preserving idempotent events;
 - isolate an affected non-production restored resource from all workload routes;
-- retain current database backup/restore artifacts and logs; never delete them as containment.
+- preserve relevant database backup/restore metadata and PHI-free logs under the approved retention schedule or a documented legal hold; never delete evidence merely to conceal or simplify containment.
 
 Do not improvise a production network cutover, credential rotation, database replacement, schema rollback, storage shared-key disablement, Redis flush, or destructive cleanup without the exact command/resource, owner, expected effect, observation window, and rollback path. Never remove the only known connectivity path during diagnosis.
 
@@ -100,12 +113,12 @@ Maintain an append-only timeline containing:
 - incident/chat/ticket references, but not sensitive payloads;
 - evidence-file SHA-256 digests and restricted-system references.
 
-Preserve relevant Log Analytics retention and Azure activity/audit records through approved controls. Do not extend retention or export data broadly without privacy/legal review.
+Preserve relevant PHI-free Log Analytics and Azure activity/audit evidence only through the approved schedule or a documented legal hold. Do not extend retention, reset an underlying data clock through restoration, or export data broadly without privacy/legal review.
 
 ### 5. Recover and validate
 
 1. Restore service through the last known-good, least-privilege path.
-2. Run synthetic end-to-end validation for authentication/entitlement, upload, transcription, note generation/persistence, billing/webhook advisory flow, worker/backlog, and dependency health as applicable.
+2. Run synthetic end-to-end validation for verified identity, valid practice membership/role, owner authority where applicable, current agreements/BAA, active subscription/entitlement, tenant isolation, feature-specific consent, rollout state, upload, transcription, note generation/persistence, billing/webhook advisory flow, worker/backlog, and dependency health as applicable. Professional credential/licensure status and NPI are not authorization inputs.
 3. Run negative tests for the failed boundary: invalid identity, forbidden DDL, public network, stale key, cross-tenant access, or unsigned webhook.
 4. Confirm alert evaluation, delivery, acknowledgement, and resolution.
 5. For data recovery, use `docs/NONPRODUCTION_BACKUP_RESTORE_REHEARSAL.md` as prior evidence. A production restore requires a separate approved disaster-recovery procedure and authority.
@@ -155,9 +168,9 @@ Closure requires:
 ### Authentication, entitlement, or tenant-boundary signal
 
 1. Use fixed auth/authz event codes and aggregate status classes; do not inspect tokens or user payloads in shared systems.
-2. Bound affected revisions/routes/tenant count. Coordinate with the canonical Core entitlement/onboarding owner rather than creating a parallel contract.
-3. Revoke only the implicated session/credential boundary when possible and preserve unrelated access.
-4. NPI absence/mismatch is not an authentication signal or containment control.
+2. Bound affected revisions/routes/tenant count. Check verified identity, valid practice membership/role, owner authority where applicable, current agreements/BAA, active subscription/entitlement, tenant isolation, feature-specific consent, and rollout state. Coordinate with the canonical Core entitlement/onboarding owner rather than creating a parallel contract.
+3. Revoke only the implicated authentication session/token or workload secret when possible and preserve unrelated access. “Credential” here never means professional credential/licensure status.
+4. Professional credential/licensure status and NPI are authorization-neutral; their absence or mismatch is not an authentication signal or containment control.
 
 ### Billing/webhook or CAB advisory failure
 
@@ -169,7 +182,7 @@ Closure requires:
 
 1. Use aggregate event codes, queue age/depth, task failure/retry, dependency health, and capacity.
 2. Do not place upload names, transcript/note content, prompts, or third-party payloads in alerts/tickets.
-3. Pause the smallest consumer stage if continued processing risks corruption or disclosure. Preserve idempotent work for replay.
+3. Pause the smallest consumer stage if continued processing risks corruption or disclosure. Preserve only PHI-free idempotency receipts and replay metadata after raw content reaches successful transcript/integrity validation or its six-hour retry ceiling.
 4. Validate recovery with synthetic objects and notes only.
 
 ### Backup or restore failure
@@ -208,4 +221,4 @@ Rollback invoked/completed:
 
 Before public-PHI activation, run a synthetic tabletop plus one technical drill. At minimum exercise: production-vs-staging identity verification, PHI-free triage, a reversible containment proposal, alert delivery/acknowledgement/escalation, Core entitlement coordination, recovery validation, support/customer handoff, and evidence handling. No live production change is required or authorized for the rehearsal.
 
-This runbook remains `DRAFT` until owners, severity targets, coverage hours, communication paths, break-glass authority, and rehearsal evidence are approved.
+This runbook remains `DRAFT` until independent secondary owners, severity and response targets, coverage hours, protected communication paths, break-glass authority, and rehearsal evidence are approved. The primary role/name designation alone does not close those gates.
