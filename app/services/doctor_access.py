@@ -91,9 +91,7 @@ def resolve_doctor_access(
     baa_in_force = bool(practice and practice.baa_in_force(at=at))
     pilot_grant = active_pilot_access_grant(doctor, at=at)
     pilot_entitlement_in_force = bool(
-        practice
-        and pilot_grant
-        and pilot_grant.practice_id_snapshot == practice.id
+        practice and pilot_grant and pilot_grant.practice_id_snapshot == practice.id
     )
     entitlement_in_force = bool(
         practice and (practice.entitled(at=at) or pilot_entitlement_in_force)
