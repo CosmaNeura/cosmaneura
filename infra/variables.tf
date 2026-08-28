@@ -8,6 +8,35 @@ variable "tags" {
   }
 }
 
+variable "enable_public_phi_observability" {
+  description = "Create PHI-free public-pilot metrics, alerts, diagnostics, and routing after staging approval."
+  type        = bool
+  default     = false
+}
+
+variable "public_phi_alert_email" {
+  description = "Approved role mailbox for public-PHI alerts; required only when observability is enabled."
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.public_phi_alert_email == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.public_phi_alert_email))
+    error_message = "public_phi_alert_email must be empty or a valid role mailbox"
+  }
+}
+
+variable "public_phi_support_owner" {
+  description = "Approved non-personal support-owner role slug; required only when observability is enabled."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.public_phi_support_owner == "" || can(regex("^[a-z0-9][a-z0-9-]{2,62}$", var.public_phi_support_owner))
+    error_message = "public_phi_support_owner must be empty or a 3-63 character lowercase role slug"
+  }
+}
+
 variable "onepassword_tags" {
   description = "A map of tags to add to all opentofu-generated 1p items"
   type        = list(string)

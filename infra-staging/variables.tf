@@ -8,6 +8,35 @@ variable "tags" {
   }
 }
 
+variable "enable_public_phi_observability" {
+  description = "Create PHI-free public-pilot metrics, alerts, diagnostics, and routing after staging approval."
+  type        = bool
+  default     = false
+}
+
+variable "public_phi_alert_email" {
+  description = "Approved role mailbox for public-PHI alerts; required only when observability is enabled."
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = var.public_phi_alert_email == "" || can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.public_phi_alert_email))
+    error_message = "public_phi_alert_email must be empty or a valid role mailbox"
+  }
+}
+
+variable "public_phi_support_owner" {
+  description = "Approved non-personal support-owner role slug; required only when observability is enabled."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.public_phi_support_owner == "" || can(regex("^[a-z0-9][a-z0-9-]{2,62}$", var.public_phi_support_owner))
+    error_message = "public_phi_support_owner must be empty or a 3-63 character lowercase role slug"
+  }
+}
+
 variable "onepassword_tags" {
   description = "A map of tags to add to all opentofu-generated 1p items"
   type        = list(string)
@@ -15,6 +44,19 @@ variable "onepassword_tags" {
   default = [
     "terraform-managed"
   ]
+}
+
+variable "staging_container_apps_egress_ipv4" {
+  description = "Operator-supplied outbound IPv4 address of the staging Container Apps; required for each plan and checked against refreshed scheduler state."
+  type        = string
+
+  validation {
+    condition = (
+      can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}$", var.staging_container_apps_egress_ipv4)) &&
+      can(cidrhost("${var.staging_container_apps_egress_ipv4}/32", 0))
+    )
+    error_message = "staging_container_apps_egress_ipv4 must be a valid IPv4 address"
+  }
 }
 
 # variables which should be exposed publicly in the azure ui
