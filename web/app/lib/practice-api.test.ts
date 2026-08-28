@@ -51,6 +51,13 @@ describe("practiceReady", () => {
 })
 
 describe("billingCheckoutPaths", () => {
+  it("returns public onboarding through one fixed PHI-free path", () => {
+    expect(billingCheckoutPaths("/onboarding")).toEqual({
+      successPath: "/settings?billing=success&returnTo=%2Fonboarding",
+      cancelPath: "/settings?billing=cancelled&returnTo=%2Fonboarding",
+    })
+  })
+
   it("uses fixed PHI-free success and cancellation paths", () => {
     expect(billingCheckoutPaths("/schedule?view=week#today")).toEqual({
       successPath: "/settings?billing=success",

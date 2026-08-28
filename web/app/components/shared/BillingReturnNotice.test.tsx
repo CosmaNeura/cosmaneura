@@ -158,6 +158,30 @@ describe("BillingReturnNotice", () => {
     expect(screen.getByText(/subscription confirmed/i)).toBeInTheDocument()
   })
 
+  it("does not confirm a manageable but non-entitled Stripe projection", async () => {
+    vi.useFakeTimers()
+    const malformedProjection = practice({
+      entitled: false,
+      subscription_status: "active",
+      billing_subscription_manageable: true,
+    })
+    vi.mocked(getPractice).mockResolvedValue(malformedProjection)
+
+    const onPracticeChange = renderNotice(
+      "/settings?billing=success",
+      malformedProjection,
+    )
+
+    expect(
+      screen.getByText(/confirming your subscription/i),
+    ).toBeInTheDocument()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_500)
+    })
+    expect(screen.queryByText(/subscription confirmed/i)).toBeNull()
+    expect(onPracticeChange).not.toHaveBeenCalled()
+  })
+
   it("does not invite a duplicate payment when confirmation is delayed", async () => {
     vi.useFakeTimers()
     vi.mocked(getPractice).mockResolvedValue(practice())

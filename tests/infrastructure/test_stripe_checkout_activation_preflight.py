@@ -21,7 +21,7 @@ PORTAL_CONFIGURATION_ID = "bpc_cosmaneura_paid_pilot"
 WEBHOOK_URL = "https://app.example.test/external/v1/webhooks/stripe"
 WEBHOOK_ID = "we_sensitive_endpoint_identifier"
 SOURCE_SHA = "a" * 40
-RECEIVER_SHA = "c" * 40
+RECEIVER_SHA = "685e2cb84a63b02faf078a4aa9b06e4f581572bd"
 EVIDENCE_SHA256 = "b" * 64
 EXPECTED_WEBHOOK_EVENTS = [
     "checkout.session.completed",
@@ -39,6 +39,25 @@ def test_baa_v22_bytes_match_activation_pin() -> None:
     actual_sha256 = hashlib.sha256(baa_path.read_bytes()).hexdigest()
 
     assert actual_sha256 == preflight.BAA_SHA256
+
+
+def test_entitlement_contract_and_receiver_match_activation_pins() -> None:
+    preflight = _load_preflight()
+    contract_path = (
+        ROOT
+        / "contracts"
+        / "public-entitlements"
+        / "v2"
+        / "capability-entitlement.schema.json"
+    )
+
+    assert preflight.ENTITLEMENT_CONTRACT_VERSION == (
+        "public-capability-entitlements.v2"
+    )
+    assert hashlib.sha256(contract_path.read_bytes()).hexdigest() == (
+        preflight.ENTITLEMENT_SCHEMA_SHA256
+    )
+    assert preflight.ACCEPTED_NPI_FREE_CORE_RECEIVER_SHA == RECEIVER_SHA
 
 
 def _load_preflight() -> ModuleType:
@@ -380,9 +399,9 @@ def test_preflight_fully_paginates_and_classifies_without_exposing_ids() -> None
     assert evidence["entitlement_contract"] == {
         "policy_revision": "2026-08-27",
         "schema_sha256": (
-            "a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578"
+            "a51843ed0810a2b43fd16cf6e66eb2830717c8381aa7fea3f8d05b9e55cb1bad"
         ),
-        "version": "public-capability-entitlements.v1",
+        "version": "public-capability-entitlements.v2",
     }
     assert evidence["retired_price_ids"] == ("price_legacy_website",)
     assert evidence["price_inventory_pages_scanned"] == 2
@@ -643,6 +662,10 @@ def test_apply_cannot_expire_sessions_before_full_drain() -> None:
         ),
         (
             {"npi_free_core_receiver_sha": "not-a-full-sha"},
+            "npi_free_core_receiver_evidenced",
+        ),
+        (
+            {"npi_free_core_receiver_sha": "c" * 40},
             "npi_free_core_receiver_evidenced",
         ),
         (

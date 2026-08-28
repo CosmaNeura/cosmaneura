@@ -495,6 +495,8 @@ def test_owner_baa_then_complete(bare_authenticated_client: TestClient):
     practice.stripe_customer_id = "cus_test_public_onboarding_complete"
     practice.stripe_state_version = 1
     practice.subscription_status = "trialing"
+    practice.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=14)
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
     practice.save()
     done = bare_authenticated_client.post(api_app.url_path_for("complete_onboarding"))
     assert done.status_code == status.HTTP_200_OK
@@ -607,6 +609,20 @@ def test_baa_acceptance_writes_append_only_record(
     # idempotent per (practice, version): re-accepting is a no-op
     _accept_baa(bare_authenticated_client)
     assert acceptance_count() == 1
+
+
+def test_public_baa_acceptance_does_not_start_checkout_trial(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    assert practice.public_onboarding_required is True
+
+    body = _accept_baa(bare_authenticated_client)
+
+    assert body["trial_ends_at"] is None
+    assert body["entitled"] is False
 
 
 def test_baa_acceptance_retry_repairs_legal_gate_without_starting_trial(
@@ -1002,7 +1018,7 @@ def test_practice_gate_blocks_doctor_without_practice_even_if_onboarded(
     assert resp.status_code == status.HTTP_403_FORBIDDEN
 
 
-def test_baa_acceptance_does_not_start_trial_or_open_billing_gate(
+def test_managed_legacy_baa_acceptance_starts_trial_and_opens_the_gate(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -1019,15 +1035,19 @@ def test_baa_acceptance_does_not_start_trial_or_open_billing_gate(
     assert blocked.status_code == status.HTTP_403_FORBIDDEN
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["entitled"] is False
+    assert body["entitled"] is True
     assert body["billing_exempt"] is False
-    assert body["trial_ends_at"] is None
+    assert body["trial_ends_at"] is not None
 
-    still_closed = bare_authenticated_client.get(api_app.url_path_for("note_list"))
-    assert still_closed.status_code == status.HTTP_402_PAYMENT_REQUIRED
+    trial_ends_at = datetime.fromisoformat(body["trial_ends_at"])
+    trial_left = trial_ends_at - datetime.now(timezone.utc)
+    assert timedelta(days=13) < trial_left <= timedelta(days=14)
+
+    opened = bare_authenticated_client.get(api_app.url_path_for("note_list"))
+    assert opened.status_code == status.HTTP_200_OK
 
 
-def test_expired_timed_comp_does_not_make_baa_acceptance_entitling(
+def test_expired_timed_comp_does_not_suppress_managed_legacy_trial_at_baa_acceptance(
     bare_authenticated_client: TestClient,
 ):
     doctor = _authed_doctor()
@@ -1039,8 +1059,8 @@ def test_expired_timed_comp_does_not_make_baa_acceptance_entitling(
     practice.save()
 
     body = _accept_baa(bare_authenticated_client)
-    assert body["trial_ends_at"] is None
-    assert body["entitled"] is False
+    assert body["trial_ends_at"] is not None
+    assert body["entitled"] is True
 
 
 def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
@@ -1071,8 +1091,10 @@ def test_expired_trial_closes_the_gate_and_exemption_reopens_it(
     assert ended.status_code == status.HTTP_402_PAYMENT_REQUIRED
 
     # a bound active subscription (mirrored from Stripe) is the third source
+    practice.stripe_customer_id = "cus_route_gate_test"
     practice.stripe_subscription_id = "sub_route_gate_test"
     practice.subscription_status = "active"
+    practice.stripe_state_version = 1
     practice.save()
     subscribed = bare_authenticated_client.get(api_app.url_path_for("note_list"))
     assert subscribed.status_code == status.HTTP_200_OK
@@ -1091,9 +1113,16 @@ def test_unbound_entitled_subscription_status_fails_closed(
     practice.trial_ends_at = datetime.now(timezone.utc) + timedelta(days=14)
     practice.save()
 
+    practice_status = bare_authenticated_client.get(
+        api_app.url_path_for("practice_status")
+    )
     response = bare_authenticated_client.get(api_app.url_path_for("note_list"))
 
-    assert response.status_code == status.HTTP_402_PAYMENT_REQUIRED
+    assert practice_status.status_code == status.HTTP_200_OK
+    assert practice_status.json()["entitled"] is False
+    # Credential review is intentionally earlier than billing in the real-PHI
+    # gate. Either way, the malformed/unbound billing projection cannot open it.
+    assert response.status_code == status.HTTP_403_FORBIDDEN
 
 
 def test_negotiated_baa_on_file_satisfies_the_gate(

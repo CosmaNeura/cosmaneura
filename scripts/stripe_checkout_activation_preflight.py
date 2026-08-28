@@ -62,11 +62,12 @@ STRIPE_API = "https://api.stripe.com/v1"
 STRIPE_API_VERSION = "2025-09-30.clover"
 CURRENT_PAYMENT_METHOD_COLLECTION = "always"
 ACTIVATION_POLICY_VERSION = "paid-pilot-v3"
-ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v1"
+ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v2"
 ENTITLEMENT_POLICY_REVISION = "2026-08-27"
 ENTITLEMENT_SCHEMA_SHA256 = (
-    "a33ba095ea284575fc8004ecc7b2e05b6aa60c911f5c03add3a0ea1f7ef9e578"
+    "a51843ed0810a2b43fd16cf6e66eb2830717c8381aa7fea3f8d05b9e55cb1bad"
 )
+ACCEPTED_NPI_FREE_CORE_RECEIVER_SHA = "685e2cb84a63b02faf078a4aa9b06e4f581572bd"
 BAA_DOCUMENT_ID = "CN-BAA-CUST-CW"
 BAA_VERSION = "2.2"
 BAA_SHA256 = "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
@@ -998,6 +999,10 @@ def _evidence(
     npi_free_core_receiver_evidenced = bool(
         npi_free_core_receiver_confirmed
         and GIT_SHA.fullmatch(npi_free_core_receiver_sha)
+        and hmac.compare_digest(
+            npi_free_core_receiver_sha,
+            ACCEPTED_NPI_FREE_CORE_RECEIVER_SHA,
+        )
     )
     counsel_baa_scope_reconciliation_evidenced = bool(
         counsel_baa_scope_reconciliation_confirmed

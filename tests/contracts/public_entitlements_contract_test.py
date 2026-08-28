@@ -11,6 +11,15 @@ from app.routes.public_onboarding import CapabilityEntitlementResponse
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACT_DIR = ROOT / "contracts" / "public-entitlements" / "v1"
 V2_CONTRACT_DIR = ROOT / "contracts" / "public-entitlements" / "v2"
+CAPABILITY_OPENAPI_SCHEMAS = (
+    "CapabilityEntitlementResponse",
+    "CapabilityActorResponse",
+    "CapabilityGatesResponse",
+    "CapabilitySeatsResponse",
+    "CapabilityMapResponse",
+    "CapabilityDecisionResponse",
+    "CabCapabilityDecisionResponse",
+)
 
 
 def _property_names(value: object) -> set[str]:
@@ -111,6 +120,32 @@ def test_v2_schema_pins_disabled_and_cab_semantics() -> None:
     assert "npi" not in _property_names(schema)
 
     CapabilityEntitlementResponse.model_validate(fixture)
+
+
+def test_v2_schema_remains_byte_pinned() -> None:
+    content = (V2_CONTRACT_DIR / "capability-entitlement.schema.json").read_bytes()
+
+    assert hashlib.sha256(content).hexdigest() == (
+        "a51843ed0810a2b43fd16cf6e66eb2830717c8381aa7fea3f8d05b9e55cb1bad"
+    )
+
+
+def test_capability_openapi_projection_remains_receiver_compatible() -> None:
+    specification = json.loads((ROOT / "web" / "openapi.json").read_text())
+    projection = {
+        "path": specification["paths"]["/internal/v1/capabilities"],
+        "schemas": {
+            name: specification["components"]["schemas"][name]
+            for name in CAPABILITY_OPENAPI_SCHEMAS
+        },
+    }
+    canonical = (
+        json.dumps(projection, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+
+    assert hashlib.sha256(canonical).hexdigest() == (
+        "62babdb18afcc3bb9d902d9afb652fd9f6aa20bf35973a1959c52451b7cf9636"
+    )
 
 
 @pytest.mark.parametrize(

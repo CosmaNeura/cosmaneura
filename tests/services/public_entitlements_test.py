@@ -116,17 +116,42 @@ def test_public_subscription_gate_fails_closed_during_billing_incidents() -> Non
     assert not public_subscription_in_force(practice, at=now)
 
     practice.trial_ends_at = now + timedelta(days=14)
-    assert not public_subscription_in_force(practice, at=now)
-
-    practice.stripe_subscription_id = "sub_test_receiver_contract"
     assert public_subscription_in_force(practice, at=now)
+
+
+def test_managed_entitlement_requires_a_live_trial_and_respects_explicit_state() -> (
+    None
+):
+    practice = _practice()
+    now = datetime(2026, 8, 27, 12, 0, tzinfo=timezone.utc)
+
+    practice.subscription_status = "trialing"
+    practice.trial_ends_at = None
+    assert not practice.entitled(at=now)
+
+    practice.trial_ends_at = now - timedelta(seconds=1)
+    assert not practice.entitled(at=now)
+
+    practice.trial_ends_at = now + timedelta(days=14)
+    assert practice.entitled(at=now)
+
+    for non_entitled_state in (
+        "canceled",
+        "past_due",
+        "unpaid",
+        "paused",
+        "invalid",
+        "future_state",
+    ):
+        practice.subscription_status = non_entitled_state
+        assert not practice.entitled(at=now)
+
+    practice.subscription_status = None
+    assert practice.entitled(at=now)
 
     practice.subscription_status = "active"
-    practice.stripe_subscription_id = None
-    assert not public_subscription_in_force(practice, at=now)
-
-    practice.stripe_subscription_id = "sub_test_receiver_contract"
-    assert public_subscription_in_force(practice, at=now)
+    practice.trial_ends_at = None
+    assert practice.entitled(at=now)
 
 
 def test_reactivation_is_idempotent_but_rejects_twenty_first_seat() -> None:

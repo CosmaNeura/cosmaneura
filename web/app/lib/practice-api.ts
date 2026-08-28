@@ -425,11 +425,13 @@ export function getBaaAcceptances() {
 // They stay reachable after the trial lapses (the 402 gate exempts them).
 export function billingCheckoutPaths(returnTo?: string | null) {
   // Never send the current application URL, record ids, search terms, or
-  // fragments to Stripe. The settings page owns any post-billing navigation.
-  void returnTo
+  // fragments to Stripe. Public onboarding is the sole fixed, PHI-free return
+  // destination; the settings page owns every other post-billing navigation.
+  const onboardingReturn = safeBillingReturnTo(returnTo) === "/onboarding"
+  const suffix = onboardingReturn ? "&returnTo=%2Fonboarding" : ""
   return {
-    successPath: "/settings?billing=success",
-    cancelPath: "/settings?billing=cancelled",
+    successPath: `/settings?billing=success${suffix}`,
+    cancelPath: `/settings?billing=cancelled${suffix}`,
   }
 }
 

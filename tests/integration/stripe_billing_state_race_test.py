@@ -57,6 +57,9 @@ def test_cancel_commits_while_older_active_refresh_is_in_flight(
         origin_channel="direct",
         stripe_customer_id="cus_race",
         stripe_subscription_id="sub_race",
+        stripe_subscription_entitlement_contract=(
+            stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+        ),
         subscription_status="active",
     )
     subscription = {
@@ -171,6 +174,9 @@ def test_stale_invalid_contract_cannot_revoke_newer_valid_state(
         origin_channel="direct",
         stripe_customer_id="cus_contract_race",
         stripe_subscription_id="sub_contract_race",
+        stripe_subscription_entitlement_contract=(
+            stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+        ),
         subscription_status="active",
     )
     subscription = {
@@ -298,7 +304,9 @@ def test_checkout_retires_remote_session_when_billing_state_changes_in_flight(
             "checkout_policy": stripe_billing.CHECKOUT_IDEMPOTENCY_POLICY_VERSION,
             "checkout_attempt": "0",
             "practice_id": str(practice.id),
-            "entitlement_contract": "public-capability-entitlements.v1",
+            "entitlement_contract": (
+                stripe_billing.PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+            ),
             "trial_clock": stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY,
             "trial_days": "14",
         },
@@ -417,7 +425,9 @@ def test_concurrent_checkout_callers_share_one_open_session(
             "checkout_policy": stripe_billing.CHECKOUT_IDEMPOTENCY_POLICY_VERSION,
             "checkout_attempt": "0",
             "practice_id": str(practice.id),
-            "entitlement_contract": "public-capability-entitlements.v1",
+            "entitlement_contract": (
+                stripe_billing.PUBLIC_ENTITLEMENT_CONTRACT_VERSION
+            ),
             "trial_clock": stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY,
             "trial_days": "14",
         },

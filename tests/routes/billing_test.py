@@ -257,6 +257,9 @@ def test_acquisition_kill_switch_keeps_existing_portal_and_webhooks_alive(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = subscription["metadata"][
+        "entitlement_contract"
+    ]
     practice.subscription_status = "past_due"
     practice.stripe_state_version = 1
     practice.save()
@@ -359,6 +362,36 @@ def test_expired_comp_is_reported_inactive_and_can_reactivate(
 
 
 @pytest.mark.usefixtures("stripe_configured")
+def test_checkout_accepts_only_the_fixed_public_onboarding_return(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    _lapse(practice)
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={
+            "success_path": "/settings?billing=success&returnTo=%2Fonboarding",
+            "cancel_path": "/settings?billing=cancelled&returnTo=%2Fonboarding",
+        },
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_200_OK, response.text
+    checkout_call = next(
+        call for call in route_stripe.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    assert checkout_call[2]["success_url"] == (
+        f"{VALID_ORIGIN}/settings?billing=success&returnTo=%2Fonboarding"
+    )
+    assert checkout_call[2]["cancel_url"] == (
+        f"{VALID_ORIGIN}/settings?billing=cancelled&returnTo=%2Fonboarding"
+    )
+
+
+@pytest.mark.usefixtures("stripe_configured")
 def test_active_standalone_billing_exemption_blocks_checkout_before_stripe_io(
     authenticated_client: TestClient,
     route_stripe: RouteStripe,
@@ -390,9 +423,15 @@ def test_legacy_incomplete_checkout_returns_retryable_conflict_then_recovers(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = subscription["metadata"][
+        "entitlement_contract"
+    ]
     practice.subscription_status = "incomplete"
     practice.stripe_state_version = 1
     practice.stripe_checkout_session_id = "cs_route_legacy_incomplete"
+    practice.stripe_checkout_entitlement_contract = subscription["metadata"][
+        "entitlement_contract"
+    ]
     practice.stripe_checkout_session_url = (
         "https://checkout.stripe.com/c/pay/route-legacy-incomplete"
     )
@@ -680,6 +719,9 @@ def test_terminal_retired_price_can_start_replacement_checkout(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = (
+        stripe_billing.LEGACY_UNVERSIONED_STRIPE_CONTRACT
+    )
     practice.subscription_status = "canceled"
     practice.stripe_state_version = 1
     practice.save()
@@ -709,9 +751,15 @@ def test_stale_terminal_projection_cannot_resume_checkout_over_remote_active(
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_customer_id = subscription["customer"]
     practice.stripe_subscription_id = subscription["id"]
+    practice.stripe_subscription_entitlement_contract = subscription["metadata"][
+        "entitlement_contract"
+    ]
     practice.subscription_status = "canceled"
     practice.stripe_state_version = 1
     practice.stripe_checkout_session_id = "cs_must_not_resume_over_remote_active"
+    practice.stripe_checkout_entitlement_contract = subscription["metadata"][
+        "entitlement_contract"
+    ]
     practice.stripe_checkout_session_url = (
         "https://checkout.stripe.com/c/pay/must-not-resume"
     )
@@ -828,6 +876,7 @@ def test_checkout_rejects_status_only_core_projection_as_local_conflict(
     ("field", "value"),
     [
         ("success_path", "/settings?billing=success&patient=private"),
+        ("success_path", "/settings?billing=success&returnTo=%2Fnotes"),
         ("cancel_path", "/settings#private"),
         ("success_path", "/\\evil.example/private"),
     ],
@@ -1031,6 +1080,9 @@ def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
     subscription["trial_end"] = trial_start + int(timedelta(days=14).total_seconds())
     route_stripe.subscriptions[subscription["id"]] = subscription
     practice.stripe_checkout_session_id = "cs_route_webhook"
+    practice.stripe_checkout_entitlement_contract = subscription["metadata"][
+        "entitlement_contract"
+    ]
     practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
     practice.save()
     event_id = f"evt_{secrets.token_hex(8)}"
