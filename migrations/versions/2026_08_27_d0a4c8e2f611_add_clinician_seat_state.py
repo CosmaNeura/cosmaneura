@@ -17,6 +17,26 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _refuse_inactive_membership_downgrade() -> None:
+    """Never erase a durable inactive-seat decision."""
+
+    if op.get_context().as_sql:
+        raise RuntimeError("clinician seat-state downgrade is unsupported offline")
+    connection = op.get_bind()
+    connection.execute(sa.text("LOCK TABLE practice_member IN ACCESS EXCLUSIVE MODE"))
+    inactive_count = connection.execute(
+        sa.text(
+            "SELECT count(*) FROM practice_member "
+            "WHERE seat_state IS DISTINCT FROM 'active'"
+        )
+    ).scalar_one()
+    if inactive_count:
+        raise RuntimeError(
+            "refusing to discard clinician seat state: "
+            f"inactive_memberships={inactive_count}"
+        )
+
+
 def upgrade() -> None:
     op.add_column(
         "practice_member",
@@ -45,6 +65,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    _refuse_inactive_membership_downgrade()
     op.drop_index(
         "practice_member_practice_seat_state_idx",
         table_name="practice_member",

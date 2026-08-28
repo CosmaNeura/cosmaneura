@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://cosmaneura.com/contracts/public-entitlements/v1/capability-entitlement.schema.json",
   "title": "CosmaNeura public capability entitlement",
-  "description": "Server-authoritative, PHI-free access decision for one authenticated actor in one practice.",
+  "description": "Server-authoritative, PHI-free preflight decision for one authenticated actor in one practice. Professional credential and NPI data are outside this authorization contract.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,16 +15,9 @@
     "capabilities"
   ],
   "properties": {
-    "contract_version": {
-      "const": "public-capability-entitlements.v1"
-    },
-    "policy_revision": {
-      "const": "2026-08-27"
-    },
-    "generated_at": {
-      "type": "string",
-      "format": "date-time"
-    },
+    "contract_version": { "const": "public-capability-entitlements.v1" },
+    "policy_revision": { "const": "2026-08-28" },
+    "generated_at": { "type": "string", "format": "date-time" },
     "actor": {
       "type": "object",
       "additionalProperties": false,
@@ -40,16 +33,17 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "email_verified",
+        "identity_verified",
+        "membership_authorized",
         "baa_accepted",
         "terms_accepted",
         "privacy_accepted",
         "subscription_state",
-        "credential_required",
-        "credential_state"
+        "tenant_isolation_verified"
       ],
       "properties": {
-        "email_verified": { "type": "boolean" },
+        "identity_verified": { "type": "boolean" },
+        "membership_authorized": { "type": "boolean" },
         "baa_accepted": { "type": "boolean" },
         "terms_accepted": { "type": "boolean" },
         "privacy_accepted": { "type": "boolean" },
@@ -68,10 +62,7 @@
             "canceled"
           ]
         },
-        "credential_required": { "type": "boolean" },
-        "credential_state": {
-          "enum": ["pending", "approved", "rejected", "needs_review"]
-        }
+        "tenant_isolation_verified": { "type": "boolean" }
       }
     },
     "seats": {
@@ -99,19 +90,60 @@
       "additionalProperties": false,
       "required": ["soap_note", "intake_prep", "session_prep", "scribe", "cab"],
       "properties": {
-        "soap_note": { "$ref": "#/$defs/capabilityDecision" },
-        "intake_prep": { "$ref": "#/$defs/capabilityDecision" },
-        "session_prep": { "$ref": "#/$defs/capabilityDecision" },
-        "scribe": { "$ref": "#/$defs/capabilityDecision" },
-        "cab": { "$ref": "#/$defs/capabilityDecision" }
+        "soap_note": { "$ref": "#/$defs/standardCapabilityDecision" },
+        "intake_prep": { "$ref": "#/$defs/intakePrepCapabilityDecision" },
+        "session_prep": { "$ref": "#/$defs/readOnlyCapabilityDecision" },
+        "scribe": { "$ref": "#/$defs/webPwaFirstCapabilityDecision" },
+        "cab": { "$ref": "#/$defs/advisoryOnlyCapabilityDecision" }
       }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "capabilities": {
+            "anyOf": [
+              { "properties": { "soap_note": { "properties": { "decision": { "const": "allowed" } }, "required": ["decision"] } } },
+              { "properties": { "intake_prep": { "properties": { "decision": { "const": "allowed" } }, "required": ["decision"] } } },
+              { "properties": { "session_prep": { "properties": { "decision": { "const": "allowed" } }, "required": ["decision"] } } },
+              { "properties": { "scribe": { "properties": { "decision": { "const": "allowed" } }, "required": ["decision"] } } },
+              { "properties": { "cab": { "properties": { "decision": { "const": "allowed" } }, "required": ["decision"] } } }
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "actor": {
+            "properties": { "membership_state": { "const": "active" } }
+          },
+          "gates": {
+            "properties": {
+              "identity_verified": { "const": true },
+              "membership_authorized": { "const": true },
+              "baa_accepted": { "const": true },
+              "terms_accepted": { "const": true },
+              "privacy_accepted": { "const": true },
+              "subscription_state": { "enum": ["trialing", "active"] },
+              "tenant_isolation_verified": { "const": true }
+            }
+          }
+        }
+      }
+    }
+  ],
   "$defs": {
     "capabilityDecision": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["decision", "data_mode", "rollout", "operation_mode", "reason_codes"],
+      "required": [
+        "decision",
+        "data_mode",
+        "rollout",
+        "operation_mode",
+        "consent_requirement",
+        "reason_codes"
+      ],
       "properties": {
         "decision": { "enum": ["allowed", "denied"] },
         "data_mode": { "enum": ["none", "synthetic_only", "real_phi"] },
@@ -119,27 +151,137 @@
         "operation_mode": {
           "enum": ["standard", "read_only", "web_pwa_first", "advisory_only"]
         },
+        "consent_requirement": { "enum": ["none", "execution_context"] },
         "reason_codes": {
           "type": "array",
+          "minItems": 1,
           "uniqueItems": true,
           "items": {
             "enum": [
               "allowed",
-              "email_unverified",
+              "identity_unverified",
               "membership_inactive",
               "membership_revoked",
+              "membership_unauthorized",
+              "owner_authority_required",
               "legal_incomplete",
               "subscription_inactive",
-              "credential_pending",
-              "credential_needs_review",
-              "credential_rejected",
+              "tenant_isolation_failed",
+              "consent_required",
               "cohort_ineligible",
               "rollout_disabled",
               "policy_unavailable"
             ]
           }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "decision": { "const": "allowed" } },
+            "required": ["decision"]
+          },
+          "then": {
+            "properties": {
+              "data_mode": { "const": "real_phi" },
+              "rollout": { "enum": ["cohort", "enabled"] },
+              "reason_codes": {
+                "minItems": 1,
+                "maxItems": 1,
+                "contains": { "const": "allowed" }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "decision": { "const": "denied" } },
+            "required": ["decision"]
+          },
+          "then": {
+            "properties": {
+              "data_mode": { "enum": ["none", "synthetic_only"] },
+              "reason_codes": { "not": { "contains": { "const": "allowed" } } }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "rollout": { "const": "disabled" } },
+            "required": ["rollout"]
+          },
+          "then": {
+            "properties": {
+              "decision": { "const": "denied" },
+              "data_mode": { "const": "none" },
+              "reason_codes": {
+                "contains": { "const": "rollout_disabled" },
+                "not": { "contains": { "const": "allowed" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "standardCapabilityDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityDecision" },
+        { "type": "object", "properties": { "operation_mode": { "const": "standard" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "intakePrepCapabilityDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityDecision" },
+        {
+          "type": "object",
+          "required": ["question_set"],
+          "properties": {
+            "operation_mode": { "const": "standard" },
+            "question_set": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "question_count", "modifiable_by"],
+              "properties": {
+                "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "question_count": { "const": 5 },
+                "modifiable_by": { "const": "authorized_practice_users" }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "readOnlyCapabilityDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityDecision" },
+        { "type": "object", "properties": { "operation_mode": { "const": "read_only" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "webPwaFirstCapabilityDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityDecision" },
+        { "type": "object", "properties": { "operation_mode": { "const": "web_pwa_first" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "advisoryOnlyCapabilityDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/capabilityDecision" },
+        {
+          "type": "object",
+          "required": ["ehr_write", "claim_submission", "clearinghouse_submission"],
+          "properties": {
+            "operation_mode": { "const": "advisory_only" },
+            "ehr_write": { "const": false },
+            "claim_submission": { "const": false },
+            "clearinghouse_submission": { "const": false }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
     }
   }
 }

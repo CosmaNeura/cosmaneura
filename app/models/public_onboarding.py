@@ -1,10 +1,9 @@
 """Durable, non-PHI evidence for public practice onboarding.
 
-Legal acceptances and credential review events are append-only. Invitations
-persist only a SHA-256 digest of bearer material; the normalized invitee email
-is retained so an authorized practice owner can safely identify and revoke an
-invitation after a reload. Their database guard permits exactly one accepted
-or revoked transition.
+Legal acceptances are append-only. Invitations persist only a SHA-256 digest
+of bearer material; the normalized invitee email is retained so an authorized
+practice owner can safely identify and revoke an invitation after a reload.
+Their database guard permits exactly one accepted or revoked transition.
 """
 
 from datetime import datetime
@@ -17,7 +16,7 @@ from activemodel.types import TypeIDType
 from sqlmodel import Column, Field
 
 from .doctor import Doctor
-from .practice import CredentialState, Practice, PracticeMember
+from .practice import Practice
 
 
 class LegalDocumentKind(str, Enum):
@@ -81,66 +80,6 @@ class PublicLegalAcceptance(
     accepted_at_utc: datetime = Field(
         sa_type=sa.DateTime(timezone=True),  # type: ignore
     )
-
-
-class CredentialReviewAudit(
-    BaseModel,
-    TimestampsMixin,
-    TypeIDMixin("credential_review_audit"),
-    table=True,
-):
-    """Append-only evidence for one independent credential-state transition."""
-
-    __table_args__ = (
-        sa.CheckConstraint(
-            "from_state IN ('pending', 'approved', 'rejected', 'needs_review')",
-            name="ck_credential_review_audit_from_state",
-        ),
-        sa.CheckConstraint(
-            "to_state IN ('approved', 'rejected', 'needs_review')",
-            name="ck_credential_review_audit_to_state",
-        ),
-        sa.CheckConstraint(
-            "from_state <> to_state",
-            name="ck_credential_review_audit_state_changed",
-        ),
-        sa.CheckConstraint(
-            "evidence_sha256 ~ '^[0-9a-f]{64}$'",
-            name="ck_credential_review_audit_evidence_sha256",
-        ),
-        sa.CheckConstraint(
-            "event_digest ~ '^[0-9a-f]{64}$'",
-            name="ck_credential_review_audit_event_digest",
-        ),
-        sa.CheckConstraint(
-            "char_length(btrim(reviewer_ref)) > 0 "
-            "AND char_length(btrim(verification_method)) > 0 "
-            "AND char_length(btrim(reason_code)) > 0",
-            name="ck_credential_review_audit_review_evidence",
-        ),
-        sa.Index(
-            "credential_review_audit_member_time_idx",
-            "practice_member_id",
-            "reviewed_at",
-        ),
-    )
-
-    practice_member_id: TypeIDType = PracticeMember.foreign_key()
-    from_state: str = Field(max_length=16)
-    to_state: str = Field(max_length=16)
-    reviewer_ref: str = Field(max_length=255)
-    reviewer_doctor_id: TypeIDType | None = Field(
-        default=None,
-        sa_type=TypeIDType("doctor"),  # type: ignore
-        foreign_key="doctor.id",
-    )
-    verification_method: str = Field(max_length=128)
-    evidence_sha256: str = Field(min_length=64, max_length=64)
-    reason_code: str = Field(max_length=128)
-    reviewed_at: datetime = Field(
-        sa_type=sa.DateTime(timezone=True),  # type: ignore
-    )
-    event_digest: str = Field(min_length=64, max_length=64, unique=True)
 
 
 class PracticeInvitation(
@@ -248,8 +187,6 @@ class PracticeInvitation(
 
 
 __all__ = [
-    "CredentialReviewAudit",
-    "CredentialState",
     "LegalDocumentKind",
     "PracticeInvitation",
     "PublicLegalAcceptance",

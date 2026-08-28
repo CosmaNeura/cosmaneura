@@ -30,11 +30,6 @@ class PracticeAccessAction(str, Enum):
     organization_access_revoked = "organization_access_revoked"
     doctor_identity_rebound = "doctor_identity_rebound"
     doctor_account_closed = "doctor_account_closed"
-    public_invitation_issued = "public_invitation_issued"
-    public_invitation_accepted = "public_invitation_accepted"
-    public_invitation_revoked = "public_invitation_revoked"
-    clinician_seat_deactivated = "clinician_seat_deactivated"
-    clinician_seat_reactivated = "clinician_seat_reactivated"
 
 
 class PracticeAccessAudit(

@@ -8,12 +8,16 @@ MIGRATION_PATH = (
     Path(__file__).parents[1]
     / "migrations/versions/2026_08_27_e7a9c3d5f102_add_public_onboarding_evidence.py"
 )
+SEAT_MIGRATION_PATH = (
+    Path(__file__).parents[1]
+    / "migrations/versions/2026_08_27_d0a4c8e2f611_add_clinician_seat_state.py"
+)
 
 
-def _migration_module():
+def _migration_module(path: Path = MIGRATION_PATH):
     spec = importlib.util.spec_from_file_location(
         "public_onboarding_evidence_guard_migration",
-        MIGRATION_PATH,
+        path,
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -64,10 +68,8 @@ def test_public_onboarding_downgrade_fails_closed_offline() -> None:
     "fragment, expected",
     [
         ("FROM public_legal_acceptance", "legal_acceptances=1"),
-        ("FROM credential_review_audit", "credential_reviews=1"),
         ("FROM practice_invitation", "practice_invitations=1"),
         ("FROM practice WHERE", "public_practices=1"),
-        ("FROM practice_member", "credential_decisions=1"),
     ],
 )
 def test_public_onboarding_downgrade_refuses_material_state(
@@ -104,4 +106,55 @@ def test_public_onboarding_downgrade_allows_only_empty_online_schema() -> None:
 
     migration._refuse_populated_downgrade()
     assert connection.statements[0].startswith("LOCK TABLE")
-    assert len(connection.statements) == 6
+    assert len(connection.statements) == 4
+
+
+def test_public_acquisition_fence_is_neutral_and_npi_free() -> None:
+    source = MIGRATION_PATH.read_text()
+
+    assert 'server_default="managed"' in source
+    assert "server_default=None" in source
+    assert "ck_practice_acquisition_source" in source
+    assert "ck_practice_public_self_service_no_npi" in source
+    assert "authorization-neutral" in source
+    assert "credential_state" not in source
+    assert "credential_review" not in source
+
+
+def test_seat_state_downgrade_refuses_offline_and_inactive_state() -> None:
+    migration = _migration_module(SEAT_MIGRATION_PATH)
+    setattr(
+        migration,
+        "op",
+        SimpleNamespace(get_context=lambda: SimpleNamespace(as_sql=True)),
+    )
+    with pytest.raises(RuntimeError, match="unsupported offline"):
+        migration._refuse_inactive_membership_downgrade()
+
+    connection = _Connection("seat_state IS DISTINCT FROM 'active'")
+    setattr(
+        migration,
+        "op",
+        SimpleNamespace(
+            get_context=lambda: SimpleNamespace(as_sql=False),
+            get_bind=lambda: connection,
+        ),
+    )
+    with pytest.raises(RuntimeError, match="inactive_memberships=1"):
+        migration._refuse_inactive_membership_downgrade()
+    assert connection.statements[0].startswith("LOCK TABLE practice_member")
+
+
+def test_seat_state_downgrade_allows_all_active_memberships() -> None:
+    migration = _migration_module(SEAT_MIGRATION_PATH)
+    connection = _Connection()
+    setattr(
+        migration,
+        "op",
+        SimpleNamespace(
+            get_context=lambda: SimpleNamespace(as_sql=False),
+            get_bind=lambda: connection,
+        ),
+    )
+    migration._refuse_inactive_membership_downgrade()
+    assert len(connection.statements) == 2

@@ -2830,18 +2830,6 @@
             "minLength": 3,
             "title": "Legal Name"
           },
-          "npi": {
-            "anyOf": [
-              {
-                "type": "string",
-                "maxLength": 10
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Npi"
-          },
           "city": {
             "anyOf": [
               {

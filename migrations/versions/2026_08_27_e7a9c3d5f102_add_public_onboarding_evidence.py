@@ -1,4 +1,4 @@
-"""Add durable public onboarding and credential evidence.
+"""Add durable public onboarding evidence.
 
 Revision ID: e7a9c3d5f102
 Revises: d0a4c8e2f611
@@ -53,7 +53,7 @@ def _typeid(name: str, prefix: str, *, nullable: bool = False) -> sa.Column:
 
 
 def _refuse_populated_downgrade() -> None:
-    """Never discard public onboarding or credential evidence silently."""
+    """Never discard public onboarding evidence or provenance silently."""
 
     if op.get_context().as_sql:
         raise RuntimeError(
@@ -62,8 +62,7 @@ def _refuse_populated_downgrade() -> None:
     connection = op.get_bind()
     connection.execute(
         sa.text(
-            "LOCK TABLE public_legal_acceptance, credential_review_audit, "
-            "practice_invitation, practice, practice_member "
+            "LOCK TABLE public_legal_acceptance, practice_invitation, practice "
             "IN ACCESS EXCLUSIVE MODE"
         )
     )
@@ -71,27 +70,14 @@ def _refuse_populated_downgrade() -> None:
         "legal_acceptances": connection.execute(
             sa.text("SELECT count(*) FROM public_legal_acceptance")
         ).scalar_one(),
-        "credential_reviews": connection.execute(
-            sa.text("SELECT count(*) FROM credential_review_audit")
-        ).scalar_one(),
         "practice_invitations": connection.execute(
             sa.text("SELECT count(*) FROM practice_invitation")
         ).scalar_one(),
         "public_practices": connection.execute(
             sa.text(
                 "SELECT count(*) FROM practice "
-                "WHERE public_onboarding_required IS TRUE "
+                "WHERE acquisition_source = 'public_self_service' "
                 "OR public_pilot_cohort IS TRUE"
-            )
-        ).scalar_one(),
-        "credential_decisions": connection.execute(
-            sa.text(
-                "SELECT count(*) FROM practice_member "
-                "WHERE credential_state <> 'pending' "
-                "OR credential_reviewed_at IS NOT NULL "
-                "OR credential_reviewer_ref IS NOT NULL "
-                "OR credential_verification_method IS NOT NULL "
-                "OR credential_evidence_sha256 IS NOT NULL"
             )
         ).scalar_one(),
     }
@@ -106,28 +92,32 @@ def upgrade() -> None:
     op.add_column(
         "practice",
         sa.Column(
-            "public_onboarding_required",
-            sa.Boolean(),
-            server_default=sa.false(),
+            "acquisition_source",
+            sa.String(length=32),
+            server_default="managed",
             nullable=False,
-            comment="Whether the public legal/credential gates apply to this practice.",
+            comment="Enrollment provenance for migration fencing; authorization-neutral.",
         ),
     )
     # The temporary default backfills every pre-existing practice as managed.
-    # Remove it in the same migration transaction so a pre-gate binary, which
-    # cannot supply this discriminator, fails closed on every new practice
-    # insert during a migrate-before-code rollout.
+    # Remove it in the same transaction so a pre-gate binary cannot create a
+    # practice while the database is already on this schema.
     op.alter_column(
         "practice",
-        "public_onboarding_required",
-        existing_type=sa.Boolean(),
+        "acquisition_source",
+        existing_type=sa.String(length=32),
         existing_nullable=False,
         server_default=None,
     )
     op.create_check_constraint(
-        "ck_practice_public_onboarding_no_npi",
+        "ck_practice_acquisition_source",
         "practice",
-        "NOT public_onboarding_required OR npi IS NULL",
+        "acquisition_source IN ('managed', 'public_self_service')",
+    )
+    op.create_check_constraint(
+        "ck_practice_public_self_service_no_npi",
+        "practice",
+        "acquisition_source <> 'public_self_service' OR npi IS NULL",
     )
     op.add_column(
         "practice",
@@ -136,60 +126,8 @@ def upgrade() -> None:
             sa.Boolean(),
             server_default=sa.false(),
             nullable=False,
-            comment="Explicit public-pilot rollout cohort; false preserves managed practices.",
+            comment="Explicit capability-rollout cohort; false is the safe default.",
         ),
-    )
-
-    op.add_column(
-        "practice_member",
-        sa.Column(
-            "credential_state",
-            sa.String(),
-            server_default="pending",
-            nullable=False,
-            comment="Public PHI access remains denied until independently approved.",
-        ),
-    )
-    op.add_column(
-        "practice_member",
-        sa.Column("credential_reviewed_at", sa.DateTime(timezone=True)),
-    )
-    op.add_column(
-        "practice_member",
-        sa.Column("credential_reviewer_ref", sa.String(length=255)),
-    )
-    op.add_column(
-        "practice_member",
-        sa.Column("credential_verification_method", sa.String(length=128)),
-    )
-    op.add_column(
-        "practice_member",
-        sa.Column("credential_evidence_sha256", sa.String(length=64)),
-    )
-    op.create_check_constraint(
-        "ck_practice_member_credential_state",
-        "practice_member",
-        "credential_state IN ('pending', 'approved', 'rejected', 'needs_review')",
-    )
-    op.create_check_constraint(
-        "ck_practice_member_credential_evidence_complete",
-        "practice_member",
-        "(credential_state = 'pending' "
-        "AND credential_reviewed_at IS NULL "
-        "AND credential_reviewer_ref IS NULL "
-        "AND credential_verification_method IS NULL "
-        "AND credential_evidence_sha256 IS NULL) OR "
-        "(credential_state <> 'pending' "
-        "AND credential_reviewed_at IS NOT NULL "
-        "AND credential_reviewer_ref IS NOT NULL "
-        "AND credential_verification_method IS NOT NULL "
-        "AND credential_evidence_sha256 IS NOT NULL)",
-    )
-    op.create_check_constraint(
-        "ck_practice_member_credential_evidence_sha256",
-        "practice_member",
-        "credential_evidence_sha256 IS NULL OR "
-        "credential_evidence_sha256 ~ '^[0-9a-f]{64}$'",
     )
 
     op.create_table(
@@ -264,81 +202,6 @@ def upgrade() -> None:
     )
 
     op.create_table(
-        "credential_review_audit",
-        _id("credential_review_audit"),
-        *_timestamps(),
-        _typeid("practice_member_id", "practice_member"),
-        sa.Column("from_state", sa.String(length=16), nullable=False),
-        sa.Column("to_state", sa.String(length=16), nullable=False),
-        sa.Column("reviewer_ref", sa.String(length=255), nullable=False),
-        _typeid("reviewer_doctor_id", "doctor", nullable=True),
-        sa.Column("verification_method", sa.String(length=128), nullable=False),
-        sa.Column("evidence_sha256", sa.String(length=64), nullable=False),
-        sa.Column("reason_code", sa.String(length=128), nullable=False),
-        sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("event_digest", sa.String(length=64), nullable=False),
-        sa.CheckConstraint(
-            "from_state IN ('pending', 'approved', 'rejected', 'needs_review')",
-            name=op.f(
-                "credential_review_audit_ck_credential_review_audit_from_state"
-            ),
-        ),
-        sa.CheckConstraint(
-            "to_state IN ('approved', 'rejected', 'needs_review')",
-            name=op.f(
-                "credential_review_audit_ck_credential_review_audit_to_state"
-            ),
-        ),
-        sa.CheckConstraint(
-            "from_state <> to_state",
-            name=op.f(
-                "credential_review_audit_ck_credential_review_audit_state_changed"
-            ),
-        ),
-        sa.CheckConstraint(
-            "evidence_sha256 ~ '^[0-9a-f]{64}$'",
-            name=op.f(
-                "credential_review_audit_ck_credential_review_audit_evidence_sha256"
-            ),
-        ),
-        sa.CheckConstraint(
-            "event_digest ~ '^[0-9a-f]{64}$'",
-            name=op.f(
-                "credential_review_audit_ck_credential_review_audit_event_digest"
-            ),
-        ),
-        sa.CheckConstraint(
-            "char_length(btrim(reviewer_ref)) > 0 "
-            "AND char_length(btrim(verification_method)) > 0 "
-            "AND char_length(btrim(reason_code)) > 0",
-            name=op.f(
-                "credential_review_audit_ck_credential_review_audit_review_evidence"
-            ),
-        ),
-        sa.ForeignKeyConstraint(
-            ["practice_member_id"],
-            ["practice_member.id"],
-            name=op.f("credential_review_audit_practice_member_id_fkey"),
-        ),
-        sa.ForeignKeyConstraint(
-            ["reviewer_doctor_id"],
-            ["doctor.id"],
-            name=op.f("credential_review_audit_reviewer_doctor_id_fkey"),
-        ),
-        sa.PrimaryKeyConstraint("id", name=op.f("credential_review_audit_pkey")),
-        sa.UniqueConstraint(
-            "event_digest",
-            name=op.f("credential_review_audit_event_digest_key"),
-        ),
-        comment="Append-only evidence for one independent credential-state transition.",
-    )
-    op.create_index(
-        "credential_review_audit_member_time_idx",
-        "credential_review_audit",
-        ["practice_member_id", "reviewed_at"],
-    )
-
-    op.create_table(
         "practice_invitation",
         _id("practice_invitation"),
         *_timestamps(),
@@ -360,22 +223,16 @@ def upgrade() -> None:
         sa.Column("revocation_reason", sa.String(length=512)),
         sa.CheckConstraint(
             "token_digest ~ '^[0-9a-f]{64}$'",
-            name=op.f(
-                "practice_invitation_ck_practice_invitation_token_digest"
-            ),
+            name=op.f("practice_invitation_ck_practice_invitation_token_digest"),
         ),
         sa.CheckConstraint(
             "invitee_email = lower(btrim(invitee_email)) "
             "AND position('@' IN invitee_email) > 1",
-            name=op.f(
-                "practice_invitation_ck_practice_invitation_normalized_email"
-            ),
+            name=op.f("practice_invitation_ck_practice_invitation_normalized_email"),
         ),
         sa.CheckConstraint(
             "invitee_email_digest ~ '^[0-9a-f]{64}$'",
-            name=op.f(
-                "practice_invitation_ck_practice_invitation_email_digest"
-            ),
+            name=op.f("practice_invitation_ck_practice_invitation_email_digest"),
         ),
         sa.CheckConstraint(
             "idempotency_key_digest ~ '^[0-9a-f]{64}$'",
@@ -401,9 +258,7 @@ def upgrade() -> None:
             "(accepted_at IS NULL AND accepted_by_doctor_id IS NULL "
             "AND revoked_at IS NOT NULL AND revoked_by_doctor_id IS NOT NULL "
             "AND revocation_reason IS NOT NULL)",
-            name=op.f(
-                "practice_invitation_ck_practice_invitation_terminal_state"
-            ),
+            name=op.f("practice_invitation_ck_practice_invitation_terminal_state"),
         ),
         sa.CheckConstraint(
             "accepted_by_doctor_id IS NULL "
@@ -456,32 +311,6 @@ def upgrade() -> None:
 
     op.execute(
         """
-        CREATE FUNCTION cosmas_guard_credential_member_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          IF NEW.credential_state IS DISTINCT FROM 'pending'
-             OR NEW.credential_reviewed_at IS NOT NULL
-             OR NEW.credential_reviewer_ref IS NOT NULL
-             OR NEW.credential_verification_method IS NOT NULL
-             OR NEW.credential_evidence_sha256 IS NOT NULL THEN
-            RAISE EXCEPTION 'new memberships must begin with pending credentials'
-              USING ERRCODE = '55000';
-          END IF;
-          RETURN NEW;
-        END;
-        $$
-        """
-    )
-    op.execute(
-        """
-        CREATE TRIGGER practice_member_guard_credential_insert
-        BEFORE INSERT ON practice_member
-        FOR EACH ROW EXECUTE FUNCTION cosmas_guard_credential_member_insert()
-        """
-    )
-
-    op.execute(
-        """
         CREATE FUNCTION cosmas_validate_public_legal_acceptance_insert()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -490,7 +319,6 @@ def upgrade() -> None:
                SELECT 1
                  FROM practice_member member
                  JOIN doctor signer ON signer.id = member.doctor_id
-                 JOIN practice tenant ON tenant.id = member.practice_id
                 WHERE member.practice_id = NEW.practice_id
                   AND member.doctor_id = NEW.signer_doctor_id
                   AND member.role = 'owner'
@@ -498,7 +326,6 @@ def upgrade() -> None:
                   AND member.access_revoked_at IS NULL
                   AND signer.deleted_at IS NULL
                   AND lower(btrim(signer.email)) = lower(btrim(NEW.signer_email))
-                  AND tenant.public_onboarding_required IS TRUE
              ) THEN
             RAISE EXCEPTION 'public legal acceptance requires the active practice owner'
               USING ERRCODE = '55000';
@@ -520,119 +347,6 @@ def upgrade() -> None:
         CREATE TRIGGER public_legal_acceptance_reject_mutation
         BEFORE UPDATE OR DELETE ON public_legal_acceptance
         FOR EACH ROW EXECUTE FUNCTION cosmas_reject_append_only_mutation()
-        """
-    )
-    op.execute(
-        """
-        CREATE TRIGGER credential_review_audit_reject_mutation
-        BEFORE UPDATE OR DELETE ON credential_review_audit
-        FOR EACH ROW EXECUTE FUNCTION cosmas_reject_append_only_mutation()
-        """
-    )
-
-    op.execute(
-        """
-        CREATE FUNCTION cosmas_validate_credential_review_insert()
-        RETURNS trigger LANGUAGE plpgsql AS $$
-        DECLARE
-          current_state text;
-          subject_doctor_id uuid;
-        BEGIN
-          SELECT credential_state, doctor_id
-            INTO current_state, subject_doctor_id
-            FROM practice_member
-           WHERE id = NEW.practice_member_id;
-          IF NOT FOUND OR current_state IS DISTINCT FROM NEW.from_state THEN
-            RAISE EXCEPTION 'credential review does not match current state'
-              USING ERRCODE = '55000';
-          END IF;
-          IF NEW.reviewer_doctor_id IS NOT NULL
-             AND NEW.reviewer_doctor_id = subject_doctor_id THEN
-            RAISE EXCEPTION 'clinicians cannot approve their own credentials'
-              USING ERRCODE = '55000';
-          END IF;
-          -- Reviewer identity, verification method, and SLA are deliberately
-          -- undecided for this launch slice. Keep every transition closed at
-          -- the persistence boundary until a later migration installs the
-          -- approved reviewer-authority policy.
-          RAISE EXCEPTION 'credential reviewer authorization is not configured'
-            USING ERRCODE = '55000';
-        END;
-        $$
-        """
-    )
-    op.execute(
-        """
-        CREATE TRIGGER credential_review_audit_validate_insert
-        BEFORE INSERT ON credential_review_audit
-        FOR EACH ROW EXECUTE FUNCTION cosmas_validate_credential_review_insert()
-        """
-    )
-    op.execute(
-        """
-        CREATE FUNCTION cosmas_guard_credential_member_transition()
-        RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          IF NEW.credential_state IS NOT DISTINCT FROM OLD.credential_state
-             AND NEW.credential_reviewed_at IS NOT DISTINCT FROM OLD.credential_reviewed_at
-             AND NEW.credential_reviewer_ref IS NOT DISTINCT FROM OLD.credential_reviewer_ref
-             AND NEW.credential_verification_method IS NOT DISTINCT FROM OLD.credential_verification_method
-             AND NEW.credential_evidence_sha256 IS NOT DISTINCT FROM OLD.credential_evidence_sha256 THEN
-            RETURN NEW;
-          END IF;
-          IF NOT EXISTS (
-            SELECT 1 FROM credential_review_audit audit
-             WHERE audit.practice_member_id = OLD.id
-               AND audit.from_state = OLD.credential_state
-               AND audit.to_state = NEW.credential_state
-               AND audit.reviewed_at = NEW.credential_reviewed_at
-               AND audit.reviewer_ref = NEW.credential_reviewer_ref
-               AND audit.verification_method = NEW.credential_verification_method
-               AND audit.evidence_sha256 = NEW.credential_evidence_sha256
-          ) THEN
-            RAISE EXCEPTION 'credential transition requires matching audit evidence'
-              USING ERRCODE = '55000';
-          END IF;
-          RETURN NEW;
-        END;
-        $$
-        """
-    )
-    op.execute(
-        """
-        CREATE TRIGGER practice_member_guard_credential_transition
-        BEFORE UPDATE ON practice_member
-        FOR EACH ROW EXECUTE FUNCTION cosmas_guard_credential_member_transition()
-        """
-    )
-    op.execute(
-        """
-        CREATE FUNCTION cosmas_validate_credential_review_committed()
-        RETURNS trigger LANGUAGE plpgsql AS $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM practice_member member
-             WHERE member.id = NEW.practice_member_id
-               AND member.credential_state = NEW.to_state
-               AND member.credential_reviewed_at = NEW.reviewed_at
-               AND member.credential_reviewer_ref = NEW.reviewer_ref
-               AND member.credential_verification_method = NEW.verification_method
-               AND member.credential_evidence_sha256 = NEW.evidence_sha256
-          ) THEN
-            RAISE EXCEPTION 'credential review was not applied to membership'
-              USING ERRCODE = '55000';
-          END IF;
-          RETURN NULL;
-        END;
-        $$
-        """
-    )
-    op.execute(
-        """
-        CREATE CONSTRAINT TRIGGER credential_review_audit_validate_commit
-        AFTER INSERT ON credential_review_audit
-        DEFERRABLE INITIALLY DEFERRED
-        FOR EACH ROW EXECUTE FUNCTION cosmas_validate_credential_review_committed()
         """
     )
 
@@ -695,35 +409,11 @@ def downgrade() -> None:
     )
     op.execute("DROP FUNCTION IF EXISTS cosmas_guard_practice_invitation_mutation()")
     op.execute(
-        "DROP TRIGGER IF EXISTS credential_review_audit_validate_commit "
-        "ON credential_review_audit"
-    )
-    op.execute("DROP FUNCTION IF EXISTS cosmas_validate_credential_review_committed()")
-    op.execute(
-        "DROP TRIGGER IF EXISTS practice_member_guard_credential_transition "
-        "ON practice_member"
-    )
-    op.execute("DROP FUNCTION IF EXISTS cosmas_guard_credential_member_transition()")
-    op.execute(
-        "DROP TRIGGER IF EXISTS credential_review_audit_validate_insert "
-        "ON credential_review_audit"
-    )
-    op.execute("DROP FUNCTION IF EXISTS cosmas_validate_credential_review_insert()")
-    op.execute(
         "DROP TRIGGER IF EXISTS public_legal_acceptance_validate_insert "
         "ON public_legal_acceptance"
     )
     op.execute(
         "DROP FUNCTION IF EXISTS cosmas_validate_public_legal_acceptance_insert()"
-    )
-    op.execute(
-        "DROP TRIGGER IF EXISTS practice_member_guard_credential_insert "
-        "ON practice_member"
-    )
-    op.execute("DROP FUNCTION IF EXISTS cosmas_guard_credential_member_insert()")
-    op.execute(
-        "DROP TRIGGER IF EXISTS credential_review_audit_reject_mutation "
-        "ON credential_review_audit"
     )
     op.execute(
         "DROP TRIGGER IF EXISTS public_legal_acceptance_reject_mutation "
@@ -738,40 +428,20 @@ def downgrade() -> None:
     )
     op.drop_table("practice_invitation")
     op.drop_index(
-        "credential_review_audit_member_time_idx",
-        table_name="credential_review_audit",
-    )
-    op.drop_table("credential_review_audit")
-    op.drop_index(
         "public_legal_acceptance_practice_kind_idx",
         table_name="public_legal_acceptance",
     )
     op.drop_table("public_legal_acceptance")
 
     op.drop_constraint(
-        "ck_practice_member_credential_evidence_sha256",
-        "practice_member",
+        "ck_practice_public_self_service_no_npi",
+        "practice",
         type_="check",
     )
     op.drop_constraint(
-        "ck_practice_member_credential_evidence_complete",
-        "practice_member",
-        type_="check",
-    )
-    op.drop_constraint(
-        "ck_practice_member_credential_state",
-        "practice_member",
-        type_="check",
-    )
-    op.drop_column("practice_member", "credential_evidence_sha256")
-    op.drop_column("practice_member", "credential_verification_method")
-    op.drop_column("practice_member", "credential_reviewer_ref")
-    op.drop_column("practice_member", "credential_reviewed_at")
-    op.drop_column("practice_member", "credential_state")
-    op.drop_constraint(
-        "ck_practice_public_onboarding_no_npi",
+        "ck_practice_acquisition_source",
         "practice",
         type_="check",
     )
     op.drop_column("practice", "public_pilot_cohort")
-    op.drop_column("practice", "public_onboarding_required")
+    op.drop_column("practice", "acquisition_source")

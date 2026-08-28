@@ -14,7 +14,7 @@ from sqlalchemy import func
 from sqlmodel import Session, col, select
 
 PUBLIC_ENTITLEMENT_CONTRACT_VERSION = "public-capability-entitlements.v1"
-PUBLIC_ENTITLEMENT_POLICY_REVISION = "2026-08-27"
+PUBLIC_ENTITLEMENT_POLICY_REVISION = "2026-08-28"
 MAX_ACTIVE_CLINICIAN_SEATS = 20
 
 CAPABILITY_KEYS = (
@@ -23,13 +23,6 @@ CAPABILITY_KEYS = (
     "session_prep",
     "scribe",
     "cab",
-)
-
-CREDENTIAL_STATES = (
-    "pending",
-    "approved",
-    "rejected",
-    "needs_review",
 )
 
 FAIL_CLOSED_SUBSCRIPTION_STATES = frozenset({"pending_verification", "invalid"})

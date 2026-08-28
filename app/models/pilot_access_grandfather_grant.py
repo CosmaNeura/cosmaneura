@@ -1,9 +1,9 @@
-"""Durable, per-Clerk-account evidence for legacy pilot access.
+"""Durable, per-Clerk-account evidence for a legacy pilot entitlement.
 
-The grant is deliberately independent of practice membership, BAA execution,
-and practice billing state.  A nullable Doctor/practice association records
-what existed when the operator applied the reviewed plan; authorization is
-always rooted in the stable Clerk subject and the approved email snapshot.
+The record never authorizes access by itself. Runtime authorization still
+requires verified identity, an active authorized practice membership, a BAA,
+and exact tenant binding; a matching practice snapshot may satisfy only the
+entitlement gate.
 """
 
 from datetime import datetime
