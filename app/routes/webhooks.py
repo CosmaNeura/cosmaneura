@@ -285,13 +285,17 @@ async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
     mirrored ``subscription_status``/ids. Unverifiable events are never
     accepted: 503 with no secret configured, 401 on a bad signature.
     """
-    raw_body = await request.body()
-
     if not stripe_config.stripe_webhook_configured():
         log.warning("stripe webhook received while billing rollout is not ready")
         return JSONResponse(
             {"status": "billing webhook not configured"}, status_code=503
         )
+    try:
+        raw_body = await _read_bounded_body(request)
+    except WebhookBodyTooLarge:
+        return JSONResponse({"status": "payload too large"}, status_code=413)
+    except InvalidContentLength:
+        return JSONResponse({"status": "invalid request"}, status_code=400)
 
     if not stripe_billing.verify_webhook_signature(
         raw_body, request.headers.get("stripe-signature")
@@ -301,10 +305,19 @@ async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
 
     try:
         event = json.loads(raw_body)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return JSONResponse({"status": "invalid JSON"}, status_code=400)
+    if not isinstance(event, dict):
         return JSONResponse({"status": "invalid JSON"}, status_code=400)
     event_id = str(event.get("id") or "")
-    event_type = str(event.get("type") or "unknown")
+    raw_event_type = event.get("type")
+    event_type = (
+        raw_event_type
+        if isinstance(raw_event_type, str)
+        and raw_event_type in stripe_billing.MIRRORED_EVENT_TYPES
+        else "unsupported"
+    )
+    event_ref = external_webhook_inbox.provider_log_ref(event_id)
 
     # Persist the signed envelope before acknowledging it. Stripe HTTP calls
     # happen in Celery; a one-minute DB sweep recovers any broker publish loss.
@@ -315,46 +328,49 @@ async def stripe_webhook(request: Request, background_tasks: BackgroundTasks):
     except stripe_billing.StripeStateInvalid as exc:
         log.error(
             "stripe webhook state validation failed",
-            event_id=event_id,
+            event_ref=event_ref,
             event_type=event_type,
             error=str(exc),
         )
         return JSONResponse({"status": "invalid Stripe state"}, status_code=400)
-    except Exception:
+    except Exception as exc:
         log.warning(
             "stripe webhook could not persist its durable inbox record",
-            event_id=event_id,
+            event_ref=event_ref,
             event_type=event_type,
-            exc_info=True,
+            error_code=type(exc).__name__,
         )
         return JSONResponse(
             {"status": "Stripe inbox temporarily unavailable"}, status_code=503
         )
 
     if inbox_id is not None and not duplicate:
-        background_tasks.add_task(_publish_stripe_inbox, str(inbox_id), event_id)
+        background_tasks.add_task(_publish_stripe_inbox, str(inbox_id), event_ref)
 
     log.info(
         "stripe webhook durably accepted",
-        event_id=event_id,
+        event_ref=event_ref,
         event_type=event_type,
-        inbox_id=str(inbox_id) if inbox_id is not None else None,
+        inbox_ref=external_webhook_inbox.provider_log_ref(
+            str(inbox_id) if inbox_id is not None else None
+        ),
         duplicate=duplicate,
     )
     return WebhookAck(status="ok", duplicate=duplicate)
 
 
-def _publish_stripe_inbox(inbox_id: str, event_id: str) -> None:
+def _publish_stripe_inbox(inbox_id: str, event_ref: str) -> None:
     """Best-effort post-response publish; the DB sweep is authoritative."""
 
     try:
         app.jobs.stripe_events.process.delay(inbox_id)
-    except Exception:
+    except Exception as exc:
         log.warning(
-            "stripe event persisted but immediate worker publish failed; sweep will retry",
-            event_id=event_id,
-            inbox_id=inbox_id,
-            exc_info=True,
+            "stripe event persisted but immediate worker publish failed; "
+            "sweep will retry",
+            event_ref=event_ref,
+            inbox_ref=external_webhook_inbox.provider_log_ref(inbox_id),
+            error_code=type(exc).__name__,
         )
 
 

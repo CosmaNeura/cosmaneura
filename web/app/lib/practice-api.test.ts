@@ -51,26 +51,24 @@ describe("practiceReady", () => {
 })
 
 describe("billingCheckoutPaths", () => {
-  it("carries the validated recovery destination through success and cancel", () => {
+  it("uses fixed PHI-free success and cancellation paths", () => {
     expect(billingCheckoutPaths("/schedule?view=week#today")).toEqual({
-      successPath:
-        "/settings?billing=success&returnTo=%2Fschedule%3Fview%3Dweek%23today",
-      cancelPath:
-        "/settings?billing=cancelled&returnTo=%2Fschedule%3Fview%3Dweek%23today",
+      successPath: "/settings?billing=success",
+      cancelPath: "/settings?billing=cancelled",
     })
   })
 
-  it("falls back to notes for an off-site return destination", () => {
+  it("does not forward an off-site return destination", () => {
     expect(billingCheckoutPaths("https://evil.example")).toEqual({
-      successPath: "/settings?billing=success&returnTo=%2Fnotes",
-      cancelPath: "/settings?billing=cancelled&returnTo=%2Fnotes",
+      successPath: "/settings?billing=success",
+      cancelPath: "/settings?billing=cancelled",
     })
   })
 
-  it("falls back to notes when an encoded deep link exceeds the API limit", () => {
+  it("does not forward record-like query data", () => {
     expect(billingCheckoutPaths(`/notes?search=${"x".repeat(300)}`)).toEqual({
-      successPath: "/settings?billing=success&returnTo=%2Fnotes",
-      cancelPath: "/settings?billing=cancelled&returnTo=%2Fnotes",
+      successPath: "/settings?billing=success",
+      cancelPath: "/settings?billing=cancelled",
     })
   })
 })

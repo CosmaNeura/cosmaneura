@@ -11,10 +11,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
+from structlog.testing import capture_logs
 
 import app.configuration.stripe as stripe_config
 import app.jobs.stripe_events
 import app.services.stripe_billing as stripe_billing
+from app.routes import webhooks
 from app.server import api_app
 from app.services.organization_access import (
     RosterApprovalInput,
@@ -87,7 +89,15 @@ class RouteStripe:
                 "payment_method_collection": data["payment_method_collection"],
                 "metadata": {
                     "checkout_policy": data["metadata[checkout_policy]"],
+                    "checkout_attempt": data["metadata[checkout_attempt]"],
                     "practice_id": data["metadata[practice_id]"],
+                    "entitlement_contract": data["metadata[entitlement_contract]"],
+                    "trial_clock": data["metadata[trial_clock]"],
+                    **(
+                        {"trial_days": data["metadata[trial_days]"]}
+                        if "metadata[trial_days]" in data
+                        else {}
+                    ),
                 },
             }
             self.sessions[session["id"]] = deepcopy(session)
@@ -136,7 +146,12 @@ def _subscription(practice: Practice, *, status_value: str) -> dict:
         "customer": "cus_route_test",
         "status": status_value,
         "livemode": False,
-        "metadata": {"practice_id": str(practice.id)},
+        "metadata": {
+            "practice_id": str(practice.id),
+            "checkout_policy": stripe_billing.CHECKOUT_IDEMPOTENCY_POLICY_VERSION,
+            "entitlement_contract": "public-capability-entitlements.v1",
+            "trial_clock": stripe_billing.LEGACY_TRIAL_CLOCK_POLICY,
+        },
         "items": {
             "data": [
                 {
@@ -156,6 +171,9 @@ def stripe_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(stripe_config, "STRIPE_SECRET_KEY", "sk_test_x")
     monkeypatch.setattr(stripe_config, "STRIPE_ACCOUNT_ID", "acct_test_cosmaneura")
     monkeypatch.setattr(stripe_config, "STRIPE_PRICE_ID", "price_test_x")
+    monkeypatch.setattr(
+        stripe_config, "STRIPE_PORTAL_CONFIGURATION_ID", "bpc_test_restricted"
+    )
     monkeypatch.setattr(stripe_config, "STRIPE_WEBHOOK_SECRET", WEBHOOK_SECRET)
     monkeypatch.setattr(stripe_config, "STRIPE_API_VERSION", "2025-09-30.clover")
     monkeypatch.setattr(
@@ -301,7 +319,37 @@ def test_expired_comp_is_reported_inactive_and_can_reactivate(
     )
     assert checkout.status_code == status.HTTP_200_OK, checkout.text
     assert checkout.json()["url"].startswith("https://checkout.stripe.com/")
-    assert any(call[1] == "/checkout/sessions" for call in route_stripe.calls)
+    checkout_call = next(
+        call for call in route_stripe.calls if call[1] == "/checkout/sessions"
+    )
+    assert checkout_call[2]
+    assert checkout_call[2]["success_url"] == (
+        f"{VALID_ORIGIN}/settings?billing=success"
+    )
+    assert checkout_call[2]["cancel_url"] == (
+        f"{VALID_ORIGIN}/settings?billing=cancelled"
+    )
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_active_standalone_billing_exemption_blocks_checkout_before_stripe_io(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    practice = _own_practice(_dev_doctor())
+    practice.billing_exempt = True
+    practice.billing_exempt_until = None
+    practice.save()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "active billing exemption" in response.json()["detail"]
+    assert route_stripe.calls == []
 
 
 @pytest.mark.usefixtures("stripe_configured")
@@ -486,6 +534,40 @@ def test_active_organization_billing_exemption_blocks_checkout(
 
 
 @pytest.mark.usefixtures("stripe_configured")
+def test_managed_practice_blocks_checkout_without_active_billing_exemption(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+):
+    doctor = _dev_doctor()
+    practice = _own_practice(doctor)
+    practice.baa_version = None
+    practice.baa_accepted_at = None
+    practice.baa_accepted_by_doctor_id = None
+    practice.baa_signature_name = None
+    practice.baa_signature_title = None
+    practice.trial_ends_at = None
+    practice.negotiated_baa_required = True
+    practice.negotiated_baa_on_file = True
+    practice.negotiated_baa_effective_date = datetime.now(timezone.utc) - timedelta(
+        days=1
+    )
+    practice.negotiated_baa_reference = "test://managed-baa"
+    practice.billing_exempt = False
+    practice.billing_exempt_until = datetime.now(timezone.utc) - timedelta(days=1)
+    practice.save()
+
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "managed" in response.json()["detail"]
+    assert route_stripe.calls == []
+
+
+@pytest.mark.usefixtures("stripe_configured")
 def test_active_pilot_grant_blocks_new_checkout_without_hiding_portal(
     authenticated_client: TestClient,
     route_stripe: RouteStripe,
@@ -597,6 +679,31 @@ def test_checkout_requires_recognized_origin(authenticated_client: TestClient):
 
 
 @pytest.mark.usefixtures("stripe_configured")
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("success_path", "/settings?billing=success&patient=private"),
+        ("cancel_path", "/settings#private"),
+        ("success_path", "/\\evil.example/private"),
+    ],
+)
+def test_checkout_rejects_noncanonical_provider_redirects_before_stripe_io(
+    authenticated_client: TestClient,
+    route_stripe: RouteStripe,
+    field: str,
+    value: str,
+):
+    response = authenticated_client.post(
+        api_app.url_path_for("create_billing_checkout"),
+        json={field: value},
+        headers={"origin": VALID_ORIGIN},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    assert route_stripe.calls == []
+
+
+@pytest.mark.usefixtures("stripe_configured")
 def test_portal_conflicts_without_billing_account(authenticated_client: TestClient):
     response = authenticated_client.post(
         api_app.url_path_for("create_billing_portal"),
@@ -630,6 +737,83 @@ def test_stripe_webhook_rejects_bad_signature(client: TestClient):
 
 
 @pytest.mark.usefixtures("stripe_configured")
+def test_stripe_webhook_rejects_oversized_body_before_signature(
+    client: TestClient,
+):
+    response = client.post(
+        STRIPE_WEBHOOK_PATH,
+        content=b"x" * (webhooks.MAX_WEBHOOK_BODY_BYTES + 1),
+        headers={"stripe-signature": "untrusted"},
+    )
+    assert response.status_code == status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_stripe_webhook_rejects_signed_non_object_json(client: TestClient):
+    body = b"[]"
+    response = client.post(
+        STRIPE_WEBHOOK_PATH,
+        content=body,
+        headers={"stripe-signature": _sign(body)},
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_stripe_webhook_rejects_signed_invalid_utf8(client: TestClient):
+    body = b'"\xff"'
+    response = client.post(
+        STRIPE_WEBHOOK_PATH,
+        content=body,
+        headers={"stripe-signature": _sign(body)},
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.usefixtures("stripe_configured")
+def test_stripe_webhook_rejects_boolean_event_timestamp(client: TestClient):
+    body = json.dumps(
+        {
+            "id": "evt_boolean_created",
+            "type": "customer.subscription.updated",
+            "created": True,
+            "api_version": "2025-09-30.clover",
+            "livemode": False,
+            "data": {"object": {"id": "sub_boolean_created"}},
+        }
+    ).encode()
+    response = client.post(
+        STRIPE_WEBHOOK_PATH,
+        content=body,
+        headers={"stripe-signature": _sign(body)},
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.usefixtures("stripe_configured")
+@pytest.mark.parametrize(
+    "event_type",
+    ["unsupported-private-sentinel", ["malformed-private-sentinel"]],
+)
+def test_stripe_webhook_bounds_unsupported_event_type_telemetry(
+    client: TestClient, event_type: object
+):
+    body = json.dumps({"id": "evt_unsupported", "type": event_type}).encode()
+
+    with capture_logs() as logs:
+        response = client.post(
+            STRIPE_WEBHOOK_PATH,
+            content=body,
+            headers={"stripe-signature": _sign(body)},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    rendered_logs = json.dumps(logs)
+    assert "private-sentinel" not in rendered_logs
+    assert '"event_type": "unsupported"' in rendered_logs
+
+
+@pytest.mark.usefixtures("stripe_configured")
 def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
     client: TestClient,
     route_stripe: RouteStripe,
@@ -640,17 +824,45 @@ def test_stripe_webhook_mirrors_fresh_state_and_dedupes(
         email_domain="example.com",
         origin_channel="direct",
     ).save()
+    owner = Doctor(
+        clerk_id=f"user_webhook_owner_{secrets.token_hex(5)}",
+        email=f"webhook-owner-{secrets.token_hex(3)}@example.com",
+        biography="",
+    ).save()
+    PracticeMember(
+        practice_id=practice.id,
+        doctor_id=owner.id,
+        role="owner",
+    ).save()
     subscription = _subscription(practice, status_value="active")
+    subscription["metadata"].update(
+        {
+            "trial_clock": stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY,
+            "trial_days": "14",
+        }
+    )
+    trial_start = int(time.time())
+    subscription["trial_start"] = trial_start
+    subscription["trial_end"] = trial_start + int(timedelta(days=14).total_seconds())
     route_stripe.subscriptions[subscription["id"]] = subscription
+    practice.stripe_checkout_session_id = "cs_route_webhook"
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.save()
     event_id = f"evt_{secrets.token_hex(8)}"
     body = json.dumps(
         {
             "id": event_id,
-            "type": "customer.subscription.updated",
+            "type": "checkout.session.completed",
             "created": int(time.time()),
             "api_version": "2025-09-30.clover",
             "livemode": False,
-            "data": {"object": subscription},
+            "data": {
+                "object": {
+                    "id": "cs_route_webhook",
+                    "client_reference_id": str(practice.id),
+                    "subscription": subscription["id"],
+                }
+            },
         }
     ).encode()
 

@@ -424,29 +424,13 @@ export function getBaaAcceptances() {
 // Both billing endpoints return a Stripe-hosted URL to send the browser to.
 // They stay reachable after the trial lapses (the 402 gate exempts them).
 export function billingCheckoutPaths(returnTo?: string | null) {
-  const buildPaths = (safeReturnTo: string) => {
-    const successParams = new URLSearchParams({
-      billing: "success",
-      returnTo: safeReturnTo,
-    })
-    const cancelParams = new URLSearchParams({
-      billing: "cancelled",
-      returnTo: safeReturnTo,
-    })
-    return {
-      successPath: `/settings?${successParams.toString()}`,
-      cancelPath: `/settings?${cancelParams.toString()}`,
-    }
+  // Never send the current application URL, record ids, search terms, or
+  // fragments to Stripe. The settings page owns any post-billing navigation.
+  void returnTo
+  return {
+    successPath: "/settings?billing=success",
+    cancelPath: "/settings?billing=cancelled",
   }
-
-  const paths = buildPaths(safeBillingReturnTo(returnTo))
-  // The backend intentionally caps Stripe redirect paths at 200 characters.
-  // Preserve normal deep links, but never turn an unusually long current URL
-  // into a failed Checkout request.
-  if (paths.successPath.length <= 200 && paths.cancelPath.length <= 200) {
-    return paths
-  }
-  return buildPaths("/notes")
 }
 
 export function createBillingCheckout(returnTo?: string | null) {
