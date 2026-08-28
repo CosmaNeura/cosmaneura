@@ -116,6 +116,16 @@ def test_public_subscription_gate_fails_closed_during_billing_incidents() -> Non
     assert not public_subscription_in_force(practice, at=now)
 
     practice.trial_ends_at = now + timedelta(days=14)
+    assert not public_subscription_in_force(practice, at=now)
+
+    practice.stripe_subscription_id = "sub_test_receiver_contract"
+    assert public_subscription_in_force(practice, at=now)
+
+    practice.subscription_status = "active"
+    practice.stripe_subscription_id = None
+    assert not public_subscription_in_force(practice, at=now)
+
+    practice.stripe_subscription_id = "sub_test_receiver_contract"
     assert public_subscription_in_force(practice, at=now)
 
 

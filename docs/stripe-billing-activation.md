@@ -59,8 +59,8 @@ non-revoked memberships do, including the owner, up to 20.
 
 ## Reconciled deployed-state snapshot
 
-The following is read-only evidence observed at `2026-08-27T19:17:30Z`, not an
-activation approval:
+The following is read-only evidence observed at `2026-08-27T19:17:30Z` and
+revalidated at `2026-08-28T00:22:05Z`, not an activation approval:
 
 - Production API revision
   `cosmaneura-prod-app--r32865876578a1-ad25836`, worker revision
@@ -70,11 +70,11 @@ activation approval:
   the API held 100% traffic.
 - Production API and worker reported `STRIPE_INTEGRATION_ENABLED=false`,
   `STRIPE_BILLING_ENABLED=false`, `STRIPE_LIVE_MODE=true`, and Stripe API
-  version `2025-09-30.clover`. Account/price environment names were present,
-  the portal configuration was not deployed, and no deployed
-  `STRIPE_SECRET_KEY` or `STRIPE_WEBHOOK_SECRET` secret-reference entries were
-  present. Source `.env.production.backend` has conditional secret-manager
-  expressions; those are not evidence of deployed secret refs.
+  version `2025-09-30.clover`. Account/price environment names were present
+  with empty literal values, the portal configuration was not deployed, and no
+  deployed `STRIPE_SECRET_KEY` or `STRIPE_WEBHOOK_SECRET` secret-reference
+  entries were present. Source `.env.production.backend` has conditional
+  secret-manager expressions; those are not evidence of deployed secret refs.
   Account/product/price values, the pinned Billing Portal configuration, and
   the webhook endpoint were not verified. With integration disabled, webhook
   and portal maintenance is unavailable; production activation is blocked.

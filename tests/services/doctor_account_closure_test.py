@@ -293,6 +293,53 @@ def test_closure_refuses_owner_while_another_active_member_remains():
     assert owner_member.access_revoked_at is None
 
 
+@pytest.mark.parametrize("checkout_state", ["frozen_request", "cached_session"])
+def test_closure_refuses_unresolved_stripe_checkout(checkout_state: str):
+    doctor, practice, member = _scope()
+    if checkout_state == "frozen_request":
+        practice.stripe_checkout_request_json = '{"mode":"subscription"}'
+        practice.stripe_checkout_request_created_at = datetime(
+            2026, 8, 24, 12, 0, tzinfo=UTC
+        )
+    else:
+        practice.stripe_checkout_session_id = "cs_test_closure_pending"
+    practice.save()
+
+    with pytest.raises(DoctorAccountClosureError, match="Checkout must be reconciled"):
+        plan_doctor_account_closure(
+            doctor_id=doctor.id,
+            operator_ref="change:checkout-closure-test",
+            reason="Refuse closure while a hosted Checkout can still complete",
+        )
+
+    doctor.refresh()
+    member.refresh()
+    assert doctor.deleted_at is None
+    assert member.access_revoked_at is None
+
+
+def test_closure_refuses_final_owner_with_nonterminal_subscription():
+    doctor, practice, member = _scope()
+    practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
+    practice.subscription_status = "active"
+    practice.save()
+
+    with pytest.raises(
+        DoctorAccountClosureError,
+        match="nonterminal Stripe subscription must be resolved",
+    ):
+        plan_doctor_account_closure(
+            doctor_id=doctor.id,
+            operator_ref="change:subscription-closure-test",
+            reason="Refuse final-owner closure while recurring billing remains live",
+        )
+
+    doctor.refresh()
+    member.refresh()
+    assert doctor.deleted_at is None
+    assert member.access_revoked_at is None
+
+
 def test_closure_permits_non_owner_and_leaves_owner_active():
     owner, practice, _ = _scope(is_solo=False)
     workforce = Doctor(
@@ -565,6 +612,102 @@ def test_closure_retry_repairs_legacy_over_cap_post_commit_queue_gap() -> None:
     assert practice.stripe_quantity_sync_error == (
         "active clinician seat count exceeds public pilot maximum"
     )
+
+
+def test_workforce_closure_records_stripe_reconciliation_atomically():
+    _, practice, _ = _scope(is_solo=False)
+    doctor = Doctor(
+        clerk_id=f"user_close_workforce_billing_{secrets.token_hex(5)}",
+        email=f"workforce-billing-{secrets.token_hex(5)}@example.com",
+        biography="",
+    ).save()
+    member = PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="workforce",
+        attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        attestation_name="Departing Workforce Provider",
+    ).save()
+    practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
+    practice.subscription_status = "active"
+    practice.stripe_quantity_sync_version = 7
+    practice.save()
+    args = {
+        "doctor_id": doctor.id,
+        "operator_ref": "change:stripe-closure-test",
+        "reason": "Close the provider and queue billing reconciliation",
+    }
+    plan = plan_doctor_account_closure(**args)
+    assert plan.stripe_follow_up_required is True
+
+    result = close_doctor_account(
+        **args,
+        confirmed_plan_sha256=plan.plan_sha256,
+        now=datetime(2026, 8, 24, 13, 30, tzinfo=UTC),
+    )
+
+    assert result.changed is True
+    doctor.refresh()
+    member.refresh()
+    practice.refresh()
+    assert doctor.deleted_at is not None
+    assert member.access_revoked_at is not None
+    assert practice.stripe_quantity_sync_required is True
+    assert practice.stripe_quantity_sync_target == 1
+    assert practice.stripe_quantity_sync_version == 8
+
+
+def test_closure_rolls_back_when_stripe_quantity_target_cannot_be_recorded(
+    monkeypatch,
+):
+    _, practice, _ = _scope(is_solo=False)
+    doctor = Doctor(
+        clerk_id=f"user_close_workforce_rollback_{secrets.token_hex(5)}",
+        email=f"workforce-rollback-{secrets.token_hex(5)}@example.com",
+        biography="",
+    ).save()
+    member = PracticeMember(
+        practice_id=practice.id,
+        doctor_id=doctor.id,
+        role="workforce",
+        attested_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
+        attestation_name="Rollback Workforce Provider",
+    ).save()
+    practice.stripe_subscription_id = f"sub_closure_{secrets.token_hex(5)}"
+    practice.subscription_status = "active"
+    practice.save()
+    args = {
+        "doctor_id": doctor.id,
+        "operator_ref": "change:stripe-closure-rollback-test",
+        "reason": "Prove closure and quantity target roll back together",
+    }
+    plan = plan_doctor_account_closure(**args)
+
+    def fail_quantity_target(*_args, **_kwargs) -> int:
+        raise account_closure.ClinicianSeatPolicyError("synthetic ledger failure")
+
+    monkeypatch.setattr(
+        account_closure,
+        "record_active_clinician_seat_quantity",
+        fail_quantity_target,
+    )
+    with pytest.raises(
+        DoctorAccountClosureError,
+        match="seat reconciliation could not be recorded",
+    ):
+        close_doctor_account(
+            **args,
+            confirmed_plan_sha256=plan.plan_sha256,
+            now=datetime(2026, 8, 24, 13, 30, tzinfo=UTC),
+        )
+
+    doctor.refresh()
+    member.refresh()
+    practice.refresh()
+    assert doctor.deleted_at is None
+    assert member.access_revoked_at is None
+    assert practice.stripe_quantity_sync_required is False
+    assert practice.stripe_quantity_sync_target is None
 
 
 def test_closure_revokes_governed_authority_without_deleting_history(monkeypatch):

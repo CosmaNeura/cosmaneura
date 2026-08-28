@@ -1814,11 +1814,16 @@ def revoke_roster_access(
                 session.add(member)
                 session.add(locked_doctor)
                 if previous_active_count is not None:
-                    record_active_clinician_seat_quantity(
-                        session,
-                        locked_practice,
-                        previous_active_count=previous_active_count,
-                    )
+                    try:
+                        record_active_clinician_seat_quantity(
+                            session,
+                            locked_practice,
+                            previous_active_count=previous_active_count,
+                        )
+                    except ClinicianSeatPolicyError:
+                        raise OrganizationAccessError(
+                            "organization seat ledger is unavailable"
+                        ) from None
             audit = PracticeAccessAudit(
                 practice_id=locked_practice.id,
                 action=PracticeAccessAction.organization_access_revoked.value,

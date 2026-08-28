@@ -653,6 +653,21 @@ def _evaluate(
         doctor = doctor_snapshot
         member = member_snapshot
 
+    # An unbound hosted Checkout remains usable after local account closure.
+    # Require the audited Checkout recovery workflow to prove it absent,
+    # expire it, or bind its subscription before any clinician is revoked.
+    if (
+        practice.stripe_checkout_request_json is not None
+        or practice.stripe_checkout_session_id is not None
+    ):
+        raise DoctorAccountClosureError(
+            "Stripe Checkout must be reconciled before account closure"
+        )
+
+    from app.services.stripe_billing import has_nonterminal_subscription
+
+    stripe_follow_up_required = has_nonterminal_subscription(practice)
+
     receipt_statement = select(PracticeAccessAudit).where(
         PracticeAccessAudit.practice_id == practice.id,
         PracticeAccessAudit.action == PracticeAccessAction.doctor_account_closed.value,
@@ -695,7 +710,7 @@ def _evaluate(
                 authority_identity_count=counts.authority_identities,
                 active_mount_session_count=counts.mount_sessions,
                 video_integration_count=counts.video_integrations,
-                stripe_follow_up_required=bool(practice.stripe_subscription_id),
+                stripe_follow_up_required=stripe_follow_up_required,
                 already_applied=True,
             ),
             doctor=doctor,
@@ -748,6 +763,11 @@ def _evaluate(
             raise DoctorAccountClosureError(
                 "a non-solo owner requires an explicit practice wind-down before account closure"
             )
+        if stripe_follow_up_required:
+            raise DoctorAccountClosureError(
+                "a nonterminal Stripe subscription must be resolved before closing "
+                "the final practice owner"
+            )
     elif member.role != PracticeRole.workforce.value:
         raise DoctorAccountClosureError("provider membership role is invalid")
 
@@ -787,7 +807,7 @@ def _evaluate(
                 len(authority_scope.sessions) if authority_scope is not None else 0
             ),
             video_integration_count=len(video_integrations),
-            stripe_follow_up_required=bool(practice.stripe_subscription_id),
+            stripe_follow_up_required=stripe_follow_up_required,
             already_applied=False,
         ),
         doctor=doctor,
@@ -952,6 +972,15 @@ def close_doctor_account(
             # unusable by this platform without deleting the external account.
             for integration in evaluated.video_integrations:
                 session.delete(integration)
+
+            if evaluated.plan.stripe_follow_up_required:
+                # The membership revocation and Stripe repair obligation must
+                # commit together. Remote I/O remains asynchronous and is
+                # fenced by the obligation version.
+                record_active_clinician_seat_quantity(
+                    session,
+                    evaluated.practice,
+                )
 
             if evaluated.authority_scope is not None:
                 scope = evaluated.authority_scope

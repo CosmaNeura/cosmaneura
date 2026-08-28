@@ -14,7 +14,7 @@ from typer.testing import CliRunner
 
 import app.configuration.stripe as stripe_config
 from app.cli import app as cli_app
-from app.services import stripe_billing
+from app.services import organization_access, stripe_billing
 from app.services.organization_access import (
     RosterApprovalInput,
     claim_roster_access,
@@ -26,6 +26,7 @@ from app.services.practice_access import (
     PracticeAccessChangeError,
     set_billing_exemption,
 )
+from app.services.public_entitlements import ClinicianSeatPolicyError
 
 from activemodel.session_manager import global_session
 from app.models.doctor import Doctor
@@ -36,6 +37,10 @@ from app.models.stripe_event_receipt import StripeEventReceipt
 
 WEBHOOK_SECRET = "whsec_test_secret"
 NOW = datetime(2026, 8, 20, 20, 0, tzinfo=timezone.utc)
+
+
+def _invalid_seat_ledger(*_args, **_kwargs) -> int:
+    raise ClinicianSeatPolicyError("test invalid seat ledger")
 
 
 class FakeStripe:
@@ -1797,6 +1802,31 @@ def test_checkout_accepts_twenty_active_seats_and_rejects_twenty_one(
     )
 
 
+def test_checkout_fails_closed_when_canonical_seat_ledger_is_invalid(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    monkeypatch.setattr(
+        stripe_billing,
+        "active_clinician_seat_count",
+        _invalid_seat_ledger,
+    )
+
+    with pytest.raises(
+        stripe_billing.StripeSeatLedgerInvalid,
+        match="active-clinician ledger is invalid",
+    ):
+        stripe_billing.create_checkout_session(
+            practice,
+            customer_email="owner@example.com",
+            success_url="https://app.example/settings",
+            cancel_url="https://app.example/settings",
+            now=NOW,
+        )
+
+    assert not any(call[1] == "/checkout/sessions" for call in remote.calls)
+
+
 def test_paused_trial_without_card_revokes_then_resumed_restores_entitlement(
     remote: FakeStripe,
 ):
@@ -2367,6 +2397,20 @@ def test_unbound_entitled_status_fails_closed(subscription_status: str):
     assert not practice.entitled(at=NOW)
 
 
+@pytest.mark.parametrize("subscription_id", ["", "not_a_stripe_subscription"])
+@pytest.mark.parametrize("subscription_status", ["trialing", "active"])
+def test_malformed_subscription_id_fails_closed(
+    subscription_id: str,
+    subscription_status: str,
+):
+    practice = _practice()
+    practice.stripe_subscription_id = subscription_id
+    practice.subscription_status = subscription_status
+    practice.trial_ends_at = NOW + timedelta(days=14)
+
+    assert not practice.entitled(at=NOW)
+
+
 @pytest.mark.parametrize(
     "trial_end",
     [None, NOW, NOW - timedelta(seconds=1)],
@@ -2408,6 +2452,64 @@ def test_bound_remote_quantity_above_pilot_limit_revokes_entitlement(
     assert not practice.stripe_quantity_sync_required
     assert subscription["items"]["data"][0]["quantity"] == 1
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
+
+
+def test_refresh_revokes_stale_entitlement_when_canonical_seat_ledger_is_invalid(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "active"
+    practice.save()
+    monkeypatch.setattr(
+        stripe_billing,
+        "active_clinician_seat_count",
+        _invalid_seat_ledger,
+    )
+
+    stripe_billing.refresh_subscription_state(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_required is False
+    assert practice.stripe_quantity_sync_error == (
+        "authoritative active-clinician ledger is invalid"
+    )
+    assert not practice.entitled(at=NOW)
+
+
+def test_webhook_revokes_stale_entitlement_when_canonical_seat_ledger_is_invalid(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "active"
+    practice.save()
+    monkeypatch.setattr(
+        stripe_billing,
+        "active_clinician_seat_count",
+        _invalid_seat_ledger,
+    )
+
+    assert stripe_billing.apply_stripe_event(
+        _event(
+            "customer.subscription.updated",
+            subscription,
+            event_id="evt_invalid_seat_ledger",
+            created=int(NOW.timestamp()),
+        )
+    )
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert StripeEventReceipt.get(event_id="evt_invalid_seat_ledger") is not None
+    assert not practice.entitled(at=NOW)
 
 
 def test_zero_local_seats_fail_closed_but_do_not_block_cancellation(
@@ -3428,6 +3530,57 @@ def test_organization_claim_and_revoke_mark_quantity_reconciliation():
     assert practice.stripe_quantity_sync_version > second_version
 
 
+def test_organization_revoke_and_quantity_obligation_roll_back_together(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    domain = f"seat-rollback-{secrets.token_hex(4)}.example.com"
+    practice, code = _organization_practice(domain, now=NOW)
+    doctor = _organization_doctor(f"clinician@{domain}")
+    _import_organization_roster(practice, [doctor.email or ""], now=NOW)
+    _, member = claim_roster_access(
+        doctor,
+        supplied_code=code,
+        now=NOW + timedelta(seconds=1),
+    )
+    approval_id = member.organization_roster_approval_id
+    assert approval_id is not None
+    practice.stripe_customer_id = "cus_org_seat_rollback"
+    practice.stripe_subscription_id = "sub_org_seat_rollback"
+    practice.subscription_status = "active"
+    practice.save()
+
+    def fail_quantity_target(*_args, **_kwargs) -> int:
+        raise ClinicianSeatPolicyError("synthetic ledger failure")
+
+    monkeypatch.setattr(
+        organization_access,
+        "record_active_clinician_seat_quantity",
+        fail_quantity_target,
+    )
+    with pytest.raises(
+        organization_access.OrganizationAccessError,
+        match="seat ledger is unavailable",
+    ):
+        revoke_roster_access(
+            practice,
+            doctor.email or "",
+            operator_ref="stripe-billing-test",
+            reason="Prove revocation and quantity target roll back together",
+            now=NOW + timedelta(seconds=2),
+        )
+
+    member.refresh()
+    doctor.refresh()
+    practice.refresh()
+    approval = organization_access.OrganizationRosterApproval.get(id=approval_id)
+    assert approval is not None
+    assert approval.revoked_at is None
+    assert member.access_revoked_at is None
+    assert doctor.deleted_at is None
+    assert practice.stripe_quantity_sync_required is False
+    assert practice.stripe_quantity_sync_target is None
+
+
 def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStripe):
     practice = _practice()
     subscription = _subscription(practice, quantity=2)
@@ -3452,6 +3605,37 @@ def test_quantity_sync_failure_is_durable_and_reconciles_later(remote: FakeStrip
     assert not practice.stripe_quantity_sync_required
     assert practice.stripe_quantity_synced_at is not None
     assert remote.subscriptions[subscription["id"]]["items"]["data"][0]["quantity"] == 1
+
+
+def test_quantity_sync_fails_closed_when_canonical_seat_ledger_is_invalid(
+    remote: FakeStripe, monkeypatch: pytest.MonkeyPatch
+):
+    practice = _practice()
+    subscription = _subscription(practice)
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.stripe_subscription_id = subscription["id"]
+    practice.subscription_status = "active"
+    practice.stripe_quantity_sync_required = True
+    practice.stripe_quantity_sync_target = 1
+    practice.save()
+    monkeypatch.setattr(
+        stripe_billing,
+        "active_clinician_seat_count",
+        _invalid_seat_ledger,
+    )
+
+    assert not stripe_billing.sync_subscription_quantity(practice)
+
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_quantity_sync_required is False
+    assert practice.stripe_quantity_sync_target is None
+    assert practice.stripe_quantity_sync_error == "active_seat_ledger_invalid"
+    assert not any(
+        path.startswith("/subscription_items/")
+        for _method, path, _data, _key in remote.calls
+    )
 
 
 def test_quantity_sync_never_mutates_a_bound_subscription_with_identity_drift(

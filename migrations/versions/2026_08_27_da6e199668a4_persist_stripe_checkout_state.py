@@ -1,7 +1,7 @@
 """Persist Stripe Checkout request and trial-policy state.
 
 Revision ID: da6e199668a4
-Revises: d0a4c8e2f611
+Revises: e7a9c3d5f102
 Create Date: 2026-08-27 18:00:00.000000
 """
 
@@ -12,7 +12,7 @@ from alembic import op
 
 
 revision: str = "da6e199668a4"
-down_revision: str | None = "d0a4c8e2f611"
+down_revision: str | None = "e7a9c3d5f102"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

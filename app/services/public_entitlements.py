@@ -114,10 +114,14 @@ def public_subscription_in_force(
     ):
         return False
     if status == "active":
-        return True
+        return practice.stripe_subscription_id is not None
     if status == "trialing":
         current = at or datetime.now(timezone.utc)
-        return bool(practice.trial_ends_at and practice.trial_ends_at > current)
+        return bool(
+            practice.stripe_subscription_id
+            and practice.trial_ends_at
+            and practice.trial_ends_at > current
+        )
     if status is not None:
         return False
     # Creating a hosted Checkout Session starts the billing clock, but it does
