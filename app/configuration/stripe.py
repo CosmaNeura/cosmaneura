@@ -10,6 +10,9 @@ STRIPE_BILLING_ENABLED = config("STRIPE_BILLING_ENABLED", default=False, cast=bo
 STRIPE_SECRET_KEY = config("STRIPE_SECRET_KEY", default="", cast=str)
 STRIPE_ACCOUNT_ID = config("STRIPE_ACCOUNT_ID", default="", cast=str)
 STRIPE_PRICE_ID = config("STRIPE_PRICE_ID", default="", cast=str)
+STRIPE_PORTAL_CONFIGURATION_ID = config(
+    "STRIPE_PORTAL_CONFIGURATION_ID", default="", cast=str
+)
 STRIPE_WEBHOOK_SECRET = config("STRIPE_WEBHOOK_SECRET", default="", cast=str)
 STRIPE_API_VERSION = config("STRIPE_API_VERSION", default="", cast=str)
 STRIPE_LIVE_MODE = config("STRIPE_LIVE_MODE", default=False, cast=bool)
@@ -52,6 +55,15 @@ def stripe_webhook_configured() -> bool:
     )
 
 
+def stripe_portal_configured() -> bool:
+    """Whether Billing Portal sessions can use the pinned configuration."""
+
+    return bool(
+        stripe_runtime_configured()
+        and STRIPE_PORTAL_CONFIGURATION_ID.startswith("bpc_")
+    )
+
+
 def stripe_billing_configured() -> bool:
     """Whether creating *new* Checkout subscriptions is safe.
 
@@ -59,4 +71,8 @@ def stripe_billing_configured() -> bool:
     subscription that this deployment cannot subsequently mirror.
     """
 
-    return bool(STRIPE_BILLING_ENABLED and stripe_webhook_configured())
+    return bool(
+        STRIPE_BILLING_ENABLED
+        and stripe_webhook_configured()
+        and stripe_portal_configured()
+    )

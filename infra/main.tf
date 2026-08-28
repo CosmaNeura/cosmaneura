@@ -71,6 +71,7 @@ locals {
       startswith(trimspace(try(data.external.secrets.result["STRIPE_WEBHOOK_SECRET"], "")), "whsec_") &&
       startswith(trimspace(try(data.external.secrets.result["STRIPE_ACCOUNT_ID"], "")), "acct_") &&
       startswith(trimspace(try(data.external.secrets.result["STRIPE_PRICE_ID"], "")), "price_") &&
+      startswith(trimspace(try(data.external.secrets.result["STRIPE_PORTAL_CONFIGURATION_ID"], "")), "bpc_") &&
       trimspace(try(data.external.secrets.result["STRIPE_API_VERSION"], "")) != ""
     ))
   )
