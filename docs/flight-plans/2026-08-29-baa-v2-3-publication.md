@@ -8,8 +8,9 @@
   support,” and retaining every other substantive term.
 - In scope: the immutable Core v2.3 HTML asset and digest, the additive
   `baa_version` record, current-version clickwrap enforcement, onboarding
-  version text and versioned PDF link, focused tests, and coordinated public
-  HTML/PDF publication in `CosmaNeura/cosmaneura-web`.
+  version text and versioned PDF link, exact document-identity binding on the
+  acceptance request, focused tests, and coordinated public HTML/PDF
+  publication in `CosmaNeura/cosmaneura-web`.
 - Explicit non-goals: changing or deleting v2.2 or any historical acceptance;
   changing negotiated organization BAAs; adding claim preparation,
   submission, 837P, clearinghouse, EHR-write, billing, or other product
@@ -75,9 +76,9 @@
 
 ## Schema/data sequence
 
-| Change | Rung | PR/branch | Invariant | Recovery |
-|---|---|---|---|---|
-| Add v2.3 and select it for clickwrap | Additive legal-version publication plus current-version cut | Core `legal/baa-v2-3-remove-claims-submission-20260829` | v2.2 asset/row/acceptances remain unchanged; v2.3 is the sole current version; a stale clickwrap cannot authorize PHI access; negotiated BAAs retain their existing effective-date rules | Before any v2.3 acceptance, the guarded downgrade may delete only the unused v2.3 row and restore v2.2 current. After any v2.3 acceptance, stop onboarding, retain all evidence, and roll forward with counsel direction. |
+| Change                               | Rung                                                        | PR/branch                                               | Invariant                                                                                                                                                                                                                                                               | Recovery                                                                                                                                                                                                                  |
+| ------------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add v2.3 and select it for clickwrap | Additive legal-version publication plus current-version cut | Core `legal/baa-v2-3-remove-claims-submission-20260829` | v2.2 asset/row/acceptances remain unchanged; v2.3 is the sole current version; the API accepts only the exact current doc ID, version, and digest presented by the browser and returns 409 for any mismatch; negotiated BAAs retain their existing effective-date rules | Before any v2.3 acceptance, the guarded downgrade may delete only the unused v2.3 row and restore v2.2 current. After any v2.3 acceptance, stop onboarding, retain all evidence, and roll forward with counsel direction. |
 
 - PHI-safe rehearsal: use only a synthetic practice and clinician in staging.
   Verify an existing v2.2 clickwrap becomes not-in-force, access fails closed,
@@ -91,10 +92,11 @@
      PDF before advancing.
   2. Complete Core CI and exact-head independent review. Reconcile the full
      production drift and satisfy the existing Terraform/callback gates.
-  3. Stop new clickwrap onboarding for the Core production revision change so
-     no v2.2 page can remain open while v2.3 becomes current. Promote through
-     the founder-only workflow, wait for the prior revision to drain, and then
-     reopen onboarding only after the canary passes.
+  3. Stop new clickwrap onboarding for the Core production revision change as
+     an additional operational guard. The API independently rejects an open
+     tab unless its submitted doc ID, version, and digest exactly match the
+     current BAA. Promote through the founder-only workflow, wait for the prior
+     revision to drain, and then reopen onboarding only after the canary passes.
   4. Review, merge, and promote the web activation branch; verify canonical
      `/baa` and `/baa.pdf` only after Core v2.3 is healthy.
 - Health signals and measurable abort thresholds: abort on any digest mismatch,

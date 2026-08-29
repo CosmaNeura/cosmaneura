@@ -61,6 +61,9 @@ def _accept_baa(client: TestClient) -> dict:
     resp = client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": ["baa"],
@@ -490,12 +493,61 @@ def test_baa_acceptance_requires_checkbox(bare_authenticated_client: TestClient)
     resp = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": [],
         },
     )
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.parametrize(
+    "identity_override",
+    [
+        pytest.param({"doc_id": "CN-BAA-CUST-CW-OTHER"}, id="doc-id"),
+        pytest.param({"version": "2.2"}, id="version"),
+        pytest.param({"sha256": "0" * 64}, id="sha256"),
+        pytest.param(
+            {
+                "version": "2.2",
+                "sha256": (
+                    "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
+                ),
+            },
+            id="stale-v2.2-tab",
+        ),
+    ],
+)
+def test_baa_acceptance_rejects_document_identity_mismatch(
+    bare_authenticated_client: TestClient,
+    identity_override: dict[str, str],
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    body = {
+        "doc_id": BAA_DOC_ID,
+        "version": BAA_CURRENT_VERSION,
+        "sha256": BAA_CURRENT_SHA256,
+        "signature_name": "Pat Owner",
+        "signature_title": "Physician / owner",
+        "checks": ["baa"],
+    } | identity_override
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json=body,
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "reload and review" in response.json()["detail"].lower()
+    assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 0
+    practice.refresh()
+    assert practice.baa_version is None
+    assert practice.baa_accepted_at is None
 
 
 def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
@@ -516,6 +568,9 @@ def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
     clickwrap = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": ["baa"],

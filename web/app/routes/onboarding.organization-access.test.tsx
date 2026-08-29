@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest"
 import { vi } from "vitest"
 
+import type { PracticeStatus } from "~/lib/practice-api"
+
 import {
   AccountRecoveryRequired,
+  BaaClickwrap,
   ManagedOrganizationAccessNotice,
   default as OnboardingPage,
   OrganizationAccessFlow,
@@ -12,13 +15,50 @@ import {
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 const apiMocks = vi.hoisted(() => ({
+  acceptPracticeBaa: vi.fn(),
   createPractice: vi.fn(),
+  getBaaCurrent: vi.fn(),
 }))
 
 vi.mock("~/lib/practice-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("~/lib/practice-api")>()
-  return { ...actual, createPractice: apiMocks.createPractice }
+  return {
+    ...actual,
+    acceptPracticeBaa: apiMocks.acceptPracticeBaa,
+    createPractice: apiMocks.createPractice,
+    getBaaCurrent: apiMocks.getBaaCurrent,
+  }
 })
+
+function practice(overrides: Partial<PracticeStatus> = {}): PracticeStatus {
+  return {
+    legal_name: "Test Practice, PLLC",
+    join_code: "TESTCODE",
+    email_domain: "example.com",
+    origin_channel: "direct",
+    pastoral_pack: false,
+    baa_accepted: false,
+    role: "owner",
+    attested: false,
+    access_authorized: false,
+    authorization_basis: null,
+    access_revoked: false,
+    pilot_access_grant_active: false,
+    trial_ends_at: null,
+    billing_exempt: false,
+    billing_exempt_until: null,
+    billing_exempt_active: false,
+    billing_enabled: false,
+    billing_management_enabled: false,
+    billing_portal_available: false,
+    billing_checkout_resumable: false,
+    billing_subscription_manageable: false,
+    billing_checkout_available_at: null,
+    entitled: false,
+    subscription_status: null,
+    ...overrides,
+  }
+}
 
 describe("onboarding view-as safety", () => {
   it("renders only the verification interstitial when status is unavailable", () => {
@@ -219,6 +259,79 @@ describe("PracticeForm onboarding guardrails", () => {
       channel: "direct",
       pastoral_pack: false,
     })
+  })
+})
+
+describe("BaaClickwrap", () => {
+  it("accepts the exact document identity fetched and displayed", async () => {
+    const current = {
+      doc_id: "CN-BAA-CUST-CW",
+      version: "2.3",
+      sha256: "f".repeat(64),
+      html: "<p>Current agreement body</p>",
+    }
+    const accepted = practice({ baa_accepted: true })
+    apiMocks.getBaaCurrent.mockReset().mockResolvedValueOnce(current)
+    apiMocks.acceptPracticeBaa.mockReset().mockResolvedValueOnce(accepted)
+    const onPractice = vi.fn()
+
+    render(
+      <BaaClickwrap
+        practice={practice()}
+        onPractice={onPractice}
+        onDecline={vi.fn()}
+      />,
+    )
+
+    await screen.findByText("Current agreement body")
+    fireEvent.change(
+      screen.getByRole("textbox", { name: /accepting individual/i }),
+      { target: { value: "Pat Owner" } },
+    )
+    fireEvent.change(screen.getByRole("textbox", { name: "Title" }), {
+      target: { value: "Physician / owner" },
+    })
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: /I have read and agree/i }),
+    )
+    fireEvent.click(screen.getByRole("button", { name: "I Agree" }))
+
+    await waitFor(() => {
+      expect(apiMocks.acceptPracticeBaa).toHaveBeenCalledWith({
+        doc_id: current.doc_id,
+        version: current.version,
+        sha256: current.sha256,
+        signature_name: "Pat Owner",
+        signature_title: "Physician / owner",
+        checks: ["baa"],
+      })
+      expect(onPractice).toHaveBeenCalledWith(accepted)
+    })
+  })
+
+  it("fails closed when the backend document identity does not match the bundled agreement", async () => {
+    apiMocks.getBaaCurrent.mockReset().mockResolvedValueOnce({
+      doc_id: "CN-BAA-CUST-CW",
+      version: "2.2",
+      sha256: "a".repeat(64),
+      html: "<p>Stale agreement body</p>",
+    })
+    apiMocks.acceptPracticeBaa.mockReset()
+
+    render(
+      <BaaClickwrap
+        practice={practice()}
+        onPractice={vi.fn()}
+        onDecline={vi.fn()}
+      />,
+    )
+
+    expect(
+      await screen.findByText(/agreement version could not be verified/i),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Stale agreement body")).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "I Agree" })).toBeDisabled()
+    expect(apiMocks.acceptPracticeBaa).not.toHaveBeenCalled()
   })
 })
 
