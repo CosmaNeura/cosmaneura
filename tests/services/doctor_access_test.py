@@ -6,6 +6,7 @@ import pytest
 
 from app.services.doctor_access import resolve_doctor_access
 
+from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.doctor import Doctor
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
 from app.models.practice import Practice, PracticeMember
@@ -199,6 +200,25 @@ def test_normal_practice_path_keeps_baa_and_entitlement_rules():
     assert entitled.authorization_basis == "workforce_attestation"
     assert entitled.baa_in_force is True
     assert entitled.entitlement_in_force is True
+
+
+def test_stale_clickwrap_denies_access_until_current_version_is_accepted():
+    doctor = _doctor("stale-baa")
+    practice, _ = _practice(doctor)
+    practice.baa_accepted_at = datetime.now(timezone.utc)
+    practice.baa_version = "CN-BAA-CUST-CW v2.2"
+    practice.billing_exempt = True
+    practice.save()
+
+    stale = resolve_doctor_access(doctor)
+    assert stale.allowed is False
+    assert stale.denial_reason == "baa_not_in_force"
+
+    practice.baa_version = BAA_CURRENT_REFERENCE
+    practice.save()
+    current = resolve_doctor_access(doctor)
+    assert current.allowed is True
+    assert current.baa_in_force is True
 
 
 @pytest.mark.parametrize("acquisition_source", ["managed", "public_self_service"])

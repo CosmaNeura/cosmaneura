@@ -5,9 +5,9 @@ export const PRODUCT = "Cosmas"
  * hash-verified by the backend (`GET /internal/v1/baa/current`) from
  * `app/assets/baa/` — never inline it here. */
 export const BAA_DOC_ID = "CN-BAA-CUST-CW"
-export const BAA_VERSION = "2.2"
+export const BAA_VERSION = "2.3"
 
-export const BAA_PDF_URL = "https://cosmaneura.com/baa.pdf"
+export const BAA_PDF_URL = "https://cosmaneura.com/baa-v2-3.pdf"
 
 /** Exact label pattern required by CLAUDE_BAA_IMPLEMENTATION step 3. */
 export function baaCheckboxLabel(legalName: string) {

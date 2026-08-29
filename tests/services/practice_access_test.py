@@ -13,6 +13,7 @@ from app.services.practice_access import (
 )
 
 from activemodel.session_manager import get_session
+from app.models.baa import BAA_CURRENT_REFERENCE
 from app.models.practice import Practice
 from app.models.practice_access_audit import (
     PracticeAccessAction,
@@ -52,6 +53,17 @@ def test_future_negotiated_baa_is_recorded_but_does_not_unlock_early():
     assert audit.action == PracticeAccessAction.negotiated_baa_recorded.value
     assert audit.operator_ref == "ticket-BAA-204"
     assert audit.document_reference == "CN-BAA-CUST-2026-0042"
+
+
+def test_clickwrap_baa_requires_the_current_version() -> None:
+    practice = _practice()
+    practice.baa_accepted_at = NOW
+    practice.baa_version = "CN-BAA-CUST-CW v2.2"
+
+    assert not practice.baa_in_force(at=NOW)
+
+    practice.baa_version = BAA_CURRENT_REFERENCE
+    assert practice.baa_in_force(at=NOW)
 
 
 def test_future_replacement_cannot_suspend_negotiated_baa_currently_in_force():

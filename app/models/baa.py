@@ -23,9 +23,10 @@ from .practice import Practice
 BAA_ASSET_DIR = get_root_path() / "app" / "assets" / "baa"
 
 BAA_DOC_ID = "CN-BAA-CUST-CW"
-BAA_CURRENT_VERSION = "2.2"
-BAA_CURRENT_SHA256 = "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
-BAA_CURRENT_FILENAME = "baa_cn-baa-cust-cw_v2.2.html"
+BAA_CURRENT_VERSION = "2.3"
+BAA_CURRENT_SHA256 = "9bdc110b6b2ffcc9f5e7aee653af499357d2f35dccf43c57d8bbcf70094ed34e"
+BAA_CURRENT_FILENAME = "baa_cn-baa-cust-cw_v2.3.html"
+BAA_CURRENT_REFERENCE = f"{BAA_DOC_ID} v{BAA_CURRENT_VERSION}"
 
 
 class BaaVersion(BaseModel, TimestampsMixin, TypeIDMixin("baa_version"), table=True):
