@@ -983,10 +983,17 @@ def zoom_revoked_ack(request: Request) -> None:
 _JOIN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
-def _current_baa_version() -> BaaVersion:
+def _verified_current_baa() -> tuple[BaaVersion, str, str]:
     version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
     assert version, "no current BAA version published — seed migration missing?"
-    return version
+    html = version.content()
+    content_sha256 = hashlib.sha256(html.encode("utf-8")).hexdigest()
+    if not version.matches_pinned_content_sha256(content_sha256):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="BAA text failed integrity verification.",
+        )
+    return version, html, content_sha256
 
 
 def _client_ip(request: Request) -> str | None:
@@ -1441,18 +1448,12 @@ class BaaDocument(BaseModel, extra="forbid"):
 @internal_api_app.get("/baa/current", name="baa_current")
 def baa_current(request: Request) -> BaaDocument:
     """The canonical, hash-verified BAA text presented in the clickwrap."""
-    version = _current_baa_version()
-    html = version.content()
-    content_sha = hashlib.sha256(html.encode("utf-8")).hexdigest()
-    if content_sha != version.sha256:
-        # guardrail 2 of the BAA implementation brief: fail loudly, never
-        # present text that doesn't match the recorded hash
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="BAA text failed integrity verification.",
-        )
+    version, html, content_sha256 = _verified_current_baa()
     return BaaDocument(
-        doc_id=version.doc_id, version=version.version, sha256=version.sha256, html=html
+        doc_id=version.doc_id,
+        version=version.version,
+        sha256=content_sha256,
+        html=html,
     )
 
 
@@ -1496,7 +1497,7 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the practice owner can accept the BAA.",
         )
-    version = _current_baa_version()
+    version, _, pinned_content_sha256 = _verified_current_baa()
     # Serialize acceptance per practice. The legal execution record, its gate
     # mirror, any legacy managed-practice trial, and owner attestation commit
     # atomically. Public self-service trials start only after card collection
@@ -1537,10 +1538,15 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
                 accepted_at_utc=accepted_at,
                 ip_address=_client_ip(request),
                 user_agent=(request.headers.get("user-agent") or "")[:512] or None,
-                content_sha256=version.sha256,
+                content_sha256=pinned_content_sha256,
             )
             session.add(acceptance)
         else:
+            if not version.matches_pinned_content_sha256(acceptance.content_sha256):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="BAA acceptance failed integrity verification.",
+                )
             accepted_at = acceptance.accepted_at_utc
 
         practice.baa_version = f"{version.doc_id} v{version.version}"
@@ -1661,13 +1667,7 @@ def lookup_practice(request: Request, data: JoinCodeBody) -> PracticeLookupResul
     ):
         return PracticeLookupResult()
     if not email_matches_domain(verified_email, practice.email_domain):
-        return PracticeLookupResult(
-            mismatch=JoinMismatch(
-                practice_name=practice.legal_name,
-                required_domain=practice.email_domain,
-                signed_in_domain=extract_email_domain(verified_email),
-            )
-        )
+        return PracticeLookupResult()
     return PracticeLookupResult(
         practice=PracticeStatus(
             legal_name=practice.legal_name,
@@ -1847,12 +1847,8 @@ def join_practice(request: Request, data: JoinPracticeBody) -> PracticeStatus:
             locked_verified_email, locked_practice.email_domain
         ):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=(
-                    f"{locked_practice.legal_name} is for "
-                    f"@{locked_practice.email_domain} inboxes. "
-                    "Start your own Cosmas practice instead."
-                ),
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No practice matches that join code.",
             )
         if not locked_practice.baa_in_force():
             raise HTTPException(

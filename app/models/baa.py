@@ -26,6 +26,9 @@ BAA_DOC_ID = "CN-BAA-CUST-CW"
 BAA_CURRENT_VERSION = "2.2"
 BAA_CURRENT_SHA256 = "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
 BAA_CURRENT_FILENAME = "baa_cn-baa-cust-cw_v2.2.html"
+BAA_PINNED_SHA256_BY_EDITION = {
+    (BAA_DOC_ID, BAA_CURRENT_VERSION): BAA_CURRENT_SHA256,
+}
 
 
 class BaaVersion(BaseModel, TimestampsMixin, TypeIDMixin("baa_version"), table=True):
@@ -47,6 +50,17 @@ class BaaVersion(BaseModel, TimestampsMixin, TypeIDMixin("baa_version"), table=T
 
     def content(self) -> str:
         return (get_root_path() / self.content_path).read_text()
+
+    def pinned_content_sha256(self) -> str | None:
+        return BAA_PINNED_SHA256_BY_EDITION.get((self.doc_id, self.version))
+
+    def matches_pinned_content_sha256(self, content_sha256: str) -> bool:
+        pinned_sha256 = self.pinned_content_sha256()
+        return (
+            pinned_sha256 is not None
+            and self.sha256 == pinned_sha256
+            and content_sha256 == pinned_sha256
+        )
 
 
 # No update or delete paths exist for acceptances in application code by

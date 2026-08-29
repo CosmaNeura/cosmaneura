@@ -19,7 +19,7 @@ from app.services.public_entitlements import (
 from app.utils.email_domain import extract_email_domain
 
 from activemodel.session_manager import get_session
-from app.models.baa import BAA_CURRENT_SHA256, BaaAcceptance
+from app.models.baa import BAA_CURRENT_SHA256, BAA_DOC_ID, BaaAcceptance, BaaVersion
 from app.models.doctor import Doctor, DoctorRole
 from app.models.organization_access import ProviderOrganization
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
@@ -534,6 +534,56 @@ def test_public_baa_acceptance_retry_repairs_legal_gate_without_starting_trial(
     assert member.attestation_name == acceptance.accepted_by_name
 
 
+def test_baa_hash_validation_rejects_matching_tampered_row_values():
+    version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
+    assert version
+    tampered_sha256 = "0" * 64
+    version.sha256 = tampered_sha256
+
+    assert not version.matches_pinned_content_sha256(tampered_sha256)
+
+
+def test_baa_acceptance_retry_rejects_tampered_content_hash(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    member = PracticeMember.get(doctor_id=doctor.id)
+    version = BaaVersion.get(doc_id=BAA_DOC_ID, is_current=True)
+    assert member
+    assert version
+    BaaAcceptance(
+        practice_id=practice.id,
+        baa_version_id=version.id,
+        covered_entity_legal_name=practice.legal_name,
+        accepted_by_doctor_id=doctor.id,
+        accepted_by_name="Pat Owner",
+        accepted_by_title="Physician / owner",
+        accepted_by_email=doctor.email or "",
+        accepted_at_utc=datetime.now(timezone.utc),
+        content_sha256="0" * 64,
+    ).save()
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json={
+            "signature_name": "Pat Owner",
+            "signature_title": "Physician / owner",
+            "checks": ["baa"],
+        },
+    )
+
+    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.json() == {
+        "detail": "BAA acceptance failed integrity verification."
+    }
+    practice.refresh()
+    member.refresh()
+    assert practice.baa_accepted_at is None
+    assert member.attested_at is None
+
+
 def test_baa_acceptance_has_database_idempotency_constraint():
     table = SQLModel.metadata.tables["baa_acceptance"]
     constraints = {constraint.name for constraint in table.constraints}
@@ -569,9 +619,11 @@ def test_baa_acceptance_database_rejects_update_and_delete(
         savepoint.rollback()
 
 
-def test_join_requires_matching_email_domain(bare_authenticated_client: TestClient):
-    doctor = _authed_doctor()
-    Practice(
+def test_wrong_domain_lookup_is_generic_and_join_is_rejected(
+    bare_authenticated_client: TestClient,
+):
+    _authed_doctor()
+    practice = Practice(
         legal_name="MyCatholicDoctor Nashua",
         join_code="MCDNASHU",
         email_domain="mycatholicdoctor.com",
@@ -587,10 +639,9 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
         json={"join_code": "mcd-nashu"},
     )
     assert lookup.status_code == status.HTTP_200_OK, lookup.text
-    body = lookup.json()
-    assert body["practice"] is None
-    assert body["mismatch"]["required_domain"] == "mycatholicdoctor.com"
-    assert body["mismatch"]["signed_in_domain"] == extract_email_domain(doctor.email)
+    assert lookup.json() == {"practice": None, "mismatch": None}
+    assert practice.legal_name not in lookup.text
+    assert practice.email_domain not in lookup.text
 
     joined = bare_authenticated_client.post(
         api_app.url_path_for("join_practice"),
@@ -600,7 +651,10 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
             "checks": ["workforce", "not-party", "direction", "phi"],
         },
     )
-    assert joined.status_code == status.HTTP_403_FORBIDDEN
+    assert joined.status_code == status.HTTP_404_NOT_FOUND
+    assert joined.json() == {"detail": "No practice matches that join code."}
+    assert practice.legal_name not in joined.text
+    assert practice.email_domain not in joined.text
 
 
 def test_solo_practice_code_is_never_disclosed_or_accepted(
