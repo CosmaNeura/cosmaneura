@@ -282,6 +282,53 @@ def _event(
     }
 
 
+def _invoice_event(
+    event_type: str,
+    subscription: dict,
+    *,
+    event_id: str,
+    created: int,
+    include_practice_hint: bool = True,
+) -> dict:
+    return {
+        "id": event_id,
+        "type": event_type,
+        "created": created,
+        "api_version": "2025-09-30.clover",
+        "livemode": False,
+        "data": {
+            "object": {
+                "id": f"in_{event_id.removeprefix('evt_')}",
+                "customer": subscription["customer"],
+                "customer_email": "sensitive-invoice@example.com",
+                "livemode": False,
+                "parent": {
+                    "type": "subscription_details",
+                    "subscription_details": {
+                        "subscription": subscription["id"],
+                        "metadata": {
+                            "practice_id": (
+                                subscription["metadata"]["practice_id"]
+                                if include_practice_hint
+                                else None
+                            )
+                        },
+                    },
+                },
+            }
+        },
+    }
+
+
+def _current_checkout_subscription(practice: Practice, **kwargs: Any) -> dict:
+    subscription = _subscription(practice, **kwargs)
+    subscription["metadata"]["trial_clock"] = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    subscription["metadata"]["trial_days"] = "14"
+    subscription["trial_start"] = int(NOW.timestamp())
+    subscription["trial_end"] = int((NOW + timedelta(days=14)).timestamp())
+    return subscription
+
+
 def _bind_verified_public_subscription(
     practice: Practice,
     subscription: dict,
@@ -1454,6 +1501,345 @@ def test_verified_event_is_durable_and_deduplicated_before_stripe_io(
     assert stripe_billing.process_stripe_event_inbox(first_id)
     practice.refresh()
     assert practice.subscription_status == "canceled"
+
+
+@pytest.mark.parametrize("event_type", ["invoice.paid", "invoice.payment_succeeded"])
+def test_paid_invoice_for_known_customer_durably_restores_subscription_mirror(
+    remote: FakeStripe,
+    event_type: str,
+):
+    practice = _practice()
+    subscription = _current_checkout_subscription(
+        practice,
+        subscription_id=f"sub_{event_type.replace('.', '_')}",
+        customer_id=f"cus_{event_type.replace('.', '_')}",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.save()
+    event = _invoice_event(
+        event_type,
+        subscription,
+        event_id=f"evt_{event_type.replace('.', '_')}",
+        created=int((NOW + timedelta(days=30)).timestamp()),
+        include_practice_hint=False,
+    )
+
+    inbox_id, duplicate = stripe_billing.enqueue_stripe_event(event)
+    duplicate_id, duplicate_again = stripe_billing.enqueue_stripe_event(event)
+
+    assert inbox_id is not None
+    assert duplicate_id == inbox_id
+    assert duplicate is False
+    assert duplicate_again is True
+    assert remote.calls == []
+    practice.refresh()
+    assert practice.stripe_subscription_id is None
+    inbox = StripeEventInbox.get(id=inbox_id)
+    assert inbox
+    assert "sensitive-invoice@example.com" not in inbox.payload_json
+
+    assert stripe_billing.process_stripe_event_inbox(inbox_id)
+    practice.refresh()
+    assert practice.stripe_customer_id == subscription["customer"]
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.stripe_subscription_entitlement_contract == (
+        stripe_billing.CURRENT_STRIPE_ENTITLEMENT_CONTRACT_VERSION
+    )
+    assert practice.stripe_trial_clock_policy == (
+        stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    )
+    assert practice.trial_ends_at == NOW + timedelta(days=14)
+    assert practice.subscription_status == "active"
+
+
+def test_paid_invoice_does_not_bind_from_mutable_metadata_alone(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _current_checkout_subscription(
+        practice,
+        subscription_id="sub_invoice_practice_hint",
+        customer_id="cus_invoice_practice_hint",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    event = _invoice_event(
+        "invoice.paid",
+        subscription,
+        event_id="evt_invoice_practice_hint",
+        created=int((NOW + timedelta(days=30)).timestamp()),
+    )
+
+    inbox_id, duplicate = stripe_billing.enqueue_stripe_event(event)
+
+    assert inbox_id is not None
+    assert duplicate is False
+    assert stripe_billing.process_stripe_event_inbox(inbox_id)
+    assert remote.calls == []
+    practice.refresh()
+    assert practice.stripe_customer_id is None
+    assert practice.stripe_subscription_id is None
+    assert practice.subscription_status is None
+    inbox = StripeEventInbox.get(id=inbox_id)
+    assert inbox
+    assert inbox.state == "processed"
+
+
+def test_paid_invoice_recovers_only_through_exact_completed_checkout(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _current_checkout_subscription(
+        practice,
+        subscription_id="sub_invoice_checkout_recovery",
+        customer_id="cus_invoice_checkout_recovery",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    frozen = _store_frozen_paid_pilot_checkout_request(practice)
+    practice.refresh()
+    practice.stripe_checkout_session_id = "cs_invoice_checkout_recovery"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/cs_invoice_checkout_recovery"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=24)
+    practice.stripe_checkout_request_json = None
+    practice.stripe_checkout_request_created_at = None
+    practice.save()
+    checkout_session = _paid_pilot_checkout_session(
+        practice,
+        frozen,
+        session_id="cs_invoice_checkout_recovery",
+        status="complete",
+    )
+    checkout_session["customer"] = subscription["customer"]
+    checkout_session["subscription"] = subscription["id"]
+    remote.sessions[checkout_session["id"]] = checkout_session
+    event = _invoice_event(
+        "invoice.paid",
+        subscription,
+        event_id="evt_invoice_checkout_recovery",
+        created=int((NOW + timedelta(days=30)).timestamp()),
+    )
+
+    inbox_id, duplicate = stripe_billing.enqueue_stripe_event(event)
+
+    assert inbox_id is not None
+    assert duplicate is False
+    assert stripe_billing.process_stripe_event_inbox(inbox_id)
+    practice.refresh()
+    assert practice.stripe_customer_id == subscription["customer"]
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.subscription_status == "active"
+    assert practice.stripe_checkout_session_id is None
+    assert practice.stripe_checkout_request_json is None
+    assert practice.stripe_checkout_attempt == 1
+
+
+def test_paid_invoice_cannot_bypass_an_open_checkout_session(remote: FakeStripe):
+    practice = _practice()
+    subscription = _current_checkout_subscription(
+        practice,
+        subscription_id="sub_invoice_open_checkout",
+        customer_id="cus_invoice_open_checkout",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    frozen = _store_frozen_paid_pilot_checkout_request(practice)
+    practice.refresh()
+    practice.stripe_checkout_session_id = "cs_invoice_open_checkout"
+    practice.stripe_checkout_session_url = (
+        "https://checkout.stripe.com/c/pay/cs_invoice_open_checkout"
+    )
+    practice.stripe_checkout_session_expires_at = NOW + timedelta(hours=24)
+    practice.stripe_checkout_request_json = None
+    practice.stripe_checkout_request_created_at = None
+    practice.save()
+    checkout_session = _paid_pilot_checkout_session(
+        practice,
+        frozen,
+        session_id="cs_invoice_open_checkout",
+        status="open",
+    )
+    checkout_session["customer"] = subscription["customer"]
+    remote.sessions[checkout_session["id"]] = checkout_session
+
+    with pytest.raises(stripe_billing.StripeStateConflict, match="still pending"):
+        stripe_billing.apply_stripe_event(
+            _invoice_event(
+                "invoice.paid",
+                subscription,
+                event_id="evt_invoice_open_checkout",
+                created=int(NOW.timestamp()),
+            )
+        )
+
+    practice.refresh()
+    assert practice.stripe_subscription_id is None
+    assert practice.stripe_checkout_session_id == "cs_invoice_open_checkout"
+
+
+def test_bound_invoice_customer_mismatch_is_consumed_and_revokes_access(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription)
+    practice.stripe_trial_clock_policy = stripe_billing.CHECKOUT_TRIAL_CLOCK_POLICY
+    practice.trial_ends_at = NOW + timedelta(days=14)
+    practice.save()
+    event = _invoice_event(
+        "invoice.paid",
+        subscription,
+        event_id="evt_invoice_customer_mismatch",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"]["customer"] = "cus_unrelated"
+
+    inbox_id, duplicate = stripe_billing.enqueue_stripe_event(event)
+
+    assert inbox_id is not None
+    assert duplicate is False
+    practice.refresh()
+    assert practice.subscription_status == "pending_verification"
+    assert stripe_billing.process_stripe_event_inbox(inbox_id)
+    practice.refresh()
+    assert practice.subscription_status == "invalid"
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.stripe_quantity_sync_error == (
+        "invoice customer does not match its Stripe subscription"
+    )
+    inbox = StripeEventInbox.get(id=inbox_id)
+    assert inbox
+    assert inbox.state == "processed"
+
+
+def test_invoice_envelope_accepts_legacy_and_expanded_subscription_references():
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    legacy = _invoice_event(
+        "invoice.paid",
+        subscription,
+        event_id="evt_invoice_legacy_shape",
+        created=int(NOW.timestamp()),
+    )
+    legacy_object = legacy["data"]["object"]
+    legacy_object["subscription"] = {"id": subscription["id"]}
+    legacy_object["customer"] = {"id": subscription["customer"]}
+    del legacy_object["parent"]
+
+    envelope = stripe_billing.validate_stripe_event_envelope(legacy)
+
+    assert envelope is not None
+    assert envelope[-1] == subscription["id"]
+
+
+def test_invoice_envelope_rejects_conflicting_subscription_references():
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    event = _invoice_event(
+        "invoice.paid",
+        subscription,
+        event_id="evt_invoice_conflicting_shape",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"]["subscription"] = "sub_conflicting"
+
+    with pytest.raises(stripe_billing.StripeStateInvalid, match="references conflict"):
+        stripe_billing.validate_stripe_event_envelope(event)
+
+
+def test_one_off_invoice_is_ignored_without_durable_storage(remote: FakeStripe):
+    practice = _practice()
+    subscription = _current_checkout_subscription(practice)
+    event = _invoice_event(
+        "invoice.paid",
+        subscription,
+        event_id="evt_one_off_invoice",
+        created=int(NOW.timestamp()),
+    )
+    event["data"]["object"]["parent"] = {
+        "type": "quote_details",
+        "quote_details": {"quote": "qt_one_off"},
+    }
+
+    assert stripe_billing.enqueue_stripe_event(event) == (None, False)
+    assert (
+        StripeEventInbox.where(
+            StripeEventInbox.event_id == "evt_one_off_invoice"
+        ).count()
+        == 0
+    )
+    assert remote.calls == []
+
+
+def test_invoice_payment_failed_preserves_bound_fail_closed_lifecycle(
+    remote: FakeStripe,
+):
+    practice = _practice()
+    subscription = _subscription(practice, status="past_due")
+    remote.subscriptions[subscription["id"]] = subscription
+    _bind_verified_public_subscription(practice, subscription, status="active")
+    event = _invoice_event(
+        "invoice.payment_failed",
+        subscription,
+        event_id="evt_invoice_payment_failed",
+        created=int(NOW.timestamp()),
+    )
+
+    inbox_id, duplicate = stripe_billing.enqueue_stripe_event(event)
+
+    assert inbox_id is not None
+    assert duplicate is False
+    practice.refresh()
+    assert practice.subscription_status == "pending_verification"
+    assert stripe_billing.process_stripe_event_inbox(inbox_id)
+    practice.refresh()
+    assert practice.stripe_customer_id == subscription["customer"]
+    assert practice.stripe_subscription_id == subscription["id"]
+    assert practice.subscription_status == "past_due"
+    assert not practice.entitled(at=NOW)
+
+
+@pytest.mark.parametrize("event_type", ["invoice.paid", "invoice.payment_succeeded"])
+@pytest.mark.parametrize("mismatch", ["account", "mode", "price"])
+def test_paid_invoice_initial_binding_fails_closed_on_authority_mismatch(
+    remote: FakeStripe,
+    event_type: str,
+    mismatch: str,
+):
+    practice = _practice()
+    subscription = _current_checkout_subscription(
+        practice,
+        subscription_id=f"sub_invoice_bad_{mismatch}_{event_type.replace('.', '_')}",
+        customer_id=f"cus_invoice_bad_{mismatch}_{event_type.replace('.', '_')}",
+    )
+    remote.subscriptions[subscription["id"]] = subscription
+    practice.stripe_customer_id = subscription["customer"]
+    practice.save()
+    event = _invoice_event(
+        event_type,
+        subscription,
+        event_id=f"evt_invoice_bad_{mismatch}_{event_type.replace('.', '_')}",
+        created=int(NOW.timestamp()),
+    )
+    if mismatch == "account":
+        event["account"] = "acct_other"
+    elif mismatch == "mode":
+        event["data"]["object"]["livemode"] = True
+    else:
+        remote.subscriptions[subscription["id"]]["items"]["data"][0]["price"] = {
+            "id": "price_other"
+        }
+
+    with pytest.raises(stripe_billing.StripeStateInvalid):
+        stripe_billing.apply_stripe_event(event)
+
+    practice.refresh()
+    assert practice.stripe_customer_id == subscription["customer"]
+    assert practice.stripe_subscription_id is None
+    assert practice.subscription_status is None
 
 
 def test_stale_nonentitling_inbox_event_does_not_revoke_newer_active_state(
