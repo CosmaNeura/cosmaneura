@@ -238,16 +238,25 @@ class Practice(BaseModel, TimestampsMixin, TypeIDMixin("practice"), table=True):
         )
 
     def baa_in_force(self, *, at: datetime | None = None) -> bool:
-        """Clickwrap acceptance recorded, or an effective negotiated edition.
+        """Current clickwrap accepted, or an effective negotiated edition.
 
         A countersigned agreement can be recorded ahead of its effective date,
         but it must not unlock PHI until that date actually arrives. The
         reference is also required so an accidental boolean flip fails closed.
+        Clickwrap editions are version-bound: publishing a substantive update
+        makes an older clickwrap insufficient until the owner re-accepts.
         """
 
-        if self.baa_accepted_at is not None:
+        if self.negotiated_baa_in_force(at=at):
             return True
-        return self.negotiated_baa_in_force(at=at)
+        if self.baa_accepted_at is None:
+            return False
+
+        # Local import avoids the model cycle: baa.py owns the versioned
+        # agreement and references Practice from BaaAcceptance.
+        from .baa import BAA_CURRENT_REFERENCE
+
+        return self.baa_version == BAA_CURRENT_REFERENCE
 
     def billing_exemption_active(self, *, at: datetime | None = None) -> bool:
         """Whether the configured comp is an entitlement source right now."""

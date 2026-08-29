@@ -1457,6 +1457,9 @@ def baa_current(request: Request) -> BaaDocument:
 
 
 class AcceptBaaBody(BaseModel, extra="forbid"):
+    doc_id: str
+    version: str
+    sha256: str
     signature_name: str = Field(min_length=2, max_length=120)
     signature_title: str = Field(min_length=2, max_length=120)
     checks: list[str]
@@ -1497,6 +1500,21 @@ def accept_practice_baa(request: Request, data: AcceptBaaBody) -> PracticeStatus
             detail="Only the practice owner can accept the BAA.",
         )
     version = _current_baa_version()
+    if (
+        data.doc_id != version.doc_id
+        or data.version != version.version
+        or data.sha256 != version.sha256
+    ):
+        # Bind the execution record to the exact document the browser rendered.
+        # In particular, a tab that loaded an earlier version must reload rather
+        # than accidentally accepting whichever version is current at submit time.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "The BAA changed after it was displayed. Reload and review the "
+                "current agreement before accepting."
+            ),
+        )
     # Serialize acceptance per practice. The legal execution record, its gate
     # mirror, any legacy managed-practice trial, and owner attestation commit
     # atomically. Public self-service trials start only after card collection

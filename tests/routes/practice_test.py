@@ -19,7 +19,14 @@ from app.services.public_entitlements import (
 from app.utils.email_domain import extract_email_domain
 
 from activemodel.session_manager import get_session
-from app.models.baa import BAA_CURRENT_SHA256, BaaAcceptance
+from app.models.baa import (
+    BAA_CURRENT_REFERENCE,
+    BAA_CURRENT_SHA256,
+    BAA_CURRENT_VERSION,
+    BAA_DOC_ID,
+    BaaAcceptance,
+    BaaVersion,
+)
 from app.models.doctor import Doctor, DoctorRole
 from app.models.organization_access import ProviderOrganization
 from app.models.pilot_access_grandfather_grant import PilotAccessGrandfatherGrant
@@ -54,6 +61,9 @@ def _accept_baa(client: TestClient) -> dict:
     resp = client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": ["baa"],
@@ -396,6 +406,86 @@ def test_owner_baa_then_complete(bare_authenticated_client: TestClient):
     assert doctor.onboarding_completed_at is not None
 
 
+def test_current_baa_endpoint_serves_the_v23_asset(
+    bare_authenticated_client: TestClient,
+):
+    _authed_doctor()
+
+    response = bare_authenticated_client.get(api_app.url_path_for("baa_current"))
+
+    assert response.status_code == status.HTTP_200_OK
+    body = response.json()
+    assert body["doc_id"] == BAA_DOC_ID
+    assert body["version"] == BAA_CURRENT_VERSION
+    assert body["sha256"] == BAA_CURRENT_SHA256
+    assert "claims preparation and submission support" not in body["html"]
+
+
+def test_prior_clickwrap_requires_reacceptance_of_current_baa(
+    bare_authenticated_client: TestClient,
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    member = PracticeMember.get(doctor_id=doctor.id)
+    assert member
+
+    accepted_at = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    old_version = BaaVersion(
+        doc_id=BAA_DOC_ID,
+        version="2.2",
+        sha256="13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e",
+        content_path="app/assets/baa/baa_cn-baa-cust-cw_v2.2.html",
+        published_at=accepted_at,
+        is_current=False,
+    ).save()
+    old_acceptance = BaaAcceptance(
+        practice_id=practice.id,
+        baa_version_id=old_version.id,
+        covered_entity_legal_name=practice.legal_name,
+        accepted_by_doctor_id=doctor.id,
+        accepted_by_name="Pat Owner",
+        accepted_by_title="Physician / owner",
+        accepted_by_email=doctor.email or "test@example.com",
+        accepted_at_utc=accepted_at,
+        content_sha256=old_version.sha256,
+    ).save()
+    practice.baa_version = f"{BAA_DOC_ID} v2.2"
+    practice.baa_accepted_at = accepted_at
+    practice.baa_accepted_by_doctor_id = doctor.id
+    practice.baa_signature_name = "Pat Owner"
+    practice.baa_signature_title = "Physician / owner"
+    practice.save()
+    member.attested_at = accepted_at
+    member.attestation_name = "Pat Owner"
+    member.save()
+
+    stale_status = bare_authenticated_client.get(
+        api_app.url_path_for("practice_status")
+    )
+    assert stale_status.status_code == status.HTTP_200_OK
+    assert stale_status.json()["baa_accepted"] is False
+    blocked = bare_authenticated_client.post(
+        api_app.url_path_for("complete_onboarding")
+    )
+    assert blocked.status_code == status.HTTP_400_BAD_REQUEST
+
+    reaccepted = _accept_baa(bare_authenticated_client)
+    practice.refresh()
+    assert reaccepted["baa_accepted"] is True
+    assert practice.baa_version == BAA_CURRENT_REFERENCE
+    assert BaaAcceptance.get(id=old_acceptance.id) is not None
+    current = BaaVersion.get(doc_id=BAA_DOC_ID, version=BAA_CURRENT_VERSION)
+    assert current
+    assert (
+        BaaAcceptance.where(
+            (BaaAcceptance.practice_id == practice.id)
+            & (BaaAcceptance.baa_version_id == current.id)
+        ).count()
+        == 1
+    )
+
+
 def test_baa_acceptance_requires_checkbox(bare_authenticated_client: TestClient):
     _authed_doctor()
     _create_practice(bare_authenticated_client)
@@ -403,12 +493,61 @@ def test_baa_acceptance_requires_checkbox(bare_authenticated_client: TestClient)
     resp = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": [],
         },
     )
     assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.parametrize(
+    "identity_override",
+    [
+        pytest.param({"doc_id": "CN-BAA-CUST-CW-OTHER"}, id="doc-id"),
+        pytest.param({"version": "2.2"}, id="version"),
+        pytest.param({"sha256": "0" * 64}, id="sha256"),
+        pytest.param(
+            {
+                "version": "2.2",
+                "sha256": (
+                    "13448bf42105db05e36e566f2f8ea0190926223e9dbb03efb8778cf8cfc7332e"
+                ),
+            },
+            id="stale-v2.2-tab",
+        ),
+    ],
+)
+def test_baa_acceptance_rejects_document_identity_mismatch(
+    bare_authenticated_client: TestClient,
+    identity_override: dict[str, str],
+):
+    doctor = _authed_doctor()
+    _create_practice(bare_authenticated_client)
+    practice = _own_practice(doctor)
+    body = {
+        "doc_id": BAA_DOC_ID,
+        "version": BAA_CURRENT_VERSION,
+        "sha256": BAA_CURRENT_SHA256,
+        "signature_name": "Pat Owner",
+        "signature_title": "Physician / owner",
+        "checks": ["baa"],
+    } | identity_override
+
+    response = bare_authenticated_client.post(
+        api_app.url_path_for("accept_practice_baa"),
+        json=body,
+    )
+
+    assert response.status_code == status.HTTP_409_CONFLICT
+    assert "reload and review" in response.json()["detail"].lower()
+    assert BaaAcceptance.where(BaaAcceptance.practice_id == practice.id).count() == 0
+    practice.refresh()
+    assert practice.baa_version is None
+    assert practice.baa_accepted_at is None
 
 
 def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
@@ -429,6 +568,9 @@ def test_negotiated_baa_required_blocks_clickwrap_and_legacy_join_paths(
     clickwrap = bare_authenticated_client.post(
         api_app.url_path_for("accept_practice_baa"),
         json={
+            "doc_id": BAA_DOC_ID,
+            "version": BAA_CURRENT_VERSION,
+            "sha256": BAA_CURRENT_SHA256,
             "signature_name": "Pat Owner",
             "signature_title": "Physician / owner",
             "checks": ["baa"],
@@ -579,7 +721,7 @@ def test_join_requires_matching_email_domain(bare_authenticated_client: TestClie
         pastoral_pack=True,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
 
     lookup = bare_authenticated_client.post(
@@ -617,7 +759,7 @@ def test_solo_practice_code_is_never_disclosed_or_accepted(
         pastoral_pack=False,
         is_solo=True,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
 
     lookup = bare_authenticated_client.post(
@@ -653,7 +795,7 @@ def test_legacy_public_domain_group_code_is_not_usable(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
 
     lookup = bare_authenticated_client.post(
@@ -690,7 +832,7 @@ def test_lookup_does_not_disclose_practice_to_a_stale_bound_email(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
     monkeypatch.setattr(
         internal,
@@ -723,7 +865,7 @@ def test_join_rechecks_live_email_while_rows_are_locked(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
     ).save()
     live_emails = iter([doctor.email, "replacement@outside.example"])
     monkeypatch.setattr(
@@ -785,7 +927,7 @@ def test_join_persists_quantity_repair_without_waiting_for_stripe(
         pastoral_pack=False,
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
         stripe_customer_id="cus_fast_join",
         stripe_subscription_id="sub_fast_join",
         subscription_status="active",
@@ -828,7 +970,7 @@ def test_join_rejects_twenty_first_active_clinician_atomically(
         origin_channel="direct",
         is_solo=False,
         baa_accepted_at=datetime.now(timezone.utc),
-        baa_version="CN-BAA-CUST-CW v2.2",
+        baa_version=BAA_CURRENT_REFERENCE,
         stripe_subscription_id=f"sub_join_full_{secrets.token_hex(8)}",
         stripe_quantity_sync_target=MAX_ACTIVE_CLINICIAN_SEATS,
         stripe_quantity_sync_version=3,
