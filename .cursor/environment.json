@@ -1,0 +1,29 @@
+{
+  "name": "cosmaneura",
+  "install": "bash scripts/cloud-agent-install.sh",
+  "start": "bash scripts/cloud-agent-start.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "export PATH=\"$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH\"; direnv exec . just py_dev"
+    },
+    {
+      "name": "frontend",
+      "command": "export PATH=\"$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH\"; direnv exec . just js_dev"
+    },
+    {
+      "name": "worker",
+      "command": "export PATH=\"$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH\"; direnv exec . celery -A app.celery.celery_app worker"
+    },
+    {
+      "name": "scheduler",
+      "command": "export PATH=\"$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH\"; direnv exec . celery -A app.celery.celery_app beat --scheduler redbeat.RedBeatScheduler"
+    }
+  ],
+  "ports": [
+    { "name": "backend api", "port": 8205 },
+    { "name": "frontend", "port": 8207 },
+    { "name": "mailpit ui", "port": 8025 },
+    { "name": "localias https", "port": 443 }
+  ]
+}
