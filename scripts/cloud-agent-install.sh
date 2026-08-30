@@ -126,6 +126,18 @@ export VITE_POSTHOG_HOST=https://us.i.posthog.com
 ENVEOF
 fi
 
+# Test-mode overrides (loaded when CI=true). Mirrors the env the GitHub Actions
+# PR workflow injects so `just js_test` / `just py_test` run without 1Password.
+if [ ! -f "$REPO_ROOT/.env.test.local" ]; then
+  log "Writing placeholder .env.test.local"
+  cat > "$REPO_ROOT/.env.test.local" <<'ENVEOF'
+# Cloud Agent test-mode overrides (NON-SECRET placeholders).
+# Mirrors the env the GitHub Actions PR workflow injects for test runs.
+export VITE_CLERK_PUBLIC_KEY=pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk
+export CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsucHVsbC1yZXF1ZXN0LmludmFsaWQk
+ENVEOF
+fi
+
 # ---------------------------------------------------------------------------
 # 6. Data services + database bootstrap (needed to import the app / migrate)
 # ---------------------------------------------------------------------------
