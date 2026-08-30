@@ -59,9 +59,14 @@ fi
 ROOT_CRT="$HOME/.local/state/localias/caddy/pki/authorities/local/root.crt"
 if [ -f "$ROOT_CRT" ]; then
   mkdir -p "$HOME/.pki/nssdb"
-  certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password 2>/dev/null || true
-  certutil -d "sql:$HOME/.pki/nssdb" -L 2>/dev/null | grep -q 'localias-root' || \
-    certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n "localias-root" -i "$ROOT_CRT" 2>/dev/null || true
+  # Only initialize the NSS db once. `certutil -N` blocks on an existing db,
+  # so guard on the db file and always feed stdin from /dev/null.
+  if [ ! -f "$HOME/.pki/nssdb/cert9.db" ]; then
+    certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password </dev/null >/dev/null 2>&1 || true
+  fi
+  if ! certutil -d "sql:$HOME/.pki/nssdb" -L </dev/null 2>/dev/null | grep -q 'localias-root'; then
+    certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n "localias-root" -i "$ROOT_CRT" </dev/null >/dev/null 2>&1 || true
+  fi
 fi
 
 log "Data services ready"
