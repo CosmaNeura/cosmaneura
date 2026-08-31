@@ -13,9 +13,9 @@ import { render, screen } from "@testing-library/react"
 describe("resolveVisibleChannel", () => {
   it("treats an explicit channel search param as authoritative", () => {
     expect(resolveVisibleChannel("mcd", "app.cosmaneura.com")).toBe("mcd")
-    expect(
-      resolveVisibleChannel("catholic", "app.mycatholicdoctor.com"),
-    ).toBe("catholic")
+    expect(resolveVisibleChannel("catholic", "app.mycatholicdoctor.com")).toBe(
+      "catholic",
+    )
     expect(resolveVisibleChannel("direct", "mycatholicdoctor.com")).toBe(
       "direct",
     )

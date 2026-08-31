@@ -86,7 +86,7 @@ export function ChannelAuthChrome({
             {copy.title}
           </h1>
           {copy.methodHint ? (
-            <p className="mt-3 text-sm font-medium leading-relaxed text-[var(--brand-navy-deep)]">
+            <p className="mt-3 text-sm leading-relaxed font-medium text-[var(--brand-navy-deep)]">
               {copy.methodHint}
             </p>
           ) : null}
