@@ -1,36 +1,69 @@
 import { Outlet, href } from "react-router"
 
-import { Route } from "./+types/notes"
+import type { Route } from "./+types/notes"
 
 import { AppSidebar } from "@/components/app-sidebar"
+import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { NOTES_STALE_TIME, queryClient } from "~/configuration/tanstack-query"
+import { noteList, type Appointment } from "~/configuration/client"
+import { queryClient } from "~/configuration/tanstack-query"
 import { appointmentsToSidebarEntries } from "~/lib/appointment"
+import {
+  type PracticeAgreementBlock,
+  practiceAgreementBlockFromClientResult,
+  practiceAgreementBlockFromRouteFailure,
+} from "~/lib/practice-gate-error"
 
 import { invariant } from "@epic-web/invariant"
 import { noteListOptions } from "client/@tanstack/react-query.gen"
 
-// Prefetch through the shared query cache (not a raw noteList() call) so any
-// component that later mounts and uses useQuery({...noteListOptions()})
-// reads the same cached list instead of issuing a second /internal/v1/notes
-// request. Same dedup approach as the authenticated layout uses for settings.
-export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
-  const data = await queryClient.ensureQueryData({
-    ...noteListOptions(),
-    staleTime: NOTES_STALE_TIME,
-  })
-  invariant(data, "data failed to load")
-  return data
+export type NotesLayoutData = {
+  appointments: Appointment[]
+  blocked: PracticeAgreementBlock | null
 }
 
-// import type { ShouldRevalidateFunctionArgs } from "react-router"
-// TODO not operational! https://github.com/remix-run/react-router/issues/12740
-// https://discord.com/channels/770287896669978684/770287896669978687/1328764904894758954
-// export function shouldRevalidate(_arg: ShouldRevalidateFunctionArgs) {
-//   return false
-// }
+function blockedNotesData(blocked: PracticeAgreementBlock): NotesLayoutData {
+  return { appointments: [], blocked }
+}
 
-export default function NotesLayout({ loaderData }: Route.ComponentProps) {
+export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
+  try {
+    const result = await noteList()
+    const blocked = practiceAgreementBlockFromClientResult(result)
+    if (blocked) return blockedNotesData(blocked)
+
+    invariant(result.data, "data failed to load")
+    queryClient.setQueryData(noteListOptions().queryKey, result.data)
+    return { appointments: result.data.appointments, blocked: null }
+  } catch (error) {
+    const blocked = practiceAgreementBlockFromRouteFailure(error)
+    if (blocked) return blockedNotesData(blocked)
+    throw error
+  }
+}
+
+// Inspect the raw noteList() result so a practice-gate 403 keeps its server
+// detail. Successful lists still seed the shared query cache that later
+// useQuery({...noteListOptions()}) callers read.
+export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
+  return loadNotesLayoutData()
+}
+
+export function ErrorBoundary({ error }: { error: unknown }) {
+  const blocked = practiceAgreementBlockFromRouteFailure(error)
+  if (blocked) return <PracticeAgreementWall block={blocked} />
+  throw error
+}
+
+export default function NotesLayout({
+  loaderData,
+}: {
+  loaderData: NotesLayoutData
+}) {
+  if (loaderData.blocked) {
+    return <PracticeAgreementWall block={loaderData.blocked} />
+  }
+
   const { appointments } = loaderData
 
   return (

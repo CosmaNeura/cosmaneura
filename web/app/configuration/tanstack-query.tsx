@@ -18,9 +18,9 @@ export const queryClient = new QueryClient()
 export const SETTINGS_STALE_TIME = 60_000
 
 // Same dedup rationale as SETTINGS_STALE_TIME but for the notes list. The
-// notes-layout loader prefetches via ensureQueryData; any component that
-// later mounts and calls useQuery({...noteListOptions()}) with this same
-// staleTime reads the cached prefetch instead of issuing a second
+// notes-layout loader seeds the shared cache after a successful noteList();
+// any component that later mounts and calls useQuery({...noteListOptions()})
+// with this same staleTime reads that cache instead of issuing a second
 // /internal/v1/notes request.
 export const NOTES_STALE_TIME = 60_000
 
