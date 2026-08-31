@@ -1,170 +1,304 @@
-# Clerk entry fail-loud diagnosis — 2026-08-31
+# Existing-user entry regression — fail-loud diagnosis (2026-08-31)
 
 ## Decision
 
-This is a diagnosis-only change. No Cosmas code or configuration defect was
-proved, so this branch changes no runtime behavior.
+This is a proven Cosmas authorization regression, not a Clerk lockout.
 
-The password path is explained at the live Clerk credential boundary: the
-unlocked row had no password, so that path cannot reach any practice,
-agreement, domain, or entitlement decision. The historical
-Google/user-visible failure is not reconstructed because Clerk has no
-attributable failed event and no browser trace was captured:
+The affected users can authenticate, but the production practice gate currently
+prevents them from entering PHI-bearing product routes. An active legacy-pilot
+grant was originally a complete, revocable access basis. PR #188 changed it to
+entitlement-only and began requiring a practice membership, practice
+authorization, and an in-force BAA in addition to the still-valid grant.
 
-- The managed-email Clerk row was verified, not banned, and not locked, but it
-  had no password credential (`password_enabled=false`). An email-and-password
-  attempt therefore could not authenticate that row. "Unlocked" does not mean
-  that a password exists.
-- At 16:58:45 EDT on 2026-08-31, Clerk recorded a successful `oauth_google`
-  sign-in for the managed-email row. The user card reported that Google social
-  account as newly added at the same time. This establishes when the current
-  Google connection completed, but it does not establish why an earlier Google
-  attempt may have failed.
-- At 16:58:47–16:58:48 EDT, the same pseudonymous Cosmas account received HTTP
-  200 from `/internal/v1/view-as/status`, `/internal/v1/settings`,
-  `/internal/v1/practice`, and
-  `/internal/v1/practice/organization-access`. The Google sign-in therefore
-  crossed the Clerk session and Cosmas identity-bootstrap boundaries without a
-  persistent backend rejection. These practice-gate-exempt responses do not
-  prove the user's practice, agreement, domain, or entitlement state. They
-  prove server-side bootstrap, not that the user saw a rendered screen.
+Production evidence proves the impact is cohort-wide:
 
-Production Clerk also contains a separate, older personal-email row with the
-same human name. It is not a second row for the managed login email: the exact
-managed address occurs once among all 47 live users. The older row has a
-different verified primary email and a different Clerk subject, its Google
-account was linked about eleven months ago, and its last sign-in was in October
-2025. Do not merge these rows. A merge is neither required by this diagnosis
-nor authorized by it.
+- the aggregate pilot audit reports 47 active grant lineages, zero revoked
+  lineages, zero integrity errors, and a valid cohort;
+- all 47 active grants belong to existing Doctors whose onboarding was
+  previously completed;
+- all 47 grants predate the PR #188 behavior change;
+- all 31 active managed-domain Doctors have a valid active grant, but the
+  current resolver denies 29 with `practice_membership_required` and two with
+  `baa_not_in_force`;
+- the same 29/2 result occurs with the entitlement check disabled, so billing
+  and Stripe are not the cause.
 
-The incident report places the user-visible onset on Friday or Saturday,
-2026-08-28 or 2026-08-29, and reports another failed interval at 11:00–12:10 EDT
-on 2026-08-31. The live state changed after that Monday interval. The later
-successful sign-in does not rewrite the incident: the PHI-safe Cosmas log query
-returned no bootstrap request for the affected pseudonymous account and no
-fixed identity-failure event during that interval. It does establish that the
-correct managed-email row can now create a Google session and reach the Cosmas
-bootstrap.
-The dashboard inspection was read-only and did not create that session or
-modify either user.
+The repair in this PR restores the historical access basis for every existing,
+completed-onboarding Doctor with an active exact-account pilot grant. It is not
+hard-coded to either reported user or to an email domain. Doctor deletion,
+grant revocation, and revoked or inactive membership remain higher-priority
+denials. Accounts without a valid grant still use the normal membership,
+authorization, BAA, and entitlement gates.
 
-The same HMAC account also had HTTP 200 bootstrap traffic outside the reported
-window, including 09:52, 13:43, and 14:33 EDT on 2026-08-31. An already-open
-browser can retain a valid session and poll status while a fresh sign-in on a
-different browser is unavailable. These rows rule out a persistent session or
-identity-bootstrap rejection; they do not prove access-state booleans or which
-person was looking at which rendered screen.
+This PR is not live. Until a human separately names a merge and a later
+production Build & Publish, affected users may complete Clerk authentication
+but still cannot enter the product.
 
-## Pseudonymous evidence
+## What fails, where, and why
 
-No email address, raw Clerk subject, token, session ID, device ID, IP address,
-or patient information is recorded here.
+The observed sequence is:
 
-| Evidence | Pseudonymous reference / result |
-| --- | --- |
-| Normalized managed email | `sha256:d07527cbd35cb3833260f035de69a0109b50218eef5f179a31e00e2c3ca36521` |
-| Managed-email Clerk subject | `sha256:bcd88c83e9887129d9a1b24a3aa74159dc62966b77655c7f961dd94890c9b8be` |
-| Separate personal-email Clerk subject | `sha256:4dd8d2ded2ec6b8e5bb58b90ce12a8e5fffa68f1fecb0bd654c469fdedcf57d5` |
-| Cosmas access-log account | `hmac:1d9d0260c7ae` |
-| Reported failure window | 2026-08-31 11:00–12:10 EDT: zero fixed bootstrap-path rows for that HMAC reference |
-| Successful existing-session traffic outside the window | 2026-08-31 09:52, 13:43, and 14:33 EDT: fixed bootstrap paths returned HTTP 200 |
-| Later Clerk result | 2026-08-31 16:58:43 EDT `sign_in.created`; 16:58:45 EDT `session.created` and `sign_in.completed`; strategy `oauth_google` |
-| Later Cosmas result | 2026-08-31 16:58:47–16:58:48 EDT: status/settings/practice/organization-access all HTTP 200 |
+1. Clerk verifies a passwordless email-code or Google sign-in and creates a
+   session.
+2. Cosmas binds the session to the existing Doctor using the stable Clerk
+   subject.
+3. Practice-exempt bootstrap routes return 200.
+4. `/internal/v1/notes` reaches the default practice gate.
+5. `resolve_doctor_access()` rejects the Doctor despite an active exact
+   legacy-pilot grant.
+6. The product route returns 403. Founder support-view maps that denial to
+   `target_access_pending` and displays:
 
-Clerk has no subject-bound failed event that reconstructs the exact
-Friday/Saturday click, browser screen, or Google identity selection. The Clerk
-production log does contain one unbound
-`oauth_authorization.failed` event at 05:35:15 EDT on 2026-08-28 with reason
-`oauth2idp_patch_fosite_state_non_invalid_state_error`. That event has no actor,
-subject, or IP in Clerk, so it cannot honestly be attributed to this user and
-is not used as proof.
+   > Account not ready
+   >
+   > This account is not ready for interactive access yet. No onboarding, BAA,
+   > billing, or account form is available while reviewing this state.
 
-## Why no Cosmas code cause is proved
+That exact screen is a support-view interstitial, not a Clerk page and not
+necessarily the screen the target user sees. It is nevertheless diagnostic:
+`app/services/view_as.py` emits `target_access_pending` only after the target
+identity resolves but product access does not. The frontend deliberately
+collapses membership, practice authorization, BAA, and entitlement denials
+into that one message.
 
-1. `web/app/routes/sign-in.tsx` delegates every sign-in method to the same Clerk
-   `<SignIn>` component. Cosmas has no Google-versus-password account-selection
-   branch.
-2. `web/app/configuration/client.ts` obtains a token from the resulting Clerk
-   session. `app/routes/dependencies/clerk.py` verifies that token, and
-   `app/routes/dependencies/doctor.py` binds the Doctor only by its stable Clerk
-   `sub`. Google and password on one Clerk row are therefore one Cosmas account.
-3. Backend dependency order is Clerk session, Doctor binding, then practice
-   access. The settings, practice, organization-access, and onboarding routes
-   are exempt from the normal practice gate in
-   `app/routes/dependencies/practice_gate.py` so that a signed-in user can reach
-   recovery and setup.
-4. Missing membership, organization authorization, or agreement sends a
-   successfully authenticated user to onboarding. A lapsed entitlement sends
-   a practice-ready user to Settings. Neither can suppress a Clerk sign-in
-   event.
-5. A different Clerk subject that presents an email already owned by a Doctor
-   returns the explicit HTTP 409 account-recovery path. No such response was
-   observed in the later successful path.
+PR #188, merged at 09:52 EDT on 2026-08-28, changed
+`app/services/doctor_access.py` from:
 
-Current master does contain a separate fail-loud risk: the root support-view
-guard wraps `/sign-in/*`, including the Google callback. A failed Clerk
-bootstrap or failed `/internal/v1/view-as/status` can replace the sign-in UI
-with a support-status error, and a never-settling Clerk bootstrap can leave the
-loading screen in place. The incident supplied no screen or network evidence
-for that branch, while the live credential evidence above directly explains
-the password path and records a later successful Google callback.
-It is therefore not a proved incident cause and is not changed here.
+- active exact grant -> allowed after disabled/revoked tombstone checks
 
-## Founder reproduction and discriminator
+to:
 
-Use a clean browser profile and preserve the Network panel. Never copy tokens,
-raw identifiers, emails, or response bodies into an issue or PR.
+- active exact grant -> entitlement only, and only when its practice snapshot
+  matches a current membership;
+- membership + organization/workforce authorization + BAA still mandatory.
 
-1. In the production Clerk dashboard, search for the affected managed email
-   from the private incident handoff. Locally normalize and hash it if needed;
-   its SHA-256 must match the managed-email reference above. The raw address
-   must not be copied into this PR or a log query.
-2. Read only the user card. Confirm `locked=false`, `banned=false`, the one
-   primary email is verified, `password_enabled=false`, and Google is the one
-   external account. Do not unlock, set a password, reset MFA, or edit the
-   account.
-3. Treat the Clerk choices distinctly:
-   - Password: this row has none, so a password attempt is expected to fail at
-     Clerk before Cosmas.
-   - Email verification code: this is enabled for the live instance and is not
-     the same thing as a password.
-   - Google: choose the managed Workspace identity. A completed attempt must
-     produce `sign_in.created`, `session.created`, and `sign_in.completed` for
-     the managed-email subject.
-4. If Google returns to `/sign-in/sso-callback`, keep the Network log and look
-   for these fixed bootstrap calls; loader and render concurrency does not
-   guarantee their order:
-   - `/internal/v1/view-as/status`
-   - `/internal/v1/settings`
-   - `/internal/v1/practice`
-   - `/internal/v1/practice/organization-access`
-5. Classify any failure without changing data:
+The changed code reached production in revision `982d552` at approximately
+11:14 EDT on 2026-08-29. It can explain failures from that deployment forward.
+There is no attributable browser or Clerk event that proves what happened
+before that deployment, so an earlier Friday report is not rewritten as this
+same event.
 
-   | Observation | Boundary |
-   | --- | --- |
-   | No Clerk `sign_in.completed` | Pre-session path; Cosmas backend has not received an authenticated session. Use the visible state below to distinguish Clerk from the browser guard |
-   | Endless `Loading application...` | Clerk browser bootstrap has not settled |
-   | `Support-view status unavailable` | Clerk bootstrap failed, or an existing session could not complete the support-view preflight |
-   | Settings HTTP 403 with `Not authenticated`, or verified missing/malformed Authorization evidence | The bearer credential was absent or rejected before identity binding |
-   | Settings HTTP 401 | Clerk token/JWKS validation |
-   | Settings HTTP 403 plus `managed_organization_identity_verification_failed` | Live primary-email evidence or stored-email equality failed |
-   | Settings HTTP 403 plus `pilot_access_identity_verification_failed` | Pilot access identity verification failed |
-   | Settings HTTP 409 plus `account_identity_recovery_required` | Different Clerk subject collided with an existing Doctor email |
-   | Settings HTTP 410 | Local account/tombstone disabled |
-   | Settings HTTP 200 and `practice_ready=false` | Auth succeeded; follow the practice/organization path |
-   | Settings HTTP 200 and `billing_recovery_required=true` | Auth succeeded; follow the entitlement path in Settings |
+The live database state is exactly the state the new logic rejects. The
+managed-domain cohort has 29 grant holders with no membership and two with
+authorized memberships but no BAA recorded in force. This is not an individual
+password, Google-account, email-domain, billing, or capture problem.
 
-6. Correlate only timestamp, fixed route, HTTP status, request ID, and HMAC or
-   SHA-256 references. A successful Clerk event plus the four HTTP 200 results
-   above is the founder-believable entry proof used for this diagnosis.
+## Pseudonymous incident evidence
 
-## Scope and recovery
+No raw email address, deterministic email digest, Clerk subject, session
+identifier, token, IP address, or patient information is recorded here.
 
-- Risk tier: **Tier 0, documentation only**. No auth/session, entitlement,
-  account, schema, infrastructure, or runtime behavior changes.
-- No Clerk user was unlocked, edited, merged, or reset. No email was sent.
-- No production build, publish, deployment, Terraform operation, environment
-  change, or feature-flag change occurred.
-- Recovery for this documentation-only change is `git revert <commit>`.
-- Merge is not production promotion. Any merge and any later Build & Publish
-  remain separate, human-named decisions.
+| Evidence | `hmac:1d9d0260c7ae` | `hmac:c1017665b46d` |
+| --- | --- | --- |
+| Clerk account state | Verified, unlocked, unbanned, passwordless | Verified, unlocked, unbanned, passwordless |
+| Successful Clerk path | Google session completed at approximately 16:58 EDT | Google session completed at approximately 17:25 EDT |
+| Cosmas result | `/notes` 403; status/settings/practice recovery routes 200 | `/notes` 403; status/settings/practice recovery routes 200 |
+| Exact access decision | `practice_membership_required` | `practice_membership_required` |
+| Active grant | Yes; exact identity and retained digest match | Yes; exact identity and retained digest match |
+
+Both Google external-account records predate this incident. Their dashboard
+timestamps changed after successful sign-in; that update time must not be
+reported as the connection-creation time.
+
+One incident also included repeated email-code requests before Google
+succeeded. A newly requested Clerk code invalidates an older code, so only the
+newest message should be used. That is a separate credential-flow issue and
+does not explain the later Cosmas 403.
+
+## Why the fix covers all existing users
+
+The compatibility predicate uses durable account state, not an email string:
+
+1. the Doctor is not disabled;
+2. no revoked grant tombstone exists;
+3. any existing membership is neither revoked nor inactive;
+4. the exact subject/email grant is active and passes its retained digest
+   checks;
+5. the Doctor had already completed onboarding.
+
+The production aggregate is 47 of 47 active pilot Doctors satisfying that
+existing-user predicate. It includes all 31 managed-domain Doctors. Forty-four
+of the 47 intentionally have no practice snapshot, so requiring a snapshot or
+manufacturing a membership would not restore the documented grandfather
+cohort.
+
+A fresh or pre-login account does not become authorized merely because a grant
+row exists. A normal account without an active grant remains fail-closed at the
+existing practice gates. This PR does not create memberships, alter a BAA,
+grant billing, change a role, or edit Clerk.
+
+The public self-service authorization contract remains unchanged. This is a
+compatibility exception for a completed-onboarding Doctor with an active exact
+legacy grant, not a way for a new public account to replace membership or BAA
+evidence with a grant. The blanket entitlement-only language introduced by
+#188 in `contracts/public-entitlements/v1/README.md` and
+`docs/public-auth-entitlement-handoff-v1.md` governs the new public path but
+conflicts with the older grandfather rollout for this closed cohort. This
+diagnosis and its executable tests supersede that language only for the narrow
+completed-onboarding legacy-grant case. Those public/billing-stack files remain
+untouched by instruction.
+
+The runtime predicate intentionally does not hard-code a date, email domain, or
+list of users. A future privileged issuance of an active exact grant to a
+Doctor who already completed onboarding would receive the same legacy access;
+grant creation remains a separate reviewed administrative action. The
+production statement that all currently eligible accounts predate #188 is an
+audited fact about today's 47 rows, not a hidden date check in the code.
+
+## Founder reproduction
+
+Reproduce and verify without impersonating an affected live user:
+
+1. In Clerk, open an affected user from the private incident handoff. Confirm
+   the account is verified, unlocked, unbanned, and passwordless. Do not unlock,
+   add a password, reset MFA, or edit connected accounts.
+2. Read the existing Clerk and application events. A successful attempt has
+   `sign_in.created`, `session.created`, and `sign_in.completed`, followed
+   by 200 responses from practice-exempt bootstrap routes and a 403 from
+   `/internal/v1/notes`. That combination means login succeeded and the
+   product gate failed.
+3. The founder's already-observed support-view result is the exact **Account
+   not ready** interstitial above. Starting or changing support-view is an
+   audited state change and is not required to repeat the diagnosis.
+4. Run the existing aggregate-only command in the production application
+   image:
+
+   `python -m app.cli audit-pilot-access`
+
+   Require `base_count=47`, `active_count=47`, `revoked_count=0`,
+   `integrity_error_count=0`, `cohort_integrity_valid=true`, and
+   `state=active`. The command prints no identities.
+5. Evaluate access in read-only aggregate form. Set
+   `TARGET_EMAIL_DOMAIN` privately in the shell, then run this inside the
+   production application image. It emits counts and denial labels only:
+
+   ```python
+   import json
+   import os
+   from collections import Counter
+
+   from app.models.doctor import Doctor
+   from app.services.doctor_access import resolve_doctor_access
+   from app.services.pilot_access_grandfather import active_pilot_access_grant
+
+   domain = os.environ["TARGET_EMAIL_DOMAIN"].strip().lower().lstrip("@")
+   doctors = [
+       doctor
+       for doctor in Doctor.all()
+       if doctor.deleted_at is None
+       and (doctor.email or "").lower().endswith(f"@{domain}")
+   ]
+   decisions = [resolve_doctor_access(doctor) for doctor in doctors]
+   no_entitlement = [
+       resolve_doctor_access(doctor, require_entitlement=False)
+       for doctor in doctors
+   ]
+   print(
+       json.dumps(
+           {
+               "account_count": len(doctors),
+               "active_grant_count": sum(
+                   active_pilot_access_grant(doctor) is not None
+                   for doctor in doctors
+               ),
+               "completed_onboarding_count": sum(
+                   doctor.onboarding_completed_at is not None
+                   for doctor in doctors
+               ),
+               "decisions": dict(
+                   Counter(
+                       decision.denial_reason or "allowed"
+                       for decision in decisions
+                   )
+               ),
+               "decisions_without_entitlement": dict(
+                   Counter(
+                       decision.denial_reason or "allowed"
+                       for decision in no_entitlement
+                   )
+               ),
+           },
+           sort_keys=True,
+       )
+   )
+   ```
+
+   Before this patch, require 31 accounts, 31 active grants, 31 completed
+   onboardings, and the current 29 `practice_membership_required` / two
+   `baa_not_in_force` split in both decision maps. Do not print emails,
+   subjects, database IDs, or patient data.
+
+Verify the proposed repair in CI and, if separately authorized, with an
+approved non-human staging smoke account before any later publication:
+
+1. An existing completed-onboarding Doctor with a valid active grant and no
+   membership is allowed with authorization basis `pilot_grant`.
+2. The same is true when a legacy membership exists but no personal/practice
+   BAA is recorded, matching the grandfather contract.
+3. A disabled Doctor, revoked grant, revoked membership, or inactive membership
+   remains denied.
+4. A completed-onboarding Doctor without a grant remains denied by the normal
+   practice gate.
+5. A new or incomplete-onboarding synthetic grant does not bypass onboarding.
+6. An approved non-destructive pilot smoke account reaches one product view,
+   and support-view no longer reports `target_access_pending`.
+
+Record only fixed route, status, timestamp, counts, and HMAC/SHA-256 references.
+Never copy tokens, raw identifiers, email addresses, or response bodies into
+the PR.
+
+## Last-week PR and deployment audit
+
+Window: 2026-08-24 00:00 EDT through 2026-08-31. The audit found 34 merged PRs:
+26 to `master` and eight staging-only merges. The deployed commit graph had no
+unmatched direct push.
+
+| Area | PRs | Relevance |
+| --- | --- | --- |
+| Auth, session, account state | #160, #162, #164, #182 | #160 introduced the root support-view guard and can obscure a pre-session browser failure, but it does not produce the proven post-session `/notes` denial. #162 promoted it; #164 is schema preparation; #182 updates dependencies. |
+| Authorization, legal, entitlement | #188, #217, #218, #219, #221, #222, #228 | #188 is causal. #217–#222 are billing/Stripe work; disabling entitlement produces the same denials, so they are excluded. #228 changes clickwrap-current-version behavior; 29 accounts fail before BAA evaluation and the other two have no BAA in force rather than a stale edition. |
+| Unrelated product behavior | #223, #227 | These changes do not touch Clerk, sessions, Doctor binding, or practice access and cannot be reused for login. |
+| Deployment, infrastructure, and policy/docs | #157, #158, #161, #163, #165, #166, #167, #169, #171, #175–#181, #183, #184, #187, #216, #220 | Audited for deployment or authentication effects; none changes the access decision that emitted these 403 responses. |
+
+Production ran `9b98c69` from late 2026-08-24 until the manual deployment on
+2026-08-29. Revision `982d552`, containing #188 and #228, completed deployment
+at approximately 11:14 EDT on 2026-08-29. Other reviewed runs in the period
+performed validation or staging work and did not create a separate production
+revision.
+
+## Verification
+
+- 310 affected-consumer backend tests pass (three skipped), including the full
+  protected practice-route suite, Doctor access decisions, API-key
+  authorization, jobs, callbacks, and a new authenticated
+  `/internal/v1/notes` regression proving that an existing grant user reaches
+  the product without manufacturing a membership or BAA.
+- The tests preserve denials for a disabled Doctor, a revoked grant, a revoked
+  or inactive membership, a digest-mismatched grant, an incomplete-onboarding
+  grant, and a normal account without a grant.
+- Ruff check, Ruff format check, and `git diff --check` pass for the changed
+  files.
+- Required GitHub PR checks must be green before handoff; no passing check
+  authorizes merge or publication.
+
+## Scope, safety, and recovery
+
+- No user-specific exception, domain allowlist, password, MFA, account merge,
+  unlock, or Clerk mutation is included.
+- No practice, membership, BAA, billing, patient, visit, capture, or webhook
+  record is changed.
+- No file owned by the separate capture/visit-bind task, and no protected
+  onboarding, BAA-model, billing-stack, internal-route, infrastructure, or
+  production-configuration file is changed.
+- `resolve_doctor_access()` is shared by interactive routes and durable-job
+  authorization. Restoring the existing-user grant basis therefore has a
+  deliberate transitive effect wherever that central decision is consumed; it
+  does not alter any capture dispatch, meeting join, callback, or visit-binding
+  logic.
+- No email was sent.
+- No Build & Publish, deployment, Terraform, flag flip, production mutation, or
+  user impersonation was performed. Production work was limited to read-only
+  Clerk/log inspection and aggregate authorization queries.
+- Recovery is a normal revert of this PR's runtime commit.
+- Merge is not promotion. This PR neither performs nor authorizes a merge or
+  later production publication.
