@@ -80,10 +80,7 @@ function isRouteErrorLike(
   error: unknown,
 ): error is { status: number; statusText?: string; data: unknown } {
   return Boolean(
-    error &&
-      typeof error === "object" &&
-      "status" in error &&
-      "data" in error,
+    error && typeof error === "object" && "status" in error && "data" in error,
   )
 }
 

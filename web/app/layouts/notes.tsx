@@ -5,7 +5,7 @@ import type { Route } from "./+types/notes"
 import { AppSidebar } from "@/components/app-sidebar"
 import { PracticeAgreementWall } from "@/components/notes/PracticeAgreementWall"
 import { SidebarProvider } from "@/components/ui/sidebar"
-import { noteList, type Appointment } from "~/configuration/client"
+import { type Appointment, noteList } from "~/configuration/client"
 import { queryClient } from "~/configuration/tanstack-query"
 import { appointmentsToSidebarEntries } from "~/lib/appointment"
 import {

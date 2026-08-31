@@ -1,4 +1,4 @@
-import { data, isRouteErrorResponse, type MetaFunction } from "react-router"
+import { type MetaFunction, data, isRouteErrorResponse } from "react-router"
 
 import type { Route } from "./+types/detail"
 
