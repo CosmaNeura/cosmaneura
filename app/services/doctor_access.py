@@ -1,9 +1,10 @@
 """One fail-closed authorization decision for Doctor-facing product access.
 
-The decision is deliberately read-only. Legacy pilot records remain available
-for continuity evidence and explicit revocation, but cannot bypass identity,
-membership, practice authority, or BAA gates. A practice-bound active record
-may satisfy only the entitlement gate for that same tenant.
+The decision is deliberately read-only. An exact, active legacy-pilot grant on
+an already-onboarded Doctor is an independent authorization basis: it preserves
+the reviewed cohort's access without creating or rewriting membership, BAA, or
+billing state. Disabled Doctors and explicit grant or membership revocations
+remain hard denials.
 """
 
 from __future__ import annotations
@@ -65,6 +66,22 @@ def _denied(
     )
 
 
+def _has_valid_legacy_pilot_access(
+    doctor: Doctor,
+    *,
+    has_active_grant: bool,
+) -> bool:
+    """Recognize an active pilot grant for a completed-onboarding Doctor.
+
+    The current fixed cohort's grants all belong to Doctors whose onboarding
+    was already complete before the access regression. Requiring that durable
+    marker excludes pre-login grant rows without adding an aggregate cohort
+    scan to every authorized request.
+    """
+
+    return doctor.onboarding_completed_at is not None and has_active_grant
+
+
 def resolve_doctor_access(
     doctor: Doctor,
     *,
@@ -74,10 +91,11 @@ def resolve_doctor_access(
     """Resolve effective product access without mutating identity or tenancy.
 
     A disabled Doctor, a revoked grandfather grant, or a revoked or inactive
-    membership is an explicit tombstone. Every allowed decision requires an
-    active membership, its normal authorization basis, a current BAA, and (by
-    default) an in-force entitlement. A pilot record can satisfy only that last
-    gate, and only when its immutable practice snapshot matches the membership.
+    membership is an explicit tombstone and therefore outranks every positive
+    authorization basis. An active exact-account pilot grant on an
+    already-onboarded Doctor then permits access without requiring a membership,
+    BAA, trial, subscription, or billing exemption. Everyone else continues
+    through the normal practice/member authorization rules.
     """
 
     if doctor.deleted_at is not None:
@@ -107,6 +125,18 @@ def resolve_doctor_access(
     if member is not None and member.seat_state != ClinicianSeatState.active.value:
         return _denied(
             "practice_membership_inactive",
+            baa_in_force=baa_in_force,
+            entitlement_in_force=entitlement_in_force,
+        )
+
+    if _has_valid_legacy_pilot_access(
+        doctor,
+        has_active_grant=pilot_grant is not None,
+    ):
+        return DoctorAccessDecision(
+            allowed=True,
+            authorization_basis="pilot_grant",
+            denial_reason=None,
             baa_in_force=baa_in_force,
             entitlement_in_force=entitlement_in_force,
         )
