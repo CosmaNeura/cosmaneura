@@ -46,6 +46,22 @@ beforeEach(() => {
 })
 
 describe("loadNotesLayoutData", () => {
+  it("returns an updated-agreement wall for Maura's BAA-in-force 403", async () => {
+    noteList.mockResolvedValue({
+      data: undefined,
+      error: { detail: PRACTICE_BAA_REQUIRED_DETAIL },
+      response: { status: 403 },
+    })
+
+    const loaded = await loadNotesLayoutData()
+
+    expect(loaded.blocked?.kind).toBe("accept_agreement")
+    expect(loaded.blocked?.headline).toBe("Accept the updated agreement")
+    expect(loaded.blocked?.detail).toBe(PRACTICE_BAA_REQUIRED_DETAIL)
+    expect(loaded.blocked?.kind).not.toBe("join_practice")
+    expect(setQueryData).not.toHaveBeenCalled()
+  })
+
   it("returns a join-practice wall payload when notes 403 without throwing", async () => {
     noteList.mockResolvedValue({
       data: undefined,
@@ -72,8 +88,9 @@ describe("loadNotesLayoutData", () => {
     expect(loaded.blocked?.kind).toBe("accept_agreement")
     expect(loaded.blocked?.headline).toBe("Accept the updated agreement")
     expect(loaded.blocked?.instruction).toMatch(
-      /accept the updated agreement or join the practice/i,
+      /accept the updated agreement before notes will appear/i,
     )
+    expect(loaded.blocked?.instruction).not.toMatch(/join the practice/i)
   })
 
   it("seeds the notes cache on a successful list", async () => {
@@ -100,8 +117,7 @@ describe("NotesLayout", () => {
         kind: "accept_agreement" as const,
         detail: PRACTICE_BAA_REQUIRED_DETAIL,
         headline: "Accept the updated agreement",
-        instruction:
-          "Accept the updated agreement or join the practice before notes will appear.",
+        instruction: "Accept the updated agreement before notes will appear.",
       },
     }
 
@@ -115,8 +131,13 @@ describe("NotesLayout", () => {
       screen.getByRole("heading", { name: "Accept the updated agreement" }),
     ).toBeInTheDocument()
     expect(
-      screen.getByText(/accept the updated agreement or join the practice/i),
+      screen.getByText(
+        /accept the updated agreement before notes will appear/i,
+      ),
     ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { name: "Join the practice" }),
+    ).not.toBeInTheDocument()
     expect(screen.queryByText("Select a patient")).not.toBeInTheDocument()
   })
 })

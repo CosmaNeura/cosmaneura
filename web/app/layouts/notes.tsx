@@ -43,7 +43,9 @@ export async function loadNotesLayoutData(): Promise<NotesLayoutData> {
 }
 
 // Inspect the raw noteList() result so a practice-gate 403 keeps its server
-// detail. Successful lists still seed the shared query cache that later
+// detail. The live post-Google notes 403 is BAA v2.3 reaccept (detail:
+// "The Cosmaneura Inc BAA must be in force..."), not empty-practice.
+// Successful lists still seed the shared query cache that later
 // useQuery({...noteListOptions()}) callers read.
 export async function clientLoader(_loader_args: Route.ClientLoaderArgs) {
   return loadNotesLayoutData()

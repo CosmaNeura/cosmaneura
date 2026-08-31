@@ -16,21 +16,23 @@ describe("practiceAgreementBlockFromUnknown", () => {
 
     expect(block?.kind).toBe("join_practice")
     expect(block?.headline).toBe("Join the practice")
-    expect(block?.instruction).toMatch(/accept the updated agreement/i)
     expect(block?.instruction).toMatch(/join the practice/i)
+    expect(block?.instruction).not.toMatch(/updated agreement/i)
     expect(block?.detail).toBe(PRACTICE_MEMBERSHIP_REQUIRED_DETAIL)
   })
 
-  it("maps the re-accept 403 detail from a thrown Error", () => {
-    const block = practiceAgreementBlockFromUnknown(
-      new Error(PRACTICE_BAA_REQUIRED_DETAIL),
-    )
+  it("maps Maura's live BAA v2.3 reaccept 403, not empty-practice", () => {
+    const block = practiceAgreementBlockFromUnknown({
+      detail: PRACTICE_BAA_REQUIRED_DETAIL,
+      status: 403,
+    })
 
     expect(block?.kind).toBe("accept_agreement")
     expect(block?.headline).toBe("Accept the updated agreement")
     expect(block?.instruction).toMatch(/accept the updated agreement/i)
-    expect(block?.instruction).toMatch(/join the practice/i)
+    expect(block?.instruction).not.toMatch(/join the practice/i)
     expect(block?.detail).toBe(PRACTICE_BAA_REQUIRED_DETAIL)
+    expect(block?.kind).not.toBe("join_practice")
   })
 
   it("reads a nested hey-api { error: { detail } } payload", () => {
@@ -68,6 +70,18 @@ describe("practiceAgreementBlockFromClientResult", () => {
     })
 
     expect(block?.kind).toBe("join_practice")
+  })
+
+  it("surfaces Maura's notes 403 (BAA in force required) without calling it empty-practice", () => {
+    const block = practiceAgreementBlockFromClientResult({
+      data: undefined,
+      error: { detail: PRACTICE_BAA_REQUIRED_DETAIL },
+      response: { status: 403 },
+    })
+
+    expect(block?.kind).toBe("accept_agreement")
+    expect(block?.headline).toBe("Accept the updated agreement")
+    expect(block?.kind).not.toBe("join_practice")
   })
 })
 
