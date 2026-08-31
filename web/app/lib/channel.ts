@@ -35,12 +35,23 @@ export function resolveChannel(fromSearch?: string | null): Channel {
   return readStoredChannel()
 }
 
-export function loginCopy(channel: Channel) {
+export const SIGN_IN_LOAD_ERROR_COPY = "sign-in didn’t load — refresh"
+
+export type LoginCopy = {
+  kicker: string
+  title: string
+  body: string
+  methodHint?: string
+}
+
+export function loginCopy(channel: Channel): LoginCopy {
   if (channel === "mcd") {
     return {
       kicker: "MyCatholicDoctor",
       title: "Continue in Cosmas — MyCatholicDoctor",
       body: "Sign in with the @mycatholicdoctor.com address MCD has on file. Same Cosmas. Same Cosmaneura Inc BAA on the practice.",
+      methodHint:
+        "Use Google or one email code (use the newest mail). Do not tap resend. There is no password for this group — the password box is a dead end.",
     }
   }
   if (channel === "catholic") {

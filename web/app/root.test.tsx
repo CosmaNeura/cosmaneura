@@ -8,7 +8,11 @@ import {
   checkViewAsStatus,
 } from "~/lib/view-as-api"
 
-import App, { ErrorBoundary } from "./root"
+import App, {
+  ErrorBoundary,
+  HYDRATE_FALLBACK_TIMEOUT_MS,
+  HydrateFallback,
+} from "./root"
 import { act, render, screen, waitFor } from "@testing-library/react"
 
 vi.mock("~/lib/view-as-api", () => ({
@@ -328,6 +332,53 @@ describe("Root App", () => {
       }
     },
   )
+})
+
+describe("HydrateFallback", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it("keeps spinning until the login timeout", () => {
+    vi.useFakeTimers()
+    render(<HydrateFallback />)
+
+    expect(screen.getByText("Loading application...")).toBeInTheDocument()
+    act(() => {
+      vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS - 1)
+    })
+    expect(screen.getByText("Loading application...")).toBeInTheDocument()
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+  })
+
+  it("fails loud when Clerk or login is not ready after a few seconds", () => {
+    vi.useFakeTimers()
+    render(<HydrateFallback />)
+
+    act(() => {
+      vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS)
+    })
+
+    expect(screen.queryByText("Loading application...")).not.toBeInTheDocument()
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "sign-in didn’t load — refresh",
+    )
+  })
+
+  it("reloads from the fail-loud refresh control", () => {
+    vi.useFakeTimers()
+    const reload = vi.fn()
+    vi.stubGlobal("location", { reload })
+    render(<HydrateFallback />)
+
+    act(() => {
+      vi.advanceTimersByTime(HYDRATE_FALLBACK_TIMEOUT_MS)
+    })
+    screen.getByRole("button", { name: "Refresh" }).click()
+
+    expect(reload).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe("root error boundary", () => {
