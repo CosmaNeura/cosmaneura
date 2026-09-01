@@ -60,12 +60,37 @@ class RecallApiError(DispatchAlert):
     "The Recall API refused or was unreachable during dispatch."
 
 
+class MissingAppointmentBinding(DispatchAlert):
+    """A tracked Zoom meeting has no appointment bound, so capture is never
+    authorized. Silent today: arm_authorized_occurrence_locked returns a bare
+    False and the visit is simply never recorded."""
+
+
+class RecordingContinuationBlocked(DispatchAlert):
+    """A participant joined a session that already has a bot or a completed
+    capture, and continuation was refused for want of an exact encounter
+    binding. Correct refusal, but the visit still goes unrecorded."""
+
+
+class WatchdogArmingFailed(DispatchAlert):
+    "Monitoring could not be armed. The visit proceeds; nothing is watching it."
+
+
 class StuckHoldingForDoctor(DispatchAlert):
     "Patients are in the room but no participant was ever classified as the host."
 
 
 class NoRecordingWithBothPresent(DispatchAlert):
     "Doctor and patient are both in the room and nothing is recording."
+
+
+class AlertDeliveryProbe(DispatchAlert):
+    """Deliberate test alert, fired by `cli verify-alert-delivery`.
+
+    Exists so the last hop can be checked on purpose: not that an event was
+    built, but that a notification for it reached a person. Never raised by
+    application code.
+    """
 
 
 class WebhookRouteUnreachable(DispatchAlert):

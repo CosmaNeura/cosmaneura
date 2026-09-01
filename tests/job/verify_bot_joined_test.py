@@ -215,3 +215,101 @@ def test_meeting_started_arms_the_watchdog_through_this_module():
     from app.services import zoom_webhooks
 
     assert zoom_webhooks.verify_bot_joined is verify_bot_joined
+
+
+# --------- review follow-ups: occurrence identity and torn reads ---------
+
+
+def test_a_check_from_a_previous_occurrence_stands_down(redis, captured_alerts):
+    """`meeting_id` is reused all day by a personal meeting room. A check armed
+    for the 9am visit that fires after the 9:30 one started would otherwise
+    read the new patient's state and alert about the wrong visit -- or worse,
+    burn the once-per-meeting guard so the real failure stays quiet."""
+    _live_session(redis)
+    redis.set(f"{PREFIX}:occurrence_digest", "occurrence-b")
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+
+    verify_bot_joined.perform(MEETING_ID, occurrence_digest="occurrence-a")
+
+    assert captured_alerts == []
+
+
+def test_a_check_for_the_current_occurrence_still_alerts(redis, captured_alerts):
+    _live_session(redis)
+    redis.set(f"{PREFIX}:occurrence_digest", "occurrence-a")
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+
+    verify_bot_joined.perform(MEETING_ID, occurrence_digest="occurrence-a")
+
+    assert len(captured_alerts) == 1
+    assert captured_alerts[0]["type"] is alerting.StuckHoldingForDoctor
+
+
+def test_no_alert_when_the_state_settles_before_the_verdict(redis, captured_alerts):
+    """The unlocked pass reads a dozen keys one at a time while the handlers
+    mutate them. Landing between "recording_active cleared" and "paused_at set"
+    looks exactly like a failed visit. The locked recheck is what stops that
+    torn read from paging anyone.
+
+    Simulated the way it really happens: the handler finishes while we are
+    waiting for the lock, so the state we finally hold is healthy."""
+    _live_session(redis)
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+
+    real_lock = redis.lock
+
+    class _LockThatWaitsForAHandler:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def acquire(self, blocking=True):
+            acquired = self._inner.acquire(blocking=blocking)
+            # The handler we were queued behind just started the recording.
+            redis.set(f"{PREFIX}:recording_active", "1")
+            return acquired
+
+        def release(self):
+            self._inner.release()
+
+    redis.lock = lambda *a, **kw: _LockThatWaitsForAHandler(real_lock(*a, **kw))
+    try:
+        verify_bot_joined.perform(MEETING_ID)
+    finally:
+        redis.lock = real_lock
+
+    assert captured_alerts == []
+    assert redis.get(f"{PREFIX}:watchdog_alerted") is None
+
+
+def test_a_busy_lifecycle_defers_instead_of_guessing(
+    redis, captured_alerts, monkeypatch
+):
+    """A handler holding the lock is mid-transition, so the answer is about to
+    change. Re-check next pass rather than page on a state nobody has finished
+    writing."""
+    _live_session(redis)
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+
+    class _BusyLock:
+        def acquire(self, blocking=True):
+            return False
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(redis, "lock", lambda *a, **kw: _BusyLock())
+
+    verify_bot_joined.perform(MEETING_ID)
+
+    assert captured_alerts == []
+    # the guard must not be burned by a deferral
+    assert redis.get(f"{PREFIX}:watchdog_alerted") is None
+
+
+def test_the_watchdog_takes_the_same_lock_the_handlers_take():
+    """Sharing the key rather than the constructor is the whole point; a
+    duplicated literal would drift silently and the recheck would guard
+    nothing."""
+    from app.services.zoom_webhooks import lifecycle_lock_key
+
+    assert lifecycle_lock_key("m-1") == "recall:meeting:m-1:lifecycle_lock"

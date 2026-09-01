@@ -1,19 +1,25 @@
-"""Synthetic monitor for the Zoom -> Recall note-taker pipeline.
+"""Ingress and credential probes for the Zoom capture path.
 
-Where the heartbeat task (app.jobs.heartbeat) only proves the worker is
-alive, this proves the code path that handles real user traffic is still
-intact, every 15 minutes, against production redis + database.
+What this does and does not establish, stated plainly because the previous
+framing overclaimed: these probes prove that the pieces a capture *depends on*
+are reachable and that our credentials still work. They do not prove a bot can
+join a meeting or produce a recording -- nothing here creates a bot. Only a
+real bot joining a real meeting shows that, and that smoke test is deliberately
+separate (see the follow-up noted at the bottom).
+
+Where the heartbeat task (app.jobs.heartbeat) only proves the worker is alive,
+these run every 15 minutes against production redis + database.
 
 It runs three probes, each of which fails independently so one broken
 dependency cannot mask another:
 
-1. **Handler probe** (in-process). Calls handle_meeting_started directly.
+1. **Dependency probe** (in-process). Calls handle_meeting_started directly.
    Catches env var drift (DATABASE_URL, REDIS_URL, ZOOM_* secrets unset
    or rotated), DB and Redis connectivity from the worker container,
    import-chain breakage from a deploy that boots but explodes on first
    real request, and Azure network policy changes blocking egress.
 
-2. **Route probe** (HTTP). POSTs a correctly signed synthetic webhook to
+2. **Ingress probe** (HTTP). POSTs a correctly signed synthetic webhook to
    our own public endpoint. This is the layer probe 1 cannot see: TLS and
    ingress, the FastAPI route, ``ZOOM_SECRET_TOKEN`` actually matching
    what signs the request, and the Celery enqueue. It matters because a
@@ -21,7 +27,7 @@ dependency cannot mask another:
    deactivates an endpoint after repeated failures -- a config change
    nobody deployed silently takes the note-taker offline for all doctors.
 
-3. **Recall probe** (HTTP). One authenticated call to the Recall API.
+3. **Credential probe** (HTTP). One authenticated call to the Recall API.
    An invalid ``RECALL_API_KEY`` is otherwise discovered by the first
    patient visit that fails to record.
 
@@ -34,10 +40,16 @@ DoctorVideoIntegration row, so handle_meeting_started executes the
 redis. That branch still touches redis (lock acquire) and the DB
 (doctor lookup), which is enough to validate the dependency chain.
 
-Sentry CeleryIntegration with monitor_beat_tasks=True turns this into a
-cron monitor: if the task fails or doesn't fire on schedule, the on-call
-gets paged. Probe failures alert through services.alerting instead, since
-a failed probe is a finding, not a crash.
+Sentry CeleryIntegration with monitor_beat_tasks=True turns this into a cron
+monitor: if the task fails or doesn't fire on schedule, the on-call gets paged.
+Probe failures alert through services.alerting instead, since a failed probe is
+a finding, not a crash.
+
+Not covered here, on purpose: an end-to-end bot-create/join/record smoke
+against a dedicated non-PHI meeting. That is the only check that would prove
+the note-taker actually works, and it costs a Recall bot per run, so its
+cadence and its meeting are a product decision rather than something to bury
+in this task.
 """
 
 import hashlib
@@ -95,7 +107,7 @@ def _clear_lock(redis, meeting_id: str) -> None:
     redis.delete(f"recall:meeting:{meeting_id}:starting_lock")
 
 
-def _probe_handler(redis) -> None:
+def _probe_dependencies(redis) -> None:
     _clear_lock(redis, SYNTHETIC_MEETING_ID)
     zoom_webhooks.handle_meeting_started(_payload(SYNTHETIC_MEETING_ID))
 
@@ -124,7 +136,7 @@ def signed_headers(body: bytes) -> dict[str, str]:
     }
 
 
-def _probe_webhook_route(redis) -> None:
+def _probe_ingress(redis) -> None:
     """POST a correctly signed webhook to our own public endpoint.
 
     Signed with the same secret the route verifies against, so a mismatch
@@ -157,15 +169,15 @@ def _probe_webhook_route(redis) -> None:
         # Not fatal, but it means the event never reached Celery, so the
         # probe proved less than it looks like it did.
         log.warning(
-            "synthetic zoom check: webhook deduplicated, handler not enqueued",
+            "zoom probes: ingress deduplicated, handler not enqueued",
             meeting_id=SYNTHETIC_HTTP_MEETING_ID,
         )
         return
 
-    log.info("synthetic zoom check: webhook route ok")
+    log.info("zoom probes: ingress ok")
 
 
-def _probe_recall_api() -> None:
+def _probe_recall_credentials() -> None:
     try:
         recall.ping()
     except httpx.HTTPStatusError as exc:
@@ -181,19 +193,19 @@ def _probe_recall_api() -> None:
         )
         return
 
-    log.info("synthetic zoom check: recall api ok")
+    log.info("zoom probes: recall credentials ok")
 
 
 def perform() -> None:
     redis = get_redis()
 
-    _probe_handler(redis)
+    _probe_dependencies(redis)
 
     if is_production() or is_staging():
-        _probe_webhook_route(redis)
-        _probe_recall_api()
+        _probe_ingress(redis)
+        _probe_recall_credentials()
 
-    log.info("synthetic zoom check completed")
+    log.info("zoom probes completed")
 
 
 perform_celery = celery_app.task(name="app.jobs.synthetic_zoom_check.perform")(perform)

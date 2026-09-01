@@ -2622,3 +2622,37 @@ def restore_visit_note_version_command(
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("verify-alert-delivery")
+def verify_alert_delivery():
+    """Fire a deliberate test alert and confirm a human receives it.
+
+    Everything in `tests/services/alerting_test.py` proves the alert is built
+    correctly and survives the PHI scrubber. None of it proves the last hop:
+    that Sentry is configured to notify a person for this issue type. An
+    alerting system nobody is subscribed to fails exactly the way the silent
+    logging it replaced did, and the only way to know is to send one and go
+    look.
+
+    Run this against production, then check that the alert actually arrived
+    wherever the on-call reads them -- not just that a Sentry issue exists.
+    If an issue appears but no notification did, the gap is the Sentry alert
+    rule, not this code.
+    """
+
+    from app.environments import python_environment
+    from app.services import alerting
+
+    alerting.alert(
+        alerting.AlertDeliveryProbe,
+        environment=python_environment(),
+    )
+
+    typer.echo(
+        "Fired AlertDeliveryProbe.\n"
+        "Now confirm two separate things:\n"
+        "  1. a Sentry issue titled AlertDeliveryProbe exists\n"
+        "  2. a notification for it reached a human channel\n"
+        "Only the second one is the thing being tested."
+    )

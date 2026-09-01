@@ -151,10 +151,12 @@ def test_network_probes_do_not_run_outside_production(
     would alert on every run and teach everyone to ignore them."""
     called: list[str] = []
     monkeypatch.setattr(
-        synthetic_zoom_check, "_probe_webhook_route", lambda r: called.append("route")
+        synthetic_zoom_check, "_probe_ingress", lambda r: called.append("route")
     )
     monkeypatch.setattr(
-        synthetic_zoom_check, "_probe_recall_api", lambda: called.append("recall")
+        synthetic_zoom_check,
+        "_probe_recall_credentials",
+        lambda: called.append("recall"),
     )
 
     synthetic_zoom_check.perform()
@@ -162,7 +164,7 @@ def test_network_probes_do_not_run_outside_production(
     assert called == []
 
 
-def test_route_probe_alerts_when_the_endpoint_rejects_a_valid_signature(
+def test_ingress_probe_alerts_when_the_endpoint_rejects_a_valid_signature(
     global_session, monkeypatch, in_production, captured_alerts
 ):
     """A 401 here means ZOOM_SECRET_TOKEN no longer matches the Zoom app,
@@ -170,7 +172,7 @@ def test_route_probe_alerts_when_the_endpoint_rejects_a_valid_signature(
     monkeypatch.setattr(
         httpx, "Client", _FakeClient(response=_FakeResponse(status_code=401))
     )
-    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_api", lambda: None)
+    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_credentials", lambda: None)
 
     synthetic_zoom_check.perform()
 
@@ -179,13 +181,13 @@ def test_route_probe_alerts_when_the_endpoint_rejects_a_valid_signature(
     assert captured_alerts[0]["status"] == 401
 
 
-def test_route_probe_alerts_when_the_endpoint_is_unreachable(
+def test_ingress_probe_alerts_when_the_endpoint_is_unreachable(
     global_session, monkeypatch, in_production, captured_alerts
 ):
     monkeypatch.setattr(
         httpx, "Client", _FakeClient(raises=httpx.ConnectError("no route to host"))
     )
-    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_api", lambda: None)
+    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_credentials", lambda: None)
 
     synthetic_zoom_check.perform()
 
@@ -194,11 +196,11 @@ def test_route_probe_alerts_when_the_endpoint_is_unreachable(
     assert captured_alerts[0]["error_class"] == "ConnectError"
 
 
-def test_route_probe_is_silent_on_success(
+def test_ingress_probe_is_silent_on_success(
     global_session, monkeypatch, in_production, captured_alerts
 ):
     monkeypatch.setattr(httpx, "Client", _FakeClient())
-    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_api", lambda: None)
+    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_credentials", lambda: None)
 
     synthetic_zoom_check.perform()
 
@@ -213,7 +215,7 @@ def test_each_probe_run_is_a_fresh_event_for_the_idempotency_guard(
     reach Celery and the probe would quietly stop testing anything."""
     fake = _FakeClient()
     monkeypatch.setattr(httpx, "Client", fake)
-    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_api", lambda: None)
+    monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_credentials", lambda: None)
 
     synthetic_zoom_check.perform()
     synthetic_zoom_check.perform()
@@ -222,7 +224,7 @@ def test_each_probe_run_is_a_fresh_event_for_the_idempotency_guard(
     assert fake.posts[0]["content"] != fake.posts[1]["content"]
 
 
-def test_recall_probe_alerts_on_rejected_credentials(
+def test_credential_probe_alerts_on_rejected_credentials(
     global_session, monkeypatch, in_production, captured_alerts
 ):
     """An invalid RECALL_API_KEY is otherwise found by the first patient
@@ -237,7 +239,7 @@ def test_recall_probe_alerts_on_rejected_credentials(
         )
 
     monkeypatch.setattr(recall, "ping", raise_401)
-    monkeypatch.setattr(synthetic_zoom_check, "_probe_webhook_route", lambda r: None)
+    monkeypatch.setattr(synthetic_zoom_check, "_probe_ingress", lambda r: None)
 
     synthetic_zoom_check.perform()
 
