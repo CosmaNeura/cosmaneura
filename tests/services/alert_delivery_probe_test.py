@@ -25,12 +25,12 @@ class _ActiveClient:
 class _FakeSentry:
     def __init__(self, client):
         self._client = client
-        self.flushed: list[float] = []
+        self.flushed: list[float | None] = []
 
     def get_client(self):
         return self._client
 
-    def flush(self, timeout=None):
+    def flush(self, timeout: float | None = None):
         self.flushed.append(timeout)
 
 
