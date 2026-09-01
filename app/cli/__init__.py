@@ -2625,34 +2625,50 @@ if __name__ == "__main__":
 
 
 @app.command("verify-alert-delivery")
-def verify_alert_delivery():
+def verify_alert_delivery(flush_seconds: float = 15.0):
     """Fire a deliberate test alert and confirm a human receives it.
 
     Everything in `tests/services/alerting_test.py` proves the alert is built
     correctly and survives the PHI scrubber. None of it proves the last hop:
     that Sentry is configured to notify a person for this issue type. An
     alerting system nobody is subscribed to fails exactly the way the silent
-    logging it replaced did, and the only way to know is to send one and go
-    look.
+    logging it replaced did, and the only way to know is to send one and look.
 
-    Run this against production, then check that the alert actually arrived
-    wherever the on-call reads them -- not just that a Sentry issue exists.
-    If an issue appears but no notification did, the gap is the Sentry alert
-    rule, not this code.
+    Refuses to claim success it cannot back. Sentry is only initialised in
+    production (`configuration.sentry.configure_sentry`), so anywhere else this
+    reports that nothing was sent rather than printing a reassuring message
+    over a no-op. It also flushes explicitly: the SDK's atexit flush allows two
+    seconds, and a probe that exits before its own event is transmitted would
+    report delivery while proving none.
     """
+
+    import sentry_sdk
 
     from app.environments import python_environment
     from app.services import alerting
 
-    alerting.alert(
-        alerting.AlertDeliveryProbe,
-        environment=python_environment(),
-    )
+    environment = python_environment()
+    client = sentry_sdk.get_client()
+
+    if not client.is_active():
+        typer.secho(
+            f"Sentry is not initialised for PYTHON_ENV={environment!r}, so nothing "
+            "was sent.\n"
+            "Only production initialises Sentry. Re-run with PYTHON_ENV=production "
+            "and the production SENTRY_DSN, or run this inside a production "
+            "container.",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(code=1)
+
+    alerting.alert(alerting.AlertDeliveryProbe, environment=environment)
+    sentry_sdk.flush(timeout=flush_seconds)
 
     typer.echo(
-        "Fired AlertDeliveryProbe.\n"
+        f"Fired AlertDeliveryProbe (environment={environment}) and flushed.\n"
         "Now confirm two separate things:\n"
         "  1. a Sentry issue titled AlertDeliveryProbe exists\n"
-        "  2. a notification for it reached a human channel\n"
-        "Only the second one is the thing being tested."
+        "  2. a notification for it reached a channel a human reads\n"
+        "Only the second one is the thing being tested. An issue with no "
+        "subscriber fails the same way the silent logging it replaces did."
     )
