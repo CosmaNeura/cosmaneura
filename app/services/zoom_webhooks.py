@@ -8,7 +8,7 @@ from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.configuration.server import API_BASE_URL
 from app.environments import is_production, is_staging
-from app.jobs import merge_window
+from app.jobs import merge_window, verify_bot_joined
 from app.routes.recall_callbacks import zak_token_redis_key
 from app.services import recall, zoom_capture_authorization, zoom_webhook_operations
 from app.services import zoom as zoom_service
@@ -260,6 +260,13 @@ def handle_meeting_started(
                 occurrence_digest=event_occurrence,
             )
         )
+
+    # From here on this is a meeting we have taken responsibility for, so a
+    # visit that ends with no recording is a defect rather than a configuration
+    # choice. Arm the outside observer that notices it: the dispatch path
+    # cannot, because its worst failure mode is a state it never leaves rather
+    # than an error it raises. Idempotent per meeting.
+    verify_bot_joined.queue(meeting_id_str)
 
     log.info(
         "meeting session started, awaiting doctor",
@@ -1224,6 +1231,8 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
         "merge_task_id",
         "merge_release_intent_id",
         "paused_at",
+        "watchdog_queued",
+        "watchdog_alerted",
     ]
     # Keep merge_generation until its own 24-hour TTL. Personal meeting rooms
     # reuse meeting_id, and a revoked task from the prior session can still be
