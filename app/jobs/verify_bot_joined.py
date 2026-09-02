@@ -328,7 +328,7 @@ def queue(
                 1,
                 queue_key,
                 claim,
-                _QUEUED_TTL_SECONDS,
+                str(_QUEUED_TTL_SECONDS),
             )
         )
     except Exception:
