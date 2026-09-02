@@ -21,10 +21,15 @@ import app.services.authority
 import app.services.authority_audit
 import app.services.authority_conversation
 import app.services.authority_usage
+import app.services.session_prep
 from app import log
 from app.configuration.authority import (
     AUTHORITY_KERNEL_SETTINGS,
     AuthorityKernelSettings,
+)
+from app.configuration.session_prep import (
+    SESSION_PREP_SYNTHETIC_SETTINGS,
+    SessionPrepSyntheticSettings,
 )
 
 from activemodel.session_manager import aglobal_session
@@ -524,9 +529,14 @@ def get_agent_authority_settings() -> AuthorityKernelSettings:
     return AUTHORITY_KERNEL_SETTINGS
 
 
+def get_session_prep_synthetic_settings() -> SessionPrepSyntheticSettings:
+    return SESSION_PREP_SYNTHETIC_SETTINGS
+
+
 @agent_api_app.post(
     "/tools/invoke",
-    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+    response_model=app.services.session_prep.SessionPrepToolResponse,
+    status_code=status.HTTP_200_OK,
     openapi_extra={
         "requestBody": {
             "required": True,
@@ -540,6 +550,7 @@ def get_agent_authority_settings() -> AuthorityKernelSettings:
 )
 async def invoke_tool(
     request: Request,
+    response: Response,
     principal: Annotated[
         EntraServicePrincipal,
         Depends(authenticate_agent_api_request),
@@ -574,12 +585,20 @@ async def invoke_tool(
             pattern=r"^[A-Za-z0-9._~-]{16,128}$",
         ),
     ],
+    authority_settings: Annotated[
+        AuthorityKernelSettings,
+        Depends(get_agent_authority_settings),
+    ],
+    session_prep_settings: Annotated[
+        SessionPrepSyntheticSettings,
+        Depends(get_session_prep_synthetic_settings),
+    ],
     trace_id: Annotated[
         str | None,
         Header(alias="X-Trace-ID"),
     ] = None,
-) -> JSONResponse:
-    """Authenticate and validate the reserved tool while execution stays dark."""
+) -> app.services.session_prep.SessionPrepToolResponse | JSONResponse:
+    """Run the default-off, exact-ref synthetic Session Prep compatibility path."""
 
     resolved_trace_id = normalize_trace_id(trace_id)
     singleton_headers = (
@@ -624,13 +643,112 @@ async def invoke_tool(
             trace_id=resolved_trace_id,
         )
 
-    return agent_problem_response(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        code="PLATFORM_UNAVAILABLE",
-        title="Platform unavailable",
-        detail="The requested platform tool is not available.",
-        trace_id=resolved_trace_id,
+    if not session_prep_settings.is_complete():
+        return agent_problem_response(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="PLATFORM_UNAVAILABLE",
+            title="Platform unavailable",
+            detail="The requested platform tool is not available.",
+            trace_id=resolved_trace_id,
+        )
+
+    invocation = SessionPrepContextReadInvocation.model_validate(
+        data.model_dump(mode="json", exclude_unset=True)
     )
+    try:
+        authorized = app.services.session_prep.authorize_session_prep_read(
+            workload_client_id=principal.client_id,
+            mount_context_token=mount_context_token,
+            interaction_ref=interaction_ref,
+            client_turn_id=client_turn_id,
+            source_turn_ref=invocation.arguments.source_turn_ref,
+            settings=authority_settings,
+        )
+        result = app.services.session_prep.SYNTHETIC_SESSION_PREP_SERVICE.invoke(
+            workload_client_id=principal.client_id,
+            interaction_ref=interaction_ref,
+            client_turn_id=client_turn_id,
+            idempotency_key=idempotency_key,
+            source_turn_ref=invocation.arguments.source_turn_ref,
+            context_snapshot_ref=invocation.arguments.context_snapshot_ref,
+            detail=invocation.arguments.detail,
+            allowed_context_snapshot_ref=session_prep_settings.context_snapshot_ref,
+            turn_closed=authorized.turn_closed,
+        )
+    except app.services.authority.AuthorityKernelDisabledError:
+        return agent_problem_response(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="PLATFORM_UNAVAILABLE",
+            title="Platform unavailable",
+            detail="The requested platform tool is not available.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.authority.ContextTokenExpiredError:
+        return agent_problem_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="CONTEXT_EXPIRED",
+            title="Context expired",
+            detail="The mount context has expired.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.authority.ContextTokenInvalidError:
+        return agent_problem_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="CONTEXT_INVALID",
+            title="Context invalid",
+            detail="A valid mount context is required.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.authority.InteractionInvalidError:
+        return agent_problem_response(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            code="INTERACTION_INVALID",
+            title="Interaction invalid",
+            detail="A valid current interaction is required.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.authority.ClientTurnConflictError:
+        return agent_problem_response(
+            status_code=status.HTTP_409_CONFLICT,
+            code="CLIENT_TURN_CONFLICT",
+            title="Client turn conflict",
+            detail="The tool request conflicts with the current turn.",
+            trace_id=resolved_trace_id,
+        )
+    except (
+        app.services.authority.AuthorityRequestDeniedError,
+        app.services.session_prep.SessionPrepScopeDenied,
+    ):
+        return agent_problem_response(
+            status_code=status.HTTP_403_FORBIDDEN,
+            code="SCOPE_DENIED",
+            title="Scope denied",
+            detail="The current mount context is not authorized.",
+            trace_id=resolved_trace_id,
+        )
+    except app.services.session_prep.SessionPrepIdempotencyConflict:
+        return agent_problem_response(
+            status_code=status.HTTP_409_CONFLICT,
+            code="IDEMPOTENCY_CONFLICT",
+            title="Idempotency conflict",
+            detail="The idempotency key is bound to another request.",
+            trace_id=resolved_trace_id,
+        )
+    except (app.services.session_prep.SessionPrepInvariantError, SQLAlchemyError):
+        return agent_problem_response(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            code="PLATFORM_UNAVAILABLE",
+            title="Platform unavailable",
+            detail="The requested platform tool is temporarily unavailable.",
+            retryable=True,
+            trace_id=resolved_trace_id,
+        )
+
+    response.headers["X-Trace-ID"] = resolved_trace_id
+    response.headers["X-Cosmaneura-Client-Turn-ID"] = str(client_turn_id)
+    response.headers["Idempotency-Replayed"] = str(result.replayed).lower()
+    response.headers["Cache-Control"] = "no-store"
+    return result.response
 
 
 @agent_api_app.post(
