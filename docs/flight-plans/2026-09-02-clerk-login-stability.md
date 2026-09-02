@@ -31,17 +31,22 @@
 - Production evidence on 2026-09-02: API, worker, and scheduler are Running and
   provisioned successfully on image SHA
   `8fa02a71f4b880cd43f4fccc8c81c92a0d635623`; `/healthcheck` and `/sign-in`
-  return HTTP 200.
+  return HTTP 200. Production is behind current `master` after Session Prep PR
+  #244 merged as a separate dark receiver.
 - Staging evidence on 2026-09-02: deployed image
   `22eaf3ca9d64a07ad662ff6a3a9066d3b393a081`; the `staging` branch is materially
   behind `master`. Do not combine broad staging reconciliation with this auth
   change merely to obtain a smoke environment.
-- Difference from `master` and deployed-only behavior: production matches
-  current `master`; PR #238 adds only the guarded frontend mount-preservation
-  behavior and tests.
+- Difference from `master` and deployed-only behavior: current `master`
+  `a77f9f6e6940f9dd5bdc340a25f14f05c02cc9b7` contains the separately approved,
+  dark Session Prep contract receiver from PR #244 and is not yet deployed.
+  PR #238 adds only the guarded frontend mount-preservation behavior and tests
+  on top of that source state.
 - Reconciliation decision: retain staging temporarily and exercise the exact
   PR candidate locally with staging's public Clerk configuration. Reconcile
-  the staging branch separately under its own reviewed plan.
+  the staging branch separately under its own reviewed plan. Hold production
+  promotion until the Session Prep owner confirms that deploying the already
+  merged dark receiver in the same promotion preserves its rollout boundary.
 - Previous known-good artifact and data-recovery boundary: production image
   `8fa02a71f4b880cd43f4fccc8c81c92a0d635623`; no data recovery is required.
 
@@ -78,9 +83,11 @@
 
 ## Security and recovery
 
-- Founder/compliance release acceptance: approved by `JohnClem` in the
-  originating Codex task on 2026-09-02 for this isolated incremental change,
-  conditional on the staging-configured smoke and post-deploy verification.
+- Founder/compliance release acceptance: `JohnClem` approved PR #238 as an
+  incremental auth-stability release in the originating Codex task on
+  2026-09-02, conditional on the staging-configured smoke and post-deploy
+  verification. Production promotion remains held because current `master`
+  also contains separately owned, not-yet-deployed Session Prep PR #244.
 - This approval does not accept changes to tenant authorization, grandfathered
   pilot policy, Zoom capture, Scribe, Session Prep, or a broader cohort.
 - Recovery: revert PR #238, promote the resulting exact `master` SHA, verify
