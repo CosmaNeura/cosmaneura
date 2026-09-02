@@ -60,6 +60,9 @@ Use the canonical sequence:
   account, recording, name, or clinical content.
 - [ ] Staging Recall credential and dashboard access; Sentry issue access and
   confirmed human notification route.
+- [ ] Founder resolves the current telemetry hold: Sentry intentionally
+  initializes only in production, so staging issue delivery cannot be claimed
+  until an approved staging sink/configuration exists.
 - [ ] Read-only health access for API, worker, scheduler, queues, Redis key
   presence, database binding, and encrypted durable-inbox status.
 - [ ] Previous known-good staging digest and rollback authority recorded.
