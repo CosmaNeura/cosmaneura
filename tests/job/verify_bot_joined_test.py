@@ -24,6 +24,7 @@ _SUFFIXES = (
     "paused_at",
     "merge_task_id",
     "bot_id",
+    "occurrence_digest",
     "watchdog_alerted",
     "watchdog_queued",
 )
@@ -313,3 +314,98 @@ def test_the_watchdog_takes_the_same_lock_the_handlers_take():
     from app.services.zoom_webhooks import lifecycle_lock_key
 
     assert lifecycle_lock_key("m-1") == "recall:meeting:m-1:lifecycle_lock"
+
+
+def test_publish_failure_releases_claim_so_retry_can_arm(redis, monkeypatch):
+    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
+    published: list[tuple[tuple, dict]] = []
+
+    def publish(*args, **kwargs):
+        published.append((args, kwargs))
+        if len(published) == 1:
+            raise RuntimeError("broker unavailable")
+        return "queued"
+
+    monkeypatch.setattr(verify_bot_joined.perform_celery, "apply_async", publish)
+
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        verify_bot_joined.queue(MEETING_ID, occurrence_digest="occurrence-a")
+
+    assert redis.get(f"{PREFIX}:watchdog_queued") is None
+    assert (
+        verify_bot_joined.queue(MEETING_ID, occurrence_digest="occurrence-a")
+        == "queued"
+    )
+    assert len(published) == 2
+    assert published == [
+        (
+            (),
+            {
+                "args": (MEETING_ID, 1, "occurrence-a"),
+                "countdown": verify_bot_joined.FIRST_CHECK_DELAY_SECONDS,
+            },
+        ),
+        (
+            (),
+            {
+                "args": (MEETING_ID, 1, "occurrence-a"),
+                "countdown": verify_bot_joined.FIRST_CHECK_DELAY_SECONDS,
+            },
+        ),
+    ]
+    assert redis.get(f"{PREFIX}:watchdog_queued") is not None
+
+
+def test_publish_failure_never_releases_a_replacement_claim(redis, monkeypatch):
+    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
+    queue_key = f"{PREFIX}:watchdog_queued"
+
+    def publish(*_args, **_kwargs):
+        redis.delete(queue_key)
+        assert redis.set(queue_key, "replacement-owner", nx=True, ex=60)
+        raise RuntimeError("original publisher failed")
+
+    monkeypatch.setattr(verify_bot_joined.perform_celery, "apply_async", publish)
+
+    with pytest.raises(RuntimeError, match="original publisher failed"):
+        verify_bot_joined.queue(MEETING_ID, occurrence_digest="occurrence-a")
+
+    assert redis.get(queue_key) == b"replacement-owner"
+
+
+def test_successful_publish_retains_claim_and_deduplicates(redis, monkeypatch):
+    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
+    published: list[bool] = []
+
+    def publish(*_args, **_kwargs):
+        published.append(True)
+        return "queued"
+
+    monkeypatch.setattr(verify_bot_joined.perform_celery, "apply_async", publish)
+
+    assert verify_bot_joined.queue(MEETING_ID) == "queued"
+    assert verify_bot_joined.queue(MEETING_ID) is None
+    assert published == [True]
+    assert redis.get(f"{PREFIX}:watchdog_queued") is not None
+    assert (
+        redis.ttl(f"{PREFIX}:watchdog_queued")
+        > verify_bot_joined._QUEUE_CLAIM_TTL_SECONDS
+    )
+
+
+def test_cleanup_failure_leaves_only_a_short_retry_suppression(redis, monkeypatch):
+    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
+    monkeypatch.setattr(
+        verify_bot_joined.perform_celery,
+        "apply_async",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("broker unavailable")),
+    )
+    monkeypatch.setattr(
+        redis, "eval", lambda *_args: (_ for _ in ()).throw(ConnectionError())
+    )
+
+    with pytest.raises(RuntimeError, match="broker unavailable"):
+        verify_bot_joined.queue(MEETING_ID)
+
+    ttl = redis.ttl(f"{PREFIX}:watchdog_queued")
+    assert 0 < ttl <= verify_bot_joined._QUEUE_CLAIM_TTL_SECONDS

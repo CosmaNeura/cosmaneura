@@ -18,6 +18,7 @@ paging there would train everyone to ignore the channel inside a day. It
 re-checks a bounded number of times and alerts at most once per meeting.
 """
 
+import secrets
 from typing import cast
 
 from app import log
@@ -35,6 +36,22 @@ RECHECK_INTERVAL_SECONDS = 180
 MAX_CHECKS = 5
 
 _ALERTED_TTL_SECONDS = 24 * 60 * 60
+_QUEUED_TTL_SECONDS = 24 * 60 * 60
+_QUEUE_CLAIM_TTL_SECONDS = 5 * 60
+_RELEASE_OWNED_QUEUE_CLAIM = """
+local value = redis.call('GET', KEYS[1])
+if not value or value ~= ARGV[1] then
+  return 0
+end
+return redis.call('DEL', KEYS[1])
+"""
+_FINALIZE_OWNED_QUEUE_CLAIM = """
+local value = redis.call('GET', KEYS[1])
+if not value or value ~= ARGV[1] then
+  return 0
+end
+return redis.call('EXPIRE', KEYS[1], ARGV[2])
+"""
 # Far shorter than the handlers' own blocking timeout: a watchdog waiting on a
 # live handler is a worker slot spent doing nothing, and deferring to the next
 # check costs three minutes of latency on a verdict that is not urgent.
@@ -275,11 +292,56 @@ def queue(
         return None
 
     redis = get_redis()
-    if not redis.set(
-        f"recall:meeting:{meeting_id}:watchdog_queued", "1", nx=True, ex=86400
-    ):
+    queue_key = f"recall:meeting:{meeting_id}:watchdog_queued"
+    claim = secrets.token_hex(16)
+    if not redis.set(queue_key, claim, nx=True, ex=_QUEUE_CLAIM_TTL_SECONDS):
         return None
 
-    return perform_celery.apply_async(
-        args=(meeting_id, 1, occurrence_digest), countdown=countdown
-    )
+    try:
+        result = perform_celery.apply_async(
+            args=(meeting_id, 1, occurrence_digest), countdown=countdown
+        )
+    except Exception:
+        try:
+            released = bool(redis.eval(_RELEASE_OWNED_QUEUE_CLAIM, 1, queue_key, claim))
+        except Exception:
+            # Preserve the broker exception: _arm_join_watchdog reports that
+            # operational failure, while the claim still expires on its TTL.
+            log.warning(
+                "join watchdog: queue claim cleanup failed",
+                meeting_ref=alerting.ref(meeting_id),
+            )
+        else:
+            if not released:
+                # The key expired or a later publisher now owns it. Never
+                # delete a replacement claim while unwinding this failure.
+                log.info(
+                    "join watchdog: queue claim ownership changed",
+                    meeting_ref=alerting.ref(meeting_id),
+                )
+        raise
+
+    try:
+        finalized = bool(
+            redis.eval(
+                _FINALIZE_OWNED_QUEUE_CLAIM,
+                1,
+                queue_key,
+                claim,
+                _QUEUED_TTL_SECONDS,
+            )
+        )
+    except Exception:
+        # Publication succeeded. A short lease is safer than risking a
+        # duplicate-suppressing claim that survives for a day without proof.
+        log.warning(
+            "join watchdog: queue claim finalization failed",
+            meeting_ref=alerting.ref(meeting_id),
+        )
+    else:
+        if not finalized:
+            log.info(
+                "join watchdog: queue claim changed after publication",
+                meeting_ref=alerting.ref(meeting_id),
+            )
+    return result

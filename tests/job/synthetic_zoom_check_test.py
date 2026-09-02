@@ -68,11 +68,10 @@ def test_synthetic_check_does_not_persist_lock_across_runs(global_session):
 # --------- Route and Recall probes ---------
 #
 # The handler probe above never leaves the process, so it cannot see the
-# two config failures that take the note-taker offline for *every* doctor
-# at once: a rotated ZOOM_SECRET_TOKEN (Zoom's webhooks start returning 401
-# and Zoom eventually deactivates the endpoint) and a rotated
-# RECALL_API_KEY. Both used to be discovered by the first patient visit
-# that failed to record.
+# route and credential failures that can take the note-taker offline for every
+# doctor. The self-signed route probe cannot prove the Marketplace secret;
+# that requires a provider-originated callback. A rejected RECALL_API_KEY used
+# to be discovered by the first patient visit that failed to record.
 
 
 class _FakeResponse:
@@ -112,11 +111,8 @@ def in_production(monkeypatch):
     monkeypatch.setattr(synthetic_zoom_check, "is_staging", lambda: False)
 
 
-def test_probe_signature_is_accepted_by_the_real_verifier():
-    """The test that makes this monitor worth having. If the probe signed
-    its body differently from how Zoom signs, it would pass forever while
-    real webhooks were being rejected -- a monitor that reports health it
-    never measured."""
+def test_probe_signature_format_is_accepted_by_the_route_verifier():
+    """Pin local signer/verifier compatibility without claiming provider proof."""
     from app.routes import webhooks
 
     body = b'{"event":"meeting.started"}'
@@ -129,8 +125,8 @@ def test_probe_signature_is_accepted_by_the_real_verifier():
     )
 
 
-def test_probe_signature_is_rejected_when_the_secret_drifts(monkeypatch):
-    """The failure this probe exists to catch, proved to actually fail."""
+def test_probe_signature_is_rejected_when_local_secrets_differ(monkeypatch):
+    """A local signer/verifier mismatch is rejected."""
     from app.routes import webhooks
 
     body = b'{"event":"meeting.started"}'
@@ -164,11 +160,10 @@ def test_network_probes_do_not_run_outside_production(
     assert called == []
 
 
-def test_ingress_probe_alerts_when_the_endpoint_rejects_a_valid_signature(
+def test_ingress_probe_alerts_when_endpoint_rejects_locally_signed_request(
     global_session, monkeypatch, in_production, captured_alerts
 ):
-    """A 401 here means ZOOM_SECRET_TOKEN no longer matches the Zoom app,
-    so every real webhook is being rejected too."""
+    """A local 401 is observable without claiming Marketplace secret proof."""
     monkeypatch.setattr(
         httpx, "Client", _FakeClient(response=_FakeResponse(status_code=401))
     )

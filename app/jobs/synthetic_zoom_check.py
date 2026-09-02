@@ -1,11 +1,12 @@
 """Ingress and credential probes for the Zoom capture path.
 
 What this does and does not establish, stated plainly because the previous
-framing overclaimed: these probes prove that the pieces a capture *depends on*
-are reachable and that our credentials still work. They do not prove a bot can
-join a meeting or produce a recording -- nothing here creates a bot. Only a
-real bot joining a real meeting shows that, and that smoke test is deliberately
-separate (see the follow-up noted at the bottom).
+framing overclaimed: these probes prove that some pieces a capture *depends on*
+are reachable, that the local webhook signer and verifier agree, and that the
+Recall credential works. They do not prove the Zoom Marketplace signing secret
+matches, or that a bot can join a meeting and produce a recording. Only a
+provider-originated callback proves the former; a real bot joining a synthetic
+meeting proves the latter. Both checks remain separate release evidence.
 
 Where the heartbeat task (app.jobs.heartbeat) only proves the worker is alive,
 these run every 15 minutes against production redis + database.
@@ -14,18 +15,17 @@ It runs three probes, each of which fails independently so one broken
 dependency cannot mask another:
 
 1. **Dependency probe** (in-process). Calls handle_meeting_started directly.
-   Catches env var drift (DATABASE_URL, REDIS_URL, ZOOM_* secrets unset
-   or rotated), DB and Redis connectivity from the worker container,
+   Catches required env vars being unset, DB and Redis connectivity from the
+   worker container,
    import-chain breakage from a deploy that boots but explodes on first
    real request, and Azure network policy changes blocking egress.
 
-2. **Ingress probe** (HTTP). POSTs a correctly signed synthetic webhook to
-   our own public endpoint. This is the layer probe 1 cannot see: TLS and
-   ingress, the FastAPI route, ``ZOOM_SECRET_TOKEN`` actually matching
-   what signs the request, and the Celery enqueue. It matters because a
-   rotated secret rejects *every* Zoom webhook with a 401 and Zoom
-   deactivates an endpoint after repeated failures -- a config change
-   nobody deployed silently takes the note-taker offline for all doctors.
+2. **Ingress probe** (HTTP). POSTs a locally signed synthetic webhook to our
+   own public endpoint. This is the layer probe 1 cannot see: TLS and ingress,
+   the FastAPI route, local signer/verifier consistency, and durable-inbox
+   acceptance. Because both sides use this deployment's ``ZOOM_SECRET_TOKEN``,
+   success cannot establish what secret Zoom Marketplace actually uses or
+   prove that best-effort broker publication succeeded.
 
 3. **Credential probe** (HTTP). One authenticated call to the Recall API.
    An invalid ``RECALL_API_KEY`` is otherwise discovered by the first
@@ -113,7 +113,7 @@ def _probe_dependencies(redis) -> None:
 
 
 def signed_headers(body: bytes) -> dict[str, str]:
-    """Sign a probe body exactly the way Zoom signs a real webhook.
+    """Sign a probe body using Zoom's documented signature format.
 
     Kept public and separate so a test can feed the result straight into
     the route's own ``_verify_zoom_signature``. Without that, the probe
@@ -137,10 +137,11 @@ def signed_headers(body: bytes) -> dict[str, str]:
 
 
 def _probe_ingress(redis) -> None:
-    """POST a correctly signed webhook to our own public endpoint.
+    """POST a locally signed webhook to our own public endpoint.
 
-    Signed with the same secret the route verifies against, so a mismatch
-    here is exactly the mismatch that would reject real Zoom traffic.
+    This proves only that this deployment can reach its route and that its
+    local signer and verifier agree. A provider-originated callback is required
+    to prove the Zoom Marketplace app is configured with the same secret.
     """
     _clear_lock(redis, SYNTHETIC_HTTP_MEETING_ID)
 
@@ -157,8 +158,8 @@ def _probe_ingress(redis) -> None:
         return
 
     if response.status_code != httpx.codes.OK:
-        # A 401 here means ZOOM_SECRET_TOKEN no longer matches the Zoom app
-        # and every real webhook is being rejected too.
+        # A 401 means our locally signed request was rejected. It does not by
+        # itself establish the Marketplace app's configured secret.
         alerting.alert(
             alerting.WebhookRouteUnreachable,
             status=response.status_code,
