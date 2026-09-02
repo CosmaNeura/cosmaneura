@@ -77,17 +77,23 @@
 6. Founder manually promotes exact current `master`, then verifies health,
    public sign-in rendering, one approved MCD pilot journey, and aggregate
    authentication/application error signals.
+
 - Abort on any remount/new-factor behavior, failed code, loss of fail-closed
   behavior, unexpected identity or tenant resolution, 5xx increase, or drift
   from the reviewed SHA.
 
 ## Security and recovery
 
-- Founder/compliance release acceptance: `JohnClem` approved PR #238 as an
-  incremental auth-stability release in the originating Codex task on
-  2026-09-02, conditional on the staging-configured smoke and post-deploy
-  verification. Production promotion remains held because current `master`
-  also contains separately owned, not-yet-deployed Session Prep PR #244.
+- Founder source-merge authorization: in the latest follow-up on 2026-09-02,
+  `JohnClem` approved PR #238 as an incremental auth-stability improvement and
+  asked us to complete its flight plan, review, and real Clerk smoke. Source
+  merge remains conditional on green protected checks, the exact-final-SHA
+  review, and a successful smoke.
+- Production/compliance release acceptance: pending. The source-merge approval
+  does not authorize production promotion of current `master`, because it also
+  contains separately owned, not-yet-deployed Session Prep PR #244. Require a
+  coordinated release decision for that receiver plus the post-merge gates in
+  this plan before promotion.
 - This approval does not accept changes to tenant authorization, grandfathered
   pilot policy, Zoom capture, Scribe, Session Prep, or a broader cohort.
 - Recovery: revert PR #238, promote the resulting exact `master` SHA, verify

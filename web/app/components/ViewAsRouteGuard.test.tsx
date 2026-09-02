@@ -429,6 +429,35 @@ describe("ViewAsGlobalRouteGuard identity controls", () => {
     expect(onUnmount).toHaveBeenCalledTimes(1)
   })
 
+  it("fails closed when a routine auth-route recheck is inconsistent", async () => {
+    vi.useFakeTimers()
+    const initial = deferredViewAsCheck()
+    const routine = deferredViewAsCheck()
+    vi.mocked(checkAuthenticatedViewAsStatus)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(routine.promise)
+
+    render(
+      <ViewAsGlobalRouteGuard pathname="/sign-in">
+        <p data-testid="auth-mount-probe">Sign-in controls</p>
+      </ViewAsGlobalRouteGuard>,
+    )
+    await act(async () => initial.resolve(signedOutCheck))
+    await act(async () => window.dispatchEvent(new Event("focus")))
+    expect(screen.getByTestId("auth-mount-probe")).toBeInTheDocument()
+
+    await act(async () =>
+      routine.resolve({
+        state: "ready",
+        status: { ...activeStatus, read_only: false },
+      }),
+    )
+    expect(
+      screen.getByText("Support-view status unavailable"),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId("auth-mount-probe")).not.toBeInTheDocument()
+  })
+
   it("fails closed when a routine auth-route recheck becomes unavailable", async () => {
     vi.useFakeTimers()
     const initial = deferredViewAsCheck()
