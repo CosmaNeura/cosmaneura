@@ -32,8 +32,8 @@ staging deployment. Stop if any required result differs.
 
    Require equal latest/ready revisions. The activation record contains the
    initial accepted baseline, not a permanent pin: after a reviewed staging
-   deployment, require the live Platform tag to equal the exact audited
-   `staging` commit used by the operator checkout. Resolve every tag to its
+   deployment, require the live Platform source tag to equal the exact audited
+   candidate SHA selected by the canonical workflow. Resolve every tag to its
    registry digest; a tag alone is not immutable evidence. Provider and public
    must remain at their separately accepted immutable digests unless their own
    reviewed deployment intentionally changes them.
@@ -69,14 +69,23 @@ staging deployment. Stop if any required result differs.
    `V7_STATUS PASS`. It checks the exact one-row failed/failed baseline and
    protected-reference hash in-process and emits no reference or counts.
 
-5. After the next Platform deploy containing the harness commit, run the
+5. After the next Platform deploy containing the harness commit, independently
+   resolve the accepted Platform image digest and bind it when invoking the
    committed
-   [`run-provider-v7-smoke.sh`](../infra-staging/run-provider-v7-smoke.sh).
-   This future post-deploy gate is not a current closeout blocker. Require
-   `V7_SMOKE PASS`, covering provider success, missing/invalid-context denial,
-   public-workload denial, a complete user/final turn, complete audit/usage
-   ingestion, idempotent replay, and cleanup of every temporary session.
-   Health alone is insufficient.
+   [`run-provider-v7-smoke.sh`](../infra-staging/run-provider-v7-smoke.sh):
+
+   ```bash
+   EXPECTED_PLATFORM_IMAGE_DIGEST='sha256:<accepted-platform-image-digest>' \
+     bash infra-staging/run-provider-v7-smoke.sh
+   ```
+
+   Replace the placeholder with the exact accepted digest. The wrapper fails
+   closed if the value is absent, malformed, or differs from the live immutable
+   Platform image. This future post-deploy gate is not a current closeout
+   blocker. Require `V7_SMOKE PASS`, covering provider success,
+   missing/invalid-context denial, public-workload denial, a complete user/final
+   turn, complete audit/usage ingestion, idempotent replay, and cleanup of every
+   temporary session. Health alone is insufficient.
 
 ## Stop conditions
 
