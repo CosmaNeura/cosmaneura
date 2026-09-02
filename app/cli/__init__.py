@@ -2620,10 +2620,6 @@ def restore_visit_note_version_command(
     )
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command("verify-alert-delivery")
 def verify_alert_delivery(flush_seconds: float = 15.0):
     """Fire a deliberate test alert and confirm a human receives it.
@@ -2672,3 +2668,7 @@ def verify_alert_delivery(flush_seconds: float = 15.0):
         "Only the second one is the thing being tested. An issue with no "
         "subscriber fails the same way the silent logging it replaces did."
     )
+
+
+if __name__ == "__main__":
+    app()
