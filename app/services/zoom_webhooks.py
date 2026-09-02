@@ -7,6 +7,7 @@ from app import log
 from app.celery import celery_app
 from app.configuration.redis import get_redis
 from app.configuration.server import API_BASE_URL
+from app.configuration.zoom import ZOOM_WATCHDOG_ENABLED
 from app.environments import is_production, is_staging
 from app.jobs import merge_window, verify_bot_joined
 from app.routes.recall_callbacks import zak_token_redis_key
@@ -274,7 +275,7 @@ def handle_meeting_started(
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=meeting_id_str)
 
-    if occurrence_armed:
+    if occurrence_armed and zoom_mtg is not None:
         # Arm monitoring only once capture is actually expected.
         # arm_authorized_occurrence_locked returns True only when the doctor's
         # access is in force, capture is available to them, and the meeting has
@@ -286,17 +287,7 @@ def handle_meeting_started(
         # The occurrence digest travels with the task: `meeting_id` is reused
         # all day by a personal meeting room, so a check that fires after this
         # occurrence ended would otherwise judge the next patient's visit.
-        _arm_join_watchdog(meeting_id_str, event_occurrence)
-    elif zoom_mtg is not None and zoom_mtg.appointment_id is None:
-        # The meeting is one we track, but nothing bound it to an appointment,
-        # so authorization can never arm and the visit is silently never
-        # recorded. A meeting we do not track at all is somebody else's and
-        # stays quiet.
-        alerting.alert(
-            alerting.MissingAppointmentBinding,
-            meeting_ref=provider_log_ref(meeting_id_str),
-            doctor_ref=provider_log_ref(str(doctor.id)),
-        )
+        arm_join_watchdog(meeting_id_str, event_occurrence, str(zoom_mtg.id))
     if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
@@ -315,12 +306,16 @@ def handle_meeting_started(
         start_zoom_capture_job.queue(str(zoom_mtg.id))
 
 
-def _arm_join_watchdog(meeting_id: str, occurrence_digest: str | None) -> None:
+def arm_join_watchdog(
+    meeting_id: str, occurrence_digest: str | None, meeting_record_id: str
+) -> None:
     """Persist monitoring for inbox recovery without blocking capture."""
-    if occurrence_digest is None:
+    if not ZOOM_WATCHDOG_ENABLED or occurrence_digest is None:
         return
     try:
-        verify_bot_joined.queue_durably(meeting_id, occurrence_digest)
+        verify_bot_joined.queue_durably(
+            meeting_record_id, meeting_id, occurrence_digest
+        )
     except Exception as exc:
         log.warning(
             "join watchdog could not be armed",
@@ -1282,6 +1277,7 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
     (e.g. cleaning orphan state during handle_meeting_started) so duplicate
     meeting.started webhooks for the same session still get deduped.
     """
+    occurrence = _rget(redis, f"recall:meeting:{meeting_id}:occurrence_digest")
     suffixes = [
         "bot_id",
         "doctor_id",
@@ -1301,6 +1297,8 @@ def _clear_meeting_keys(redis, meeting_id: str, preserve_lock: bool = False) -> 
         "watchdog_queued",
         "watchdog_alerted",
     ]
+    if occurrence is not None:
+        suffixes.append(f"watchdog_alerted:{occurrence}")
     # Keep merge_generation until its own 24-hour TTL. Personal meeting rooms
     # reuse meeting_id, and a revoked task from the prior session can still be
     # delivered after this cleanup. Resetting the counter would let that stale

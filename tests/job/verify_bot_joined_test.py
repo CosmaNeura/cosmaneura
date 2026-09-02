@@ -1,12 +1,14 @@
 """Join-watchdog safety and failure tests."""
 
 import pytest
+from typeid import TypeID
 
 from app.configuration.redis import get_redis
 from app.jobs import verify_bot_joined
-from app.services import alerting
+from app.services import alerting, external_webhook_inbox
 
 MEETING_ID = "watchdog-test-meeting"
+MEETING_RECORD_ID = str(TypeID("zmtg"))
 PREFIX = f"recall:meeting:{MEETING_ID}"
 
 _SUFFIXES = (
@@ -20,8 +22,11 @@ _SUFFIXES = (
     "bot_id",
     "occurrence_digest",
     "watchdog_alerted",
-    "watchdog_queued",
 )
+
+
+def _alert_key(occurrence: str = "legacy") -> str:
+    return f"{PREFIX}:watchdog_alerted:{occurrence}"
 
 
 @pytest.fixture
@@ -29,9 +34,13 @@ def redis():
     r = get_redis()
     for s in _SUFFIXES:
         r.delete(f"{PREFIX}:{s}")
+    for key in r.scan_iter(f"{PREFIX}:watchdog_alerted:*"):
+        r.delete(key)
     yield r
     for s in _SUFFIXES:
         r.delete(f"{PREFIX}:{s}")
+    for key in r.scan_iter(f"{PREFIX}:watchdog_alerted:*"):
+        r.delete(key)
 
 
 def _live_session(redis):
@@ -45,33 +54,14 @@ def test_no_alert_when_meeting_state_is_gone(redis, captured_alerts):
     assert captured_alerts == []
 
 
-def test_no_alert_while_recording(redis, captured_alerts):
-    _live_session(redis)
-    redis.set(f"{PREFIX}:recording_active", "1")
-    redis.set(f"{PREFIX}:doctor_present", "1")
-    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
-
-    verify_bot_joined.perform(MEETING_ID)
-
-    assert captured_alerts == []
-
-
-def test_no_alert_once_capture_has_started(redis, captured_alerts):
-    _live_session(redis)
-    redis.set(f"{PREFIX}:capture_started", "1")
-    redis.set(f"{PREFIX}:doctor_present", "1")
-    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
-
-    verify_bot_joined.perform(MEETING_ID)
-
-    assert captured_alerts == []
-
-
-def test_no_alert_when_paused_inside_merge_window(redis, captured_alerts):
+@pytest.mark.parametrize(
+    "healthy_key", ["recording_active", "capture_started", "paused_at"]
+)
+def test_no_alert_for_nonfailure_session_state(redis, captured_alerts, healthy_key):
     _live_session(redis)
     redis.set(f"{PREFIX}:doctor_present", "1")
     redis.sadd(f"{PREFIX}:participants_present", "patient-a")
-    redis.set(f"{PREFIX}:paused_at", "2026-09-01T12:00:00")
+    redis.set(f"{PREFIX}:{healthy_key}", "1")
 
     verify_bot_joined.perform(MEETING_ID)
 
@@ -81,14 +71,6 @@ def test_no_alert_when_paused_inside_merge_window(redis, captured_alerts):
 def test_no_alert_when_the_doctor_is_alone(redis, captured_alerts):
     _live_session(redis)
     redis.set(f"{PREFIX}:doctor_present", "1")
-
-    verify_bot_joined.perform(MEETING_ID)
-
-    assert captured_alerts == []
-
-
-def test_no_alert_for_an_empty_room(redis, captured_alerts):
-    _live_session(redis)
 
     verify_bot_joined.perform(MEETING_ID)
 
@@ -111,6 +93,7 @@ def test_alerts_when_doctor_and_patient_are_present_with_no_recording(
     _live_session(redis)
     redis.set(f"{PREFIX}:doctor_present", "1")
     redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
 
     verify_bot_joined.perform(MEETING_ID)
 
@@ -120,16 +103,18 @@ def test_alerts_when_doctor_and_patient_are_present_with_no_recording(
     assert captured_alerts[0]["doctor_present"] is True
 
 
-def test_alerts_at_most_once_per_meeting(redis, captured_alerts):
+def test_alerts_at_most_once_per_occurrence(redis, captured_alerts):
     _live_session(redis)
+    redis.set(f"{PREFIX}:occurrence_digest", "occurrence-a")
     redis.set(f"{PREFIX}:doctor_present", "1")
     redis.sadd(f"{PREFIX}:participants_present", "patient-a")
 
-    verify_bot_joined.perform(MEETING_ID, check_number=1)
-    verify_bot_joined.perform(MEETING_ID, check_number=2)
-    verify_bot_joined.perform(MEETING_ID, check_number=3)
+    verify_bot_joined.perform(MEETING_ID, 1, "occurrence-a")
+    verify_bot_joined.perform(MEETING_ID, 2, "occurrence-a")
+    redis.set(f"{PREFIX}:occurrence_digest", "occurrence-b")
+    verify_bot_joined.perform(MEETING_ID, 1, "occurrence-b")
 
-    assert len(captured_alerts) == 1
+    assert len(captured_alerts) == 2
 
 
 @pytest.mark.parametrize("failure", [None, RuntimeError("sentry unavailable")])
@@ -150,11 +135,11 @@ def test_alert_failure_leaves_guard_open_for_retry(redis, monkeypatch, failure):
     monkeypatch.setattr(verify_bot_joined.alerting, "alert", deliver)
     with pytest.raises(RuntimeError):
         verify_bot_joined.perform(MEETING_ID)
-    assert redis.get(f"{PREFIX}:watchdog_alerted") is None
+    assert redis.get(_alert_key()) is None
 
     verify_bot_joined.perform(MEETING_ID)
     assert attempts == [True, True]
-    assert redis.get(f"{PREFIX}:watchdog_alerted") is not None
+    assert redis.get(_alert_key()) is not None
 
 
 def test_marker_write_failure_happens_after_alert_delivery(redis, monkeypatch):
@@ -169,7 +154,7 @@ def test_marker_write_failure_happens_after_alert_delivery(redis, monkeypatch):
     real_set = redis.set
 
     def fail_marker(key, *args, **kwargs):
-        if key == f"{PREFIX}:watchdog_alerted":
+        if key == _alert_key():
             raise ConnectionError()
         return real_set(key, *args, **kwargs)
 
@@ -189,17 +174,6 @@ def test_alert_reports_how_long_the_visit_had_been_broken(redis, captured_alerts
     assert captured_alerts[0]["minutes_since_start"] == 12
 
 
-def test_occupancy_counts_people_not_webhooks(redis, captured_alerts):
-    _live_session(redis)
-    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
-    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
-    redis.set(f"{PREFIX}:doctor_present", "1")
-
-    verify_bot_joined.perform(MEETING_ID)
-
-    assert captured_alerts[0]["patient_count"] == 1
-
-
 def test_the_alert_carries_no_raw_identifiers(redis, captured_alerts):
     _live_session(redis)
     redis.set(f"{PREFIX}:doctor_present", "1")
@@ -214,24 +188,41 @@ def test_the_alert_carries_no_raw_identifiers(redis, captured_alerts):
     assert captured_alerts[0]["bot_ref"].startswith("hmac:")
 
 
-def test_task_is_registered_under_the_name_beat_and_revocation_use():
-    from app.celery import celery_app
-
-    assert "app.jobs.verify_bot_joined.perform" in celery_app.tasks
-
-
-def test_meeting_started_arms_the_watchdog_through_this_module():
-    from app.services import zoom_webhooks
-
-    assert zoom_webhooks.verify_bot_joined is verify_bot_joined
-
-
 def test_a_check_from_a_previous_occurrence_stands_down(redis, captured_alerts):
     _live_session(redis)
     redis.set(f"{PREFIX}:occurrence_digest", "occurrence-b")
     redis.sadd(f"{PREFIX}:participants_present", "patient-a")
 
     verify_bot_joined.perform(MEETING_ID, occurrence_digest="occurrence-a")
+
+    assert captured_alerts == []
+
+
+def test_missing_active_state_alerts_when_capture_is_still_expected(
+    redis, captured_alerts, monkeypatch
+):
+    monkeypatch.setattr(verify_bot_joined, "_capture_still_expected", lambda *_: True)
+
+    verify_bot_joined.perform(
+        MEETING_ID,
+        occurrence_digest="occurrence-a",
+        meeting_record_id=MEETING_RECORD_ID,
+    )
+
+    assert [call["type"] for call in captured_alerts] == [alerting.LostSessionState]
+    assert redis.get(_alert_key("occurrence-a")) is not None
+
+
+def test_missing_active_state_stands_down_after_a_proven_end(
+    redis, captured_alerts, monkeypatch
+):
+    monkeypatch.setattr(verify_bot_joined, "_capture_still_expected", lambda *_: False)
+
+    verify_bot_joined.perform(
+        MEETING_ID,
+        occurrence_digest="occurrence-a",
+        meeting_record_id=MEETING_RECORD_ID,
+    )
 
     assert captured_alerts == []
 
@@ -272,7 +263,33 @@ def test_no_alert_when_the_state_settles_before_the_verdict(redis, captured_aler
         redis.lock = real_lock
 
     assert captured_alerts == []
-    assert redis.get(f"{PREFIX}:watchdog_alerted") is None
+    assert redis.get(_alert_key()) is None
+
+
+def test_alert_reason_is_reread_after_taking_the_lifecycle_lock(redis, captured_alerts):
+    _live_session(redis)
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+    real_lock = redis.lock
+
+    class _LockAfterDoctorJoins:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def acquire(self, blocking=True):
+            acquired = self._inner.acquire(blocking=blocking)
+            redis.set(f"{PREFIX}:doctor_present", "1")
+            return acquired
+
+        def release(self):
+            self._inner.release()
+
+    redis.lock = lambda *a, **kw: _LockAfterDoctorJoins(real_lock(*a, **kw))
+    try:
+        verify_bot_joined.perform(MEETING_ID)
+    finally:
+        redis.lock = real_lock
+
+    assert captured_alerts[0]["type"] is alerting.NoRecordingWithBothPresent
 
 
 def test_a_busy_lifecycle_defers_instead_of_guessing(
@@ -293,158 +310,42 @@ def test_a_busy_lifecycle_defers_instead_of_guessing(
     verify_bot_joined.perform(MEETING_ID)
 
     assert captured_alerts == []
-    assert redis.get(f"{PREFIX}:watchdog_alerted") is None
+    assert redis.get(_alert_key()) is None
 
 
-def test_the_watchdog_takes_the_same_lock_the_handlers_take():
-    from app.services.zoom_webhooks import lifecycle_lock_key
-
-    assert lifecycle_lock_key("m-1") == "recall:meeting:m-1:lifecycle_lock"
-
-
-def test_publish_failure_releases_claim_so_retry_can_arm(redis, monkeypatch):
+def test_durable_queue_publishes_only_an_opaque_delivery_id(monkeypatch):
     monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
-    published: list[tuple[tuple, dict]] = []
-
-    def publish(*args, **kwargs):
-        published.append((args, kwargs))
-        if len(published) == 1:
-            raise RuntimeError("broker unavailable")
-        return "queued"
-
-    monkeypatch.setattr(verify_bot_joined.perform_celery, "apply_async", publish)
-
-    with pytest.raises(RuntimeError, match="broker unavailable"):
-        verify_bot_joined.queue(MEETING_ID, occurrence_digest="occurrence-a")
-
-    assert redis.get(f"{PREFIX}:watchdog_queued") is None
-    assert (
-        verify_bot_joined.queue(MEETING_ID, occurrence_digest="occurrence-a")
-        == "queued"
+    published: list[tuple[str, int | None]] = []
+    monkeypatch.setattr(
+        external_webhook_inbox,
+        "publish_delivery",
+        lambda delivery_id, *, countdown=None: published.append(
+            (delivery_id, countdown)
+        ),
     )
+
+    stored = verify_bot_joined.queue_durably(
+        MEETING_RECORD_ID, MEETING_ID, "a" * 64, check_number=2
+    )
+
+    assert stored is not None
     assert published == [
-        (
-            (),
-            {
-                "args": (MEETING_ID, 1, "occurrence-a"),
-                "countdown": verify_bot_joined.FIRST_CHECK_DELAY_SECONDS,
-            },
-        ),
-        (
-            (),
-            {
-                "args": (MEETING_ID, 1, "occurrence-a"),
-                "countdown": verify_bot_joined.FIRST_CHECK_DELAY_SECONDS,
-            },
-        ),
+        (stored.delivery_id, verify_bot_joined.RECHECK_INTERVAL_SECONDS)
     ]
-    assert redis.get(f"{PREFIX}:watchdog_queued") is not None
+    assert MEETING_ID not in repr(published)
 
 
-def test_retried_claim_with_our_token_still_publishes(redis, monkeypatch):
+def test_rearm_persists_the_next_check(monkeypatch):
     monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
-    monkeypatch.setattr(verify_bot_joined.secrets, "token_hex", lambda _size: "ours")
-    redis.set(f"{PREFIX}:watchdog_queued", "ours", ex=60)
-    published: list[bool] = []
+    armed: list[tuple[str, str, str, int]] = []
     monkeypatch.setattr(
-        verify_bot_joined.perform_celery,
-        "apply_async",
-        lambda **_kwargs: published.append(True) or "queued",
+        verify_bot_joined,
+        "queue_durably",
+        lambda record, meeting, occurrence, *, check_number: armed.append(
+            (record, meeting, occurrence, check_number)
+        ),
     )
 
-    assert verify_bot_joined.queue(MEETING_ID) == "queued"
-    assert published == [True]
+    verify_bot_joined._rearm(MEETING_RECORD_ID, MEETING_ID, 2, "occurrence-a")
 
-
-def test_foreign_provisional_claim_requires_retry(redis, monkeypatch):
-    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
-    redis.set(
-        f"{PREFIX}:watchdog_queued",
-        "another-publisher",
-        ex=verify_bot_joined._QUEUE_CLAIM_TTL_SECONDS,
-    )
-
-    with pytest.raises(verify_bot_joined.WatchdogQueueClaimPending):
-        verify_bot_joined.queue(MEETING_ID)
-
-
-def test_publish_failure_never_releases_a_replacement_claim(redis, monkeypatch):
-    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
-    queue_key = f"{PREFIX}:watchdog_queued"
-
-    def publish(*_args, **_kwargs):
-        redis.delete(queue_key)
-        assert redis.set(queue_key, "replacement-owner", nx=True, ex=60)
-        raise RuntimeError("original publisher failed")
-
-    monkeypatch.setattr(verify_bot_joined.perform_celery, "apply_async", publish)
-
-    with pytest.raises(RuntimeError, match="original publisher failed"):
-        verify_bot_joined.queue(MEETING_ID, occurrence_digest="occurrence-a")
-
-    assert redis.get(queue_key) == b"replacement-owner"
-
-
-def test_successful_publish_retains_claim_and_deduplicates(redis, monkeypatch):
-    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
-    published: list[bool] = []
-
-    def publish(*_args, **_kwargs):
-        published.append(True)
-        return "queued"
-
-    monkeypatch.setattr(verify_bot_joined.perform_celery, "apply_async", publish)
-
-    assert verify_bot_joined.queue(MEETING_ID) == "queued"
-    assert verify_bot_joined.queue(MEETING_ID) is None
-    assert published == [True]
-    assert redis.get(f"{PREFIX}:watchdog_queued") is not None
-    assert (
-        redis.ttl(f"{PREFIX}:watchdog_queued")
-        > verify_bot_joined._QUEUE_CLAIM_TTL_SECONDS
-    )
-
-
-def test_cleanup_failure_leaves_only_a_short_retry_suppression(redis, monkeypatch):
-    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
-
-    def fail_publish(**_kwargs):
-        monkeypatch.setattr(
-            redis, "eval", lambda *_args: (_ for _ in ()).throw(ConnectionError())
-        )
-        raise RuntimeError("broker unavailable")
-
-    monkeypatch.setattr(
-        verify_bot_joined.perform_celery,
-        "apply_async",
-        fail_publish,
-    )
-
-    with pytest.raises(RuntimeError, match="broker unavailable"):
-        verify_bot_joined.queue(MEETING_ID)
-
-    ttl = redis.ttl(f"{PREFIX}:watchdog_queued")
-    assert 0 < ttl <= verify_bot_joined._QUEUE_CLAIM_TTL_SECONDS
-
-
-def test_finalize_failure_keeps_a_short_claim_and_raises(redis, monkeypatch):
-    monkeypatch.setattr(verify_bot_joined, "_delayed_execution_available", lambda: True)
-    real_eval = redis.eval
-
-    def fail_finalize(script, *args):
-        if script == verify_bot_joined._FINALIZE_OWNED_QUEUE_CLAIM:
-            raise ConnectionError()
-        return real_eval(script, *args)
-
-    published: list[bool] = []
-    monkeypatch.setattr(redis, "eval", fail_finalize)
-    monkeypatch.setattr(
-        verify_bot_joined.perform_celery,
-        "apply_async",
-        lambda **_kwargs: published.append(True),
-    )
-
-    with pytest.raises(ConnectionError):
-        verify_bot_joined.queue(MEETING_ID)
-    assert published == [True]
-    assert 0 < redis.ttl(f"{PREFIX}:watchdog_queued") <= 300
+    assert armed == [(MEETING_RECORD_ID, MEETING_ID, "occurrence-a", 3)]

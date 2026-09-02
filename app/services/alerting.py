@@ -37,16 +37,12 @@ class RecallApiError(DispatchAlert):
     "The Recall API refused or was unreachable during dispatch."
 
 
-class MissingAppointmentBinding(DispatchAlert):
-    "A tracked Zoom meeting has no appointment bound, so capture is unauthorized."
-
-
 class RecordingContinuationBlocked(DispatchAlert):
     "Continuation was refused without an exact encounter binding."
 
 
 class WatchdogArmingFailed(DispatchAlert):
-    "Monitoring could not be armed. The visit proceeds; nothing is watching it."
+    "Monitoring could not be armed or executed; durable recovery must retry it."
 
 
 class StuckHoldingForDoctor(DispatchAlert):

@@ -118,26 +118,47 @@ def test_zoom_watchdog_intent_is_encrypted_idempotent_and_retried(
     from app.jobs import verify_bot_joined
     from app.services import alerting
 
+    now = datetime.now(UTC)
     occurrence = inbox.digest_provider_reference("watchdog-occurrence-private")
+    meeting_record_id = str(TypeID("zmtg"))
     stored = inbox.store_zoom_watchdog_intent(
-        meeting_id="zoom-watchdog-private", occurrence_digest=occurrence
+        meeting_record_id=meeting_record_id,
+        meeting_id="zoom-watchdog-private",
+        occurrence_digest=occurrence,
+        check_number=2,
+        delay_seconds=180,
+        now=now,
     )
     replay = inbox.store_zoom_watchdog_intent(
-        meeting_id="zoom-watchdog-private", occurrence_digest=occurrence
+        meeting_record_id=meeting_record_id,
+        meeting_id="zoom-watchdog-private",
+        occurrence_digest=occurrence,
+        check_number=2,
     )
     assert replay == inbox.StoredDelivery(stored.delivery_id, duplicate=True)
     assert "zoom-watchdog-private" not in (
         _delivery(stored.delivery_id).encrypted_payload or ""
     )
+    assert (
+        inbox.claim_delivery(stored.delivery_id, now=now + timedelta(seconds=179))
+        is None
+    )
+    delivery = _delivery(stored.delivery_id)
+    delivery.next_attempt_at = now
+    delivery.save()
 
-    attempts: list[tuple[str, str | None]] = []
+    attempts: list[tuple[str, int, str | None, str | None]] = []
 
-    def queue(meeting_id, *, occurrence_digest=None):
-        attempts.append((meeting_id, occurrence_digest))
+    def perform(
+        meeting_id, check_number=1, occurrence_digest=None, meeting_record_id=None
+    ):
+        attempts.append(
+            (meeting_id, check_number, occurrence_digest, meeting_record_id)
+        )
         if len(attempts) == 1:
-            raise ConnectionError("broker unavailable")
+            raise ConnectionError("watchdog dependency unavailable")
 
-    monkeypatch.setattr(verify_bot_joined, "queue", queue)
+    monkeypatch.setattr(verify_bot_joined, "perform", perform)
     inbox.process_delivery(stored.delivery_id)
     failed = _delivery(stored.delivery_id)
     assert failed.state == "retry_wait" and failed.last_error_code == "handler_error"
@@ -148,8 +169,8 @@ def test_zoom_watchdog_intent_is_encrypted_idempotent_and_retried(
     inbox.process_delivery(stored.delivery_id)
 
     assert attempts == [
-        ("zoom-watchdog-private", occurrence),
-        ("zoom-watchdog-private", occurrence),
+        ("zoom-watchdog-private", 2, occurrence, meeting_record_id),
+        ("zoom-watchdog-private", 2, occurrence, meeting_record_id),
     ]
     completed = _delivery(stored.delivery_id)
     assert completed.state == "completed" and completed.encrypted_payload is None

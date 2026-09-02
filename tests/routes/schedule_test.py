@@ -284,7 +284,10 @@ def test_authorize_zoom_capture_arms_active_occurrence_and_queues_retry(
 
     try:
         before_authorize = datetime.now(timezone.utc)
-        with patch("app.routes.internal.start_zoom_capture_job") as mock_start:
+        with (
+            patch("app.routes.internal.start_zoom_capture_job") as mock_start,
+            patch("app.services.zoom_webhooks.arm_join_watchdog") as mock_watchdog,
+        ):
             response = authenticated_client.post(
                 api_app.url_path_for(
                     "authorize_zoom_capture",
@@ -298,6 +301,9 @@ def test_authorize_zoom_capture_arms_active_occurrence_and_queues_retry(
         assert response.status_code == status.HTTP_200_OK, response.text
         assert response.json()["state"] == "armed"
         mock_start.queue.assert_called_once_with(str(meeting.id))
+        mock_watchdog.assert_called_once_with(
+            meeting.zoom_meeting_id, occurrence_digest, str(meeting.id)
+        )
         persisted = ZoomMeeting.one(meeting.id)
         assert persisted.capture_authorization_occurrence_digest == occurrence_digest
         assert persisted.capture_authorization_expires_at is not None

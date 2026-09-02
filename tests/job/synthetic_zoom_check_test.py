@@ -80,6 +80,8 @@ class _FakeResponse:
         self._body = body if body is not None else {"status": "ok", "duplicate": False}
 
     def json(self):
+        if isinstance(self._body, Exception):
+            raise self._body
         return self._body
 
 
@@ -200,6 +202,26 @@ def test_ingress_probe_is_silent_on_success(
     synthetic_zoom_check.perform()
 
     assert captured_alerts == []
+
+
+@pytest.mark.parametrize("body", [[], ValueError("malformed")])
+def test_invalid_ingress_response_does_not_mask_recall_probe(
+    body, global_session, monkeypatch, in_production, captured_alerts
+):
+    recall_probes: list[bool] = []
+    monkeypatch.setattr(httpx, "Client", _FakeClient(response=_FakeResponse(body=body)))
+    monkeypatch.setattr(
+        synthetic_zoom_check,
+        "_probe_recall_credentials",
+        lambda: recall_probes.append(True),
+    )
+
+    synthetic_zoom_check.perform()
+
+    assert recall_probes == [True]
+    assert [call["type"] for call in captured_alerts] == [
+        alerting.WebhookRouteUnreachable
+    ]
 
 
 def test_each_probe_run_is_a_fresh_event_for_the_idempotency_guard(

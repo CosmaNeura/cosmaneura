@@ -121,7 +121,19 @@ def _probe_ingress(redis) -> None:
         )
         return
 
-    if response.json().get("duplicate"):
+    try:
+        response_body = response.json()
+    except ValueError:
+        response_body = None
+    if not isinstance(response_body, dict):
+        alerting.alert(
+            alerting.WebhookRouteUnreachable,
+            status=response.status_code,
+            error_class="InvalidResponse",
+        )
+        return
+
+    if response_body.get("duplicate"):
         # Not fatal, but it means the event never reached Celery, so the
         # probe proved less than it looks like it did.
         log.warning(

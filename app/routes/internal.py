@@ -2319,6 +2319,11 @@ def authorize_zoom_capture(
         ) from None
 
     if result.armed:
+        from app.services import zoom_webhooks
+
+        zoom_webhooks.arm_join_watchdog(
+            zoom_meeting_id, result.occurrence_digest, result.meeting_record_id
+        )
         start_zoom_capture_job.queue(result.meeting_record_id)
 
     return ZoomCaptureAuthorizationResponse(

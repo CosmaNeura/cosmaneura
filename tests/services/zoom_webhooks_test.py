@@ -1833,13 +1833,17 @@ def test_meeting_cleanup_preserves_generation_against_prior_session_tasks(
 ):
     from app.services import zoom_webhooks
 
+    occurrence_digest = digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
     clean_redis.set(_key("bot_id"), BOT_ID)
     clean_redis.set(_key("merge_generation"), "7")
+    clean_redis.set(_key("occurrence_digest"), occurrence_digest)
+    clean_redis.set(_key(f"watchdog_alerted:{occurrence_digest}"), "alerted")
 
     zoom_webhooks._clear_meeting_keys(clean_redis, MEETING_ID)
 
     assert clean_redis.get(_key("bot_id")) is None
     assert clean_redis.get(_key("merge_generation")) == b"7"
+    assert clean_redis.get(_key(f"watchdog_alerted:{occurrence_digest}")) is None
 
 
 def test_meeting_ended_with_no_bot_logs_no_recording(
@@ -2489,24 +2493,55 @@ def test_watchdog_is_armed_when_capture_is_expected(
     from app.jobs import verify_bot_joined
     from app.services import zoom_webhooks
 
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
+    tracked = ZoomMeeting.one(doctor_id=doctor_with_zoom.id, zoom_meeting_id=MEETING_ID)
+    expected_occurrence = digest_provider_reference(
+        f"zoom-occurrence:{OCCURRENCE_UUID}"
+    )
+    assert verify_bot_joined._capture_still_expected(
+        str(tracked.id), MEETING_ID, expected_occurrence
+    ), "the authorization is durable before the start-status save"
     armed: list[tuple] = []
     monkeypatch.setattr(
         verify_bot_joined,
         "queue_durably",
-        lambda meeting_id, occurrence: armed.append((meeting_id, occurrence)),
+        lambda meeting_record_id, meeting_id, occurrence: armed.append(
+            (meeting_record_id, meeting_id, occurrence)
+        ),
     )
 
     zoom_webhooks.handle_meeting_started(_started_payload())
 
     assert len(armed) == 1
-    meeting_id, occurrence = armed[0]
+    meeting_record_id, meeting_id, occurrence = armed[0]
     assert meeting_id == MEETING_ID
+    assert meeting_record_id == str(tracked.id)
     # The occurrence travels with the task so a check that fires after this
     # visit ends cannot judge the next patient's.
     assert occurrence is not None
+    tracked.status = ZoomMeetingStatus.ended
+    tracked.save()
+    assert not verify_bot_joined._capture_still_expected(
+        str(tracked.id), MEETING_ID, expected_occurrence
+    )
 
 
-def test_watchdog_is_not_armed_when_no_capture_is_expected(
+def test_watchdog_producer_is_dormant_until_enabled(monkeypatch):
+    from app.services import zoom_webhooks
+
+    armed: list[tuple] = []
+    monkeypatch.setattr(
+        zoom_webhooks.verify_bot_joined,
+        "queue_durably",
+        lambda *args: armed.append(args),
+    )
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", False)
+    zoom_webhooks.arm_join_watchdog(MEETING_ID, "a" * 64, "zmtg_invalid")
+
+    assert armed == []
+
+
+def test_unbound_start_waits_for_supported_late_authorization(
     clean_redis,
     allow_doctor_access,
     mock_recall,
@@ -2514,13 +2549,11 @@ def test_watchdog_is_not_armed_when_no_capture_is_expected(
     monkeypatch,
     captured_alerts,
 ):
-    """No appointment bound means authorization can never arm and no capture
-    was ever going to happen. Arming there would page for every meeting we
-    were not going to record -- but the missing binding is itself a silent
-    failure, so it gets its own alert instead."""
+    """An unbound start remains quiet while supported late authorization waits."""
     from app.jobs import verify_bot_joined
-    from app.services import alerting, zoom_webhooks
+    from app.services import zoom_webhooks
 
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
     _doctor_with_unbound_meeting(allow_doctor_access)
 
     armed: list = []
@@ -2533,7 +2566,7 @@ def test_watchdog_is_not_armed_when_no_capture_is_expected(
     zoom_webhooks.handle_meeting_started(_started_payload())
 
     assert armed == []
-    assert [c["type"] for c in captured_alerts] == [alerting.MissingAppointmentBinding]
+    assert captured_alerts == []
 
 
 def test_watchdog_publish_failure_is_durable_and_does_not_break_dispatch(
@@ -2546,7 +2579,9 @@ def test_watchdog_publish_failure_is_durable_and_does_not_break_dispatch(
 
     from app.models.external_webhook_delivery import ExternalWebhookDelivery
 
-    def explode(_delivery_id):
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
+
+    def explode(_delivery_id, **_kwargs):
         raise ConnectionError("broker unavailable")
 
     monkeypatch.setattr(external_webhook_inbox, "publish_delivery", explode)

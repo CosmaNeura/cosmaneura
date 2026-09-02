@@ -43,6 +43,7 @@ class ZoomCaptureAuthorizationResult:
     appointment_id: str
     meeting_record_id: str
     armed: bool
+    occurrence_digest: str | None
 
 
 def _redis_text(redis, key: str) -> str | None:
@@ -331,6 +332,7 @@ def authorize_capture_for_appointment(
                 appointment_id=str(appointment.id),
                 meeting_record_id=str(meeting.id),
                 armed=existing_digest is not None,
+                occurrence_digest=existing_digest,
             )
 
         if not result.armed:
@@ -350,6 +352,7 @@ def authorize_capture_for_appointment(
                         zoom_meeting_id=zoom_meeting_id,
                         occurrence_digest=active_occurrence,
                     ),
+                    occurrence_digest=active_occurrence,
                 )
 
     log.info(
