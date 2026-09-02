@@ -112,6 +112,49 @@ def test_zoom_teardown_intent_is_encrypted_health_visible_and_reconciled(
     assert completed.encrypted_payload is None
 
 
+def test_zoom_watchdog_intent_is_encrypted_idempotent_and_retried(
+    monkeypatch, captured_alerts
+) -> None:
+    from app.jobs import verify_bot_joined
+    from app.services import alerting
+
+    occurrence = inbox.digest_provider_reference("watchdog-occurrence-private")
+    stored = inbox.store_zoom_watchdog_intent(
+        meeting_id="zoom-watchdog-private", occurrence_digest=occurrence
+    )
+    replay = inbox.store_zoom_watchdog_intent(
+        meeting_id="zoom-watchdog-private", occurrence_digest=occurrence
+    )
+    assert replay == inbox.StoredDelivery(stored.delivery_id, duplicate=True)
+    assert "zoom-watchdog-private" not in (
+        _delivery(stored.delivery_id).encrypted_payload or ""
+    )
+
+    attempts: list[tuple[str, str | None]] = []
+
+    def queue(meeting_id, *, occurrence_digest=None):
+        attempts.append((meeting_id, occurrence_digest))
+        if len(attempts) == 1:
+            raise ConnectionError("broker unavailable")
+
+    monkeypatch.setattr(verify_bot_joined, "queue", queue)
+    inbox.process_delivery(stored.delivery_id)
+    failed = _delivery(stored.delivery_id)
+    assert failed.state == "retry_wait" and failed.last_error_code == "handler_error"
+    assert [call["type"] for call in captured_alerts] == [alerting.WatchdogArmingFailed]
+
+    failed.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
+    failed.save()
+    inbox.process_delivery(stored.delivery_id)
+
+    assert attempts == [
+        ("zoom-watchdog-private", occurrence),
+        ("zoom-watchdog-private", occurrence),
+    ]
+    completed = _delivery(stored.delivery_id)
+    assert completed.state == "completed" and completed.encrypted_payload is None
+
+
 def test_zoom_projection_discards_participant_name_and_keeps_bot_classification() -> (
     None
 ):

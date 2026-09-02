@@ -1,19 +1,4 @@
-"""The contract that makes every other alert in this codebase work.
-
-Two facts drive the design here, and both are easy to undo by accident:
-
-1. The application logger is structlog with a PrintLoggerFactory, so it never
-   creates a stdlib LogRecord and Sentry's LoggingIntegration never sees it.
-   No `log.error` here has ever produced an alert.
-2. `configuration.sentry.scrub_event` strips message, logentry, tags, contexts,
-   extra and fingerprint from every outbound event, and blanks exception value
-   strings. That is deliberate -- Sentry is not a channel that carries
-   application text.
-
-Together they mean the only thing that can distinguish one alert from another
-in Sentry is the exception *type*. These tests pin both facts, so if either
-changes the reasoning behind this module is revisited on purpose.
-"""
+"""PHI scrubbing and Sentry alert-channel contract tests."""
 
 import logging
 
@@ -30,6 +15,7 @@ class _FakeSentry:
 
     def capture_exception(self, exc):
         self.captured.append(exc)
+        return "test-event-id"
 
 
 @pytest.fixture
@@ -41,15 +27,14 @@ def fake_sentry(monkeypatch):
 
 def test_alert_captures_a_sentry_event(fake_sentry):
     "The whole point. A log line alone reaches no on-call."
-    alerting.alert(alerting.ZoomOAuthRevoked, meeting_ref="hmac:abc")
+    event_id = alerting.alert(alerting.ZoomOAuthRevoked, meeting_ref="hmac:abc")
 
+    assert event_id == "test-event-id"
     assert len(fake_sentry.captured) == 1
     assert isinstance(fake_sentry.captured[0], alerting.ZoomOAuthRevoked)
 
 
 def test_each_failure_mode_is_its_own_exception_type(fake_sentry):
-    """Type is the only thing that survives scrubbing, so it is the only way
-    two failure modes can land as two Sentry issues rather than one."""
     alerting.alert(alerting.ZoomOAuthRevoked)
     alerting.alert(alerting.BotNeverReady)
 
@@ -60,13 +45,6 @@ def test_each_failure_mode_is_its_own_exception_type(fake_sentry):
 
 
 def test_the_sentry_event_survives_the_phi_scrubber():
-    """The regression that motivated the whole design.
-
-    An earlier version used capture_message with tags, contexts and a
-    fingerprint. scrub_event removes every one of those, so the event arrived
-    carrying nothing at all and all alerts collapsed into one issue. An
-    exception event keeps its type through the same scrubber.
-    """
     event = {
         "level": "error",
         "exception": {
@@ -103,8 +81,6 @@ def test_capture_message_would_not_survive_the_scrubber():
 
 
 def test_alert_writes_the_event_code_to_the_log(fake_sentry, capsys):
-    """Sentry carries the type; the structured log carries the detail. They
-    join on event_code, so it has to be the same token."""
     alerting.alert(alerting.BotNeverReady, meeting_ref="hmac:abc", patient_count=2)
 
     out = capsys.readouterr().out
@@ -113,8 +89,6 @@ def test_alert_writes_the_event_code_to_the_log(fake_sentry, capsys):
 
 
 def test_alert_types_are_all_dispatch_alerts():
-    """A stray Exception subclass would still capture, but would sit outside
-    the DispatchAlert family that makes these greppable as one class."""
     exported = [
         value
         for name, value in vars(alerting).items()
@@ -139,12 +113,6 @@ def test_ref_does_not_leak_the_identifier():
 
 
 def test_app_logger_never_reaches_stdlib_logging():
-    """The reason services.alerting exists at all.
-
-    If this starts failing, structlog was reconfigured onto a stdlib logger
-    factory and `log.error` would reach Sentry on its own. Good news, but it
-    changes the rationale here and should be a deliberate decision.
-    """
     records: list[logging.LogRecord] = []
 
     class _Collector(logging.Handler):

@@ -2492,10 +2492,8 @@ def test_watchdog_is_armed_when_capture_is_expected(
     armed: list[tuple] = []
     monkeypatch.setattr(
         verify_bot_joined,
-        "queue",
-        lambda meeting_id, **kw: armed.append(
-            (meeting_id, kw.get("occurrence_digest"))
-        ),
+        "queue_durably",
+        lambda meeting_id, occurrence: armed.append((meeting_id, occurrence)),
     )
 
     zoom_webhooks.handle_meeting_started(_started_payload())
@@ -2527,7 +2525,9 @@ def test_watchdog_is_not_armed_when_no_capture_is_expected(
 
     armed: list = []
     monkeypatch.setattr(
-        verify_bot_joined, "queue", lambda meeting_id, **kw: armed.append(meeting_id)
+        verify_bot_joined,
+        "queue_durably",
+        lambda meeting_id, occurrence: armed.append(meeting_id),
     )
 
     zoom_webhooks.handle_meeting_started(_started_payload())
@@ -2536,24 +2536,35 @@ def test_watchdog_is_not_armed_when_no_capture_is_expected(
     assert [c["type"] for c in captured_alerts] == [alerting.MissingAppointmentBinding]
 
 
-def test_watchdog_arming_failure_does_not_break_dispatch(
+def test_watchdog_publish_failure_is_durable_and_does_not_break_dispatch(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch, captured_alerts
 ):
     """Monitoring must never take down what it monitors. If Redis or the broker
     is unavailable, arming fails, the session still registers, and the failure
     to watch is itself reported."""
-    from app.jobs import verify_bot_joined
-    from app.services import alerting, zoom_webhooks
+    from app.services import alerting, external_webhook_inbox, zoom_webhooks
 
-    def explode(meeting_id, **kw):
+    from app.models.external_webhook_delivery import ExternalWebhookDelivery
+
+    def explode(_delivery_id):
         raise ConnectionError("broker unavailable")
 
-    monkeypatch.setattr(verify_bot_joined, "queue", explode)
+    monkeypatch.setattr(external_webhook_inbox, "publish_delivery", explode)
 
     zoom_webhooks.handle_meeting_started(_started_payload())
 
     assert clean_redis.get(_key("doctor_id")) is not None, "dispatch state was lost"
     assert alerting.WatchdogArmingFailed in [c["type"] for c in captured_alerts]
+    intent = cast(
+        ExternalWebhookDelivery | None,
+        ExternalWebhookDelivery.where(
+            ExternalWebhookDelivery.event_type
+            == external_webhook_inbox.ZOOM_WATCHDOG_ARM_EVENT
+        ).first(),
+    )
+    assert intent is not None and intent.state == "pending"
+    assert intent.encrypted_payload is not None
+    assert MEETING_ID not in intent.encrypted_payload
 
 
 def test_blocked_continuation_is_reported(

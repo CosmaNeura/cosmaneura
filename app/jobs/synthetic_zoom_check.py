@@ -1,55 +1,10 @@
-"""Ingress and credential probes for the Zoom capture path.
+"""Dependency, ingress, and Recall credential probes for Zoom capture.
 
-What this does and does not establish, stated plainly because the previous
-framing overclaimed: these probes prove that some pieces a capture *depends on*
-are reachable, that the local webhook signer and verifier agree, and that the
-Recall credential works. They do not prove the Zoom Marketplace signing secret
-matches, or that a bot can join a meeting and produce a recording. Only a
-provider-originated callback proves the former; a real bot joining a synthetic
-meeting proves the latter. Both checks remain separate release evidence.
-
-Where the heartbeat task (app.jobs.heartbeat) only proves the worker is alive,
-these run every 15 minutes against production redis + database.
-
-It runs three probes, each of which fails independently so one broken
-dependency cannot mask another:
-
-1. **Dependency probe** (in-process). Calls handle_meeting_started directly.
-   Catches required env vars being unset, DB and Redis connectivity from the
-   worker container,
-   import-chain breakage from a deploy that boots but explodes on first
-   real request, and Azure network policy changes blocking egress.
-
-2. **Ingress probe** (HTTP). POSTs a locally signed synthetic webhook to our
-   own public endpoint. This is the layer probe 1 cannot see: TLS and ingress,
-   the FastAPI route, local signer/verifier consistency, and durable-inbox
-   acceptance. Because both sides use this deployment's ``ZOOM_SECRET_TOKEN``,
-   success cannot establish what secret Zoom Marketplace actually uses or
-   prove that best-effort broker publication succeeded.
-
-3. **Credential probe** (HTTP). One authenticated call to the Recall API.
-   An invalid ``RECALL_API_KEY`` is otherwise discovered by the first
-   patient visit that fails to record.
-
-Probes 2 and 3 leave the container, so they only run in production and
-staging; the handler probe runs everywhere.
-
-The payloads use host_ids that will never match a real
-DoctorVideoIntegration row, so handle_meeting_started executes the
-"no doctor found, skipping" branch instead of stamping live state into
-redis. That branch still touches redis (lock acquire) and the DB
-(doctor lookup), which is enough to validate the dependency chain.
-
-Sentry CeleryIntegration with monitor_beat_tasks=True turns this into a cron
-monitor: if the task fails or doesn't fire on schedule, the on-call gets paged.
-Probe failures alert through services.alerting instead, since a failed probe is
-a finding, not a crash.
-
-Not covered here, on purpose: an end-to-end bot-create/join/record smoke
-against a dedicated non-PHI meeting. That is the only check that would prove
-the note-taker actually works, and it costs a Recall bot per run, so its
-cadence and its meeting are a product decision rather than something to bury
-in this task.
+The locally signed ingress check proves TLS/routing, local signer-verifier
+consistency, and durable-inbox acceptance—not the Zoom Marketplace secret or
+bot capture. Those require a provider callback and a synthetic meeting. The
+sentinel handler probe touches Redis and the database without matching a real
+doctor; network probes run only in staging/production.
 """
 
 import hashlib

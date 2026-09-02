@@ -316,17 +316,11 @@ def handle_meeting_started(
 
 
 def _arm_join_watchdog(meeting_id: str, occurrence_digest: str | None) -> None:
-    """Arm monitoring without letting it take down what it monitors.
-
-    Arming touches Redis and the Celery broker. Either can fail, and an
-    exception here would abort handle_meeting_started -- the webhook would
-    retry and the capture path would be disrupted by its own observer. A visit
-    that runs unwatched is worse than one that runs watched, and far better
-    than one that does not run. The failure is itself alerted so an unwatched
-    session is not also an unnoticed one.
-    """
+    """Persist monitoring for inbox recovery without blocking capture."""
+    if occurrence_digest is None:
+        return
     try:
-        verify_bot_joined.queue(meeting_id, occurrence_digest=occurrence_digest)
+        verify_bot_joined.queue_durably(meeting_id, occurrence_digest)
     except Exception as exc:
         log.warning(
             "join watchdog could not be armed",

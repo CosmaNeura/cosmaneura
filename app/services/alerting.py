@@ -1,25 +1,8 @@
-"""Alerts for dispatch failures that are otherwise invisible.
+"""PHI-scrubbed Sentry alerts for otherwise silent dispatch failures.
 
-Why this module exists: the application logger is structlog configured with a
-``PrintLoggerFactory``/``BytesLoggerFactory`` (see
-``structlog_config._logger_factory``), so an ``app.log`` call never creates a
-stdlib ``LogRecord``. Sentry's ``LoggingIntegration`` hooks
-``logging.Logger.callHandlers``, which means **no ``log.error(...)`` in this
-codebase has ever produced a Sentry event**. Only unhandled exceptions reach
-Sentry, and every abort in the Zoom -> Recall path is a ``return`` with a log
-line rather than a raise -- so a note-taker that fails to join a real visit
-produces exactly zero alerts and is discovered when the doctor complains.
-
-**How this fits the PHI boundary.** ``configuration.sentry.scrub_event`` drops
-``message``, ``logentry``, ``tags``, ``contexts``, ``extra`` and ``fingerprint``
-from every outbound event, and blanks exception ``value`` strings. That is
-deliberate: Sentry is not a channel that carries application text. The one
-thing it still carries is the **exception type**, so each failure mode is its
-own class here. Sentry gets a distinguishable, empty-by-construction event; the
-detail lives in the structured log, keyed by the same ``event_code``.
-
-Identifiers go through ``provider_log_ref`` for the same reason they do in the
-webhook adapters -- non-reversible, still greppable, correlates across lines.
+Structlog does not emit stdlib records here, and Sentry strips event text and
+context. Exception type identifies the issue; structured logs hold only
+pseudonymous correlation references and bounded metadata.
 """
 
 from typing import Any
@@ -31,13 +14,7 @@ from app.services.external_webhook_inbox import provider_log_ref
 
 
 class DispatchAlert(Exception):
-    """A visit will go unrecorded and a human needs to know.
-
-    Never raised as control flow -- instances are handed to
-    ``sentry_sdk.capture_exception`` so the class name becomes the Sentry
-    issue. Raising one would change celery retry behaviour on paths that
-    deliberately return.
-    """
+    """A visit may go unrecorded and a human needs to know."""
 
 
 class LostSessionState(DispatchAlert):
@@ -61,15 +38,11 @@ class RecallApiError(DispatchAlert):
 
 
 class MissingAppointmentBinding(DispatchAlert):
-    """A tracked Zoom meeting has no appointment bound, so capture is never
-    authorized. Silent today: arm_authorized_occurrence_locked returns a bare
-    False and the visit is simply never recorded."""
+    "A tracked Zoom meeting has no appointment bound, so capture is unauthorized."
 
 
 class RecordingContinuationBlocked(DispatchAlert):
-    """A participant joined a session that already has a bot or a completed
-    capture, and continuation was refused for want of an exact encounter
-    binding. Correct refusal, but the visit still goes unrecorded."""
+    "Continuation was refused without an exact encounter binding."
 
 
 class WatchdogArmingFailed(DispatchAlert):
@@ -85,12 +58,7 @@ class NoRecordingWithBothPresent(DispatchAlert):
 
 
 class AlertDeliveryProbe(DispatchAlert):
-    """Deliberate test alert, fired by `cli verify-alert-delivery`.
-
-    Exists so the last hop can be checked on purpose: not that an event was
-    built, but that a notification for it reached a person. Never raised by
-    application code.
-    """
+    "Deliberate test alert fired by `cli verify-alert-delivery`."
 
 
 class WebhookRouteUnreachable(DispatchAlert):
@@ -101,20 +69,14 @@ class RecallApiUnreachable(DispatchAlert):
     "The synthetic monitor could not authenticate against the Recall API."
 
 
-def alert(alert_type: type[DispatchAlert], **context: Any) -> None:
-    """Write the structured log line and raise a Sentry event.
-
-    ``event_code`` is the class name, matching the convention the webhook
-    adapters already use, so the log and the Sentry issue join on one token.
-    Context values are counts and enum-like strings; pass identifiers through
-    ``ref()`` rather than raw.
-    """
+def alert(alert_type: type[DispatchAlert], **context: Any) -> str | None:
+    """Log safe context and capture a type-identifiable Sentry event."""
     log.error(
         "zoom dispatch alert",
         event_code=alert_type.__name__,
         **context,
     )
-    sentry_sdk.capture_exception(alert_type())
+    return sentry_sdk.capture_exception(alert_type())
 
 
 def ref(value: Any) -> str:

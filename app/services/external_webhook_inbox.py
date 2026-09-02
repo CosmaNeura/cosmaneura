@@ -35,6 +35,7 @@ ZOOM_TEARDOWN_RECOVERY_DELAY = timedelta(minutes=3)
 ZOOM_TEARDOWN_EVENTS = frozenset(
     {"internal.zoom_bot_pause", "internal.zoom_bot_release"}
 )
+ZOOM_WATCHDOG_ARM_EVENT = "internal.zoom_watchdog_arm"
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _PSEUDONYMOUS_EVENT_PREFIX = "hmac-v1:"
 # Keep aligned with app.services.recall.BOT_NAME without importing that module
@@ -126,6 +127,16 @@ def _project_recall(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_zoom(event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if event_type == ZOOM_WATCHDOG_ARM_EVENT:
+        intent = payload.get("watchdog_intent")
+        if not isinstance(intent, dict):
+            intent = {}
+        projected = {
+            key: intent[key]
+            for key in ("meeting_id", "occurrence_digest")
+            if intent.get(key) is not None
+        }
+        return {"event": event_type, "watchdog_intent": projected}
     if event_type in ZOOM_TEARDOWN_EVENTS:
         intent = payload.get("teardown_intent")
         if not isinstance(intent, dict):
@@ -344,6 +355,22 @@ def store_zoom_teardown_intent(
         payload={"event": event_type, "teardown_intent": intent},
         now=now,
         _next_attempt_at=now + recovery_delay,
+    )
+
+
+def store_zoom_watchdog_intent(
+    *, meeting_id: str, occurrence_digest: str, now: datetime | None = None
+) -> StoredDelivery:
+    """Persist an occurrence-scoped watchdog publication for reconciliation."""
+    if not meeting_id or not _DIGEST_RE.fullmatch(occurrence_digest):
+        raise ValueError("invalid Zoom watchdog target")
+    intent = {"meeting_id": meeting_id, "occurrence_digest": occurrence_digest}
+    return store_verified_external_webhook(
+        provider="zoom",
+        provider_event_id=f"{ZOOM_WATCHDOG_ARM_EVENT}:{meeting_id}:{occurrence_digest}",
+        event_type=ZOOM_WATCHDOG_ARM_EVENT,
+        payload={"event": ZOOM_WATCHDOG_ARM_EVENT, "watchdog_intent": intent},
+        now=now,
     )
 
 
@@ -567,6 +594,37 @@ def _dispatch(claim: ClaimedDelivery, payload: dict[str, Any]) -> None:
         recall_webhooks.dispatch(event_type=claim.event_type, payload=payload)
         return
     if claim.provider == "zoom":
+        if claim.event_type == ZOOM_WATCHDOG_ARM_EVENT:
+            from app.jobs import verify_bot_joined
+            from app.services import alerting
+
+            intent = payload.get("watchdog_intent")
+            meeting_id = intent.get("meeting_id") if isinstance(intent, dict) else None
+            occurrence = (
+                intent.get("occurrence_digest") if isinstance(intent, dict) else None
+            )
+            if (
+                not isinstance(meeting_id, str)
+                or not meeting_id
+                or not isinstance(occurrence, str)
+                or not _DIGEST_RE.fullmatch(occurrence)
+            ):
+                raise PermanentWebhookError()
+            try:
+                verify_bot_joined.queue(meeting_id, occurrence_digest=occurrence)
+            except verify_bot_joined.WatchdogQueueClaimPending as exc:
+                raise RetryableWebhookError("handler_error") from exc
+            except Exception as exc:
+                try:
+                    alerting.alert(
+                        alerting.WatchdogArmingFailed,
+                        meeting_ref=provider_log_ref(meeting_id),
+                        error_type=type(exc).__name__,
+                    )
+                except Exception:
+                    log.exception("failed to report watchdog arming failure")
+                raise RetryableWebhookError("handler_error") from exc
+            return
         if claim.event_type in ZOOM_TEARDOWN_EVENTS:
             from app.jobs import merge_window
 
