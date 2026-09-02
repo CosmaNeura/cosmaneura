@@ -1,0 +1,11 @@
+{
+  "tool_name": "session-prep.context.read",
+  "tool_version": "1.0.0",
+  "subject_ref": null,
+  "arguments": {
+    "source_turn_ref": "turn_synthetic_001",
+    "context_snapshot_ref": "context_synthetic_001",
+    "purpose": "session_prep",
+    "detail": "brief"
+  }
+}
