@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.cosmaneura.com/provider-session-prep/v1/request.schema.json",
+  "title": "Provider Session Prep context read request v1.0.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool_name", "tool_version", "subject_ref", "arguments"],
+  "properties": {
+    "tool_name": {
+      "const": "session-prep.context.read"
+    },
+    "tool_version": {
+      "const": "1.0.0"
+    },
+    "subject_ref": {
+      "type": "null"
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_turn_ref", "context_snapshot_ref", "purpose", "detail"],
+      "properties": {
+        "source_turn_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "context_snapshot_ref": {
+          "$ref": "#/$defs/opaqueRef"
+        },
+        "purpose": {
+          "const": "session_prep"
+        },
+        "detail": {
+          "enum": ["brief", "supporting_context"]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "opaqueRef": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9._~-]{8,160}$"
+    }
+  }
+}
