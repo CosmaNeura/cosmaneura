@@ -69,17 +69,34 @@ class SessionCreate(BaseModel):
     modality: Literal["in_person", "virtual", "phone"]
 
 
+class ExternalTranscriptSessionCreate(SessionCreate):
+    """Create a session whose ingest mode is selected by the Scribe receiver."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+CaptureSessionStatus = Literal[
+    "created",
+    "capturing",
+    "uploaded",
+    "processing",
+    "transcript_ready",
+    "handed_off",
+    "failed",
+]
+
+
 class CaptureSession(SessionCreate):
     id: UUID
-    status: Literal[
-        "created",
-        "capturing",
-        "uploaded",
-        "processing",
-        "transcript_ready",
-        "handed_off",
-        "failed",
-    ]
+    ingest_mode: Literal["chunk_upload"] = "chunk_upload"
+    status: CaptureSessionStatus
+    created_at: datetime
+
+
+class ExternalTranscriptCaptureSession(ExternalTranscriptSessionCreate):
+    id: UUID
+    ingest_mode: Literal["external_async_transcript"]
+    status: CaptureSessionStatus
     created_at: datetime
 
 
@@ -106,6 +123,14 @@ class ScribeWorkflowClient(Protocol):
         idempotency_key: str,
     ) -> CaptureSession: ...
 
+    async def create_external_transcript_session(
+        self,
+        tenant_id: UUID,
+        payload: ExternalTranscriptSessionCreate,
+        *,
+        idempotency_key: str,
+    ) -> ExternalTranscriptCaptureSession: ...
+
     async def close(self) -> None: ...
 
 
@@ -127,6 +152,16 @@ class DisabledScribeWorkflowClient:
         *,
         idempotency_key: str,
     ) -> CaptureSession:
+        del tenant_id, payload, idempotency_key
+        raise ScribeWorkflowDisabledError("scribe_workflow_disabled")
+
+    async def create_external_transcript_session(
+        self,
+        tenant_id: UUID,
+        payload: ExternalTranscriptSessionCreate,
+        *,
+        idempotency_key: str,
+    ) -> ExternalTranscriptCaptureSession:
         del tenant_id, payload, idempotency_key
         raise ScribeWorkflowDisabledError("scribe_workflow_disabled")
 
@@ -186,6 +221,21 @@ class HttpScribeWorkflowClient:
             CaptureSession,
         )
 
+    async def create_external_transcript_session(
+        self,
+        tenant_id: UUID,
+        payload: ExternalTranscriptSessionCreate,
+        *,
+        idempotency_key: str,
+    ) -> ExternalTranscriptCaptureSession:
+        return await self._post(
+            "/v1/external-transcript-sessions",
+            tenant_id,
+            payload,
+            idempotency_key,
+            ExternalTranscriptCaptureSession,
+        )
+
     async def _post(
         self,
         path: str,
@@ -211,8 +261,8 @@ class HttpScribeWorkflowClient:
         if response.status_code in {200, 201}:
             try:
                 return response_model.model_validate(response.json())
-            except (ValueError, ValidationError) as exc:
-                raise ScribeWorkflowRetryableError("scribe_invalid_response") from exc
+            except (ValueError, ValidationError):
+                raise ScribeWorkflowRetryableError("scribe_invalid_response") from None
         if response.status_code == 409:
             raise ScribeWorkflowConflictError("scribe_conflict")
         if response.status_code in {408, 425, 429} or response.status_code >= 500:
