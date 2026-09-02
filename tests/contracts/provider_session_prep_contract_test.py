@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_DIR = ROOT / "contracts" / "schemas" / "provider-session-prep-v1"
@@ -46,7 +47,7 @@ RESULT_FIXTURES = {
 }
 
 
-def _load(path: Path) -> dict[str, object]:
+def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text())
 
 
@@ -112,9 +113,7 @@ def test_result_fixtures_pin_stable_states_and_content_relationships() -> None:
         assert set(fixture) == required
         assert fixture["schema_version"] == "1.0.0"
         included_refs = {
-            item["source_ref"]
-            for item in fixture["provenance"]
-            if item["included"]
+            item["source_ref"] for item in fixture["provenance"] if item["included"]
         }
         assert fixture["source_count"] == len(included_refs)
 
