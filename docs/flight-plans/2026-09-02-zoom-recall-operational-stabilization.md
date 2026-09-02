@@ -46,6 +46,8 @@ Use the canonical sequence:
 
 - [ ] Exact Auth base SHA supplied; final #239/follow-up head and merge base
   recorded; no overlap with Auth/IAM files.
+- [ ] Staging data and every connected test account are attested synthetic-only;
+  otherwise stop before deployment or provider traffic.
 - [ ] Dedicated staging Zoom Marketplace app, with staging client ID, client
   secret, webhook secret token, OAuth redirect URI, and event endpoint URL.
 - [ ] A provider-originated signed callback reaches the staging endpoint. The
