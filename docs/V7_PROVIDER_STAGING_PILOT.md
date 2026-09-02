@@ -32,11 +32,12 @@ staging deployment. Stop if any required result differs.
 
    Require equal latest/ready revisions. The activation record contains the
    initial accepted baseline, not a permanent pin: after a reviewed staging
-   deployment, require the live Platform source tag to equal the exact audited
-   candidate SHA selected by the canonical workflow. Resolve every tag to its
-   registry digest; a tag alone is not immutable evidence. Provider and public
-   must remain at their separately accepted immutable digests unless their own
-   reviewed deployment intentionally changes them.
+   deployment, require the live Platform digest to equal the immutable digest
+   in the canonical workflow publication record, and require that record to
+   bind the image to the exact audited candidate SHA. A tag alone is not
+   immutable evidence. Provider and public must remain at their separately
+   accepted immutable digests unless their own reviewed deployment
+   intentionally changes them.
 
 2. Require HTTP 200 from the platform `/healthcheck` and both Sovereign
    `/healthz` endpoints. Retain only the expected health fields. Provider must
