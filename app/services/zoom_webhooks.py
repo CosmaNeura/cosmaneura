@@ -331,6 +331,7 @@ def arm_join_watchdog(
         except Exception:
             # Alerting about a broken dependency must not raise either.
             log.exception("failed to report watchdog arming failure")
+        raise
 
 
 def _rget(redis, key: str) -> str | None:

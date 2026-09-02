@@ -238,6 +238,44 @@ def test_a_check_for_the_current_occurrence_still_alerts(redis, captured_alerts)
     assert captured_alerts[0]["type"] is alerting.StuckHoldingForDoctor
 
 
+def test_durable_check_fences_a_mismatched_record(redis, captured_alerts, monkeypatch):
+    _live_session(redis)
+    redis.set(f"{PREFIX}:occurrence_digest", "occurrence-a")
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+    monkeypatch.setattr(verify_bot_joined, "_capture_still_expected", lambda *_: False)
+
+    verify_bot_joined.perform(
+        MEETING_ID,
+        occurrence_digest="occurrence-a",
+        meeting_record_id=MEETING_RECORD_ID,
+    )
+
+    assert captured_alerts == []
+    assert redis.get(_alert_key("occurrence-a")) is None
+
+
+def test_final_check_evaluates_state_restored_under_lock(
+    redis, captured_alerts, monkeypatch
+):
+    redis.sadd(f"{PREFIX}:participants_present", "patient-a")
+
+    class _RestoringLock:
+        def acquire(self, blocking=True):
+            _live_session(redis)
+            redis.set(f"{PREFIX}:occurrence_digest", "occurrence-a")
+            return True
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(redis, "lock", lambda *a, **kw: _RestoringLock())
+    verify_bot_joined.perform(
+        MEETING_ID, check_number=5, occurrence_digest="occurrence-a"
+    )
+
+    assert captured_alerts[0]["type"] is alerting.StuckHoldingForDoctor
+
+
 def test_no_alert_when_the_state_settles_before_the_verdict(redis, captured_alerts):
     _live_session(redis)
     redis.sadd(f"{PREFIX}:participants_present", "patient-a")

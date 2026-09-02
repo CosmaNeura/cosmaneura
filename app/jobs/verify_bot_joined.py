@@ -141,6 +141,16 @@ def perform(
     redis = get_redis()
     prefix = f"recall:meeting:{meeting_id}"
 
+    if meeting_record_id is not None and (
+        occurrence_digest is None
+        or not _capture_still_expected(meeting_record_id, meeting_id, occurrence_digest)
+    ):
+        log.info(
+            "join watchdog: durable target inactive",
+            meeting_ref=alerting.ref(meeting_id),
+        )
+        return
+
     active_occurrence = _rget(redis, f"{prefix}:occurrence_digest")
     if occurrence_digest is not None and (
         active_occurrence is None
@@ -149,15 +159,18 @@ def perform(
             and not redis.get(f"{prefix}:doctor_id")
         )
     ):
-        if _missing_state_needs_recheck(
+        needs_recheck = _missing_state_needs_recheck(
             redis,
             meeting_record_id,
             meeting_id,
             occurrence_digest,
             check_number,
-        ):
+        )
+        if needs_recheck and check_number < MAX_CHECKS:
             _rearm(meeting_record_id, meeting_id, check_number, occurrence_digest)
-        return
+            return
+        if not needs_recheck:
+            return
     if not _occurrence_matches(redis, prefix, occurrence_digest):
         log.info(
             "join watchdog: occurrence changed, standing down",
@@ -324,5 +337,12 @@ def queue_durably(
         check_number=check_number,
         delay_seconds=countdown,
     )
-    external_webhook_inbox.publish_delivery(stored.delivery_id, countdown=countdown)
+    try:
+        external_webhook_inbox.publish_delivery(stored.delivery_id, countdown=countdown)
+    except Exception as exc:
+        alerting.alert(
+            alerting.WatchdogArmingFailed,
+            meeting_ref=alerting.ref(meeting_id),
+            error_type=type(exc).__name__,
+        )
     return stored

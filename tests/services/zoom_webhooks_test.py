@@ -3,6 +3,7 @@ from itertools import count
 from typing import Any, cast
 
 import pytest
+from typeid import TypeID
 
 from app.configuration.redis import get_redis
 from app.services.external_webhook_inbox import digest_provider_reference
@@ -2501,6 +2502,14 @@ def test_watchdog_is_armed_when_capture_is_expected(
     assert verify_bot_joined._capture_still_expected(
         str(tracked.id), MEETING_ID, expected_occurrence
     ), "the authorization is durable before the start-status save"
+    assert not any(
+        verify_bot_joined._capture_still_expected(*target)
+        for target in (
+            (str(tracked.id), "another-meeting", expected_occurrence),
+            (str(tracked.id), MEETING_ID, "b" * 64),
+            (str(TypeID("zmtg")), MEETING_ID, expected_occurrence),
+        )
+    )
     armed: list[tuple] = []
     monkeypatch.setattr(
         verify_bot_joined,
@@ -2569,19 +2578,18 @@ def test_unbound_start_waits_for_supported_late_authorization(
     assert captured_alerts == []
 
 
-def test_watchdog_publish_failure_is_durable_and_does_not_break_dispatch(
+def test_watchdog_publish_is_durable_but_persistence_failure_retries(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch, captured_alerts
 ):
-    """Monitoring must never take down what it monitors. If Redis or the broker
-    is unavailable, arming fails, the session still registers, and the failure
-    to watch is itself reported."""
+    """Broker loss preserves the intent; persistence loss retries its parent."""
+    from app.jobs import verify_bot_joined
     from app.services import alerting, external_webhook_inbox, zoom_webhooks
 
     from app.models.external_webhook_delivery import ExternalWebhookDelivery
 
     monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
 
-    def explode(_delivery_id, **_kwargs):
+    def explode(*_args, **_kwargs):
         raise ConnectionError("broker unavailable")
 
     monkeypatch.setattr(external_webhook_inbox, "publish_delivery", explode)
@@ -2600,6 +2608,10 @@ def test_watchdog_publish_failure_is_durable_and_does_not_break_dispatch(
     assert intent is not None and intent.state == "pending"
     assert intent.encrypted_payload is not None
     assert MEETING_ID not in intent.encrypted_payload
+
+    monkeypatch.setattr(verify_bot_joined, "queue_durably", explode)
+    with pytest.raises(ConnectionError):
+        zoom_webhooks.arm_join_watchdog(MEETING_ID, "a" * 64, str(intent.id))
 
 
 def test_blocked_continuation_is_reported(
