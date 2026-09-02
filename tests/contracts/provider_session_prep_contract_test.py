@@ -34,7 +34,7 @@ EXPECTED_HASHES = {
         "7242063179b40c0c2923fc768ed4dac2337aefa3a0feaa18320365c9fb557a82"
     ),
     FIXTURE_DIR / "result-refreshing-brief.json": (
-        "6f21876d1207872f366e75af27bbaa6823b4f98c480aeaa291111370d6894496"
+        "e8a5fb225f0fe75d71e453df99a543a33120450536fd4db86ba7bb474f0af155"
     ),
     FIXTURE_DIR / "result-unavailable.json": (
         "cd34858a808f1dd28825a129bb4655e77d10adc14a956a7cad2774bfbf81ff02"

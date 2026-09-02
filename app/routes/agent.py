@@ -454,7 +454,7 @@ async def _validated_tool_body(
     try:
         raw = json.loads(bytes(body), object_pairs_hook=_closed_json_object)
         return ToolInvocationEnvelope.model_validate(raw)
-    except (TypeError, ValueError, UnicodeDecodeError):
+    except (TypeError, ValueError, UnicodeDecodeError, RecursionError):
         return agent_problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             code="VALIDATION_FAILED",
@@ -615,7 +615,7 @@ async def invoke_tool(
         SessionPrepContextReadInvocation.model_validate(
             data.model_dump(mode="json", exclude_unset=True)
         )
-    except ValidationError:
+    except (ValidationError, ValueError, RecursionError):
         return agent_problem_response(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             code="VALIDATION_FAILED",
@@ -624,9 +624,6 @@ async def invoke_tool(
             trace_id=resolved_trace_id,
         )
 
-    # Receiver-first rollout: recognize the frozen request without touching
-    # authority, snapshot, PHI, idempotency, or adapter paths. Execution lands
-    # only in a separately reviewed implementation slice.
     return agent_problem_response(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         code="PLATFORM_UNAVAILABLE",

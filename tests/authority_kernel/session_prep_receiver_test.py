@@ -187,6 +187,25 @@ def test_receiver_rejects_invalid_content_without_reflection(
     assert "sentinel" not in response.text
 
 
+def test_receiver_rejects_deep_json_recursion_without_500() -> None:
+    content = (
+        json.dumps(_request_body())
+        .replace(
+            '"detail": "brief"', '"detail": "brief", "nested": ' + "[" * 500 + "]" * 500
+        )
+        .encode()
+    )
+
+    response = _authorized_client().post(
+        "/service/v1/agent/tools/invoke",
+        headers={**_headers(), "Content-Type": "application/json"},
+        content=content,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "VALIDATION_FAILED"
+
+
 def test_receiver_rejects_duplicate_json_keys_and_oversized_bodies() -> None:
     duplicate = json.dumps(_request_body()).replace(
         '"tool_name": "session-prep.context.read",',
