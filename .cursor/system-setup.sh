@@ -10,6 +10,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 APT_CONFOLD=(-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef)
+CURSOR_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "== [system] apt packages =="
 APT_PACKAGES=(
@@ -55,13 +56,6 @@ if ! command -v mise >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/mise" ]; then
 fi
 
 echo "== [system] localias (local TLS reverse proxy) =="
-if ! command -v localias >/dev/null 2>&1; then
-  url="$(curl -fsSL https://api.github.com/repos/peterldowns/localias/releases/latest \
-    | jq -r '.assets[].browser_download_url' \
-    | grep -iE 'linux.*(amd64|x86_64)' | grep -ivE 'sha|\.txt' | head -1)"
-  curl -fsSL -o /tmp/localias.bin "$url"
-  sudo install -m 0755 /tmp/localias.bin /usr/local/bin/localias
-  rm -f /tmp/localias.bin
-fi
+bash "$CURSOR_SETUP_DIR/../scripts/install_pinned_localias.sh"
 
 echo "== [system] done =="
