@@ -1063,10 +1063,7 @@ def _discover_sets(
             continue
         match = BASE_RE.fullmatch(name)
         if match is None:
-            if (
-                name in {"default", "postgres"}
-                or "privatelink.postgres.database.azure.com/" in rid
-            ):
+            if name in {"default", "postgres"}:
                 deferred.append(rid)
                 continue
             _fail("unknown_or_malformed_resource")

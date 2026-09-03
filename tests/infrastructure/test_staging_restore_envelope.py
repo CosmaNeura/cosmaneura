@@ -550,8 +550,11 @@ def test_cleanup_refuses_unknown_or_malformed_resource_without_delete() -> None:
     fake = FakeAzure(policy, identity_kind="cleanup")
     fake.resources = [
         {
-            "id": fake.ctx.resource_id("Microsoft.Storage/storageAccounts", "unknown"),
-            "name": "unknown",
+            "id": fake.ctx.resource_id(
+                "Microsoft.Network/networkSecurityGroups",
+                "privatelink.postgres.database.azure.com/unexpected",
+            ),
+            "name": "unexpected",
             "tags": {},
         }
     ]
