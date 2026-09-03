@@ -346,9 +346,12 @@
    after `9a2399212488`, the accepted synthetic evidence digest, the approved
    vendor-fingerprint-set digest, and the newly bootstrapped and independently
    accepted immutable recovery digest.
-2. Require Backend, Frontend, change-budget, workflow-policy tests, migration
-   graph/lint, all three focused migration guard tests, BAA asset tests, and
-   the isolated restore rehearsal to pass against the exact candidate.
+2. Require change-budget and workflow-policy checks to pass for the exact
+   protected-master controller SHA. Separately run Backend, Frontend, migration
+   graph/lint, all three focused migration guard tests, BAA asset tests, and the
+   isolated restore rehearsal against exact candidate `8fa02a7...`; retain the
+   original PR #230 check evidence as historical provenance rather than
+   misattributing controller-only checks to the candidate.
 3. Quiesce onboarding, BAA, billing, and other mutating synthetic traffic before
    migration. The old image can no longer create practices after the
    acquisition default is removed, and it does not contain the newly current
