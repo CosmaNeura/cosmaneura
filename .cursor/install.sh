@@ -16,6 +16,13 @@ source "$SCRIPT_DIR/services.sh"
 echo "== [install] ensure pinned toolchain (.tool-versions) =="
 mise install
 
+# lib.sh's direnv allow runs before the toolchain is installed on a fresh image,
+# so direnv may not exist yet and the allow is skipped. Now that mise has
+# installed direnv, allow the .envrc so `direnv exec` (denv) works.
+echo "== [install] allow direnv =="
+hash -r 2>/dev/null || true
+direnv allow .
+
 echo "== [install] create developer-local env files (gitignored, no secrets) =="
 # Mirrors `just setup`, plus the two dev values the committed examples omit:
 # API_BASE_URL (required at import time) and a non-secret placeholder Clerk key.
