@@ -49,7 +49,8 @@ jobs:
   authorize:
     if: >-
       (github.event_name == 'workflow_dispatch' &&
-       (inputs.action == 'cleanup' || inputs.action == 'provision')) ||
+       (inputs.action == 'cleanup' ||
+        (inputs.action == 'provision' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true'))) ||
       (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true')
     runs-on: ubuntu-latest
     outputs:
@@ -222,7 +223,9 @@ jobs:
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY:$GITHUB_REF:$GITHUB_REF_PROTECTED" = "CosmaNeura/cosmaneura:refs/heads/master:true"
-          test "$GITHUB_SHA" = "$(gh api repos/CosmaNeura/cosmaneura/git/ref/heads/master --jq .object.sha)"
+          current_master="$(gh api repos/CosmaNeura/cosmaneura/git/ref/heads/master --jq .object.sha)"
+          comparison="$(gh api "repos/CosmaNeura/cosmaneura/compare/${GITHUB_SHA}...${current_master}" --jq .status)"
+          test "$comparison" = "identical" -o "$comparison" = "ahead"
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then test "$GITHUB_ACTOR:$GITHUB_TRIGGERING_ACTOR" = "JohnClem:JohnClem"; fi
       - name: Authenticate dedicated cleanup identity
         uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3

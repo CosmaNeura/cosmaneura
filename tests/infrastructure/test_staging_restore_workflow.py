@@ -28,7 +28,9 @@ def test_workflow_is_protected_manual_and_cleanup_is_default_off() -> None:
     assert workflow.count("Reauthorize protected head after environment approval") == 2
     assert workflow.count("validate-policy") == 1
     assert workflow.index("validate-policy") < workflow.index("azure/login@")
-    assert "STAGING_RESTORE_CLEANUP_ENABLED == 'true'" in workflow
+    assert workflow.count("STAGING_RESTORE_CLEANUP_ENABLED == 'true'") == 3
+    assert "compare/${GITHUB_SHA}...${current_master}" in workflow
+    assert '"$comparison" = "identical" -o "$comparison" = "ahead"' in workflow
     assert "needs.provision.result != 'success'" in workflow
     assert "--allow-missing" in workflow and "--force" in workflow
     assert "actions/checkout@fbc6f399" in workflow
