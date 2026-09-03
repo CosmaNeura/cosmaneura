@@ -269,7 +269,7 @@ def test_staging_preflight_runs_after_job_creation_before_alembic() -> None:
         in deploy[create:preflight]
     )
     assert '--container-name "$migration_container_name"' in override
-    assert '--image "$STAGING_TAG"' in override
+    assert '--image "$STAGING_IMAGE_REFERENCE"' in override
     assert "--command /opt/venv/bin/python" in override
     assert '--env-vars "DATABASE_URL=secretref:database-url"' in override
     assert "Billing migration preflight blocked schema migration" in override
