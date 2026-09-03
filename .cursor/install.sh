@@ -58,9 +58,10 @@ echo "== [install] database migrate (dev + test) =="
 denv just db_migrate
 
 # Seed only when the dev database is empty. seed.py anchors are idempotent, but
-# it also appends synthetic sample appointments per run, so guard for idempotence.
-seeded="$(denv psql "$DATABASE_URL" -tAc \
-  "SELECT COALESCE((SELECT count(*) FROM doctor), 0)" 2>/dev/null | tr -d '[:space:]' || echo 0)"
+# it appends synthetic appointments and inserts note schemas that violate a
+# unique constraint on re-run, so guard for idempotence. DATABASE_URL must be
+# expanded inside the direnv environment, not the outer shell.
+seeded="$(denv bash -c 'psql "$DATABASE_URL" -tAc "SELECT COALESCE((SELECT count(*) FROM doctor), 0)"' 2>/dev/null | tr -d '[:space:]' || echo 0)"
 if [ "${seeded:-0}" = "0" ]; then
   echo "== [install] seeding database (dev + test) =="
   denv just db_seed
