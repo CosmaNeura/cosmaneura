@@ -24,13 +24,30 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
 DATABASE_URL_ENVIRONMENT = "STAGING_SERVER_SCOPE_DATABASE_URL"
+ALLOWED_INPUT_CONNECTION_PARAMETERS = frozenset(
+    {"host", "port", "dbname", "user", "password", "sslmode", "sslrootcert"}
+)
+LOCAL_DATABASE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+SYSTEM_SSL_ROOT_CERT = "system"
+ADDITIONAL_CONNECTION_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "OPENSSL_CONF",
+        "OPENSSL_ENGINES",
+        "OPENSSL_MODULES",
+        "PGSERVICEFILE",
+        "PGSYSCONFDIR",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+    }
+)
 CANONICAL_POLICY_SHA256 = (
-    "4842cb66cf966edc21da7b0e75431f8cd75db50e65476527d73075951ba95813"
+    "d2bd8047d8be58bfd4e685897da39bd9d4bff6cc011d0d55177d49d2e08fa753"
 )
 HMAC_DOMAIN = b"cosmaneura:staging-server-scope-evidence:v1\x00"
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -50,7 +67,7 @@ SERVER_SURFACES = tuple(
     "databases roles memberships role_settings database_privileges tablespaces replication_slots replication_origins prepared_transactions subscriptions parameter_privileges shared_security_labels shared_descriptions settings".split()
 )
 DATABASE_SURFACES = tuple(
-    "schema extensions foreign_data_wrappers foreign_servers foreign_tables foreign_privileges language_privileges user_mappings publications publication_memberships publication_namespaces subscription_state subscription_relations security_labels event_triggers large_objects".split()
+    "schema shared_dependencies extensions foreign_data_wrappers foreign_servers foreign_tables foreign_privileges language_privileges user_mappings publications publication_memberships publication_namespaces subscription_state subscription_relations security_labels event_triggers large_objects".split()
 )
 
 
@@ -586,11 +603,16 @@ SCHEMA_QUERIES = (
        'row_security',c.relrowsecurity,'force_row_security',c.relforcerowsecurity,
        'replica_identity',c.relreplident,'partition',c.relispartition,
        'access_method',am.amname,'partition_key',pg_catalog.pg_get_partkeydef(c.oid),
-       'partition_bound',pg_catalog.pg_get_expr(c.relpartbound,c.oid,false))::text
+       'partition_bound',pg_catalog.pg_get_expr(c.relpartbound,c.oid,false),
+       'tablespace',ts.spcname)::text
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
        JOIN pg_catalog.pg_roles r ON r.oid=c.relowner
        LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam
+       LEFT JOIN pg_catalog.pg_tablespace ts ON ts.oid=COALESCE(
+       NULLIF(c.reltablespace,0),(SELECT d.dattablespace
+       FROM pg_catalog.pg_database d
+       WHERE d.datname=pg_catalog.current_database()))
        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','relation_option','schema',n.nspname,
        'relation',c.relname,'option',o.option)::text FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
@@ -671,6 +693,17 @@ SCHEMA_QUERIES = (
        FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace
        JOIN pg_catalog.pg_roles r ON r.oid=t.typowner
        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','collation','schema',n.nspname,
+       'name',c.collname,'owner',r.rolname,'provider',c.collprovider,
+       'deterministic',c.collisdeterministic,
+       'encoding',pg_catalog.pg_encoding_to_char(c.collencoding),
+       'collate',c.collcollate,'ctype',c.collctype,
+       'icu_locale',c.colliculocale,'icu_rules',c.collicurules,
+       'version',c.collversion)::text
+       FROM pg_catalog.pg_collation c
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace
+       JOIN pg_catalog.pg_roles r ON r.oid=c.collowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','enum_label','schema',n.nspname,
        'type',t.typname,'sort_order',e.enumsortorder::text,'label',e.enumlabel)::text
        FROM pg_catalog.pg_enum e JOIN pg_catalog.pg_type t ON t.oid=e.enumtypid
@@ -742,13 +775,14 @@ class LivePostgresAdapter:
     def __init__(
         self, dsn: str, policy: Mapping[str, Any], *, allow_local: bool = False
     ):
-        self._dsn = dsn
         self._policy = policy
         self._deadline = 0.0
         self._query_sequence = 0
         self._total_records = 0
         self._total_bytes = 0
-        self._validate_dsn(allow_local=allow_local)
+        self._connection_parameters = MappingProxyType(
+            self._validate_dsn(dsn, allow_local=allow_local)
+        )
         self.start_capture(MAXIMUM_CAPTURE_SECONDS)
 
     def start_capture(self, maximum_seconds: int) -> None:
@@ -763,13 +797,33 @@ class LivePostgresAdapter:
             raise EvidenceFailure("capture.deadline_exceeded")
         return remaining
 
-    def _validate_dsn(self, *, allow_local: bool) -> None:
+    @staticmethod
+    def _reject_libpq_environment(pq: Any) -> None:
         try:
+            environment_names = {
+                option.envvar.decode("ascii")
+                for option in pq.Conninfo.get_defaults()
+                if option.envvar
+            }
+        except Exception:
+            raise EvidenceFailure("database_url.environment_invalid") from None
+        if any(
+            name in os.environ
+            for name in environment_names | ADDITIONAL_CONNECTION_ENVIRONMENT_VARIABLES
+        ):
+            raise EvidenceFailure("database_url.environment_override")
+
+    def _validate_dsn(self, dsn: str, *, allow_local: bool) -> dict[str, str | int]:
+        try:
+            from psycopg import pq
             from psycopg.conninfo import conninfo_to_dict
 
-            values = conninfo_to_dict(self._dsn)
+            values = conninfo_to_dict(dsn)
         except Exception:
             raise EvidenceFailure("database_url.invalid") from None
+        self._reject_libpq_environment(pq)
+        if set(values) - ALLOWED_INPUT_CONNECTION_PARAMETERS:
+            raise EvidenceFailure("database_url.unsupported_parameter")
         source = self._policy["source"]
         host = values.get("host")
         raw_port = values.get("port")
@@ -778,27 +832,63 @@ class LivePostgresAdapter:
         except ValueError:
             raise EvidenceFailure("database_url.invalid") from None
         database = values.get("dbname")
+        user = values.get("user")
+        password = values.get("password")
+        if (
+            not isinstance(user, str)
+            or not user
+            or not isinstance(password, str)
+            or not password
+        ):
+            raise EvidenceFailure("database_url.credentials_required")
         if (host, port, database) != (
             source["host"],
             source["port"],
             source["maintenance_database"],
         ):
-            if not allow_local or host not in {"localhost", "127.0.0.1", "::1"}:
+            raise EvidenceFailure("database_url.target_mismatch")
+        sslmode = values.get("sslmode")
+        sslrootcert = values.get("sslrootcert")
+        if allow_local:
+            if host not in LOCAL_DATABASE_HOSTS:
                 raise EvidenceFailure("database_url.target_mismatch")
-        if not allow_local and values.get("sslmode") != "verify-full":
+            if (sslmode, sslrootcert) not in {
+                (None, None),
+                ("disable", None),
+                ("verify-full", SYSTEM_SSL_ROOT_CERT),
+            }:
+                raise EvidenceFailure("database_url.tls_invalid")
+            normalized_sslmode = sslmode or "disable"
+        elif (sslmode, sslrootcert) != ("verify-full", SYSTEM_SSL_ROOT_CERT):
             raise EvidenceFailure("database_url.tls_required")
+        else:
+            normalized_sslmode = "verify-full"
+
+        parameters: dict[str, str | int] = {
+            "host": str(host),
+            "port": port,
+            "user": user,
+            "password": password,
+            "sslmode": normalized_sslmode,
+            "sslcertmode": "disable",
+            "gssencmode": "disable",
+        }
+        if sslrootcert is not None:
+            parameters["sslrootcert"] = sslrootcert
+        return parameters
 
     def _connect(self, database: str) -> Any:
         try:
             import psycopg
 
+            self._reject_libpq_environment(psycopg.pq)
             remaining = self._remaining()
             if remaining < 1:
                 raise EvidenceFailure("capture.deadline_exceeded")
             timeout = min(10, int(remaining))
-            connection = psycopg.connect(
-                self._dsn, dbname=database, connect_timeout=timeout
-            )
+            parameters: dict[str, Any] = dict(self._connection_parameters)
+            parameters.update(dbname=database, connect_timeout=timeout)
+            connection = psycopg.connect(**parameters)
             self._remaining()
             return connection
         except EvidenceFailure:
@@ -883,6 +973,8 @@ class LivePostgresAdapter:
                     self._remaining()
                     record = list(row)
                     size = len(_canonical(record))
+                    if size > MAXIMUM_ROW_BYTES:
+                        raise EvidenceFailure("catalog.resource_limit")
                     query_records += 1
                     query_bytes += size
                     self._total_records += 1
@@ -1085,11 +1177,35 @@ class LivePostgresAdapter:
                 schema.extend(row[0] for row in self._rows(connection, query))
             return {
                 "schema": schema,
+                "shared_dependencies": self._rows(
+                    connection,
+                    """SELECT jsonb_build_object(
+                    'dependent_type',dependent_object.type,
+                    'dependent_names',dependent_object.object_names,
+                    'dependent_arguments',dependent_object.object_args,
+                    'referenced_type',referenced_object.type,
+                    'referenced_names',referenced_object.object_names,
+                    'referenced_arguments',referenced_object.object_args,
+                    'dependency_type',dependency.deptype)::text
+                    FROM pg_catalog.pg_shdepend dependency
+                    CROSS JOIN LATERAL pg_catalog.pg_identify_object_as_address(
+                    dependency.classid,dependency.objid,
+                    dependency.objsubid) dependent_object
+                    CROSS JOIN LATERAL pg_catalog.pg_identify_object_as_address(
+                    dependency.refclassid,dependency.refobjid,0) referenced_object
+                    WHERE dependency.dbid=(SELECT oid FROM pg_catalog.pg_database
+                    WHERE datname=pg_catalog.current_database())
+                    ORDER BY dependent_object.type,dependent_object.object_names,
+                    dependent_object.object_args,referenced_object.type,
+                    referenced_object.object_names,referenced_object.object_args,
+                    dependency.deptype""",
+                ),
                 "extensions": self._rows(
                     connection,
-                    """SELECT e.extname,e.extversion,n.nspname,e.extrelocatable
+                    """SELECT e.extname,e.extversion,n.nspname,r.rolname,e.extrelocatable
                     FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n
-                    ON n.oid=e.extnamespace ORDER BY e.extname""",
+                    ON n.oid=e.extnamespace JOIN pg_catalog.pg_roles r
+                    ON r.oid=e.extowner ORDER BY e.extname""",
                 ),
                 "foreign_data_wrappers": self._rows(
                     connection,

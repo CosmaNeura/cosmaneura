@@ -115,7 +115,45 @@ def _server(module: ModuleType) -> Any:
 def _database_surfaces(label: str) -> dict[str, list[Any]]:
     return {
         "schema": [{"kind": "schema", "label": label}],
-        "extensions": [["plpgsql", "1.0", "pg_catalog", False]],
+        "shared_dependencies": [
+            {
+                "dependent_type": "table",
+                "dependent_names": ["public", "table-private"],
+                "dependent_arguments": [],
+                "referenced_type": "role",
+                "referenced_names": ["owner-role"],
+                "referenced_arguments": [],
+                "dependency_type": "o",
+            },
+            {
+                "dependent_type": "extension",
+                "dependent_names": ["plpgsql"],
+                "dependent_arguments": [],
+                "referenced_type": "role",
+                "referenced_names": ["owner-role"],
+                "referenced_arguments": [],
+                "dependency_type": "o",
+            },
+            {
+                "dependent_type": "collation",
+                "dependent_names": ["public", "collation-private"],
+                "dependent_arguments": [],
+                "referenced_type": "role",
+                "referenced_names": ["owner-role"],
+                "referenced_arguments": [],
+                "dependency_type": "o",
+            },
+            {
+                "dependent_type": "table",
+                "dependent_names": ["public", "table-private"],
+                "dependent_arguments": [],
+                "referenced_type": "tablespace",
+                "referenced_names": ["tablespace-private"],
+                "referenced_arguments": [],
+                "dependency_type": "t",
+            },
+        ],
+        "extensions": [["plpgsql", "1.0", "pg_catalog", "owner-role", False]],
         "foreign_data_wrappers": [["fdw-private", ["token=fdw-secret"]]],
         "foreign_servers": [["server-private", ["host=private.invalid"]]],
         "foreign_tables": [["private", "table-private", "server-private"]],
@@ -250,6 +288,8 @@ def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
         "password=secret",
         "private-verifier",
         "publication-private",
+        "collation-private",
+        "tablespace-private",
         "c2VjcmV0",
     ):
         assert raw_value not in rendered
@@ -312,6 +352,30 @@ def test_unknown_missing_and_changed_databases_fail_closed(module: ModuleType) -
     )
     with pytest.raises(module.EvidenceFailure, match="database.missing"):
         _collect(module, policy, module.SnapshotAdapter(missing_server, databases))
+
+
+@pytest.mark.parametrize(
+    ("record_index", "referenced_name"),
+    [
+        (1, "changed-extension-owner"),
+        (2, "changed-collation-owner"),
+        (3, "changed-tablespace"),
+    ],
+)
+def test_shared_owner_and_tablespace_dependency_drift_changes_pin(
+    module: ModuleType, record_index: int, referenced_name: str
+) -> None:
+    server = _server(module)
+    databases = _databases()
+    policy = _policy(module, server, databases)
+    databases["appdb"]["shared_dependencies"][record_index]["referenced_names"] = [
+        referenced_name
+    ]
+
+    with pytest.raises(
+        module.EvidenceFailure, match="database.shared_dependencies_mismatch"
+    ):
+        _collect(module, policy, module.SnapshotAdapter(server, databases))
 
 
 @pytest.mark.parametrize(
@@ -504,6 +568,47 @@ def test_live_row_iteration_stops_before_materializing_over_limit(
         adapter._rows(Connection(huge), "SELECT huge", ())
 
 
+def test_live_row_iteration_rejects_large_canonical_row_after_small_preflight(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Cursor:
+        itersize = 0
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def execute(self, query: str, parameters: Any) -> None:
+            del query, parameters
+
+        def __iter__(self) -> Any:
+            return iter((("compressible" * 10,),))
+
+    class Result:
+        def fetchone(self) -> tuple[int, int, int]:
+            return (1, 1, 1)
+
+    class Connection:
+        def execute(self, query: str, parameters: Any) -> Result:
+            del query, parameters
+            return Result()
+
+        def cursor(self, *, name: str) -> Cursor:
+            assert name.startswith("server_scope_")
+            return Cursor()
+
+    adapter = object.__new__(module.LivePostgresAdapter)
+    adapter.start_capture(60)
+    monkeypatch.setattr(module, "MAXIMUM_ROW_BYTES", 32)
+
+    with pytest.raises(module.EvidenceFailure, match="catalog.resource_limit"):
+        adapter._rows(Connection(), "SELECT compressible", ())
+    assert adapter._total_records == 0
+    assert adapter._total_bytes == 0
+
+
 def test_database_url_comes_only_from_fixed_environment(
     module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -514,6 +619,212 @@ def test_database_url_comes_only_from_fixed_environment(
         module.DATABASE_URL_ENVIRONMENT, "postgresql://secret.invalid/db"
     )
     assert module.database_url_from_environment() == "postgresql://secret.invalid/db"
+
+
+def _clear_libpq_environment(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from psycopg import pq
+
+    for option in pq.Conninfo.get_defaults():
+        if option.envvar:
+            monkeypatch.delenv(option.envvar.decode("ascii"), raising=False)
+    for name in module.ADDITIONAL_CONNECTION_ENVIRONMENT_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+
+
+def _server_scope_dsn(host: str) -> str:
+    return (
+        f"postgresql://scope-reader:local-test-only@{host}:5432/postgres"
+        "?sslmode=verify-full&sslrootcert=system"
+    )
+
+
+@pytest.mark.parametrize(
+    ("malicious_dsn", "error_code"),
+    [
+        ("{base}&hostaddr=203.0.113.9", "database_url.unsupported_parameter"),
+        ("{base}&service=attacker", "database_url.unsupported_parameter"),
+        (
+            (
+                "host={host} port=5432 dbname=postgres user=scope-reader "
+                "password=local-test-only sslmode=verify-full sslrootcert=system "
+                "servicefile=/tmp/attacker.conf"
+            ),
+            "database_url.invalid",
+        ),
+        (
+            (
+                "postgresql://scope-reader:local-test-only@{host}:5432,"
+                "attacker.invalid:5432/postgres"
+                "?sslmode=verify-full&sslrootcert=system"
+            ),
+            "database_url.invalid",
+        ),
+        (
+            "{base}&options=-c%20search_path%3Dattacker",
+            "database_url.unsupported_parameter",
+        ),
+        ("{base}&sslcert=/tmp/attacker.pem", "database_url.unsupported_parameter"),
+        ("{base}&sslcertmode=require", "database_url.unsupported_parameter"),
+        (
+            (
+                "postgresql://scope-reader:local-test-only@{host}:5432/postgres"
+                "?sslmode=require&sslrootcert=system"
+            ),
+            "database_url.tls_required",
+        ),
+        (
+            (
+                "postgresql://scope-reader:local-test-only@{host}:5432/postgres"
+                "?sslmode=verify-full&sslrootcert=/tmp/attacker.pem"
+            ),
+            "database_url.tls_required",
+        ),
+        (
+            (
+                "postgresql://scope-reader:local-test-only@{host}:5432/postgres"
+                "?sslmode=verify-full"
+            ),
+            "database_url.tls_required",
+        ),
+    ],
+)
+def test_live_adapter_rejects_routing_indirection_and_tls_overrides(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    malicious_dsn: str,
+    error_code: str,
+) -> None:
+    _clear_libpq_environment(module, monkeypatch)
+    policy = json.loads(POLICY.read_text())
+    host = policy["source"]["host"]
+    rendered = malicious_dsn.format(base=_server_scope_dsn(host), host=host)
+
+    with pytest.raises(module.EvidenceFailure, match=error_code) as captured:
+        module.LivePostgresAdapter(rendered, policy)
+    assert "local-test-only" not in str(captured.value)
+
+
+def test_live_adapter_accepts_only_canonical_azure_and_local_parameters(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _clear_libpq_environment(module, monkeypatch)
+    policy = json.loads(POLICY.read_text())
+    host = policy["source"]["host"]
+    adapter = module.LivePostgresAdapter(_server_scope_dsn(host), policy)
+    assert adapter._connection_parameters == {
+        "host": host,
+        "port": 5432,
+        "user": "scope-reader",
+        "password": "local-test-only",
+        "sslmode": "verify-full",
+        "sslcertmode": "disable",
+        "gssencmode": "disable",
+        "sslrootcert": "system",
+    }
+    assert not hasattr(adapter, "_dsn")
+
+    keyword_dsn = (
+        f"host={host} port=5432 dbname=postgres user=scope-reader "
+        "password=local-test-only sslmode=verify-full sslrootcert=system"
+    )
+    module.LivePostgresAdapter(keyword_dsn, policy)
+
+    local_policy = deepcopy(policy)
+    local_policy["source"].update(host="localhost", maintenance_database="test")
+    local = module.LivePostgresAdapter(
+        "postgresql://local:local@localhost:5432/test",
+        local_policy,
+        allow_local=True,
+    )
+    assert local._connection_parameters == {
+        "host": "localhost",
+        "port": 5432,
+        "user": "local",
+        "password": "local",
+        "sslmode": "disable",
+        "sslcertmode": "disable",
+        "gssencmode": "disable",
+    }
+
+
+def test_connect_uses_only_sanitized_parameters(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import psycopg
+
+    _clear_libpq_environment(module, monkeypatch)
+    policy = json.loads(POLICY.read_text())
+    host = policy["source"]["host"]
+    adapter = module.LivePostgresAdapter(_server_scope_dsn(host), policy)
+    marker = object()
+    captured: dict[str, Any] = {}
+
+    def fake_connect(*args: Any, **kwargs: Any) -> object:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return marker
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    assert adapter._connect("another-database") is marker
+    assert captured["args"] == ()
+    assert captured["kwargs"] == {
+        "host": host,
+        "port": 5432,
+        "user": "scope-reader",
+        "password": "local-test-only",
+        "sslmode": "verify-full",
+        "sslcertmode": "disable",
+        "gssencmode": "disable",
+        "sslrootcert": "system",
+        "dbname": "another-database",
+        "connect_timeout": 10,
+    }
+
+
+@pytest.mark.parametrize(
+    "environment_name", ["PGHOSTADDR", "PGSERVICEFILE", "SSL_CERT_FILE"]
+)
+def test_live_adapter_rejects_libpq_and_tls_environment_overrides(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    environment_name: str,
+) -> None:
+    _clear_libpq_environment(module, monkeypatch)
+    policy = json.loads(POLICY.read_text())
+    monkeypatch.setenv(environment_name, "/tmp/attacker-controlled")
+
+    with pytest.raises(
+        module.EvidenceFailure, match="database_url.environment_override"
+    ):
+        module.LivePostgresAdapter(_server_scope_dsn(policy["source"]["host"]), policy)
+
+
+def test_connect_rechecks_environment_before_using_credentials(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import psycopg
+
+    _clear_libpq_environment(module, monkeypatch)
+    policy = json.loads(POLICY.read_text())
+    adapter = module.LivePostgresAdapter(
+        _server_scope_dsn(policy["source"]["host"]), policy
+    )
+    called = False
+
+    def fake_connect(**_kwargs: Any) -> object:
+        nonlocal called
+        called = True
+        return object()
+
+    monkeypatch.setattr(psycopg, "connect", fake_connect)
+    monkeypatch.setenv("PGHOSTADDR", "203.0.113.9")
+    with pytest.raises(
+        module.EvidenceFailure, match="database_url.environment_override"
+    ):
+        adapter._connect("postgres")
+    assert called is False
 
 
 def test_committed_policy_is_hash_pinned_and_deliberately_dormant(
@@ -542,18 +853,49 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
     import psycopg
     from psycopg import sql
 
-    base_url = os.environ["TEST_DATABASE_URL"]
-    parsed = urllib.parse.urlsplit(base_url)
-    assert parsed.scheme == "postgresql"
-    assert parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-    assert (parsed.port is None or 1 <= parsed.port <= 65535) and parsed.path == "/test"
+    base_url = os.environ.get("TEST_DATABASE_URL")
+    if not base_url:
+        pytest.skip("TEST_DATABASE_URL is not configured")
+    try:
+        parsed = urllib.parse.urlsplit(base_url)
+        valid_port = parsed.port is None or 1 <= parsed.port <= 65535
+    except ValueError:
+        pytest.fail(
+            "TEST_DATABASE_URL is not a valid local PostgreSQL URL", pytrace=False
+        )
+    if (
+        parsed.scheme != "postgresql"
+        or parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+        or not valid_port
+        or parsed.path != "/test"
+    ):
+        pytest.fail(
+            "TEST_DATABASE_URL is not a valid local PostgreSQL URL", pytrace=False
+        )
+    local_policy = json.loads(POLICY.read_text())
+    local_policy["source"].update(
+        host=parsed.hostname,
+        port=parsed.port or 5432,
+        maintenance_database="test",
+    )
+    adapter = module.LivePostgresAdapter(base_url, local_policy, allow_local=True)
+
+    def local_connection_parameters(database: str) -> dict[str, Any]:
+        return {
+            **adapter._connection_parameters,
+            "dbname": database,
+            "connect_timeout": 10,
+        }
+
     first = f"scope_a_{secrets.token_hex(6)}"
     second = f"scope_b_{secrets.token_hex(6)}"
     role = f"scope_role_{secrets.token_hex(6)}"
     created: list[str] = []
     role_created = False
     try:
-        with psycopg.connect(base_url, autocommit=True) as admin:
+        with psycopg.connect(
+            **local_connection_parameters("test"), autocommit=True
+        ) as admin:
             for name in (first, second):
                 admin.execute(
                     sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
@@ -561,13 +903,6 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
                     )
                 )
                 created.append(name)
-        local_policy = json.loads(POLICY.read_text())
-        local_policy["source"].update(
-            host=parsed.hostname,
-            port=parsed.port or 5432,
-            maintenance_database="test",
-        )
-        adapter = module.LivePostgresAdapter(base_url, local_policy, allow_local=True)
         settings = ["server_version_num", "wal_level"]
         server_before = adapter.server_snapshot(settings)
         names = {record["name"] for record in server_before.surfaces["databases"]}
@@ -577,15 +912,18 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
         assert set(first_before) == set(module.DATABASE_SURFACES)
         assert set(second_before) == set(module.DATABASE_SURFACES)
 
-        with psycopg.connect(base_url, autocommit=True) as admin:
+        with psycopg.connect(
+            **local_connection_parameters("test"), autocommit=True
+        ) as admin:
             admin.execute(
                 sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'local-test-only'").format(
                     sql.Identifier(role)
                 )
             )
         role_created = True
-        first_url = urllib.parse.urlunsplit(parsed._replace(path=f"/{first}"))
-        with psycopg.connect(first_url, autocommit=True) as connection:
+        with psycopg.connect(
+            **local_connection_parameters(first), autocommit=True
+        ) as connection:
             connection.execute("CREATE TABLE public.server_scope_probe (id integer)")
             connection.execute(
                 "CREATE VIEW public.scope_view WITH "
@@ -639,7 +977,9 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
         assert first_after["publication_namespaces"]
         assert first_after["large_objects"]
 
-        with psycopg.connect(base_url, autocommit=True) as admin:
+        with psycopg.connect(
+            **local_connection_parameters("test"), autocommit=True
+        ) as admin:
             admin.execute(
                 sql.SQL("COMMENT ON ROLE {} IS 'private'").format(sql.Identifier(role))
             )
@@ -652,7 +992,9 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
         assert server_after.surfaces["shared_descriptions"]
     finally:
         if role_created or created:
-            with psycopg.connect(base_url, autocommit=True) as admin:
+            with psycopg.connect(
+                **local_connection_parameters("test"), autocommit=True
+            ) as admin:
                 for name in created:
                     admin.execute(
                         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -692,6 +1034,13 @@ def test_script_is_standalone_read_only_and_aggregate_only() -> None:
     assert "pg_catalog.pg_authid" in source
     assert "pg_catalog.pg_tablespace_location" in source
     assert "pg_catalog.pg_replication_origin_status" in source
+    assert "pg_catalog.pg_shdepend" in source
+    assert "dependency.refclassid" in source
+    assert "dependency.refobjid" in source
+    assert "c.reltablespace" in source
+    assert "d.dattablespace" in source
+    assert "c.collowner" in source
+    assert "e.extowner" in source
     assert "subskiplsn='0/0'" in source and "srsublsn='0/0'" in source
     assert "array_agg" not in source
     assert "fetchall" not in source
