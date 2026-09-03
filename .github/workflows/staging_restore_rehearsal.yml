@@ -29,7 +29,7 @@ on:
         required: false
         type: string
       ttl_hours:
-        description: Restore lifetime; 24 hours is the hard maximum
+        description: Active restore-resource lifetime; 24 hours is the hard maximum
         required: true
         default: "6"
         type: choice
