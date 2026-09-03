@@ -303,7 +303,6 @@ def note_detail(
 
     # Engagement engine v2: the patient's enacted communication role, if scored.
     engagement_role = EngagementRole.get(appointment_id=appointment_id)
-
     note_detail = NoteDetail(
         appointment=appointment,
         transcript=transcript,
