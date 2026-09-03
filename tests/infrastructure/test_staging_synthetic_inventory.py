@@ -51,6 +51,8 @@ class FakeProvider:
     non_system_schema_count: int = 1
     sequence_count: int = 0
     large_object_count: int = 0
+    schema_descriptor_sha256: str | None = None
+    schema_descriptor_counts: dict[str, int] | None = None
     column_mutation: tuple[str, int, tuple[str, str, bool]] | None = None
     relation_mutations: dict[str, tuple[str, bool]] = field(default_factory=dict)
     revisions: list[str] | None = None
@@ -96,6 +98,13 @@ class FakeProvider:
             table, index, column = self.column_mutation
             catalog[table][2][index] = column
         return catalog
+
+    def database_schema_descriptor(self) -> Any:
+        expected = self.policy["profiles"][self.profile]["schema_descriptor"]
+        return self.module.SchemaDescriptor(
+            self.schema_descriptor_sha256 or expected["sha256"],
+            self.schema_descriptor_counts or dict(expected["counts"]),
+        )
 
     def alembic_revisions(self) -> list[str]:
         if self.revisions is not None:
@@ -200,6 +209,29 @@ def module() -> ModuleType:
     return _load_module()
 
 
+def test_schema_descriptor_is_canonical_and_bounded(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sections = {name: [] for name in module.SCHEMA_DESCRIPTOR_SECTIONS}
+    sections["relations"] = [{"name": "second"}, {"name": "first"}]
+    forward = module._schema_descriptor(sections)
+    sections["relations"].reverse()
+    reverse = module._schema_descriptor(sections)
+
+    assert forward == reverse
+    assert forward.counts["relations"] == 2
+    with pytest.raises(
+        module.InventoryFailure, match="database.schema_descriptor_failed"
+    ):
+        module._schema_descriptor(sections | {"unexpected": []})
+    monkeypatch.setattr(module, "MAXIMUM_SCHEMA_DESCRIPTOR_RECORDS", 1)
+    with pytest.raises(
+        module.InventoryFailure, match="database.schema_descriptor_failed"
+    ):
+        module._schema_descriptor(sections)
+
+
 def test_policy_is_closed_world_and_covers_both_exact_catalogs(
     module: ModuleType,
 ) -> None:
@@ -246,6 +278,41 @@ def test_policy_is_closed_world_and_covers_both_exact_catalogs(
     assert policy["database"]["sequences"] == []
     assert policy["database"]["reject_large_objects"] is True
     assert policy["redis"]["scan_all_logical_databases"] is True
+    assert policy["evidence"]["schema_descriptor_algorithm"] == "SHA-256"
+    assert policy["profiles"]["pre"]["schema_descriptor"] == {
+        "format": "postgresql-16-public-v1",
+        "sha256": "d40e3ef2415e38ff0f47d52faf50b054b7942aa6a700046d394939a7cfda39ad",
+        "counts": {
+            "relations": 63,
+            "columns": 744,
+            "constraints": 346,
+            "indexes": 186,
+            "triggers": 19,
+            "trigger_functions": 9,
+            "rls_policies": 0,
+            "enum_types": 14,
+            "enum_labels": 37,
+            "views": 0,
+            "routines": 11,
+        },
+    }
+    assert policy["profiles"]["post"]["schema_descriptor"] == {
+        "format": "postgresql-16-public-v1",
+        "sha256": "f84f6fff90a2db3e5353597d75bffa2b1b9dc906b35d800942afe22336406104",
+        "counts": {
+            "relations": 65,
+            "columns": 784,
+            "constraints": 372,
+            "indexes": 195,
+            "triggers": 22,
+            "trigger_functions": 11,
+            "rls_policies": 0,
+            "enum_types": 14,
+            "enum_labels": 37,
+            "views": 0,
+            "routines": 13,
+        },
+    }
 
     pre_practice_columns = [column[0] for column in pre["practice"]["columns"]]
     assert "acquisition_source" not in pre_practice_columns
@@ -272,6 +339,7 @@ def test_provider_mock_passes_with_exact_approved_state(
     assert evidence["counts"]["redis.logical_databases_with_keys"] == 0
     assert evidence["counts"]["redis.keys"] == 0
     assert len(evidence["catalog_hmac"]) == 64
+    assert len(evidence["schema_descriptor_sha256"]) == 64
     assert set(evidence) == {
         "schema_version",
         "policy_id",
@@ -283,12 +351,14 @@ def test_provider_mock_passes_with_exact_approved_state(
         "rule_violation_counts",
         "identity_hmacs",
         "catalog_hmac",
+        "schema_descriptor_sha256",
         "state_hmacs",
         "blob_state_hmacs",
         "redis_state_hmac",
         "errors",
         "pass",
     }
+    assert set(policy["evidence"]["allowed_fields"]) == set(evidence)
 
 
 def test_evidence_contains_no_provider_values(module: ModuleType) -> None:
@@ -329,6 +399,10 @@ def test_evidence_contains_no_provider_values(module: ModuleType) -> None:
         ({"non_system_schema_count": 2}, "database.schema_set"),
         ({"sequence_count": 1}, "database.sequence_set"),
         ({"large_object_count": 1}, "database.large_objects"),
+        (
+            {"schema_descriptor_sha256": "f" * 64},
+            "database.schema_descriptor",
+        ),
         ({"revisions": ["wrong"]}, "database.alembic_version"),
         (
             {"table_counts": {"zoom_meeting": 1}},
@@ -784,7 +858,108 @@ def test_policy_catalog_matches_migration_replay(
                 assert provider.database_global_counts() == module.DatabaseGlobalCounts(
                     1, 0, 0
                 )
+                descriptor_policy = profile["schema_descriptor"]
+                observed_descriptor = provider.database_schema_descriptor()
+                assert observed_descriptor == module.SchemaDescriptor(
+                    descriptor_policy["sha256"], descriptor_policy["counts"]
+                )
                 assert len(observed) - 1 == profile["table_count"]
+        with psycopg.connect(database_url) as connection:
+            provider = object.__new__(module.LiveInventoryProvider)
+            provider._connection = connection
+            baseline = provider.database_schema_descriptor()
+            connection.execute(
+                "CREATE TYPE public.descriptor_probe_enum AS ENUM ('first')"
+            )
+            connection.execute(
+                "CREATE TABLE public.descriptor_probe ("
+                "id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+                "base integer NOT NULL DEFAULT 7, "
+                "generated integer GENERATED ALWAYS AS (base + 1) STORED, "
+                "CONSTRAINT descriptor_probe_positive CHECK (base > 0))"
+            )
+            connection.execute(
+                "CREATE INDEX descriptor_probe_generated_idx "
+                "ON public.descriptor_probe (generated)"
+            )
+            connection.execute(
+                "CREATE FUNCTION public.descriptor_probe_trigger() RETURNS trigger "
+                "LANGUAGE plpgsql AS $$ BEGIN NEW.base := NEW.base; RETURN NEW; END $$"
+            )
+            connection.execute(
+                "CREATE TRIGGER descriptor_probe_trigger BEFORE INSERT "
+                "ON public.descriptor_probe FOR EACH ROW "
+                "EXECUTE FUNCTION public.descriptor_probe_trigger()"
+            )
+            connection.execute(
+                "ALTER TABLE public.descriptor_probe ENABLE ROW LEVEL SECURITY"
+            )
+            connection.execute(
+                "CREATE POLICY descriptor_probe_policy ON public.descriptor_probe "
+                "USING (base > 0)"
+            )
+            connection.execute(
+                "CREATE VIEW public.descriptor_probe_view AS "
+                "SELECT base, generated FROM public.descriptor_probe"
+            )
+            connection.execute(
+                "CREATE MATERIALIZED VIEW public.descriptor_probe_materialized AS "
+                "SELECT base FROM public.descriptor_probe WITH NO DATA"
+            )
+            connection.execute(
+                "CREATE FUNCTION public.descriptor_probe_routine(value integer = 2) "
+                "RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT value + 1 $$"
+            )
+            expanded = provider.database_schema_descriptor()
+            assert expanded.sha256 != baseline.sha256
+            assert all(
+                expanded.counts[section] > baseline.counts[section]
+                for section in module.SCHEMA_DESCRIPTOR_SECTIONS
+            )
+
+            connection.execute(
+                "DROP VIEW public.descriptor_probe_view; "
+                "DROP MATERIALIZED VIEW public.descriptor_probe_materialized; "
+                "DROP INDEX public.descriptor_probe_generated_idx; "
+                "ALTER TABLE public.descriptor_probe DROP COLUMN generated; "
+                "ALTER TABLE public.descriptor_probe "
+                "ADD COLUMN generated integer "
+                "GENERATED ALWAYS AS (base + 2) STORED; "
+                "CREATE INDEX descriptor_probe_generated_idx "
+                "ON public.descriptor_probe (base); "
+                "CREATE VIEW public.descriptor_probe_view AS "
+                "SELECT base, generated FROM public.descriptor_probe WHERE base > 0; "
+                "CREATE MATERIALIZED VIEW public.descriptor_probe_materialized AS "
+                "SELECT generated AS base FROM public.descriptor_probe WITH NO DATA"
+            )
+            connection.execute(
+                "ALTER TABLE public.descriptor_probe ALTER COLUMN base SET DEFAULT 8; "
+                "ALTER TABLE public.descriptor_probe ALTER COLUMN id "
+                "SET GENERATED BY DEFAULT; "
+                "ALTER TABLE public.descriptor_probe "
+                "DROP CONSTRAINT descriptor_probe_positive; "
+                "ALTER TABLE public.descriptor_probe "
+                "ADD CONSTRAINT descriptor_probe_positive CHECK (base > 1); "
+                "ALTER TABLE public.descriptor_probe FORCE ROW LEVEL SECURITY; "
+                "ALTER TABLE public.descriptor_probe "
+                "DISABLE TRIGGER descriptor_probe_trigger; "
+                "ALTER POLICY descriptor_probe_policy ON public.descriptor_probe "
+                "USING (base > 1); "
+                "ALTER TYPE public.descriptor_probe_enum "
+                "RENAME VALUE 'first' TO 'second'"
+            )
+            connection.execute(
+                "CREATE OR REPLACE FUNCTION public.descriptor_probe_trigger() "
+                "RETURNS trigger LANGUAGE plpgsql AS "
+                "$$ BEGIN NEW.base := NEW.base + 0; RETURN NEW; END $$; "
+                "CREATE OR REPLACE FUNCTION "
+                "public.descriptor_probe_routine(value integer = 2) "
+                "RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT value + 2 $$"
+            )
+            definition_changed = provider.database_schema_descriptor()
+            assert definition_changed.counts == expanded.counts
+            assert definition_changed.sha256 != expanded.sha256
+            connection.rollback()
         with psycopg.connect(database_url, autocommit=True) as temporary_connection:
             temporary_connection.execute(
                 "CREATE TEMP SEQUENCE unexpected_temp_sequence"
@@ -828,6 +1003,13 @@ def test_script_is_standalone_and_never_imports_app_or_alembic() -> None:
     assert "SET LOCAL row_security = off" in source
     assert "SET LOCAL search_path = pg_catalog" in source
     assert "SET LOCAL lock_timeout" in source
+    assert "current_setting('server_version_num')" in source
+    assert "server_version // 10_000 != 16" in source
     assert "LEFT JOIN pg_catalog.pg_attribute" in source
+    assert "pg_catalog.pg_get_constraintdef" in source
+    assert "pg_catalog.pg_get_indexdef" in source
+    assert "pg_catalog.pg_get_triggerdef" in source
+    assert "pg_catalog.pg_get_functiondef" in source
+    assert "pg_catalog.pg_get_viewdef" in source
     assert "row_to_json(source)::text" in source
     assert "include_system=True" in source

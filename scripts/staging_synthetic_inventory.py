@@ -27,6 +27,8 @@ MINIMUM_HMAC_KEY_BYTES = 32
 MAXIMUM_HMAC_KEY_BYTES = 4096
 MAXIMUM_TRUST_FILE_BYTES = 8 * 1024 * 1024
 MAXIMUM_ERRORS = 64
+MAXIMUM_SCHEMA_DESCRIPTOR_RECORDS = 10_000
+MAXIMUM_SCHEMA_DESCRIPTOR_BYTES = 8 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 10
 STATEMENT_TIMEOUT_MILLISECONDS = 30_000
 LOCK_TIMEOUT_MILLISECONDS = 5_000
@@ -35,12 +37,26 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # fmt: off
-CANONICAL_POLICY_SHA256 = "cfbb2e61925d25a42936179009d7988a52f5e11dc8941d140937ba9b86d74607"
-CANONICAL_POLICY_SEMANTIC_SHA256 = "957ee032bcb55d4e7b8df2d40a462173736c9bc251fa0a21fa42afc8383e4e8e"
+CANONICAL_POLICY_SHA256 = "165efa56ce4ae84bbd936bf577a1ddfce74d722ede8d881da650d69904b93d72"
+CANONICAL_POLICY_SEMANTIC_SHA256 = "d2652aa532ffcbc67390f92cd68eb732eafcb9dbb36b9db88254d838e45efa05"
 EXPECTED_PROFILES = {"pre": ("89c31f0ae275", 62), "post": ("9a2399212488", 64)}
 EXPECTED_DATABASE_TARGET = ("cosmaneura-staging-postgres.postgres.database.azure.com", "staging", 5432)
 EXPECTED_BLOB_TARGET = "cosmaneurastaginguploads.blob.core.windows.net"
 EXPECTED_REDIS_TARGET = ("cosmaneura-staging-redis.redis.cache.windows.net", 6380, 0)
+SCHEMA_DESCRIPTOR_FORMAT = "postgresql-16-public-v1"
+SCHEMA_DESCRIPTOR_SECTIONS = (
+    "relations",
+    "columns",
+    "constraints",
+    "indexes",
+    "triggers",
+    "trigger_functions",
+    "rls_policies",
+    "enum_types",
+    "enum_labels",
+    "views",
+    "routines",
+)
 EXPECTED_DISPOSITIONS = {
     "synthetic_lineage": frozenset("appointment patient ehr_sandbox_patient_designation ehr_sandbox_record_mapping synthetic_preview_appointment_fixture".split()),
     "fixed_catalog": frozenset("baa_version drug_reference doctor_note_schema lab_range_set note_type_customization".split()),
@@ -77,10 +93,18 @@ class RedisSurface:
     key_count: int
 
 
+@dataclass(frozen=True, slots=True)
+class SchemaDescriptor:
+    sha256: str
+    counts: Mapping[str, int]
+
+
 class InventoryProvider(Protocol):
     def database_global_counts(self) -> DatabaseGlobalCounts: ...
 
     def database_catalog(self) -> Mapping[str, RelationContract]: ...
+
+    def database_schema_descriptor(self) -> SchemaDescriptor: ...
 
     def alembic_revisions(self) -> Sequence[str]: ...
 
@@ -106,6 +130,39 @@ def _canonical_json(value: Any) -> bytes:
         separators=(",", ":"),
         ensure_ascii=True,
     ).encode()
+
+
+def _schema_descriptor(
+    sections: Mapping[str, Sequence[Mapping[str, Any]]],
+) -> SchemaDescriptor:
+    if set(sections) != set(SCHEMA_DESCRIPTOR_SECTIONS):
+        raise InventoryFailure("database.schema_descriptor_failed")
+    canonical_sections: dict[str, list[Mapping[str, Any]]] = {}
+    total_records = 0
+    total_bytes = 0
+    for section in SCHEMA_DESCRIPTOR_SECTIONS:
+        records = sorted(sections[section], key=_canonical_json)
+        total_records += len(records)
+        if total_records > MAXIMUM_SCHEMA_DESCRIPTOR_RECORDS:
+            raise InventoryFailure("database.schema_descriptor_failed")
+        for record in records:
+            encoded = _canonical_json(record)
+            total_bytes += len(encoded)
+            if total_bytes > MAXIMUM_SCHEMA_DESCRIPTOR_BYTES:
+                raise InventoryFailure("database.schema_descriptor_failed")
+        canonical_sections[section] = records
+    encoded = _canonical_json(
+        {"format": SCHEMA_DESCRIPTOR_FORMAT, "sections": canonical_sections}
+    )
+    if len(encoded) > MAXIMUM_SCHEMA_DESCRIPTOR_BYTES:
+        raise InventoryFailure("database.schema_descriptor_failed")
+    return SchemaDescriptor(
+        sha256=hashlib.sha256(encoded).hexdigest(),
+        counts={
+            section: len(canonical_sections[section])
+            for section in SCHEMA_DESCRIPTOR_SECTIONS
+        },
+    )
 
 
 def _digest(key: bytes, domain: str, values: Iterable[str | bytes]) -> str:
@@ -502,6 +559,20 @@ def validate_policy(policy: Mapping[str, Any]) -> None:
                         raise InventoryFailure("policy.invalid")
     for profile in ("pre", "post"):
         _expected_tables(policy, profile)
+        descriptor = policy["profiles"][profile].get("schema_descriptor", {})
+        descriptor_counts = descriptor.get("counts", {})
+        if (
+            descriptor.get("format") != SCHEMA_DESCRIPTOR_FORMAT
+            or not isinstance(descriptor.get("sha256"), str)
+            or HEX_256_RE.fullmatch(descriptor["sha256"]) is None
+            or not isinstance(descriptor_counts, dict)
+            or set(descriptor_counts) != set(SCHEMA_DESCRIPTOR_SECTIONS)
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for value in descriptor_counts.values()
+            )
+        ):
+            raise InventoryFailure("policy.invalid")
 
 
 def _validate_approved_state(
@@ -643,6 +714,27 @@ def verify_inventory(
         "database-catalog",
         [_canonical_json(observed_catalog)],
     )
+    schema_descriptor = provider.database_schema_descriptor()
+    if (
+        not isinstance(schema_descriptor.sha256, str)
+        or HEX_256_RE.fullmatch(schema_descriptor.sha256) is None
+        or set(schema_descriptor.counts) != set(SCHEMA_DESCRIPTOR_SECTIONS)
+        or any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in schema_descriptor.counts.values()
+        )
+    ):
+        raise InventoryFailure("database.schema_descriptor_failed")
+    for section, count in schema_descriptor.counts.items():
+        counts[f"database.schema.{section}"] = count
+    expected_descriptor = profile["schema_descriptor"]
+    if schema_descriptor.counts != expected_descriptor[
+        "counts"
+    ] or not hmac.compare_digest(
+        schema_descriptor.sha256,
+        expected_descriptor["sha256"],
+    ):
+        fail("database.schema_descriptor")
     revisions = list(provider.alembic_revisions())
     counts["database.alembic_version"] = len(revisions)
     if revisions != [profile["revision"]]:
@@ -766,6 +858,7 @@ def verify_inventory(
         "rule_violation_counts": rule_counts,
         "identity_hmacs": identity_hmacs,
         "catalog_hmac": catalog_hmac,
+        "schema_descriptor_sha256": schema_descriptor.sha256,
         "state_hmacs": state_hmacs,
         "blob_state_hmacs": blob_hmacs,
         "redis_state_hmac": redis_hmac,
@@ -810,11 +903,17 @@ class LiveInventoryProvider:
             )
             self._connection.execute("SET LOCAL row_security = off")
             self._connection.execute("SET LOCAL search_path = pg_catalog")
-            database_name, tls_active = self._connection.execute(
-                "SELECT current_database(), COALESCE((SELECT ssl FROM "
-                "pg_catalog.pg_stat_ssl WHERE pid = pg_catalog.pg_backend_pid()), FALSE)"
+            database_name, server_version, tls_active = self._connection.execute(
+                "SELECT current_database(), "
+                "current_setting('server_version_num')::integer, "
+                "COALESCE((SELECT ssl FROM pg_catalog.pg_stat_ssl "
+                "WHERE pid = pg_catalog.pg_backend_pid()), FALSE)"
             ).fetchone()
-            if database_name != "staging" or tls_active is not True:
+            if (
+                database_name != "staging"
+                or server_version // 10_000 != 16
+                or tls_active is not True
+            ):
                 raise InventoryFailure("database.server_identity")
             credential = DefaultAzureCredential(
                 exclude_interactive_browser_credential=True
@@ -878,6 +977,425 @@ class LiveInventoryProvider:
             if column is not None:
                 relation[2].append((column, data_type, not_null))
         return result
+
+    def _descriptor_records(
+        self,
+        query: str,
+        fields: Sequence[str],
+    ) -> list[dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+        try:
+            cursor = self._connection.execute(query)
+            for row in cursor:
+                if len(row) != len(fields):
+                    raise InventoryFailure("database.schema_descriptor_failed")
+                records.append(dict(zip(fields, row, strict=True)))
+                if len(records) > MAXIMUM_SCHEMA_DESCRIPTOR_RECORDS:
+                    raise InventoryFailure("database.schema_descriptor_failed")
+        except InventoryFailure:
+            raise
+        except Exception:
+            raise InventoryFailure("database.schema_descriptor_failed") from None
+        return records
+
+    def database_schema_descriptor(self) -> SchemaDescriptor:
+        """Fingerprint all approved public-schema DDL from the open snapshot."""
+
+        sections: dict[str, list[dict[str, Any]]] = {}
+        sections["relations"] = self._descriptor_records(
+            "SELECT namespace.nspname, relation.relname, relation.relkind, "
+            "relation.relpersistence, relation.relreplident, "
+            "relation.relrowsecurity, relation.relforcerowsecurity, "
+            "relation.relispartition, "
+            "COALESCE(access_method.amname, ''), "
+            "COALESCE(tablespace.spcname, ''), "
+            "COALESCE((SELECT pg_catalog.string_agg(option, E'\\n' ORDER BY option) "
+            "FROM pg_catalog.unnest(relation.reloptions) AS option), ''), "
+            "COALESCE(pg_catalog.pg_get_expr(relation.relpartbound, "
+            "relation.oid, TRUE), ''), "
+            "COALESCE(pg_catalog.pg_get_partkeydef(relation.oid), '') "
+            "FROM pg_catalog.pg_class AS relation "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = relation.relnamespace "
+            "LEFT JOIN pg_catalog.pg_am AS access_method "
+            "ON access_method.oid = relation.relam "
+            "LEFT JOIN pg_catalog.pg_tablespace AS tablespace "
+            "ON tablespace.oid = relation.reltablespace "
+            "WHERE namespace.nspname = 'public' "
+            "AND relation.relkind IN ('r', 'p', 'f', 'S', 'v', 'm', 'c') "
+            "ORDER BY relation.relname, relation.relkind",
+            (
+                "schema",
+                "name",
+                "kind",
+                "persistence",
+                "replica_identity",
+                "row_security",
+                "force_row_security",
+                "is_partition",
+                "access_method",
+                "tablespace",
+                "options",
+                "partition_bound",
+                "partition_key",
+            ),
+        )
+        sections["columns"] = self._descriptor_records(
+            "SELECT namespace.nspname, relation.relname, relation.relkind, "
+            "attribute.attnum, attribute.attname, "
+            "pg_catalog.format_type(attribute.atttypid, attribute.atttypmod), "
+            "attribute.attnotnull, attribute.attidentity, "
+            "attribute.attgenerated, attribute.attislocal, "
+            "attribute.attinhcount, attribute.attndims, "
+            "attribute.attstorage, attribute.attcompression, "
+            "attribute.attstattarget, "
+            "COALESCE(collation_namespace.nspname, ''), "
+            "COALESCE(collation_value.collname, ''), "
+            "COALESCE(pg_catalog.pg_get_expr(default_value.adbin, "
+            "default_value.adrelid, TRUE), '') "
+            "FROM pg_catalog.pg_class AS relation "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = relation.relnamespace "
+            "JOIN pg_catalog.pg_attribute AS attribute "
+            "ON attribute.attrelid = relation.oid "
+            "AND attribute.attnum > 0 AND NOT attribute.attisdropped "
+            "LEFT JOIN pg_catalog.pg_attrdef AS default_value "
+            "ON default_value.adrelid = relation.oid "
+            "AND default_value.adnum = attribute.attnum "
+            "LEFT JOIN pg_catalog.pg_collation AS collation_value "
+            "ON collation_value.oid = attribute.attcollation "
+            "AND attribute.attcollation <> 0 "
+            "LEFT JOIN pg_catalog.pg_namespace AS collation_namespace "
+            "ON collation_namespace.oid = collation_value.collnamespace "
+            "WHERE namespace.nspname = 'public' "
+            "AND relation.relkind IN ('r', 'p', 'f', 'S', 'v', 'm', 'c') "
+            "ORDER BY relation.relname, attribute.attnum",
+            (
+                "schema",
+                "relation",
+                "relation_kind",
+                "position",
+                "name",
+                "type",
+                "not_null",
+                "identity",
+                "generated",
+                "is_local",
+                "inheritance_count",
+                "dimensions",
+                "storage",
+                "compression",
+                "statistics_target",
+                "collation_schema",
+                "collation",
+                "default_or_generated_expression",
+            ),
+        )
+        sections["constraints"] = self._descriptor_records(
+            "SELECT namespace.nspname, constraint_value.conname, "
+            "constraint_value.contype, constraint_value.condeferrable, "
+            "constraint_value.condeferred, constraint_value.convalidated, "
+            "constraint_value.conislocal, constraint_value.coninhcount, "
+            "constraint_value.connoinherit, "
+            "COALESCE(relation.relname, ''), "
+            "COALESCE(relation.relkind, ''), "
+            "COALESCE(domain_type.typname, ''), "
+            "COALESCE(parent_constraint.conname, ''), "
+            "COALESCE(parent_relation.relname, ''), "
+            "pg_catalog.pg_get_constraintdef(constraint_value.oid, TRUE) "
+            "FROM pg_catalog.pg_constraint AS constraint_value "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = constraint_value.connamespace "
+            "LEFT JOIN pg_catalog.pg_class AS relation "
+            "ON relation.oid = constraint_value.conrelid "
+            "LEFT JOIN pg_catalog.pg_type AS domain_type "
+            "ON domain_type.oid = constraint_value.contypid "
+            "LEFT JOIN pg_catalog.pg_constraint AS parent_constraint "
+            "ON parent_constraint.oid = constraint_value.conparentid "
+            "LEFT JOIN pg_catalog.pg_class AS parent_relation "
+            "ON parent_relation.oid = parent_constraint.conrelid "
+            "WHERE namespace.nspname = 'public' "
+            "ORDER BY COALESCE(relation.relname, domain_type.typname, ''), "
+            "constraint_value.conname, constraint_value.contype",
+            (
+                "schema",
+                "name",
+                "type",
+                "deferrable",
+                "initially_deferred",
+                "validated",
+                "is_local",
+                "inheritance_count",
+                "no_inherit",
+                "relation",
+                "relation_kind",
+                "domain",
+                "parent_constraint",
+                "parent_relation",
+                "definition",
+            ),
+        )
+        sections["indexes"] = self._descriptor_records(
+            "SELECT table_namespace.nspname, table_relation.relname, "
+            "index_namespace.nspname, index_relation.relname, "
+            "access_method.amname, index_value.indisunique, "
+            "index_value.indisprimary, index_value.indisexclusion, "
+            "index_value.indimmediate, index_value.indisclustered, "
+            "index_value.indisvalid, index_value.indcheckxmin, "
+            "index_value.indisready, index_value.indislive, "
+            "index_value.indisreplident, index_value.indnullsnotdistinct, "
+            "COALESCE(pg_catalog.pg_get_expr(index_value.indexprs, "
+            "index_value.indrelid, TRUE), ''), "
+            "COALESCE(pg_catalog.pg_get_expr(index_value.indpred, "
+            "index_value.indrelid, TRUE), ''), "
+            "pg_catalog.pg_get_indexdef(index_relation.oid) "
+            "FROM pg_catalog.pg_index AS index_value "
+            "JOIN pg_catalog.pg_class AS table_relation "
+            "ON table_relation.oid = index_value.indrelid "
+            "JOIN pg_catalog.pg_namespace AS table_namespace "
+            "ON table_namespace.oid = table_relation.relnamespace "
+            "JOIN pg_catalog.pg_class AS index_relation "
+            "ON index_relation.oid = index_value.indexrelid "
+            "JOIN pg_catalog.pg_namespace AS index_namespace "
+            "ON index_namespace.oid = index_relation.relnamespace "
+            "JOIN pg_catalog.pg_am AS access_method "
+            "ON access_method.oid = index_relation.relam "
+            "WHERE table_namespace.nspname = 'public' "
+            "ORDER BY table_relation.relname, index_relation.relname",
+            (
+                "table_schema",
+                "table",
+                "index_schema",
+                "name",
+                "access_method",
+                "unique",
+                "primary",
+                "exclusion",
+                "immediate",
+                "clustered",
+                "valid",
+                "check_xmin",
+                "ready",
+                "live",
+                "replica_identity",
+                "nulls_not_distinct",
+                "expressions",
+                "predicate",
+                "definition",
+            ),
+        )
+        sections["triggers"] = self._descriptor_records(
+            "SELECT table_namespace.nspname, table_relation.relname, "
+            "trigger_value.tgname, trigger_value.tgenabled, "
+            "pg_catalog.pg_get_triggerdef(trigger_value.oid, TRUE), "
+            "function_namespace.nspname, function_value.proname, "
+            "pg_catalog.pg_get_function_identity_arguments(function_value.oid) "
+            "FROM pg_catalog.pg_trigger AS trigger_value "
+            "JOIN pg_catalog.pg_class AS table_relation "
+            "ON table_relation.oid = trigger_value.tgrelid "
+            "JOIN pg_catalog.pg_namespace AS table_namespace "
+            "ON table_namespace.oid = table_relation.relnamespace "
+            "JOIN pg_catalog.pg_proc AS function_value "
+            "ON function_value.oid = trigger_value.tgfoid "
+            "JOIN pg_catalog.pg_namespace AS function_namespace "
+            "ON function_namespace.oid = function_value.pronamespace "
+            "WHERE table_namespace.nspname = 'public' "
+            "AND NOT trigger_value.tgisinternal "
+            "ORDER BY table_relation.relname, trigger_value.tgname",
+            (
+                "table_schema",
+                "table",
+                "name",
+                "enabled",
+                "definition",
+                "function_schema",
+                "function",
+                "function_identity_arguments",
+            ),
+        )
+        sections["trigger_functions"] = self._descriptor_records(
+            "SELECT DISTINCT function_namespace.nspname, "
+            "function_value.proname, "
+            "pg_catalog.pg_get_function_identity_arguments(function_value.oid), "
+            "pg_catalog.pg_get_functiondef(function_value.oid) "
+            "FROM pg_catalog.pg_trigger AS trigger_value "
+            "JOIN pg_catalog.pg_class AS table_relation "
+            "ON table_relation.oid = trigger_value.tgrelid "
+            "JOIN pg_catalog.pg_namespace AS table_namespace "
+            "ON table_namespace.oid = table_relation.relnamespace "
+            "JOIN pg_catalog.pg_proc AS function_value "
+            "ON function_value.oid = trigger_value.tgfoid "
+            "JOIN pg_catalog.pg_namespace AS function_namespace "
+            "ON function_namespace.oid = function_value.pronamespace "
+            "WHERE table_namespace.nspname = 'public' "
+            "AND NOT trigger_value.tgisinternal "
+            "ORDER BY function_namespace.nspname, function_value.proname, "
+            "pg_catalog.pg_get_function_identity_arguments(function_value.oid)",
+            ("schema", "name", "identity_arguments", "definition"),
+        )
+        sections["rls_policies"] = self._descriptor_records(
+            "SELECT table_namespace.nspname, table_relation.relname, "
+            "policy.polname, policy.polpermissive, policy.polcmd, "
+            "COALESCE((SELECT pg_catalog.string_agg("
+            "CASE WHEN role_oid = 0 THEN 'PUBLIC' "
+            "ELSE pg_catalog.pg_get_userbyid(role_oid) END, E'\\n' "
+            "ORDER BY CASE WHEN role_oid = 0 THEN 'PUBLIC' "
+            "ELSE pg_catalog.pg_get_userbyid(role_oid) END) "
+            "FROM pg_catalog.unnest(policy.polroles) AS role_oid), ''), "
+            "COALESCE(pg_catalog.pg_get_expr(policy.polqual, "
+            "policy.polrelid, TRUE), ''), "
+            "COALESCE(pg_catalog.pg_get_expr(policy.polwithcheck, "
+            "policy.polrelid, TRUE), '') "
+            "FROM pg_catalog.pg_policy AS policy "
+            "JOIN pg_catalog.pg_class AS table_relation "
+            "ON table_relation.oid = policy.polrelid "
+            "JOIN pg_catalog.pg_namespace AS table_namespace "
+            "ON table_namespace.oid = table_relation.relnamespace "
+            "WHERE table_namespace.nspname = 'public' "
+            "ORDER BY table_relation.relname, policy.polname",
+            (
+                "table_schema",
+                "table",
+                "name",
+                "permissive",
+                "command",
+                "roles",
+                "using_expression",
+                "check_expression",
+            ),
+        )
+        sections["enum_types"] = self._descriptor_records(
+            "SELECT namespace.nspname, type_value.typname "
+            "FROM pg_catalog.pg_type AS type_value "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = type_value.typnamespace "
+            "WHERE namespace.nspname = 'public' "
+            "AND type_value.typtype = 'e' "
+            "ORDER BY type_value.typname",
+            ("schema", "name"),
+        )
+        sections["enum_labels"] = self._descriptor_records(
+            "SELECT namespace.nspname, type_value.typname, "
+            "enum_value.enumsortorder::text, enum_value.enumlabel "
+            "FROM pg_catalog.pg_enum AS enum_value "
+            "JOIN pg_catalog.pg_type AS type_value "
+            "ON type_value.oid = enum_value.enumtypid "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = type_value.typnamespace "
+            "WHERE namespace.nspname = 'public' "
+            "ORDER BY type_value.typname, enum_value.enumsortorder",
+            ("schema", "type", "sort_order", "label"),
+        )
+        sections["views"] = self._descriptor_records(
+            "SELECT namespace.nspname, relation.relname, relation.relkind, "
+            "COALESCE((SELECT pg_catalog.string_agg(option, E'\\n' ORDER BY option) "
+            "FROM pg_catalog.unnest(relation.reloptions) AS option), ''), "
+            "pg_catalog.pg_get_viewdef(relation.oid, TRUE) "
+            "FROM pg_catalog.pg_class AS relation "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = relation.relnamespace "
+            "WHERE namespace.nspname = 'public' "
+            "AND relation.relkind IN ('v', 'm') "
+            "ORDER BY relation.relname",
+            ("schema", "name", "kind", "options", "definition"),
+        )
+        sections["routines"] = self._descriptor_records(
+            "SELECT namespace.nspname, routine.proname, routine.prokind, "
+            "pg_catalog.pg_get_function_identity_arguments(routine.oid), "
+            "pg_catalog.pg_get_function_arguments(routine.oid), "
+            "COALESCE(pg_catalog.pg_get_function_result(routine.oid), ''), "
+            "language.lanname, routine.provolatile, routine.proparallel, "
+            "routine.proisstrict, routine.prosecdef, routine.proleakproof, "
+            "routine.proretset, routine.procost::text, routine.prorows::text, "
+            "COALESCE((SELECT pg_catalog.string_agg(option, E'\\n' ORDER BY option) "
+            "FROM pg_catalog.unnest(routine.proconfig) AS option), ''), "
+            "routine.prosrc, COALESCE(routine.probin, ''), "
+            "CASE WHEN routine.prokind = 'a' THEN '' "
+            "ELSE pg_catalog.pg_get_functiondef(routine.oid) END, "
+            "COALESCE(aggregate_value.aggkind, ''), "
+            "COALESCE(aggregate_value.aggnumdirectargs, 0), "
+            "CASE WHEN aggregate_value.aggtransfn = 0 THEN '' "
+            "ELSE aggregate_value.aggtransfn::pg_catalog.regprocedure::text END, "
+            "CASE WHEN aggregate_value.aggfinalfn = 0 THEN '' "
+            "ELSE aggregate_value.aggfinalfn::pg_catalog.regprocedure::text END, "
+            "CASE WHEN aggregate_value.aggcombinefn = 0 THEN '' "
+            "ELSE aggregate_value.aggcombinefn::pg_catalog.regprocedure::text END, "
+            "CASE WHEN aggregate_value.aggserialfn = 0 THEN '' "
+            "ELSE aggregate_value.aggserialfn::pg_catalog.regprocedure::text END, "
+            "CASE WHEN aggregate_value.aggdeserialfn = 0 THEN '' "
+            "ELSE aggregate_value.aggdeserialfn::pg_catalog.regprocedure::text END, "
+            "CASE WHEN aggregate_value.aggmtransfn = 0 THEN '' "
+            "ELSE aggregate_value.aggmtransfn::pg_catalog.regprocedure::text END, "
+            "CASE WHEN aggregate_value.aggminvtransfn = 0 THEN '' "
+            "ELSE aggregate_value.aggminvtransfn::pg_catalog.regprocedure::text END, "
+            "CASE WHEN aggregate_value.aggmfinalfn = 0 THEN '' "
+            "ELSE aggregate_value.aggmfinalfn::pg_catalog.regprocedure::text END, "
+            "COALESCE(aggregate_value.aggfinalextra, FALSE), "
+            "COALESCE(aggregate_value.aggmfinalextra, FALSE), "
+            "COALESCE(aggregate_value.aggfinalmodify, ''), "
+            "COALESCE(aggregate_value.aggmfinalmodify, ''), "
+            "CASE WHEN aggregate_value.aggsortop = 0 THEN '' "
+            "ELSE aggregate_value.aggsortop::pg_catalog.regoperator::text END, "
+            "COALESCE(pg_catalog.format_type(aggregate_value.aggtranstype, NULL), ''), "
+            "COALESCE(aggregate_value.aggtransspace, 0), "
+            "COALESCE(pg_catalog.format_type(aggregate_value.aggmtranstype, NULL), ''), "
+            "COALESCE(aggregate_value.aggmtransspace, 0), "
+            "COALESCE(aggregate_value.agginitval, ''), "
+            "COALESCE(aggregate_value.aggminitval, '') "
+            "FROM pg_catalog.pg_proc AS routine "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = routine.pronamespace "
+            "JOIN pg_catalog.pg_language AS language "
+            "ON language.oid = routine.prolang "
+            "LEFT JOIN pg_catalog.pg_aggregate AS aggregate_value "
+            "ON aggregate_value.aggfnoid = routine.oid "
+            "WHERE namespace.nspname = 'public' "
+            "ORDER BY routine.proname, "
+            "pg_catalog.pg_get_function_identity_arguments(routine.oid)",
+            (
+                "schema",
+                "name",
+                "kind",
+                "identity_arguments",
+                "arguments",
+                "result",
+                "language",
+                "volatility",
+                "parallel",
+                "strict",
+                "security_definer",
+                "leakproof",
+                "returns_set",
+                "cost",
+                "rows",
+                "configuration",
+                "source",
+                "binary",
+                "definition",
+                "aggregate_kind",
+                "aggregate_direct_arguments",
+                "aggregate_transition_function",
+                "aggregate_final_function",
+                "aggregate_combine_function",
+                "aggregate_serial_function",
+                "aggregate_deserial_function",
+                "aggregate_moving_transition_function",
+                "aggregate_moving_inverse_function",
+                "aggregate_moving_final_function",
+                "aggregate_final_extra",
+                "aggregate_moving_final_extra",
+                "aggregate_final_modify",
+                "aggregate_moving_final_modify",
+                "aggregate_sort_operator",
+                "aggregate_transition_type",
+                "aggregate_transition_space",
+                "aggregate_moving_transition_type",
+                "aggregate_moving_transition_space",
+                "aggregate_initial_value",
+                "aggregate_moving_initial_value",
+            ),
+        )
+        return _schema_descriptor(sections)
 
     def alembic_revisions(self) -> Sequence[str]:
         return [
