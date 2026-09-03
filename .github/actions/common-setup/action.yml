@@ -9,6 +9,11 @@ inputs:
       runtime deps that live inside the Docker image, not on the deploy host, so
       pulling their ~69MB/91-package tree there only risks the apt-mirror stall.
     default: "zsh libnss3-tools poppler-utils ffmpeg"
+  enable_cache:
+    description: >
+      Restore and save shared tool and dependency caches. Disable this before
+      executing a separately selected source revision in a default-branch run.
+    default: "true"
 runs:
   using: 'composite'
   steps:
@@ -17,6 +22,7 @@ runs:
     - uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
       with:
         version: 2025.3.6
+        cache: ${{ inputs.enable_cache }}
     # Inlined apt install to avoid `iloveitaly/actions-use-apt-tools` (Node 20
     # via actions/cache@v4). Caching /var/cache/apt/archives is skipped: the
     # dir's root-owned `partial/` subdir made cache@v5 emit a tar-exit-2
@@ -49,6 +55,7 @@ runs:
           PATH
     # cache node_modules
     - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      if: inputs.enable_cache == 'true'
       with:
         path: web/node_modules
         key: ${{ runner.os }}-node-modules-${{ hashFiles('web/pnpm-lock.yaml') }}

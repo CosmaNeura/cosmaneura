@@ -65,7 +65,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      candidate_sha: ${{ steps.verify.outputs.candidate_sha }}
+      verified_revision: ${{ steps.verify.outputs.verified_revision }}
       approval_pr_number: ${{ steps.verify.outputs.approval_pr_number }}
       synthetic_evidence_sha256: ${{ steps.verify.outputs.synthetic_evidence_sha256 }}
       staging_identity_fingerprints_sha256: ${{ steps.verify.outputs.staging_identity_fingerprints_sha256 }}
@@ -121,10 +121,18 @@ jobs:
             exit 1
           fi
 
-          python3 scripts/verify_staging_candidate.py
+          verification_result=$(python3 scripts/verify_staging_candidate.py)
+          verified_revision=$(
+            jq -er '.candidate_sha | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+              <<< "$verification_result"
+          )
+          if [[ "$verified_revision" != "$CANDIDATE_SHA" ]]; then
+            echo "::error::Verified candidate output does not match the requested candidate."
+            exit 1
+          fi
 
           {
-            echo "candidate_sha=$CANDIDATE_SHA"
+            echo "verified_revision=$verified_revision"
             echo "approval_pr_number=$APPROVAL_PR_NUMBER"
             echo "synthetic_evidence_sha256=$SYNTHETIC_EVIDENCE_SHA256"
             echo "staging_identity_fingerprints_sha256=$STAGING_IDENTITY_FINGERPRINTS_SHA256"
@@ -141,23 +149,51 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check out protected-master test controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install protected-master backend test prerequisites
+        env:
+          APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          APT_PACKAGES: "zsh libnss3-tools"
+        run: |
+          sudo apt-get $APT_OPTS update -qq
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.authorize.outputs.candidate_sha }}
+          ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact candidate checkout
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-      - uses: ./.github/actions/common-setup
-        timeout-minutes: 10
-        with:
-          apt-packages: zsh libnss3-tools
-      - uses: iloveitaly/github-action-localias@b6ed1f2decb4bc1d4e0e55e7113f61c86a3a004d # master 2026-08-21
+      - name: Start exact candidate local test routing
+        uses: iloveitaly/github-action-localias@b6ed1f2decb4bc1d4e0e55e7113f61c86a3a004d # master 2026-08-21
         with:
           chrome: true
+      - name: Install exact candidate toolchain without shared caches
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2025.3.6
+          cache: "false"
+      - name: Load exact candidate test environment
+        uses: iloveitaly/github-action-direnv-load-and-mask@9f4661e90b5d5fefb96463379587f82b4ca0520a # master 2026-08-21
+        with:
+          environment_allowlist: >
+            PYTHON_TEST_SERVER_HOST,
+            JAVASCRIPT_SERVER_HOST,
+            VITE_PYTHON_URL,
+            OPENAPI_JSON_PATH,
+            TMP_DIRECTORY,
+            TEST_RESULTS_DIRECTORY,
+            PLAYWRIGHT_RESULT_DIRECTORY,
+            VIRTUAL_ENV,
+            PATH
       - run: just up --fast
       - run: just py_setup
       - run: just py_lint
@@ -182,18 +218,47 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Check out protected-master test controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install protected-master frontend test prerequisites
+        env:
+          APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          APT_PACKAGES: "zsh libnss3-tools poppler-utils ffmpeg"
+        run: |
+          sudo apt-get $APT_OPTS update -qq
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
       - name: Check out exact candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          ref: ${{ needs.authorize.outputs.candidate_sha }}
+          ref: ${{ needs.authorize.outputs.verified_revision }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify exact candidate checkout
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-      - uses: ./.github/actions/common-setup
-        timeout-minutes: 10
+      - name: Install exact candidate toolchain without shared caches
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2025.3.6
+          cache: "false"
+      - name: Load exact candidate test environment
+        uses: iloveitaly/github-action-direnv-load-and-mask@9f4661e90b5d5fefb96463379587f82b4ca0520a # master 2026-08-21
+        with:
+          environment_allowlist: >
+            PYTHON_TEST_SERVER_HOST,
+            JAVASCRIPT_SERVER_HOST,
+            VITE_PYTHON_URL,
+            OPENAPI_JSON_PATH,
+            TMP_DIRECTORY,
+            TEST_RESULTS_DIRECTORY,
+            PLAYWRIGHT_RESULT_DIRECTORY,
+            VIRTUAL_ENV,
+            PATH
       - run: just js_setup
       - name: Generate OpenAPI client
         run: cd web && pnpm run openapi
@@ -238,7 +303,7 @@ jobs:
       - name: Reverify candidate before protected configuration credentials
         env:
           APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -317,19 +382,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check out exact candidate for image build
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          ref: ${{ needs.authorize.outputs.candidate_sha }}
-          path: candidate
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: ./.github/actions/common-setup
+      - name: Set up protected-master build runner without shared caches
+        uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
           apt-packages: zsh
-      - uses: ./.github/actions/install-nixpacks
+          enable_cache: "false"
+      - name: Install protected-master Nixpacks tooling
+        uses: ./.github/actions/install-nixpacks
+
+      - name: Check out exact candidate for image build
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.authorize.outputs.verified_revision }}
+          path: candidate
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Download allowlisted public staging frontend configuration
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -339,7 +407,7 @@ jobs:
 
       - name: Verify exact candidate and public build configuration
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           EXPECTED_FRONTEND_CONFIG_SHA256: ${{ needs.config.outputs.frontend_config_sha256 }}
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/candidate-build-config/staging-frontend-build.json
         run: |
@@ -357,7 +425,7 @@ jobs:
       - name: Build exact candidate image without protected credentials
         working-directory: candidate
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           CONTAINER_REGISTRY_HOST: cosmaneurastagingregistry.azurecr.io
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/candidate-build-config/staging-frontend-build.json
           JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
@@ -370,7 +438,7 @@ jobs:
       - name: Package content-addressed candidate image archive
         id: package
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           IMAGE_ARCHIVE_DIR: ${{ runner.temp }}/canonical-staging-image
         run: |
           set -euo pipefail
@@ -404,7 +472,7 @@ jobs:
       - name: Upload content-addressed candidate image archive
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: canonical-staging-image-${{ needs.authorize.outputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: canonical-staging-image-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canonical-staging-image
           if-no-files-found: error
           overwrite: false
@@ -447,7 +515,7 @@ jobs:
       - name: Reverify candidate before protected credentials
         env:
           APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -497,12 +565,12 @@ jobs:
       - name: Download content-addressed candidate image archive
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: canonical-staging-image-${{ needs.authorize.outputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: canonical-staging-image-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canonical-staging-image
 
       - name: Verify and load candidate image archive without executing it
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           EXPECTED_ARCHIVE_SHA256: ${{ needs.build.outputs.archive_sha256 }}
           EXPECTED_IMAGE_ID: ${{ needs.build.outputs.image_id }}
           IMAGE_ARCHIVE_DIR: ${{ runner.temp }}/canonical-staging-image
@@ -538,7 +606,7 @@ jobs:
       - name: Reverify candidate before immutable image publication
         env:
           APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -556,7 +624,7 @@ jobs:
       - name: Publish candidate SHA tag and resolve immutable digest
         id: publish
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           REGISTRY_HOST: ${{ steps.staging_contract.outputs.registry_host }}
         run: |
           set -euo pipefail
@@ -599,7 +667,7 @@ jobs:
       - name: Record immutable publication result
         if: always()
         env:
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           IMAGE_DIGEST: ${{ steps.publish.outputs.image_digest }}
           IMAGE_REFERENCE: ${{ steps.publish.outputs.image_reference }}
           PUBLICATION_OUTCOME: ${{ steps.publish.outcome }}
@@ -638,7 +706,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: canonical-staging-publication-${{ needs.authorize.outputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: canonical-staging-publication-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-publication-evidence
           if-no-files-found: error
           overwrite: false
@@ -695,7 +763,7 @@ jobs:
       - name: Record reviewed staging request
         env:
           APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           DISPATCH_ACTOR: ${{ github.actor }}
           DISPATCH_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           EXPECTED_RECOVERY_DIGEST: ${{ needs.authorize.outputs.recovery_digest }}
@@ -744,7 +812,7 @@ jobs:
         id: pre_credentials
         env:
           APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -909,7 +977,7 @@ jobs:
         id: pre_mutation
         env:
           APPROVAL_PR_NUMBER: ${{ needs.authorize.outputs.approval_pr_number }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -923,7 +991,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           DURABLE_WEBHOOK_INBOX_ENABLED: "false"
           ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
           ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
@@ -980,7 +1048,7 @@ jobs:
           AZURE_IDENTITY_OUTCOME: ${{ steps.azure_identity.outcome }}
           BACKEND_TEST_RESULT: ${{ needs.app.result }}
           BUILD_RESULT: ${{ needs.build.result }}
-          CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
           CONFIG_RESULT: ${{ needs.config.result }}
           CONFIGURATION_EVIDENCE: ${{ steps.deploy.outputs.configuration_evidence }}
           DEPLOYMENT_OUTCOME: ${{ steps.deploy.outcome }}
@@ -1245,7 +1313,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: canonical-staging-release-${{ needs.authorize.outputs.candidate_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: canonical-staging-release-${{ needs.authorize.outputs.verified_revision }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: staging-release-evidence
           if-no-files-found: error
           overwrite: false

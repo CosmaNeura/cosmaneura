@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "deploy_staging_candidate.yml"
 LEGACY_WORKFLOW = ROOT / ".github" / "workflows" / "build_and_publish_manual.yml"
+COMMON_SETUP = ROOT / ".github" / "actions" / "common-setup" / "action.yml"
 
 
 def _source() -> str:
@@ -91,9 +92,48 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
     for name in ("app", "web"):
         job = _job(source, name)
         assert "needs: authorize" in job
-        assert "ref: ${{ needs.authorize.outputs.candidate_sha }}" in job
-        assert "persist-credentials: false" in job
+        controls = _step(job, "Check out protected-master test controls")
+        prerequisites = _step(
+            job,
+            (
+                "Install protected-master backend test prerequisites"
+                if name == "app"
+                else "Install protected-master frontend test prerequisites"
+            ),
+        )
+        candidate = _step(job, "Check out exact candidate")
+        verification = _step(job, "Verify exact candidate checkout")
+        candidate_toolchain = _step(
+            job, "Install exact candidate toolchain without shared caches"
+        )
+        candidate_environment = _step(job, "Load exact candidate test environment")
+        assert "ref: ${{ github.sha }}" in controls
+        assert "ref: ${{ needs.authorize.outputs.verified_revision }}" in candidate
+        assert job.index(controls) < job.index(prerequisites) < job.index(candidate)
+        assert (
+            job.index(candidate)
+            < job.index(verification)
+            < job.index(candidate_toolchain)
+            < job.index(candidate_environment)
+        )
+        assert 'cache: "false"' in candidate_toolchain
+        assert "github-action-direnv-load-and-mask@" in candidate_environment
+        assert "uses: ./.github/actions/common-setup" not in job
+        assert job.count("persist-credentials: false") == 2
         assert 'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"' in job
+        if name == "app":
+            candidate_routing = _step(job, "Start exact candidate local test routing")
+            assert (
+                job.index(verification)
+                < job.index(candidate_routing)
+                < job.index(candidate_toolchain)
+            )
+            candidate_commands = ("just up --fast", "just py_setup", "just py_test")
+        else:
+            candidate_commands = ("just js_setup", "pnpm run openapi", "just js_test")
+        for command in candidate_commands:
+            assert job.index(command) > job.index(verification)
+    assert "needs.authorize.outputs.candidate_sha" not in source
     assert "just py_lint" in _job(source, "app")
     assert "just db_migrate" in _job(source, "app")
     assert "just db_lint" in _job(source, "app")
@@ -130,9 +170,19 @@ def test_candidate_build_and_protected_publication_use_fresh_jobs() -> None:
     assert "ref: ${{ github.sha }}" in deploy
     assert "uses: ./.github/actions/common-setup" in deploy
     assert "apt-packages: zsh" in deploy
+    build_setup = _step(
+        build, "Set up protected-master build runner without shared caches"
+    )
+    nixpacks_setup = _step(build, "Install protected-master Nixpacks tooling")
     candidate_checkout = _step(build, "Check out exact candidate for image build")
-    assert "ref: ${{ needs.authorize.outputs.candidate_sha }}" in candidate_checkout
+    assert 'enable_cache: "false"' in build_setup
+    assert "ref: ${{ needs.authorize.outputs.verified_revision }}" in candidate_checkout
     assert "path: candidate" in candidate_checkout
+    assert (
+        build.index(build_setup)
+        < build.index(nixpacks_setup)
+        < build.index(candidate_checkout)
+    )
     candidate_build = _step(
         build, "Build exact candidate image without protected credentials"
     )
@@ -152,6 +202,46 @@ def test_candidate_build_and_protected_publication_use_fresh_jobs() -> None:
     assert "working-directory: candidate" not in deploy
     assert "just build" not in deploy
     assert "just build_push" not in source
+
+
+def test_candidate_revision_is_verified_before_checkout_and_caches_are_disabled() -> (
+    None
+):
+    source = _source()
+    authorize = _job(source, "authorize")
+    common_setup = COMMON_SETUP.read_text(encoding="utf-8")
+
+    assert (
+        "verified_revision: ${{ steps.verify.outputs.verified_revision }}" in authorize
+    )
+    assert (
+        "verification_result=$(python3 scripts/verify_staging_candidate.py)"
+        in authorize
+    )
+    assert ".candidate_sha | select(" in authorize
+    assert '"$verified_revision" != "$CANDIDATE_SHA"' in authorize
+    assert 'echo "verified_revision=$verified_revision"' in authorize
+    assert "candidate_sha: ${{ steps.verify.outputs.candidate_sha }}" not in authorize
+
+    assert "enable_cache:" in common_setup
+    assert 'default: "true"' in common_setup
+    assert "cache: ${{ inputs.enable_cache }}" in common_setup
+    assert "if: inputs.enable_cache == 'true'" in common_setup
+
+    for name in ("app", "web", "build"):
+        job = _job(source, name)
+        candidate_marker = (
+            "      - name: Check out exact candidate for image build\n"
+            if name == "build"
+            else "      - name: Check out exact candidate\n"
+        )
+        candidate_offset = job.index(candidate_marker)
+        if name == "build":
+            assert 'enable_cache: "false"' in job[:candidate_offset]
+        else:
+            assert 'cache: "false"' in job[candidate_offset:]
+        assert "uses: ./.github/actions/" not in job[candidate_offset:]
+        assert "uses: actions/cache" not in job[candidate_offset:]
 
 
 def test_provenance_is_rechecked_before_each_protected_boundary() -> None:
