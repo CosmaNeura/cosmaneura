@@ -280,9 +280,10 @@ def test_policy_is_closed_world_and_covers_both_exact_catalogs(
     assert policy["redis"]["scan_all_logical_databases"] is True
     assert policy["evidence"]["schema_descriptor_algorithm"] == "SHA-256"
     assert policy["profiles"]["pre"]["schema_descriptor"] == {
-        "format": "postgresql-16-public-v1",
-        "sha256": "d40e3ef2415e38ff0f47d52faf50b054b7942aa6a700046d394939a7cfda39ad",
+        "format": "postgresql-16-public-v2",
+        "sha256": "b6dd67990533bec013f9db94c9c24940fabf9388ba97b585db45db24ca786849",
         "counts": {
+            "namespace_objects": 88,
             "relations": 63,
             "columns": 744,
             "constraints": 346,
@@ -290,16 +291,19 @@ def test_policy_is_closed_world_and_covers_both_exact_catalogs(
             "triggers": 19,
             "trigger_functions": 9,
             "rls_policies": 0,
-            "enum_types": 14,
+            "types": 154,
             "enum_labels": 37,
             "views": 0,
             "routines": 11,
+            "authorizations": 1944,
+            "default_privileges": 0,
         },
     }
     assert policy["profiles"]["post"]["schema_descriptor"] == {
-        "format": "postgresql-16-public-v1",
-        "sha256": "f84f6fff90a2db3e5353597d75bffa2b1b9dc906b35d800942afe22336406104",
+        "format": "postgresql-16-public-v2",
+        "sha256": "3857d3b44c40f88cf2da464acbc8cd76068884979cc9b4bc6276c9ebb73c9295",
         "counts": {
+            "namespace_objects": 92,
             "relations": 65,
             "columns": 784,
             "constraints": 372,
@@ -307,10 +311,12 @@ def test_policy_is_closed_world_and_covers_both_exact_catalogs(
             "triggers": 22,
             "trigger_functions": 11,
             "rls_policies": 0,
-            "enum_types": 14,
+            "types": 158,
             "enum_labels": 37,
             "views": 0,
             "routines": 13,
+            "authorizations": 2035,
+            "default_privileges": 0,
         },
     }
 
@@ -837,7 +843,7 @@ def test_policy_catalog_matches_migration_replay(
         for profile_name in ("pre", "post"):
             profile = policy["profiles"][profile_name]
             command.upgrade(config, profile["revision"])
-            with psycopg.connect(database_url, autocommit=True) as connection:
+            with psycopg.connect(database_url) as connection:
                 provider = object.__new__(module.LiveInventoryProvider)
                 provider._connection = connection
                 observed = provider.database_catalog()
@@ -868,6 +874,52 @@ def test_policy_catalog_matches_migration_replay(
             provider = object.__new__(module.LiveInventoryProvider)
             provider._connection = connection
             baseline = provider.database_schema_descriptor()
+
+            connection.execute("SET LOCAL search_path = pg_catalog")
+            assert provider.database_schema_descriptor() == baseline
+
+            def isolated_change(
+                statement: str,
+                *,
+                count_changes: tuple[str, ...] = (),
+            ) -> None:
+                before = provider.database_schema_descriptor()
+                connection.execute("SAVEPOINT descriptor_isolated_change")
+                connection.execute(statement)
+                changed = provider.database_schema_descriptor()
+                assert changed.sha256 != before.sha256
+                for section in count_changes:
+                    assert changed.counts[section] != before.counts[section]
+                connection.execute("ROLLBACK TO SAVEPOINT descriptor_isolated_change")
+
+            for statement in (
+                "CREATE DOMAIN public.descriptor_probe_domain AS text",
+                "CREATE TYPE public.descriptor_probe_range AS RANGE "
+                "(subtype = integer)",
+                "CREATE TYPE public.descriptor_probe_composite AS (value integer)",
+                "CREATE TYPE public.descriptor_probe_shell",
+            ):
+                isolated_change(
+                    statement,
+                    count_changes=("namespace_objects", "types"),
+                )
+            isolated_change(
+                "ALTER TABLE public.doctor OWNER TO pg_database_owner",
+            )
+            for statement in (
+                "GRANT SELECT ON TABLE public.doctor TO PUBLIC",
+                "GRANT SELECT (id) ON TABLE public.doctor TO PUBLIC",
+                "REVOKE EXECUTE ON FUNCTION public.typeid_parse(text) FROM PUBLIC",
+                "REVOKE USAGE ON TYPE public.zoommeetingstatus FROM PUBLIC",
+                "REVOKE USAGE ON SCHEMA public FROM PUBLIC",
+            ):
+                isolated_change(statement)
+            isolated_change(
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+                "GRANT SELECT ON TABLES TO PUBLIC",
+                count_changes=("default_privileges",),
+            )
+
             connection.execute(
                 "CREATE TYPE public.descriptor_probe_enum AS ENUM ('first')"
             )
@@ -914,51 +966,65 @@ def test_policy_catalog_matches_migration_replay(
             assert expanded.sha256 != baseline.sha256
             assert all(
                 expanded.counts[section] > baseline.counts[section]
-                for section in module.SCHEMA_DESCRIPTOR_SECTIONS
+                for section in (
+                    "namespace_objects",
+                    "relations",
+                    "columns",
+                    "constraints",
+                    "indexes",
+                    "triggers",
+                    "trigger_functions",
+                    "rls_policies",
+                    "types",
+                    "enum_labels",
+                    "views",
+                    "routines",
+                    "authorizations",
+                )
             )
 
-            connection.execute(
-                "DROP VIEW public.descriptor_probe_view; "
-                "DROP MATERIALIZED VIEW public.descriptor_probe_materialized; "
-                "DROP INDEX public.descriptor_probe_generated_idx; "
-                "ALTER TABLE public.descriptor_probe DROP COLUMN generated; "
-                "ALTER TABLE public.descriptor_probe "
-                "ADD COLUMN generated integer "
-                "GENERATED ALWAYS AS (base + 2) STORED; "
-                "CREATE INDEX descriptor_probe_generated_idx "
-                "ON public.descriptor_probe (base); "
-                "CREATE VIEW public.descriptor_probe_view AS "
-                "SELECT base, generated FROM public.descriptor_probe WHERE base > 0; "
-                "CREATE MATERIALIZED VIEW public.descriptor_probe_materialized AS "
-                "SELECT generated AS base FROM public.descriptor_probe WITH NO DATA"
-            )
-            connection.execute(
-                "ALTER TABLE public.descriptor_probe ALTER COLUMN base SET DEFAULT 8; "
+            for statement in (
+                "ALTER TABLE public.descriptor_probe ALTER COLUMN base SET DEFAULT 8",
                 "ALTER TABLE public.descriptor_probe ALTER COLUMN id "
-                "SET GENERATED BY DEFAULT; "
+                "SET GENERATED BY DEFAULT",
                 "ALTER TABLE public.descriptor_probe "
                 "DROP CONSTRAINT descriptor_probe_positive; "
+                "ALTER TABLE public.descriptor_probe ADD CONSTRAINT "
+                "descriptor_probe_positive CHECK (base > 1)",
+                "DROP INDEX public.descriptor_probe_generated_idx; "
+                "CREATE INDEX descriptor_probe_generated_idx "
+                "ON public.descriptor_probe (base)",
+                "ALTER TABLE public.descriptor_probe FORCE ROW LEVEL SECURITY",
                 "ALTER TABLE public.descriptor_probe "
-                "ADD CONSTRAINT descriptor_probe_positive CHECK (base > 1); "
-                "ALTER TABLE public.descriptor_probe FORCE ROW LEVEL SECURITY; "
-                "ALTER TABLE public.descriptor_probe "
-                "DISABLE TRIGGER descriptor_probe_trigger; "
+                "DISABLE TRIGGER descriptor_probe_trigger",
                 "ALTER POLICY descriptor_probe_policy ON public.descriptor_probe "
-                "USING (base > 1); "
+                "USING (base > 1)",
                 "ALTER TYPE public.descriptor_probe_enum "
-                "RENAME VALUE 'first' TO 'second'"
-            )
-            connection.execute(
+                "RENAME VALUE 'first' TO 'second'",
                 "CREATE OR REPLACE FUNCTION public.descriptor_probe_trigger() "
                 "RETURNS trigger LANGUAGE plpgsql AS "
-                "$$ BEGIN NEW.base := NEW.base + 0; RETURN NEW; END $$; "
+                "$$ BEGIN NEW.base := NEW.base + 0; RETURN NEW; END $$",
                 "CREATE OR REPLACE FUNCTION "
                 "public.descriptor_probe_routine(value integer = 2) "
-                "RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT value + 2 $$"
-            )
-            definition_changed = provider.database_schema_descriptor()
-            assert definition_changed.counts == expanded.counts
-            assert definition_changed.sha256 != expanded.sha256
+                "RETURNS integer LANGUAGE sql IMMUTABLE "
+                "AS $$ SELECT value + 2 $$",
+                "CREATE OR REPLACE VIEW public.descriptor_probe_view AS "
+                "SELECT base, generated FROM public.descriptor_probe "
+                "WHERE base > 0",
+                "DROP MATERIALIZED VIEW public.descriptor_probe_materialized; "
+                "CREATE MATERIALIZED VIEW public.descriptor_probe_materialized AS "
+                "SELECT generated AS base FROM public.descriptor_probe WITH NO DATA",
+                "DROP VIEW public.descriptor_probe_view; "
+                "DROP INDEX public.descriptor_probe_generated_idx; "
+                "ALTER TABLE public.descriptor_probe DROP COLUMN generated; "
+                "ALTER TABLE public.descriptor_probe ADD COLUMN generated integer "
+                "GENERATED ALWAYS AS (base + 2) STORED; "
+                "CREATE INDEX descriptor_probe_generated_idx "
+                "ON public.descriptor_probe (generated); "
+                "CREATE VIEW public.descriptor_probe_view AS "
+                "SELECT base, generated FROM public.descriptor_probe",
+            ):
+                isolated_change(statement)
             connection.rollback()
         with psycopg.connect(database_url, autocommit=True) as temporary_connection:
             temporary_connection.execute(
@@ -975,6 +1041,48 @@ def test_policy_catalog_matches_migration_replay(
                 assert provider.database_global_counts() == module.DatabaseGlobalCounts(
                     2, 2, 1
                 )
+
+        repeat_name = f"inventory_repeat_{secrets.token_hex(8)}"
+        repeat_url = urllib.parse.urlunsplit(parsed._replace(path=f"/{repeat_name}"))
+        repeat_created = False
+        try:
+            with psycopg.connect(base_url, autocommit=True) as admin:
+                admin.execute(
+                    sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
+                        sql.Identifier(repeat_name)
+                    )
+                )
+            repeat_created = True
+            monkeypatch.setenv("TEST_DATABASE_URL", repeat_url)
+            repeat_config = Config(os.fspath(ROOT / "alembic.ini"))
+            repeat_config.set_main_option(
+                "script_location", os.fspath(ROOT / "migrations")
+            )
+            for profile_name in ("pre", "post"):
+                profile = policy["profiles"][profile_name]
+                command.upgrade(repeat_config, profile["revision"])
+                with psycopg.connect(repeat_url) as connection:
+                    provider = object.__new__(module.LiveInventoryProvider)
+                    provider._connection = connection
+                    descriptor = profile["schema_descriptor"]
+                    assert provider.database_schema_descriptor() == (
+                        module.SchemaDescriptor(
+                            descriptor["sha256"], descriptor["counts"]
+                        )
+                    )
+        finally:
+            if repeat_created:
+                with psycopg.connect(base_url, autocommit=True) as admin:
+                    admin.execute(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        "WHERE datname = %s AND pid <> pg_backend_pid()",
+                        (repeat_name,),
+                    )
+                    admin.execute(
+                        sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
+                            sql.Identifier(repeat_name)
+                        )
+                    )
     finally:
         if created:
             with psycopg.connect(base_url, autocommit=True) as admin:
@@ -1001,7 +1109,9 @@ def test_script_is_standalone_and_never_imports_app_or_alembic() -> None:
     }
     assert "REPEATABLE READ READ ONLY DEFERRABLE" in source
     assert "SET LOCAL row_security = off" in source
-    assert "SET LOCAL search_path = pg_catalog" in source
+    assert "SET LOCAL search_path = pg_catalog, public" in source
+    assert "pg_catalog.pg_identify_object_as_address" in source
+    assert "pg_catalog.aclexplode" in source
     assert "SET LOCAL lock_timeout" in source
     assert "current_setting('server_version_num')" in source
     assert "server_version // 10_000 != 16" in source

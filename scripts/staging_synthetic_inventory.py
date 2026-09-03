@@ -37,14 +37,15 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # fmt: off
-CANONICAL_POLICY_SHA256 = "165efa56ce4ae84bbd936bf577a1ddfce74d722ede8d881da650d69904b93d72"
-CANONICAL_POLICY_SEMANTIC_SHA256 = "d2652aa532ffcbc67390f92cd68eb732eafcb9dbb36b9db88254d838e45efa05"
+CANONICAL_POLICY_SHA256 = "9bc83f96f82cbaaf3ec0b9acbde107733afebde1bf411d66f14e47405478c39e"
+CANONICAL_POLICY_SEMANTIC_SHA256 = "70fc91062ee09086ec65585fd8b782999e46e3d0db5880cc982d12202693399c"
 EXPECTED_PROFILES = {"pre": ("89c31f0ae275", 62), "post": ("9a2399212488", 64)}
 EXPECTED_DATABASE_TARGET = ("cosmaneura-staging-postgres.postgres.database.azure.com", "staging", 5432)
 EXPECTED_BLOB_TARGET = "cosmaneurastaginguploads.blob.core.windows.net"
 EXPECTED_REDIS_TARGET = ("cosmaneura-staging-redis.redis.cache.windows.net", 6380, 0)
-SCHEMA_DESCRIPTOR_FORMAT = "postgresql-16-public-v1"
+SCHEMA_DESCRIPTOR_FORMAT = "postgresql-16-public-v2"
 SCHEMA_DESCRIPTOR_SECTIONS = (
+    "namespace_objects",
     "relations",
     "columns",
     "constraints",
@@ -52,10 +53,12 @@ SCHEMA_DESCRIPTOR_SECTIONS = (
     "triggers",
     "trigger_functions",
     "rls_policies",
-    "enum_types",
+    "types",
     "enum_labels",
     "views",
     "routines",
+    "authorizations",
+    "default_privileges",
 )
 EXPECTED_DISPOSITIONS = {
     "synthetic_lineage": frozenset("appointment patient ehr_sandbox_patient_designation ehr_sandbox_record_mapping synthetic_preview_appointment_fixture".split()),
@@ -163,6 +166,20 @@ def _schema_descriptor(
             for section in SCHEMA_DESCRIPTOR_SECTIONS
         },
     )
+
+
+def _configure_catalog_session(connection: Any) -> None:
+    """Make PostgreSQL catalog rendering deterministic for this transaction."""
+
+    for statement in (
+        "SET LOCAL search_path = pg_catalog, public",
+        "SET LOCAL quote_all_identifiers = off",
+        "SET LOCAL extra_float_digits = 3",
+        "SET LOCAL DateStyle = 'ISO, YMD'",
+        "SET LOCAL IntervalStyle = 'postgres'",
+        "SET LOCAL bytea_output = 'hex'",
+    ):
+        connection.execute(statement)
 
 
 def _digest(key: bytes, domain: str, values: Iterable[str | bytes]) -> str:
@@ -902,7 +919,7 @@ class LiveInventoryProvider:
                 f"SET LOCAL lock_timeout = {LOCK_TIMEOUT_MILLISECONDS}"
             )
             self._connection.execute("SET LOCAL row_security = off")
-            self._connection.execute("SET LOCAL search_path = pg_catalog")
+            _configure_catalog_session(self._connection)
             database_name, server_version, tls_active = self._connection.execute(
                 "SELECT current_database(), "
                 "current_setting('server_version_num')::integer, "
@@ -956,6 +973,7 @@ class LiveInventoryProvider:
         )
 
     def database_catalog(self) -> Mapping[str, RelationContract]:
+        _configure_catalog_session(self._connection)
         rows = self._connection.execute(
             "SELECT relation.relname, relation.relkind, relation.relrowsecurity, "
             "attribute.attname, "
@@ -1001,7 +1019,25 @@ class LiveInventoryProvider:
     def database_schema_descriptor(self) -> SchemaDescriptor:
         """Fingerprint all approved public-schema DDL from the open snapshot."""
 
+        _configure_catalog_session(self._connection)
         sections: dict[str, list[dict[str, Any]]] = {}
+        sections["namespace_objects"] = self._descriptor_records(
+            "SELECT identified.type, identified.object_names, "
+            "identified.object_args "
+            "FROM pg_catalog.pg_depend AS dependency "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = dependency.refobjid "
+            "CROSS JOIN LATERAL pg_catalog.pg_identify_object_as_address("
+            "dependency.classid, dependency.objid, dependency.objsubid) "
+            "AS identified "
+            "WHERE dependency.refclassid = "
+            "'pg_catalog.pg_namespace'::pg_catalog.regclass "
+            "AND dependency.deptype = 'n' "
+            "AND namespace.nspname = 'public' "
+            "ORDER BY identified.type, identified.object_names, "
+            "identified.object_args",
+            ("kind", "names", "arguments"),
+        )
         sections["relations"] = self._descriptor_records(
             "SELECT namespace.nspname, relation.relname, relation.relkind, "
             "relation.relpersistence, relation.relreplident, "
@@ -1012,7 +1048,7 @@ class LiveInventoryProvider:
             "COALESCE((SELECT pg_catalog.string_agg(option, E'\\n' ORDER BY option) "
             "FROM pg_catalog.unnest(relation.reloptions) AS option), ''), "
             "COALESCE(pg_catalog.pg_get_expr(relation.relpartbound, "
-            "relation.oid, TRUE), ''), "
+            "relation.oid, FALSE), ''), "
             "COALESCE(pg_catalog.pg_get_partkeydef(relation.oid), '') "
             "FROM pg_catalog.pg_class AS relation "
             "JOIN pg_catalog.pg_namespace AS namespace "
@@ -1052,7 +1088,7 @@ class LiveInventoryProvider:
             "COALESCE(collation_namespace.nspname, ''), "
             "COALESCE(collation_value.collname, ''), "
             "COALESCE(pg_catalog.pg_get_expr(default_value.adbin, "
-            "default_value.adrelid, TRUE), '') "
+            "default_value.adrelid, FALSE), '') "
             "FROM pg_catalog.pg_class AS relation "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = relation.relnamespace "
@@ -1102,7 +1138,7 @@ class LiveInventoryProvider:
             "COALESCE(domain_type.typname, ''), "
             "COALESCE(parent_constraint.conname, ''), "
             "COALESCE(parent_relation.relname, ''), "
-            "pg_catalog.pg_get_constraintdef(constraint_value.oid, TRUE) "
+            "pg_catalog.pg_get_constraintdef(constraint_value.oid, FALSE) "
             "FROM pg_catalog.pg_constraint AS constraint_value "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = constraint_value.connamespace "
@@ -1145,10 +1181,10 @@ class LiveInventoryProvider:
             "index_value.indisready, index_value.indislive, "
             "index_value.indisreplident, index_value.indnullsnotdistinct, "
             "COALESCE(pg_catalog.pg_get_expr(index_value.indexprs, "
-            "index_value.indrelid, TRUE), ''), "
+            "index_value.indrelid, FALSE), ''), "
             "COALESCE(pg_catalog.pg_get_expr(index_value.indpred, "
-            "index_value.indrelid, TRUE), ''), "
-            "pg_catalog.pg_get_indexdef(index_relation.oid) "
+            "index_value.indrelid, FALSE), ''), "
+            "pg_catalog.pg_get_indexdef(index_relation.oid, 0, FALSE) "
             "FROM pg_catalog.pg_index AS index_value "
             "JOIN pg_catalog.pg_class AS table_relation "
             "ON table_relation.oid = index_value.indrelid "
@@ -1187,7 +1223,7 @@ class LiveInventoryProvider:
         sections["triggers"] = self._descriptor_records(
             "SELECT table_namespace.nspname, table_relation.relname, "
             "trigger_value.tgname, trigger_value.tgenabled, "
-            "pg_catalog.pg_get_triggerdef(trigger_value.oid, TRUE), "
+            "pg_catalog.pg_get_triggerdef(trigger_value.oid, FALSE), "
             "function_namespace.nspname, function_value.proname, "
             "pg_catalog.pg_get_function_identity_arguments(function_value.oid) "
             "FROM pg_catalog.pg_trigger AS trigger_value "
@@ -1243,9 +1279,9 @@ class LiveInventoryProvider:
             "ELSE pg_catalog.pg_get_userbyid(role_oid) END) "
             "FROM pg_catalog.unnest(policy.polroles) AS role_oid), ''), "
             "COALESCE(pg_catalog.pg_get_expr(policy.polqual, "
-            "policy.polrelid, TRUE), ''), "
+            "policy.polrelid, FALSE), ''), "
             "COALESCE(pg_catalog.pg_get_expr(policy.polwithcheck, "
-            "policy.polrelid, TRUE), '') "
+            "policy.polrelid, FALSE), '') "
             "FROM pg_catalog.pg_policy AS policy "
             "JOIN pg_catalog.pg_class AS table_relation "
             "ON table_relation.oid = policy.polrelid "
@@ -1264,15 +1300,139 @@ class LiveInventoryProvider:
                 "check_expression",
             ),
         )
-        sections["enum_types"] = self._descriptor_records(
-            "SELECT namespace.nspname, type_value.typname "
+        sections["types"] = self._descriptor_records(
+            "SELECT namespace.nspname, type_value.typname, "
+            "type_value.typtype, type_value.typcategory, "
+            "type_value.typispreferred, type_value.typisdefined, "
+            "type_value.typlen, type_value.typbyval, type_value.typdelim, "
+            "type_value.typalign, type_value.typstorage, "
+            "type_value.typnotnull, type_value.typtypmod, type_value.typndims, "
+            "COALESCE(pg_catalog.pg_get_expr(type_value.typdefaultbin, 0, FALSE), "
+            "type_value.typdefault, ''), "
+            "COALESCE(relation_namespace.nspname, ''), "
+            "COALESCE(relation.relname, ''), "
+            "COALESCE(element_namespace.nspname, ''), "
+            "COALESCE(element_type.typname, ''), "
+            "COALESCE(array_namespace.nspname, ''), "
+            "COALESCE(array_type.typname, ''), "
+            "COALESCE(base_namespace.nspname, ''), "
+            "COALESCE(base_type.typname, ''), "
+            "COALESCE(collation_namespace.nspname, ''), "
+            "COALESCE(collation_value.collname, ''), "
+            "type_value.typinput::pg_catalog.regprocedure::text, "
+            "type_value.typoutput::pg_catalog.regprocedure::text, "
+            "CASE WHEN type_value.typreceive = 0 THEN '' ELSE "
+            "type_value.typreceive::pg_catalog.regprocedure::text END, "
+            "CASE WHEN type_value.typsend = 0 THEN '' ELSE "
+            "type_value.typsend::pg_catalog.regprocedure::text END, "
+            "CASE WHEN type_value.typmodin = 0 THEN '' ELSE "
+            "type_value.typmodin::pg_catalog.regprocedure::text END, "
+            "CASE WHEN type_value.typmodout = 0 THEN '' ELSE "
+            "type_value.typmodout::pg_catalog.regprocedure::text END, "
+            "CASE WHEN type_value.typanalyze = 0 THEN '' ELSE "
+            "type_value.typanalyze::pg_catalog.regprocedure::text END, "
+            "CASE WHEN type_value.typsubscript = 0 THEN '' ELSE "
+            "type_value.typsubscript::pg_catalog.regprocedure::text END, "
+            "COALESCE(range_subtype_namespace.nspname, ''), "
+            "COALESCE(range_subtype.typname, ''), "
+            "COALESCE(multirange_namespace.nspname, ''), "
+            "COALESCE(multirange_type.typname, ''), "
+            "COALESCE(range_collation_namespace.nspname, ''), "
+            "COALESCE(range_collation.collname, ''), "
+            "COALESCE(opclass_namespace.nspname, ''), "
+            "COALESCE(opclass.opcname, ''), "
+            "CASE WHEN range_value.rngcanonical = 0 THEN '' ELSE "
+            "range_value.rngcanonical::pg_catalog.regprocedure::text END, "
+            "CASE WHEN range_value.rngsubdiff = 0 THEN '' ELSE "
+            "range_value.rngsubdiff::pg_catalog.regprocedure::text END "
             "FROM pg_catalog.pg_type AS type_value "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = type_value.typnamespace "
+            "LEFT JOIN pg_catalog.pg_class AS relation "
+            "ON relation.oid = type_value.typrelid "
+            "LEFT JOIN pg_catalog.pg_namespace AS relation_namespace "
+            "ON relation_namespace.oid = relation.relnamespace "
+            "LEFT JOIN pg_catalog.pg_type AS element_type "
+            "ON element_type.oid = type_value.typelem "
+            "LEFT JOIN pg_catalog.pg_namespace AS element_namespace "
+            "ON element_namespace.oid = element_type.typnamespace "
+            "LEFT JOIN pg_catalog.pg_type AS array_type "
+            "ON array_type.oid = type_value.typarray "
+            "LEFT JOIN pg_catalog.pg_namespace AS array_namespace "
+            "ON array_namespace.oid = array_type.typnamespace "
+            "LEFT JOIN pg_catalog.pg_type AS base_type "
+            "ON base_type.oid = type_value.typbasetype "
+            "LEFT JOIN pg_catalog.pg_namespace AS base_namespace "
+            "ON base_namespace.oid = base_type.typnamespace "
+            "LEFT JOIN pg_catalog.pg_collation AS collation_value "
+            "ON collation_value.oid = type_value.typcollation "
+            "LEFT JOIN pg_catalog.pg_namespace AS collation_namespace "
+            "ON collation_namespace.oid = collation_value.collnamespace "
+            "LEFT JOIN pg_catalog.pg_range AS range_value "
+            "ON range_value.rngtypid = type_value.oid "
+            "LEFT JOIN pg_catalog.pg_type AS range_subtype "
+            "ON range_subtype.oid = range_value.rngsubtype "
+            "LEFT JOIN pg_catalog.pg_namespace AS range_subtype_namespace "
+            "ON range_subtype_namespace.oid = range_subtype.typnamespace "
+            "LEFT JOIN pg_catalog.pg_type AS multirange_type "
+            "ON multirange_type.oid = range_value.rngmultitypid "
+            "LEFT JOIN pg_catalog.pg_namespace AS multirange_namespace "
+            "ON multirange_namespace.oid = multirange_type.typnamespace "
+            "LEFT JOIN pg_catalog.pg_collation AS range_collation "
+            "ON range_collation.oid = range_value.rngcollation "
+            "LEFT JOIN pg_catalog.pg_namespace AS range_collation_namespace "
+            "ON range_collation_namespace.oid = range_collation.collnamespace "
+            "LEFT JOIN pg_catalog.pg_opclass AS opclass "
+            "ON opclass.oid = range_value.rngsubopc "
+            "LEFT JOIN pg_catalog.pg_namespace AS opclass_namespace "
+            "ON opclass_namespace.oid = opclass.opcnamespace "
             "WHERE namespace.nspname = 'public' "
-            "AND type_value.typtype = 'e' "
             "ORDER BY type_value.typname",
-            ("schema", "name"),
+            (
+                "schema",
+                "name",
+                "kind",
+                "category",
+                "preferred",
+                "defined",
+                "length",
+                "by_value",
+                "delimiter",
+                "alignment",
+                "storage",
+                "not_null",
+                "type_modifier",
+                "array_dimensions",
+                "default_expression",
+                "relation_schema",
+                "relation",
+                "element_schema",
+                "element_type",
+                "array_schema",
+                "array_type",
+                "base_schema",
+                "base_type",
+                "collation_schema",
+                "collation",
+                "input_function",
+                "output_function",
+                "receive_function",
+                "send_function",
+                "type_modifier_input_function",
+                "type_modifier_output_function",
+                "analyze_function",
+                "subscript_function",
+                "range_subtype_schema",
+                "range_subtype",
+                "multirange_schema",
+                "multirange_type",
+                "range_collation_schema",
+                "range_collation",
+                "range_operator_class_schema",
+                "range_operator_class",
+                "range_canonical_function",
+                "range_subtype_diff_function",
+            ),
         )
         sections["enum_labels"] = self._descriptor_records(
             "SELECT namespace.nspname, type_value.typname, "
@@ -1290,7 +1450,7 @@ class LiveInventoryProvider:
             "SELECT namespace.nspname, relation.relname, relation.relkind, "
             "COALESCE((SELECT pg_catalog.string_agg(option, E'\\n' ORDER BY option) "
             "FROM pg_catalog.unnest(relation.reloptions) AS option), ''), "
-            "pg_catalog.pg_get_viewdef(relation.oid, TRUE) "
+            "pg_catalog.pg_get_viewdef(relation.oid, FALSE) "
             "FROM pg_catalog.pg_class AS relation "
             "JOIN pg_catalog.pg_namespace AS namespace "
             "ON namespace.oid = relation.relnamespace "
@@ -1393,6 +1553,133 @@ class LiveInventoryProvider:
                 "aggregate_moving_transition_space",
                 "aggregate_initial_value",
                 "aggregate_moving_initial_value",
+            ),
+        )
+        sections["authorizations"] = self._descriptor_records(
+            "WITH database_owner AS ("
+            "SELECT datdba AS oid FROM pg_catalog.pg_database "
+            "WHERE datname = pg_catalog.current_database()), "
+            "objects AS ("
+            "SELECT 'schema'::text AS object_kind, namespace.nspname AS schema, "
+            "''::text AS name, ''::text AS identity_arguments, "
+            "''::text AS subobject, namespace.nspowner AS owner_oid, "
+            "COALESCE(namespace.nspacl, "
+            "pg_catalog.acldefault('n', namespace.nspowner)) AS acl "
+            "FROM pg_catalog.pg_namespace AS namespace "
+            "WHERE namespace.nspname = 'public' "
+            "UNION ALL "
+            "SELECT 'relation:' || relation.relkind::text, namespace.nspname, "
+            "relation.relname, '', '', relation.relowner, "
+            "COALESCE(relation.relacl, CASE "
+            "WHEN relation.relkind = 'S' THEN "
+            "pg_catalog.acldefault('S', relation.relowner) "
+            "WHEN relation.relkind IN ('r', 'p', 'v', 'm', 'f') THEN "
+            "pg_catalog.acldefault('r', relation.relowner) "
+            "ELSE NULL::pg_catalog.aclitem[] END) "
+            "FROM pg_catalog.pg_class AS relation "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = relation.relnamespace "
+            "WHERE namespace.nspname = 'public' "
+            "UNION ALL "
+            "SELECT 'column', namespace.nspname, relation.relname, '', "
+            "attribute.attname, relation.relowner, attribute.attacl "
+            "FROM pg_catalog.pg_attribute AS attribute "
+            "JOIN pg_catalog.pg_class AS relation "
+            "ON relation.oid = attribute.attrelid "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = relation.relnamespace "
+            "WHERE namespace.nspname = 'public' "
+            "AND attribute.attnum > 0 AND NOT attribute.attisdropped "
+            "UNION ALL "
+            "SELECT 'routine', namespace.nspname, routine.proname, "
+            "pg_catalog.pg_get_function_identity_arguments(routine.oid), '', "
+            "routine.proowner, COALESCE(routine.proacl, "
+            "pg_catalog.acldefault('f', routine.proowner)) "
+            "FROM pg_catalog.pg_proc AS routine "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = routine.pronamespace "
+            "WHERE namespace.nspname = 'public' "
+            "UNION ALL "
+            "SELECT 'type', namespace.nspname, type_value.typname, '', '', "
+            "type_value.typowner, COALESCE(type_value.typacl, "
+            "pg_catalog.acldefault('T', type_value.typowner)) "
+            "FROM pg_catalog.pg_type AS type_value "
+            "JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = type_value.typnamespace "
+            "WHERE namespace.nspname = 'public'), "
+            "expanded AS ("
+            "SELECT objects.*, privilege.grantor, privilege.grantee, "
+            "privilege.privilege_type, privilege.is_grantable "
+            "FROM objects LEFT JOIN LATERAL "
+            "pg_catalog.aclexplode(objects.acl) AS privilege ON TRUE) "
+            "SELECT expanded.object_kind, expanded.schema, expanded.name, "
+            "expanded.identity_arguments, expanded.subobject, "
+            "CASE WHEN expanded.owner_oid = database_owner.oid "
+            "THEN 'database_owner' "
+            "WHEN pg_catalog.pg_get_userbyid(expanded.owner_oid) = "
+            "'pg_database_owner' THEN 'pg_database_owner' "
+            "ELSE 'role:' || pg_catalog.pg_get_userbyid(expanded.owner_oid) END, "
+            "CASE WHEN expanded.grantor IS NULL THEN '' "
+            "WHEN expanded.grantor = database_owner.oid THEN 'database_owner' "
+            "WHEN pg_catalog.pg_get_userbyid(expanded.grantor) = "
+            "'pg_database_owner' THEN 'pg_database_owner' "
+            "ELSE 'role:' || pg_catalog.pg_get_userbyid(expanded.grantor) END, "
+            "CASE WHEN expanded.grantee IS NULL THEN '' "
+            "WHEN expanded.grantee = 0 THEN 'PUBLIC' "
+            "WHEN expanded.grantee = database_owner.oid THEN 'database_owner' "
+            "WHEN pg_catalog.pg_get_userbyid(expanded.grantee) = "
+            "'pg_database_owner' THEN 'pg_database_owner' "
+            "ELSE 'role:' || pg_catalog.pg_get_userbyid(expanded.grantee) END, "
+            "COALESCE(expanded.privilege_type, ''), "
+            "COALESCE(expanded.is_grantable, FALSE) "
+            "FROM expanded CROSS JOIN database_owner "
+            "ORDER BY expanded.object_kind, expanded.schema, expanded.name, "
+            "expanded.identity_arguments, expanded.subobject, 7, 8, 9, 10",
+            (
+                "object_kind",
+                "schema",
+                "name",
+                "identity_arguments",
+                "subobject",
+                "owner",
+                "grantor",
+                "grantee",
+                "privilege",
+                "grantable",
+            ),
+        )
+        sections["default_privileges"] = self._descriptor_records(
+            "WITH database_owner AS ("
+            "SELECT datdba AS oid FROM pg_catalog.pg_database "
+            "WHERE datname = pg_catalog.current_database()) "
+            "SELECT CASE WHEN defaults.defaclrole = database_owner.oid "
+            "THEN 'database_owner' "
+            "ELSE 'role:' || pg_catalog.pg_get_userbyid(defaults.defaclrole) END, "
+            "COALESCE(namespace.nspname, ''), defaults.defaclobjtype, "
+            "CASE WHEN privilege.grantor = database_owner.oid "
+            "THEN 'database_owner' "
+            "ELSE 'role:' || pg_catalog.pg_get_userbyid(privilege.grantor) END, "
+            "CASE WHEN privilege.grantee = 0 THEN 'PUBLIC' "
+            "WHEN privilege.grantee = database_owner.oid THEN 'database_owner' "
+            "ELSE 'role:' || pg_catalog.pg_get_userbyid(privilege.grantee) END, "
+            "privilege.privilege_type, privilege.is_grantable "
+            "FROM pg_catalog.pg_default_acl AS defaults "
+            "CROSS JOIN database_owner "
+            "LEFT JOIN pg_catalog.pg_namespace AS namespace "
+            "ON namespace.oid = defaults.defaclnamespace "
+            "CROSS JOIN LATERAL pg_catalog.aclexplode(defaults.defaclacl) "
+            "AS privilege "
+            "WHERE defaults.defaclrole = database_owner.oid "
+            "AND (defaults.defaclnamespace = 0 OR namespace.nspname = 'public') "
+            "ORDER BY 1, 2, 3, 4, 5, 6, 7",
+            (
+                "owner",
+                "schema",
+                "object_kind",
+                "grantor",
+                "grantee",
+                "privilege",
+                "grantable",
             ),
         )
         return _schema_descriptor(sections)
