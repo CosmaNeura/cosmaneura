@@ -38,6 +38,18 @@ variable "control_cidr_inventory_revalidated" {
   default     = false
 }
 
+variable "enable_private_executor_network_foundation" {
+  description = "Delegate the reserved executor subnet and create the isolated private-service-endpoint subnet after separate plan approval."
+  type        = bool
+  default     = false
+}
+
+variable "private_executor_network_plan_approved" {
+  description = "Action-time approval that the saved network-foundation plan is additive, unpeered, private, and limited to the exact 10.76.0.0/24 topology."
+  type        = bool
+  default     = false
+}
+
 variable "enable_marker_create_assignments" {
   description = "Assign marker-create roles to unfederated job UAMIs only after live provider-fidelity testing proves the exact minimum data actions."
   type        = bool

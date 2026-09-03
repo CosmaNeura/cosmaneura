@@ -21,8 +21,12 @@ persistent, non-PHI prerequisites for the isolated restore controller:
 - a private `StorageV2` `Standard_ZRS` marker account, three ARM-created private
   marker containers, a reserved aggregate-only `restore-evidence-v1` container,
   private Blob endpoint, private DNS zone, and VNet link; and
-- an unpeered `10.76.0.0/24` control VNet with a marker endpoint subnet and an
-  empty subnet reserved for a later private executor.
+- an unpeered `10.76.0.0/24` control VNet with a `10.76.0.0/27` marker endpoint
+  subnet and an inert `10.76.0.32/27` executor reservation; and
+- an independently default-off private-executor network foundation that
+  delegates `10.76.0.32/27` only to `Microsoft.App/environments` and reserves
+  `10.76.0.64/27` only for later ACR, Key Vault, and per-rehearsal PostgreSQL
+  private endpoints.
 
 The target restore network remains controller-owned and ephemeral. Its contract
 is `10.75.0.0/24` with `10.75.0.0/27` for the PostgreSQL private endpoint. This
@@ -32,16 +36,43 @@ cosmaneura-staging-rehearsal` to be empty before a restore. The policy and role
 assignments are target-scoped extension resources. A credentialed readback must
 still prove that the exact controller command returns `[]` before activation.
 
+## Private-executor network foundation
+
+The network-only rung is present in source but defaults off. It requires the
+base control plane, both action-time CIDR revalidations, and two matching
+switches in an independently accepted saved plan:
+
+```hcl
+enable_private_executor_network_foundation = true
+private_executor_network_plan_approved     = true
+```
+
+When enabled, the plan changes the existing empty `10.76.0.32/27` reservation
+only by adding the exact Container Apps environment delegation. It adds one
+empty `10.76.0.64/27` subnet with private-endpoint network policies disabled.
+Default outbound access is disabled on all three control subnets. The third
+subnet is reserved for a future digest-pinned ACR, private Key Vault, and one
+second PostgreSQL private endpoint per rehearsal so an executor never needs a
+VNet peer or public route to the ephemeral `10.75.0.0/24` target.
+
+This rung deliberately creates no Container Apps environment or job, ACR, Key
+Vault, PostgreSQL endpoint, DNS zone beyond the existing marker Blob zone, NAT
+gateway, route table, NSG, public IP, peering, secret, credential, or workflow
+binding. Those are separate reviewed slices. A provider-mocked plan proves the
+HCL shape only; live provider validation must still prove that Azure accepts a
+`/27` workload-profile infrastructure subnet and the exact delegation action.
+
 ## Deliberate blockers
 
-The reserved `10.76.0.32/27` subnet is not a runner, Container Apps environment,
-route, peer, or proof of connectivity to an ephemeral `10.75.0.0/24` target.
+The optionally delegated `10.76.0.32/27` subnet is not a runner, Container Apps
+environment, route, peer, or proof of connectivity to an ephemeral
+`10.75.0.0/24` target. The empty `10.76.0.64/27` subnet is not an endpoint.
 `private_executor_binding_implemented` and
 `trusted_evidence_binding_implemented` remain hard-coded `false`; a separate
-reviewed rung must choose the runtime, attach the unfederated job UAMIs, bind the
-aggregate-only evidence sink, add only the required topology, and prove private
-DNS and data-plane reachability before any workflow integration or ReadOnly
-account lock.
+reviewed rung must create the runtime and private services, attach the
+unfederated job UAMIs, bind the aggregate-only evidence sink, add only the
+required DNS, and prove private DNS and data-plane reachability before any
+workflow integration or ReadOnly account lock.
 
 The controller currently validates federation through `az ad app
 federated-credential list`, while this root deliberately creates UAMI-bound
@@ -84,7 +115,7 @@ tofu -chdir=infra-staging-rehearsal test -test-directory=tests -no-color
 
 Before any credentialed plan, refresh the complete VNet and peering inventory
 and independently confirm that both `10.75.0.0/24` and `10.76.0.0/24` remain
-unused and non-overlapping. Only then may the plan set all three reversible
+unused and non-overlapping. Only then may the base plan set all three reversible
 inputs:
 
 ```hcl
@@ -92,6 +123,14 @@ deploy_staging_restore_control_plane = true
 target_cidr_inventory_revalidated    = true
 control_cidr_inventory_revalidated   = true
 ```
+
+The private-executor network foundation additionally requires its two matching
+switches shown above. Setting either without the other fails the activation
+guard. If the base control plane is already deployed, the foundation delta must
+show only the Container Apps delegation update and the new private-endpoint
+subnet. In a combined first apply, those must be the only resources attributable
+to the foundation. Neither plan may contain a replacement, peering, public
+ingress, compute, endpoint, role, or secret attributable to this rung.
 
 A read-only Azure preflight on 2026-09-03 reported the default storage name
 `cosmaneurarehearsalctl` globally available. Availability is transient and must
