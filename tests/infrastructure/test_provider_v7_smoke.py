@@ -220,12 +220,19 @@ def test_operator_wrapper_never_accepts_a_workload_token() -> None:
     assert "/app/infra-staging/provider_v7_smoke.py" in wrapper
     assert "/usr/bin/expect" in wrapper
     assert '--command "$command"' not in wrapper
-    assert "name=='API_BASE_URL'" in wrapper
+    assert '.name == "API_BASE_URL"' in wrapper
     assert '"$PLATFORM_ORIGIN"' in wrapper
     assert '"https://$PLATFORM_FQDN"' not in wrapper
     assert "EXPECTED_PUBLIC_CLIENT_ID" in wrapper
     assert '"$PUBLIC_CLIENT_ID"' in wrapper
-    assert "cosmaneura/cosmaneura:$HEAD" in wrapper
+    assert "EXPECTED_PLATFORM_IMAGE_DIGEST" in wrapper
+    assert "cosmaneura/cosmaneura@$EXPECTED_PLATFORM_IMAGE_DIGEST" in wrapper
+    assert "cosmaneura/cosmaneura:$HEAD" not in wrapper
+    assert "properties.latestReadyRevisionName" in wrapper
+    assert "PLATFORM_READY_REVISION" in wrapper
+    assert "containerapp revision show" in wrapper
+    assert '--revision "$PLATFORM_READY_REVISION"' in wrapper
+    assert "properties.template.containers[0].image --output tsv" not in wrapper
     assert len(command) < 1000
     assert "V7_SMOKE PASS" in wrapper
 
@@ -249,12 +256,6 @@ def test_full_smoke_rejects_alternate_platform_origin_before_exec(tmp_path) -> N
     wrapper = ROOT / "infra-staging" / "run-provider-v7-smoke.sh"
     fake_az = tmp_path / "az"
     az_log = tmp_path / "az.log"
-    head = subprocess.run(
-        ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
     fake_az.write_text(
         "#!/bin/sh\n"
         'printf "%s\\n" "$*" >> "$FAKE_AZ_LOG"\n'
@@ -265,9 +266,9 @@ def test_full_smoke_rejects_alternate_platform_origin_before_exec(tmp_path) -> N
         "      *cosmaneura-sovereign-staging-app*) echo provider.example.invalid ;;\n"
         "      *) echo public.example.invalid ;;\n"
         "    esac ;;\n"
-        "  *API_BASE_URL*) echo https://attacker.example ;;\n"
+        '  *latestReadyRevision*) echo \'{"latestRevision":"platform--ready","latestReadyRevision":"platform--ready","activeRevisionsMode":"Single","traffic":[{"latestRevision":true,"weight":100}]}\' ;;\n'
+        '  *\'containerapp revision show\'*) echo \'{"containers":[{"name":"cosmaneura-staging-app","image":"cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","env":[{"name":"API_BASE_URL","value":"https://attacker.example","secretRef":null}]}],"health":"Healthy","running":"Running","provisioning":"Provisioned"}\' ;;\n'
         "  *PLATFORM_AGENT_API_SCOPE*) echo api://00000000-0000-0000-0000-000000000000/.default ;;\n"
-        '  *properties.template.containers\\[0\\].image*) echo "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura:$FAKE_HEAD" ;;\n'
         "esac\n"
     )
     fake_az.chmod(0o755)
@@ -280,7 +281,7 @@ def test_full_smoke_rejects_alternate_platform_origin_before_exec(tmp_path) -> N
             **os.environ,
             "PATH": f"{tmp_path}:{os.environ['PATH']}",
             "FAKE_AZ_LOG": str(az_log),
-            "FAKE_HEAD": head,
+            "EXPECTED_PLATFORM_IMAGE_DIGEST": "sha256:" + "a" * 64,
         },
     )
 
