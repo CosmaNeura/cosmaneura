@@ -17,6 +17,9 @@ from typeid import TypeID
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/staging_restore_sanitizer.py"
 POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-policy.json"
+DATA_CONTRACT = (
+    ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-data-contract.json"
+)
 INVENTORY_POLICY = ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 KEY = b"sanitizer-test-key-that-is-at-least-32-bytes"
 OTHER_KEY = b"different-test-key-that-is-at-least-32-bytes"
@@ -49,6 +52,10 @@ def module() -> ModuleType:
 
 def _policies() -> tuple[dict[str, Any], dict[str, Any]]:
     return json.loads(POLICY.read_bytes()), json.loads(INVENTORY_POLICY.read_bytes())
+
+
+def _data_contract() -> dict[str, Any]:
+    return json.loads(DATA_CONTRACT.read_bytes())
 
 
 def _receipt() -> dict[str, Any]:
@@ -129,13 +136,38 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
     assert hashlib.sha256(INVENTORY_POLICY.read_bytes()).hexdigest() == (
         module.inventory.CANONICAL_POLICY_SHA256
     )
-    module.validate_policy(policy, inventory_policy)
+    assert hashlib.sha256(DATA_CONTRACT.read_bytes()).hexdigest() == (
+        module.CANONICAL_DATA_CONTRACT_SHA256
+    )
+    data_contract = _data_contract()
+    module.validate_policy(policy, inventory_policy, data_contract)
+    assert data_contract["retained_table_count"] == 29
+    assert data_contract["retained_column_count"] == 343
     assert policy["status"]["executable"] is False
     assert policy["execution_contract"]["database_connections_permitted"] is False
     assert policy["execution_contract"]["sql_mutation_permitted"] is False
-    assert policy["transform_contract"]["retained_column_policy_status"] == (
-        "incomplete_blocks_activation"
+    transform = policy["transform_contract"]
+    assert transform["retained_column_policy_status"] == (
+        "complete_sha256_pinned_343_columns"
     )
+    assert transform["data_contract_path"] == str(DATA_CONTRACT.relative_to(ROOT))
+    assert (
+        transform["data_contract_sha256"]
+        == hashlib.sha256(DATA_CONTRACT.read_bytes()).hexdigest()
+    )
+    assert set(policy["status"]["activation_blockers"]) == module.ACTIVATION_BLOCKERS
+    assert "complete_retained_column_transform_policy" not in module.ACTIVATION_BLOCKERS
+    assert transform["dependent_digest_recipes"] == {}
+    assert transform["semantic_domains"]["typed_text_references"] == {
+        "mode": "derive_typeid_text_from_transformed_uuid",
+        "references": {
+            "authority_person_binding.binding_ref": {
+                "source": "appointment.id",
+                "typeid_prefix": "appointment",
+            }
+        },
+        "implementation_status": "data_contract_complete_execution_missing",
+    }
     assert (
         set(
             policy["transform_contract"]["fixed_catalog"][
@@ -149,6 +181,94 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
     assert "def rewrite_database" not in source
 
 
+@pytest.mark.parametrize("change", ["missing", "extra"])
+def test_data_contract_requires_exact_column_coverage(
+    module: ModuleType, change: str
+) -> None:
+    policy, inventory_policy = _policies()
+    contract = _data_contract()
+    if change == "missing":
+        del contract["tables"]["doctor"]["columns"]["email"]
+    else:
+        contract["tables"]["doctor"]["columns"]["unexpected"] = "preserve_approved"
+    with pytest.raises(module.SanitizerFailure, match="data_contract.column_coverage"):
+        module.validate_data_contract(contract, inventory_policy, policy)
+
+
+def test_data_contract_partitions_rewritten_and_discarded_rows(
+    module: ModuleType,
+) -> None:
+    policy, inventory_policy = _policies()
+    contract = _data_contract()
+    assert set(contract["row_actions"]["discard_rows"]) == module.GUARDED_TABLES
+    for table_name in module.GUARDED_TABLES:
+        assert set(contract["tables"][table_name]["columns"].values()) == {
+            "discard_row"
+        }
+
+    changed = copy.deepcopy(contract)
+    changed["tables"]["baa_acceptance"]["columns"]["id"] = (
+        "hmac_uuid7:typeid:baa_acceptance"
+    )
+    with pytest.raises(module.SanitizerFailure, match="data_contract.discard_action"):
+        module.validate_data_contract(changed, inventory_policy, policy)
+
+
+def test_data_contract_enforces_fk_domains_and_exact_graph(module: ModuleType) -> None:
+    policy, inventory_policy = _policies()
+    contract = _data_contract()
+    assert len(contract["foreign_keys"]) == 46
+    changed = copy.deepcopy(contract)
+    changed["tables"]["appointment"]["columns"]["doctor_id"] = (
+        "hmac_uuid7:typeid:patient"
+    )
+    with pytest.raises(
+        module.SanitizerFailure, match="data_contract.foreign_key_action"
+    ):
+        module.validate_data_contract(changed, inventory_policy, policy)
+
+    changed = copy.deepcopy(contract)
+    changed["foreign_keys"] = [
+        binding
+        for binding in changed["foreign_keys"]
+        if binding["source"] != ["authority_person_origin.person_id"]
+    ]
+    with pytest.raises(module.SanitizerFailure, match="data_contract.foreign_keys"):
+        module.validate_data_contract(changed, inventory_policy, policy)
+
+
+def test_data_contract_enforces_sensitive_and_nullable_actions(
+    module: ModuleType,
+) -> None:
+    policy, inventory_policy = _policies()
+    contract = _data_contract()
+    changed = copy.deepcopy(contract)
+    changed["tables"]["doctor"]["columns"]["email"] = "preserve_approved"
+    with pytest.raises(module.SanitizerFailure, match="data_contract.semantic_domains"):
+        module.validate_data_contract(changed, inventory_policy, policy)
+
+    changed = copy.deepcopy(contract)
+    changed["tables"]["doctor"]["columns"]["role"] = "set_null"
+    with pytest.raises(module.SanitizerFailure, match="data_contract.nullability"):
+        module.validate_data_contract(changed, inventory_policy, policy)
+
+
+def test_data_contract_enforces_fixed_catalog_and_derived_recipes(
+    module: ModuleType,
+) -> None:
+    policy, inventory_policy = _policies()
+    contract = _data_contract()
+    changed = copy.deepcopy(contract)
+    changed["tables"]["doctor_note_schema"]["columns"]["fields"] = "preserve_approved"
+    with pytest.raises(module.SanitizerFailure, match="data_contract.fixed_catalog"):
+        module.validate_data_contract(changed, inventory_policy, policy)
+
+    changed = copy.deepcopy(contract)
+    changed["derived_values"]["practice.join_code"]["length"] = 8
+    with pytest.raises(module.SanitizerFailure, match="data_contract.derived_values"):
+        module.validate_data_contract(changed, inventory_policy, policy)
+
+
 def test_policy_rejects_unknown_fields_and_activation(module: ModuleType) -> None:
     policy, inventory_policy = _policies()
     changed = copy.deepcopy(policy)
@@ -158,6 +278,16 @@ def test_policy_rejects_unknown_fields_and_activation(module: ModuleType) -> Non
     changed = copy.deepcopy(policy)
     changed["status"]["executable"] = True
     with pytest.raises(module.SanitizerFailure, match="policy.status"):
+        module.validate_policy(changed, inventory_policy)
+    changed = copy.deepcopy(policy)
+    changed["status"]["activation_blockers"][4] = (
+        "complete_retained_column_transform_policy"
+    )
+    with pytest.raises(module.SanitizerFailure, match="policy.status"):
+        module.validate_policy(changed, inventory_policy)
+    changed = copy.deepcopy(policy)
+    changed["transform_contract"]["data_contract_sha256"] = "0" * 64
+    with pytest.raises(module.SanitizerFailure, match="policy.transform"):
         module.validate_policy(changed, inventory_policy)
     changed = copy.deepcopy(policy)
     changed["target"]["unexpected"] = True
@@ -362,11 +492,17 @@ def test_typed_text_references_and_unsafe_execution_remain_blockers(
             "source": "appointment.id",
             "typeid_prefix": "appointment",
         },
-        "authority_person_origin.source_ref": {
-            "source": "patient.id",
-            "typeid_prefix": "patient",
-        },
     }
+    assert (
+        _data_contract()["tables"]["authority_person_origin"]["columns"]["source_ref"]
+        == "discard_row"
+    )
+    assert typed["implementation_status"] == (
+        "data_contract_complete_execution_missing"
+    )
+    assert _data_contract()["derived_values"]["authority_person_binding.binding_ref"][
+        "required_source_values"
+    ] == {"authority_person_binding.binding_kind": ["provider_record"]}
     future = policy["execution_contract"]["future_transaction_requirements"]
     assert future["disable_triggers"] is False
     assert future["truncate_cascade"] is False
