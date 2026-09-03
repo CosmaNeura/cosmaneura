@@ -120,11 +120,21 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
         assert job.count("persist-credentials: false") == 1
         assert 'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"' in job
         if name == "app":
-            candidate_routing = _step(job, "Start exact candidate local test routing")
+            localias_install = _step(job, "Install SHA-verified Localias")
             assert (
                 job.index(verification)
-                < job.index(candidate_routing)
+                < job.index(localias_install)
                 < job.index(candidate_toolchain)
+            )
+            candidate_routing = _step(
+                job, "Start exact candidate SHA-verified local test routing"
+            )
+            assert "bash scripts/install_pinned_localias.sh" in localias_install
+            assert "bash scripts/start_pinned_localias_ci.sh" in candidate_routing
+            assert (
+                job.index("just py_setup")
+                < job.index(candidate_routing)
+                < job.index("just py_lint")
             )
             candidate_commands = ("just up --fast", "just py_setup", "just py_test")
         else:
