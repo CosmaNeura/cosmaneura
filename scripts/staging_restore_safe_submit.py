@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Dormant, race-safe ARM primitives for one PostgreSQL PITR submission.
+"""Dormant model for one PostgreSQL PITR submission and reconciliation.
 
 The current workflow does not import this module.  A future reviewed binding can
-use it only after the canonical policies are activated.  Provider errors and
-responses are never rendered by this module.
+use it only after the canonical policies are activated and marker-store atomicity
+is proven.  Provider errors and responses are never rendered by this module.
 """
 
 from __future__ import annotations
@@ -22,17 +22,14 @@ from time import sleep
 from typing import Any, Callable, Mapping, NoReturn, Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
-ENVELOPE_POLICY_PATH = (
-    ROOT / "contracts/staging-rehearsal/v1/restore-envelope-policy.json"
-)
-SAFE_SUBMIT_POLICY_PATH = (
-    ROOT / "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json"
-)
+POLICY_ROOT = ROOT / "contracts/staging-rehearsal/v1"
+ENVELOPE_POLICY_PATH = POLICY_ROOT / "restore-envelope-policy.json"
+SAFE_SUBMIT_POLICY_PATH = POLICY_ROOT / "restore-safe-submit-policy.json"
 ENVELOPE_POLICY_SHA256 = (
     "e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c"
 )
 SAFE_SUBMIT_POLICY_SHA256 = (
-    "33914160aed0632cc3d563bd1fba8a6de2703588dd06b37a2417470b58deb1b7"
+    "3d684f71223e8cab42939819c7101c7a89a53666958c3587ae094da9d2d99933"
 )
 
 REHEARSAL_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -136,9 +133,12 @@ def _parse_arm_utc(value: object) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
-def _read_object(path: Path) -> dict[str, Any]:
+def _read_object(path: Path, expected_sha256: str) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_bytes()
+        if _sha256(raw) != expected_sha256:
+            _fail("policy_digest_mismatch")
+        value = json.loads(raw)
     except (OSError, UnicodeError, json.JSONDecodeError):
         _fail("policy_read_failed")
     if not isinstance(value, dict):
@@ -260,12 +260,23 @@ class AzureArmTransport:
                     _fail("arm_response_invalid")
                 return ArmResponse(status=status, body=parsed, headers=response_headers)
         except urllib.error.HTTPError as exc:
-            return ArmResponse(
-                status=exc.code,
-                headers={key.lower(): value for key, value in exc.headers.items()},
-            )
+            try:
+                return ArmResponse(
+                    status=int(exc.code),
+                    headers={key.lower(): value for key, value in exc.headers.items()},
+                )
+            except Exception as response_error:
+                if mutating:
+                    raise ArmOutcomeUnknown from response_error
+                _fail("arm_response_invalid")
+        except (ArmOutcomeUnknown, SafeSubmitError):
+            raise
         except (OSError, TimeoutError, urllib.error.URLError) as exc:
             raise ArmOutcomeUnknown from exc
+        except Exception as exc:
+            if mutating:
+                raise ArmOutcomeUnknown from exc
+            raise SafeSubmitError("arm_response_invalid") from exc
 
 
 @dataclass(frozen=True)
@@ -296,6 +307,8 @@ class SafeSubmitConfig:
     cleanup_name_suffix: str
     ready_state: str
     failed_states: frozenset[str]
+    execution_authorized: bool
+    deployment_marker_conditional_create_fidelity_proven: bool
 
 
 @dataclass(frozen=True)
@@ -341,6 +354,7 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
         not isinstance(activation, dict)
         or set(activation)
         != {
+            "deployment_marker_conditional_create_fidelity_proven",
             "workflow_integrated",
             "trusted_evidence_binding_implemented",
         }
@@ -348,6 +362,7 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
     ):
         _fail("safe_submit_activation_invalid")
     if executable and activation != {
+        "deployment_marker_conditional_create_fidelity_proven": True,
         "workflow_integrated": True,
         "trusted_evidence_binding_implemented": True,
     }:
@@ -382,18 +397,15 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
 
 
 def validate_canonical_contracts() -> tuple[dict[str, Any], dict[str, Any]]:
-    if _sha256(ENVELOPE_POLICY_PATH.read_bytes()) != ENVELOPE_POLICY_SHA256:
-        _fail("envelope_policy_digest_mismatch")
-    if _sha256(SAFE_SUBMIT_POLICY_PATH.read_bytes()) != SAFE_SUBMIT_POLICY_SHA256:
-        _fail("safe_submit_policy_digest_mismatch")
-    envelope = _read_object(ENVELOPE_POLICY_PATH)
-    safe = _read_object(SAFE_SUBMIT_POLICY_PATH)
+    envelope = _read_object(ENVELOPE_POLICY_PATH, ENVELOPE_POLICY_SHA256)
+    safe = _read_object(SAFE_SUBMIT_POLICY_PATH, SAFE_SUBMIT_POLICY_SHA256)
     if envelope.get("trusted_evidence_binding_implemented") is not False:
         _fail("canonical_envelope_activation_changed")
     if tuple(sorted(_placeholder_values(envelope))) != EXPECTED_PLACEHOLDERS:
         _fail("canonical_envelope_blockers_changed")
     _validate_safe_policy(safe, executable=False)
     if safe["activation"] != {
+        "deployment_marker_conditional_create_fidelity_proven": False,
         "workflow_integrated": False,
         "trusted_evidence_binding_implemented": False,
     }:
@@ -404,7 +416,14 @@ def validate_canonical_contracts() -> tuple[dict[str, Any], dict[str, Any]]:
 def config_from_policies(
     envelope: dict[str, Any], safe: dict[str, Any], *, executable: bool
 ) -> SafeSubmitConfig:
-    validate_canonical_contracts()
+    canonical_envelope, canonical_safe = validate_canonical_contracts()
+    if executable and (
+        _sha256(_canonical(envelope)) != _sha256(_canonical(canonical_envelope))
+        or _sha256(_canonical(safe)) != _sha256(_canonical(canonical_safe))
+    ):
+        _fail("executable_policy_not_canonical")
+    if executable:
+        envelope, safe = canonical_envelope, canonical_safe
     _validate_safe_policy(safe, executable=executable)
     if (
         envelope.get("policy_id") != safe["envelope_policy_id"]
@@ -454,6 +473,7 @@ def config_from_policies(
         "providers/Microsoft.DBforPostgreSQL/flexibleServers",
         str(source["server_name"]),
     )
+    activation = safe["activation"]
     arm = safe["arm"]
     return SafeSubmitConfig(
         policy_id=safe["policy_id"],
@@ -482,11 +502,15 @@ def config_from_policies(
         cleanup_name_suffix=arm["cleanup_name_suffix"],
         ready_state=safe["outcomes"]["ready_state"],
         failed_states=frozenset(safe["outcomes"]["failed_states"]),
+        execution_authorized=executable,
+        deployment_marker_conditional_create_fidelity_proven=activation[
+            "deployment_marker_conditional_create_fidelity_proven"
+        ],
     )
 
 
 class SafeRestoreSubmitter:
-    """Persist intent, submit one exact PUT, and reconcile by resource identity."""
+    """Model marker persistence, one exact PUT, and identity reconciliation."""
 
     def __init__(
         self,
@@ -509,6 +533,12 @@ class SafeRestoreSubmitter:
         if not isinstance(value, datetime) or value.tzinfo is None:
             _fail("trusted_clock_invalid")
         return value.astimezone(UTC).replace(microsecond=0)
+
+    def _require_marker_fidelity(self) -> None:
+        if not self.config.execution_authorized:
+            _fail("safe_submit_not_activated")
+        if not self.config.deployment_marker_conditional_create_fidelity_proven:
+            _fail("deployment_marker_atomicity_unproven")
 
     def _request(
         self,
@@ -714,6 +744,7 @@ class SafeRestoreSubmitter:
     def _ensure_deployment(
         self, marker_id: str, record: dict[str, Any]
     ) -> dict[str, Any]:
+        self._require_marker_fidelity()
         existing = self._get_deployment(marker_id)
         if isinstance(existing, ArmResponse):
             actual, state = self._record_from_deployment(existing, marker_id)
@@ -1150,6 +1181,7 @@ class SafeRestoreSubmitter:
         return self._cleanup_target(intent, intent_digest)
 
     def submit(self, request: RestoreRequest) -> SubmitOutcome:
+        self._require_marker_fidelity()
         expected = self._build_intent(request)
         intent_marker_id = self._intent_marker_id(request.rehearsal_id)
         if self._intent_expired(expected):
@@ -1236,6 +1268,7 @@ class SafeRestoreSubmitter:
         return self._poll_restore(intent, intent_digest)
 
     def cleanup_intent(self, rehearsal_id: str) -> SubmitOutcome:
+        self._require_marker_fidelity()
         intent, intent_digest = self._load_intent(rehearsal_id)
         submission_id = self._submission_marker_id(rehearsal_id)
         actual = self._read_deployment_bounded(submission_id)
