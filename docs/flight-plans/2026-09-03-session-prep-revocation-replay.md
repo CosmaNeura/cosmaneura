@@ -18,6 +18,9 @@ The request digest conflict check remains first. A caller cannot use revocation
 to change a request under an existing idempotency key. Source revocation then
 overrides replay of prior content, including after the canonical turn has
 closed. New logical poll keys also receive a content-free unavailable result.
+Context lookup and revocation share one service-state lock, so a completed
+revocation cannot race with a stale pre-lock context read and allow content to
+replay or generate afterward.
 
 ## Acceptance
 
@@ -27,6 +30,8 @@ closed. New logical poll keys also receive a content-free unavailable result.
 - The first revoked response is a new content-free tombstone; another exact
   retry replays that tombstone.
 - A new logical poll after revocation is also content-free.
+- Concurrent context reads and revocation serialize on the same lock; after
+  revocation returns, every subsequent read observes the revoked context.
 - Existing static revocation, immutable artifact, stale-content, scope, and
   idempotency-conflict tests remain green.
 
@@ -42,7 +47,7 @@ are implemented, verified, and explicitly approved.
 
 - Ruff format and lint: passed for the changed service and test.
 - Pyright: 0 errors for the changed service and test.
-- Session Prep service, receiver, and conversation kernel: 51 passed.
+- Session Prep service, receiver, and conversation kernel: 52 passed.
 - PostgreSQL and Redis were local test instances only; all fixtures were
   synthetic. The local PostgreSQL server reported 16.15 versus the repository's
   16.9 pin, so exact-version CI remains authoritative.
