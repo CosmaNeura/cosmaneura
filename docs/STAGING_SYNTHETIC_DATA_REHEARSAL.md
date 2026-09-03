@@ -1,0 +1,65 @@
+# Staging synthetic-data inventory gate
+
+Status: **READ-ONLY GATE IMPLEMENTED — LIVE PROOF NOT YET RUN**
+
+This gate answers one narrow question before a staging restore or canonical promotion: does the complete staging data surface match an independently approved, synthetic-only state? The permitted state is more precisely described as **synthetic clinical data with allowlisted workforce PII**. It is not PII-free, and a passing result is not authorization to restore, sanitize, deploy, or change infrastructure. The versioned contract is `contracts/staging-rehearsal/v1/synthetic-data-policy.json`; the standalone reader is `scripts/staging_synthetic_inventory.py`. The reader does not import the application or Alembic and does not run migrations.
+
+## Closed-world policy
+
+The database contract covers every domain table exactly once. The pre profile pins Alembic revision `89c31f0ae275` and 62 tables. The post profile pins `9a2399212488` and 64 tables; only `practice_invitation` and `public_legal_acceptance` are added. Column name, PostgreSQL type, nullability, and ordinal position are exact. An unknown or missing table or column fails. `alembic_version` is a separate control table and must contain exactly the one profile revision.
+
+Each domain table has one disposition:
+
+- `required_empty`: clinical/free-text, vendor credential, webhook/inbox, transient session/token, Zoom, and other runtime state must contain no rows.
+- `synthetic_lineage`: the approved patient, appointment, Preview-EHR, and synthetic-fixture state must match its keyed state digest, required synthetic markers, parent references, and root coverage.
+- `workforce_allowlist`: exact keyed identity and full-state digests are approved separately. Credential and vendor-binding columns named by a null rule must be null. Schema-required join/access codes named by `rotation_columns` must be independently verified as rotated before their exact full-state digest is approved.
+- `fixed_catalog`: exact keyed full-state digests are approved separately.
+
+The blob account must contain exactly `uploads`, `example-notes`, `test-uploads`, and `test-example-notes`. Enumeration includes live blobs, versions, snapshots, deleted entries, and uncommitted blocks. Any uncommitted block fails because its bytes cannot be independently read; the first two containers must be empty, and the test containers must match an independently approved fixed state.
+For every retained object, the gate streams and hashes its bytes plus metadata, tags, content type, version/snapshot identity, and deletion state. An unknown container, unreadable object version, or object-state change fails. Two full listings must produce identical digests so a concurrent write cannot yield a passing torn inventory.
+
+Redis v1 is intentionally stricter than a cache classification: workers and schedulers must be quiesced, database 0 must be selected, and `DBSIZE` must be zero on two consecutive reads. The reader never scans or prints keys. Any key or changing count fails.
+
+## Independent approved state
+
+The policy describes structure and rules. A second, access-restricted JSON file binds the exact retained state without storing raw rows or object names:
+
+```json
+{
+  "schema_version": 1,
+  "policy_sha256": "<64 lowercase hex>",
+  "profile": "post",
+  "tables": {"doctor": {"count": 1, "state_hmac": "<64 lowercase hex>",
+    "identity_hmac": "<64 lowercase hex>"}},
+  "containers": {
+    "test-uploads": {"count": 0, "state_hmac": "<64 lowercase hex>"}
+  }
+}
+```
+
+The real file must contain every and only retained table/container required by the selected profile. It may contain counts and HMAC-SHA-256 values only. A privacy-authorized reviewer must derive and approve it independently using the same high-entropy key as the verification run. Do not place the approved-state file or HMAC key in the repository. A digest copied from an unreviewed failing run is not approval.
+
+## Read-only run
+
+Prerequisites remain external blockers: named operator and observer, workload quiescence, a protected evidence destination, approved source/candidate SHAs, and a reviewed approved-state file. Set the database and Redis URLs through environment variables so credentials do not enter argv or shell history.
+
+```text
+umask 077
+export STAGING_DATABASE_URL='<secret URL>'
+export STAGING_REDIS_URL='<secret URL>'
+python scripts/staging_synthetic_inventory.py \
+  --policy contracts/staging-rehearsal/v1/synthetic-data-policy.json \
+  --approved-state /protected/path/approved-state.json \
+  --profile post \
+  --source-sha <40-hex-source-sha> \
+  --candidate-sha <40-hex-candidate-sha> \
+  --hmac-key-file /protected/path/inventory-hmac.key \
+  --blob-account-url https://cosmaneurastaginguploads.blob.core.windows.net \
+  --redis-quiesced > /protected/path/inventory-evidence.json
+```
+
+The database URL is accepted only for the pinned staging database with `sslmode=verify-full` and an absolute `sslrootcert`. Redis is accepted only as `rediss` for the pinned staging cache, port 6380, database 0, with `ssl_cert_reqs=required`, `ssl_check_hostname=true`, and an absolute CA path. Optional TLS client private keys and the HMAC key must be owner-only regular files with mode `0600`; symlinks and unsafe parent directories are rejected. The command opens PostgreSQL as repeatable-read/read-only, performs no writes, and emits a single JSON object. Evidence is limited to policy/source/candidate identity, aggregate counts, rule-violation counts, and keyed catalog/state digests. It never emits database values, emails, object names, Redis keys, tokens, or connection strings. Exit 0 means every check passed; exit 1 means a policy mismatch; exit 2 means validation/provider failure. Error codes are bounded and contain only policy-defined identifiers. `source_sha` and `candidate_sha` are validated 40-hex operator claims in this standalone phase; the reader cannot prove repository provenance. A later trusted workflow must bind both values to its protected checkout and restore record before this evidence can authorize a rehearsal.
+
+## Promotion boundary
+
+A pass is necessary but not sufficient for the rehearsal. Before any restore or canonical staging cutover, separately approve and prove the isolated restore network/identity/TTL envelope, deterministic sanitizer, evidence sink, cleanup authority, RTO/RPO, and post-sanitize rerun. The current live database and Redis connection material must first be upgraded from certificate-optional or `sslmode=require` behavior to the verified TLS forms required here. No live inventory has been collected by this change.
