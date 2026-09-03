@@ -36,16 +36,23 @@ ensure_localias() {
   fi
   # Ensure the localias root CA is trusted by the system and by Chromium (NSS),
   # so the browser can load https://*.cosma.localhost without warnings.
+  # `|| true` guards against SIGPIPE from head closing the find pipeline early
+  # (lib.sh enables pipefail + set -e).
   local root_crt
   root_crt="$(sudo find "$HOME/.local/state/localias" /root/.local/state/localias \
-    -name root.crt -path '*authorities/local*' 2>/dev/null | head -1)"
+    -name root.crt -path '*authorities/local*' 2>/dev/null | head -1 || true)"
   if [ -n "${root_crt:-}" ]; then
-    sudo cp "$root_crt" /usr/local/share/ca-certificates/localias-root.crt
-    sudo update-ca-certificates >/dev/null 2>&1 || true
+    sudo cp "$root_crt" /usr/local/share/ca-certificates/localias-root.crt </dev/null
+    sudo update-ca-certificates >/dev/null 2>&1 </dev/null || true
+    # Chromium trusts certs from the NSS db. Initialize it only when missing;
+    # `certutil -N` prompts (and would hang) if the db already exists. Redirect
+    # stdin from /dev/null throughout so nothing can block on a prompt.
     mkdir -p "$HOME/.pki/nssdb"
-    certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password >/dev/null 2>&1 || true
-    if ! certutil -d "sql:$HOME/.pki/nssdb" -L 2>/dev/null | grep -q localias-root; then
-      certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n localias-root -i "$root_crt" >/dev/null 2>&1 || true
+    if [ ! -f "$HOME/.pki/nssdb/cert9.db" ]; then
+      certutil -d "sql:$HOME/.pki/nssdb" -N --empty-password >/dev/null 2>&1 </dev/null || true
+    fi
+    if ! certutil -d "sql:$HOME/.pki/nssdb" -L </dev/null 2>/dev/null | grep -q localias-root; then
+      certutil -d "sql:$HOME/.pki/nssdb" -A -t "C,," -n localias-root -i "$root_crt" >/dev/null 2>&1 </dev/null || true
     fi
   fi
 }
