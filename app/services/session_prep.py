@@ -865,6 +865,23 @@ class SyntheticSessionPrepService:
         self._invocations: dict[tuple[str, str, str, str], _CachedInvocation] = {}
         self._lock = threading.Lock()
 
+    def _context_locked(self, context_snapshot_ref: str) -> SyntheticContext | None:
+        """Return a context while the caller owns the service-state lock."""
+
+        return self._contexts.get(context_snapshot_ref)
+
+    def revoke_context(self, context_snapshot_ref: str) -> None:
+        """Atomically revoke one synthetic context for all later reads."""
+
+        with self._lock:
+            context = self._context_locked(context_snapshot_ref)
+            if context is None:
+                raise SessionPrepScopeDenied
+            self._contexts[context_snapshot_ref] = replace(
+                context,
+                state="source_revoked",
+            )
+
     def _content_result(
         self,
         context: SyntheticContext,
@@ -966,9 +983,6 @@ class SyntheticSessionPrepService:
     ) -> SessionPrepInvocation:
         if context_snapshot_ref != allowed_context_snapshot_ref:
             raise SessionPrepScopeDenied
-        context = self._contexts.get(context_snapshot_ref)
-        if context is None:
-            raise SessionPrepScopeDenied
         if detail != "brief":
             # Supporting context needs a distinct canonical provider follow-up
             # action. This synthetic rung implements only session-prep.open.
@@ -993,6 +1007,15 @@ class SyntheticSessionPrepService:
             if cached is not None:
                 if cached.request_digest != request_digest:
                     raise SessionPrepIdempotencyConflict
+
+            # Context lookup shares the mutation lock with revocation.  Once a
+            # revocation completes, no invocation can retain a pre-revocation
+            # context and replay or generate content from it.
+            context = self._context_locked(context_snapshot_ref)
+            if context is None:
+                raise SessionPrepScopeDenied
+
+            if cached is not None:
                 if (
                     context.state != "source_revoked"
                     or cached.response.result.state == "unavailable"
