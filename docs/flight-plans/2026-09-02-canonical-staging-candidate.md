@@ -59,8 +59,11 @@
      workflow rejects any identity that has more than the sole environment
      subject `repo:CosmaNeura/cosmaneura:environment:staging`.
   3. Rehearse the four migrations from an isolated, verified synthetic-only
-     restore using the exact PR #230 source and immutable image digest. A failed
-     or unverifiable rehearsal holds every later step.
+     restore using the exact PR #230 source. Build and hash a credentialless
+     rehearsal archive from that SHA and load it directly into the isolated
+     runner; do not publish the canonical candidate tag. This proves the source
+     and migration contract, not the bytes of the later canonical image. A
+     failed or unverifiable rehearsal holds every later step.
   4. After an action-time confirmation, switch the GitHub `Staging` environment
      policy from the old `staging` ref to `master` and verify the read-back. Do
      not dispatch in the same authorization step.
@@ -269,11 +272,14 @@
   Stripe binding shapes needed by the migration. A verifier emits only counts,
   keyed digests, and pass/fail.
 - Do not use `infra-staging/deploy.sh` for the restore rehearsal: it targets the
-  persistent staging resource group and migration job. Run the exact
-  `8fa02a7...` image by immutable digest with database-only configuration and
-  no external service credentials. Require restored schema
-  `89c31f0ae275`, run the aggregate duplicate preflight, assert the image's sole
-  head is `9a2399212488`, then migrate to that exact revision.
+  persistent staging resource group and migration job. Build a credentialless
+  image archive from exact source `8fa02a7...`, record its SHA-256, and load it
+  directly into a network-contained rehearsal runner with database-only
+  configuration and no external service credentials. Do not publish or reserve
+  the canonical candidate tag, and do not claim this independently built
+  rehearsal archive is byte-identical to the later deployment image. Require
+  restored schema `89c31f0ae275`, run the aggregate duplicate preflight, assert
+  the image's sole head is `9a2399212488`, then migrate to that exact revision.
 - Record before/after schema dumps or digests, aggregate/HMAC state, duration,
   lock observations, exit status, and all table/index/constraint/trigger and
   row-count invariants. Run synthetic seat, onboarding, Stripe-state, and BAA
@@ -349,10 +355,14 @@
    BAA v2.3 asset. Keep the quiescent interval bounded, deploy workers and API
    in the reviewed order, and prove incompatible revisions have drained before
    reopening synthetic traffic.
-4. Resolve the candidate's staging tag to one immutable registry digest before
-   migration. Reject an existing candidate tag, a digest mismatch, `latest`, a
-   production registry, or different digests among the migration and workload
-   steps.
+4. During the separately confirmed canonical dispatch, require the candidate's
+   staging tag to be absent, publish the exact credentialless build archive,
+   resolve it to one immutable registry digest before persistent-staging
+   migration, and use that same digest for migration and every workload. Reject
+   an existing candidate tag, a digest mismatch, `latest`, a production
+   registry, or different digests among those steps. The post-deploy smoke is
+   the first evidence against the exact published bytes; the earlier isolated
+   rehearsal is source- and schema-contract evidence.
 
 ### Staging-only service identity and configuration checklist
 
