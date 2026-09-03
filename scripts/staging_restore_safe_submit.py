@@ -1207,6 +1207,8 @@ class SafeRestoreSubmitter:
         cleanup_requested = self._cleanup_requested(intent, intent_digest)
         if cleanup_requested is UNKNOWN or cleanup_requested is True:
             return self._cleanup_target(intent, intent_digest)
+        if self._intent_expired(intent):
+            return self._cleanup_target(intent, intent_digest)
         response = self._request(
             "PUT",
             intent["target_server_resource_id"],

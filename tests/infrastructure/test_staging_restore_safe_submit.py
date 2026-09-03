@@ -348,7 +348,9 @@ def test_expiry_during_restore_polling_persists_cleanup_and_deletes_target() -> 
     fake = FakeArm()
     before_expiry = TEST_NOW
     at_expiry = datetime(2026, 9, 3, 18, tzinfo=UTC)
-    times = iter([before_expiry, before_expiry, before_expiry, at_expiry])
+    times = iter(
+        [before_expiry, before_expiry, before_expiry, before_expiry, at_expiry]
+    )
     engine = safe_submit.SafeRestoreSubmitter(
         fake, _config(), sleeper=lambda _: None, clock=lambda: next(times)
     )
@@ -359,6 +361,21 @@ def test_expiry_during_restore_polling_persists_cleanup_and_deletes_target() -> 
     assert len(_mutations(fake, "PUT")) == 1
     assert len(_mutations(fake, "DELETE")) == 1
     assert fake.target is None
+
+
+def test_expiry_during_final_cleanup_read_blocks_target_put() -> None:
+    fake = FakeArm()
+    before_expiry = TEST_NOW
+    at_expiry = datetime(2026, 9, 3, 18, tzinfo=UTC)
+    times = iter([before_expiry, before_expiry, before_expiry, at_expiry])
+    engine = safe_submit.SafeRestoreSubmitter(
+        fake, _config(), sleeper=lambda _: None, clock=lambda: next(times)
+    )
+    outcome = engine.submit(_request())
+    assert outcome.status == "pending_late_materialization"
+    assert outcome.cleanup_required is True
+    assert len(fake.deployments) == 3
+    assert _mutations(fake, "PUT") == []
 
 
 def test_cleanup_tombstone_recheck_immediately_before_put_wins_race() -> None:
