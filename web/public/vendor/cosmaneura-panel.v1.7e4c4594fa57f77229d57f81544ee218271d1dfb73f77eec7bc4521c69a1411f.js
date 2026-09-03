@@ -19,8 +19,6 @@
  *     getContext: async () => ({
  *       clientId: openRecord.threadKey,
  *       thread_ref: openRecord.assistantThreadRef,
- *       // Reserved for the explicit /session-prep action; never sent to /chat.
- *       context_snapshot_ref: openRecord.assistantSnapshotRef,
  *       digest_ref: openRecord.journeyDigestRef,
  *     }),
  *     onHumanContact: action => host.openHumanContactPath(action.action_id),
@@ -397,7 +395,7 @@
       open: false, busy: false, switching: false, destroyed: false,
       clientId: null, history: null, persona: "patient", generation: 0,
       accessGranted: false, localFixture: false,
-      recordReady: false, contextSnapshot: null, recordHeaders: null,
+      recordReady: false, recordHeaders: null,
       sessionPrepAvailable: false, prepBusy: false,
       welcomePromise: null, welcomeController: null, welcomeRenderGeneration: null,
       recordController: null, chatController: null, prepController: null,
@@ -532,7 +530,7 @@
       state.localFixture = false;
       state.sessionPrepAvailable = false;
       input.readOnly = false;
-      state.recordReady = false; state.contextSnapshot = null;
+      state.recordReady = false;
       state.recordHeaders = null; state.retryAttempt = null;
       state.busy = false; state.switching = false;
       clearSessionPrep();
@@ -605,13 +603,18 @@
           Object.keys(value).some(function (key) { return allowed.indexOf(key) < 0; }) ||
           String(value.clientId == null ? "" : value.clientId) !== recordId) return null;
       var clean = { clientId: recordId };
-      ["thread_ref", "context_snapshot_ref", "digest_ref"].forEach(function (key) {
+      ["thread_ref", "digest_ref"].forEach(function (key) {
         if (value[key] != null) clean[key] = value[key];
       });
-      if (["thread_ref", "context_snapshot_ref", "digest_ref"].some(function (key) {
+      if (["thread_ref", "digest_ref"].some(function (key) {
         return clean[key] != null &&
           (typeof clean[key] !== "string" || !OPAQUE_REF.test(clean[key]));
       })) return null;
+      // Tolerate one legacy host field during migration, but never copy it into
+      // panel state or either browser request contract.
+      if (value.context_snapshot_ref != null &&
+          (typeof value.context_snapshot_ref !== "string" ||
+           !OPAQUE_REF.test(value.context_snapshot_ref))) return null;
       if (value.terminology != null) {
         if (typeof value.terminology !== "string" || value.terminology.length > 40) return null;
         clean.terminology = value.terminology;
@@ -624,8 +627,7 @@
     }
 
     function governedChatMetadata(context, outputFormat) {
-      // A Session Prep comparison handle has one purpose and one wire path.
-      // Generic chat receives only its independently governed context hints.
+      // Generic chat receives only independently governed host context hints.
       var meta = { output_format: outputFormat };
       ["clientId", "thread_ref", "digest_ref", "terminology", "care_model"]
         .forEach(function (key) {
@@ -703,7 +705,6 @@
       state.localFixture = false;
       state.sessionPrepAvailable = false;
       state.recordReady = false;
-      state.contextSnapshot = null;
       state.recordHeaders = null;
       state.retryAttempt = null;
       state.welcomePromise = null;
@@ -740,7 +741,6 @@
           mismatch.recordMismatch = true;
           throw mismatch;
         }
-        state.contextSnapshot = context;
         state.recordHeaders = headers;
         // Never ask the host for governed history until the server-side role
         // check succeeds and the opaque record context validates locally.
@@ -776,7 +776,6 @@
       } catch (error) {
         if (currentGeneration(generation) && error.name !== "AbortError") {
           state.recordReady = false;
-          state.contextSnapshot = null;
           state.recordHeaders = null;
           setNamedBetaAccess(false);
           if (error.recordMismatch) {
@@ -1128,7 +1127,7 @@
         var refreshed = governedContext(await opts.getContext(), attempt.recordId);
         if (!currentGeneration(attempt.generation))
           throw new DOMException("stale", "AbortError");
-        if (!refreshed || refreshed.context_snapshot_ref !== attempt.contextSnapshotRef) {
+        if (!refreshed) {
           loadThreadFor(null);
           throw new DOMException("record mismatch", "AbortError");
         }
@@ -1208,7 +1207,7 @@
           !state.sessionPrepAvailable || !state.recordReady || state.clientId === null) return;
       var generation = state.generation;
       // A new action never retains a previous brief while authority and the
-      // encounter-scoped comparison handle are being re-evaluated.
+      // current host record are being re-evaluated.
       clearSessionPrep();
       state.prepBusy = true; syncControls();
       try {
@@ -1217,23 +1216,17 @@
         var recordId = state.clientId;
         var context = governedContext(await opts.getContext(), recordId);
         if (!currentGeneration(generation)) return;
-        if (!context || !context.context_snapshot_ref) {
+        if (!context) {
           loadThreadFor(null);
-          return;
-        }
-        if (!state.contextSnapshot ||
-            state.contextSnapshot.context_snapshot_ref !== context.context_snapshot_ref) {
-          loadThreadFor(recordId);
           return;
         }
         var clientTurnId = freshClientTurnId();
         var body = JSON.stringify({
           client_turn_id: clientTurnId,
-          context_snapshot_ref: context.context_snapshot_ref,
         });
         var attempt = {
           url: url + "/session-prep", initialHeaders: headers, body: body,
-          clientTurnId: clientTurnId, contextSnapshotRef: context.context_snapshot_ref,
+          clientTurnId: clientTurnId,
           recordId: recordId, generation: generation,
         };
         await runSessionPrepAttempt(attempt);
@@ -1491,7 +1484,7 @@
       state.welcomeController = null;
       state.history = null; state.clientId = null; state.welcomePromise = null;
       state.accessGranted = false;
-      state.recordReady = false; state.contextSnapshot = null; state.recordHeaders = null;
+      state.recordReady = false; state.recordHeaders = null;
       state.sessionPrepAvailable = false;
       state.retryAttempt = null;
       if (savedPad !== null) {
