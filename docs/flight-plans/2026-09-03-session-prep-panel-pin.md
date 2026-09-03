@@ -11,12 +11,12 @@ feature or authorize real provider data.
 
 - Core base: `d543e035d968d3dccc34cd03baaef90b41a4629c`.
 - Core Session Prep merge: `6cea63e59203a8730af39497a3672b3f4598ba98`.
-- Sovereign corrected source candidate: `8f3b1562cb0296222278d84e09504f3252e96bbf`.
+- Sovereign corrected source candidate: `f521d09df69653761e3b7e05099476e693d31688`.
 - Receiver baseline merge: `8020b745673a13875aecf32941a6711d22926045`.
 - Panel SHA-256:
-  `e02a761ba1943b865bb9edeb5434ffe8095f12b865f1f9b4ea402039a16c5bcb`.
+  `7e4c4594fa57f77229d57f81544ee218271d1dfb73f77eec7bc4521c69a1411f`.
 - Panel SRI:
-  `sha256-4Cp2G6GUO4Zbue3rVDT/6AlfErhl8fm06kAgOaFsW8s=`.
+  `sha256-fkxFlPpX93Ip1X+BVE7iGCcdHftz937se8RSHGmhQR8=`.
 
 These panel bytes are the exact output of the corrected Sovereign candidate;
 they are not yet claimed to be present on Sovereign `main`.
@@ -63,10 +63,10 @@ panel. The Session Prep control remains absent unless Sovereign's governed
 - A record or encounter switch clears content synchronously and late responses
   cannot repaint the prior record.
 - Mid-poll revocation and terminal 401/403 responses clear or suppress content.
-- Only the dedicated Session Prep POST body carries the authorized opaque
-  `context_snapshot_ref`; generic chat, URLs, DOM, and browser storage do not.
-  No patient or record identifier, note/source reference or content, artifact
-  provenance, or digest is sent with that request.
+- The browser Session Prep POST carries only `client_turn_id`; Sovereign derives
+  the configured synthetic handle after mount/capability resolution and sends
+  it only on the server-to-server Core tool request. Generic Note Detail, chat,
+  URLs, DOM, and browser storage never receive that handle or clinical data.
 
 ## Promotion and recovery
 
@@ -85,7 +85,7 @@ explicitly approved.
 
 - The Core and Sovereign request/result schemas and seven fixtures are
   byte-identical.
-- The vendored file is byte-identical to Sovereign candidate `8f3b1562cb0296222278d84e09504f3252e96bbf`
+- The vendored file is byte-identical to Sovereign candidate `f521d09df69653761e3b7e05099476e693d31688`
   and hashes to the pinned SHA-256 above.
 - Sovereign's independent panel contract harness passed against the Core-vendored
   file, including record switching, stale-response suppression, revocation,
