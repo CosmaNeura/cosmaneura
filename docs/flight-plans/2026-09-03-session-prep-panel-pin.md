@@ -9,7 +9,7 @@ feature or authorize real provider data.
 
 ## Exact inputs
 
-- Core base: `e63debb1cf0ac89829afe2fc758d3e3982f07786`.
+- Core base: `d543e035d968d3dccc34cd03baaef90b41a4629c`.
 - Core Session Prep merge: `6cea63e59203a8730af39497a3672b3f4598ba98`.
 - Sovereign product-slice merge: `8020b745673a13875aecf32941a6711d22926045`.
 - Independently reviewed Sovereign source: `a6bde339056cbaf4dea6d51e7196a4a37f8ab452`.
@@ -63,8 +63,9 @@ panel. The Session Prep control remains absent unless Sovereign's governed
 - A record or encounter switch clears content synchronously and late responses
   cannot repaint the prior record.
 - Mid-poll revocation and terminal 401/403 responses clear or suppress content.
-- Record identifiers, snapshot references, provenance, digests, and browser
-  storage APIs do not cross into the browser request or rendered surface.
+- The browser request carries the authorized opaque `context_snapshot_ref`, but
+  no patient or record identifier, note/source reference or content, artifact
+  provenance, or digest. Browser storage APIs are not used.
 
 ## Promotion and recovery
 
@@ -87,6 +88,8 @@ explicitly approved.
   and hashes to the pinned SHA-256 above.
 - Sovereign's independent panel contract harness passed against the Core-vendored
   file, including record switching, stale-response suppression, revocation,
-  bounded polling, four states, and browser-storage leakage checks.
+  retry identity, four states, and browser-storage leakage checks.
+- Sovereign's runtime suite passed 68 tests, including the three-call/ten-second
+  polling bound and direct typed-response projection.
 - Core Vitest: 43 files and 233 tests passed with synthetic public test values.
 - Core TypeScript typecheck, Prettier, and ESLint passed.
