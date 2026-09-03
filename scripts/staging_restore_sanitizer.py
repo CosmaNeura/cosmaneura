@@ -27,11 +27,17 @@ import staging_synthetic_inventory as inventory
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-policy.json"
+DATA_CONTRACT_PATH = (
+    ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-data-contract.json"
+)
 INVENTORY_POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
 CANONICAL_POLICY_SHA256 = (
-    "e648fa0e1a37ccbdd98b6793f8e943d21eb6f5cd554dd0690ac529c37296183a"
+    "4c20b0118ee5e93b9ee4138418bdd93b2f411fbe69af4c834a4ae39651e74291"
+)
+CANONICAL_DATA_CONTRACT_SHA256 = (
+    "f1c0c7dce56cd2aa42647578940f807186d8e888b70c66da9aa64aa7402b1360"
 )
 APP_NAME = "cosmaneura-staging-restore-sanitizer-v1"
 HMAC_DOMAIN = "cosmaneura:staging-restore-sanitizer:v1"
@@ -144,6 +150,223 @@ MIGRATION_FILES = {
     ),
 }
 
+DATA_CONTRACT_KEYS = {
+    "schema_version",
+    "contract_id",
+    "closed_world",
+    "source_profile",
+    "retained_table_count",
+    "retained_column_count",
+    "row_actions",
+    "tables",
+    "foreign_keys",
+    "derived_values",
+}
+TABLE_CONTRACT_KEYS = {"disposition", "row_action", "columns"}
+ACTIVATION_BLOCKERS = {
+    "authenticated_controller_receipt_verification",
+    "controller_receipt_target_fqdn",
+    "controller_receipt_authoritative_restore_point",
+    "authenticated_server_scope_evidence_binding",
+    "approved_database_role",
+    "data_contract_executor_implementation",
+    "fixed_catalog_source_state_and_post_projection_verification",
+    "derived_value_execution_proof",
+    "atomic_transaction_and_postcommit_verification",
+    "guarded_table_truncate_permission_and_rollback_proof",
+}
+SIMPLE_COLUMN_ACTIONS = {
+    "discard_row",
+    "preserve_approved",
+    "preserve_verified_catalog",
+    "set_null",
+    "hmac_email",
+    "hmac_domain",
+    "hmac_issuer",
+    "hmac_subject",
+    "derive_typeid_text:appointment",
+    "rotate_join_code",
+    "derive_access_code_salt",
+    "derive_access_code_digest",
+}
+ENTITY_ID_DOMAINS = {
+    "appointment": "typeid:appointment",
+    "authority_actor": "typeid:authority_actor",
+    "authority_actor_external_identity": "typeid:actor_identity",
+    "authority_person": "typeid:authority_person",
+    "authority_person_binding": "typeid:person_binding",
+    "authority_tenant": "typeid:authority_tenant",
+    "authority_tenant_membership": "typeid:tenant_membership",
+    "baa_version": "typeid:baa_version",
+    "doctor": "typeid:doctor",
+    "doctor_note_schema": "typeid:doctor_note_schema",
+    "drug_reference": "typeid:drug_reference",
+    "ehr_sandbox_patient_designation": "typeid:ehr_sandbox_designation",
+    "ehr_sandbox_record_mapping": "typeid:ehr_sandbox_mapping",
+    "lab_range_set": "typeid:lab_range_set",
+    "note_type_customization": "typeid:note_type_customization",
+    "patient": "typeid:patient",
+    "practice": "typeid:practice",
+    "provider_organization": "typeid:provider_organization",
+    "synthetic_preview_appointment_fixture": "typeid:synthetic_preview_fixture",
+}
+EXPECTED_FOREIGN_KEYS = {
+    (("appointment.doctor_id",), ("doctor.id",)),
+    (("appointment.patient_id",), ("patient.id",)),
+    (("authority_actor_external_identity.actor_id",), ("authority_actor.id",)),
+    (("authority_person.merged_into_person_id",), ("authority_person.id",)),
+    (("authority_person_binding.person_id",), ("authority_person.id",)),
+    (("authority_person_binding.tenant_id",), ("authority_tenant.id",)),
+    (("authority_person_binding.actor_id",), ("authority_actor.id",)),
+    (("authority_person_origin.person_id",), ("authority_person.id",)),
+    (("authority_tenant_membership.tenant_id",), ("authority_tenant.id",)),
+    (("authority_tenant_membership.actor_id",), ("authority_actor.id",)),
+    (("baa_acceptance.accepted_by_doctor_id",), ("doctor.id",)),
+    (("baa_acceptance.baa_version_id",), ("baa_version.id",)),
+    (("baa_acceptance.practice_id",), ("practice.id",)),
+    (("doctor_note_schema.doctor_id",), ("doctor.id",)),
+    (("ehr_sandbox_patient_designation.doctor_id",), ("doctor.id",)),
+    (("ehr_sandbox_patient_designation.patient_id",), ("patient.id",)),
+    (
+        (
+            "ehr_sandbox_patient_designation.patient_id",
+            "ehr_sandbox_patient_designation.doctor_id",
+        ),
+        ("patient.id", "patient.doctor_id"),
+    ),
+    (("ehr_sandbox_record_mapping.doctor_id",), ("doctor.id",)),
+    (("ehr_sandbox_record_mapping.patient_id",), ("patient.id",)),
+    (
+        ("ehr_sandbox_record_mapping.designation_id",),
+        ("ehr_sandbox_patient_designation.id",),
+    ),
+    (
+        (
+            "ehr_sandbox_record_mapping.designation_id",
+            "ehr_sandbox_record_mapping.doctor_id",
+            "ehr_sandbox_record_mapping.patient_id",
+        ),
+        (
+            "ehr_sandbox_patient_designation.id",
+            "ehr_sandbox_patient_designation.doctor_id",
+            "ehr_sandbox_patient_designation.patient_id",
+        ),
+    ),
+    (("lab_range_set.doctor_id",), ("doctor.id",)),
+    (
+        ("note_type_customization.doctor_note_schema_id",),
+        ("doctor_note_schema.id",),
+    ),
+    (("organization_roster_approval.claimed_doctor_id",), ("doctor.id",)),
+    (
+        ("organization_roster_approval.organization_id",),
+        ("provider_organization.id",),
+    ),
+    (
+        (
+            "organization_roster_approval.target_practice_id",
+            "organization_roster_approval.organization_id",
+        ),
+        ("practice.id", "practice.organization_id"),
+    ),
+    (("patient.doctor_id",), ("doctor.id",)),
+    (
+        ("pilot_access_continuity_amendment_identity.amendment_id",),
+        ("pilot_access_continuity_amendment.id",),
+    ),
+    (
+        ("pilot_access_continuity_amendment_identity.doctor_id_snapshot",),
+        ("doctor.id",),
+    ),
+    (
+        ("pilot_access_continuity_amendment_identity.grant_id",),
+        ("pilot_access_grandfather_grant.id",),
+    ),
+    (
+        ("pilot_access_continuity_amendment_identity.practice_id_snapshot",),
+        ("practice.id",),
+    ),
+    (("pilot_access_grandfather_grant.doctor_id_snapshot",), ("doctor.id",)),
+    (("pilot_access_grandfather_grant.practice_id_snapshot",), ("practice.id",)),
+    (("practice.organization_id",), ("provider_organization.id",)),
+    (
+        ("practice.organization_id", "practice.email_domain"),
+        ("provider_organization.id", "provider_organization.email_domain"),
+    ),
+    (("practice_access_audit.practice_id",), ("practice.id",)),
+    (("practice_member.doctor_id",), ("doctor.id",)),
+    (
+        ("practice_member.organization_roster_approval_id",),
+        ("organization_roster_approval.id",),
+    ),
+    (
+        (
+            "practice_member.organization_roster_approval_id",
+            "practice_member.practice_id",
+            "practice_member.doctor_id",
+        ),
+        (
+            "organization_roster_approval.id",
+            "organization_roster_approval.target_practice_id",
+            "organization_roster_approval.claimed_doctor_id",
+        ),
+    ),
+    (("practice_member.practice_id",), ("practice.id",)),
+    (
+        ("superadmin_capability_audit.grant_id",),
+        ("superadmin_capability_grant.id",),
+    ),
+    (("superadmin_capability_grant.doctor_id",), ("doctor.id",)),
+    (("synthetic_preview_appointment_fixture.doctor_id",), ("doctor.id",)),
+    (("synthetic_preview_appointment_fixture.patient_id",), ("patient.id",)),
+    (
+        ("synthetic_preview_appointment_fixture.appointment_id",),
+        ("appointment.id",),
+    ),
+    (
+        (
+            "synthetic_preview_appointment_fixture.patient_id",
+            "synthetic_preview_appointment_fixture.doctor_id",
+        ),
+        ("patient.id", "patient.doctor_id"),
+    ),
+}
+EXPECTED_DERIVED_VALUES = {
+    "authority_person_binding.binding_ref": {
+        "recipe": "typeid_text_from_transformed_uuid",
+        "source": ["appointment.id"],
+        "required_source_values": {
+            "authority_person_binding.binding_kind": ["provider_record"]
+        },
+        "typeid_prefix": "appointment",
+    },
+    "practice.join_code": {
+        "recipe": "hmac_join_code_from_transformed_uuid",
+        "source": ["practice.id"],
+        "alphabet": ACCESS_CODE_ALPHABET,
+        "length": 12,
+    },
+    "provider_organization.access_code_salt": {
+        "recipe": "hmac_salt_from_transformed_uuid",
+        "source": ["provider_organization.id"],
+        "bytes": 16,
+    },
+    "provider_organization.access_code_digest": {
+        "recipe": "scrypt_of_hidden_hmac_code",
+        "source": [
+            "provider_organization.id",
+            "provider_organization.access_code_salt",
+        ],
+        "code_alphabet": ACCESS_CODE_ALPHABET,
+        "code_length": 12,
+        "scrypt_n": 16384,
+        "scrypt_r": 8,
+        "scrypt_p": 1,
+        "digest_bytes": 32,
+        "plaintext_emitted": False,
+    },
+}
+
 
 class SanitizerFailure(RuntimeError):
     """A bounded, content-free refusal code."""
@@ -212,6 +435,24 @@ def load_canonical_policy() -> dict[str, Any]:
     return value
 
 
+def load_canonical_data_contract() -> dict[str, Any]:
+    try:
+        raw = DATA_CONTRACT_PATH.read_bytes()
+    except OSError:
+        _fail("data_contract.unreadable")
+    if not hmac.compare_digest(
+        hashlib.sha256(raw).hexdigest(), CANONICAL_DATA_CONTRACT_SHA256
+    ):
+        _fail("data_contract.digest_mismatch")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        _fail("data_contract.invalid")
+    if not isinstance(value, dict):
+        _fail("data_contract.invalid")
+    return value
+
+
 def _retained_tables(
     inventory_policy: Mapping[str, Any], profile: str
 ) -> dict[str, dict[str, Any]]:
@@ -221,6 +462,232 @@ def _retained_tables(
         for name, spec in expected.items()
         if spec["disposition"] != "required_empty"
     }
+
+
+def _column_reference(
+    reference: object,
+    columns: Mapping[str, tuple[str, bool]],
+    code: str,
+) -> tuple[str, bool]:
+    if not isinstance(reference, str) or reference not in columns:
+        _fail(code)
+    return columns[reference]
+
+
+def _valid_column_action(action: object) -> bool:
+    if not isinstance(action, str):
+        return False
+    if action in SIMPLE_COLUMN_ACTIONS:
+        return True
+    for prefix in ("hmac_uuid7:", "hmac_text:"):
+        if action.startswith(prefix):
+            return DOMAIN_RE.fullmatch(action.removeprefix(prefix)) is not None
+    return False
+
+
+def validate_data_contract(
+    contract: Mapping[str, Any],
+    inventory_policy: Mapping[str, Any],
+    sanitizer_policy: Mapping[str, Any],
+) -> None:
+    """Prove that every retained source column has one approved action.
+
+    This validates a data-only contract.  It does not read rows, connect to
+    PostgreSQL, execute a transform, or authorize sanitizer activation.
+    """
+
+    try:
+        _exact_keys(contract, DATA_CONTRACT_KEYS, "data_contract.closed_world")
+        if (
+            contract["schema_version"] != 1
+            or contract["contract_id"]
+            != "cosmaneura-isolated-restore-sanitizer-data-v1"
+            or contract["closed_world"] is not True
+            or contract["source_profile"] != "pre"
+        ):
+            _fail("data_contract.identity")
+
+        retained = _retained_tables(inventory_policy, contract["source_profile"])
+        if contract["retained_table_count"] != len(retained) or contract[
+            "retained_column_count"
+        ] != sum(len(spec["columns"]) for spec in retained.values()):
+            _fail("data_contract.counts")
+
+        row_actions = _exact_keys(
+            contract["row_actions"],
+            {"discard_rows", "rewrite_rows"},
+            "data_contract.row_actions",
+        )
+        discard = row_actions["discard_rows"]
+        rewrite = row_actions["rewrite_rows"]
+        if (
+            not isinstance(discard, list)
+            or not isinstance(rewrite, list)
+            or len(discard) != len(set(discard))
+            or len(rewrite) != len(set(rewrite))
+            or set(discard) != GUARDED_TABLES
+            or set(discard) & set(rewrite)
+            or set(discard) | set(rewrite) != set(retained)
+        ):
+            _fail("data_contract.row_actions")
+
+        tables = contract["tables"]
+        if not isinstance(tables, Mapping) or set(tables) != set(retained):
+            _fail("data_contract.table_coverage")
+        columns: dict[str, tuple[str, bool]] = {}
+        actions: dict[str, str] = {}
+        for table_name, inventory_table in retained.items():
+            table = _exact_keys(
+                tables[table_name], TABLE_CONTRACT_KEYS, "data_contract.table"
+            )
+            expected_action = (
+                "discard_rows" if table_name in GUARDED_TABLES else "rewrite_rows"
+            )
+            expected_columns = {
+                str(column[0]): (str(column[1]), bool(column[2]))
+                for column in inventory_table["columns"]
+            }
+            table_actions = table["columns"]
+            if (
+                table["disposition"] != inventory_table["disposition"]
+                or table["row_action"] != expected_action
+                or not isinstance(table_actions, Mapping)
+                or set(table_actions) != set(expected_columns)
+            ):
+                _fail("data_contract.column_coverage")
+            for column_name, (data_type, required) in expected_columns.items():
+                reference = f"{table_name}.{column_name}"
+                action = table_actions[column_name]
+                if not _valid_column_action(action):
+                    _fail("data_contract.column_action")
+                if expected_action == "discard_rows":
+                    if action != "discard_row":
+                        _fail("data_contract.discard_action")
+                elif action == "discard_row":
+                    _fail("data_contract.discard_action")
+                if action == "set_null" and required:
+                    _fail("data_contract.nullability")
+                if action.startswith("hmac_uuid7:") and data_type != "uuid":
+                    _fail("data_contract.column_type")
+                if action in {
+                    "hmac_email",
+                    "hmac_domain",
+                    "hmac_issuer",
+                    "hmac_subject",
+                    "derive_typeid_text:appointment",
+                    "rotate_join_code",
+                    "derive_access_code_salt",
+                    "derive_access_code_digest",
+                } or action.startswith("hmac_text:"):
+                    if not data_type.startswith("character varying"):
+                        _fail("data_contract.column_type")
+                if action == "preserve_verified_catalog" and (
+                    table_name not in FIXED_CATALOG_TABLES
+                ):
+                    _fail("data_contract.fixed_catalog")
+                columns[reference] = (data_type, required)
+                actions[reference] = action
+
+        if len(columns) != contract["retained_column_count"]:
+            _fail("data_contract.counts")
+        for table_name, domain in ENTITY_ID_DOMAINS.items():
+            if actions.get(f"{table_name}.id") != f"hmac_uuid7:{domain}":
+                _fail("data_contract.identifier_domain")
+
+        fixed = sanitizer_policy["transform_contract"]["fixed_catalog"]
+        identifier_domains = fixed["identifier_domains"]
+        for reference, domain in identifier_domains.items():
+            if actions.get(reference) != f"hmac_uuid7:{domain}":
+                _fail("data_contract.fixed_catalog")
+        for table_name, payload_columns in fixed["payload_columns_preserved"].items():
+            for column_name in payload_columns:
+                if (
+                    actions.get(f"{table_name}.{column_name}")
+                    != "preserve_verified_catalog"
+                ):
+                    _fail("data_contract.fixed_catalog")
+
+        foreign_keys = contract["foreign_keys"]
+        if not isinstance(foreign_keys, list):
+            _fail("data_contract.foreign_keys")
+        observed_foreign_keys: set[tuple[tuple[str, ...], tuple[str, ...]]] = set()
+        for item in foreign_keys:
+            item = _exact_keys(item, {"source", "target"}, "data_contract.foreign_keys")
+            source = item["source"]
+            target = item["target"]
+            if (
+                not isinstance(source, list)
+                or not isinstance(target, list)
+                or not source
+                or len(source) != len(target)
+                or not all(isinstance(value, str) for value in source + target)
+            ):
+                _fail("data_contract.foreign_keys")
+            binding = (tuple(source), tuple(target))
+            if binding in observed_foreign_keys:
+                _fail("data_contract.foreign_keys")
+            observed_foreign_keys.add(binding)
+            source_is_discarded = source[0].split(".", 1)[0] in set(discard)
+            for source_ref, target_ref in zip(source, target, strict=True):
+                _column_reference(source_ref, columns, "data_contract.foreign_keys")
+                _column_reference(target_ref, columns, "data_contract.foreign_keys")
+                if not source_is_discarded and (
+                    actions[target_ref] == "discard_row"
+                    or actions[source_ref] != actions[target_ref]
+                ):
+                    _fail("data_contract.foreign_key_action")
+        if observed_foreign_keys != EXPECTED_FOREIGN_KEYS:
+            _fail("data_contract.foreign_keys")
+
+        if contract["derived_values"] != EXPECTED_DERIVED_VALUES:
+            _fail("data_contract.derived_values")
+        expected_derived_actions = {
+            "authority_person_binding.binding_ref": "derive_typeid_text:appointment",
+            "practice.join_code": "rotate_join_code",
+            "provider_organization.access_code_salt": "derive_access_code_salt",
+            "provider_organization.access_code_digest": "derive_access_code_digest",
+        }
+        for reference, expected in expected_derived_actions.items():
+            _column_reference(reference, columns, "data_contract.derived_values")
+            if actions[reference] != expected:
+                _fail("data_contract.derived_values")
+
+        domains = sanitizer_policy["transform_contract"]["semantic_domains"]
+        rewrite_tables = set(rewrite)
+
+        def retained_references(values: object) -> set[str]:
+            if not isinstance(values, list):
+                _fail("data_contract.semantic_domains")
+            return {
+                value
+                for value in values
+                if isinstance(value, str) and value.split(".", 1)[0] in rewrite_tables
+            }
+
+        semantic_actions = {
+            "clerk_issuer": "hmac_issuer",
+            "clerk_subject": "hmac_subject",
+            "verified_email": "hmac_email",
+            "organization_email_domain": "hmac_domain",
+        }
+        for domain_name, expected_action in semantic_actions.items():
+            expected = retained_references(domains[domain_name]["columns"])
+            observed = {
+                reference
+                for reference, action in actions.items()
+                if action == expected_action
+            }
+            if observed != expected:
+                _fail("data_contract.semantic_domains")
+        if set(domains["provider_access_code"]["columns"]) != {
+            "provider_organization.access_code_salt",
+            "provider_organization.access_code_digest",
+        }:
+            _fail("data_contract.semantic_domains")
+    except SanitizerFailure:
+        raise
+    except (KeyError, TypeError, ValueError):
+        _fail("data_contract.invalid")
 
 
 def _validate_fixed_catalog(
@@ -366,16 +833,12 @@ def _validate_semantic_domains(
     )
     if (
         typed["mode"] != "derive_typeid_text_from_transformed_uuid"
-        or typed["implementation_status"] != "missing_blocks_activation"
+        or typed["implementation_status"] != "data_contract_complete_execution_missing"
         or typed["references"]
         != {
             "authority_person_binding.binding_ref": {
                 "source": "appointment.id",
                 "typeid_prefix": "appointment",
-            },
-            "authority_person_origin.source_ref": {
-                "source": "patient.id",
-                "typeid_prefix": "patient",
             },
         }
     ):
@@ -383,11 +846,20 @@ def _validate_semantic_domains(
 
 
 def validate_policy(
-    policy: Mapping[str, Any], inventory_policy: Mapping[str, Any]
+    policy: Mapping[str, Any],
+    inventory_policy: Mapping[str, Any],
+    data_contract: Mapping[str, Any] | None = None,
 ) -> None:
     try:
         inventory.validate_policy(inventory_policy)
         _validate_policy(policy, inventory_policy)
+        validate_data_contract(
+            data_contract
+            if data_contract is not None
+            else load_canonical_data_contract(),
+            inventory_policy,
+            policy,
+        )
     except inventory.InventoryFailure:
         _fail("inventory_policy.invalid")
     except (KeyError, TypeError, ValueError):
@@ -418,8 +890,8 @@ def _validate_policy(
         status["executable"] is not False
         or status["trusted_evidence_binding_implemented"] is not False
         or status["database_mutation_implemented"] is not False
-        or len(status["activation_blockers"]) != 9
-        or len(set(status["activation_blockers"])) != 9
+        or set(status["activation_blockers"]) != ACTIVATION_BLOCKERS
+        or len(status["activation_blockers"]) != len(ACTIVATION_BLOCKERS)
     ):
         _fail("policy.status")
 
@@ -579,6 +1051,8 @@ def _validate_policy(
             "minimum_key_bytes",
             "primitive_status",
             "retained_column_policy_status",
+            "data_contract_path",
+            "data_contract_sha256",
             "uuid_output",
             "semantic_domains",
             "dependent_digest_recipes",
@@ -591,15 +1065,13 @@ def _validate_policy(
         or transform["domain"] != HMAC_DOMAIN
         or transform["minimum_key_bytes"] != MINIMUM_KEY_BYTES
         or transform["primitive_status"] != "implemented_and_pure"
-        or transform["retained_column_policy_status"] != "incomplete_blocks_activation"
+        or transform["retained_column_policy_status"]
+        != "complete_sha256_pinned_343_columns"
+        or transform["data_contract_path"]
+        != "contracts/staging-rehearsal/v1/restore-sanitizer-data-contract.json"
+        or transform["data_contract_sha256"] != CANONICAL_DATA_CONTRACT_SHA256
         or transform["uuid_output"] != "RFC-variant-UUIDv7"
-        or transform["dependent_digest_recipes"]
-        != {
-            "plain_sha256": "lowercase_hex_sha256_of_transformed_utf8_value",
-            "superadmin_identity_binding_sha256": (
-                "canonical_json_sha256_of_transformed_identity_fields_and_typeid"
-            ),
-        }
+        or transform["dependent_digest_recipes"] != {}
     ):
         _fail("policy.transform")
     _validate_semantic_domains(transform["semantic_domains"], retained)
@@ -1173,8 +1645,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = _arguments(argv)
         policy = load_canonical_policy()
+        data_contract = load_canonical_data_contract()
         inventory_policy = _load_json(INVENTORY_POLICY_PATH, "inventory_policy.invalid")
-        validate_policy(policy, inventory_policy)
+        validate_policy(policy, inventory_policy, data_contract)
         validate_migration_files(policy)
         if args.operation == "preflight":
             preflight(policy, inventory_policy, lambda: None)
