@@ -8,6 +8,7 @@ is proven.  Provider errors and responses are never rendered by this module.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -15,8 +16,10 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
 from time import sleep
 from typing import Any, Callable, Mapping, NoReturn, Protocol
@@ -29,7 +32,7 @@ ENVELOPE_POLICY_SHA256 = (
     "e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c"
 )
 SAFE_SUBMIT_POLICY_SHA256 = (
-    "3d684f71223e8cab42939819c7101c7a89a53666958c3587ae094da9d2d99933"
+    "43036b4fc936440a8b741fdd431ff616966de709c2c5fe9cd128bc4c388c2449"
 )
 
 REHEARSAL_RE = re.compile(r"^[0-9a-f]{12}$")
@@ -56,9 +59,15 @@ EXPECTED_PLACEHOLDERS = (
     "CONFIGURE_EXACT_PROVISION_TARGET_ROLE_PERMISSIONS_SHA256",
 )
 MANAGEMENT_ROOT = "https://management.azure.com"
-DEPLOYMENT_TYPE = "microsoft.resources/deployments"
+BLOB_OAUTH_RESOURCE = "https://storage.azure.com/"
+BLOB_SERVICE_VERSION = "2021-12-02"
+BLOB_HOST_RE = re.compile(r"^[a-z0-9]{3,24}\.blob\.core\.windows\.net$")
+CONTAINER_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
+ETAG_RE = re.compile(r'^"[^"\r\n]+"$')
+MARKER_KINDS = frozenset({"intent", "submission", "cleanup"})
 POSTGRES_TYPE = "microsoft.dbforpostgresql/flexibleservers"
 UNKNOWN = object()
+CLEANUP_PRESENT_UNPROVEN = object()
 ISOLATED = "isolated"
 ISOLATION_TRANSIENT = "transient"
 ISOLATION_REFUSED = "refused"
@@ -74,6 +83,18 @@ class SafeSubmitError(Exception):
 
 class ArmOutcomeUnknown(Exception):
     """The caller cannot know whether ARM accepted the request."""
+
+
+class MarkerOutcomeUnknown(Exception):
+    """The caller cannot prove a marker present or absent."""
+
+
+class MarkerPresentInvalid(SafeSubmitError):
+    """The exact marker path exists but its bytes/properties are untrusted."""
+
+
+class MarkerConflict(SafeSubmitError):
+    """The exact marker path already contains different bytes."""
 
 
 def _fail(code: str) -> NoReturn:
@@ -176,6 +197,14 @@ class ArmTransport(Protocol):
         headers: Mapping[str, str] | None = None,
         timeout_seconds: int,
     ) -> ArmResponse: ...
+
+
+class MarkerStore(Protocol):
+    def read(self, kind: str, rehearsal_id: str) -> bytes | None: ...
+
+    def create_if_absent(self, kind: str, rehearsal_id: str, raw: bytes) -> bytes: ...
+
+    def list_intent_ids(self) -> tuple[str, ...]: ...
 
 
 class AzureArmTransport:
@@ -293,22 +322,421 @@ class SafeSubmitConfig:
     name_prefix: str
     maximum_ttl_hours: int
     required_tags: dict[str, str]
-    deployment_api_version: str
     postgres_api_version: str
     request_timeout_seconds: int
     poll_interval_seconds: int
-    intent_poll_attempts: int
     restore_poll_attempts: int
     cleanup_poll_attempts: int
     binding_clock_skew_seconds: int
     late_materialization_watch_hours: int
-    intent_name_suffix: str
-    submission_name_suffix: str
-    cleanup_name_suffix: str
+    marker_account_resource_id: str
+    marker_account_host: str
+    marker_oauth_resource: str
+    marker_service_version: str
+    marker_containers: dict[str, str]
+    marker_blob_name_suffix: str
+    marker_request_timeout_seconds: int
+    marker_read_poll_attempts: int
+    marker_read_poll_interval_seconds: int
+    marker_max_record_bytes: int
+    marker_list_page_size: int
+    marker_list_max_pages: int
+    marker_list_max_records: int
+    marker_max_list_response_bytes: int
+    marker_minimum_retention_days: int
     ready_state: str
     failed_states: frozenset[str]
     execution_authorized: bool
-    deployment_marker_conditional_create_fidelity_proven: bool
+    blob_marker_store_implemented: bool
+    blob_marker_provider_fidelity_proven: bool
+    private_runner_binding_implemented: bool
+
+
+@dataclass(frozen=True)
+class BlobResponse:
+    status: int
+    body: bytes
+    headers: Mapping[str, str]
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+class AzureBlobMarkerStore:
+    """Raw-byte, create-only marker store pinned to one Blob endpoint."""
+
+    def __init__(
+        self,
+        config: SafeSubmitConfig,
+        *,
+        sleeper: Callable[[float], None] = sleep,
+        clock: Callable[[], datetime] = _now,
+        opener: Any | None = None,
+    ) -> None:
+        self.config = config
+        self.sleeper = sleeper
+        self.clock = clock
+        self.opener = opener or urllib.request.build_opener(_RefuseRedirects())
+        account_parts = config.marker_account_resource_id.strip("/").split("/")
+        if (
+            not config.execution_authorized
+            or not config.blob_marker_store_implemented
+            or not config.blob_marker_provider_fidelity_proven
+            or not config.private_runner_binding_implemented
+            or len(account_parts) != 8
+            or any(not part for part in account_parts)
+            or [part.lower() for part in account_parts[::2]]
+            != ["subscriptions", "resourcegroups", "providers", "storageaccounts"]
+            or account_parts[5].lower() != "microsoft.storage"
+            or account_parts[7] != config.marker_account_host.split(".", 1)[0]
+            or not BLOB_HOST_RE.fullmatch(config.marker_account_host)
+            or config.marker_oauth_resource != BLOB_OAUTH_RESOURCE
+            or config.marker_service_version != BLOB_SERVICE_VERSION
+            or set(config.marker_containers) != MARKER_KINDS
+            or len(set(config.marker_containers.values())) != len(MARKER_KINDS)
+            or not all(
+                CONTAINER_RE.fullmatch(value)
+                for value in config.marker_containers.values()
+            )
+            or config.marker_blob_name_suffix != ".json"
+            or not 1 <= config.marker_request_timeout_seconds <= 60
+            or not 1 <= config.marker_read_poll_attempts <= 100
+            or not 0 <= config.marker_read_poll_interval_seconds <= 60
+            or not 1 <= config.marker_max_record_bytes <= 1_048_576
+            or not 1 <= config.marker_list_page_size <= 5_000
+            or not 1 <= config.marker_list_max_pages <= 100
+            or not 1 <= config.marker_list_max_records <= 50_000
+            or not config.marker_max_record_bytes
+            <= config.marker_max_list_response_bytes
+            <= 4_194_304
+            or config.marker_minimum_retention_days < 90
+        ):
+            _fail("blob_store_configuration_invalid")
+
+    def _trusted_now(self) -> datetime:
+        try:
+            value = self.clock()
+        except Exception as exc:
+            raise SafeSubmitError("trusted_clock_unavailable") from exc
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            _fail("trusted_clock_invalid")
+        return value.astimezone(UTC).replace(microsecond=0)
+
+    def _access_token(self) -> str:
+        command = [
+            "az",
+            "account",
+            "get-access-token",
+            "--resource",
+            BLOB_OAUTH_RESOURCE,
+            "--query",
+            "accessToken",
+            "--output",
+            "tsv",
+            "--only-show-errors",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=self.config.marker_request_timeout_seconds,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise MarkerOutcomeUnknown from exc
+        token = result.stdout.strip()
+        if result.returncode != 0 or not token or any(char.isspace() for char in token):
+            _fail("blob_authentication_failed")
+        return token
+
+    def _url(self, kind: str, rehearsal_id: str) -> str:
+        if kind not in MARKER_KINDS or not REHEARSAL_RE.fullmatch(rehearsal_id):
+            _fail("marker_path_invalid")
+        container = self.config.marker_containers[kind]
+        name = f"{rehearsal_id}{self.config.marker_blob_name_suffix}"
+        return f"https://{self.config.marker_account_host}/{container}/{name}"
+
+    def _list_url(self, marker: str | None) -> str:
+        query: dict[str, str | int] = {
+            "restype": "container",
+            "comp": "list",
+            "maxresults": self.config.marker_list_page_size,
+        }
+        if marker:
+            query["marker"] = marker
+        return (
+            f"https://{self.config.marker_account_host}/"
+            f"{self.config.marker_containers['intent']}?"
+            f"{urllib.parse.urlencode(query)}"
+        )
+
+    def _validate_url(self, url: str) -> None:
+        parsed = urllib.parse.urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != self.config.marker_account_host
+            or parsed.netloc != self.config.marker_account_host
+            or parsed.fragment
+            or not parsed.path.startswith("/")
+            or "//" in parsed.path
+        ):
+            _fail("blob_request_target_invalid")
+
+    def _client_request_id(self, method: str, url: str, body: bytes | None) -> str:
+        material = b"\0".join(
+            [method.encode(), url.encode(), hashlib.sha256(body or b"").digest()]
+        )
+        digest = hashlib.sha256(material).hexdigest()
+        return "-".join(
+            [digest[:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32]]
+        )
+
+    def _response_headers(self, response: Any) -> dict[str, str]:
+        normalized: dict[str, str] = {}
+        for key, value in response.headers.items():
+            lowered = str(key).lower()
+            if lowered in normalized or "\r" in str(value) or "\n" in str(value):
+                raise ValueError("invalid response headers")
+            normalized[lowered] = str(value)
+        return normalized
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        body: bytes | None = None,
+        max_response_bytes: int,
+        exact_marker_get: bool = False,
+    ) -> BlobResponse:
+        method = method.upper()
+        mutating = method == "PUT"
+        self._validate_url(url)
+        headers = {
+            "Accept": "application/json" if exact_marker_get else "application/xml",
+            "Authorization": f"Bearer {self._access_token()}",
+            "x-ms-client-request-id": self._client_request_id(method, url, body),
+            "x-ms-date": format_datetime(self._trusted_now(), usegmt=True),
+            "x-ms-version": self.config.marker_service_version,
+        }
+        if mutating:
+            assert body is not None
+            content_md5 = base64.b64encode(
+                hashlib.md5(body, usedforsecurity=False).digest()
+            ).decode()
+            headers.update(
+                {
+                    "Accept": "application/json",
+                    "Content-Length": str(len(body)),
+                    "Content-MD5": content_md5,
+                    "Content-Type": "application/json",
+                    "If-None-Match": "*",
+                    "x-ms-blob-content-md5": content_md5,
+                    "x-ms-blob-type": "BlockBlob",
+                }
+            )
+        request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        status: int | None = None
+        try:
+            with self.opener.open(
+                request, timeout=self.config.marker_request_timeout_seconds
+            ) as response:
+                status = int(response.status)
+                if 300 <= status < 400 or response.geturl() != url:
+                    _fail("blob_redirect_refused")
+                response_headers = self._response_headers(response)
+                raw = response.read(max_response_bytes + 1)
+                if len(raw) > max_response_bytes:
+                    if mutating:
+                        raise MarkerOutcomeUnknown
+                    if exact_marker_get and status == 200:
+                        raise MarkerPresentInvalid("marker_body_too_large")
+                    _fail("blob_response_too_large")
+                return BlobResponse(status, raw, response_headers)
+        except urllib.error.HTTPError as exc:
+            if 300 <= int(exc.code) < 400:
+                _fail("blob_redirect_refused")
+            return BlobResponse(int(exc.code), b"", {})
+        except (MarkerOutcomeUnknown, MarkerPresentInvalid, SafeSubmitError):
+            raise
+        except Exception as exc:
+            if mutating:
+                raise MarkerOutcomeUnknown from exc
+            if exact_marker_get and status == 200:
+                raise MarkerPresentInvalid("marker_response_invalid") from exc
+            raise MarkerOutcomeUnknown from exc
+
+    def _verify_marker(self, response: BlobResponse) -> bytes:
+        headers = response.headers
+        try:
+            content_length = int(headers["content-length"])
+            last_modified = parsedate_to_datetime(headers["last-modified"])
+            retained_until = parsedate_to_datetime(
+                headers["x-ms-immutability-policy-until-date"]
+            )
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise MarkerPresentInvalid("marker_properties_unproven") from exc
+        expected_md5 = base64.b64encode(
+            hashlib.md5(response.body, usedforsecurity=False).digest()
+        ).decode()
+        if (
+            content_length != len(response.body)
+            or headers.get("content-md5") != expected_md5
+            or headers.get("content-type", "").split(";", 1)[0].lower()
+            != "application/json"
+            or not ETAG_RE.fullmatch(headers.get("etag", ""))
+            or headers.get("x-ms-blob-type") != "BlockBlob"
+            or headers.get("x-ms-version") != self.config.marker_service_version
+            or headers.get("x-ms-server-encrypted", "").lower() != "true"
+            or headers.get("x-ms-immutability-policy-mode", "").lower() != "locked"
+            or headers.get("x-ms-legal-hold", "").lower() != "true"
+            or last_modified.tzinfo is None
+            or retained_until.tzinfo is None
+            or retained_until.astimezone(UTC) - last_modified.astimezone(UTC)
+            < timedelta(days=self.config.marker_minimum_retention_days)
+        ):
+            raise MarkerPresentInvalid("marker_properties_unproven")
+        return response.body
+
+    def _read_once(self, kind: str, rehearsal_id: str) -> bytes | None:
+        response = self._request(
+            "GET",
+            self._url(kind, rehearsal_id),
+            max_response_bytes=self.config.marker_max_record_bytes,
+            exact_marker_get=True,
+        )
+        if response.status == 404:
+            return None
+        if response.status == 200:
+            return self._verify_marker(response)
+        if response.status in {408, 425, 429} or response.status >= 500:
+            raise MarkerOutcomeUnknown
+        _fail("marker_read_refused")
+
+    def read(self, kind: str, rehearsal_id: str) -> bytes | None:
+        indeterminate = False
+        for attempt in range(self.config.marker_read_poll_attempts):
+            try:
+                raw = self._read_once(kind, rehearsal_id)
+            except MarkerOutcomeUnknown:
+                indeterminate = True
+            else:
+                if raw is not None:
+                    return raw
+                if not indeterminate:
+                    return None
+            if attempt + 1 < self.config.marker_read_poll_attempts:
+                self.sleeper(self.config.marker_read_poll_interval_seconds)
+        raise MarkerOutcomeUnknown
+
+    def _verify_create_response(self, response: BlobResponse) -> None:
+        if (
+            response.status != 201
+            or response.headers.get("x-ms-request-server-encrypted", "").lower()
+            != "true"
+            or response.headers.get("x-ms-version")
+            != self.config.marker_service_version
+            or not ETAG_RE.fullmatch(response.headers.get("etag", ""))
+        ):
+            raise MarkerOutcomeUnknown
+
+    def create_if_absent(self, kind: str, rehearsal_id: str, raw: bytes) -> bytes:
+        if not raw or len(raw) > self.config.marker_max_record_bytes:
+            _fail("marker_record_size_invalid")
+        try:
+            existing = self.read(kind, rehearsal_id)
+        except MarkerPresentInvalid:
+            raise
+        if existing is not None:
+            if existing != raw:
+                raise MarkerConflict("marker_record_conflict")
+            return existing
+        try:
+            response = self._request(
+                "PUT",
+                self._url(kind, rehearsal_id),
+                body=raw,
+                max_response_bytes=self.config.marker_max_record_bytes,
+            )
+            if response.status == 201:
+                self._verify_create_response(response)
+            elif 200 <= response.status < 300:
+                raise MarkerOutcomeUnknown
+            elif (
+                response.status not in {408, 409, 412, 425, 429}
+                and response.status < 500
+            ):
+                _fail("marker_write_refused")
+        except MarkerOutcomeUnknown:
+            pass
+        for attempt in range(self.config.marker_read_poll_attempts):
+            try:
+                observed = self._read_once(kind, rehearsal_id)
+            except MarkerOutcomeUnknown:
+                observed = None
+            if observed is not None:
+                if observed != raw:
+                    raise MarkerConflict("marker_record_conflict")
+                return observed
+            if attempt + 1 < self.config.marker_read_poll_attempts:
+                self.sleeper(self.config.marker_read_poll_interval_seconds)
+        raise MarkerOutcomeUnknown
+
+    def list_intent_ids(self) -> tuple[str, ...]:
+        found: list[str] = []
+        seen: set[str] = set()
+        marker: str | None = None
+        for page in range(self.config.marker_list_max_pages):
+            response = self._request(
+                "GET",
+                self._list_url(marker),
+                max_response_bytes=self.config.marker_max_list_response_bytes,
+            )
+            if response.status in {408, 425, 429} or response.status >= 500:
+                raise MarkerOutcomeUnknown
+            if response.status != 200:
+                _fail("marker_list_refused")
+            if (
+                response.headers.get("x-ms-version")
+                != self.config.marker_service_version
+                or response.headers.get("content-type", "").split(";", 1)[0].lower()
+                != "application/xml"
+                or b"<!DOCTYPE" in response.body.upper()
+                or b"<!ENTITY" in response.body.upper()
+            ):
+                _fail("marker_list_invalid")
+            try:
+                root = ET.fromstring(response.body)
+            except ET.ParseError as exc:
+                raise SafeSubmitError("marker_list_invalid") from exc
+            if root.tag != "EnumerationResults":
+                _fail("marker_list_invalid")
+            for entry in root.findall("./Blobs/Blob/Name"):
+                name = entry.text or ""
+                suffix = self.config.marker_blob_name_suffix
+                rehearsal_id = name.removesuffix(suffix)
+                if (
+                    not name.endswith(suffix)
+                    or not REHEARSAL_RE.fullmatch(rehearsal_id)
+                    or rehearsal_id in seen
+                ):
+                    _fail("marker_list_invalid")
+                seen.add(rehearsal_id)
+                found.append(rehearsal_id)
+                if len(found) > self.config.marker_list_max_records:
+                    _fail("marker_list_bound_exceeded")
+            next_marker = root.findtext("./NextMarker") or ""
+            if not next_marker:
+                return tuple(sorted(found))
+            if len(next_marker) > 1_024 or any(ord(char) < 32 for char in next_marker):
+                _fail("marker_list_invalid")
+            marker = next_marker
+            if page + 1 < self.config.marker_list_max_pages:
+                self.sleeper(self.config.marker_read_poll_interval_seconds)
+        _fail("marker_list_bound_exceeded")
 
 
 @dataclass(frozen=True)
@@ -340,11 +768,12 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
         "envelope_policy_sha256",
         "activation",
         "arm",
+        "marker_store",
         "outcomes",
         "retention",
     } or (
-        policy.get("schema_version") != 2
-        or policy.get("policy_id") != "cosmaneura-staging-restore-safe-submit-v2"
+        policy.get("schema_version") != 3
+        or policy.get("policy_id") != "cosmaneura-staging-restore-safe-submit-v3"
         or policy.get("envelope_policy_id") != "cosmaneura-staging-restore-envelope-v1"
         or policy.get("envelope_policy_sha256") != f"sha256:{ENVELOPE_POLICY_SHA256}"
     ):
@@ -354,7 +783,9 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
         not isinstance(activation, dict)
         or set(activation)
         != {
-            "deployment_marker_conditional_create_fidelity_proven",
+            "blob_marker_store_implemented",
+            "blob_marker_provider_fidelity_proven",
+            "private_runner_binding_implemented",
             "workflow_integrated",
             "trusted_evidence_binding_implemented",
         }
@@ -362,7 +793,9 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
     ):
         _fail("safe_submit_activation_invalid")
     if executable and activation != {
-        "deployment_marker_conditional_create_fidelity_proven": True,
+        "blob_marker_store_implemented": True,
+        "blob_marker_provider_fidelity_proven": True,
+        "private_runner_binding_implemented": True,
         "workflow_integrated": True,
         "trusted_evidence_binding_implemented": True,
     }:
@@ -370,28 +803,114 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
     arm = policy.get("arm")
     if arm != {
         "management_host": "management.azure.com",
-        "deployment_api_version": "2022-09-01",
         "postgres_api_version": "2024-08-01",
         "request_timeout_seconds": 30,
         "poll_interval_seconds": 15,
-        "intent_poll_attempts": 20,
         "restore_poll_attempts": 480,
         "cleanup_poll_attempts": 120,
         "binding_clock_skew_seconds": 300,
         "late_materialization_watch_hours": 48,
-        "intent_name_suffix": "restore-intent-v2",
-        "submission_name_suffix": "restore-submit-v2",
-        "cleanup_name_suffix": "restore-cleanup-v2",
     }:
         _fail("safe_submit_arm_policy_mismatch")
+    marker_store = policy.get("marker_store")
+    if marker_store != {
+        "kind": "azure-blob-immutable-create-only-v1",
+        "account_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_STORAGE_ACCOUNT_RESOURCE_ID",
+        "account_host": "CONFIGURE_EXACT_RESTORE_MARKER_STORAGE_ACCOUNT_HOST",
+        "oauth_resource": BLOB_OAUTH_RESOURCE,
+        "blob_service_version": BLOB_SERVICE_VERSION,
+        "containers": {
+            "intent": "restore-intents-v3",
+            "submission": "restore-submissions-v3",
+            "cleanup": "restore-cleanups-v3",
+        },
+        "blob_name_suffix": ".json",
+        "request_timeout_seconds": 30,
+        "read_poll_attempts": 20,
+        "read_poll_interval_seconds": 15,
+        "max_record_bytes": 65_536,
+        "list_page_size": 500,
+        "list_max_pages": 20,
+        "list_max_records": 10_000,
+        "max_list_response_bytes": 1_048_576,
+        "account_posture": {
+            "resource_group_id": "CONFIGURE_EXACT_RESTORE_MARKER_CONTROL_RESOURCE_GROUP_ID",
+            "sku": "Standard_ZRS",
+            "kind": "StorageV2",
+            "public_network_access": "Disabled",
+            "shared_key_access": False,
+            "allow_blob_public_access": False,
+            "default_to_oauth_authentication": True,
+            "https_only": True,
+            "minimum_tls_version": "TLS1_2",
+            "hierarchical_namespace": False,
+            "blob_versioning": False,
+            "nfs_v3": False,
+            "sftp": False,
+            "local_users": False,
+            "point_in_time_restore": False,
+            "last_access_time_tracking": False,
+            "management_lock_id": "CONFIGURE_EXACT_RESTORE_MARKER_MANAGEMENT_LOCK_ID",
+            "management_lock_level": "ReadOnly",
+        },
+        "network": {
+            "private_endpoint_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_ENDPOINT_RESOURCE_ID",
+            "private_dns_zone_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_DNS_ZONE_RESOURCE_ID",
+            "private_dns_link_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_DNS_LINK_RESOURCE_ID",
+            "runner_subnet_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_RUNNER_SUBNET_RESOURCE_ID",
+            "runner_environment": "CONFIGURE_EXACT_RESTORE_MARKER_RUNNER_ENVIRONMENT",
+        },
+        "rbac": {
+            "actions": [],
+            "create_read_data_actions": "CONFIGURE_EXACT_RESTORE_MARKER_CREATE_READ_DATA_ACTIONS",
+            "read_data_actions": [
+                "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+            ],
+            "create_read_role_definition_id": "CONFIGURE_EXACT_RESTORE_MARKER_CREATE_READ_ROLE_DEFINITION_ID",
+            "create_read_role_permissions_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_CREATE_READ_ROLE_PERMISSIONS_SHA256",
+            "read_role_definition_id": "CONFIGURE_EXACT_RESTORE_MARKER_READ_ROLE_DEFINITION_ID",
+            "read_role_permissions_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_READ_ROLE_PERMISSIONS_SHA256",
+            "provision_intent_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_INTENT_ROLE_ASSIGNMENT_ID",
+            "provision_submission_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_SUBMISSION_ROLE_ASSIGNMENT_ID",
+            "provision_cleanup_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_CLEANUP_READ_ROLE_ASSIGNMENT_ID",
+            "cleanup_intent_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_INTENT_READ_ROLE_ASSIGNMENT_ID",
+            "cleanup_submission_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_SUBMISSION_READ_ROLE_ASSIGNMENT_ID",
+            "cleanup_marker_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_MARKER_ROLE_ASSIGNMENT_ID",
+        },
+        "immutability": {
+            "scope": "container",
+            "mode": "Locked",
+            "minimum_retention_days": 90,
+            "legal_hold_tag": "restorecontrolactive",
+            "allow_protected_append_writes": False,
+            "allow_protected_append_writes_all": False,
+            "intent_policy_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_INTENT_IMMUTABILITY_POLICY_RESOURCE_ID",
+            "submission_policy_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_SUBMISSION_IMMUTABILITY_POLICY_RESOURCE_ID",
+            "cleanup_policy_resource_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_IMMUTABILITY_POLICY_RESOURCE_ID",
+            "configuration_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_IMMUTABILITY_CONFIGURATION_EVIDENCE_SHA256",
+        },
+        "provider_fidelity": {
+            "openapi_commit_sha": "CONFIGURE_EXACT_RESTORE_MARKER_OPENAPI_COMMIT_SHA",
+            "conditional_create_concurrency_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_CONDITIONAL_CREATE_CONCURRENCY_EVIDENCE_SHA256",
+            "strong_consistency_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_STRONG_CONSISTENCY_EVIDENCE_SHA256",
+            "timeout_reconciliation_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_TIMEOUT_RECONCILIATION_EVIDENCE_SHA256",
+            "identity_authorization_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_IDENTITY_AUTHORIZATION_EVIDENCE_SHA256",
+            "block_blob_create_authorization_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_BLOCK_BLOB_CREATE_AUTHORIZATION_EVIDENCE_SHA256",
+            "overwrite_delete_denial_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_OVERWRITE_DELETE_DENIAL_EVIDENCE_SHA256",
+            "private_reachability_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_REACHABILITY_EVIDENCE_SHA256",
+            "review_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_PROVIDER_FIDELITY_REVIEW_SHA256",
+        },
+    }:
+        _fail("safe_submit_marker_store_policy_mismatch")
     if policy.get("outcomes") != {
         "ready_state": "Ready",
         "failed_states": ["Disabled", "Failed"],
     }:
         _fail("safe_submit_outcome_policy_mismatch")
     if policy.get("retention") != {
-        "delete_intent_automatically": False,
-        "reason": "Preserve the deterministic cleanup locator until a separately reviewed evidence-retention action proves the restore operation terminal and the exact target absent.",
+        "delete_markers_automatically": False,
+        "protected_kinds": ["intent", "submission", "cleanup"],
+        "reason": "Preserve every authorization and cleanup tombstone; deleting a current cleanup marker could permit a later retry to submit the deterministic target.",
     }:
         _fail("safe_submit_retention_policy_mismatch")
 
@@ -405,7 +924,9 @@ def validate_canonical_contracts() -> tuple[dict[str, Any], dict[str, Any]]:
         _fail("canonical_envelope_blockers_changed")
     _validate_safe_policy(safe, executable=False)
     if safe["activation"] != {
-        "deployment_marker_conditional_create_fidelity_proven": False,
+        "blob_marker_store_implemented": False,
+        "blob_marker_provider_fidelity_proven": False,
+        "private_runner_binding_implemented": False,
         "workflow_integrated": False,
         "trusted_evidence_binding_implemented": False,
     }:
@@ -475,6 +996,7 @@ def config_from_policies(
     )
     activation = safe["activation"]
     arm = safe["arm"]
+    marker = safe["marker_store"]
     return SafeSubmitConfig(
         policy_id=safe["policy_id"],
         envelope_policy_id=envelope["policy_id"],
@@ -488,23 +1010,37 @@ def config_from_policies(
         name_prefix=str(target["name_prefix"]),
         maximum_ttl_hours=int(target["maximum_ttl_hours"]),
         required_tags=dict(required_tags),
-        deployment_api_version=arm["deployment_api_version"],
         postgres_api_version=arm["postgres_api_version"],
         request_timeout_seconds=arm["request_timeout_seconds"],
         poll_interval_seconds=arm["poll_interval_seconds"],
-        intent_poll_attempts=arm["intent_poll_attempts"],
         restore_poll_attempts=arm["restore_poll_attempts"],
         cleanup_poll_attempts=arm["cleanup_poll_attempts"],
         binding_clock_skew_seconds=arm["binding_clock_skew_seconds"],
         late_materialization_watch_hours=arm["late_materialization_watch_hours"],
-        intent_name_suffix=arm["intent_name_suffix"],
-        submission_name_suffix=arm["submission_name_suffix"],
-        cleanup_name_suffix=arm["cleanup_name_suffix"],
+        marker_account_resource_id=marker["account_resource_id"],
+        marker_account_host=marker["account_host"],
+        marker_oauth_resource=marker["oauth_resource"],
+        marker_service_version=marker["blob_service_version"],
+        marker_containers=dict(marker["containers"]),
+        marker_blob_name_suffix=marker["blob_name_suffix"],
+        marker_request_timeout_seconds=marker["request_timeout_seconds"],
+        marker_read_poll_attempts=marker["read_poll_attempts"],
+        marker_read_poll_interval_seconds=marker["read_poll_interval_seconds"],
+        marker_max_record_bytes=marker["max_record_bytes"],
+        marker_list_page_size=marker["list_page_size"],
+        marker_list_max_pages=marker["list_max_pages"],
+        marker_list_max_records=marker["list_max_records"],
+        marker_max_list_response_bytes=marker["max_list_response_bytes"],
+        marker_minimum_retention_days=marker["immutability"]["minimum_retention_days"],
         ready_state=safe["outcomes"]["ready_state"],
         failed_states=frozenset(safe["outcomes"]["failed_states"]),
         execution_authorized=executable,
-        deployment_marker_conditional_create_fidelity_proven=activation[
-            "deployment_marker_conditional_create_fidelity_proven"
+        blob_marker_store_implemented=activation["blob_marker_store_implemented"],
+        blob_marker_provider_fidelity_proven=activation[
+            "blob_marker_provider_fidelity_proven"
+        ],
+        private_runner_binding_implemented=activation[
+            "private_runner_binding_implemented"
         ],
     )
 
@@ -515,12 +1051,14 @@ class SafeRestoreSubmitter:
     def __init__(
         self,
         transport: ArmTransport,
+        marker_store: MarkerStore,
         config: SafeSubmitConfig,
         *,
         sleeper: Callable[[float], None] = sleep,
         clock: Callable[[], datetime] = _now,
     ) -> None:
         self.transport = transport
+        self.marker_store = marker_store
         self.config = config
         self.sleeper = sleeper
         self.clock = clock
@@ -537,8 +1075,12 @@ class SafeRestoreSubmitter:
     def _require_marker_fidelity(self) -> None:
         if not self.config.execution_authorized:
             _fail("safe_submit_not_activated")
-        if not self.config.deployment_marker_conditional_create_fidelity_proven:
-            _fail("deployment_marker_atomicity_unproven")
+        if not self.config.blob_marker_store_implemented:
+            _fail("blob_marker_store_not_implemented")
+        if not self.config.blob_marker_provider_fidelity_proven:
+            _fail("blob_marker_provider_fidelity_unproven")
+        if not self.config.private_runner_binding_implemented:
+            _fail("blob_marker_private_runner_unproven")
 
     def _request(
         self,
@@ -560,27 +1102,6 @@ class SafeRestoreSubmitter:
             )
         except ArmOutcomeUnknown:
             return UNKNOWN
-
-    def _intent_marker_id(self, rehearsal_id: str) -> str:
-        return _id(
-            self.config.target_group_id,
-            "providers/Microsoft.Resources/deployments",
-            f"{self.config.name_prefix}-{rehearsal_id}-{self.config.intent_name_suffix}",
-        )
-
-    def _submission_marker_id(self, rehearsal_id: str) -> str:
-        return _id(
-            self.config.target_group_id,
-            "providers/Microsoft.Resources/deployments",
-            f"{self.config.name_prefix}-{rehearsal_id}-{self.config.submission_name_suffix}",
-        )
-
-    def _cleanup_marker_id(self, rehearsal_id: str) -> str:
-        return _id(
-            self.config.target_group_id,
-            "providers/Microsoft.Resources/deployments",
-            f"{self.config.name_prefix}-{rehearsal_id}-{self.config.cleanup_name_suffix}",
-        )
 
     def _validate_request(self, request: RestoreRequest) -> None:
         if not REHEARSAL_RE.fullmatch(request.rehearsal_id):
@@ -618,7 +1139,7 @@ class SafeRestoreSubmitter:
             "rehearsal-id": request.rehearsal_id,
         }
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "policy_id": self.config.policy_id,
             "envelope_policy_id": self.config.envelope_policy_id,
             "envelope_policy_sha256": self.config.envelope_policy_sha256,
@@ -639,160 +1160,47 @@ class SafeRestoreSubmitter:
             "required_tags": tags,
         }
 
-    def _deployment_body(self, record: dict[str, Any]) -> dict[str, Any]:
-        digest = f"sha256:{_sha256(_canonical(record))}"
-        return {
-            "properties": {
-                "mode": "Incremental",
-                "parameters": {
-                    "record": {"value": record},
-                    "recordSha256": {"value": digest},
-                },
-                "template": {
-                    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-                    "contentVersion": "1.0.0.0",
-                    "parameters": {
-                        "record": {"type": "object"},
-                        "recordSha256": {"type": "string"},
-                    },
-                    "resources": [],
-                    "outputs": {
-                        "record": {"type": "object", "value": "[parameters('record')]"},
-                        "recordSha256": {
-                            "type": "string",
-                            "value": "[parameters('recordSha256')]",
-                        },
-                    },
-                },
-            }
-        }
+    def _parse_marker(self, raw: bytes, code: str) -> dict[str, Any]:
+        try:
+            record = json.loads(raw)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise SafeSubmitError(code) from exc
+        if not isinstance(record, dict) or _canonical(record) != raw:
+            _fail(code)
+        return record
 
-    def _record_from_deployment(
-        self, response: ArmResponse, marker_id: str
-    ) -> tuple[dict[str, Any], str]:
-        body = response.body
-        if response.status != 200 or not isinstance(body, dict):
-            _fail("intent_record_unavailable")
-        marker_name = marker_id.rsplit("/", 1)[-1]
-        if (
-            _lower_id(body.get("id")) != _lower_id(marker_id)
-            or str(body.get("name")) != marker_name
-            or str(body.get("type", "")).lower() != DEPLOYMENT_TYPE
-        ):
-            _fail("intent_record_identity_mismatch")
-        properties = body.get("properties")
-        if not isinstance(properties, dict):
-            _fail("intent_record_invalid")
-        state = properties.get("provisioningState")
-        if not isinstance(state, str):
-            _fail("intent_record_invalid")
-        if state in {"Canceled", "Failed"}:
-            _fail("intent_record_terminal_failure")
-        parameters = properties.get("parameters")
-        if not isinstance(parameters, dict):
-            _fail("intent_record_invalid")
-        record_entry = parameters.get("record")
-        digest_entry = parameters.get("recordSha256")
-        if not isinstance(record_entry, dict) or not isinstance(digest_entry, dict):
-            _fail("intent_record_invalid")
-        record = record_entry.get("value")
-        digest = digest_entry.get("value")
-        if (
-            not isinstance(record, dict)
-            or digest != f"sha256:{_sha256(_canonical(record))}"
-        ):
-            _fail("intent_record_digest_mismatch")
-        return record, state
-
-    def _get_deployment(self, marker_id: str) -> ArmResponse | object | None:
-        response = self._request(
-            "GET",
-            marker_id,
-            api_version=self.config.deployment_api_version,
-        )
-        if response is UNKNOWN:
-            return UNKNOWN
-        assert isinstance(response, ArmResponse)
-        if response.status == 404:
-            return None
-        if response.status == 200:
-            return response
-        if response.status == 429 or response.status >= 500:
-            return UNKNOWN
-        _fail("intent_record_read_refused")
-
-    def _read_deployment_bounded(
-        self, marker_id: str
+    def _read_marker(
+        self, kind: str, rehearsal_id: str
     ) -> dict[str, Any] | object | None:
-        indeterminate = False
-        for attempt in range(self.config.intent_poll_attempts):
-            response = self._get_deployment(marker_id)
-            if response is None and not indeterminate:
-                return None
-            if response is UNKNOWN or response is None:
-                indeterminate = True
-            else:
-                assert isinstance(response, ArmResponse)
-                record, state = self._record_from_deployment(response, marker_id)
-                if state == "Succeeded":
-                    return record
-                indeterminate = True
-            if attempt + 1 < self.config.intent_poll_attempts:
-                self.sleeper(self.config.poll_interval_seconds)
-        return UNKNOWN
+        try:
+            raw = self.marker_store.read(kind, rehearsal_id)
+        except MarkerOutcomeUnknown:
+            return UNKNOWN
+        if raw is None:
+            return None
+        try:
+            return self._parse_marker(raw, f"{kind}_record_invalid")
+        except SafeSubmitError as exc:
+            raise MarkerPresentInvalid(f"{kind}_record_invalid") from exc
 
-    def _ensure_deployment(
-        self, marker_id: str, record: dict[str, Any]
+    def _ensure_marker(
+        self, kind: str, rehearsal_id: str, record: dict[str, Any]
     ) -> dict[str, Any]:
         self._require_marker_fidelity()
-        existing = self._get_deployment(marker_id)
-        if isinstance(existing, ArmResponse):
-            actual, state = self._record_from_deployment(existing, marker_id)
-            if actual != record:
-                _fail("intent_record_conflict")
-            if state == "Succeeded":
-                return actual
-        if existing is UNKNOWN:
-            _fail("intent_preflight_unknown")
-        if existing is None:
-            response = self._request(
-                "PUT",
-                marker_id,
-                api_version=self.config.deployment_api_version,
-                body=self._deployment_body(record),
-                headers={"If-None-Match": "*"},
-            )
-            if (
-                isinstance(response, ArmResponse)
-                and response.status
-                not in {
-                    200,
-                    201,
-                    202,
-                    409,
-                    412,
-                    429,
-                }
-                and response.status < 500
-            ):
-                _fail("intent_record_write_refused")
-        for attempt in range(self.config.intent_poll_attempts):
-            observed = self._get_deployment(marker_id)
-            if isinstance(observed, ArmResponse):
-                actual, state = self._record_from_deployment(observed, marker_id)
-                if actual != record:
-                    _fail("intent_record_conflict")
-                if state == "Succeeded":
-                    return actual
-            if attempt + 1 < self.config.intent_poll_attempts:
-                self.sleeper(self.config.poll_interval_seconds)
-        _fail("intent_persistence_unproven")
+        expected = _canonical(record)
+        try:
+            observed = self.marker_store.create_if_absent(kind, rehearsal_id, expected)
+        except MarkerOutcomeUnknown:
+            _fail(f"{kind}_persistence_unproven")
+        actual = self._parse_marker(observed, f"{kind}_record_invalid")
+        if actual != record:
+            raise MarkerConflict(f"{kind}_record_conflict")
+        return actual
 
     def _load_intent(self, rehearsal_id: str) -> tuple[dict[str, Any], str]:
         if not REHEARSAL_RE.fullmatch(rehearsal_id):
             _fail("rehearsal_id_invalid")
-        marker_id = self._intent_marker_id(rehearsal_id)
-        intent = self._read_deployment_bounded(marker_id)
+        intent = self._read_marker("intent", rehearsal_id)
         if intent is UNKNOWN:
             _fail("intent_record_read_unknown")
         if intent is None:
@@ -824,7 +1232,7 @@ class SafeRestoreSubmitter:
             "required_tags",
         }
         if set(intent) != required or (
-            intent.get("schema_version") != 2
+            intent.get("schema_version") != 3
             or intent.get("policy_id") != self.config.policy_id
             or intent.get("envelope_policy_id") != self.config.envelope_policy_id
             or intent.get("envelope_policy_sha256")
@@ -886,7 +1294,7 @@ class SafeRestoreSubmitter:
     ) -> dict[str, Any]:
         body = self._restore_body(intent, intent_digest)
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "restore-submission-authorized",
             "policy_id": self.config.policy_id,
             "rehearsal_id": intent["rehearsal_id"],
@@ -900,7 +1308,7 @@ class SafeRestoreSubmitter:
         self, intent: dict[str, Any], intent_digest: str
     ) -> dict[str, Any]:
         return {
-            "schema_version": 2,
+            "schema_version": 3,
             "kind": "restore-cleanup-authorized",
             "policy_id": self.config.policy_id,
             "rehearsal_id": intent["rehearsal_id"],
@@ -912,16 +1320,42 @@ class SafeRestoreSubmitter:
     def _cleanup_requested(
         self, intent: dict[str, Any], intent_digest: str
     ) -> bool | object:
-        marker_id = self._cleanup_marker_id(intent["rehearsal_id"])
-        response = self._get_deployment(marker_id)
-        if response is UNKNOWN:
+        try:
+            raw = self.marker_store.read("cleanup", intent["rehearsal_id"])
+        except MarkerOutcomeUnknown:
             return UNKNOWN
-        if response is None:
+        except MarkerPresentInvalid:
+            return CLEANUP_PRESENT_UNPROVEN
+        if raw is None:
             return False
-        assert isinstance(response, ArmResponse)
-        actual, _ = self._record_from_deployment(response, marker_id)
-        if actual != self._cleanup_record(intent, intent_digest):
-            _fail("cleanup_record_conflict")
+        try:
+            actual = self._parse_marker(raw, "cleanup_record_invalid")
+            _ = actual == self._cleanup_record(intent, intent_digest)
+        except SafeSubmitError:
+            pass
+        return True
+
+    def _mark_cleanup(self, intent: dict[str, Any], intent_digest: str) -> bool:
+        requested = self._cleanup_requested(intent, intent_digest)
+        if requested is True:
+            return True
+        if requested is CLEANUP_PRESENT_UNPROVEN:
+            return False
+        record = self._cleanup_record(intent, intent_digest)
+        try:
+            raw = self.marker_store.create_if_absent(
+                "cleanup", intent["rehearsal_id"], _canonical(record)
+            )
+        except MarkerConflict:
+            return True
+        except MarkerPresentInvalid:
+            return False
+        except MarkerOutcomeUnknown:
+            return False
+        try:
+            _ = self._parse_marker(raw, "cleanup_record_invalid") == record
+        except SafeSubmitError:
+            pass
         return True
 
     def _restore_body(
@@ -1088,10 +1522,14 @@ class SafeRestoreSubmitter:
     def _cleanup_target(
         self, intent: dict[str, Any], intent_digest: str
     ) -> SubmitOutcome:
-        cleanup_marker_id = self._cleanup_marker_id(intent["rehearsal_id"])
-        self._ensure_deployment(
-            cleanup_marker_id, self._cleanup_record(intent, intent_digest)
-        )
+        if not self._mark_cleanup(intent, intent_digest):
+            return self._outcome(
+                "cleanup_marker_unproven",
+                intent,
+                intent_digest,
+                observed=False,
+                cleanup_required=True,
+            )
         target_id = intent["target_server_resource_id"]
         observed = False
         delete_attempted = False
@@ -1150,7 +1588,7 @@ class SafeRestoreSubmitter:
         target_id = intent["target_server_resource_id"]
         for attempt in range(self.config.restore_poll_attempts):
             cleanup_requested = self._cleanup_requested(intent, intent_digest)
-            if cleanup_requested is UNKNOWN or cleanup_requested is True:
+            if cleanup_requested is not False:
                 return self._cleanup_target(intent, intent_digest)
             if self._intent_expired(intent):
                 return self._cleanup_target(intent, intent_digest)
@@ -1164,7 +1602,7 @@ class SafeRestoreSubmitter:
                 if isolation == ISOLATION_REFUSED:
                     return self._cleanup_target(intent, intent_digest)
                 cleanup_requested = self._cleanup_requested(intent, intent_digest)
-                if cleanup_requested is UNKNOWN or cleanup_requested is True:
+                if cleanup_requested is not False:
                     return self._cleanup_target(intent, intent_digest)
                 if self._intent_expired(intent):
                     return self._cleanup_target(intent, intent_digest)
@@ -1183,9 +1621,8 @@ class SafeRestoreSubmitter:
     def submit(self, request: RestoreRequest) -> SubmitOutcome:
         self._require_marker_fidelity()
         expected = self._build_intent(request)
-        intent_marker_id = self._intent_marker_id(request.rehearsal_id)
         if self._intent_expired(expected):
-            existing_intent = self._read_deployment_bounded(intent_marker_id)
+            existing_intent = self._read_marker("intent", request.rehearsal_id)
             if existing_intent is UNKNOWN:
                 _fail("intent_record_read_unknown")
             if existing_intent is None:
@@ -1193,7 +1630,7 @@ class SafeRestoreSubmitter:
             assert isinstance(existing_intent, dict)
             intent = existing_intent
         else:
-            intent = self._ensure_deployment(intent_marker_id, expected)
+            intent = self._ensure_marker("intent", request.rehearsal_id, expected)
         self._validate_intent(intent, request.rehearsal_id)
         if intent != expected:
             _fail("intent_record_conflict")
@@ -1201,43 +1638,37 @@ class SafeRestoreSubmitter:
         cleanup_requested = self._cleanup_requested(intent, intent_digest)
         if cleanup_requested is UNKNOWN:
             _fail("cleanup_record_preflight_unknown")
-        if cleanup_requested is True:
+        if cleanup_requested is not False:
             return self._cleanup_target(intent, intent_digest)
-        submission_marker_id = self._submission_marker_id(request.rehearsal_id)
-        existing_submission = self._get_deployment(submission_marker_id)
+        try:
+            existing_submission = self._read_marker("submission", request.rehearsal_id)
+        except MarkerPresentInvalid:
+            return self._cleanup_target(intent, intent_digest)
         submission = self._submission_record(intent, intent_digest)
         if self._intent_expired(intent):
             if existing_submission is UNKNOWN:
-                self._ensure_deployment(
-                    self._cleanup_marker_id(request.rehearsal_id),
-                    self._cleanup_record(intent, intent_digest),
-                )
-                return self._outcome(
-                    "expired_submission_record_unknown",
-                    intent,
-                    intent_digest,
-                    observed=False,
-                    cleanup_required=True,
-                )
+                return self._cleanup_target(intent, intent_digest)
             if existing_submission is None:
                 _fail("intent_expired")
-            self._ensure_deployment(submission_marker_id, submission)
+            if existing_submission != submission:
+                return self._cleanup_target(intent, intent_digest)
             return self._cleanup_target(intent, intent_digest)
         target = self._get_target(intent["target_server_resource_id"])
         if target is UNKNOWN:
             _fail("target_preflight_unknown")
-        if isinstance(target, ArmResponse) and not isinstance(
-            existing_submission, ArmResponse
-        ):
-            _fail("target_without_submission_record")
-        self._ensure_deployment(submission_marker_id, submission)
+        if isinstance(target, ArmResponse) and existing_submission != submission:
+            return self._cleanup_target(intent, intent_digest)
+        try:
+            self._ensure_marker("submission", request.rehearsal_id, submission)
+        except (MarkerConflict, MarkerPresentInvalid):
+            return self._cleanup_target(intent, intent_digest)
         if isinstance(target, ArmResponse):
             self._verify_target(target, intent, intent_digest)
             return self._poll_restore(intent, intent_digest)
         if self._intent_expired(intent):
             return self._cleanup_target(intent, intent_digest)
         cleanup_requested = self._cleanup_requested(intent, intent_digest)
-        if cleanup_requested is UNKNOWN or cleanup_requested is True:
+        if cleanup_requested is not False:
             return self._cleanup_target(intent, intent_digest)
         if self._intent_expired(intent):
             return self._cleanup_target(intent, intent_digest)
@@ -1263,27 +1694,27 @@ class SafeRestoreSubmitter:
         ):
             _fail("restore_submission_refused")
         cleanup_requested = self._cleanup_requested(intent, intent_digest)
-        if cleanup_requested is UNKNOWN or cleanup_requested is True:
+        if cleanup_requested is not False:
             return self._cleanup_target(intent, intent_digest)
         return self._poll_restore(intent, intent_digest)
 
     def cleanup_intent(self, rehearsal_id: str) -> SubmitOutcome:
         self._require_marker_fidelity()
         intent, intent_digest = self._load_intent(rehearsal_id)
-        submission_id = self._submission_marker_id(rehearsal_id)
-        actual = self._read_deployment_bounded(submission_id)
-        if actual is UNKNOWN:
-            self._ensure_deployment(
-                self._cleanup_marker_id(rehearsal_id),
-                self._cleanup_record(intent, intent_digest),
-            )
+        if not self._mark_cleanup(intent, intent_digest):
             return self._outcome(
-                "submission_record_unknown",
+                "cleanup_marker_unproven",
                 intent,
                 intent_digest,
                 observed=False,
                 cleanup_required=True,
             )
+        try:
+            actual = self._read_marker("submission", rehearsal_id)
+        except MarkerPresentInvalid:
+            return self._cleanup_target(intent, intent_digest)
+        if actual is UNKNOWN:
+            return self._cleanup_target(intent, intent_digest)
         if actual is None:
             target = self._get_target(intent["target_server_resource_id"])
             if target is None:
@@ -1302,8 +1733,6 @@ class SafeRestoreSubmitter:
                     observed=False,
                     cleanup_required=True,
                 )
-            _fail("submission_record_missing")
+            return self._cleanup_target(intent, intent_digest)
         assert isinstance(actual, dict)
-        if actual != self._submission_record(intent, intent_digest):
-            _fail("submission_record_conflict")
         return self._cleanup_target(intent, intent_digest)
