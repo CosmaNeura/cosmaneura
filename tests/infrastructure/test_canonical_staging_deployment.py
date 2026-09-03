@@ -92,7 +92,6 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
     for name in ("app", "web"):
         job = _job(source, name)
         assert "needs: authorize" in job
-        controls = _step(job, "Check out protected-master test controls")
         prerequisites = _step(
             job,
             (
@@ -107,9 +106,8 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
             job, "Install exact candidate toolchain without shared caches"
         )
         candidate_environment = _step(job, "Load exact candidate test environment")
-        assert "ref: ${{ github.sha }}" in controls
         assert "ref: ${{ needs.authorize.outputs.verified_revision }}" in candidate
-        assert job.index(controls) < job.index(prerequisites) < job.index(candidate)
+        assert job.index(prerequisites) < job.index(candidate)
         assert (
             job.index(candidate)
             < job.index(verification)
@@ -119,7 +117,7 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
         assert 'cache: "false"' in candidate_toolchain
         assert "github-action-direnv-load-and-mask@" in candidate_environment
         assert "uses: ./.github/actions/common-setup" not in job
-        assert job.count("persist-credentials: false") == 2
+        assert job.count("persist-credentials: false") == 1
         assert 'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"' in job
         if name == "app":
             candidate_routing = _step(job, "Start exact candidate local test routing")

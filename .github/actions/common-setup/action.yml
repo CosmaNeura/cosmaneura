@@ -10,9 +10,7 @@ inputs:
       pulling their ~69MB/91-package tree there only risks the apt-mirror stall.
     default: "zsh libnss3-tools poppler-utils ffmpeg"
   enable_cache:
-    description: >
-      Restore and save shared tool and dependency caches. Disable this before
-      executing a separately selected source revision in a default-branch run.
+    description: Restore and save shared tool and dependency caches.
     default: "true"
 runs:
   using: 'composite'
