@@ -148,6 +148,46 @@ def test_ready_result_has_process_local_immutable_lineage_and_replay_receipt() -
         _invoke(_service_for(context), context, turn_closed=True)
 
 
+def test_source_revocation_replaces_a_cached_ready_response_with_a_tombstone() -> None:
+    context = _context("context_synthetic_revocation_test", _note(1))
+    service = _service_for(context)
+
+    ready = _invoke(service, context)
+    assert ready.response.result.state == "ready"
+
+    revoked = replace(context, state="source_revoked")
+    service._contexts[context.context_snapshot_ref] = revoked
+    tombstone = _invoke(service, revoked, turn_closed=True)
+    replay = _invoke(service, revoked, turn_closed=True)
+    poll = _invoke(
+        service,
+        revoked,
+        idempotency_key="idem_session_prep_revoked_poll_0002",
+    )
+
+    assert tombstone.replayed is False
+    assert tombstone.response.result.state == "unavailable"
+    assert tombstone.response.result.reason_code == "context_not_available"
+    assert tombstone.response.result.prepared_brief is None
+    assert tombstone.response.result.provenance == []
+    assert "Synthetic finalized recap" not in tombstone.response.model_dump_json()
+    assert replay.replayed is True
+    assert replay.response == tombstone.response
+    assert poll.response.result.state == "unavailable"
+    assert poll.response.result.reason_code == "context_not_available"
+    assert poll.response.result.prepared_brief is None
+    assert poll.response.result.provenance == []
+    assert "Synthetic finalized recap" not in poll.response.model_dump_json()
+
+    with pytest.raises(SessionPrepIdempotencyConflict):
+        _invoke(
+            service,
+            revoked,
+            source_turn_ref="conversation_turn_changed_after_revocation",
+            turn_closed=True,
+        )
+
+
 def test_supporting_context_requires_an_unimplemented_follow_up_action() -> None:
     context = _context("context_synthetic_context_test", _note(1), _note(2))
 
