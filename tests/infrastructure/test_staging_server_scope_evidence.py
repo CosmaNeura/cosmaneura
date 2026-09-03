@@ -112,68 +112,91 @@ def _server(module: ModuleType) -> Any:
     )
 
 
-def _database_surfaces(label: str) -> dict[str, list[Any]]:
+def _database_surfaces(
+    label: str, *, contains_user_relations: bool = False
+) -> dict[str, list[Any]]:
     return {
         "schema": [{"kind": "schema", "label": label}],
-        "shared_dependencies": [
-            {
-                "dependent_type": "table",
-                "dependent_names": ["public", "table-private"],
-                "dependent_arguments": [],
-                "referenced_type": "role",
-                "referenced_names": ["owner-role"],
-                "referenced_arguments": [],
-                "dependency_type": "o",
-            },
-            {
-                "dependent_type": "extension",
-                "dependent_names": ["plpgsql"],
-                "dependent_arguments": [],
-                "referenced_type": "role",
-                "referenced_names": ["owner-role"],
-                "referenced_arguments": [],
-                "dependency_type": "o",
-            },
-            {
-                "dependent_type": "collation",
-                "dependent_names": ["public", "collation-private"],
-                "dependent_arguments": [],
-                "referenced_type": "role",
-                "referenced_names": ["owner-role"],
-                "referenced_arguments": [],
-                "dependency_type": "o",
-            },
-            {
-                "dependent_type": "table",
-                "dependent_names": ["public", "table-private"],
-                "dependent_arguments": [],
-                "referenced_type": "tablespace",
-                "referenced_names": ["tablespace-private"],
-                "referenced_arguments": [],
-                "dependency_type": "t",
-            },
-        ],
+        "user_relations": (
+            [["public", "table-private", "r"]] if contains_user_relations else []
+        ),
+        "shared_dependencies": (
+            [
+                {
+                    "dependent_type": "table",
+                    "dependent_names": ["public", "table-private"],
+                    "dependent_arguments": [],
+                    "referenced_type": "role",
+                    "referenced_names": ["owner-role"],
+                    "referenced_arguments": [],
+                    "dependency_type": "o",
+                },
+                {
+                    "dependent_type": "extension",
+                    "dependent_names": ["plpgsql"],
+                    "dependent_arguments": [],
+                    "referenced_type": "role",
+                    "referenced_names": ["owner-role"],
+                    "referenced_arguments": [],
+                    "dependency_type": "o",
+                },
+                {
+                    "dependent_type": "collation",
+                    "dependent_names": ["public", "collation-private"],
+                    "dependent_arguments": [],
+                    "referenced_type": "role",
+                    "referenced_names": ["owner-role"],
+                    "referenced_arguments": [],
+                    "dependency_type": "o",
+                },
+                {
+                    "dependent_type": "table",
+                    "dependent_names": ["public", "table-private"],
+                    "dependent_arguments": [],
+                    "referenced_type": "tablespace",
+                    "referenced_names": ["tablespace-private"],
+                    "referenced_arguments": [],
+                    "dependency_type": "t",
+                },
+            ]
+            if contains_user_relations
+            else []
+        ),
         "extensions": [["plpgsql", "1.0", "pg_catalog", "owner-role", False]],
         "foreign_data_wrappers": [["fdw-private", ["token=fdw-secret"]]],
         "foreign_servers": [["server-private", ["host=private.invalid"]]],
-        "foreign_tables": [["private", "table-private", "server-private"]],
+        "foreign_tables": (
+            [["private", "table-private", "server-private"]]
+            if contains_user_relations
+            else []
+        ),
         "foreign_privileges": [["server", "server-private", "user-private"]],
         "language_privileges": [["plpgsql", "PUBLIC", "USAGE"]],
         "user_mappings": [["server-private", "user-private", ["password=secret"]]],
         "publications": [["publication-private", False]],
-        "publication_memberships": [["publication-private", "table-private"]],
+        "publication_memberships": (
+            [["publication-private", "table-private"]]
+            if contains_user_relations
+            else []
+        ),
         "publication_namespaces": [["publication-private", "private"]],
         "subscription_state": [["subscription-private", False, 0]],
-        "subscription_relations": [["subscription-private", "table-private", "r"]],
+        "subscription_relations": (
+            [["subscription-private", "table-private", "r"]]
+            if contains_user_relations
+            else []
+        ),
         "security_labels": [["provider-private", "label-private"]],
         "event_triggers": [["event-private", "ddl_command_start"]],
-        "large_objects": [["9812", "owner-role", 0, "c2VjcmV0"]],
+        "large_objects": (
+            [["9812", "owner-role", 0, "c2VjcmV0"]] if contains_user_relations else []
+        ),
     }
 
 
 def _databases() -> dict[str, dict[str, list[Any]]]:
     return {
-        "appdb": _database_surfaces("app"),
+        "appdb": _database_surfaces("app", contains_user_relations=True),
         "postgres": _database_surfaces("maintenance"),
         "template1": _database_surfaces("template"),
     }
@@ -183,14 +206,17 @@ def _policy(
     module: ModuleType,
     server: Any,
     databases: dict[str, dict[str, list[Any]]],
+    *,
+    primary_database: str = "appdb",
 ) -> dict[str, Any]:
     policy = json.loads(POLICY.read_text())
     policy["activation_ready"] = True
     policy["source"].update(
         resource_id=RESOURCE_ID,
         revision=REVISION,
-        host="localhost",
+        host="test.postgres.database.azure.com",
         maintenance_database="postgres",
+        primary_database=primary_database,
     )
     policy["hmac"]["key_version"] = "test-v1"
     policy["required_settings"] = sorted(row[0] for row in server.surfaces["settings"])
@@ -219,7 +245,11 @@ def _policy(
                 "identity_hmac": identity,
                 "is_template": record["is_template"],
                 "allow_connections": True,
-                "status": "fingerprinted",
+                "status": (
+                    "primary_inventory"
+                    if record["name"] == primary_database
+                    else "empty"
+                ),
                 "surfaces": {
                     name: module._pin_json(
                         module._surface_pin(
@@ -271,9 +301,13 @@ def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
     assert evidence["server_version_major"] == 16
     assert len(evidence["databases"]) == 4
     assert {item["status"] for item in evidence["databases"]} == {
-        "fingerprinted",
+        "primary_inventory",
+        "empty",
         "connections_disabled",
     }
+    assert evidence["primary_database_identity_hmac"] == module._identity_hmac(
+        KEY, "database", "appdb"
+    )
     rendered = json.dumps(evidence)
     for raw_value in (
         "appdb",
@@ -295,6 +329,91 @@ def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
         assert raw_value not in rendered
     assert len(evidence["evidence_hmac"]) == 64
     assert evidence["capture_started_at"] == "2026-09-03T12:00:00Z"
+
+
+def test_non_primary_user_data_and_disabled_non_template_fail_closed(
+    module: ModuleType,
+) -> None:
+    server = _server(module)
+    databases = _databases()
+    policy = _policy(module, server, databases)
+    databases["postgres"]["user_relations"].append(
+        ["public", "restored_patient_rows", "r"]
+    )
+    with pytest.raises(module.EvidenceFailure, match="database.non_primary_not_empty"):
+        _collect(module, policy, module.SnapshotAdapter(server, databases))
+
+    changed_surfaces = deepcopy(server.surfaces)
+    changed_surfaces["databases"][0]["allow_connections"] = False
+    changed_server = replace(server, surfaces=changed_surfaces)
+    policy = _policy(module, server, _databases())
+    policy["expected_server_surfaces"]["databases"] = module._pin_json(
+        module._surface_pin(KEY, "server:databases", changed_surfaces["databases"])
+    )
+    with pytest.raises(module.EvidenceFailure, match="database.disabled_non_template"):
+        _collect(
+            module,
+            policy,
+            module.SnapshotAdapter(changed_server, _databases()),
+        )
+
+
+def test_policy_binds_exactly_one_primary_database(module: ModuleType) -> None:
+    server = _server(module)
+    databases = _databases()
+    policy = _policy(module, server, databases)
+    policy["source"]["primary_database"] = "postgres"
+    with pytest.raises(
+        module.EvidenceFailure, match="database.primary_binding_mismatch"
+    ):
+        _collect(module, policy, module.SnapshotAdapter(server, databases))
+
+    policy = _policy(module, server, databases)
+    postgres_identity = module._identity_hmac(KEY, "database", "postgres")
+    postgres = next(
+        item
+        for item in policy["expected_databases"]
+        if item["identity_hmac"] == postgres_identity
+    )
+    postgres.update(
+        is_template=False,
+        allow_connections=False,
+        status="connections_disabled",
+        surfaces=None,
+    )
+    with pytest.raises(module.EvidenceFailure, match="policy.invalid_database"):
+        module.validate_policy(policy)
+
+    policy = _policy(module, server, databases)
+    postgres = next(
+        item
+        for item in policy["expected_databases"]
+        if item["identity_hmac"] == postgres_identity
+    )
+    postgres["surfaces"]["user_relations"]["count"] = 1
+    with pytest.raises(module.EvidenceFailure, match="policy.invalid_database"):
+        module.validate_policy(policy)
+
+
+def test_rewrite_rule_definition_changes_schema_pin(module: ModuleType) -> None:
+    server = _server(module)
+    databases = _databases()
+    policy = _policy(module, server, databases)
+    databases["appdb"]["schema"].append(
+        {
+            "kind": "rewrite_rule",
+            "schema": "public",
+            "relation": "patient_rows",
+            "name": "discard_insert",
+            "enabled": "O",
+            "is_instead": True,
+            "event": "3",
+            "definition": "CREATE RULE discard_insert AS ON INSERT DO INSTEAD NOTHING",
+        }
+    )
+
+    with pytest.raises(module.EvidenceFailure, match="database.schema_mismatch"):
+        _collect(module, policy, module.SnapshotAdapter(server, databases))
 
 
 @pytest.mark.parametrize("surface", list(_load_module().SERVER_SURFACES))
@@ -549,23 +668,34 @@ def test_live_row_iteration_stops_before_materializing_over_limit(
 
         def __init__(self, bounds: tuple[int, int, int] = (2, 2, 1)) -> None:
             self.bounds = bounds
+            self.queries: list[str] = []
+            self.cursor_calls = 0
 
         def execute(self, query: str, parameters: Any) -> Any:
-            del query, parameters
+            del parameters
+            self.queries.append(query)
             return self.Result(self.bounds)
 
         def cursor(self, *, name: str) -> Cursor:
             assert name.startswith("server_scope_")
+            self.cursor_calls += 1
             return Cursor()
 
     adapter = object.__new__(module.LivePostgresAdapter)
     adapter.start_capture(60)
     monkeypatch.setattr(module, "MAXIMUM_RECORDS_PER_SURFACE", 2)
+    bounded_connection = Connection()
     with pytest.raises(module.EvidenceFailure, match="catalog.resource_limit"):
-        adapter._rows(Connection(), "SELECT bounded", ())
-    huge = (1, module.MAXIMUM_ROW_BYTES + 1, module.MAXIMUM_ROW_BYTES + 1)
+        adapter._rows(bounded_connection, "SELECT bounded", ())
+    assert "row_to_json" in bounded_connection.queries[-1]
+    assert "octet_length" in bounded_connection.queries[-1]
+    assert "pg_column_size" not in bounded_connection.queries[-1]
+    rendered_limit = module.MAXIMUM_ROW_BYTES // module.MAXIMUM_JSON_ASCII_EXPANSION
+    huge = (1, rendered_limit + 1, rendered_limit + 1)
+    huge_connection = Connection(huge)
     with pytest.raises(module.EvidenceFailure, match="catalog.resource_limit"):
-        adapter._rows(Connection(huge), "SELECT huge", ())
+        adapter._rows(huge_connection, "SELECT huge", ())
+    assert huge_connection.cursor_calls == 0
 
 
 def test_live_row_iteration_rejects_large_canonical_row_after_small_preflight(
@@ -704,6 +834,35 @@ def test_live_adapter_rejects_routing_indirection_and_tls_overrides(
     with pytest.raises(module.EvidenceFailure, match=error_code) as captured:
         module.LivePostgresAdapter(rendered, policy)
     assert "local-test-only" not in str(captured.value)
+
+
+@pytest.mark.parametrize(
+    "invalid_host",
+    [
+        "good.postgres.database.azure.com,attacker.invalid",
+        " good.postgres.database.azure.com",
+        "good.postgres.database.azure.com ",
+        "/var/run/postgresql",
+        "GOOD.postgres.database.azure.com",
+    ],
+)
+def test_policy_host_is_one_canonical_azure_fqdn(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_host: str,
+) -> None:
+    _clear_libpq_environment(module, monkeypatch)
+    policy = json.loads(POLICY.read_text())
+    policy["source"]["host"] = invalid_host
+    with pytest.raises(module.EvidenceFailure, match="policy.invalid_source"):
+        module.validate_policy(policy)
+    if "," in invalid_host:
+        dsn = (
+            f"host={invalid_host} port=5432 dbname=postgres user=scope-reader "
+            "password=local-test-only sslmode=verify-full sslrootcert=system"
+        )
+        with pytest.raises(module.EvidenceFailure, match="policy.invalid_source"):
+            module.LivePostgresAdapter(dsn, policy)
 
 
 def test_live_adapter_accepts_only_canonical_azure_and_local_parameters(
@@ -889,6 +1048,7 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
 
     first = f"scope_a_{secrets.token_hex(6)}"
     second = f"scope_b_{secrets.token_hex(6)}"
+    disabled = f"scope_disabled_{secrets.token_hex(6)}"
     role = f"scope_role_{secrets.token_hex(6)}"
     created: list[str] = []
     role_created = False
@@ -896,17 +1056,37 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
         with psycopg.connect(
             **local_connection_parameters("test"), autocommit=True
         ) as admin:
-            for name in (first, second):
+            for name in (first, second, disabled):
                 admin.execute(
                     sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
                         sql.Identifier(name)
                     )
                 )
                 created.append(name)
+            admin.execute(
+                sql.SQL("ALTER DATABASE {} ALLOW_CONNECTIONS false").format(
+                    sql.Identifier(disabled)
+                )
+            )
         settings = ["server_version_num", "wal_level"]
         server_before = adapter.server_snapshot(settings)
         names = {record["name"] for record in server_before.surfaces["databases"]}
-        assert {first, second, "template0"} <= names
+        assert {first, second, disabled, "template0"} <= names
+        disabled_record = next(
+            record
+            for record in server_before.surfaces["databases"]
+            if record["name"] == disabled
+        )
+        disabled_metadata = module._database_metadata(disabled_record)
+        with pytest.raises(
+            module.EvidenceFailure, match="database.disabled_non_template"
+        ):
+            module._database_scope_status(
+                disabled_metadata[0],
+                is_template=disabled_metadata[1],
+                allow_connections=disabled_metadata[2],
+                primary_database=first,
+            )
         first_before = adapter.database_snapshot(first)
         second_before = adapter.database_snapshot(second)
         assert set(first_before) == set(module.DATABASE_SURFACES)
@@ -959,19 +1139,98 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
                 "CREATE PUBLICATION scope_schema_pub FOR TABLES IN SCHEMA public"
             )
             connection.execute("SELECT pg_catalog.lo_create(9812)")
+        first_without_rule = adapter.database_snapshot(first)
+        with psycopg.connect(
+            **local_connection_parameters(first), autocommit=True
+        ) as connection:
+            connection.execute(
+                "CREATE RULE server_scope_no_insert AS ON INSERT "
+                "TO public.server_scope_probe DO INSTEAD NOTHING"
+            )
         first_after = adapter.database_snapshot(first)
+        assert module._surface_pin(KEY, "rule", first_without_rule["schema"]) != (
+            module._surface_pin(KEY, "rule", first_after["schema"])
+        )
+        with psycopg.connect(
+            **local_connection_parameters(second), autocommit=True
+        ) as connection:
+            connection.execute("CREATE TABLE public.scope_payload (payload text)")
+            connection.execute(
+                "INSERT INTO public.scope_payload VALUES (repeat('x', 1200000))"
+            )
+            sizes = connection.execute(
+                "SELECT pg_catalog.pg_column_size(payload),"
+                "pg_catalog.octet_length(pg_catalog.row_to_json(q)::text) "
+                "FROM public.scope_payload q"
+            ).fetchone()
+        assert sizes is not None
+        compressed, rendered = sizes
+        assert compressed * module.MAXIMUM_JSON_ASCII_EXPANSION < (
+            module.MAXIMUM_ROW_BYTES
+        )
+        assert rendered * module.MAXIMUM_JSON_ASCII_EXPANSION > (
+            module.MAXIMUM_ROW_BYTES
+        )
+        reader = adapter._connect(second)
+
+        class PreflightOnlyConnection:
+            def execute(self, query: str, parameters: Any = None) -> Any:
+                return reader.execute(query, parameters)
+
+            def cursor(self, *, name: str) -> Any:
+                raise AssertionError(f"cursor unexpectedly created: {name}")
+
+        try:
+            adapter._configure(reader)
+            with pytest.raises(module.EvidenceFailure, match="catalog.resource_limit"):
+                adapter._rows(
+                    PreflightOnlyConnection(),
+                    "SELECT payload FROM public.scope_payload",
+                )
+        finally:
+            reader.close()
+        second_after = adapter.database_snapshot(second)
+        with pytest.raises(
+            module.EvidenceFailure, match="database.non_primary_not_empty"
+        ):
+            module._require_non_primary_empty(second_after)
+        live_surfaces = deepcopy(server_before.surfaces)
+        live_surfaces["databases"] = [
+            record
+            for record in live_surfaces["databases"]
+            if record["name"] in {first, second}
+        ]
+        live_server = replace(server_before, surfaces=live_surfaces)
+        live_databases = {first: first_before, second: second_before}
+        live_policy = _policy(
+            module,
+            live_server,
+            live_databases,
+            primary_database=first,
+        )
+        with pytest.raises(
+            module.EvidenceFailure, match="database.non_primary_not_empty"
+        ):
+            _collect(
+                module,
+                live_policy,
+                module.SnapshotAdapter(
+                    live_server,
+                    {first: first_before, second: second_after},
+                ),
+            )
         assert module._surface_pin(KEY, "probe", first_before["schema"]) != (
             module._surface_pin(KEY, "probe", first_after["schema"])
         )
-        assert module._surface_pin(KEY, "probe", second_before["schema"]) == (
-            module._surface_pin(
-                KEY, "probe", adapter.database_snapshot(second)["schema"]
-            )
-        )
+        assert module._surface_pin(
+            KEY, "probe", second_before["user_relations"]
+        ) != module._surface_pin(KEY, "probe", second_after["user_relations"])
         rendered_schema = "\n".join(first_after["schema"])
         assert "security_barrier=true" in rendered_schema
         assert "column_fdw_option" in rendered_schema
         assert "column_authorization" in rendered_schema
+        assert "server_scope_no_insert" in rendered_schema
+        assert '"kind": "rewrite_rule"' in rendered_schema
         assert any(row[4] == role for row in first_after["foreign_privileges"])
         assert any(row[5] == role for row in first_after["language_privileges"])
         assert first_after["publication_namespaces"]
@@ -1035,6 +1294,10 @@ def test_script_is_standalone_read_only_and_aggregate_only() -> None:
     assert "pg_catalog.pg_tablespace_location" in source
     assert "pg_catalog.pg_replication_origin_status" in source
     assert "pg_catalog.pg_shdepend" in source
+    assert "pg_catalog.pg_rewrite" in source
+    assert "pg_catalog.pg_get_ruledef" in source
+    assert "pg_catalog.row_to_json" in source
+    assert "pg_catalog.octet_length" in source
     assert "dependency.refclassid" in source
     assert "dependency.refobjid" in source
     assert "c.reltablespace" in source
