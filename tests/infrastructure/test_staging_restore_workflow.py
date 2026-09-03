@@ -17,6 +17,8 @@ def test_workflow_is_protected_manual_and_cleanup_is_default_off() -> None:
     assert "environment" not in jobs["authorize"]
     assert jobs["provision"]["environment"] == "staging-restore-provision"
     assert jobs["cleanup"]["environment"] == "staging-restore-cleanup"
+    assert jobs["provision"]["runs-on"] == "ubuntu-latest"
+    assert jobs["cleanup"]["runs-on"] == "ubuntu-latest"
     permissions = {"attestations": "write", "contents": "read", "id-token": "write"}
     assert jobs["provision"]["permissions"] == permissions
     assert jobs["cleanup"]["permissions"] == permissions
@@ -38,3 +40,5 @@ def test_workflow_is_protected_manual_and_cleanup_is_default_off() -> None:
     assert "actions/attest-build-provenance@e8998f949" in workflow
     assert "if: always()" in workflow
     assert "pull_request:" not in workflow and "push:" not in workflow
+    assert "staging_restore_safe_submit" not in workflow
+    assert "restore-safe-submit-policy.json" not in workflow
