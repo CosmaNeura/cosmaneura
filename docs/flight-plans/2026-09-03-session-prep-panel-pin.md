@@ -92,5 +92,5 @@ explicitly approved.
   retry identity, four states, and browser-storage leakage checks.
 - Sovereign's runtime suite passed 68 tests, including the three-call/ten-second
   polling bound and direct typed-response projection.
-- Core Vitest: 43 files and 234 tests passed with synthetic public test values.
+- Core Vitest: 43 files and 233 tests passed with synthetic public test values.
 - Core TypeScript typecheck, Prettier, and ESLint passed.
