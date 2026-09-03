@@ -993,8 +993,14 @@ class SyntheticSessionPrepService:
             if cached is not None:
                 if cached.request_digest != request_digest:
                     raise SessionPrepIdempotencyConflict
-                return SessionPrepInvocation(response=cached.response, replayed=True)
-            if turn_closed:
+                if (
+                    context.state != "source_revoked"
+                    or cached.response.result.state == "unavailable"
+                ):
+                    return SessionPrepInvocation(
+                        response=cached.response, replayed=True
+                    )
+            if turn_closed and context.state != "source_revoked":
                 raise SessionPrepScopeDenied
 
             observed_at = self._clock()
