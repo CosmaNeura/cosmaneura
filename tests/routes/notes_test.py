@@ -3,7 +3,13 @@ from datetime import UTC, datetime
 from fastapi import status
 from fastapi.testclient import TestClient
 
+import app.services.session_prep_scope as session_prep_scope
+import app.services.staging_synthetic_appointment as staging_fixture_service
+from app.configuration.session_prep import SessionPrepSyntheticSettings
 from app.server import api_app
+from app.services.staging_synthetic_appointment import (
+    ensure_staging_synthetic_appointment,
+)
 
 from activemodel.session_manager import get_engine
 from app.models.ai_visit_note import AIVisitNote
@@ -115,6 +121,69 @@ def test_note_detail(authenticated_client: TestClient):
     assert result["appointment"]["id"] == str(appointment.id)
     assert result["appointment"]["patient_id"] == str(patient.id)
     assert result["appointment"]["doctor_id"] == str(doctor.id)
+    assert result["context_snapshot_ref"] is None
+
+
+def test_note_detail_projects_context_ref_only_for_exact_synthetic_fixture(
+    authenticated_client: TestClient,
+    monkeypatch,
+):
+    _, _, clerk_user = get_clerk_dev_user()
+    doctor = Doctor.find_or_create_by(clerk_id=clerk_user.id)
+    if not doctor.email:
+        assert clerk_user.email_addresses
+        doctor.email = clerk_user.email_addresses[0].email_address
+    doctor.last_active_at = datetime.now(UTC)
+    doctor.save()
+    monkeypatch.setattr(staging_fixture_service, "is_staging", lambda: True)
+    monkeypatch.setattr(session_prep_scope, "is_staging", lambda: True)
+    fixture = ensure_staging_synthetic_appointment(
+        doctor_id=doctor.id,
+        doctor_email=doctor.email,
+        operator_ref="operator_note_detail_session_prep",
+    )
+    monkeypatch.setattr(
+        session_prep_scope,
+        "SESSION_PREP_SYNTHETIC_SETTINGS",
+        SessionPrepSyntheticSettings(
+            enabled=True,
+            context_snapshot_ref="context_synthetic_note_detail_v1",
+            clerk_subject=doctor.clerk_id,
+            appointment_id=str(fixture.appointment.id),
+            fixture_id=str(fixture.fixture.id),
+        ),
+    )
+
+    eligible = authenticated_client.get(
+        api_app.url_path_for(
+            "note_detail",
+            appointment_id=fixture.appointment.id,
+        )
+    )
+
+    assert eligible.status_code == status.HTTP_200_OK
+    assert eligible.json()["context_snapshot_ref"] == "context_synthetic_note_detail_v1"
+
+    ordinary_patient = Patient(
+        doctor_id=doctor.id,
+        name="Synthetic ordinary route record",
+        date_of_birth=datetime(2001, 1, 1),
+    ).save()
+    ordinary_appointment = Appointment(
+        doctor_id=doctor.id,
+        patient_id=ordinary_patient.id,
+        appointment_date=datetime(2098, 1, 1),
+        external_id=None,
+    ).save()
+    ordinary = authenticated_client.get(
+        api_app.url_path_for(
+            "note_detail",
+            appointment_id=ordinary_appointment.id,
+        )
+    )
+
+    assert ordinary.status_code == status.HTTP_200_OK
+    assert ordinary.json()["context_snapshot_ref"] is None
 
 
 def test_note_detail_returns_only_current_note_version(
