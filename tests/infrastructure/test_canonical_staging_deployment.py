@@ -48,19 +48,27 @@ def test_workflow_is_manual_only_non_cancelling_and_requires_release_contract() 
     assert "cancel-in-progress: false" in source
 
 
-def test_legacy_staging_dispatch_is_fail_closed_without_changing_production() -> None:
+def test_legacy_and_canonical_staging_paths_are_ref_disjoint() -> None:
     legacy = LEGACY_WORKFLOW.read_text(encoding="utf-8")
     authorization = _job(legacy, "authorize-staging")
+    legacy_deploy = _job(legacy, "deploy-staging")
+    canonical_deploy = _job(_source(), "deploy")
 
-    hold = authorization.index(
-        "name: Hold legacy staging deployment for canonical cutover"
-    )
-    old_authorization = authorization.index(
-        "name: Require founder-authorized manual deployment from staging"
-    )
-    assert hold < old_authorization
-    assert "exit 1" in authorization[hold:old_authorization]
+    assert "name: Hold legacy staging deployment for canonical cutover" not in legacy
+    assert "github.ref == 'refs/heads/staging'" in authorization
+    assert '"$DEPLOYMENT_REF" != "refs/heads/staging"' in authorization
     assert "environment:" not in authorization
+    assert "github.ref == 'refs/heads/staging'" in legacy_deploy
+    assert "environment: staging" in legacy_deploy
+    assert "refs/heads/master" not in authorization + legacy_deploy
+
+    assert "github.ref == 'refs/heads/master'" in canonical_deploy
+    assert "environment: staging" in canonical_deploy
+    identity = _step(
+        canonical_deploy, "Verify observed staging Azure identity, trust, and scope"
+    )
+    assert "repo:CosmaNeura/cosmaneura:environment:staging" in identity
+    assert "refs/heads/staging" not in identity
 
 
 def test_authorization_is_founder_only_protected_master_and_secretless() -> None:

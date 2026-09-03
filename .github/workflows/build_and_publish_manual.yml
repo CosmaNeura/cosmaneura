@@ -104,11 +104,6 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
-      - name: Hold legacy staging deployment for canonical cutover
-        run: |
-          echo "::error::Legacy staging dispatch is retired; use Deploy Staging Candidate from protected master."
-          exit 1
-
       - name: Require founder-authorized manual deployment from staging
         env:
           DEPLOYMENT_ACTOR: ${{ github.actor }}
