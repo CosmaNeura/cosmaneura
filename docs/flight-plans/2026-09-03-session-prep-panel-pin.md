@@ -11,7 +11,7 @@ feature or authorize real provider data.
 
 - Core base: `d543e035d968d3dccc34cd03baaef90b41a4629c`.
 - Core Session Prep merge: `6cea63e59203a8730af39497a3672b3f4598ba98`.
-- Sovereign corrected source candidate: `024655cd5196344982d918dad5e09f92e046b544`.
+- Sovereign corrected source candidate: `024655ca3a542caf02e46d1b9b209d3c5b4d96d0`.
 - Receiver baseline merge: `8020b745673a13875aecf32941a6711d22926045`.
 - Panel SHA-256:
   `ab64c6d2135d7b217834363791728ab04fb9d86524f1643cb72f88cfeb4e0d5c`.
@@ -85,7 +85,7 @@ explicitly approved.
 
 - The Core and Sovereign request/result schemas and seven fixtures are
   byte-identical.
-- The vendored file is byte-identical to Sovereign candidate `024655cd5196344982d918dad5e09f92e046b544`
+- The vendored file is byte-identical to Sovereign candidate `024655ca3a542caf02e46d1b9b209d3c5b4d96d0`
   and hashes to the pinned SHA-256 above.
 - Sovereign's independent panel contract harness passed against the Core-vendored
   file, including record switching, stale-response suppression, revocation,
