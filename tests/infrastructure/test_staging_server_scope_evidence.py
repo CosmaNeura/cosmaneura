@@ -46,96 +46,67 @@ def module() -> ModuleType:
     return _load_module()
 
 
+def _database(
+    name: str, *, template: bool = False, connect: bool = True
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "is_template": template,
+        "allow_connections": connect,
+        "owner": "owner-role",
+        "encoding": "UTF8",
+        "collation": "C",
+        "ctype": "C",
+        "locale_provider": "c",
+        "icu_locale": None,
+        "icu_rules": None,
+        "collation_version": None,
+        "default_tablespace": "pg_default",
+        "connection_limit": -1,
+    }
+
+
 def _server(module: ModuleType) -> Any:
+    role = ["owner-role", *([True] * 7), -1, None, True, "scram-sha-256"] + [
+        "SCRAM-SHA-256$private-verifier"
+    ]
+    version = ["server_version_num", "160015", None, "default", "160015"] + [
+        "160015",
+        False,
+    ]
     return module.ServerSnapshot(
         version_major=16,
-        visibility={"pg_monitor": True, "pg_read_all_settings": True},
+        visibility={
+            "pg_authid": True,
+            "pg_monitor": True,
+            "pg_read_all_settings": True,
+        },
         surfaces={
             "databases": [
-                {
-                    "name": "appdb",
-                    "is_template": False,
-                    "allow_connections": True,
-                    "owner": "owner-role",
-                    "encoding": "UTF8",
-                    "collation": "C",
-                    "ctype": "C",
-                    "locale_provider": "c",
-                    "icu_locale": None,
-                    "icu_rules": None,
-                    "collation_version": None,
-                    "default_tablespace": "pg_default",
-                    "connection_limit": -1,
-                },
-                {
-                    "name": "postgres",
-                    "is_template": False,
-                    "allow_connections": True,
-                    "owner": "owner-role",
-                    "encoding": "UTF8",
-                    "collation": "C",
-                    "ctype": "C",
-                    "locale_provider": "c",
-                    "icu_locale": None,
-                    "icu_rules": None,
-                    "collation_version": None,
-                    "default_tablespace": "pg_default",
-                    "connection_limit": -1,
-                },
-                {
-                    "name": "template0",
-                    "is_template": True,
-                    "allow_connections": False,
-                    "owner": "owner-role",
-                    "encoding": "UTF8",
-                    "collation": "C",
-                    "ctype": "C",
-                    "locale_provider": "c",
-                    "icu_locale": None,
-                    "icu_rules": None,
-                    "collation_version": None,
-                    "default_tablespace": "pg_default",
-                    "connection_limit": -1,
-                },
-                {
-                    "name": "template1",
-                    "is_template": True,
-                    "allow_connections": True,
-                    "owner": "owner-role",
-                    "encoding": "UTF8",
-                    "collation": "C",
-                    "ctype": "C",
-                    "locale_provider": "c",
-                    "icu_locale": None,
-                    "icu_rules": None,
-                    "collation_version": None,
-                    "default_tablespace": "pg_default",
-                    "connection_limit": -1,
-                },
+                _database("appdb"),
+                _database("postgres"),
+                _database("template0", template=True, connect=False),
+                _database("template1", template=True),
             ],
-            "roles": [
-                ["owner-role", True, True, True, True, True, True, True, -1, None]
-            ],
+            "roles": [role],
             "memberships": [],
             "role_settings": [],
             "database_privileges": [
                 ["appdb", "owner-role", "PUBLIC", "owner-role", "CONNECT", False]
             ],
-            "tablespaces": [["pg_default", "owner-role", None, ["(PUBLIC,CREATE,f)"]]],
+            "tablespaces": [
+                ["pg_default", "owner-role", "", None, "PUBLIC", "owner-role"]
+            ],
             "replication_slots": [],
+            "replication_origins": [],
+            "prepared_transactions": [],
+            "subscriptions": [["appdb", "subscription-private", "password=secret"]],
             "parameter_privileges": [],
             "shared_security_labels": [],
+            "shared_descriptions": [],
             "settings": [
                 ["archive_mode", "off", None, "default", "off", "off", False],
-                [
-                    "server_version_num",
-                    "160015",
-                    None,
-                    "default",
-                    "160015",
-                    "160015",
-                    False,
-                ],
+                version,
             ],
         },
     )
@@ -148,10 +119,13 @@ def _database_surfaces(label: str) -> dict[str, list[Any]]:
         "foreign_data_wrappers": [["fdw-private", ["token=fdw-secret"]]],
         "foreign_servers": [["server-private", ["host=private.invalid"]]],
         "foreign_tables": [["private", "table-private", "server-private"]],
+        "foreign_privileges": [["server", "server-private", "user-private"]],
+        "language_privileges": [["plpgsql", "PUBLIC", "USAGE"]],
         "user_mappings": [["server-private", "user-private", ["password=secret"]]],
         "publications": [["publication-private", False]],
         "publication_memberships": [["publication-private", "table-private"]],
-        "subscriptions": [["subscription-private", "password=secret", False]],
+        "publication_namespaces": [["publication-private", "private"]],
+        "subscription_state": [["subscription-private", False, 0]],
         "subscription_relations": [["subscription-private", "table-private", "r"]],
         "security_labels": [["provider-private", "label-private"]],
         "event_triggers": [["event-private", "ddl_command_start"]],
@@ -274,6 +248,7 @@ def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
         RESOURCE_ID,
         "fdw-secret",
         "password=secret",
+        "private-verifier",
         "publication-private",
         "c2VjcmV0",
     ):
@@ -282,19 +257,7 @@ def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
     assert evidence["capture_started_at"] == "2026-09-03T12:00:00Z"
 
 
-@pytest.mark.parametrize(
-    "surface",
-    [
-        "databases",
-        "roles",
-        "memberships",
-        "role_settings",
-        "database_privileges",
-        "tablespaces",
-        "replication_slots",
-        "settings",
-    ],
-)
+@pytest.mark.parametrize("surface", list(_load_module().SERVER_SURFACES))
 def test_every_server_surface_is_closed_world(module: ModuleType, surface: str) -> None:
     server = _server(module)
     databases = _databases()
@@ -386,9 +349,7 @@ def test_enabled_database_read_failure_and_visibility_are_blockers(
     with pytest.raises(module.EvidenceFailure, match="database.read_blocked"):
         _collect(module, policy, module.SnapshotAdapter(server, databases))
 
-    hidden = replace(
-        server, visibility={"pg_monitor": False, "pg_read_all_settings": True}
-    )
+    hidden = replace(server, visibility={**server.visibility, "pg_authid": False})
     with pytest.raises(module.EvidenceFailure, match="server.incomplete_visibility"):
         _collect(module, policy, module.SnapshotAdapter(hidden, _databases()))
 
@@ -411,6 +372,25 @@ def test_server_change_during_capture_is_rejected(module: ModuleType) -> None:
             return value
 
     with pytest.raises(module.EvidenceFailure, match="server.changed_during_capture"):
+        _collect(module, policy, UnstableAdapter(server, databases))
+
+
+def test_database_change_between_capture_passes_is_rejected(module: ModuleType) -> None:
+    server, databases = _server(module), _databases()
+    policy = _policy(module, server, databases)
+
+    class UnstableAdapter(module.SnapshotAdapter):
+        calls = 0
+
+        def database_snapshot(self, database: str) -> Any:
+            value = super().database_snapshot(database)
+            if database == "appdb":
+                self.calls += 1
+                if self.calls == 2:
+                    value["schema"].append({"kind": "late-change"})
+            return value
+
+    with pytest.raises(module.EvidenceFailure, match="database.changed_during_capture"):
         _collect(module, policy, UnstableAdapter(server, databases))
 
 
@@ -469,9 +449,10 @@ def test_monotonic_deadline_and_resource_limits_fail_closed(
             monotonic=lambda: next(ticks),
         )
 
-    monkeypatch.setattr(module, "MAXIMUM_BYTES_PER_SURFACE", 3)
-    with pytest.raises(module.EvidenceFailure, match="catalog.surface_too_large"):
-        module._surface_pin(KEY, "bounded", ["four"])
+    with monkeypatch.context() as limits:
+        limits.setattr(module, "MAXIMUM_BYTES_PER_SURFACE", 3)
+        with pytest.raises(module.EvidenceFailure, match="catalog.surface_too_large"):
+            module._surface_pin(KEY, "bounded", ["four"])
     monkeypatch.setattr(module, "MAXIMUM_DATABASES", 3)
     policy["expected_databases"] = policy["expected_databases"][:3]
     with pytest.raises(module.EvidenceFailure, match="database.count_exceeded"):
@@ -495,8 +476,19 @@ def test_live_row_iteration_stops_before_materializing_over_limit(
             return iter(((1,), (2,), (3,)))
 
     class Connection:
-        def execute(self, query: str, parameters: Any) -> None:
+        class Result:
+            def __init__(self, bounds: tuple[int, int, int]) -> None:
+                self.bounds = bounds
+
+            def fetchone(self) -> tuple[int, int, int]:
+                return self.bounds
+
+        def __init__(self, bounds: tuple[int, int, int] = (2, 2, 1)) -> None:
+            self.bounds = bounds
+
+        def execute(self, query: str, parameters: Any) -> Any:
             del query, parameters
+            return self.Result(self.bounds)
 
         def cursor(self, *, name: str) -> Cursor:
             assert name.startswith("server_scope_")
@@ -507,6 +499,9 @@ def test_live_row_iteration_stops_before_materializing_over_limit(
     monkeypatch.setattr(module, "MAXIMUM_RECORDS_PER_SURFACE", 2)
     with pytest.raises(module.EvidenceFailure, match="catalog.resource_limit"):
         adapter._rows(Connection(), "SELECT bounded", ())
+    huge = (1, module.MAXIMUM_ROW_BYTES + 1, module.MAXIMUM_ROW_BYTES + 1)
+    with pytest.raises(module.EvidenceFailure, match="catalog.resource_limit"):
+        adapter._rows(Connection(huge), "SELECT huge", ())
 
 
 def test_database_url_comes_only_from_fixed_environment(
@@ -551,7 +546,7 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
     parsed = urllib.parse.urlsplit(base_url)
     assert parsed.scheme == "postgresql"
     assert parsed.hostname in {"localhost", "127.0.0.1", "::1"}
-    assert parsed.port in {None, 5432} and parsed.path == "/test"
+    assert (parsed.port is None or 1 <= parsed.port <= 65535) and parsed.path == "/test"
     first = f"scope_a_{secrets.token_hex(6)}"
     second = f"scope_b_{secrets.token_hex(6)}"
     role = f"scope_role_{secrets.token_hex(6)}"
@@ -582,9 +577,50 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
         assert set(first_before) == set(module.DATABASE_SURFACES)
         assert set(second_before) == set(module.DATABASE_SURFACES)
 
+        with psycopg.connect(base_url, autocommit=True) as admin:
+            admin.execute(
+                sql.SQL("CREATE ROLE {} LOGIN PASSWORD 'local-test-only'").format(
+                    sql.Identifier(role)
+                )
+            )
+        role_created = True
         first_url = urllib.parse.urlunsplit(parsed._replace(path=f"/{first}"))
         with psycopg.connect(first_url, autocommit=True) as connection:
             connection.execute("CREATE TABLE public.server_scope_probe (id integer)")
+            connection.execute(
+                "CREATE VIEW public.scope_view WITH "
+                "(security_barrier=true,security_invoker=true) AS "
+                "SELECT id FROM public.server_scope_probe"
+            )
+            connection.execute(
+                sql.SQL("GRANT SELECT (id) ON public.server_scope_probe TO {}").format(
+                    sql.Identifier(role)
+                )
+            )
+            connection.execute("CREATE FOREIGN DATA WRAPPER scope_fdw")
+            connection.execute(
+                "CREATE SERVER scope_server FOREIGN DATA WRAPPER scope_fdw "
+                "OPTIONS (host 'private.invalid')"
+            )
+            connection.execute(
+                "CREATE FOREIGN TABLE public.scope_foreign "
+                "(id integer OPTIONS (column_name 'remote_id')) SERVER scope_server "
+                "OPTIONS (table_name 'remote')"
+            )
+            for target in (
+                "FOREIGN DATA WRAPPER scope_fdw",
+                "FOREIGN SERVER scope_server",
+                "LANGUAGE plpgsql",
+            ):
+                connection.execute(
+                    sql.SQL("GRANT USAGE ON " + target + " TO {}").format(
+                        sql.Identifier(role)
+                    )
+                )
+            connection.execute(
+                "CREATE PUBLICATION scope_schema_pub FOR TABLES IN SCHEMA public"
+            )
+            connection.execute("SELECT pg_catalog.lo_create(9812)")
         first_after = adapter.database_snapshot(first)
         assert module._surface_pin(KEY, "probe", first_before["schema"]) != (
             module._surface_pin(KEY, "probe", first_after["schema"])
@@ -594,19 +630,29 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
                 KEY, "probe", adapter.database_snapshot(second)["schema"]
             )
         )
+        rendered_schema = "\n".join(first_after["schema"])
+        assert "security_barrier=true" in rendered_schema
+        assert "column_fdw_option" in rendered_schema
+        assert "column_authorization" in rendered_schema
+        assert any(row[4] == role for row in first_after["foreign_privileges"])
+        assert any(row[5] == role for row in first_after["language_privileges"])
+        assert first_after["publication_namespaces"]
+        assert first_after["large_objects"]
 
         with psycopg.connect(base_url, autocommit=True) as admin:
-            admin.execute(sql.SQL("CREATE ROLE {}").format(sql.Identifier(role)))
-        role_created = True
+            admin.execute(
+                sql.SQL("COMMENT ON ROLE {} IS 'private'").format(sql.Identifier(role))
+            )
         server_after = adapter.server_snapshot(settings)
         assert module._surface_pin(KEY, "roles", server_before.surfaces["roles"]) != (
             module._surface_pin(KEY, "roles", server_after.surfaces["roles"])
         )
+        role_row = next(row for row in server_after.surfaces["roles"] if row[0] == role)
+        assert role_row[10:12] == [True, "scram-sha-256"]
+        assert server_after.surfaces["shared_descriptions"]
     finally:
         if role_created or created:
             with psycopg.connect(base_url, autocommit=True) as admin:
-                if role_created:
-                    admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
                 for name in created:
                     admin.execute(
                         "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
@@ -618,6 +664,8 @@ def test_live_adapter_enumerates_disposable_databases_and_detects_mutations(
                             sql.Identifier(name)
                         )
                     )
+                if role_created:
+                    admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
 
 
 def test_script_is_standalone_read_only_and_aggregate_only() -> None:
@@ -634,11 +682,18 @@ def test_script_is_standalone_read_only_and_aggregate_only() -> None:
     assert "pg_catalog.pg_subscription" in source
     assert "pg_catalog.pg_subscription_rel" in source
     assert "pg_catalog.pg_publication_rel" in source
+    assert "pg_catalog.pg_publication_namespace" in source
     assert "pg_catalog.pg_foreign_table" in source
     assert "pg_catalog.pg_event_trigger" in source
     assert "pg_catalog.pg_largeobject" in source
     assert "pg_catalog.pg_shseclabel" in source
     assert "umoptions" in source
+    assert "attfdwoptions" in source
+    assert "pg_catalog.pg_authid" in source
+    assert "pg_catalog.pg_tablespace_location" in source
+    assert "pg_catalog.pg_replication_origin_status" in source
+    assert "subskiplsn='0/0'" in source and "srsublsn='0/0'" in source
+    assert "array_agg" not in source
     assert "fetchall" not in source
     assert "--database-url" not in source
     assert "STAGING_SERVER_SCOPE_DATABASE_URL" in source

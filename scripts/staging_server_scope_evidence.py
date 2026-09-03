@@ -18,6 +18,7 @@ import os
 import re
 import stat
 import sys
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -29,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
 DATABASE_URL_ENVIRONMENT = "STAGING_SERVER_SCOPE_DATABASE_URL"
 CANONICAL_POLICY_SHA256 = (
-    "7b452e230df0310685c2751dbb50f0cfd27ccf3108106618461d117bf4ca33ea"
+    "4842cb66cf966edc21da7b0e75431f8cd75db50e65476527d73075951ba95813"
 )
 HMAC_DOMAIN = b"cosmaneura:staging-server-scope-evidence:v1\x00"
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -40,36 +41,16 @@ MAXIMUM_HMAC_KEY_BYTES = 4096
 MAXIMUM_POLICY_BYTES = 1024 * 1024
 MAXIMUM_RECORDS_PER_SURFACE = 100_000
 MAXIMUM_BYTES_PER_SURFACE = 16 * 1024 * 1024
+MAXIMUM_ROW_BYTES = 1024 * 1024
 MAXIMUM_DATABASES = 64
 MAXIMUM_TOTAL_RECORDS = 500_000
 MAXIMUM_TOTAL_BYTES = 64 * 1024 * 1024
 MAXIMUM_CAPTURE_SECONDS = 900
-SERVER_SURFACES = (
-    "databases",
-    "roles",
-    "memberships",
-    "role_settings",
-    "database_privileges",
-    "tablespaces",
-    "replication_slots",
-    "parameter_privileges",
-    "shared_security_labels",
-    "settings",
+SERVER_SURFACES = tuple(
+    "databases roles memberships role_settings database_privileges tablespaces replication_slots replication_origins prepared_transactions subscriptions parameter_privileges shared_security_labels shared_descriptions settings".split()
 )
-DATABASE_SURFACES = (
-    "schema",
-    "extensions",
-    "foreign_data_wrappers",
-    "foreign_servers",
-    "foreign_tables",
-    "user_mappings",
-    "publications",
-    "publication_memberships",
-    "subscriptions",
-    "subscription_relations",
-    "security_labels",
-    "event_triggers",
-    "large_objects",
+DATABASE_SURFACES = tuple(
+    "schema extensions foreign_data_wrappers foreign_servers foreign_tables foreign_privileges language_privileges user_mappings publications publication_memberships publication_namespaces subscription_state subscription_relations security_labels event_triggers large_objects".split()
 )
 
 
@@ -259,7 +240,7 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
         raise EvidenceFailure("policy.invalid_settings")
     visibility = _expect_keys(
         policy["required_visibility"],
-        {"pg_monitor", "pg_read_all_settings"},
+        {"pg_authid", "pg_monitor", "pg_read_all_settings"},
         "policy.invalid_visibility",
     )
     if not all(value is True for value in visibility.values()):
@@ -488,6 +469,7 @@ def collect_evidence(
         item["identity_hmac"]: item for item in policy["expected_databases"]
     }
     observed_databases: list[dict[str, Any]] = []
+    fingerprinted: list[tuple[str, str, dict[str, dict[str, Any]]]] = []
     seen: set[str] = set()
     for raw_record in sorted(database_records, key=_canonical):
         check_deadline()
@@ -536,8 +518,22 @@ def collect_evidence(
                 "surfaces": surface_evidence,
             }
         )
+        fingerprinted.append((name, identity, surface_evidence))
     if seen != set(expected_databases):
         raise EvidenceFailure("database.missing")
+    for name, identity, first_pins in fingerprinted:
+        check_deadline()
+        try:
+            snapshot = adapter.database_snapshot(name)
+        except DatabaseUnavailable:
+            raise EvidenceFailure("database.read_blocked") from None
+        if set(snapshot) != set(DATABASE_SURFACES):
+            raise EvidenceFailure("database.incomplete_surface")
+        for surface in DATABASE_SURFACES:
+            pin = _surface_pin(key, f"database:{identity}:{surface}", snapshot[surface])
+            check_deadline()
+            if _pin_json(pin) != first_pins[surface]:
+                raise EvidenceFailure("database.changed_during_capture")
     check_deadline()
     after = adapter.server_snapshot(settings)
     if after != before:
@@ -596,6 +592,10 @@ SCHEMA_QUERIES = (
        JOIN pg_catalog.pg_roles r ON r.oid=c.relowner
        LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam
        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','relation_option','schema',n.nspname,
+       'relation',c.relname,'option',o.option)::text FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       CROSS JOIN LATERAL unnest(c.reloptions) o(option)
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','column','schema',n.nspname,'relation',c.relname,
        'name',a.attname,'position',a.attnum,'type',pg_catalog.format_type(a.atttypid,a.atttypmod),
        'not_null',a.attnotnull,'identity',a.attidentity,'generated',a.attgenerated,
@@ -606,6 +606,19 @@ SCHEMA_QUERIES = (
        LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
        LEFT JOIN pg_catalog.pg_collation co ON co.oid=a.attcollation
        WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname !~ '^pg_'
+       AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','column_fdw_option','schema',n.nspname,
+       'relation',c.relname,'column',a.attname,'option',o.option)::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       CROSS JOIN LATERAL unnest(a.attfdwoptions) o(option)
+       WHERE a.attnum>0 AND NOT a.attisdropped AND n.nspname !~ '^pg_'
+       AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','column_authorization','schema',n.nspname,
+       'relation',c.relname,'column',x.attname,'grantee',CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE g.rolname END,
+       'grantor',grantor.rolname,'privilege',a.privilege_type,'grantable',a.is_grantable)::text FROM pg_catalog.pg_attribute x
+       JOIN pg_catalog.pg_class c ON c.oid=x.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace CROSS JOIN LATERAL pg_catalog.aclexplode(x.attacl) a
+       LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
+       LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor
+       WHERE x.attnum>0 AND NOT x.attisdropped AND n.nspname !~ '^pg_'
        AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','constraint','schema',n.nspname,'relation',c.relname,
        'name',x.conname,'type',x.contype,'definition',
@@ -645,11 +658,11 @@ SCHEMA_QUERIES = (
        'security_definer',p.prosecdef,'leakproof',p.proleakproof,'returns_set',p.proretset,
        'source',p.prosrc,'binary',p.probin,
        'definition',CASE WHEN p.prokind='a' THEN NULL ELSE pg_catalog.pg_get_functiondef(p.oid) END,
-       'owner',r.rolname,'config',(SELECT array_agg(v ORDER BY v)
-       FROM unnest(p.proconfig) v))::text FROM pg_catalog.pg_proc p
+       'owner',r.rolname,'config',config.option)::text FROM pg_catalog.pg_proc p
        JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
        JOIN pg_catalog.pg_roles r ON r.oid=p.proowner
        JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+       LEFT JOIN LATERAL unnest(p.proconfig) config(option) ON true
        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','type','schema',n.nspname,'name',t.typname,
        'type_kind',t.typtype,'category',t.typcategory,'owner',r.rolname,
@@ -671,12 +684,13 @@ SCHEMA_QUERIES = (
        AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','policy','schema',n.nspname,'relation',c.relname,
        'name',p.polname,'command',p.polcmd,'permissive',p.polpermissive,
-       'roles',(SELECT array_agg(CASE WHEN role_oid=0 THEN 'PUBLIC' ELSE r.rolname END ORDER BY role_oid)
-       FROM unnest(p.polroles) role_oid LEFT JOIN pg_catalog.pg_roles r ON r.oid=role_oid),
+       'role',CASE WHEN role_oid=0 THEN 'PUBLIC' ELSE r.rolname END,
        'using',pg_catalog.pg_get_expr(p.polqual,p.polrelid,false),
        'check',pg_catalog.pg_get_expr(p.polwithcheck,p.polrelid,false))::text
        FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid=p.polrelid
        JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       CROSS JOIN LATERAL unnest(p.polroles) role_oid
+       LEFT JOIN pg_catalog.pg_roles r ON r.oid=role_oid
        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','authorization','object_kind',x.object_kind,
        'schema',x.schema_name,'object',x.object_name,'owner',x.owner_name,
@@ -820,6 +834,18 @@ class LivePostgresAdapter:
             connection.execute(statement)
             self._remaining()
 
+    def _cancel_at_deadline(self, connection: Any) -> threading.Timer:
+        def cancel() -> None:
+            try:
+                connection.cancel()
+            except Exception:
+                pass
+
+        timer = threading.Timer(self._remaining(), cancel)
+        timer.daemon = True
+        timer.start()
+        return timer
+
     def _rows(self, connection: Any, query: str, parameters: Any = None) -> list[Any]:
         try:
             remaining_ms = max(1, min(30_000, int(self._remaining() * 1000)))
@@ -827,6 +853,23 @@ class LivePostgresAdapter:
                 "SELECT pg_catalog.set_config('statement_timeout', %s, true)",
                 (f"{remaining_ms}ms",),
             )
+            bounds = connection.execute(
+                "SELECT count(*)::bigint,"
+                "COALESCE(sum(pg_catalog.pg_column_size(q)),0)::bigint,"
+                "COALESCE(max(pg_catalog.pg_column_size(q)),0)::bigint "
+                f"FROM ({query}) q",
+                parameters,
+            ).fetchone()
+            self._remaining()
+            if (
+                not bounds
+                or bounds[0] > MAXIMUM_RECORDS_PER_SURFACE
+                or bounds[1] > MAXIMUM_BYTES_PER_SURFACE
+                or bounds[2] > MAXIMUM_ROW_BYTES
+                or self._total_records + bounds[0] > MAXIMUM_TOTAL_RECORDS
+                or self._total_bytes + bounds[1] > MAXIMUM_TOTAL_BYTES
+            ):
+                raise EvidenceFailure("catalog.resource_limit")
             self._query_sequence += 1
             records: list[Any] = []
             query_records = 0
@@ -857,6 +900,8 @@ class LivePostgresAdapter:
         except EvidenceFailure:
             raise
         except Exception:
+            if time.monotonic() >= self._deadline:
+                raise EvidenceFailure("capture.deadline_exceeded") from None
             raise EvidenceFailure("catalog.read_blocked") from None
 
     def server_snapshot(self, required_settings: Sequence[str]) -> ServerSnapshot:
@@ -864,6 +909,7 @@ class LivePostgresAdapter:
             connection = self._connect(self._policy["source"]["maintenance_database"])
         except DatabaseUnavailable:
             raise EvidenceFailure("database.connection_blocked") from None
+        timer = self._cancel_at_deadline(connection)
         try:
             self._configure(connection)
             version = int(
@@ -873,12 +919,15 @@ class LivePostgresAdapter:
             )
             visibility_row = self._rows(
                 connection,
-                "SELECT pg_catalog.pg_has_role(current_user,'pg_monitor','MEMBER'),"
+                "SELECT pg_catalog.has_table_privilege(current_user,"
+                "'pg_catalog.pg_authid','SELECT'),"
+                "pg_catalog.pg_has_role(current_user,'pg_monitor','MEMBER'),"
                 "pg_catalog.pg_has_role(current_user,'pg_read_all_settings','MEMBER')",
             )[0]
             visibility: dict[str, bool] = {
-                "pg_monitor": bool(visibility_row[0]),
-                "pg_read_all_settings": bool(visibility_row[1]),
+                "pg_authid": bool(visibility_row[0]),
+                "pg_monitor": bool(visibility_row[1]),
+                "pg_read_all_settings": bool(visibility_row[2]),
             }
             surfaces: dict[str, Sequence[Any]] = {
                 "databases": self._rows(
@@ -895,7 +944,11 @@ class LivePostgresAdapter:
                     connection,
                     """SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,
                     rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,
-                    rolvaliduntil::text FROM pg_catalog.pg_roles ORDER BY rolname""",
+                    rolvaliduntil::text,rolpassword IS NOT NULL,
+                    CASE WHEN rolpassword IS NULL THEN 'absent'
+                    WHEN rolpassword LIKE 'SCRAM-SHA-256$%' THEN 'scram-sha-256'
+                    WHEN rolpassword LIKE 'md5%' THEN 'md5' ELSE 'other' END,
+                    rolpassword FROM pg_catalog.pg_authid ORDER BY rolname""",
                 ),
                 "memberships": self._rows(
                     connection,
@@ -930,23 +983,38 @@ class LivePostgresAdapter:
                 ),
                 "tablespaces": self._rows(
                     connection,
-                    """SELECT t.spcname,r.rolname,
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(t.spcoptions) v),
-                    (SELECT array_agg(ROW(CASE WHEN a.grantee=0 THEN 'PUBLIC'
-                    ELSE g.rolname END,grantor.rolname,a.privilege_type,
-                    a.is_grantable)::text ORDER BY 1)
-                    FROM pg_catalog.aclexplode(COALESCE(t.spcacl,
-                    pg_catalog.acldefault('t',t.spcowner))) a
+                    """SELECT t.spcname,r.rolname,pg_catalog.pg_tablespace_location(t.oid),option.option,
+                    CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE g.rolname END,grantor.rolname,a.privilege_type,a.is_grantable
+                    FROM pg_catalog.pg_tablespace t JOIN pg_catalog.pg_roles r ON r.oid=t.spcowner
+                    LEFT JOIN LATERAL unnest(t.spcoptions) option(option) ON true
+                    LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(t.spcacl,
+                    pg_catalog.acldefault('t',t.spcowner))) a ON true
                     LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
-                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor)
-                    FROM pg_catalog.pg_tablespace t JOIN pg_catalog.pg_roles r
-                    ON r.oid=t.spcowner ORDER BY t.spcname""",
+                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor ORDER BY 1,3,4,5,6,7""",
                 ),
                 "replication_slots": self._rows(
                     connection,
                     """SELECT slot_name,plugin,slot_type,database,
-                    temporary,active,two_phase,conflicting
+                    temporary,active,two_phase,conflicting,wal_status,
+                    restart_lsn::text,confirmed_flush_lsn::text,safe_wal_size
                     FROM pg_catalog.pg_replication_slots ORDER BY slot_name""",
+                ),
+                "replication_origins": self._rows(
+                    connection,
+                    """SELECT external_id,remote_lsn::text,local_lsn::text FROM pg_catalog.pg_replication_origin_status ORDER BY external_id""",
+                ),
+                "prepared_transactions": self._rows(
+                    connection,
+                    """SELECT transaction::text,gid,prepared::text,owner,database FROM pg_catalog.pg_prepared_xacts ORDER BY database,gid""",
+                ),
+                "subscriptions": self._rows(
+                    connection,
+                    """SELECT d.datname,s.subname,r.rolname,s.subenabled,s.subbinary,s.substream,s.subtwophasestate,s.subdisableonerr,
+                    s.subpasswordrequired,s.subrunasowner,s.suborigin,s.subconninfo,s.subslotname,s.subsynccommit,
+                    CASE WHEN s.subskiplsn='0/0'::pg_catalog.pg_lsn THEN NULL ELSE s.subskiplsn::text END,pub.publication
+                    FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_database d ON d.oid=s.subdbid JOIN pg_catalog.pg_roles r ON r.oid=s.subowner
+                    LEFT JOIN LATERAL unnest(s.subpublications) pub(publication) ON true
+                    ORDER BY 1,2,16""",
                 ),
                 "parameter_privileges": self._rows(
                     connection,
@@ -964,6 +1032,11 @@ class LivePostgresAdapter:
                     FROM pg_catalog.pg_shseclabel s CROSS JOIN LATERAL
                     pg_catalog.pg_identify_object_as_address(
                     s.classoid,s.objoid,0) i ORDER BY 1,2,3,4,5""",
+                ),
+                "shared_descriptions": self._rows(
+                    connection,
+                    """SELECT i.type,i.object_names,i.object_args,d.description FROM pg_catalog.pg_shdescription d CROSS JOIN LATERAL
+                    pg_catalog.pg_identify_object_as_address(d.classoid,d.objoid,0) i ORDER BY 1,2,3,4""",
                 ),
                 "settings": self._rows(
                     connection,
@@ -999,10 +1072,12 @@ class LivePostgresAdapter:
         except Exception:
             raise EvidenceFailure("catalog.read_blocked") from None
         finally:
+            timer.cancel()
             connection.close()
 
     def database_snapshot(self, database: str) -> Mapping[str, Sequence[Any]]:
         connection = self._connect(database)
+        timer = self._cancel_at_deadline(connection)
         try:
             self._configure(connection)
             schema: list[Any] = []
@@ -1019,35 +1094,61 @@ class LivePostgresAdapter:
                 "foreign_data_wrappers": self._rows(
                     connection,
                     """SELECT f.fdwname,r.rolname,f.fdwhandler::regproc::text,
-                    f.fdwvalidator::regproc::text,
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(f.fdwoptions) v)
+                    f.fdwvalidator::regproc::text,o.option
                     FROM pg_catalog.pg_foreign_data_wrapper f
-                    JOIN pg_catalog.pg_roles r ON r.oid=f.fdwowner ORDER BY f.fdwname""",
+                    JOIN pg_catalog.pg_roles r ON r.oid=f.fdwowner
+                    LEFT JOIN LATERAL unnest(f.fdwoptions) o(option) ON true
+                    ORDER BY f.fdwname,o.option""",
                 ),
                 "foreign_servers": self._rows(
                     connection,
                     """SELECT s.srvname,r.rolname,f.fdwname,s.srvtype,s.srvversion,
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(s.srvoptions) v)
+                    o.option
                     FROM pg_catalog.pg_foreign_server s JOIN pg_catalog.pg_roles r ON r.oid=s.srvowner
-                    JOIN pg_catalog.pg_foreign_data_wrapper f ON f.oid=s.srvfdw ORDER BY s.srvname""",
+                    JOIN pg_catalog.pg_foreign_data_wrapper f ON f.oid=s.srvfdw
+                    LEFT JOIN LATERAL unnest(s.srvoptions) o(option) ON true
+                    ORDER BY s.srvname,o.option""",
                 ),
                 "foreign_tables": self._rows(
                     connection,
-                    """SELECT n.nspname,c.relname,s.srvname,
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(f.ftoptions) v)
+                    """SELECT n.nspname,c.relname,s.srvname,o.option
                     FROM pg_catalog.pg_foreign_table f
                     JOIN pg_catalog.pg_class c ON c.oid=f.ftrelid
                     JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
                     JOIN pg_catalog.pg_foreign_server s ON s.oid=f.ftserver
-                    ORDER BY 1,2""",
+                    LEFT JOIN LATERAL unnest(f.ftoptions) o(option) ON true
+                    ORDER BY 1,2,4""",
+                ),
+                "foreign_privileges": self._rows(
+                    connection,
+                    """SELECT x.kind,x.name,x.owner,x.acl IS NULL,CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE g.rolname END,
+                    grantor.rolname,a.privilege_type,a.is_grantable FROM (
+                    SELECT 'fdw' kind,f.fdwname name,r.rolname owner,f.fdwacl acl
+                    FROM pg_catalog.pg_foreign_data_wrapper f JOIN pg_catalog.pg_roles r
+                    ON r.oid=f.fdwowner UNION ALL
+                    SELECT 'server',s.srvname,r.rolname,s.srvacl
+                    FROM pg_catalog.pg_foreign_server s JOIN pg_catalog.pg_roles r
+                    ON r.oid=s.srvowner) x
+                    LEFT JOIN LATERAL pg_catalog.aclexplode(x.acl) a ON true
+                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor ORDER BY 1,2,5,6,7""",
+                ),
+                "language_privileges": self._rows(
+                    connection,
+                    """SELECT l.lanname,r.rolname,l.lanispl,l.lanpltrusted,l.lanacl IS NULL,
+                    CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE g.rolname END,grantor.rolname,a.privilege_type,a.is_grantable
+                    FROM pg_catalog.pg_language l LEFT JOIN pg_catalog.pg_roles r ON r.oid=l.lanowner
+                    LEFT JOIN LATERAL pg_catalog.aclexplode(l.lanacl) a ON true LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
+                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor ORDER BY 1,6,7,8""",
                 ),
                 "user_mappings": self._rows(
                     connection,
-                    """SELECT s.srvname,CASE WHEN m.umuser=0 THEN 'PUBLIC' ELSE r.rolname END,
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(m.umoptions) v)
+                    """SELECT s.srvname,CASE WHEN m.umuser=0 THEN 'PUBLIC'
+                    ELSE r.rolname END,o.option
                     FROM pg_catalog.pg_user_mapping m
                     JOIN pg_catalog.pg_foreign_server s ON s.oid=m.umserver
-                    LEFT JOIN pg_catalog.pg_roles r ON r.oid=m.umuser ORDER BY 1,2""",
+                    LEFT JOIN pg_catalog.pg_roles r ON r.oid=m.umuser
+                    LEFT JOIN LATERAL unnest(m.umoptions) o(option) ON true
+                    ORDER BY 1,2,3""",
                 ),
                 "publications": self._rows(
                     connection,
@@ -1059,38 +1160,31 @@ class LivePostgresAdapter:
                     connection,
                     """SELECT p.pubname,n.nspname,c.relname,
                     pg_catalog.pg_get_expr(x.prqual,x.prrelid,false),
-                    (SELECT array_agg(a.attname ORDER BY a.attnum)
-                    FROM unnest(x.prattrs::smallint[]) number
-                    JOIN pg_catalog.pg_attribute a ON a.attrelid=x.prrelid
-                    AND a.attnum=number)
+                    a.attname
                     FROM pg_catalog.pg_publication_rel x
                     JOIN pg_catalog.pg_publication p ON p.oid=x.prpubid
                     JOIN pg_catalog.pg_class c ON c.oid=x.prrelid
                     JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
-                    ORDER BY 1,2,3""",
+                    LEFT JOIN LATERAL unnest(x.prattrs::smallint[]) number(attnum) ON true
+                    LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=x.prrelid
+                    AND a.attnum=number.attnum ORDER BY 1,2,3,5""",
                 ),
-                "subscriptions": self._rows(
+                "publication_namespaces": self._rows(
                     connection,
-                    """SELECT s.subname,r.rolname,s.subenabled,s.subbinary,s.substream,
-                    s.subtwophasestate,s.subdisableonerr,s.subpasswordrequired,
-                    s.subrunasowner,s.suborigin,s.subconninfo,s.subslotname,
-                    s.subsynccommit,s.subskiplsn IS NOT NULL,
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(s.subpublications) v),
-                    state.worker_count,state.connected_workers,state.received_lsn_present,
-                    state.latest_end_lsn_present
-                    FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_roles r
-                    ON r.oid=s.subowner LEFT JOIN LATERAL (
-                    SELECT count(*) worker_count,
-                    count(*) FILTER (WHERE x.pid IS NOT NULL) connected_workers,
-                    COALESCE(bool_or(x.received_lsn IS NOT NULL),false) received_lsn_present,
-                    COALESCE(bool_or(x.latest_end_lsn IS NOT NULL),false) latest_end_lsn_present
-                    FROM pg_catalog.pg_stat_subscription x WHERE x.subid=s.oid
-                    ) state ON true ORDER BY s.subname""",
+                    """SELECT p.pubname,n.nspname FROM pg_catalog.pg_publication_namespace x JOIN pg_catalog.pg_publication p ON p.oid=x.pnpubid JOIN pg_catalog.pg_namespace n ON n.oid=x.pnnspid ORDER BY 1,2""",
+                ),
+                "subscription_state": self._rows(
+                    connection,
+                    """SELECT s.subname,n.nspname,c.relname,x.pid IS NOT NULL,x.received_lsn IS NOT NULL,x.latest_end_lsn IS NOT NULL
+                    FROM pg_catalog.pg_subscription s LEFT JOIN pg_catalog.pg_stat_subscription x ON x.subid=s.oid
+                    LEFT JOIN pg_catalog.pg_class c ON c.oid=x.relid LEFT JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                    WHERE s.subdbid=(SELECT oid FROM pg_catalog.pg_database WHERE datname=current_database()) ORDER BY 1,2,3""",
                 ),
                 "subscription_relations": self._rows(
                     connection,
                     """SELECT s.subname,n.nspname,c.relname,r.srsubstate,
-                    r.srsublsn IS NOT NULL FROM pg_catalog.pg_subscription_rel r
+                    CASE WHEN r.srsublsn='0/0'::pg_catalog.pg_lsn THEN NULL
+                    ELSE r.srsublsn::text END FROM pg_catalog.pg_subscription_rel r
                     JOIN pg_catalog.pg_subscription s ON s.oid=r.srsubid
                     JOIN pg_catalog.pg_class c ON c.oid=r.srrelid
                     JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
@@ -1106,28 +1200,27 @@ class LivePostgresAdapter:
                 "event_triggers": self._rows(
                     connection,
                     """SELECT e.evtname,r.rolname,e.evtevent,e.evtenabled,n.nspname,
-                    p.proname,pg_catalog.pg_get_function_identity_arguments(p.oid),
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(e.evttags) v)
+                    p.proname,pg_catalog.pg_get_function_identity_arguments(p.oid),tag.tag
                     FROM pg_catalog.pg_event_trigger e JOIN pg_catalog.pg_roles r
                     ON r.oid=e.evtowner JOIN pg_catalog.pg_proc p ON p.oid=e.evtfoid
                     JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
-                    ORDER BY e.evtname""",
+                    LEFT JOIN LATERAL unnest(e.evttags) tag(tag) ON true
+                    ORDER BY e.evtname,tag.tag""",
                 ),
                 "large_objects": self._rows(
                     connection,
                     """SELECT m.oid::text,r.rolname,
-                    (SELECT array_agg(ROW(CASE WHEN a.grantee=0 THEN 'PUBLIC'
-                    ELSE g.rolname END,grantor.rolname,a.privilege_type,
-                    a.is_grantable)::text ORDER BY 1)
-                    FROM pg_catalog.aclexplode(COALESCE(m.lomacl,
-                    pg_catalog.acldefault('L',m.lomowner))) a
-                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
-                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor),
+                    CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE g.rolname END,
+                    grantor.rolname,a.privilege_type,a.is_grantable,
                     l.pageno,pg_catalog.encode(l.data,'base64')
                     FROM pg_catalog.pg_largeobject_metadata m
                     JOIN pg_catalog.pg_roles r ON r.oid=m.lomowner
+                    LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(m.lomacl,
+                    pg_catalog.acldefault('L',m.lomowner))) a ON true
+                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
+                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor
                     LEFT JOIN pg_catalog.pg_largeobject l ON l.loid=m.oid
-                    ORDER BY m.oid,l.pageno""",
+                    ORDER BY m.oid,3,4,5,l.pageno""",
                 ),
             }
         except EvidenceFailure:
@@ -1135,6 +1228,7 @@ class LivePostgresAdapter:
         except Exception:
             raise DatabaseUnavailable from None
         finally:
+            timer.cancel()
             connection.close()
 
 

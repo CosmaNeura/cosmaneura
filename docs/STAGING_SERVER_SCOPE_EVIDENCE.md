@@ -1,46 +1,8 @@
 # Staging PostgreSQL server-scope evidence
 
-`scripts/staging_server_scope_evidence.py` is a dormant, read-only prerequisite
-for a complete restore rehearsal. It closes the gap left by a single-database
-schema inventory: PostgreSQL point-in-time restore operates at server scope.
-
-The collector enumerates every `pg_database` row, including templates and
-platform/system databases. Every connectable database must yield a keyed schema
-fingerprint plus exact keyed inventories for extensions, foreign-data wrappers,
-foreign servers/tables, user mappings, publication membership, subscriptions
-and their relation/synchronization state, security labels, event triggers, and
-large-object metadata/content pages. A database is
-allowed to be unfingerprinted only when `datallowconn` is false and the policy
-pins `connections_disabled`. A connection or catalog permission failure on any
-enabled database blocks evidence; managed Azure restrictions are not waived.
-
-Server evidence pins roles and attributes, memberships, per-role/database
-settings, database owners and ACLs, tablespaces, replication slots, parameter
-ACLs, shared security labels, and the complete visible `pg_settings` surface
-(including a must-be-present security and recovery subset). New, missing, or
-changed records fail closed. Numeric catalog OIDs are excluded because they are
-allocation artifacts, except large-object IDs whose referential identity must
-survive restore. Role and object names are not normalized: environment-owned
-names remain policy-significant unless a future reviewed policy justifies one
-narrow normalization.
-
-Raw identities, settings, FDW/user-mapping/subscription options, security labels,
-and large-object pages are held only in process memory. Evidence contains counts
-and domain-separated HMAC-SHA-256 digests. It also binds the source resource
-identity (as an HMAC), source revision, capture interval, policy digest, and
-owner-controlled key version.
-The key file must be an owner-only regular file and must never be committed.
-The connection string is accepted only from
-`STAGING_SERVER_SCOPE_DATABASE_URL`; putting credentials in command arguments is
-unsupported. Named server cursors enforce per-query and aggregate record/byte
-ceilings while iterating, and connection/statement timeouts share a monotonic
-15-minute total deadline. A breached limit fails closed without partial evidence.
-
-The committed policy intentionally has `activation_ready: false` and placeholder
-pins, so the command refuses before connecting. Activating it requires a
-separately reviewed, trusted baseline capture with exact pins and confirmation
-that the Azure identity can read every required surface. This change adds no
-workflow, credential, database write, restore, deployment, or promotion path.
-The PostgreSQL connection cannot independently attest its Azure resource ID;
-binding the keyed receipt to authenticated control-plane evidence remains a
-separate activation prerequisite.
+`scripts/staging_server_scope_evidence.py` is a dormant, read-only prerequisite for a complete restore rehearsal. It closes the gap left by a single-database schema inventory: PostgreSQL point-in-time restore operates at server scope. The collector enumerates every `pg_database` row, including templates and platform/system databases. Every connectable database must yield a keyed schema fingerprint plus exact keyed inventories for extensions; foreign-data wrappers, servers, tables, options and ACLs; column ACLs/options; language ACLs; user mappings; table and PostgreSQL 16 schema publication membership; subscription worker/relation state; security labels; event triggers; and large-object metadata, ACLs, and content pages. View `reloptions` include `security_invoker` and `security_barrier`. A database may be unfingerprinted only when `datallowconn` is false and policy pins `connections_disabled`. Any connection or catalog permission failure on an enabled database blocks evidence; managed Azure restrictions are not waived.
+Server evidence pins `pg_authid` roles/attributes and keyed password-verifier state (presence and scheme remain inside the role aggregate), memberships, per-role/database settings, database locale/owners/ACLs/default tablespaces, tablespace locations/options/ACLs, subscription definitions, prepared transactions, replication slots (including WAL status and restart/confirmed LSNs), replication origins/status, parameter ACLs, shared descriptions and security labels, and all visible `pg_settings`. Subscription `subdbid` is resolved to database name before hashing; `subskiplsn = 0/0` is canonical unset. Relation `srsublsn = 0/0` is likewise unset, while a nonzero value is captured exactly as the copy/synchronization progress boundary. New, missing, unreadable, or changed records fail closed. Numeric catalog OIDs are excluded as allocator artifacts, except large-object IDs whose referential identity must survive restore. `pg_shdepend` is narrowly excluded: its shared/local allocator OID edges are not portable, while their restore-relevant semantics are represented by normalized database/role owners, memberships, ACLs, and resolved object inventories. No similar exclusion applies to `pg_prepared_xacts`, tablespace locations, `pg_shdescription`, or replication origins; each is pinned. Role and object names are policy-significant.
+Raw identities, settings, password verifiers, FDW/user-mapping/subscription options, LSNs, security labels, shared descriptions, tablespace locations, and large-object pages remain only in process memory. Evidence contains counts and domain-separated HMAC-SHA-256 digests and binds the HMAC of source resource identity, source revision, capture interval, policy digest, and owner-controlled key version. The key file must be an owner-only regular file and must never be committed. The connection string is accepted only from `STAGING_SERVER_SCOPE_DATABASE_URL`; credentials in command arguments are unsupported.
+Named server cursors enforce per-query and aggregate record/byte ceilings while iterating. A bounded aggregate preflight rejects oversized rows before they reach the client, queries contain no unbounded `array_agg`, and a connection cancellation timer enforces the monotonic 15-minute total deadline. A breached limit fails closed without partial evidence.
+Every connectable database is captured twice in deterministic order and both keyed surface sets must match; server surfaces must also match before and after both passes. Activation must run during a coordinated freeze of DDL, role/ACL, publication/subscription, prepared-transaction, and replication-state changes so the two-pass bracket is a stable cross-database capture.
+The committed policy intentionally has `activation_ready: false` and placeholder pins, so the command refuses before connecting. Activation requires a separately reviewed, trusted baseline capture with exact pins and confirmation that the Azure identity can read every required surface. This change adds no workflow, credential, database write, restore, deployment, or promotion path. The PostgreSQL connection cannot independently attest its Azure resource ID; binding the keyed receipt to authenticated control-plane evidence remains a separate activation prerequisite.
