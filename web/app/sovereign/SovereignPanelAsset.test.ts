@@ -34,7 +34,7 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "8020b745673a13875aecf32941a6711d22926045",
+      "8f3b1562cb0296222278d84e09504f3252e96bbf",
     )
     expect(bytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",
@@ -45,6 +45,12 @@ describe("pinned Sovereign panel asset", () => {
     )
     const source = bytes.toString("utf8")
     expect(source).toContain('url + "/session-prep"')
+    expect(source).toContain("function governedChatMetadata")
+    const chatProjection = source.slice(
+      source.indexOf("function governedChatMetadata"),
+      source.indexOf("function applyWelcomeUX"),
+    )
+    expect(chatProjection).not.toContain("context_snapshot_ref")
     for (const state of ["ready", "refreshing", "pending", "unavailable"])
       expect(source).toContain(`Session Prep ${state}`)
     expect(source).toContain("lockNamedBeta();")
