@@ -169,10 +169,7 @@ export default function NoteDetailPage({ loaderData }: Route.ComponentProps) {
 
         <VisitTranscriptViewer transcript={transcript} />
       </InnerScrollableContent>
-      <SovereignPanelHost
-        appointmentId={loaderData.appointment.id}
-        contextSnapshotRef={loaderData.context_snapshot_ref}
-      />
+      <SovereignPanelHost appointmentId={loaderData.appointment.id} />
     </SidebarInset>
   )
 }

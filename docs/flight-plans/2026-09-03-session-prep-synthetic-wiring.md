@@ -3,12 +3,13 @@
 ## Outcome and boundaries
 
 - Problem and measurable outcome: an eligible Core staging synthetic appointment
-  can project one configured opaque `context_snapshot_ref`, and the same live
-  provider/record binding can receive `session-prep:read`; all other records and
-  the default configuration receive neither.
+  can receive `session-prep:read` on its live provider/record-bound mount while
+  generic Note Detail JSON and the browser host receive no Session Prep context
+  handle; all other records and the default configuration receive no capability.
 - In scope: one fail-closed server-side scope resolver, dynamic provider
-  capability derivation, the additive Note Detail response field, browser-host
-  context lifecycle, and synthetic integration tests.
+  capability derivation, removal of the rejected Note Detail/browser handle
+  path, appointment-keyed browser-host lifecycle, and synthetic integration
+  tests.
 - Explicit non-goals: real-provider or PHI use, production activation, staging
   mutation, Auth/IAM changes, environment or deployment changes, schema/data
   changes, model-provider calls, and operational-control reconciliation.
@@ -21,12 +22,13 @@
 
 - Tier and reason: **Tier 2** because this changes record-scoped auth/session
   capability derivation and is one half of a cross-repository contract.
-- Irreversible or high-blast-radius decisions: none. The contract is additive,
-  the static provider capability set is unchanged, and runtime exposure remains
-  default-off.
+- Irreversible or high-blast-radius decisions: none. The rejected, unpromoted
+  Note Detail field is removed, the static provider capability set is unchanged,
+  and runtime exposure remains default-off.
 - Dependency-ordered PR stack; explain how each PR can be held safely:
-  1. Sovereign receiver main `92e6060` and its prepared-brief endpoint remain
-     independently safe without a sender.
+  1. Sovereign receiver must derive its configured synthetic context handle
+     server-side after resolving the record-bound mount and must accept a
+     browser `/session-prep` body containing only the client turn ID.
   2. Core base `d543e035d968d3dccc34cd03baaef90b41a4629c`, including the
      provider panel baseline and the merged synthetic-fixture/authority work,
      receives this dormant sender wiring.
@@ -35,10 +37,13 @@
   4. A separate Auth/IAM and operational-control change must complete before
      any real-provider or PHI-bearing use is considered.
   Each rung can be held with `SESSION_PREP_SYNTHETIC_ENABLED=false`.
-- Cross-repo contract/version and receiver-before-sender order: Core sends only
-  the configured opaque `context_snapshot_ref`; Sovereign owns and validates
-  the referenced immutable synthetic snapshot. Receiver `92e6060` precedes
-  sender activation. No clinical content is projected by Core.
+- Cross-repo contract/version and receiver-before-sender order: the browser
+  receives only the server-filtered `session-prep:read` welcome path and sends
+  no context handle. Sovereign derives its separately pinned synthetic handle
+  server-side only after resolving the current mount; the handle crosses into
+  Core only in the dedicated, workload-authenticated Session Prep POST body.
+  The corrected Sovereign receiver and panel pin must precede sender activation.
+  No clinical content is projected by Core Note Detail or the host bridge.
 
 ## Current deployed state
 
@@ -48,7 +53,8 @@
   dark. The staging workflow currently requires the Session Prep synthetic
   feature to remain disabled.
 - Difference from `master` and deployed-only behavior: this branch adds only
-  dormant application/API/UI wiring and tests. It does not alter deployment or
+  dormant server-side authority wiring and tests. It does not add a Note Detail
+  field, expose the configured handle to browser code, or alter deployment or
   IAM files.
 - Reconciliation decision: retain current staging behavior until the separate
   operational-control work is complete; then promote one reviewed merge commit
@@ -85,7 +91,8 @@ existing `SyntheticPreviewAppointmentFixture` provenance and fixed rows.
 ## Rollout and promotion
 
 - Ordered environments/cohorts and hold points:
-  1. Merge and verify the Sovereign receiver.
+  1. Merge and verify the corrected Sovereign receiver and browser panel, which
+     derive the configured handle server-side and omit it from browser requests.
   2. Merge Core panel hardening and this default-off sender.
   3. Reconcile the exact Core merge SHA and Sovereign receiver SHA against the
      canonical staging candidate; stop on drift.
@@ -93,17 +100,20 @@ existing `SyntheticPreviewAppointmentFixture` provenance and fixed rows.
      to the fixed preview fixture.
   5. Consider staging-only activation only after Auth/IAM and operational
      controls are independently complete.
-- Health signals and measurable abort thresholds: abort on any context ref or
-  `session-prep:read` exposure to a nonfixture record, owner mismatch, failed
-  integrity check, non-staging environment, disabled/incomplete configuration,
-  stale context after record switch, browser persistence, unbounded polling,
-  or unexpected outbound/model call.
-- Canary journey: open the exact synthetic note; verify eligibility, immutable
-  snapshot resolution, bounded prepared brief, and typed response; switch to a
-  second record and verify that browser A is detached and B receives no
-  synthetic capability; disable or tamper with the fixture and verify immediate
-  server-side capability removal; inspect URL, DOM, storage, logs, and network
-  bodies for forbidden record content.
+- Health signals and measurable abort thresholds: abort on any context handle in
+  Note Detail JSON, host context, URL, DOM, browser persistence, or browser POST;
+  on `session-prep:read` exposure to a nonfixture record, owner mismatch, failed
+  integrity check, non-staging environment, or disabled/incomplete
+  configuration; or on stale context after record switch, unbounded polling, or
+  unexpected outbound/model call.
+- Canary journey: open the exact synthetic note; verify generic hydration has no
+  context handle while the server-filtered welcome advertises Session Prep;
+  verify immutable snapshot resolution, bounded prepared brief, and typed
+  response; switch to a second record and verify that browser A is synchronously
+  detached and B receives no synthetic capability; disable or tamper with the
+  fixture and verify immediate server-side capability removal; inspect URL, DOM,
+  storage, logs, browser requests, and generic Note Detail JSON for the handle
+  and forbidden record content.
 - Founder-only manual production/PHI promotion record, or current control gap:
   production and PHI use are explicitly blocked. A later exact staging SHA must
   use the founder-only canonical workflow; this plan grants no deployment
@@ -128,8 +138,9 @@ existing `SyntheticPreviewAppointmentFixture` provenance and fixed rows.
 
 - Evidence required to call the outcome complete: focused Python and React
   suites pass; generated OpenAPI/client artifacts match; synthetic tests cover
-  default-off, wrong environment/record/owner, tamper/deletion, capability
-  revocation, record switching, stale context, and browser-data leakage; an
+  default-off, wrong environment/record/owner, second valid fixture,
+  tamper/deletion, capability revocation, record switching, synchronous teardown,
+  absent generic JSON/host context, stale content, and browser-data leakage; an
   independent agent reviews the final substantive diff.
 - Follow-up cleanup PRs and owners: activation, exact-SHA staging promotion,
   Auth/IAM, and operational controls remain separate owner-approved work.

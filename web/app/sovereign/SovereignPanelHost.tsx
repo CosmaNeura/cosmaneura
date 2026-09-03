@@ -11,7 +11,6 @@ import {
 type PanelContext = {
   clientId: string
   thread_ref?: string
-  context_snapshot_ref?: string
   digest_ref?: string
   terminology?: string
   care_model?: string
@@ -390,10 +389,8 @@ function resetAndDestroy(panel: PanelInstance): void {
 
 export function SovereignPanelHost({
   appointmentId,
-  contextSnapshotRef,
 }: {
   appointmentId: string
-  contextSnapshotRef?: string | null
 }) {
   const config = resolveSovereignProviderConfig()
   const panelRef = useRef<PanelInstance | null>(null)
@@ -423,15 +420,10 @@ export function SovereignPanelHost({
             if (cancelled) {
               throw new Error("Open record changed while context was resolving")
             }
-            // No raw history, note, patient, or labs content crosses this
-            // boundary. The optional opaque ref is projected by the server only
-            // for the exact governed synthetic record.
-            return contextSnapshotRef
-              ? {
-                  clientId: appointmentId,
-                  context_snapshot_ref: contextSnapshotRef,
-                }
-              : { clientId: appointmentId }
+            // The record-bound mount token is the only authority input. No raw
+            // history, note, patient, labs content, or Session Prep handle
+            // crosses this browser bridge.
+            return { clientId: appointmentId }
           },
           onHumanContact: openHumanContact,
           // loadHistory is deliberately omitted until the platform exposes the
@@ -469,7 +461,7 @@ export function SovereignPanelHost({
       mounted = null
       if (previous) resetAndDestroy(previous)
     }
-  }, [appointmentId, config?.origin, contextSnapshotRef])
+  }, [appointmentId, config?.origin])
 
   return config ? (
     <style data-sovereign-provider-v7-layer>{PROVIDER_V7_LAYER_STYLE}</style>
