@@ -30,6 +30,16 @@ export VITE_CLERK_PUBLIC_KEY=${VITE_CLERK_PUBLIC_KEY:-pk_test_placeholder}
 export CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLIC_KEY
 EOF
 fi
+# Test env: CI injects a real Clerk publishable key from 1Password. Provide the
+# same non-secret placeholder so js_test / pytest collection does not fail on the
+# import-time Clerk invariant.
+if [ ! -f .env.test.local ]; then
+  cat > .env.test.local <<'EOF'
+# Local test overrides (no secrets). Generated for Cloud Agent setup.
+export VITE_CLERK_PUBLIC_KEY=${VITE_CLERK_PUBLIC_KEY:-pk_test_placeholder}
+export CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLIC_KEY
+EOF
+fi
 
 echo "== [install] python deps (uv sync) =="
 denv uv sync
