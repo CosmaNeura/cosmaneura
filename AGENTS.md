@@ -67,12 +67,15 @@ highest tier and should be split when concerns can deploy independently.
   the original actor and any rerun actor are `JohnClem`; ordinary pushes,
   including documentation-only pushes, cannot enter that job. The run records
   founder self-authorization; it is not independent review.
-- Staging deployment is also founder-only and manual from the exact `staging`
-  ref. Pushes to `staging` run validation but cannot enter the protected deploy
-  job. The deploy job rechecks that its SHA is still the current `staging` head
-  before checkout or credential use, immediately before image publication, and
-  immediately before Azure mutation. This source gate does not prove that staging
-  is synthetic-only or non-PHI.
+- Staging deployment is also founder-only and manual. Its control-plane
+  workflow runs from the exact current protected `master`, while pushes to
+  `staging` remain validation-only and cannot enter a deploy job. Each run
+  requires a full immutable candidate SHA that is both contained in protected
+  `master` and the exact merge commit of the founder-selected merged PR. It
+  tests and deploys that candidate, not the moving `master` tip, and reverifies
+  provenance before protected credentials, image publication, migrations, and
+  Azure mutation. This source gate does not prove that staging is synthetic-only
+  or non-PHI.
 - The production job still builds and publishes during the promotion run
   instead of promoting a previously verified immutable artifact. Treat that
   source-to-artifact separation as an open remediation item. Preserve the
