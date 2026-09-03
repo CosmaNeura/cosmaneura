@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -146,6 +148,114 @@ def test_ready_result_has_process_local_immutable_lineage_and_replay_receipt() -
         )
     with pytest.raises(SessionPrepScopeDenied):
         _invoke(_service_for(context), context, turn_closed=True)
+
+
+def test_source_revocation_replaces_a_cached_ready_response_with_a_tombstone() -> None:
+    context = _context("context_synthetic_revocation_test", _note(1))
+    service = _service_for(context)
+
+    ready = _invoke(service, context)
+    assert ready.response.result.state == "ready"
+
+    service.revoke_context(context.context_snapshot_ref)
+    tombstone = _invoke(service, context, turn_closed=True)
+    replay = _invoke(service, context, turn_closed=True)
+    poll = _invoke(
+        service,
+        context,
+        idempotency_key="idem_session_prep_revoked_poll_0002",
+        turn_closed=True,
+    )
+
+    assert tombstone.replayed is False
+    assert tombstone.response.result.state == "unavailable"
+    assert tombstone.response.result.reason_code == "context_not_available"
+    assert tombstone.response.result.prepared_brief is None
+    assert tombstone.response.result.provenance == []
+    assert "Synthetic finalized recap" not in tombstone.response.model_dump_json()
+    assert replay.replayed is True
+    assert replay.response == tombstone.response
+    assert poll.response.result.state == "unavailable"
+    assert poll.response.result.reason_code == "context_not_available"
+    assert poll.response.result.prepared_brief is None
+    assert poll.response.result.provenance == []
+    assert "Synthetic finalized recap" not in poll.response.model_dump_json()
+
+    with pytest.raises(SessionPrepIdempotencyConflict):
+        _invoke(
+            service,
+            context,
+            source_turn_ref="conversation_turn_changed_after_revocation",
+            turn_closed=True,
+        )
+
+
+class _BlockingContextReadService(SyntheticSessionPrepService):
+    """Pause one invocation after its context lookup for lock-order testing."""
+
+    def __init__(
+        self,
+        context: SyntheticContext,
+        lookup_started: threading.Event,
+        release_lookup: threading.Event,
+    ) -> None:
+        super().__init__((context,), clock=lambda: OBSERVED_AT)
+        self._lookup_started = lookup_started
+        self._release_lookup = release_lookup
+
+    def _context_locked(
+        self,
+        context_snapshot_ref: str,
+    ) -> SyntheticContext | None:
+        context = super()._context_locked(context_snapshot_ref)
+        if threading.current_thread().name.startswith("session-prep-racing-read"):
+            self._lookup_started.set()
+            assert self._release_lookup.wait(timeout=5)
+        return context
+
+
+def test_completed_revocation_cannot_race_with_a_stale_context_read() -> None:
+    context = _context("context_synthetic_revocation_race", _note(1))
+    lookup_started = threading.Event()
+    release_lookup = threading.Event()
+    service = _BlockingContextReadService(
+        context,
+        lookup_started,
+        release_lookup,
+    )
+
+    with (
+        ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="session-prep-racing-read",
+        ) as invocation_executor,
+        ThreadPoolExecutor(max_workers=1) as revocation_executor,
+    ):
+        invocation = invocation_executor.submit(
+            _invoke,
+            service,
+            context,
+        )
+        assert lookup_started.wait(timeout=5)
+        revocation = revocation_executor.submit(
+            service.revoke_context,
+            context.context_snapshot_ref,
+        )
+        try:
+            with pytest.raises(TimeoutError):
+                revocation.result(timeout=0.2)
+        finally:
+            release_lookup.set()
+        assert invocation.result(timeout=5).response.result.state == "ready"
+        revocation.result(timeout=5)
+
+    tombstone = _invoke(service, context, turn_closed=True)
+    assert tombstone.replayed is False
+    assert tombstone.response.result.state == "unavailable"
+    assert tombstone.response.result.reason_code == "context_not_available"
+    assert tombstone.response.result.prepared_brief is None
+    assert tombstone.response.result.provenance == []
+    assert "Synthetic finalized recap" not in tombstone.response.model_dump_json()
 
 
 def test_supporting_context_requires_an_unimplemented_follow_up_action() -> None:
