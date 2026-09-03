@@ -65,3 +65,13 @@ The database URL is accepted only for the pinned staging database with `sslmode=
 ## Promotion boundary
 
 A pass is necessary but not sufficient for the rehearsal. Before any restore or canonical staging cutover, separately approve and prove the isolated restore network/identity/TTL envelope, deterministic sanitizer, evidence sink, cleanup authority, RTO/RPO, and post-sanitize rerun. The current live database and Redis connection material must first be upgraded from certificate-optional or `sslmode=require` behavior to the verified TLS forms required here. No live inventory has been collected by this change.
+
+## Dormant restore-sanitizer contract
+
+`restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.
+
+Activation remains blocked until the controller authenticates and binds the source and candidate SHAs, quiescence evidence, authoritative restore point, target resource ID and FQDN, creation/expiry, workflow/run identity, isolation result, and approved database role. The five fixed-catalog payloads require their exact authenticated source table state HMACs; their PK/FK identifiers cannot use generic transforms. Clerk values, email/domain joins, dependent digests, TypeID text references, and rotated access-code verifiers likewise require one proven semantic mapping.
+
+A future executor must keep guarded append-only tables empty, reject unexpected `ON TRUNCATE` triggers, and prove its isolated-copy `TRUNCATE`/reinsert permissions and rollback behavior; this does not preserve append-only semantics. It must use serializable transactions, `synchronous_commit=on`, bounded timeouts, an `alembic_version` lock, a pre-commit session recheck, and fresh-connection post-commit verification. Any ambiguous outcome is isolated and cleanup-only.
+
+Evidence remains aggregate counts/HMACs and bounded pass/fail codes; small groups and per-table counts are omitted. The contract does not prove erasure from server-wide PITR, global roles, backups, replicas, or logs.
