@@ -13,6 +13,10 @@ ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / "scripts" / "deploy_revision_suffix.sh"
 SHA = "72dee94186283eabb736e787575b4c2a5e1ce32e"
 DIGEST = "sha256:" + "a" * 64
+RECOVERY_DIGEST = "sha256:" + "b" * 64
+STAGING_CLIENT_ID = "45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
+STAGING_TENANT_ID = "d51754d0-bba5-4810-820e-afac542844d6"
+STAGING_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 CONTAINERS = (
     "cosmaneura-staging-worker",
     "cosmaneura-staging-scheduler",
@@ -286,6 +290,22 @@ def test_staging_immutable_candidate_and_evidence_boundaries() -> None:
     assert "staging_identity_fingerprint_set_mismatch" in deploy
     assert "database_sslmode_not_verify_full" in deploy
     assert "EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" in deploy
+    assert 'if [[ "$ENABLE_PROVIDER_V7" != "true" ]]' in deploy
+    assert 'if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" ]]' in deploy
+    for pinned_id in (
+        "45b940bf-2f4f-4b10-bcc3-4679d8855a6f",
+        "d51754d0-bba5-4810-820e-afac542844d6",
+        "bab2a709-1fcb-4c87-a9fc-802f7477ec13",
+    ):
+        assert pinned_id in deploy
+    assert '"$STAGING_REPOSITORY@$EXPECTED_RECOVERY_DIGEST"' in deploy
+    assert '"$RECOVERY_MANIFEST_DIGEST" != "$EXPECTED_RECOVERY_DIGEST"' in deploy
+    assert deploy.index("Configured Azure identity inputs") < deploy.index(
+        '"$STAGING_REPOSITORY:$GIT_SHA"'
+    )
+    assert deploy.index('"$STAGING_REPOSITORY@$EXPECTED_RECOVERY_DIGEST"') < (
+        deploy.index("az acr credential show")
+    )
     migration = _shell_function(deploy, "run_migrations")
     assert migration.index('wait_for_migration_job_execution "$execution_name"') < (
         migration.index('capture_schema_revision "Post-migration"')
@@ -512,6 +532,7 @@ def _staging_config(sslmode: str = "verify-full") -> dict[str, str]:
         "ZOOM_SECRET_TOKEN": "zoom-token",
         "RECALL_API_KEY": "recall-api",
         "RECALL_WEBHOOK_SECRET": "recall-webhook",
+        "SOVEREIGN_RECORD_GRANT_SECRET": "synthetic-record-grant-secret",
         "STRIPE_SECRET_KEY": "",
         "STRIPE_WEBHOOK_SECRET": "",
         "STRIPE_ACCOUNT_ID": "",
@@ -545,12 +566,32 @@ def _fingerprint_set(config: dict[str, str]) -> str:
 
 
 @pytest.mark.parametrize(
-    ("sslmode", "fingerprint_matches"), [("require", True), ("verify-full", False)]
+    ("sslmode", "fingerprint_matches", "grant_secret", "expected_message"),
+    [
+        (
+            "require",
+            True,
+            "synthetic-record-grant-secret",
+            "unresolved deployment blockers",
+        ),
+        (
+            "verify-full",
+            False,
+            "synthetic-record-grant-secret",
+            "unresolved deployment blockers",
+        ),
+        ("verify-full", True, "", "enabled without a configured key"),
+    ],
 )
 def test_configuration_blockers_stop_before_any_azure_call(
-    tmp_path: Path, sslmode: str, fingerprint_matches: bool
+    tmp_path: Path,
+    sslmode: str,
+    fingerprint_matches: bool,
+    grant_secret: str,
+    expected_message: str,
 ) -> None:
     config = _staging_config(sslmode)
+    config["SOVEREIGN_RECORD_GRANT_SECRET"] = grant_secret
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     az_log = tmp_path / "az.log"
@@ -585,15 +626,183 @@ def test_configuration_blockers_stop_before_any_azure_call(
             "EXPECTED_SCHEMA_AFTER": "b" * 12,
             "EXPECTED_RECOVERY_DIGEST": DIGEST,
             "EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256": expected,
+            "ENABLE_PROVIDER_V7": "true",
+            "ENABLE_SOVEREIGN_RECORD_GRANTS": "true",
         },
         check=False,
         capture_output=True,
         text=True,
     )
     assert result.returncode != 0
-    assert "unresolved deployment blockers" in result.stdout
+    assert expected_message in result.stdout
     assert all(
         value not in result.stdout + result.stderr
         for value in ("zoom-secret", "recall-webhook", "sk_test_clerk")
     )
     assert not az_log.exists()
+
+
+def _run_staging_registry_preflight(
+    tmp_path: Path,
+    *,
+    client_id: str = STAGING_CLIENT_ID,
+    tenant_id: str = STAGING_TENANT_ID,
+    subscription_id: str = STAGING_SUBSCRIPTION_ID,
+    account_json: dict[str, str] | None = None,
+    published_digest: str = DIGEST,
+    recovery_digest: str = RECOVERY_DIGEST,
+    recovery_status: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    deploy = (ROOT / "infra-staging/deploy.sh").read_text(encoding="utf-8")
+    start = deploy.index("if ! AZURE_ACCOUNT_JSON=")
+    end = deploy.index("if ! ACR_USERNAME=", start)
+    script = "set -euo pipefail\nemit_github_output() { :; }\n" + deploy[start:end]
+
+    fake_bin = tmp_path / "registry-bin"
+    fake_bin.mkdir()
+    az_log = tmp_path / "registry-az.log"
+    fake_az = fake_bin / "az"
+    fake_az.write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >>"$FAKE_AZ_LOG"
+if [ "$1" = "account" ] && [ "$2" = "show" ]; then
+  printf '%s' "$FAKE_ACCOUNT_JSON"
+  exit 0
+fi
+case "$*" in
+  *"$FAKE_REPOSITORY:$FAKE_SHA"*)
+    printf '%s\\n' "$FAKE_PUBLISHED_DIGEST"
+    exit 0
+    ;;
+  *"$FAKE_REPOSITORY@$FAKE_EXPECTED_RECOVERY_DIGEST"*)
+    if [ "$FAKE_RECOVERY_STATUS" -ne 0 ]; then
+      exit "$FAKE_RECOVERY_STATUS"
+    fi
+    printf '%s\\n' "$FAKE_RECOVERY_DIGEST"
+    exit 0
+    ;;
+esac
+exit 99
+"""
+    )
+    fake_az.chmod(0o755)
+    observed_account = account_json or {
+        "subscriptionId": STAGING_SUBSCRIPTION_ID,
+        "tenantId": STAGING_TENANT_ID,
+        "userName": STAGING_CLIENT_ID,
+        "userType": "servicePrincipal",
+    }
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "AZURE_CLIENT_ID": client_id,
+        "AZURE_TENANT_ID": tenant_id,
+        "AZURE_SUBSCRIPTION_ID": subscription_id,
+        "FAKE_ACCOUNT_JSON": json.dumps(observed_account),
+        "FAKE_AZ_LOG": str(az_log),
+        "FAKE_EXPECTED_RECOVERY_DIGEST": RECOVERY_DIGEST,
+        "FAKE_PUBLISHED_DIGEST": published_digest,
+        "FAKE_RECOVERY_DIGEST": recovery_digest,
+        "FAKE_RECOVERY_STATUS": str(recovery_status),
+        "FAKE_REPOSITORY": "cosmaneura/cosmaneura",
+        "FAKE_SHA": SHA,
+        "GIT_SHA": SHA,
+        "STAGING_IMAGE": "cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura",
+        "STAGING_IMAGE_DIGEST": DIGEST,
+        "STAGING_REPOSITORY": "cosmaneura/cosmaneura",
+        "EXPECTED_RECOVERY_DIGEST": RECOVERY_DIGEST,
+        "PINNED_STAGING_CLIENT_ID": STAGING_CLIENT_ID,
+        "PINNED_STAGING_TENANT_ID": STAGING_TENANT_ID,
+        "PINNED_STAGING_SUBSCRIPTION_ID": STAGING_SUBSCRIPTION_ID,
+    }
+    result = subprocess.run(
+        ["bash", "-c", script],
+        cwd=ROOT,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result, az_log.read_text() if az_log.exists() else ""
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("client_id", "00000000-0000-0000-0000-000000000001"),
+        ("tenant_id", "00000000-0000-0000-0000-000000000002"),
+        ("subscription_id", "00000000-0000-0000-0000-000000000003"),
+    ],
+)
+def test_staging_registry_preflight_rejects_unpinned_identity_inputs(
+    tmp_path: Path, field: str, wrong_value: str
+) -> None:
+    result, az_calls = _run_staging_registry_preflight(tmp_path, **{field: wrong_value})
+
+    assert result.returncode != 0
+    assert "Configured Azure identity inputs are not the pinned staging identity" in (
+        result.stdout
+    )
+    assert "acr manifest" not in az_calls
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("userName", "00000000-0000-0000-0000-000000000004"),
+        ("userType", "user"),
+        ("tenantId", "00000000-0000-0000-0000-000000000005"),
+        ("subscriptionId", "00000000-0000-0000-0000-000000000006"),
+    ],
+)
+def test_staging_registry_preflight_rejects_wrong_active_identity(
+    tmp_path: Path, field: str, wrong_value: str
+) -> None:
+    account = {
+        "subscriptionId": STAGING_SUBSCRIPTION_ID,
+        "tenantId": STAGING_TENANT_ID,
+        "userName": STAGING_CLIENT_ID,
+        "userType": "servicePrincipal",
+    }
+    account[field] = wrong_value
+    result, az_calls = _run_staging_registry_preflight(tmp_path, account_json=account)
+
+    assert result.returncode != 0
+    assert "Active Azure identity is not the exact staging deployment identity" in (
+        result.stdout
+    )
+    assert "acr manifest" not in az_calls
+
+
+@pytest.mark.parametrize(
+    ("recovery_status", "observed_digest", "expected_message"),
+    [
+        (1, RECOVERY_DIGEST, "reviewed recovery image is not available"),
+        (0, "sha256:" + "c" * 64, "recovery manifest does not match"),
+    ],
+)
+def test_staging_registry_preflight_rejects_unavailable_or_wrong_recovery_manifest(
+    tmp_path: Path,
+    recovery_status: int,
+    observed_digest: str,
+    expected_message: str,
+) -> None:
+    result, az_calls = _run_staging_registry_preflight(
+        tmp_path,
+        recovery_status=recovery_status,
+        recovery_digest=observed_digest,
+    )
+
+    assert result.returncode != 0
+    assert expected_message in result.stdout
+    assert f"cosmaneura/cosmaneura@{RECOVERY_DIGEST}" in az_calls
+
+
+def test_staging_registry_preflight_accepts_exact_identity_and_manifests(
+    tmp_path: Path,
+) -> None:
+    result, az_calls = _run_staging_registry_preflight(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert f"cosmaneura/cosmaneura:{SHA}" in az_calls
+    assert f"cosmaneura/cosmaneura@{RECOVERY_DIGEST}" in az_calls

@@ -40,15 +40,25 @@ RECALL_SECRET_RESOURCE_NAME="recall-webhook-secret"
 STAGING_IMAGE="cosmaneurastagingregistry.azurecr.io/cosmaneura/cosmaneura"
 STAGING_REPOSITORY="cosmaneura/cosmaneura"
 STAGING_IMAGE_REFERENCE="$STAGING_IMAGE@$STAGING_IMAGE_DIGEST"
+PINNED_STAGING_CLIENT_ID="45b940bf-2f4f-4b10-bcc3-4679d8855a6f"
+PINNED_STAGING_TENANT_ID="d51754d0-bba5-4810-820e-afac542844d6"
+PINNED_STAGING_SUBSCRIPTION_ID="bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 
 # Preserve explicit deployment controls before direnv renders the secret
 # bundle. `direnv export` emits a delta, so values inherited unchanged by the
 # rendered environment may be absent from its JSON output.
-ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-false}"
-ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-false}"
+ENABLE_PROVIDER_V7="${ENABLE_PROVIDER_V7:-}"
+ENABLE_SOVEREIGN_RECORD_GRANTS="${ENABLE_SOVEREIGN_RECORD_GRANTS:-}"
 
-if [[ "$ENABLE_PROVIDER_V7" != "true" && "$ENABLE_PROVIDER_V7" != "false" ]]; then
-	echo "ENABLE_PROVIDER_V7 must be true or false."
+# The canonical catch-up preserves these already-enabled staging capabilities.
+# Disabling either one is a separate reviewed incident/control change, not a
+# side effect permitted through this deployment executor.
+if [[ "$ENABLE_PROVIDER_V7" != "true" ]]; then
+	echo "ENABLE_PROVIDER_V7 must remain true for canonical staging deployment."
+	exit 1
+fi
+if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" ]]; then
+	echo "ENABLE_SOVEREIGN_RECORD_GRANTS must remain true for canonical staging deployment."
 	exit 1
 fi
 
@@ -137,10 +147,11 @@ if ! ENV_JSON=$(echo "$ENV_JSON" | jq -c \
 	echo "Failed to reconcile provider V7 staging configuration."
 	exit 1
 fi
-
-if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" != "true" && \
-	"$ENABLE_SOVEREIGN_RECORD_GRANTS" != "false" ]]; then
-	echo "ENABLE_SOVEREIGN_RECORD_GRANTS must be true or false."
+if ! jq -e '
+	.SOVEREIGN_RECORD_GRANT_SECRET |
+	type == "string" and length > 0
+' <<<"$ENV_JSON" >/dev/null; then
+	echo "Staging record grants were enabled without a configured key."
 	exit 1
 fi
 
@@ -336,10 +347,16 @@ if ! AZURE_ACCOUNT_JSON=$(az account show \
 	echo "Failed to inspect the active Azure identity."
 	exit 1
 fi
+if [[ "${AZURE_CLIENT_ID:-}" != "$PINNED_STAGING_CLIENT_ID" || \
+	"${AZURE_TENANT_ID:-}" != "$PINNED_STAGING_TENANT_ID" || \
+	"${AZURE_SUBSCRIPTION_ID:-}" != "$PINNED_STAGING_SUBSCRIPTION_ID" ]]; then
+	echo "Configured Azure identity inputs are not the pinned staging identity."
+	exit 1
+fi
 if ! printf '%s' "$AZURE_ACCOUNT_JSON" | jq -e \
-	--arg subscription "${AZURE_SUBSCRIPTION_ID:-}" \
-	--arg tenant "${AZURE_TENANT_ID:-}" \
-	--arg client "${AZURE_CLIENT_ID:-}" \
+	--arg subscription "$PINNED_STAGING_SUBSCRIPTION_ID" \
+	--arg tenant "$PINNED_STAGING_TENANT_ID" \
+	--arg client "$PINNED_STAGING_CLIENT_ID" \
 	'.subscriptionId == $subscription and .tenantId == $tenant and
 	 .userType == "servicePrincipal" and .userName == $client' >/dev/null; then
 	echo "Active Azure identity is not the exact staging deployment identity."
@@ -359,6 +376,16 @@ if [[ "$PUBLISHED_DIGEST" != "$STAGING_IMAGE_DIGEST" ]]; then
 	exit 1
 fi
 emit_github_output image_digest "$STAGING_IMAGE_DIGEST" || exit 1
+if ! RECOVERY_MANIFEST_DIGEST=$(az acr manifest show-metadata \
+	--registry "$ACR_NAME" --name "$STAGING_REPOSITORY@$EXPECTED_RECOVERY_DIGEST" \
+	--query digest -o tsv); then
+	echo "The reviewed recovery image is not available in the staging registry."
+	exit 1
+fi
+if [[ "$RECOVERY_MANIFEST_DIGEST" != "$EXPECTED_RECOVERY_DIGEST" ]]; then
+	echo "The staging recovery manifest does not match the reviewed digest."
+	exit 1
+fi
 if ! ACR_USERNAME=$(az acr credential show \
 	-n "$ACR_NAME" --query "username" -o tsv); then
 	echo "Failed to resolve the staging registry username."
@@ -589,12 +616,6 @@ if [[ "$RECOVERY_DIGEST" != "$EXPECTED_RECOVERY_DIGEST" ]]; then
 	exit 1
 fi
 emit_github_output recovery_digest "$RECOVERY_DIGEST" || exit 1
-
-if [[ "$ENABLE_SOVEREIGN_RECORD_GRANTS" == "true" && \
-	-z "$(echo "$ENV_JSON" | jq -r '.SOVEREIGN_RECORD_GRANT_SECRET // empty')" ]]; then
-	echo "Staging record grants were enabled without a configured key."
-	exit 1
-fi
 
 STRIPE_INTEGRATION_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_INTEGRATION_ENABLED // "false"')
 STRIPE_BILLING_ENABLED=$(echo "$ENV_JSON" | jq -r '.STRIPE_BILLING_ENABLED // "false"')
