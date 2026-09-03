@@ -397,18 +397,15 @@ describe("SovereignPanelHost", () => {
     ).toHaveLength(1)
   })
 
-  it("remounts and clears opaque context across browser record changes", async () => {
+  it("remounts synchronously and exposes only the record binding", async () => {
     vi.mocked(getClient).mockResolvedValue(signedInClerk())
     const firstDestroy = vi.fn()
     const secondDestroy = vi.fn()
-    const thirdDestroy = vi.fn()
     const firstSetRecord = vi.fn(async () => 1)
     const secondSetRecord = vi.fn(async () => 1)
-    const thirdSetRecord = vi.fn(async () => 1)
     const panels = [
       { setRecord: firstSetRecord, destroy: firstDestroy },
       { setRecord: secondSetRecord, destroy: secondDestroy },
-      { setRecord: thirdSetRecord, destroy: thirdDestroy },
     ]
     let panelIndex = 0
     mountImplementation = () => panels[panelIndex++]
@@ -421,28 +418,14 @@ describe("SovereignPanelHost", () => {
         return node
       },
     )
-    const firstRef = "context_synthetic_record_a"
-    const secondRef = "context_synthetic_record_b"
-
-    const view = render(
-      <SovereignPanelHost
-        appointmentId="appointment_a"
-        contextSnapshotRef={firstRef}
-      />,
-    )
+    const view = render(<SovereignPanelHost appointmentId="appointment_a" />)
     await waitFor(() => expect(mount).toHaveBeenCalledTimes(1))
     const firstOptions = mount.mock.calls[0][0]
     await expect(firstOptions.getContext()).resolves.toEqual({
       clientId: "appointment_a",
-      context_snapshot_ref: firstRef,
     })
 
-    view.rerender(
-      <SovereignPanelHost
-        appointmentId="appointment_b"
-        contextSnapshotRef={secondRef}
-      />,
-    )
+    view.rerender(<SovereignPanelHost appointmentId="appointment_b" />)
     // Layout-effect cleanup must detach A before rerender can paint B.
     expect(firstSetRecord).toHaveBeenCalledWith(null)
     expect(firstDestroy).toHaveBeenCalledTimes(1)
@@ -453,19 +436,6 @@ describe("SovereignPanelHost", () => {
     const secondOptions = mount.mock.calls[1][0]
     await expect(secondOptions.getContext()).resolves.toEqual({
       clientId: "appointment_b",
-      context_snapshot_ref: secondRef,
-    })
-
-    view.rerender(<SovereignPanelHost appointmentId="appointment_b" />)
-    // Removing the ref on the same record also clears before the next paint.
-    expect(secondSetRecord).toHaveBeenCalledWith(null)
-    expect(secondDestroy).toHaveBeenCalledTimes(1)
-    await expect(secondOptions.getContext()).rejects.toThrow(
-      "Open record changed while context was resolving",
-    )
-    await waitFor(() => expect(mount).toHaveBeenCalledTimes(3))
-    await expect(mount.mock.calls[2][0].getContext()).resolves.toEqual({
-      clientId: "appointment_b",
     })
 
     const browserPersistence = [window.localStorage, window.sessionStorage]
@@ -475,11 +445,10 @@ describe("SovereignPanelHost", () => {
         ),
       )
       .join("|")
-    for (const contextRef of [firstRef, secondRef]) {
-      expect(window.location.href).not.toContain(contextRef)
-      expect(document.documentElement.outerHTML).not.toContain(contextRef)
-      expect(browserPersistence).not.toContain(contextRef)
-    }
+    const serverOnlyRef = "context_synthetic_must_stay_server_side"
+    expect(window.location.href).not.toContain(serverOnlyRef)
+    expect(document.documentElement.outerHTML).not.toContain(serverOnlyRef)
+    expect(browserPersistence).not.toContain(serverOnlyRef)
   })
 
   it("rejects an exchange response that echoes a Clerk-shaped credential", async () => {
