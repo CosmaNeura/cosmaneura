@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import configparser
 import json
 import os
 import re
@@ -21,6 +22,7 @@ FOUNDER_LOGIN = "JohnClem"
 GITHUB_HOSTNAME = "github.com"
 MASTER_REF = "refs/heads/master"
 REPOSITORY = "CosmaNeura/cosmaneura"
+ALEMBIC_CONFIG = "alembic.ini"
 MIGRATION_DIRECTORY = "migrations/versions"
 
 
@@ -165,28 +167,64 @@ def _migration_revisions(source: str, path: str) -> tuple[str, tuple[str, ...]]:
     raise CandidateVerificationError("candidate migration metadata is invalid")
 
 
+def _verify_alembic_inventory_contract(
+    candidate_sha: str,
+    *,
+    stdout: Callable[[list[str]], str],
+) -> None:
+    source = stdout(["git", "show", f"{candidate_sha}:{ALEMBIC_CONFIG}"])
+    parser = configparser.ConfigParser(interpolation=None)
+    try:
+        parser.read_string(source)
+        script_location = parser.get("alembic", "script_location").strip()
+        version_locations = parser.get(
+            "alembic", "version_locations", fallback=""
+        ).strip()
+        recursive = parser.getboolean(
+            "alembic", "recursive_version_locations", fallback=False
+        )
+        sourceless = parser.getboolean("alembic", "sourceless", fallback=False)
+    except (configparser.Error, KeyError, ValueError):
+        raise CandidateVerificationError(
+            "candidate Alembic inventory configuration is invalid"
+        ) from None
+    if script_location != "migrations" or version_locations or recursive or sourceless:
+        raise CandidateVerificationError(
+            "candidate Alembic inventory configuration is unsupported"
+        )
+
+
 def _candidate_schema_head(
     candidate_sha: str,
     *,
     stdout: Callable[[list[str]], str],
 ) -> str:
+    _verify_alembic_inventory_contract(candidate_sha, stdout=stdout)
     tree = stdout(
         [
             "git",
             "ls-tree",
-            "-r",
             "-z",
-            "--name-only",
-            candidate_sha,
-            "--",
-            MIGRATION_DIRECTORY,
+            f"{candidate_sha}:{MIGRATION_DIRECTORY}",
         ]
     )
-    paths = sorted(
-        path
-        for path in tree.split("\0")
-        if path.startswith(f"{MIGRATION_DIRECTORY}/") and path.endswith(".py")
-    )
+    paths: list[str] = []
+    for entry in tree.split("\0"):
+        if not entry:
+            continue
+        try:
+            metadata, name = entry.split("\t", 1)
+            mode, object_type, _object_sha = metadata.split(" ", 2)
+        except ValueError:
+            raise CandidateVerificationError(
+                "candidate migration inventory is invalid"
+            ) from None
+        if not name.endswith(".py"):
+            continue
+        if "/" in name or object_type != "blob" or mode not in {"100644", "100755"}:
+            raise CandidateVerificationError("candidate migration inventory is invalid")
+        paths.append(f"{MIGRATION_DIRECTORY}/{name}")
+    paths.sort()
 
     revisions: set[str] = set()
     parents_by_revision: dict[str, tuple[str, ...]] = {}
