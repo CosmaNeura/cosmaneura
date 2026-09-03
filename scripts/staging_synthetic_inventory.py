@@ -176,6 +176,7 @@ def _configure_catalog_session(connection: Any) -> None:
         "SET LOCAL quote_all_identifiers = off",
         "SET LOCAL extra_float_digits = 3",
         "SET LOCAL DateStyle = 'ISO, YMD'",
+        "SET LOCAL TimeZone = 'UTC'",
         "SET LOCAL IntervalStyle = 'postgres'",
         "SET LOCAL bytea_output = 'hex'",
     ):
@@ -1669,8 +1670,8 @@ class LiveInventoryProvider:
             "ON namespace.oid = defaults.defaclnamespace "
             "CROSS JOIN LATERAL pg_catalog.aclexplode(defaults.defaclacl) "
             "AS privilege "
-            "WHERE defaults.defaclrole = database_owner.oid "
-            "AND (defaults.defaclnamespace = 0 OR namespace.nspname = 'public') "
+            "WHERE (defaults.defaclnamespace = 0 "
+            "OR namespace.nspname = 'public') "
             "ORDER BY 1, 2, 3, 4, 5, 6, 7",
             (
                 "owner",

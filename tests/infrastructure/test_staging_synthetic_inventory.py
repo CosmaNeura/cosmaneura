@@ -919,6 +919,26 @@ def test_policy_catalog_matches_migration_replay(
                 "GRANT SELECT ON TABLES TO PUBLIC",
                 count_changes=("default_privileges",),
             )
+            isolated_change(
+                "CREATE ROLE descriptor_probe_default_owner; "
+                "ALTER DEFAULT PRIVILEGES FOR ROLE "
+                "descriptor_probe_default_owner IN SCHEMA public "
+                "GRANT SELECT ON TABLES TO PUBLIC",
+                count_changes=("default_privileges",),
+            )
+
+            connection.execute("SAVEPOINT descriptor_timezone_stability")
+            connection.execute(
+                "CREATE TABLE public.descriptor_timezone_probe ("
+                "captured_at timestamptz NOT NULL DEFAULT "
+                "'2026-01-02 03:04:05+00'::timestamptz)"
+            )
+            connection.execute("SET LOCAL TimeZone = 'America/New_York'")
+            new_york = provider.database_schema_descriptor()
+            connection.execute("SET LOCAL TimeZone = 'Pacific/Honolulu'")
+            honolulu = provider.database_schema_descriptor()
+            assert new_york == honolulu
+            connection.execute("ROLLBACK TO SAVEPOINT descriptor_timezone_stability")
 
             connection.execute(
                 "CREATE TYPE public.descriptor_probe_enum AS ENUM ('first')"
