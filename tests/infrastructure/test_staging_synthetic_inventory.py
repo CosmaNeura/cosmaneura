@@ -9,7 +9,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, LiteralString
 
 import pytest
 
@@ -879,7 +879,7 @@ def test_policy_catalog_matches_migration_replay(
             assert provider.database_schema_descriptor() == baseline
 
             def isolated_change(
-                statement: str,
+                statement: LiteralString,
                 *,
                 count_changes: tuple[str, ...] = (),
             ) -> None:
