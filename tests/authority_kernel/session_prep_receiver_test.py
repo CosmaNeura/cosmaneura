@@ -68,6 +68,9 @@ def _enabled_client(
         SessionPrepSyntheticSettings(
             enabled=True,
             context_snapshot_ref=context_snapshot_ref,
+            clerk_subject="user_test_session_prep_receiver",
+            appointment_id="appointment_01j00000000000000000000000",
+            fixture_id=("synthetic_preview_fixture_01j00000000000000000000000"),
         )
     )
     monkeypatch.setattr(
