@@ -163,6 +163,7 @@ def test_source_revocation_replaces_a_cached_ready_response_with_a_tombstone() -
         service,
         revoked,
         idempotency_key="idem_session_prep_revoked_poll_0002",
+        turn_closed=True,
     )
 
     assert tombstone.replayed is False
