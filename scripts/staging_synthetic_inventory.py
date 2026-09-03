@@ -35,8 +35,8 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # fmt: off
-CANONICAL_POLICY_SHA256 = "6a48174507871903379600d5bb9b8612305a013aa9e6c9fde3226f614575e7d3"
-CANONICAL_POLICY_SEMANTIC_SHA256 = "dc34607297afeca210552c222f8893c1583e0c44deda2ae53cb125df3dc55de1"
+CANONICAL_POLICY_SHA256 = "cfbb2e61925d25a42936179009d7988a52f5e11dc8941d140937ba9b86d74607"
+CANONICAL_POLICY_SEMANTIC_SHA256 = "957ee032bcb55d4e7b8df2d40a462173736c9bc251fa0a21fa42afc8383e4e8e"
 EXPECTED_PROFILES = {"pre": ("89c31f0ae275", 62), "post": ("9a2399212488", 64)}
 EXPECTED_DATABASE_TARGET = ("cosmaneura-staging-postgres.postgres.database.azure.com", "staging", 5432)
 EXPECTED_BLOB_TARGET = "cosmaneurastaginguploads.blob.core.windows.net"
@@ -64,7 +64,22 @@ class StateDigest:
     identity_hmac: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class DatabaseGlobalCounts:
+    non_system_schema_count: int
+    sequence_count: int
+    large_object_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class RedisSurface:
+    logical_database_count: int
+    key_count: int
+
+
 class InventoryProvider(Protocol):
+    def database_global_counts(self) -> DatabaseGlobalCounts: ...
+
     def database_catalog(self) -> Mapping[str, RelationContract]: ...
 
     def alembic_revisions(self) -> Sequence[str]: ...
@@ -81,7 +96,7 @@ class InventoryProvider(Protocol):
 
     def blob_state(self, container: str, *, include_content: bool) -> StateDigest: ...
 
-    def redis_dbsize(self) -> int: ...
+    def redis_surface(self) -> RedisSurface: ...
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -338,6 +353,9 @@ def validate_policy(policy: Mapping[str, Any]) -> None:
     if (
         not isinstance(tables, dict)
         or len(tables) != 64
+        or policy["database"].get("allowed_non_system_schemas") != ["public"]
+        or policy["database"].get("sequences") != []
+        or policy["database"].get("reject_large_objects") is not True
         or policy["database"].get("reject_unknown_tables") is not True
         or policy["database"].get("reject_unknown_columns") is not True
         or policy.get("blob", {}).get("enumerate")
@@ -348,6 +366,7 @@ def validate_policy(policy: Mapping[str, Any]) -> None:
         or policy["redis"].get("required_empty") is not True
         or policy["redis"].get("quiesced_required") is not True
         or policy["redis"].get("reject_any_key") is not True
+        or policy["redis"].get("scan_all_logical_databases") is not True
         or (
             policy["database"].get("expected_host"),
             policy["database"].get("expected_name"),
@@ -576,6 +595,23 @@ def verify_inventory(
         if len(errors) < MAXIMUM_ERRORS and code not in errors:
             errors.append(code)
 
+    database_counts = provider.database_global_counts()
+    for value in (
+        database_counts.non_system_schema_count,
+        database_counts.sequence_count,
+        database_counts.large_object_count,
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise InventoryFailure("database.enumeration_failed")
+    counts["database.non_system_schemas"] = database_counts.non_system_schema_count
+    counts["database.sequences"] = database_counts.sequence_count
+    counts["database.large_objects"] = database_counts.large_object_count
+    if database_counts.non_system_schema_count != 1:
+        fail("database.schema_set")
+    if database_counts.sequence_count:
+        fail("database.sequence_set")
+    if database_counts.large_object_count:
+        fail("database.large_objects")
     observed_catalog = {
         name: {
             "kind": kind,
@@ -694,21 +730,27 @@ def verify_inventory(
             if expected_state is None or not _matches_approval(state, expected_state):
                 fail(f"blob.container.{container}.approved_state")
 
-    redis_size = provider.redis_dbsize()
-    repeated_redis_size = provider.redis_dbsize()
-    counts["redis.dbsize"] = redis_size
+    redis_surface = provider.redis_surface()
+    repeated_redis_surface = provider.redis_surface()
+    counts["redis.logical_databases_with_keys"] = redis_surface.logical_database_count
+    counts["redis.keys"] = redis_surface.key_count
     if not redis_quiesced:
         fail("redis.not_quiesced")
-    if redis_size != 0:
+    if redis_surface.key_count != 0 or redis_surface.logical_database_count != 0:
         fail("redis.required_empty")
-    if redis_size != repeated_redis_size:
+    if redis_surface != repeated_redis_surface:
         fail("redis.unstable")
     redis_hmac = _digest(
         key,
         "redis-state",
         [
             _canonical_json(
-                {"database": policy["redis"]["database"], "size": redis_size}
+                {
+                    "logical_databases_with_keys": (
+                        redis_surface.logical_database_count
+                    ),
+                    "keys": redis_surface.key_count,
+                }
             )
         ],
     )
@@ -767,6 +809,7 @@ class LiveInventoryProvider:
                 f"SET LOCAL lock_timeout = {LOCK_TIMEOUT_MILLISECONDS}"
             )
             self._connection.execute("SET LOCAL row_security = off")
+            self._connection.execute("SET LOCAL search_path = pg_catalog")
             database_name, tls_active = self._connection.execute(
                 "SELECT current_database(), COALESCE((SELECT ssl FROM "
                 "pg_catalog.pg_stat_ssl WHERE pid = pg_catalog.pg_backend_pid()), FALSE)"
@@ -797,6 +840,21 @@ class LiveInventoryProvider:
         finally:
             self._connection.close()
             self._redis.close()
+
+    def database_global_counts(self) -> DatabaseGlobalCounts:
+        schema_count, sequence_count, large_object_count = self._connection.execute(
+            "SELECT "
+            "(SELECT count(*) FROM pg_catalog.pg_namespace "
+            "WHERE nspname <> 'information_schema' AND nspname !~ '^pg_'), "
+            "(SELECT count(*) FROM pg_catalog.pg_class AS relation "
+            "WHERE relation.relkind = 'S'), "
+            "(SELECT count(*) FROM pg_catalog.pg_largeobject_metadata)"
+        ).fetchone()
+        return DatabaseGlobalCounts(
+            non_system_schema_count=int(schema_count),
+            sequence_count=int(sequence_count),
+            large_object_count=int(large_object_count),
+        )
 
     def database_catalog(self) -> Mapping[str, RelationContract]:
         rows = self._connection.execute(
@@ -1036,9 +1094,29 @@ class LiveInventoryProvider:
         except Exception:
             raise InventoryFailure("blob.enumeration_failed") from None
 
-    def redis_dbsize(self) -> int:
+    def redis_surface(self) -> RedisSurface:
         try:
-            return int(self._redis.dbsize())
+            keyspace = self._redis.info(section="keyspace")
+            if not isinstance(keyspace, Mapping):
+                raise InventoryFailure("redis.enumeration_failed")
+            logical_databases = 0
+            key_count = 0
+            for database, state in keyspace.items():
+                if (
+                    not isinstance(database, str)
+                    or re.fullmatch(r"db[0-9]+", database) is None
+                    or not isinstance(state, Mapping)
+                ):
+                    raise InventoryFailure("redis.enumeration_failed")
+                keys = state.get("keys")
+                if isinstance(keys, bool) or not isinstance(keys, int) or keys < 0:
+                    raise InventoryFailure("redis.enumeration_failed")
+                if keys:
+                    logical_databases += 1
+                    key_count += keys
+            return RedisSurface(logical_databases, key_count)
+        except InventoryFailure:
+            raise
         except Exception:
             raise InventoryFailure("redis.enumeration_failed") from None
 
