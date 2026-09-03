@@ -100,6 +100,21 @@ def _begin_side_effect(boundary: SideEffectBoundary | None) -> None:
         boundary()
 
 
+def _doctor_for_zoom_host(host_id: Any) -> Doctor | None:
+    return cast(
+        Doctor | None,
+        Doctor.where(
+            Doctor.id
+            == select(cast(Any, DoctorVideoIntegration.doctor_id))
+            .where(
+                (DoctorVideoIntegration.provider == VideoProvider.zoom)
+                & (DoctorVideoIntegration.provider_user_id == host_id)
+            )
+            .scalar_subquery()
+        ).first(),
+    )
+
+
 def handle_meeting_started(
     payload: dict[str, Any],
     before_side_effect: SideEffectBoundary | None = None,
@@ -217,18 +232,7 @@ def handle_meeting_started(
     # outside the Redis lock. A participant delivery may arrive here; it binds
     # to the occurrence above, then the second lock below verifies the same
     # occurrence is still active before publishing the server mapping.
-    doctor = cast(
-        Doctor | None,
-        Doctor.where(
-            Doctor.id
-            == select(cast(Any, DoctorVideoIntegration.doctor_id))
-            .where(
-                (DoctorVideoIntegration.provider == VideoProvider.zoom)
-                & (DoctorVideoIntegration.provider_user_id == host_id)
-            )
-            .scalar_subquery()
-        ).first(),
-    )
+    doctor = _doctor_for_zoom_host(host_id)
     if not doctor or not doctor_access_in_force(doctor):
         log.info(
             "zoom session registration skipped: access unavailable",
@@ -275,19 +279,6 @@ def handle_meeting_started(
 
     zoom_mtg = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=meeting_id_str)
 
-    if occurrence_armed and zoom_mtg is not None:
-        # Arm monitoring only once capture is actually expected.
-        # arm_authorized_occurrence_locked returns True only when the doctor's
-        # access is in force, capture is available to them, and the meeting has
-        # a validated appointment bound -- which is exactly the condition under
-        # which a visit with no recording is a defect rather than a
-        # configuration choice. Arming on mere session registration would page
-        # for every meeting we were never going to capture.
-        #
-        # The occurrence digest travels with the task: `meeting_id` is reused
-        # all day by a personal meeting room, so a check that fires after this
-        # occurrence ended would otherwise judge the next patient's visit.
-        arm_join_watchdog(meeting_id_str, event_occurrence, str(zoom_mtg.id))
     if zoom_mtg and zoom_mtg.status == ZoomMeetingStatus.scheduled:
         zoom_mtg.status = ZoomMeetingStatus.started
         zoom_mtg.save()
@@ -309,7 +300,7 @@ def handle_meeting_started(
 def arm_join_watchdog(
     meeting_id: str, occurrence_digest: str | None, meeting_record_id: str
 ) -> None:
-    """Persist monitoring for inbox recovery without blocking capture."""
+    """Persist monitoring; let a durable caller retry persistence failure."""
     if not ZOOM_WATCHDOG_ENABLED or occurrence_digest is None:
         return
     try:
@@ -332,6 +323,35 @@ def arm_join_watchdog(
             # Alerting about a broken dependency must not raise either.
             log.exception("failed to report watchdog arming failure")
         raise
+
+
+def _arm_started_watchdog_after_success(payload: dict[str, Any]) -> None:
+    """Retry-safe observer hook after the core Zoom operation succeeds."""
+    if not ZOOM_WATCHDOG_ENABLED:
+        return
+    obj = payload.get("payload", {}).get("object", {})
+    meeting_id_value = obj.get("id")
+    host_id = obj.get("host_id")
+    occurrence = _occurrence_digest(obj)
+    if meeting_id_value is None or not host_id or occurrence is None:
+        return
+    meeting_id = str(meeting_id_value)
+    doctor = _doctor_for_zoom_host(host_id)
+    if doctor is None:
+        return
+    meeting = ZoomMeeting.get(doctor_id=doctor.id, zoom_meeting_id=meeting_id)
+    if meeting is None or not verify_bot_joined._capture_still_expected(
+        str(meeting.id), meeting_id, occurrence
+    ):
+        return
+    redis = get_redis()
+    active_occurrence = _rget(redis, f"recall:meeting:{meeting_id}:occurrence_digest")
+    active_doctor_id = _rget(redis, f"recall:meeting:{meeting_id}:doctor_id")
+    if (active_occurrence is not None and active_occurrence != occurrence) or (
+        active_doctor_id is not None and active_doctor_id != str(doctor.id)
+    ):
+        return
+    arm_join_watchdog(meeting_id, occurrence, str(meeting.id))
 
 
 def _rget(redis, key: str) -> str | None:
@@ -1519,6 +1539,8 @@ def dispatch(
         event_type=event_type,
     )
     if claim.disposition == "succeeded":
+        if event_type == "meeting.started":
+            _arm_started_watchdog_after_success(payload)
         return
     if claim.disposition == "busy":
         raise RetryableWebhookError("handler_error")
@@ -1553,3 +1575,5 @@ def dispatch(
 
     if not zoom_webhook_operations.complete_event(claim):
         raise PermanentWebhookError("provider_operation_uncertain")
+    if event_type == "meeting.started":
+        _arm_started_watchdog_after_success(payload)

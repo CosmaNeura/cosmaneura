@@ -1,11 +1,4 @@
-"""Dependency, ingress, and Recall credential probes for Zoom capture.
-
-The locally signed ingress check proves TLS/routing, local signer-verifier
-consistency, and durable-inbox acceptance—not the Zoom Marketplace secret or
-bot capture. Those require a provider callback and a synthetic meeting. The
-sentinel handler probe touches Redis and the database without matching a real
-doctor; network probes run only in staging/production.
-"""
+"""Probe dependencies and ingress without claiming Marketplace-secret proof."""
 
 import hashlib
 import hmac
@@ -22,15 +15,8 @@ from app.configuration.zoom import ZOOM_SECRET_TOKEN
 from app.environments import is_production, is_staging
 from app.services import alerting, recall, zoom_webhooks
 
-# Intentional sentinel values. Never use these as real Zoom IDs anywhere
-# else — the synthetic check would interfere with a real session that
-# happened to collide.
 SYNTHETIC_HOST_ID = "synthetic-monitor-not-a-real-zoom-host"
 SYNTHETIC_MEETING_ID = "synthetic-monitor-meeting-id"
-# The route probe uses its own meeting id so it exercises the handler in
-# full. Sharing one id would mean the second probe short-circuits on the
-# starting_lock the first one just took, and we would only be testing the
-# dedup guard.
 SYNTHETIC_HTTP_MEETING_ID = "synthetic-monitor-http-meeting-id"
 
 _PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
@@ -39,9 +25,6 @@ _PROBE_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
 def _payload(meeting_id: str) -> dict:
     return {
         "event": "meeting.started",
-        # Unique per run so the webhook route's 48h idempotency guard sees
-        # a fresh event instead of replying `duplicate: true` — the whole
-        # probe would otherwise stop reaching Celery after the first run.
         "event_ts": int(time.time() * 1000),
         "payload": {
             "object": {
@@ -53,12 +36,6 @@ def _payload(meeting_id: str) -> dict:
 
 
 def _clear_lock(redis, meeting_id: str) -> None:
-    # Wipe the dedup lock from the previous run so this iteration is
-    # observable. Real meeting.started uses SET NX to prevent duplicate
-    # bot creation; if we left the lock in place across runs, every
-    # synthetic check after the first would short-circuit and we'd
-    # stop exercising the doctor-lookup + redis-write code paths we
-    # actually care about.
     redis.delete(f"recall:meeting:{meeting_id}:starting_lock")
 
 
@@ -68,13 +45,6 @@ def _probe_dependencies(redis) -> None:
 
 
 def signed_headers(body: bytes) -> dict[str, str]:
-    """Sign a probe body using Zoom's documented signature format.
-
-    Kept public and separate so a test can feed the result straight into
-    the route's own ``_verify_zoom_signature``. Without that, the probe
-    could drift into signing something the endpoint would reject and we
-    would be monitoring nothing.
-    """
     timestamp = str(int(time.time()))
     signature = (
         "v0="
@@ -92,12 +62,7 @@ def signed_headers(body: bytes) -> dict[str, str]:
 
 
 def _probe_ingress(redis) -> None:
-    """POST a locally signed webhook to our own public endpoint.
-
-    This proves only that this deployment can reach its route and that its
-    local signer and verifier agree. A provider-originated callback is required
-    to prove the Zoom Marketplace app is configured with the same secret.
-    """
+    """Local signing proves route acceptance, not the Marketplace secret."""
     _clear_lock(redis, SYNTHETIC_HTTP_MEETING_ID)
 
     body = json.dumps(_payload(SYNTHETIC_HTTP_MEETING_ID)).encode()
@@ -134,8 +99,6 @@ def _probe_ingress(redis) -> None:
         return
 
     if response_body.get("duplicate"):
-        # Not fatal, but it means the event never reached Celery, so the
-        # probe proved less than it looks like it did.
         log.warning(
             "zoom probes: ingress deduplicated, handler not enqueued",
             meeting_id=SYNTHETIC_HTTP_MEETING_ID,

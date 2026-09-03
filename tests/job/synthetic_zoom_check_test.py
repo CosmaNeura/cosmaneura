@@ -65,15 +65,6 @@ def test_synthetic_check_does_not_persist_lock_across_runs(global_session):
     perform()
 
 
-# --------- Route and Recall probes ---------
-#
-# The handler probe above never leaves the process, so it cannot see the
-# route and credential failures that can take the note-taker offline for every
-# doctor. The self-signed route probe cannot prove the Marketplace secret;
-# that requires a provider-originated callback. A rejected RECALL_API_KEY used
-# to be discovered by the first patient visit that failed to record.
-
-
 class _FakeResponse:
     def __init__(self, status_code=200, body=None):
         self.status_code = status_code
@@ -114,7 +105,6 @@ def in_production(monkeypatch):
 
 
 def test_probe_signature_format_is_accepted_by_the_route_verifier():
-    """Pin local signer/verifier compatibility without claiming provider proof."""
     from app.routes import webhooks
 
     body = b'{"event":"meeting.started"}'
@@ -128,7 +118,6 @@ def test_probe_signature_format_is_accepted_by_the_route_verifier():
 
 
 def test_probe_signature_is_rejected_when_local_secrets_differ(monkeypatch):
-    """A local signer/verifier mismatch is rejected."""
     from app.routes import webhooks
 
     body = b'{"event":"meeting.started"}'
@@ -145,8 +134,6 @@ def test_probe_signature_is_rejected_when_local_secrets_differ(monkeypatch):
 def test_network_probes_do_not_run_outside_production(
     global_session, monkeypatch, captured_alerts
 ):
-    """Local dev has no public endpoint to POST to; firing these there
-    would alert on every run and teach everyone to ignore them."""
     called: list[str] = []
     monkeypatch.setattr(
         synthetic_zoom_check, "_probe_ingress", lambda r: called.append("route")
@@ -165,7 +152,6 @@ def test_network_probes_do_not_run_outside_production(
 def test_ingress_probe_alerts_when_endpoint_rejects_locally_signed_request(
     global_session, monkeypatch, in_production, captured_alerts
 ):
-    """A local 401 is observable without claiming Marketplace secret proof."""
     monkeypatch.setattr(
         httpx, "Client", _FakeClient(response=_FakeResponse(status_code=401))
     )
@@ -227,9 +213,6 @@ def test_invalid_ingress_response_does_not_mask_recall_probe(
 def test_each_probe_run_is_a_fresh_event_for_the_idempotency_guard(
     global_session, monkeypatch, in_production, captured_alerts
 ):
-    """The webhook route drops duplicate events for 48h. If the probe sent
-    an identical body every time, only the first run of the day would ever
-    reach Celery and the probe would quietly stop testing anything."""
     fake = _FakeClient()
     monkeypatch.setattr(httpx, "Client", fake)
     monkeypatch.setattr(synthetic_zoom_check, "_probe_recall_credentials", lambda: None)
@@ -244,8 +227,6 @@ def test_each_probe_run_is_a_fresh_event_for_the_idempotency_guard(
 def test_credential_probe_alerts_on_rejected_credentials(
     global_session, monkeypatch, in_production, captured_alerts
 ):
-    """An invalid RECALL_API_KEY is otherwise found by the first patient
-    visit that fails to record."""
     from app.services import recall
 
     def raise_401():
@@ -268,9 +249,6 @@ def test_credential_probe_alerts_on_rejected_credentials(
 def test_a_broken_probe_does_not_mask_the_others(
     global_session, monkeypatch, in_production, captured_alerts
 ):
-    """Both probes have to report. If the route probe's failure short-
-    circuited the task, a simultaneous Recall outage would stay hidden
-    until the route was fixed."""
     from app.services import recall
 
     def raise_connect():

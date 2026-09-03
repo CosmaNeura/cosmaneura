@@ -1,10 +1,3 @@
-"""PHI-scrubbed Sentry alerts for otherwise silent dispatch failures.
-
-Structlog does not emit stdlib records here, and Sentry strips event text and
-context. Exception type identifies the issue; structured logs hold only
-pseudonymous correlation references and bounded metadata.
-"""
-
 from typing import Any
 
 import sentry_sdk

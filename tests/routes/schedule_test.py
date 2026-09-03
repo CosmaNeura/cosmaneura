@@ -288,6 +288,13 @@ def test_authorize_zoom_capture_arms_active_occurrence_and_queues_retry(
             patch("app.routes.internal.start_zoom_capture_job") as mock_start,
             patch("app.services.zoom_webhooks.arm_join_watchdog") as mock_watchdog,
         ):
+            mock_watchdog.side_effect = [ConnectionError(), None]
+            unavailable = authenticated_client.post(
+                api_app.url_path_for(
+                    "authorize_zoom_capture", zoom_meeting_id=meeting.zoom_meeting_id
+                ),
+                json={"appointment_id": str(appointment.id)},
+            )
             response = authenticated_client.post(
                 api_app.url_path_for(
                     "authorize_zoom_capture",
@@ -298,10 +305,12 @@ def test_authorize_zoom_capture_arms_active_occurrence_and_queues_retry(
                 },
             )
 
+        assert unavailable.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         assert response.status_code == status.HTTP_200_OK, response.text
         assert response.json()["state"] == "armed"
         mock_start.queue.assert_called_once_with(str(meeting.id))
-        mock_watchdog.assert_called_once_with(
+        assert mock_watchdog.call_count == 2
+        mock_watchdog.assert_called_with(
             meeting.zoom_meeting_id, occurrence_digest, str(meeting.id)
         )
         persisted = ZoomMeeting.one(meeting.id)

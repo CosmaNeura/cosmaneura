@@ -2321,9 +2321,15 @@ def authorize_zoom_capture(
     if result.armed:
         from app.services import zoom_webhooks
 
-        zoom_webhooks.arm_join_watchdog(
-            zoom_meeting_id, result.occurrence_digest, result.meeting_record_id
-        )
+        try:
+            zoom_webhooks.arm_join_watchdog(
+                zoom_meeting_id, result.occurrence_digest, result.meeting_record_id
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Capture monitoring is temporarily unavailable.",
+            ) from None
         start_zoom_capture_job.queue(result.meeting_record_id)
 
     return ZoomCaptureAuthorizationResponse(

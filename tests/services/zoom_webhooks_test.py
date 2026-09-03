@@ -775,6 +775,30 @@ def test_durable_participant_waits_for_meeting_mapping_before_side_effects(
     assert operation.state == "succeeded"
 
 
+def test_meeting_started_fences_before_its_first_redis_mutation(
+    clean_redis, monkeypatch
+):
+    from app.services import external_webhook_inbox as inbox
+    from app.services import zoom_webhooks
+
+    from app.models.external_webhook_operation import ExternalWebhookOperation
+
+    digest = inbox.digest_provider_reference("meeting-start-boundary")
+    monkeypatch.setattr(
+        zoom_webhooks,
+        "_lifecycle_lock",
+        lambda *_: (_ for _ in ()).throw(ConnectionError()),
+    )
+    with pytest.raises(inbox.PermanentWebhookError):
+        zoom_webhooks.dispatch(
+            "meeting.started", _started_payload(), provider_event_digest=digest
+        )
+    operation = ExternalWebhookOperation.get(
+        provider="zoom", provider_resource_digest=digest
+    )
+    assert operation is not None and operation.state == "uncertain"
+
+
 def test_duplicate_participant_join_is_idempotent_and_membership_is_hmac_only(
     clean_redis,
     doctor_with_zoom,
@@ -2519,7 +2543,11 @@ def test_watchdog_is_armed_when_capture_is_expected(
         ),
     )
 
-    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.dispatch(
+        "meeting.started",
+        _started_payload(),
+        provider_event_digest=digest_provider_reference("watchdog-arm-test"),
+    )
 
     assert len(armed) == 1
     meeting_record_id, meeting_id, occurrence = armed[0]
@@ -2533,6 +2561,40 @@ def test_watchdog_is_armed_when_capture_is_expected(
     assert not verify_bot_joined._capture_still_expected(
         str(tracked.id), MEETING_ID, expected_occurrence
     )
+
+
+def test_watchdog_posthook_distinguishes_missing_from_newer_session_state(
+    clean_redis, doctor_with_zoom, monkeypatch, captured_alerts
+):
+    from app.jobs import verify_bot_joined
+    from app.services import alerting, zoom_webhooks
+
+    monkeypatch.setattr(zoom_webhooks, "ZOOM_WATCHDOG_ENABLED", True)
+    meeting = ZoomMeeting.one(doctor_id=doctor_with_zoom.id, zoom_meeting_id=MEETING_ID)
+    occurrence = digest_provider_reference(f"zoom-occurrence:{OCCURRENCE_UUID}")
+    armed: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        verify_bot_joined, "queue_durably", lambda *args: armed.append(args)
+    )
+
+    zoom_webhooks._arm_started_watchdog_after_success(_started_payload())
+
+    assert armed == [(str(meeting.id), MEETING_ID, occurrence)]
+    verify_bot_joined.perform(
+        MEETING_ID,
+        occurrence_digest=occurrence,
+        meeting_record_id=str(meeting.id),
+    )
+    assert [call["type"] for call in captured_alerts] == [alerting.LostSessionState]
+    clean_redis.delete(_key(f"watchdog_alerted:{occurrence}"))
+
+    armed.clear()
+    clean_redis.set(_key("occurrence_digest"), "b" * 64)
+    clean_redis.set(_key("doctor_id"), str(doctor_with_zoom.id))
+    zoom_webhooks._arm_started_watchdog_after_success(_started_payload())
+
+    assert armed == []
+    assert clean_redis.get(_key("occurrence_digest")) == b"b" * 64
 
 
 def test_watchdog_producer_is_dormant_until_enabled(monkeypatch):
@@ -2578,7 +2640,7 @@ def test_unbound_start_waits_for_supported_late_authorization(
     assert captured_alerts == []
 
 
-def test_watchdog_publish_is_durable_but_persistence_failure_retries(
+def test_watchdog_publish_is_durable_and_post_success_persistence_retries(
     clean_redis, doctor_with_zoom, mock_recall, mock_zoom, monkeypatch, captured_alerts
 ):
     """Broker loss preserves the intent; persistence loss retries its parent."""
@@ -2594,7 +2656,11 @@ def test_watchdog_publish_is_durable_but_persistence_failure_retries(
 
     monkeypatch.setattr(external_webhook_inbox, "publish_delivery", explode)
 
-    zoom_webhooks.handle_meeting_started(_started_payload())
+    zoom_webhooks.dispatch(
+        "meeting.started",
+        _started_payload(),
+        provider_event_digest=digest_provider_reference("watchdog-publish-failure"),
+    )
 
     assert clean_redis.get(_key("doctor_id")) is not None, "dispatch state was lost"
     assert alerting.WatchdogArmingFailed in [c["type"] for c in captured_alerts]
@@ -2609,9 +2675,39 @@ def test_watchdog_publish_is_durable_but_persistence_failure_retries(
     assert intent.encrypted_payload is not None
     assert MEETING_ID not in intent.encrypted_payload
 
-    monkeypatch.setattr(verify_bot_joined, "queue_durably", explode)
-    with pytest.raises(ConnectionError):
-        zoom_webhooks.arm_join_watchdog(MEETING_ID, "a" * 64, str(intent.id))
+    attempts = 0
+    core_attempts = 0
+    core_handler = zoom_webhooks.HANDLERS["meeting.started"]
+
+    def persist_after_retry(*_args, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("database unavailable")
+
+    def count_core(payload, before_side_effect=None):
+        nonlocal core_attempts
+        core_attempts += 1
+        return core_handler(payload, before_side_effect)
+
+    monkeypatch.setattr(verify_bot_joined, "queue_durably", persist_after_retry)
+    monkeypatch.setitem(zoom_webhooks.HANDLERS, "meeting.started", count_core)
+    parent = external_webhook_inbox.store_verified_external_webhook(
+        provider="zoom",
+        provider_event_id="watchdog-persistence-retry",
+        event_type="meeting.started",
+        payload=_started_payload(),
+    )
+    external_webhook_inbox.process_delivery(parent.delivery_id)
+    failed = ExternalWebhookDelivery.one(parent.delivery_id)
+    assert failed.state == "retry_wait"
+    failed.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    failed.save()
+    external_webhook_inbox.process_delivery(parent.delivery_id)
+
+    assert attempts == 2
+    assert core_attempts == 1
+    assert ExternalWebhookDelivery.one(parent.delivery_id).state == "completed"
 
 
 def test_blocked_continuation_is_reported(

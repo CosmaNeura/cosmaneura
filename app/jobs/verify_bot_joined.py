@@ -1,9 +1,3 @@
-"""Detect expected Zoom captures that never start.
-
-The watchdog reads settled lifecycle state, stays quiet for expected waiting
-states, and emits a PHI-scrubbed alert for a genuinely stuck visit.
-"""
-
 from typing import cast
 
 from app import log
@@ -12,14 +6,11 @@ from app.configuration.redis import get_redis
 from app.services import alerting
 from app.services.external_webhook_inbox import ZOOM_WATCHDOG_MAX_CHECKS
 
-# Avoid mistaking a slow-but-working dispatch for failure.
 FIRST_CHECK_DELAY_SECONDS = 180
 RECHECK_INTERVAL_SECONDS = 180
-# 1 + 4 rechecks = 15 minutes of bounded coverage.
 MAX_CHECKS = ZOOM_WATCHDOG_MAX_CHECKS
 
 _ALERTED_TTL_SECONDS = 24 * 60 * 60
-# Do not occupy a worker behind a live lifecycle handler.
 _LOCK_BLOCKING_TIMEOUT_SECONDS = 5
 _LOCK_TIMEOUT_SECONDS = 30
 
@@ -30,7 +21,6 @@ def _rget(redis, key: str) -> str | None:
 
 
 def _still_failing(redis, prefix: str, occurrence_digest: str | None) -> bool:
-    """Re-read health gates under the lifecycle lock to reject torn reads."""
     if not _occurrence_matches(redis, prefix, occurrence_digest):
         return False
     if not redis.get(f"{prefix}:doctor_id"):
@@ -45,9 +35,7 @@ def _still_failing(redis, prefix: str, occurrence_digest: str | None) -> bool:
 
 
 def _occurrence_matches(redis, prefix: str, occurrence_digest: str | None) -> bool:
-    """Fence a delayed check from a later reuse of the same meeting ID."""
     if occurrence_digest is None:
-        # Rolling compatibility for tasks armed before occurrence fencing.
         return True
     return _rget(redis, f"{prefix}:occurrence_digest") == occurrence_digest
 
@@ -57,10 +45,7 @@ def _capture_still_expected(
 ) -> bool:
     from app.models.zoom_meeting import ZoomMeeting, ZoomMeetingStatus
 
-    meeting = cast(
-        ZoomMeeting | None,
-        ZoomMeeting.get(id=meeting_record_id),
-    )
+    meeting = cast(ZoomMeeting | None, ZoomMeeting.get(id=meeting_record_id))
     return bool(
         meeting is not None
         and meeting.zoom_meeting_id == meeting_id
@@ -83,8 +68,6 @@ def _alert_once(
     event_id = alerting.alert(alert_type, **context)
     if event_id is None:
         raise RuntimeError("Sentry SDK did not accept the watchdog event")
-    # The event ID proves local SDK acceptance, not server receipt or human
-    # notification; the flight plan verifies those separately in staging.
     redis.set(alerted_key, alert_type.__name__, ex=_ALERTED_TTL_SECONDS)
 
 
@@ -179,7 +162,6 @@ def perform(
         )
         return
 
-    # meeting.ended clears per-meeting state.
     if not redis.get(f"{prefix}:doctor_id"):
         log.info(
             "join watchdog: meeting state gone, nothing to check",
@@ -196,7 +178,6 @@ def perform(
         )
         return
 
-    # This visit already produced a recording; later pause is not dispatch failure.
     if redis.get(f"{prefix}:capture_started"):
         log.info(
             "join watchdog: capture already started for this session",
@@ -205,7 +186,6 @@ def perform(
         )
         return
 
-    # merge_window owns a deliberately paused, still-connected bot.
     if redis.get(f"{prefix}:paused_at") or redis.get(f"{prefix}:merge_task_id"):
         log.info(
             "join watchdog: recording paused inside merge window",
@@ -216,12 +196,10 @@ def perform(
 
     patient_count = cast(int, redis.scard(f"{prefix}:participants_present"))
 
-    if patient_count <= 0:
-        # An empty room or doctor alone is expected.
+    if patient_count <= 0 and check_number < MAX_CHECKS:
         _rearm(meeting_record_id, meeting_id, check_number, occurrence_digest)
         return
 
-    # Recheck under the handler's lock before paging on independently read keys.
     from app.services.zoom_webhooks import lifecycle_lock_key
 
     lock = redis.lock(
@@ -230,7 +208,6 @@ def perform(
         blocking_timeout=_LOCK_BLOCKING_TIMEOUT_SECONDS,
     )
     if not lock.acquire(blocking=True):
-        # A handler is mid-transition; defer rather than guess.
         log.info(
             "join watchdog: lifecycle busy, deferring verdict",
             meeting_ref=alerting.ref(meeting_id),
@@ -277,12 +254,10 @@ def perform(
         try:
             lock.release()
         except Exception:
-            # Lock already expired via its own timeout; the verdict still holds.
             log.info("join watchdog: lifecycle lock already released")
 
 
 def _delayed_execution_available() -> bool:
-    """Avoid recursive inline checks when eager mode ignores countdowns."""
     return not celery_app.conf.task_always_eager
 
 
@@ -296,11 +271,6 @@ def _rearm(
         return
 
     if check_number >= MAX_CHECKS:
-        log.info(
-            "join watchdog: check budget exhausted, standing down",
-            meeting_ref=alerting.ref(meeting_id),
-            check_number=check_number,
-        )
         return
 
     next_check = check_number + 1
@@ -321,7 +291,6 @@ def queue_durably(
     *,
     check_number: int = 1,
 ):
-    """Schedule one check through its encrypted durable execution record."""
     from app.services import external_webhook_inbox
 
     if not _delayed_execution_available():
