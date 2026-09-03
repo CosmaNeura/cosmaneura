@@ -48,6 +48,9 @@ class FakeProvider:
     catalog_extra: dict[str, tuple[str, bool, list[tuple[str, str, bool]]]] = field(
         default_factory=dict
     )
+    non_system_schema_count: int = 1
+    sequence_count: int = 0
+    large_object_count: int = 0
     column_mutation: tuple[str, int, tuple[str, str, bool]] | None = None
     relation_mutations: dict[str, tuple[str, bool]] = field(default_factory=dict)
     revisions: list[str] | None = None
@@ -55,7 +58,8 @@ class FakeProvider:
     rule_violations: dict[tuple[str, str], int] = field(default_factory=dict)
     containers: list[str] | None = None
     blob_counts: dict[str, int] = field(default_factory=dict)
-    redis_size: int = 0
+    redis_logical_databases: int = 0
+    redis_keys: int = 0
     unstable_blob_container: str | None = None
     unstable_redis: bool = False
     _blob_calls: dict[str, int] = field(default_factory=dict, init=False)
@@ -63,6 +67,13 @@ class FakeProvider:
 
     def _expected_tables(self) -> dict[str, dict[str, Any]]:
         return self.module._expected_tables(self.policy, self.profile)
+
+    def database_global_counts(self) -> Any:
+        return self.module.DatabaseGlobalCounts(
+            self.non_system_schema_count,
+            self.sequence_count,
+            self.large_object_count,
+        )
 
     def database_catalog(
         self,
@@ -121,9 +132,10 @@ class FakeProvider:
         )
         return self.module.StateDigest(count, digest)
 
-    def redis_dbsize(self) -> int:
+    def redis_surface(self) -> Any:
         self._redis_calls += 1
-        return self.redis_size + int(self.unstable_redis and self._redis_calls > 1)
+        key_count = self.redis_keys + int(self.unstable_redis and self._redis_calls > 1)
+        return self.module.RedisSurface(self.redis_logical_databases, key_count)
 
 
 def _approval(
@@ -230,6 +242,10 @@ def test_policy_is_closed_world_and_covers_both_exact_catalogs(
         "access_code_salt",
         "access_code_digest",
     ]
+    assert policy["database"]["allowed_non_system_schemas"] == ["public"]
+    assert policy["database"]["sequences"] == []
+    assert policy["database"]["reject_large_objects"] is True
+    assert policy["redis"]["scan_all_logical_databases"] is True
 
     pre_practice_columns = [column[0] for column in pre["practice"]["columns"]]
     assert "acquisition_source" not in pre_practice_columns
@@ -250,6 +266,11 @@ def test_provider_mock_passes_with_exact_approved_state(
     assert evidence["pass"] is True
     assert evidence["errors"] == []
     assert evidence["counts"]["database.alembic_version"] == 1
+    assert evidence["counts"]["database.non_system_schemas"] == 1
+    assert evidence["counts"]["database.sequences"] == 0
+    assert evidence["counts"]["database.large_objects"] == 0
+    assert evidence["counts"]["redis.logical_databases_with_keys"] == 0
+    assert evidence["counts"]["redis.keys"] == 0
     assert len(evidence["catalog_hmac"]) == 64
     assert set(evidence) == {
         "schema_version",
@@ -305,6 +326,9 @@ def test_evidence_contains_no_provider_values(module: ModuleType) -> None:
             {"relation_mutations": {"doctor": ("r", True)}},
             "database.catalog.doctor.columns",
         ),
+        ({"non_system_schema_count": 2}, "database.schema_set"),
+        ({"sequence_count": 1}, "database.sequence_set"),
+        ({"large_object_count": 1}, "database.large_objects"),
         ({"revisions": ["wrong"]}, "database.alembic_version"),
         (
             {"table_counts": {"zoom_meeting": 1}},
@@ -539,20 +563,26 @@ def test_blob_adapter_hashes_streamed_content_metadata_tags_and_all_states(
 
 
 @pytest.mark.parametrize(
-    ("redis_size", "quiesced", "error"),
+    ("logical_databases", "redis_keys", "quiesced", "error"),
     [
-        (1, True, "redis.required_empty"),
-        (0, False, "redis.not_quiesced"),
+        (1, 1, True, "redis.required_empty"),
+        (0, 0, False, "redis.not_quiesced"),
     ],
 )
-def test_redis_database_zero_must_be_quiesced_and_empty(
+def test_every_redis_database_must_be_quiesced_and_empty(
     module: ModuleType,
-    redis_size: int,
+    logical_databases: int,
+    redis_keys: int,
     quiesced: bool,
     error: str,
 ) -> None:
     policy, policy_sha256 = _policy()
-    provider = FakeProvider(module, policy, redis_size=redis_size)
+    provider = FakeProvider(
+        module,
+        policy,
+        redis_logical_databases=logical_databases,
+        redis_keys=redis_keys,
+    )
 
     evidence = _verify(
         module,
@@ -564,6 +594,52 @@ def test_redis_database_zero_must_be_quiesced_and_empty(
 
     assert evidence["pass"] is False
     assert error in evidence["errors"]
+
+
+def test_redis_adapter_aggregates_info_keyspace_without_enumerating_keys(
+    module: ModuleType,
+) -> None:
+    class Redis:
+        def __init__(self, value: Any) -> None:
+            self.value = value
+            self.calls: list[str] = []
+
+        def info(self, *, section: str) -> Any:
+            self.calls.append(section)
+            return self.value
+
+    provider = object.__new__(module.LiveInventoryProvider)
+    provider._redis = Redis(
+        {
+            "db0": {"keys": 2, "expires": 1, "avg_ttl": 10},
+            "db7": {"keys": 3, "expires": 0, "avg_ttl": 0},
+        }
+    )
+
+    assert provider.redis_surface() == module.RedisSurface(2, 5)
+    assert provider._redis.calls == ["keyspace"]
+
+    provider._redis = Redis({})
+    assert provider.redis_surface() == module.RedisSurface(0, 0)
+
+    for invalid in (
+        {"private-key": {"keys": 1}},
+        {"db1": {"keys": -1}},
+        {"db1": {"keys": True}},
+        {"db1": "keys=1"},
+    ):
+        provider._redis = Redis(invalid)
+        with pytest.raises(module.InventoryFailure, match="redis.enumeration_failed"):
+            provider.redis_surface()
+
+    class DeniedRedis:
+        def info(self, *, section: str) -> Any:
+            raise RuntimeError("private-provider-detail")
+
+    provider._redis = DeniedRedis()
+    with pytest.raises(module.InventoryFailure) as exc_info:
+        provider.redis_surface()
+    assert str(exc_info.value) == "redis.enumeration_failed"
 
 
 def _write_pem(path: Path, marker: str, mode: int = 0o644) -> Path:
@@ -705,7 +781,25 @@ def test_policy_catalog_matches_migration_replay(
                 )
                 assert observed == expected
                 assert provider.alembic_revisions() == [profile["revision"]]
+                assert provider.database_global_counts() == module.DatabaseGlobalCounts(
+                    1, 0, 0
+                )
                 assert len(observed) - 1 == profile["table_count"]
+        with psycopg.connect(database_url, autocommit=True) as temporary_connection:
+            temporary_connection.execute(
+                "CREATE TEMP SEQUENCE unexpected_temp_sequence"
+            )
+            with psycopg.connect(database_url, autocommit=True) as connection:
+                connection.execute("CREATE SCHEMA unexpected_inventory_surface")
+                connection.execute(
+                    "CREATE SEQUENCE public.unexpected_inventory_sequence"
+                )
+                connection.execute("SELECT pg_catalog.lo_create(0)")
+                provider = object.__new__(module.LiveInventoryProvider)
+                provider._connection = connection
+                assert provider.database_global_counts() == module.DatabaseGlobalCounts(
+                    2, 2, 1
+                )
     finally:
         if created:
             with psycopg.connect(base_url, autocommit=True) as admin:
@@ -732,6 +826,7 @@ def test_script_is_standalone_and_never_imports_app_or_alembic() -> None:
     }
     assert "REPEATABLE READ READ ONLY DEFERRABLE" in source
     assert "SET LOCAL row_security = off" in source
+    assert "SET LOCAL search_path = pg_catalog" in source
     assert "SET LOCAL lock_timeout" in source
     assert "LEFT JOIN pg_catalog.pg_attribute" in source
     assert "row_to_json(source)::text" in source
