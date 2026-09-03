@@ -280,6 +280,23 @@
   rehearsal archive is byte-identical to the later deployment image. Require
   restored schema `89c31f0ae275`, run the aggregate duplicate preflight, assert
   the image's sole head is `9a2399212488`, then migrate to that exact revision.
+- The separately stateful `infra-staging-rehearsal/` root is the dormant
+  control-plane boundary. Its default plan creates nothing. A reviewed enabled
+  plan may create the persistent control/empty-target groups, two OIDC
+  dispatcher UAMIs, two unfederated job UAMIs, least-privilege roles, the
+  target firewall-rule deny policy, and the private non-PHI marker/evidence
+  store. Only dispatchers receive exact environment-subject federation; source,
+  target, and marker roles bind to the job identities. The
+  controller-owned target network contract is `10.75.0.0/24`; the persistent
+  marker/private-executor reservation is a distinct `10.76.0.0/24`. Both must
+  be revalidated against the complete live peering/address inventory at plan
+  time. Reserving the executor subnet does not establish a private runner or a
+  route to the ephemeral target. Locked WORM, the AzAPI legal-hold action, and
+  the storage-account `ReadOnly` lock stay behind a separate explicit
+  irreversible approval. The lock is additionally hard-blocked until a later
+  rung binds the private executor and trusted aggregate-only evidence sink;
+  the reserved subnet and identities make no runtime claim. See
+  `infra-staging-rehearsal/README.md`.
 - Record before/after schema dumps or digests, aggregate/HMAC state, duration,
   lock observations, exit status, and all table/index/constraint/trigger and
   row-count invariants. Run synthetic seat, onboarding, Stripe-state, and BAA

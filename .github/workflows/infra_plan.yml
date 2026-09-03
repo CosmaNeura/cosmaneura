@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - 'infra/**'
+      - 'infra-staging-rehearsal/**'
       - '.env'
       - '.env.production.backend'
       - '.env.production.frontend'
@@ -70,3 +71,36 @@ jobs:
             fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  staging-rehearsal-static-plan:
+    name: Staging rehearsal Terraform PR checks (secretless)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1
+        with:
+          tofu_version: 1.12.5
+          tofu_wrapper: false
+
+      - name: tofu init without backend
+        working-directory: infra-staging-rehearsal
+        run: tofu init -backend=false -input=false
+
+      - name: tofu fmt -check
+        working-directory: infra-staging-rehearsal
+        run: tofu fmt -check -diff -recursive
+
+      - name: tofu validate
+        working-directory: infra-staging-rehearsal
+        run: tofu validate -no-color
+
+      - name: tofu plan (mock providers, no backend)
+        working-directory: infra-staging-rehearsal
+        run: tofu test -test-directory=tests -no-color
