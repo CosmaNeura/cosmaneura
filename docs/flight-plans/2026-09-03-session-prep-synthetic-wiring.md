@@ -29,9 +29,10 @@
   1. Sovereign receiver must derive its configured synthetic context handle
      server-side after resolving the record-bound mount and must accept a
      browser `/session-prep` body containing only the client turn ID.
-  2. Core base `d543e035d968d3dccc34cd03baaef90b41a4629c`, including the
-     provider panel baseline and the merged synthetic-fixture/authority work,
-     receives this dormant sender wiring.
+  2. Reviewed Core base `bba1840c5da85e9fc781cf671899e16643e32fc8`,
+     including the provider panel baseline, merged synthetic-fixture/authority
+     work, and non-overlapping staging-inventory hardening, receives this dormant
+     sender wiring.
   3. Core panel pin/revocation hardening corresponding to PRs #252 and #253 must
      be present in the exact promotion candidate before activation.
   4. A separate Auth/IAM and operational-control change must complete before
@@ -50,8 +51,9 @@
 - Live SHA/digest/configuration/schema evidence by affected environment: not
   mutated or reconciled by this implementation branch. The implementation is
   based exactly on Core `d543e035d968d3dccc34cd03baaef90b41a4629c` and remains
-  dark. The staging workflow currently requires the Session Prep synthetic
-  feature to remain disabled.
+  dark. The final reviewed branch is reconciled to exact Core base
+  `bba1840c5da85e9fc781cf671899e16643e32fc8`. The staging workflow currently
+  requires the Session Prep synthetic feature to remain disabled.
 - Difference from `master` and deployed-only behavior: this branch adds only
   dormant server-side authority wiring and tests. It does not add a Note Detail
   field, expose the configured handle to browser code, or alter deployment or
