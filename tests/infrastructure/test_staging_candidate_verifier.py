@@ -20,6 +20,11 @@ MIGRATION_PATHS = (
     "migrations/versions/2026_08_24_89c31f0ae275_base.py",
     "migrations/versions/2026_08_29_9a2399212488_head.py",
 )
+ALEMBIC_CONFIG_SOURCE = """\
+[alembic]
+script_location = migrations
+version_path_separator = os
+"""
 MASTER_API_COMMAND = [
     "gh",
     "api",
@@ -48,6 +53,16 @@ def _master_response(
     )
 
 
+def _tree_entries(paths: tuple[str, ...]) -> str:
+    object_sha = "0" * 40
+    return (
+        "\0".join(
+            f"100644 blob {object_sha}\t{path.rsplit('/', 1)[-1]}" for path in paths
+        )
+        + "\0"
+    )
+
+
 def _context(**overrides: str) -> CandidateContext:
     values = {
         "candidate_sha": CANDIDATE,
@@ -69,9 +84,11 @@ def _stdout(command: list[str]) -> str:
     if command == ["git", "rev-parse", "HEAD"]:
         return MASTER
     if command[:2] == ["git", "ls-tree"]:
-        return "\0".join((*MIGRATION_PATHS, ""))
+        return _tree_entries(MIGRATION_PATHS)
     if command[:2] == ["git", "show"]:
         path = command[2].split(":", 1)[1]
+        if path == "alembic.ini":
+            return ALEMBIC_CONFIG_SOURCE
         if path == MIGRATION_PATHS[0]:
             return f'revision = "{BASE_SCHEMA}"\ndown_revision = None\n'
         if path == MIGRATION_PATHS[1]:
@@ -235,12 +252,8 @@ def test_reads_migrations_from_exact_candidate_git_tree_without_importing() -> N
     assert [
         "git",
         "ls-tree",
-        "-r",
         "-z",
-        "--name-only",
-        CANDIDATE,
-        "--",
-        "migrations/versions",
+        f"{CANDIDATE}:migrations/versions",
     ] in commands
     assert [
         "git",
@@ -249,6 +262,47 @@ def test_reads_migrations_from_exact_candidate_git_tree_without_importing() -> N
     ] in commands
     assert commands.count(MASTER_API_COMMAND) == 2
     assert PULL_API_COMMAND in commands
+
+
+@pytest.mark.parametrize(
+    "config_source",
+    [
+        "[alembic]\nscript_location = another-directory\n",
+        "[alembic]\nscript_location = migrations\nversion_locations = other/versions\n",
+        "[alembic]\nscript_location = migrations\nrecursive_version_locations = true\n",
+        "[alembic]\nscript_location = migrations\nsourceless = true\n",
+        "[unrelated]\nscript_location = migrations\n",
+    ],
+)
+def test_rejects_alembic_inventory_configuration_drift(config_source: str) -> None:
+    def stdout(command: list[str]) -> str:
+        if command == ["git", "show", f"{CANDIDATE}:alembic.ini"]:
+            return config_source
+        return _stdout(command)
+
+    with pytest.raises(CandidateVerificationError, match="Alembic inventory"):
+        _verify(_context(), stdout=stdout)
+
+
+def test_nonrecursive_inventory_ignores_nested_migration_directories() -> None:
+    def stdout(command: list[str]) -> str:
+        if command[:2] == ["git", "ls-tree"]:
+            return _tree_entries(MIGRATION_PATHS) + f"040000 tree {'1' * 40}\tnested\0"
+        return _stdout(command)
+
+    assert _verify(_context(), stdout=stdout)["schema_head"] == EXPECTED_SCHEMA
+
+
+def test_rejects_nonregular_top_level_migration_source() -> None:
+    def stdout(command: list[str]) -> str:
+        if command[:2] == ["git", "ls-tree"]:
+            return (
+                _tree_entries(MIGRATION_PATHS) + f"120000 blob {'1' * 40}\tlinked.py\0"
+            )
+        return _stdout(command)
+
+    with pytest.raises(CandidateVerificationError, match="inventory is invalid"):
+        _verify(_context(), stdout=stdout)
 
 
 def test_rejects_schema_head_mismatch() -> None:
@@ -270,7 +324,9 @@ def test_rejects_candidate_with_multiple_migration_heads() -> None:
 
     def stdout(command: list[str]) -> str:
         if command[:2] == ["git", "ls-tree"]:
-            return "\0".join((*paths, ""))
+            return _tree_entries(paths)
+        if command == ["git", "show", f"{CANDIDATE}:alembic.ini"]:
+            return _stdout(command)
         if command[:2] == ["git", "show"]:
             revision = command[2].rsplit("/", 1)[1][:12]
             return f"revision = {revision!r}\ndown_revision = {parents[revision]!r}\n"
@@ -303,7 +359,9 @@ def test_rejects_candidate_with_cycle_hidden_beside_one_valid_head() -> None:
 
     def stdout(command: list[str]) -> str:
         if command[:2] == ["git", "ls-tree"]:
-            return "\0".join((*paths, ""))
+            return _tree_entries(paths)
+        if command == ["git", "show", f"{CANDIDATE}:alembic.ini"]:
+            return _stdout(command)
         if command[:2] == ["git", "show"]:
             revision = command[2].rsplit("/", 1)[1][:12]
             return f"revision = {revision!r}\ndown_revision = {parents[revision]!r}\n"
@@ -326,7 +384,9 @@ def test_rejects_disconnected_migration_graph() -> None:
 
     def stdout(command: list[str]) -> str:
         if command[:2] == ["git", "ls-tree"]:
-            return "\0".join((*paths, ""))
+            return _tree_entries(paths)
+        if command == ["git", "show", f"{CANDIDATE}:alembic.ini"]:
+            return _stdout(command)
         if command[:2] == ["git", "show"]:
             revision = command[2].rsplit("/", 1)[1][:12]
             return f"revision = {revision!r}\ndown_revision = {parents[revision]!r}\n"
