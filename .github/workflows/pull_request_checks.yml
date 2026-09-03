@@ -35,11 +35,12 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
-      - uses: iloveitaly/github-action-localias@b6ed1f2decb4bc1d4e0e55e7113f61c86a3a004d # master 2026-08-21
-        with:
-          chrome: true
+      - name: Install SHA-verified Localias
+        run: bash scripts/install_pinned_localias.sh
       - run: just up --fast
       - run: just py_setup
+      - name: Start SHA-verified Localias
+        run: bash scripts/start_pinned_localias_ci.sh
       - run: just py_lint
       - run: just db_migrate
       - run: just db_lint

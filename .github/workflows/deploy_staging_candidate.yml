@@ -166,10 +166,8 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-      - name: Start exact candidate local test routing
-        uses: iloveitaly/github-action-localias@b6ed1f2decb4bc1d4e0e55e7113f61c86a3a004d # master 2026-08-21
-        with:
-          chrome: true
+      - name: Install SHA-verified Localias
+        run: bash scripts/install_pinned_localias.sh
       - name: Install exact candidate toolchain without shared caches
         uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
         with:
@@ -190,6 +188,8 @@ jobs:
             PATH
       - run: just up --fast
       - run: just py_setup
+      - name: Start exact candidate SHA-verified local test routing
+        run: bash scripts/start_pinned_localias_ci.sh
       - run: just py_lint
       - run: just db_migrate
       - run: just db_lint
