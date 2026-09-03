@@ -31,7 +31,7 @@ INVENTORY_POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
 CANONICAL_POLICY_SHA256 = (
-    "77ed77c2aebd72e2dc969fa13ba05f7c8855f6dcddba2a84a1bc8d9dd69d1430"
+    "a51466ee7e41ccc044330cfee8088f87bf8faf4014594db297719f618dc14ae7"
 )
 APP_NAME = "cosmaneura-staging-restore-sanitizer-v1"
 HMAC_DOMAIN = "cosmaneura:staging-restore-sanitizer:v1"
