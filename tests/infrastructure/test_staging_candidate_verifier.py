@@ -20,6 +20,32 @@ MIGRATION_PATHS = (
     "migrations/versions/2026_08_24_89c31f0ae275_base.py",
     "migrations/versions/2026_08_29_9a2399212488_head.py",
 )
+MASTER_API_COMMAND = [
+    "gh",
+    "api",
+    "--hostname",
+    "github.com",
+    "repos/CosmaNeura/cosmaneura/branches/master",
+]
+PULL_API_COMMAND = [
+    "gh",
+    "api",
+    "--hostname",
+    "github.com",
+    "repos/CosmaNeura/cosmaneura/pulls/230",
+]
+
+
+def _master_response(
+    *, sha: str = MASTER, protected: bool = True, name: str = "master"
+) -> str:
+    return json.dumps(
+        {
+            "name": name,
+            "protected": protected,
+            "commit": {"sha": sha},
+        }
+    )
 
 
 def _context(**overrides: str) -> CandidateContext:
@@ -40,6 +66,8 @@ def _context(**overrides: str) -> CandidateContext:
 
 
 def _stdout(command: list[str]) -> str:
+    if command == ["git", "rev-parse", "HEAD"]:
+        return MASTER
     if command[:2] == ["git", "ls-tree"]:
         return "\0".join((*MIGRATION_PATHS, ""))
     if command[:2] == ["git", "show"]:
@@ -53,9 +81,9 @@ def _stdout(command: list[str]) -> str:
                 f'down_revision: str | None = "{BASE_SCHEMA}"\n'
             )
         raise AssertionError(f"unexpected candidate path: {path}")
-    if command[-1] == ".object.sha":
-        return MASTER
-    if command[:2] == ["gh", "api"]:
+    if command == MASTER_API_COMMAND:
+        return _master_response()
+    if command == PULL_API_COMMAND:
         return json.dumps(
             {
                 "state": "closed",
@@ -95,6 +123,7 @@ def test_accepts_exact_merged_pr_candidate_on_current_protected_master() -> None
     ("field", "value"),
     [
         ("candidate_sha", CANDIDATE[:12]),
+        ("workflow_sha", MASTER[:12]),
         ("approval_pr_number", "0"),
         ("expected_schema_after", "HEAD"),
         ("repository", "someone/fork"),
@@ -112,12 +141,51 @@ def test_rejects_invalid_or_unauthorized_dispatch(field: str, value: str) -> Non
 
 def test_rejects_master_advance() -> None:
     def stdout(command: list[str]) -> str:
-        if command[-1] == ".object.sha":
-            return "a" * 40
+        if command == MASTER_API_COMMAND:
+            return _master_response(sha="a" * 40)
         return _stdout(command)
 
     with pytest.raises(CandidateVerificationError, match="master advanced"):
         _verify(_context(), stdout=stdout)
+
+
+def test_rejects_unprotected_live_master_even_when_event_context_says_protected() -> (
+    None
+):
+    def stdout(command: list[str]) -> str:
+        if command == MASTER_API_COMMAND:
+            return _master_response(protected=False)
+        return _stdout(command)
+
+    with pytest.raises(CandidateVerificationError, match="protected master metadata"):
+        _verify(_context(), stdout=stdout)
+
+
+def test_rejects_control_checkout_that_is_not_the_workflow_sha() -> None:
+    def stdout(command: list[str]) -> str:
+        if command == ["git", "rev-parse", "HEAD"]:
+            return "a" * 40
+        return _stdout(command)
+
+    with pytest.raises(CandidateVerificationError, match="verifier checkout"):
+        _verify(_context(), stdout=stdout)
+
+
+def test_rejects_master_change_during_verification() -> None:
+    master_reads = 0
+
+    def stdout(command: list[str]) -> str:
+        nonlocal master_reads
+        if command == MASTER_API_COMMAND:
+            master_reads += 1
+            if master_reads == 1:
+                return _master_response()
+            return _master_response(sha="a" * 40)
+        return _stdout(command)
+
+    with pytest.raises(CandidateVerificationError, match="during candidate"):
+        _verify(_context(), stdout=stdout)
+    assert master_reads == 2
 
 
 @pytest.mark.parametrize(
@@ -141,9 +209,7 @@ def test_rejects_candidate_without_exact_merged_master_pr(
     pull.update(pull_override)
 
     def stdout(command: list[str]) -> str:
-        if command[-1] == ".object.sha":
-            return MASTER
-        if command[:2] == ["gh", "api"]:
+        if command == PULL_API_COMMAND:
             return json.dumps(pull)
         return _stdout(command)
 
@@ -181,6 +247,8 @@ def test_reads_migrations_from_exact_candidate_git_tree_without_importing() -> N
         "show",
         f"{CANDIDATE}:{MIGRATION_PATHS[1]}",
     ] in commands
+    assert commands.count(MASTER_API_COMMAND) == 2
+    assert PULL_API_COMMAND in commands
 
 
 def test_rejects_schema_head_mismatch() -> None:
