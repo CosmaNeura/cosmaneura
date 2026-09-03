@@ -40,6 +40,8 @@
     "database_privileges": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
     "tablespaces": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
     "replication_slots": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "parameter_privileges": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "shared_security_labels": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
     "settings": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"}
   },
   "expected_databases": [
@@ -53,9 +55,15 @@
         "extensions": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
         "foreign_data_wrappers": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
         "foreign_servers": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "foreign_tables": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
         "user_mappings": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
         "publications": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
-        "subscriptions": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"}
+        "publication_memberships": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "subscriptions": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "subscription_relations": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "security_labels": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "event_triggers": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "large_objects": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"}
       }
     },
     {
@@ -76,8 +84,12 @@
       "foreign_server_names",
       "user_mapping_names",
       "publication_names",
+      "publication_memberships",
       "subscription_names",
+      "subscription_connection_info",
       "slot_names",
+      "security_labels",
+      "large_object_contents",
       "setting_values",
       "connection_strings",
       "passwords"

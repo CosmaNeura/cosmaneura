@@ -60,6 +60,11 @@ def _server(module: ModuleType) -> Any:
                     "encoding": "UTF8",
                     "collation": "C",
                     "ctype": "C",
+                    "locale_provider": "c",
+                    "icu_locale": None,
+                    "icu_rules": None,
+                    "collation_version": None,
+                    "default_tablespace": "pg_default",
                     "connection_limit": -1,
                 },
                 {
@@ -70,6 +75,11 @@ def _server(module: ModuleType) -> Any:
                     "encoding": "UTF8",
                     "collation": "C",
                     "ctype": "C",
+                    "locale_provider": "c",
+                    "icu_locale": None,
+                    "icu_rules": None,
+                    "collation_version": None,
+                    "default_tablespace": "pg_default",
                     "connection_limit": -1,
                 },
                 {
@@ -80,6 +90,11 @@ def _server(module: ModuleType) -> Any:
                     "encoding": "UTF8",
                     "collation": "C",
                     "ctype": "C",
+                    "locale_provider": "c",
+                    "icu_locale": None,
+                    "icu_rules": None,
+                    "collation_version": None,
+                    "default_tablespace": "pg_default",
                     "connection_limit": -1,
                 },
                 {
@@ -90,6 +105,11 @@ def _server(module: ModuleType) -> Any:
                     "encoding": "UTF8",
                     "collation": "C",
                     "ctype": "C",
+                    "locale_provider": "c",
+                    "icu_locale": None,
+                    "icu_rules": None,
+                    "collation_version": None,
+                    "default_tablespace": "pg_default",
                     "connection_limit": -1,
                 },
             ],
@@ -103,6 +123,8 @@ def _server(module: ModuleType) -> Any:
             ],
             "tablespaces": [["pg_default", "owner-role", None, ["(PUBLIC,CREATE,f)"]]],
             "replication_slots": [],
+            "parameter_privileges": [],
+            "shared_security_labels": [],
             "settings": [
                 ["archive_mode", "off", None, "default", "off", "off", False],
                 [
@@ -123,11 +145,17 @@ def _database_surfaces(label: str) -> dict[str, list[Any]]:
     return {
         "schema": [{"kind": "schema", "label": label}],
         "extensions": [["plpgsql", "1.0", "pg_catalog", False]],
-        "foreign_data_wrappers": [],
-        "foreign_servers": [],
-        "user_mappings": [],
-        "publications": [],
-        "subscriptions": [],
+        "foreign_data_wrappers": [["fdw-private", ["token=fdw-secret"]]],
+        "foreign_servers": [["server-private", ["host=private.invalid"]]],
+        "foreign_tables": [["private", "table-private", "server-private"]],
+        "user_mappings": [["server-private", "user-private", ["password=secret"]]],
+        "publications": [["publication-private", False]],
+        "publication_memberships": [["publication-private", "table-private"]],
+        "subscriptions": [["subscription-private", "password=secret", False]],
+        "subscription_relations": [["subscription-private", "table-private", "r"]],
+        "security_labels": [["provider-private", "label-private"]],
+        "event_triggers": [["event-private", "ddl_command_start"]],
+        "large_objects": [["9812", "owner-role", 0, "c2VjcmV0"]],
     }
 
 
@@ -244,6 +272,10 @@ def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
         "plpgsql",
         "archive_mode",
         RESOURCE_ID,
+        "fdw-secret",
+        "password=secret",
+        "publication-private",
+        "c2VjcmV0",
     ):
         assert raw_value not in rendered
     assert len(evidence["evidence_hmac"]) == 64
@@ -319,6 +351,31 @@ def test_unknown_missing_and_changed_databases_fail_closed(module: ModuleType) -
         _collect(module, policy, module.SnapshotAdapter(missing_server, databases))
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("locale_provider", "i"),
+        ("icu_locale", "en-US"),
+        ("icu_rules", "private-rules"),
+        ("collation_version", "changed"),
+        ("default_tablespace", "other-space"),
+    ],
+)
+def test_database_locale_and_tablespace_are_pinned(
+    module: ModuleType, field: str, value: str
+) -> None:
+    server = _server(module)
+    policy = _policy(module, server, _databases())
+    changed = deepcopy(server.surfaces)
+    changed["databases"][0][field] = value
+    with pytest.raises(module.EvidenceFailure, match="server.databases_mismatch"):
+        _collect(
+            module,
+            policy,
+            module.SnapshotAdapter(replace(server, surfaces=changed), _databases()),
+        )
+
+
 def test_enabled_database_read_failure_and_visibility_are_blockers(
     module: ModuleType,
 ) -> None:
@@ -391,6 +448,77 @@ def test_source_revision_key_and_capture_window_are_bound(module: ModuleType) ->
     )
     with pytest.raises(module.EvidenceFailure, match="capture.invalid_duration"):
         module.collect_evidence(**kwargs, clock=lambda: next(times))
+
+
+def test_monotonic_deadline_and_resource_limits_fail_closed(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    server = _server(module)
+    databases = _databases()
+    policy = _policy(module, server, databases)
+    ticks = iter([0.0, module.MAXIMUM_CAPTURE_SECONDS])
+    with pytest.raises(module.EvidenceFailure, match="capture.deadline_exceeded"):
+        module.collect_evidence(
+            policy,
+            POLICY_SHA256,
+            module.SnapshotAdapter(server, databases),
+            KEY,
+            source_resource_id=RESOURCE_ID,
+            source_revision=REVISION,
+            key_version="test-v1",
+            monotonic=lambda: next(ticks),
+        )
+
+    monkeypatch.setattr(module, "MAXIMUM_BYTES_PER_SURFACE", 3)
+    with pytest.raises(module.EvidenceFailure, match="catalog.surface_too_large"):
+        module._surface_pin(KEY, "bounded", ["four"])
+    monkeypatch.setattr(module, "MAXIMUM_DATABASES", 3)
+    policy["expected_databases"] = policy["expected_databases"][:3]
+    with pytest.raises(module.EvidenceFailure, match="database.count_exceeded"):
+        _collect(module, policy, module.SnapshotAdapter(server, databases))
+
+
+def test_live_row_iteration_stops_before_materializing_over_limit(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Cursor:
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def execute(self, query: str, parameters: Any) -> None:
+            del query, parameters
+
+        def __iter__(self) -> Any:
+            return iter(((1,), (2,), (3,)))
+
+    class Connection:
+        def execute(self, query: str, parameters: Any) -> None:
+            del query, parameters
+
+        def cursor(self, *, name: str) -> Cursor:
+            assert name.startswith("server_scope_")
+            return Cursor()
+
+    adapter = object.__new__(module.LivePostgresAdapter)
+    adapter.start_capture(60)
+    monkeypatch.setattr(module, "MAXIMUM_RECORDS_PER_SURFACE", 2)
+    with pytest.raises(module.EvidenceFailure, match="catalog.resource_limit"):
+        adapter._rows(Connection(), "SELECT bounded", ())
+
+
+def test_database_url_comes_only_from_fixed_environment(
+    module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(module.DATABASE_URL_ENVIRONMENT, raising=False)
+    with pytest.raises(module.EvidenceFailure, match="database_url.missing_or_invalid"):
+        module.database_url_from_environment()
+    monkeypatch.setenv(
+        module.DATABASE_URL_ENVIRONMENT, "postgresql://secret.invalid/db"
+    )
+    assert module.database_url_from_environment() == "postgresql://secret.invalid/db"
 
 
 def test_committed_policy_is_hash_pinned_and_deliberately_dormant(
@@ -504,4 +632,13 @@ def test_script_is_standalone_read_only_and_aggregate_only() -> None:
     assert "pg_catalog.pg_auth_members" in source
     assert "pg_catalog.pg_replication_slots" in source
     assert "pg_catalog.pg_subscription" in source
+    assert "pg_catalog.pg_subscription_rel" in source
+    assert "pg_catalog.pg_publication_rel" in source
+    assert "pg_catalog.pg_foreign_table" in source
+    assert "pg_catalog.pg_event_trigger" in source
+    assert "pg_catalog.pg_largeobject" in source
+    assert "pg_catalog.pg_shseclabel" in source
     assert "umoptions" in source
+    assert "fetchall" not in source
+    assert "--database-url" not in source
+    assert "STAGING_SERVER_SCOPE_DATABASE_URL" in source

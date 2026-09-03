@@ -18,6 +18,7 @@ import os
 import re
 import stat
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -26,8 +27,9 @@ from typing import Any, Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
+DATABASE_URL_ENVIRONMENT = "STAGING_SERVER_SCOPE_DATABASE_URL"
 CANONICAL_POLICY_SHA256 = (
-    "d35506d9f1bbc85e6942e37ab357da479331690f01b4585a8ca8f28a61ad28c7"
+    "7b452e230df0310685c2751dbb50f0cfd27ccf3108106618461d117bf4ca33ea"
 )
 HMAC_DOMAIN = b"cosmaneura:staging-server-scope-evidence:v1\x00"
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -38,6 +40,9 @@ MAXIMUM_HMAC_KEY_BYTES = 4096
 MAXIMUM_POLICY_BYTES = 1024 * 1024
 MAXIMUM_RECORDS_PER_SURFACE = 100_000
 MAXIMUM_BYTES_PER_SURFACE = 16 * 1024 * 1024
+MAXIMUM_DATABASES = 64
+MAXIMUM_TOTAL_RECORDS = 500_000
+MAXIMUM_TOTAL_BYTES = 64 * 1024 * 1024
 MAXIMUM_CAPTURE_SECONDS = 900
 SERVER_SURFACES = (
     "databases",
@@ -47,6 +52,8 @@ SERVER_SURFACES = (
     "database_privileges",
     "tablespaces",
     "replication_slots",
+    "parameter_privileges",
+    "shared_security_labels",
     "settings",
 )
 DATABASE_SURFACES = (
@@ -54,9 +61,15 @@ DATABASE_SURFACES = (
     "extensions",
     "foreign_data_wrappers",
     "foreign_servers",
+    "foreign_tables",
     "user_mappings",
     "publications",
+    "publication_memberships",
     "subscriptions",
+    "subscription_relations",
+    "security_labels",
+    "event_triggers",
+    "large_objects",
 )
 
 
@@ -82,6 +95,8 @@ class ServerSnapshot:
 
 
 class EvidenceAdapter(Protocol):
+    def start_capture(self, maximum_seconds: int) -> None: ...
+
     def server_snapshot(self, required_settings: Sequence[str]) -> ServerSnapshot: ...
 
     def database_snapshot(self, database: str) -> Mapping[str, Sequence[Any]]: ...
@@ -97,6 +112,9 @@ class SnapshotAdapter:
     ) -> None:
         self._server = copy.deepcopy(server)
         self._databases = copy.deepcopy(databases)
+
+    def start_capture(self, maximum_seconds: int) -> None:
+        del maximum_seconds
 
     def server_snapshot(self, required_settings: Sequence[str]) -> ServerSnapshot:
         del required_settings
@@ -133,9 +151,15 @@ def _identity_hmac(key: bytes, kind: str, value: str) -> str:
 def _surface_pin(key: bytes, domain: str, records: Sequence[Any]) -> SurfacePin:
     if len(records) > MAXIMUM_RECORDS_PER_SURFACE:
         raise EvidenceFailure("catalog.surface_too_large")
-    encoded = sorted(_canonical(record) for record in records)
-    if sum(len(record) for record in encoded) > MAXIMUM_BYTES_PER_SURFACE:
-        raise EvidenceFailure("catalog.surface_too_large")
+    encoded: list[bytes] = []
+    total_bytes = 0
+    for record in records:
+        item = _canonical(record)
+        total_bytes += len(item)
+        if total_bytes > MAXIMUM_BYTES_PER_SURFACE:
+            raise EvidenceFailure("catalog.surface_too_large")
+        encoded.append(item)
+    encoded.sort()
     mac = hmac.new(key, HMAC_DOMAIN + b"surface\x00", hashlib.sha256)
     _update_mac(mac, domain.encode("ascii"))
     for record in encoded:
@@ -248,7 +272,11 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
     for pin in server.values():
         _validate_pin(pin, configured=configured)
     databases = policy["expected_databases"]
-    if not isinstance(databases, list) or not databases:
+    if (
+        not isinstance(databases, list)
+        or not databases
+        or len(databases) > MAXIMUM_DATABASES
+    ):
         raise EvidenceFailure("policy.invalid_databases")
     identities: set[str] = set()
     for database in databases:
@@ -346,6 +374,13 @@ def read_hmac_key(path: Path) -> bytes:
     return key
 
 
+def database_url_from_environment() -> str:
+    value = os.environ.get(DATABASE_URL_ENVIRONMENT)
+    if not value or "\x00" in value or len(value) > 8192:
+        raise EvidenceFailure("database_url.missing_or_invalid")
+    return value
+
+
 def read_policy(path: Path = POLICY_PATH) -> tuple[Mapping[str, Any], str]:
     raw = _read_regular_file(
         path, MAXIMUM_POLICY_BYTES, "policy.file_unsafe", exact_mode=None
@@ -377,6 +412,11 @@ def _database_metadata(record: Any) -> tuple[str, bool, bool]:
             "encoding",
             "collation",
             "ctype",
+            "locale_provider",
+            "icu_locale",
+            "icu_rules",
+            "collation_version",
+            "default_tablespace",
             "connection_limit",
         }
         or not isinstance(record["name"], str)
@@ -397,6 +437,7 @@ def collect_evidence(
     source_revision: str,
     key_version: str,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     policy = validate_policy(policy)
     if not HEX_256_RE.fullmatch(policy_sha256):
@@ -411,10 +452,18 @@ def collect_evidence(
         raise EvidenceFailure("hmac_key.version_mismatch")
     if not MINIMUM_HMAC_KEY_BYTES <= len(key) <= MAXIMUM_HMAC_KEY_BYTES:
         raise EvidenceFailure("hmac_key.invalid")
+    deadline = monotonic() + MAXIMUM_CAPTURE_SECONDS
+    adapter.start_capture(MAXIMUM_CAPTURE_SECONDS)
+
+    def check_deadline() -> None:
+        if monotonic() >= deadline:
+            raise EvidenceFailure("capture.deadline_exceeded")
+
     started = clock()
     if started.tzinfo is None:
         raise EvidenceFailure("capture.invalid_clock")
     settings = policy["required_settings"]
+    check_deadline()
     before = adapter.server_snapshot(settings)
     if before.version_major != policy["source"]["postgres_major"]:
         raise EvidenceFailure("server.version_mismatch")
@@ -425,6 +474,7 @@ def collect_evidence(
     observed_server: dict[str, dict[str, Any]] = {}
     for name in SERVER_SURFACES:
         pin = _surface_pin(key, f"server:{name}", before.surfaces[name])
+        check_deadline()
         _compare_pin(
             pin,
             policy["expected_server_surfaces"][name],
@@ -432,12 +482,15 @@ def collect_evidence(
         )
         observed_server[name] = _pin_json(pin)
     database_records = list(before.surfaces["databases"])
+    if len(database_records) > MAXIMUM_DATABASES:
+        raise EvidenceFailure("database.count_exceeded")
     expected_databases = {
         item["identity_hmac"]: item for item in policy["expected_databases"]
     }
     observed_databases: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw_record in sorted(database_records, key=_canonical):
+        check_deadline()
         name, is_template, allow_connections = _database_metadata(raw_record)
         identity = _identity_hmac(key, "database", name)
         expected = expected_databases.get(identity)
@@ -469,6 +522,7 @@ def collect_evidence(
         surface_evidence: dict[str, dict[str, Any]] = {}
         for surface in DATABASE_SURFACES:
             pin = _surface_pin(key, f"database:{identity}:{surface}", snapshot[surface])
+            check_deadline()
             _compare_pin(
                 pin,
                 expected["surfaces"][surface],
@@ -484,10 +538,12 @@ def collect_evidence(
         )
     if seen != set(expected_databases):
         raise EvidenceFailure("database.missing")
+    check_deadline()
     after = adapter.server_snapshot(settings)
     if after != before:
         raise EvidenceFailure("server.changed_during_capture")
     completed = clock()
+    check_deadline()
     duration = (completed.astimezone(UTC) - started.astimezone(UTC)).total_seconds()
     if duration < 0 or duration > MAXIMUM_CAPTURE_SECONDS:
         raise EvidenceFailure("capture.invalid_duration")
@@ -674,7 +730,24 @@ class LivePostgresAdapter:
     ):
         self._dsn = dsn
         self._policy = policy
+        self._deadline = 0.0
+        self._query_sequence = 0
+        self._total_records = 0
+        self._total_bytes = 0
         self._validate_dsn(allow_local=allow_local)
+        self.start_capture(MAXIMUM_CAPTURE_SECONDS)
+
+    def start_capture(self, maximum_seconds: int) -> None:
+        self._deadline = time.monotonic() + maximum_seconds
+        self._query_sequence = 0
+        self._total_records = 0
+        self._total_bytes = 0
+
+    def _remaining(self) -> float:
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise EvidenceFailure("capture.deadline_exceeded")
+        return remaining
 
     def _validate_dsn(self, *, allow_local: bool) -> None:
         try:
@@ -705,18 +778,36 @@ class LivePostgresAdapter:
         try:
             import psycopg
 
-            return psycopg.connect(self._dsn, dbname=database, connect_timeout=10)
+            remaining = self._remaining()
+            if remaining < 1:
+                raise EvidenceFailure("capture.deadline_exceeded")
+            timeout = min(10, int(remaining))
+            connection = psycopg.connect(
+                self._dsn, dbname=database, connect_timeout=timeout
+            )
+            self._remaining()
+            return connection
+        except EvidenceFailure:
+            raise
         except Exception:
             raise DatabaseUnavailable from None
 
-    @staticmethod
-    def _configure(connection: Any) -> None:
+    def _configure(self, connection: Any) -> None:
+        self._remaining()
         connection.execute(
             "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE"
         )
+        timeout_ms = max(1, min(30_000, int(self._remaining() * 1000)))
+        connection.execute(
+            "SELECT pg_catalog.set_config('statement_timeout', %s, true)",
+            (f"{timeout_ms}ms",),
+        )
+        lock_timeout_ms = max(1, min(5_000, int(self._remaining() * 1000)))
+        connection.execute(
+            "SELECT pg_catalog.set_config('lock_timeout', %s, true)",
+            (f"{lock_timeout_ms}ms",),
+        )
         for statement in (
-            "SET LOCAL statement_timeout = '30s'",
-            "SET LOCAL lock_timeout = '5s'",
             "SET LOCAL search_path = pg_catalog, public",
             "SET LOCAL quote_all_identifiers = off",
             "SET LOCAL extra_float_digits = 3",
@@ -727,12 +818,44 @@ class LivePostgresAdapter:
             "SET LOCAL row_security = off",
         ):
             connection.execute(statement)
+            self._remaining()
 
-    @staticmethod
-    def _rows(connection: Any, query: str, parameters: Any = None) -> list[Any]:
+    def _rows(self, connection: Any, query: str, parameters: Any = None) -> list[Any]:
         try:
-            cursor = connection.execute(query, parameters)
-            return [list(row) for row in cursor.fetchall()]
+            remaining_ms = max(1, min(30_000, int(self._remaining() * 1000)))
+            connection.execute(
+                "SELECT pg_catalog.set_config('statement_timeout', %s, true)",
+                (f"{remaining_ms}ms",),
+            )
+            self._query_sequence += 1
+            records: list[Any] = []
+            query_records = 0
+            query_bytes = 0
+            with connection.cursor(
+                name=f"server_scope_{self._query_sequence}"
+            ) as cursor:
+                cursor.itersize = 1
+                cursor.execute(query, parameters)
+                for row in cursor:
+                    self._remaining()
+                    record = list(row)
+                    size = len(_canonical(record))
+                    query_records += 1
+                    query_bytes += size
+                    self._total_records += 1
+                    self._total_bytes += size
+                    if (
+                        query_records > MAXIMUM_RECORDS_PER_SURFACE
+                        or query_bytes > MAXIMUM_BYTES_PER_SURFACE
+                        or self._total_records > MAXIMUM_TOTAL_RECORDS
+                        or self._total_bytes > MAXIMUM_TOTAL_BYTES
+                    ):
+                        raise EvidenceFailure("catalog.resource_limit")
+                    records.append(record)
+            self._remaining()
+            return records
+        except EvidenceFailure:
+            raise
         except Exception:
             raise EvidenceFailure("catalog.read_blocked") from None
 
@@ -743,11 +866,16 @@ class LivePostgresAdapter:
             raise EvidenceFailure("database.connection_blocked") from None
         try:
             self._configure(connection)
-            version = int(connection.execute("SHOW server_version_num").fetchone()[0])
-            visibility_row = connection.execute(
+            version = int(
+                self._rows(connection, "SELECT current_setting('server_version_num')")[
+                    0
+                ][0]
+            )
+            visibility_row = self._rows(
+                connection,
                 "SELECT pg_catalog.pg_has_role(current_user,'pg_monitor','MEMBER'),"
-                "pg_catalog.pg_has_role(current_user,'pg_read_all_settings','MEMBER')"
-            ).fetchone()
+                "pg_catalog.pg_has_role(current_user,'pg_read_all_settings','MEMBER')",
+            )[0]
             visibility: dict[str, bool] = {
                 "pg_monitor": bool(visibility_row[0]),
                 "pg_read_all_settings": bool(visibility_row[1]),
@@ -757,8 +885,11 @@ class LivePostgresAdapter:
                     connection,
                     """SELECT d.datname,d.datistemplate,d.datallowconn,r.rolname,
                     pg_catalog.pg_encoding_to_char(d.encoding),d.datcollate,d.datctype,
-                    d.datconnlimit FROM pg_catalog.pg_database d
-                    JOIN pg_catalog.pg_roles r ON r.oid=d.datdba ORDER BY d.datname""",
+                    d.datlocprovider,d.daticulocale,d.daticurules,d.datcollversion,
+                    t.spcname,d.datconnlimit FROM pg_catalog.pg_database d
+                    JOIN pg_catalog.pg_roles r ON r.oid=d.datdba
+                    JOIN pg_catalog.pg_tablespace t ON t.oid=d.dattablespace
+                    ORDER BY d.datname""",
                 ),
                 "roles": self._rows(
                     connection,
@@ -802,10 +933,12 @@ class LivePostgresAdapter:
                     """SELECT t.spcname,r.rolname,
                     (SELECT array_agg(v ORDER BY v) FROM unnest(t.spcoptions) v),
                     (SELECT array_agg(ROW(CASE WHEN a.grantee=0 THEN 'PUBLIC'
-                    ELSE g.rolname END,a.privilege_type,a.is_grantable)::text ORDER BY 1)
+                    ELSE g.rolname END,grantor.rolname,a.privilege_type,
+                    a.is_grantable)::text ORDER BY 1)
                     FROM pg_catalog.aclexplode(COALESCE(t.spcacl,
                     pg_catalog.acldefault('t',t.spcowner))) a
-                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee)
+                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
+                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor)
                     FROM pg_catalog.pg_tablespace t JOIN pg_catalog.pg_roles r
                     ON r.oid=t.spcowner ORDER BY t.spcname""",
                 ),
@@ -814,6 +947,23 @@ class LivePostgresAdapter:
                     """SELECT slot_name,plugin,slot_type,database,
                     temporary,active,two_phase,conflicting
                     FROM pg_catalog.pg_replication_slots ORDER BY slot_name""",
+                ),
+                "parameter_privileges": self._rows(
+                    connection,
+                    """SELECT p.parname,CASE WHEN a.grantee=0 THEN 'PUBLIC'
+                    ELSE g.rolname END,grantor.rolname,a.privilege_type,a.is_grantable
+                    FROM pg_catalog.pg_parameter_acl p
+                    CROSS JOIN LATERAL pg_catalog.aclexplode(p.paracl) a
+                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
+                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor
+                    ORDER BY 1,2,3,4""",
+                ),
+                "shared_security_labels": self._rows(
+                    connection,
+                    """SELECT i.type,i.object_names,i.object_args,s.provider,s.label
+                    FROM pg_catalog.pg_shseclabel s CROSS JOIN LATERAL
+                    pg_catalog.pg_identify_object_as_address(
+                    s.classoid,s.objoid,0) i ORDER BY 1,2,3,4,5""",
                 ),
                 "settings": self._rows(
                     connection,
@@ -834,7 +984,12 @@ class LivePostgresAdapter:
                         "encoding": row[4],
                         "collation": row[5],
                         "ctype": row[6],
-                        "connection_limit": row[7],
+                        "locale_provider": row[7],
+                        "icu_locale": row[8],
+                        "icu_rules": row[9],
+                        "collation_version": row[10],
+                        "default_tablespace": row[11],
+                        "connection_limit": row[12],
                     }
                 )
             surfaces["databases"] = database_rows
@@ -876,6 +1031,16 @@ class LivePostgresAdapter:
                     FROM pg_catalog.pg_foreign_server s JOIN pg_catalog.pg_roles r ON r.oid=s.srvowner
                     JOIN pg_catalog.pg_foreign_data_wrapper f ON f.oid=s.srvfdw ORDER BY s.srvname""",
                 ),
+                "foreign_tables": self._rows(
+                    connection,
+                    """SELECT n.nspname,c.relname,s.srvname,
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(f.ftoptions) v)
+                    FROM pg_catalog.pg_foreign_table f
+                    JOIN pg_catalog.pg_class c ON c.oid=f.ftrelid
+                    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                    JOIN pg_catalog.pg_foreign_server s ON s.oid=f.ftserver
+                    ORDER BY 1,2""",
+                ),
                 "user_mappings": self._rows(
                     connection,
                     """SELECT s.srvname,CASE WHEN m.umuser=0 THEN 'PUBLIC' ELSE r.rolname END,
@@ -890,14 +1055,79 @@ class LivePostgresAdapter:
                     p.pubdelete,p.pubtruncate,p.pubviaroot FROM pg_catalog.pg_publication p
                     JOIN pg_catalog.pg_roles r ON r.oid=p.pubowner ORDER BY p.pubname""",
                 ),
+                "publication_memberships": self._rows(
+                    connection,
+                    """SELECT p.pubname,n.nspname,c.relname,
+                    pg_catalog.pg_get_expr(x.prqual,x.prrelid,false),
+                    (SELECT array_agg(a.attname ORDER BY a.attnum)
+                    FROM unnest(x.prattrs::smallint[]) number
+                    JOIN pg_catalog.pg_attribute a ON a.attrelid=x.prrelid
+                    AND a.attnum=number)
+                    FROM pg_catalog.pg_publication_rel x
+                    JOIN pg_catalog.pg_publication p ON p.oid=x.prpubid
+                    JOIN pg_catalog.pg_class c ON c.oid=x.prrelid
+                    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                    ORDER BY 1,2,3""",
+                ),
                 "subscriptions": self._rows(
                     connection,
                     """SELECT s.subname,r.rolname,s.subenabled,s.subbinary,s.substream,
                     s.subtwophasestate,s.subdisableonerr,s.subpasswordrequired,
-                    s.subrunasowner,s.suborigin,
-                    (SELECT array_agg(v ORDER BY v) FROM unnest(s.subpublications) v)
+                    s.subrunasowner,s.suborigin,s.subconninfo,s.subslotname,
+                    s.subsynccommit,s.subskiplsn IS NOT NULL,
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(s.subpublications) v),
+                    state.worker_count,state.connected_workers,state.received_lsn_present,
+                    state.latest_end_lsn_present
                     FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_roles r
-                    ON r.oid=s.subowner ORDER BY s.subname""",
+                    ON r.oid=s.subowner LEFT JOIN LATERAL (
+                    SELECT count(*) worker_count,
+                    count(*) FILTER (WHERE x.pid IS NOT NULL) connected_workers,
+                    COALESCE(bool_or(x.received_lsn IS NOT NULL),false) received_lsn_present,
+                    COALESCE(bool_or(x.latest_end_lsn IS NOT NULL),false) latest_end_lsn_present
+                    FROM pg_catalog.pg_stat_subscription x WHERE x.subid=s.oid
+                    ) state ON true ORDER BY s.subname""",
+                ),
+                "subscription_relations": self._rows(
+                    connection,
+                    """SELECT s.subname,n.nspname,c.relname,r.srsubstate,
+                    r.srsublsn IS NOT NULL FROM pg_catalog.pg_subscription_rel r
+                    JOIN pg_catalog.pg_subscription s ON s.oid=r.srsubid
+                    JOIN pg_catalog.pg_class c ON c.oid=r.srrelid
+                    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                    ORDER BY 1,2,3""",
+                ),
+                "security_labels": self._rows(
+                    connection,
+                    """SELECT i.type,i.object_names,i.object_args,s.provider,s.label
+                    FROM pg_catalog.pg_seclabel s CROSS JOIN LATERAL
+                    pg_catalog.pg_identify_object_as_address(
+                    s.classoid,s.objoid,s.objsubid) i ORDER BY 1,2,3,4,5""",
+                ),
+                "event_triggers": self._rows(
+                    connection,
+                    """SELECT e.evtname,r.rolname,e.evtevent,e.evtenabled,n.nspname,
+                    p.proname,pg_catalog.pg_get_function_identity_arguments(p.oid),
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(e.evttags) v)
+                    FROM pg_catalog.pg_event_trigger e JOIN pg_catalog.pg_roles r
+                    ON r.oid=e.evtowner JOIN pg_catalog.pg_proc p ON p.oid=e.evtfoid
+                    JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+                    ORDER BY e.evtname""",
+                ),
+                "large_objects": self._rows(
+                    connection,
+                    """SELECT m.oid::text,r.rolname,
+                    (SELECT array_agg(ROW(CASE WHEN a.grantee=0 THEN 'PUBLIC'
+                    ELSE g.rolname END,grantor.rolname,a.privilege_type,
+                    a.is_grantable)::text ORDER BY 1)
+                    FROM pg_catalog.aclexplode(COALESCE(m.lomacl,
+                    pg_catalog.acldefault('L',m.lomowner))) a
+                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
+                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor),
+                    l.pageno,pg_catalog.encode(l.data,'base64')
+                    FROM pg_catalog.pg_largeobject_metadata m
+                    JOIN pg_catalog.pg_roles r ON r.oid=m.lomowner
+                    LEFT JOIN pg_catalog.pg_largeobject l ON l.loid=m.oid
+                    ORDER BY m.oid,l.pageno""",
                 ),
             }
         except EvidenceFailure:
@@ -910,7 +1140,6 @@ class LivePostgresAdapter:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database-url", required=True)
     parser.add_argument("--hmac-key-file", required=True, type=Path)
     parser.add_argument("--source-resource-id", required=True)
     parser.add_argument("--source-revision", required=True)
@@ -923,7 +1152,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args = _build_parser().parse_args(argv)
         policy, policy_sha256 = read_policy()
         key = read_hmac_key(args.hmac_key_file)
-        adapter = LivePostgresAdapter(args.database_url, policy)
+        adapter = LivePostgresAdapter(database_url_from_environment(), policy)
         evidence = collect_evidence(
             policy,
             policy_sha256,
