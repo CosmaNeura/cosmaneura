@@ -28,6 +28,7 @@ def _load_module() -> ModuleType:
 
 
 safe_submit = _load_module()
+TEST_NOW = datetime(2026, 9, 3, 12, 1, tzinfo=UTC)
 
 
 def _replace_placeholders(value: Any) -> Any:
@@ -70,6 +71,15 @@ def _request() -> Any:
         workflow_sha="a" * 40,
         run_id="901",
         run_attempt="1",
+    )
+
+
+def _engine(transport: Any, **config_changes: Any) -> Any:
+    return safe_submit.SafeRestoreSubmitter(
+        transport,
+        _config(**config_changes),
+        sleeper=lambda _: None,
+        clock=lambda: TEST_NOW,
     )
 
 
@@ -227,6 +237,44 @@ def _mutations(fake: FakeArm, method: str) -> list[dict[str, Any]]:
     ]
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [b"{", b"x" * 1_048_577],
+    ids=["malformed-json", "oversized-body"],
+)
+def test_successful_mutation_with_unreadable_response_is_unknown(
+    monkeypatch: pytest.MonkeyPatch, payload: bytes
+) -> None:
+    class HttpResponse:
+        status = 202
+        headers: dict[str, str] = {"x-ms-request-id": "test-request"}
+
+        def __enter__(self) -> HttpResponse:
+            return self
+
+        def __exit__(self, *_: Any) -> None:
+            return None
+
+        def read(self, _: int) -> bytes:
+            return payload
+
+    transport = safe_submit.AzureArmTransport()
+    monkeypatch.setattr(transport, "_access_token", lambda _: "test-token")
+    monkeypatch.setattr(
+        safe_submit.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: HttpResponse(),
+    )
+    with pytest.raises(safe_submit.ArmOutcomeUnknown):
+        transport.request(
+            "PUT",
+            "/subscriptions/test/resourceGroups/test/providers/Test/type/name",
+            api_version="2024-08-01",
+            body={"properties": {}},
+            timeout_seconds=30,
+        )
+
+
 def test_canonical_contract_is_pinned_and_dormant() -> None:
     envelope, policy = safe_submit.validate_canonical_contracts()
     assert envelope["trusted_evidence_binding_implemented"] is False
@@ -243,7 +291,7 @@ def test_canonical_contract_is_pinned_and_dormant() -> None:
 
 def test_accepted_restore_persists_both_markers_before_exact_arm_put() -> None:
     fake = FakeArm()
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     outcome = engine.submit(_request())
     assert outcome.status == "ready"
     assert outcome.cleanup_required is False
@@ -266,7 +314,7 @@ def test_accepted_restore_persists_both_markers_before_exact_arm_put() -> None:
 def test_unknown_submission_never_claims_absence_or_completion() -> None:
     fake = FakeArm()
     fake.restore_put_unknown = True
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     outcome = engine.submit(_request())
     assert outcome.status == "pending_late_materialization"
     assert outcome.target_observed is False
@@ -274,11 +322,117 @@ def test_unknown_submission_never_claims_absence_or_completion() -> None:
     assert len(fake.deployments) == 3
     assert len(_mutations(fake, "PUT")) == 1
     assert _mutations(fake, "DELETE") == []
+    retry = engine.submit(_request())
+    assert retry.status == "pending_late_materialization"
+    assert len(_mutations(fake, "PUT")) == 1
+
+
+def test_expired_fresh_intent_is_rejected_before_any_target_access() -> None:
+    fake = FakeArm()
+    engine = safe_submit.SafeRestoreSubmitter(
+        fake,
+        _config(),
+        sleeper=lambda _: None,
+        clock=lambda: datetime(2026, 9, 3, 18, tzinfo=UTC),
+    )
+    with pytest.raises(safe_submit.SafeSubmitError, match="intent_expired"):
+        engine.submit(_request())
+    assert all(
+        "/providers/Microsoft.Resources/deployments/" in call["resource_id"]
+        for call in fake.calls
+    )
+    assert [call["method"] for call in fake.calls] == ["GET"]
+
+
+def test_expiry_during_restore_polling_persists_cleanup_and_deletes_target() -> None:
+    fake = FakeArm()
+    before_expiry = TEST_NOW
+    at_expiry = datetime(2026, 9, 3, 18, tzinfo=UTC)
+    times = iter([before_expiry, before_expiry, before_expiry, at_expiry])
+    engine = safe_submit.SafeRestoreSubmitter(
+        fake, _config(), sleeper=lambda _: None, clock=lambda: next(times)
+    )
+    outcome = engine.submit(_request())
+    assert outcome.status == "cleaned"
+    assert outcome.cleanup_required is False
+    assert len(fake.deployments) == 3
+    assert len(_mutations(fake, "PUT")) == 1
+    assert len(_mutations(fake, "DELETE")) == 1
+    assert fake.target is None
+
+
+def test_cleanup_tombstone_recheck_immediately_before_put_wins_race() -> None:
+    class CleanupRaceArm(FakeArm):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cleanup_marker_id = ""
+            self.cleanup_parameters: dict[str, Any] = {}
+            self.cleanup_reads = 0
+
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            method, resource_id = args
+            if method == "GET" and resource_id == self.cleanup_marker_id:
+                self.cleanup_reads += 1
+                if self.cleanup_reads == 2:
+                    self.deployments[resource_id] = deepcopy(self.cleanup_parameters)
+            return super().request(*args, **kwargs)
+
+    fake = CleanupRaceArm()
+    engine = _engine(fake)
+    intent = engine._build_intent(_request())
+    digest = f"sha256:{safe_submit._sha256(safe_submit._canonical(intent))}"
+    fake.cleanup_marker_id = engine._cleanup_marker_id(intent["rehearsal_id"])
+    fake.cleanup_parameters = deepcopy(
+        engine._deployment_body(engine._cleanup_record(intent, digest))["properties"][
+            "parameters"
+        ]
+    )
+    outcome = engine.submit(_request())
+    assert outcome.status == "pending_late_materialization"
+    assert outcome.cleanup_required is True
+    assert fake.cleanup_reads >= 2
+    assert _mutations(fake, "PUT") == []
+
+
+def test_cleanup_tombstone_created_during_put_wins_after_dispatch() -> None:
+    class CleanupDuringPutArm(FakeArm):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cleanup_marker_id = ""
+            self.cleanup_parameters: dict[str, Any] = {}
+
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            method, resource_id = args
+            if (
+                method == "PUT"
+                and "/providers/Microsoft.Resources/deployments/" not in resource_id
+            ):
+                self.deployments[self.cleanup_marker_id] = deepcopy(
+                    self.cleanup_parameters
+                )
+            return super().request(*args, **kwargs)
+
+    fake = CleanupDuringPutArm()
+    engine = _engine(fake)
+    intent = engine._build_intent(_request())
+    digest = f"sha256:{safe_submit._sha256(safe_submit._canonical(intent))}"
+    fake.cleanup_marker_id = engine._cleanup_marker_id(intent["rehearsal_id"])
+    fake.cleanup_parameters = deepcopy(
+        engine._deployment_body(engine._cleanup_record(intent, digest))["properties"][
+            "parameters"
+        ]
+    )
+    outcome = engine.submit(_request())
+    assert outcome.status == "cleaned"
+    assert outcome.cleanup_required is False
+    assert len(_mutations(fake, "PUT")) == 1
+    assert len(_mutations(fake, "DELETE")) == 1
+    assert fake.target is None
 
 
 def test_retry_reconciles_the_exact_resource_without_a_second_restore_put() -> None:
     fake = FakeArm()
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     first = engine.submit(_request())
     second = engine.submit(_request())
     assert first.status == second.status == "ready"
@@ -289,7 +443,7 @@ def test_retry_reconciles_the_exact_resource_without_a_second_restore_put() -> N
 
 def test_cleanup_tombstone_prevents_a_retry_from_recreating_the_target() -> None:
     fake = FakeArm()
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     ready = engine.submit(_request())
     assert ready.status == "ready"
     cleaned = engine.cleanup_intent("012345abcdef")
@@ -303,9 +457,7 @@ def test_cleanup_tombstone_prevents_a_retry_from_recreating_the_target() -> None
 
 def test_running_intent_deployment_is_polled_instead_of_replaced() -> None:
     fake = FakeArm()
-    engine = safe_submit.SafeRestoreSubmitter(
-        fake, _config(intent_poll_attempts=3), sleeper=lambda _: None
-    )
+    engine = _engine(fake, intent_poll_attempts=3)
     intent = engine._build_intent(_request())
     marker_id = engine._intent_marker_id("012345abcdef")
     fake.deployments[marker_id] = deepcopy(
@@ -319,9 +471,7 @@ def test_running_intent_deployment_is_polled_instead_of_replaced() -> None:
 
 def test_cleanup_polls_running_intent_and_submission_records() -> None:
     fake = FakeArm()
-    engine = safe_submit.SafeRestoreSubmitter(
-        fake, _config(intent_poll_attempts=3), sleeper=lambda _: None
-    )
+    engine = _engine(fake, intent_poll_attempts=3)
     assert engine.submit(_request()).status == "ready"
     intent_id = engine._intent_marker_id("012345abcdef")
     submission_id = engine._submission_marker_id("012345abcdef")
@@ -337,7 +487,7 @@ def test_late_materialization_without_complete_tags_is_isolated_and_deleted(
 ) -> None:
     fake = FakeArm()
     fake.restore_put_unknown = True
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     pending = engine.submit(_request())
     assert pending.status == "pending_late_materialization"
     fake.restore_put_unknown = False
@@ -373,7 +523,7 @@ def test_late_materialization_without_complete_tags_is_isolated_and_deleted(
 def test_cleanup_refuses_a_wrong_resource_before_any_mutation(mutate: Any) -> None:
     fake = FakeArm()
     fake.restore_put_unknown = True
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     pending = engine.submit(_request())
     fake.materialize(
         pending.target_resource_id,
@@ -391,7 +541,7 @@ def test_cleanup_refuses_a_wrong_resource_before_any_mutation(mutate: Any) -> No
 
 def test_cleanup_without_a_durable_intent_is_fail_closed() -> None:
     fake = FakeArm()
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     target_id = _target_id(engine, _request())
     fake.materialize(
         target_id,
@@ -408,7 +558,7 @@ def test_cleanup_without_a_durable_intent_is_fail_closed() -> None:
 def test_isolation_refusal_still_attempts_guarded_deletion() -> None:
     fake = FakeArm()
     fake.restore_put_unknown = True
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     pending = engine.submit(_request())
     fake.materialize(
         pending.target_resource_id,
@@ -428,9 +578,7 @@ def test_submit_enters_cleanup_immediately_on_definite_isolation_refusal() -> No
     fake = FakeArm()
     fake.restore_public_access = "Enabled"
     fake.patch_status = 403
-    engine = safe_submit.SafeRestoreSubmitter(
-        fake, _config(restore_poll_attempts=3), sleeper=lambda _: None
-    )
+    engine = _engine(fake, restore_poll_attempts=3)
     outcome = engine.submit(_request())
     assert outcome.status == "cleaned"
     assert len(_mutations(fake, "PATCH")) == 2
@@ -439,7 +587,7 @@ def test_submit_enters_cleanup_immediately_on_definite_isolation_refusal() -> No
 
 def test_unknown_submission_record_never_claims_prepared_only() -> None:
     fake = FakeArm()
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     assert engine.submit(_request()).status == "ready"
     fake.target = None
     submission_id = engine._submission_marker_id("012345abcdef")
@@ -473,7 +621,7 @@ def test_unproven_intent_persistence_blocks_restore_submission() -> None:
             return super().request(*args, **kwargs)
 
     fake = LostDeploymentArm()
-    engine = safe_submit.SafeRestoreSubmitter(fake, _config(), sleeper=lambda _: None)
+    engine = _engine(fake)
     with pytest.raises(
         safe_submit.SafeSubmitError, match="intent_persistence_unproven"
     ):

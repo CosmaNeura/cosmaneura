@@ -111,6 +111,10 @@ def _iso(value: datetime) -> str:
     )
 
 
+def _now() -> datetime:
+    return datetime.now(UTC).replace(microsecond=0)
+
+
 def _parse_utc(value: object, code: str) -> datetime:
     if not isinstance(value, str) or not UTC_RE.fullmatch(value):
         _fail(code)
@@ -219,6 +223,7 @@ class AzureArmTransport:
             r"[0-9]{4}-[0-9]{2}-[0-9]{2}", api_version
         ):
             _fail("arm_request_target_invalid")
+        mutating = method.upper() in {"DELETE", "PATCH", "POST", "PUT"}
         query = urllib.parse.urlencode({"api-version": api_version})
         url = f"{MANAGEMENT_ROOT}{resource_id}?{query}"
         payload = _canonical(body) if body is not None else None
@@ -235,15 +240,25 @@ class AzureArmTransport:
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 raw = response.read(1_048_577)
                 if len(raw) > 1_048_576:
+                    if mutating:
+                        raise ArmOutcomeUnknown
                     _fail("arm_response_too_large")
-                parsed = json.loads(raw) if raw.strip() else None
-                return ArmResponse(
-                    status=response.status,
-                    body=parsed,
-                    headers={
+                try:
+                    parsed = json.loads(raw) if raw.strip() else None
+                except (UnicodeError, json.JSONDecodeError) as exc:
+                    if mutating:
+                        raise ArmOutcomeUnknown from exc
+                    _fail("arm_response_invalid")
+                try:
+                    status = int(response.status)
+                    response_headers = {
                         key.lower(): value for key, value in response.headers.items()
-                    },
-                )
+                    }
+                except (AttributeError, TypeError, ValueError) as exc:
+                    if mutating:
+                        raise ArmOutcomeUnknown from exc
+                    _fail("arm_response_invalid")
+                return ArmResponse(status=status, body=parsed, headers=response_headers)
         except urllib.error.HTTPError as exc:
             return ArmResponse(
                 status=exc.code,
@@ -251,8 +266,6 @@ class AzureArmTransport:
             )
         except (OSError, TimeoutError, urllib.error.URLError) as exc:
             raise ArmOutcomeUnknown from exc
-        except (UnicodeError, json.JSONDecodeError):
-            _fail("arm_response_invalid")
 
 
 @dataclass(frozen=True)
@@ -481,10 +494,21 @@ class SafeRestoreSubmitter:
         config: SafeSubmitConfig,
         *,
         sleeper: Callable[[float], None] = sleep,
+        clock: Callable[[], datetime] = _now,
     ) -> None:
         self.transport = transport
         self.config = config
         self.sleeper = sleeper
+        self.clock = clock
+
+    def _trusted_now(self) -> datetime:
+        try:
+            value = self.clock()
+        except Exception as exc:
+            raise SafeSubmitError("trusted_clock_unavailable") from exc
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            _fail("trusted_clock_invalid")
+        return value.astimezone(UTC).replace(microsecond=0)
 
     def _request(
         self,
@@ -792,6 +816,7 @@ class SafeRestoreSubmitter:
             > self.config.maximum_ttl_hours * 3600
         ):
             _fail("intent_record_invalid")
+
         expected_name = (
             f"{self.config.name_prefix}-{rehearsal_id}-e{int(cleanup.timestamp())}-pg"
         )
@@ -816,6 +841,14 @@ class SafeRestoreSubmitter:
             or not RUN_RE.fullmatch(str(intent.get("run_attempt", "")))
         ):
             _fail("intent_record_invalid")
+
+    def _intent_expired(self, intent: dict[str, Any]) -> bool:
+        created = _parse_utc(intent.get("created_at"), "intent_record_invalid")
+        now = self._trusted_now()
+        if created > now + timedelta(seconds=self.config.binding_clock_skew_seconds):
+            _fail("intent_created_in_future")
+        cleanup = _parse_utc(intent.get("cleanup_not_after"), "intent_record_invalid")
+        return cleanup <= now
 
     def _submission_record(
         self, intent: dict[str, Any], intent_digest: str
@@ -844,6 +877,21 @@ class SafeRestoreSubmitter:
             "target_server_resource_id": intent["target_server_resource_id"],
             "authorized_at": intent["created_at"],
         }
+
+    def _cleanup_requested(
+        self, intent: dict[str, Any], intent_digest: str
+    ) -> bool | object:
+        marker_id = self._cleanup_marker_id(intent["rehearsal_id"])
+        response = self._get_deployment(marker_id)
+        if response is UNKNOWN:
+            return UNKNOWN
+        if response is None:
+            return False
+        assert isinstance(response, ArmResponse)
+        actual, _ = self._record_from_deployment(response, marker_id)
+        if actual != self._cleanup_record(intent, intent_digest):
+            _fail("cleanup_record_conflict")
+        return True
 
     def _restore_body(
         self, intent: dict[str, Any], intent_digest: str
@@ -1070,6 +1118,11 @@ class SafeRestoreSubmitter:
     ) -> SubmitOutcome:
         target_id = intent["target_server_resource_id"]
         for attempt in range(self.config.restore_poll_attempts):
+            cleanup_requested = self._cleanup_requested(intent, intent_digest)
+            if cleanup_requested is UNKNOWN or cleanup_requested is True:
+                return self._cleanup_target(intent, intent_digest)
+            if self._intent_expired(intent):
+                return self._cleanup_target(intent, intent_digest)
             response = self._get_target(target_id)
             if isinstance(response, ArmResponse):
                 target = self._verify_target(response, intent, intent_digest)
@@ -1078,6 +1131,11 @@ class SafeRestoreSubmitter:
                     return self._cleanup_target(intent, intent_digest)
                 isolation = self._request_isolation(target, target_id)
                 if isolation == ISOLATION_REFUSED:
+                    return self._cleanup_target(intent, intent_digest)
+                cleanup_requested = self._cleanup_requested(intent, intent_digest)
+                if cleanup_requested is UNKNOWN or cleanup_requested is True:
+                    return self._cleanup_target(intent, intent_digest)
+                if self._intent_expired(intent):
                     return self._cleanup_target(intent, intent_digest)
                 if state == self.config.ready_state and self._is_disabled(target):
                     return self._outcome(
@@ -1092,27 +1150,47 @@ class SafeRestoreSubmitter:
         return self._cleanup_target(intent, intent_digest)
 
     def submit(self, request: RestoreRequest) -> SubmitOutcome:
-        intent = self._build_intent(request)
-        intent_marker_id = self._intent_marker_id(request.rehearsal_id)
-        intent = self._ensure_deployment(intent_marker_id, intent)
-        self._validate_intent(intent, request.rehearsal_id)
         expected = self._build_intent(request)
+        intent_marker_id = self._intent_marker_id(request.rehearsal_id)
+        if self._intent_expired(expected):
+            existing_intent = self._read_deployment_bounded(intent_marker_id)
+            if existing_intent is UNKNOWN:
+                _fail("intent_record_read_unknown")
+            if existing_intent is None:
+                _fail("intent_expired")
+            assert isinstance(existing_intent, dict)
+            intent = existing_intent
+        else:
+            intent = self._ensure_deployment(intent_marker_id, expected)
+        self._validate_intent(intent, request.rehearsal_id)
         if intent != expected:
             _fail("intent_record_conflict")
         intent_digest = f"sha256:{_sha256(_canonical(intent))}"
-        cleanup_marker_id = self._cleanup_marker_id(request.rehearsal_id)
-        existing_cleanup = self._get_deployment(cleanup_marker_id)
-        if existing_cleanup is UNKNOWN:
+        cleanup_requested = self._cleanup_requested(intent, intent_digest)
+        if cleanup_requested is UNKNOWN:
             _fail("cleanup_record_preflight_unknown")
-        if isinstance(existing_cleanup, ArmResponse):
-            actual, _ = self._record_from_deployment(
-                existing_cleanup, cleanup_marker_id
-            )
-            if actual != self._cleanup_record(intent, intent_digest):
-                _fail("cleanup_record_conflict")
+        if cleanup_requested is True:
             return self._cleanup_target(intent, intent_digest)
         submission_marker_id = self._submission_marker_id(request.rehearsal_id)
         existing_submission = self._get_deployment(submission_marker_id)
+        submission = self._submission_record(intent, intent_digest)
+        if self._intent_expired(intent):
+            if existing_submission is UNKNOWN:
+                self._ensure_deployment(
+                    self._cleanup_marker_id(request.rehearsal_id),
+                    self._cleanup_record(intent, intent_digest),
+                )
+                return self._outcome(
+                    "expired_submission_record_unknown",
+                    intent,
+                    intent_digest,
+                    observed=False,
+                    cleanup_required=True,
+                )
+            if existing_submission is None:
+                _fail("intent_expired")
+            self._ensure_deployment(submission_marker_id, submission)
+            return self._cleanup_target(intent, intent_digest)
         target = self._get_target(intent["target_server_resource_id"])
         if target is UNKNOWN:
             _fail("target_preflight_unknown")
@@ -1120,11 +1198,15 @@ class SafeRestoreSubmitter:
             existing_submission, ArmResponse
         ):
             _fail("target_without_submission_record")
-        submission = self._submission_record(intent, intent_digest)
         self._ensure_deployment(submission_marker_id, submission)
         if isinstance(target, ArmResponse):
             self._verify_target(target, intent, intent_digest)
             return self._poll_restore(intent, intent_digest)
+        if self._intent_expired(intent):
+            return self._cleanup_target(intent, intent_digest)
+        cleanup_requested = self._cleanup_requested(intent, intent_digest)
+        if cleanup_requested is UNKNOWN or cleanup_requested is True:
+            return self._cleanup_target(intent, intent_digest)
         response = self._request(
             "PUT",
             intent["target_server_resource_id"],
@@ -1146,6 +1228,9 @@ class SafeRestoreSubmitter:
             and response.status < 500
         ):
             _fail("restore_submission_refused")
+        cleanup_requested = self._cleanup_requested(intent, intent_digest)
+        if cleanup_requested is UNKNOWN or cleanup_requested is True:
+            return self._cleanup_target(intent, intent_digest)
         return self._poll_restore(intent, intent_digest)
 
     def cleanup_intent(self, rehearsal_id: str) -> SubmitOutcome:
