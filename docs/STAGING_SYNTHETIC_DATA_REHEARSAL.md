@@ -6,7 +6,7 @@ This gate answers one narrow question before a staging restore or canonical prom
 
 ## Closed-world policy
 
-The database contract covers every domain table exactly once. The pre profile pins Alembic revision `89c31f0ae275` and 62 tables. The post profile pins `9a2399212488` and 64 tables; only `practice_invitation` and `public_legal_acceptance` are added. Column name, PostgreSQL type, nullability, and ordinal position are exact. An unknown or missing table or column fails. `alembic_version` is a separate control table and must contain exactly the one profile revision.
+The database contract covers every domain table exactly once. The pre profile pins Alembic revision `89c31f0ae275` and 62 tables. The post profile pins `9a2399212488` and 64 tables; only `practice_invitation` and `public_legal_acceptance` are added. Column name, PostgreSQL type, nullability, and ordinal position are exact. `public` must be the only non-system schema; any other non-system schema, sequence, or PostgreSQL large object fails. An unknown or missing table or column fails. `alembic_version` is a separate control table and must contain exactly the one profile revision.
 
 Each domain table has one disposition:
 
@@ -18,7 +18,7 @@ Each domain table has one disposition:
 The blob account must contain exactly `uploads`, `example-notes`, `test-uploads`, and `test-example-notes`. Enumeration includes live blobs, versions, snapshots, deleted entries, and uncommitted blocks. Any uncommitted block fails because its bytes cannot be independently read; the first two containers must be empty, and the test containers must match an independently approved fixed state.
 For every retained object, the gate streams and hashes its bytes plus metadata, tags, content type, version/snapshot identity, and deletion state. An unknown container, unreadable object version, or object-state change fails. Two full listings must produce identical digests so a concurrent write cannot yield a passing torn inventory.
 
-Redis v1 is intentionally stricter than a cache classification: workers and schedulers must be quiesced, database 0 must be selected, and `DBSIZE` must be zero on two consecutive reads. The reader never scans or prints keys. Any key or changing count fails.
+Redis v1 is intentionally stricter than a cache classification: workers and schedulers must be quiesced and database 0 must be selected for the connection. Two complete `INFO keyspace` summaries must agree and report zero keys across every logical database. The reader never scans or prints keys. Any key in any logical database, malformed aggregate response, or changing count fails.
 
 ## Independent approved state
 
@@ -62,4 +62,4 @@ The database URL is accepted only for the pinned staging database with `sslmode=
 
 ## Promotion boundary
 
-A pass is necessary but not sufficient for the rehearsal. Before any restore or canonical staging cutover, separately approve and prove the isolated restore network/identity/TTL envelope, deterministic sanitizer, evidence sink, cleanup authority, RTO/RPO, and post-sanitize rerun. The current live database and Redis connection material must first be upgraded from certificate-optional or `sslmode=require` behavior to the verified TLS forms required here. No live inventory has been collected by this change.
+A pass is necessary but not sufficient for the rehearsal. Before any restore or canonical staging cutover, separately approve and prove the isolated restore network/identity/TTL envelope, deterministic sanitizer, evidence sink, cleanup authority, RTO/RPO, and post-sanitize rerun. A separate version-bound schema descriptor must also cover defaults, generated/identity expressions, constraints, indexes, user triggers and their function bodies, RLS policies, enum labels, and view/function definitions; the current gate deliberately does not represent its exact table/column check as a complete schema fingerprint. The current live database and Redis connection material must first be upgraded from certificate-optional or `sslmode=require` behavior to the verified TLS forms required here. No live inventory has been collected by this change.
