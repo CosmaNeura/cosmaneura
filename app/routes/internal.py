@@ -28,6 +28,7 @@ import app.jobs.sync_zoom_meetings as sync_zoom_meetings
 import app.services.authority as authority_service
 import app.services.ehr_sandbox_record_mapping as ehr_sandbox_record_mapping
 import app.services.example_note_upload as example_note_upload
+import app.services.session_prep_scope as session_prep_scope
 import app.services.stripe_billing as stripe_billing
 import app.services.zoom as zoom_service
 import app.services.zoom_capture_authorization as zoom_capture_authorization
@@ -268,6 +269,7 @@ class NoteDetail(BaseModel, extra="forbid"):
     transcript: AIVisitTranscript | None
     notes: list[AIVisitNote] | None
     engagement_role: EngagementRole | None = None
+    context_snapshot_ref: str | None = None
 
     @computed_field
     @property
@@ -303,6 +305,9 @@ def note_detail(
 
     # Engagement engine v2: the patient's enacted communication role, if scored.
     engagement_role = EngagementRole.get(appointment_id=appointment_id)
+    auth_state = getattr(request.state, "auth_state", None)
+    auth_payload = getattr(auth_state, "payload", None)
+    clerk_subject = auth_payload.get("sub") if isinstance(auth_payload, dict) else None
 
     note_detail = NoteDetail(
         appointment=appointment,
@@ -310,6 +315,10 @@ def note_detail(
         # TODO should be able to handle a generator, right?
         notes=visit_notes,
         engagement_role=engagement_role,
+        context_snapshot_ref=session_prep_scope.synthetic_session_prep_context_ref(
+            clerk_subject=clerk_subject if isinstance(clerk_subject, str) else "",
+            record_ref=str(appointment.id),
+        ),
     )
 
     return note_detail

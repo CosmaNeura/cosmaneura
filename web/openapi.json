@@ -4457,6 +4457,17 @@
               }
             ]
           },
+          "context_snapshot_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Snapshot Ref"
+          },
           "patient": {
             "$ref": "#/components/schemas/Patient",
             "readOnly": true
