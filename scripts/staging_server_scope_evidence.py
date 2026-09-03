@@ -24,24 +24,45 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Protocol
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
 DATABASE_URL_ENVIRONMENT = "STAGING_SERVER_SCOPE_DATABASE_URL"
+ALLOWED_INPUT_CONNECTION_PARAMETERS = frozenset(
+    {"host", "port", "dbname", "user", "password", "sslmode", "sslrootcert"}
+)
+LOCAL_DATABASE_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+SYSTEM_SSL_ROOT_CERT = "system"
+ADDITIONAL_CONNECTION_ENVIRONMENT_VARIABLES = frozenset(
+    {
+        "OPENSSL_CONF",
+        "OPENSSL_ENGINES",
+        "OPENSSL_MODULES",
+        "PGSERVICEFILE",
+        "PGSYSCONFDIR",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+    }
+)
 CANONICAL_POLICY_SHA256 = (
-    "4842cb66cf966edc21da7b0e75431f8cd75db50e65476527d73075951ba95813"
+    "4f91a206c81cc2a0b239ef48d55e5b3249dff944a80b3df28128ef62c9e8adc5"
 )
 HMAC_DOMAIN = b"cosmaneura:staging-server-scope-evidence:v1\x00"
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{12,64}$")
 KEY_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+AZURE_POSTGRES_HOST_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.postgres\.database\.azure\.com$"
+)
 MINIMUM_HMAC_KEY_BYTES = 32
 MAXIMUM_HMAC_KEY_BYTES = 4096
 MAXIMUM_POLICY_BYTES = 1024 * 1024
 MAXIMUM_RECORDS_PER_SURFACE = 100_000
 MAXIMUM_BYTES_PER_SURFACE = 16 * 1024 * 1024
 MAXIMUM_ROW_BYTES = 1024 * 1024
+MAXIMUM_JSON_ASCII_EXPANSION = 6
 MAXIMUM_DATABASES = 64
 MAXIMUM_TOTAL_RECORDS = 500_000
 MAXIMUM_TOTAL_BYTES = 64 * 1024 * 1024
@@ -50,8 +71,9 @@ SERVER_SURFACES = tuple(
     "databases roles memberships role_settings database_privileges tablespaces replication_slots replication_origins prepared_transactions subscriptions parameter_privileges shared_security_labels shared_descriptions settings".split()
 )
 DATABASE_SURFACES = tuple(
-    "schema extensions foreign_data_wrappers foreign_servers foreign_tables foreign_privileges language_privileges user_mappings publications publication_memberships publication_namespaces subscription_state subscription_relations security_labels event_triggers large_objects".split()
+    "schema user_relations shared_dependencies extensions foreign_data_wrappers foreign_servers foreign_tables foreign_privileges language_privileges user_mappings publications publication_memberships publication_namespaces subscription_state subscription_relations security_labels event_triggers large_objects".split()
 )
+NON_PRIMARY_EMPTY_SURFACES = ("user_relations", "large_objects")
 
 
 class EvidenceFailure(RuntimeError):
@@ -174,6 +196,16 @@ def _validate_pin(value: Any, *, configured: bool) -> None:
             raise EvidenceFailure("policy.invalid_pin")
 
 
+def _validate_source_host(value: Any, *, allow_local: bool = False) -> str:
+    if not isinstance(value, str):
+        raise EvidenceFailure("policy.invalid_source")
+    if allow_local and value in LOCAL_DATABASE_HOSTS:
+        return value
+    if not AZURE_POSTGRES_HOST_RE.fullmatch(value):
+        raise EvidenceFailure("policy.invalid_source")
+    return value
+
+
 def validate_policy(policy: Any) -> Mapping[str, Any]:
     policy = _expect_keys(
         policy,
@@ -206,15 +238,23 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
             "host",
             "port",
             "maintenance_database",
+            "primary_database",
             "postgres_major",
         },
         "policy.invalid_source",
     )
-    for field in ("resource_id", "revision", "host", "maintenance_database"):
+    for field in (
+        "resource_id",
+        "revision",
+        "host",
+        "maintenance_database",
+        "primary_database",
+    ):
         if not isinstance(source[field], str) or not source[field]:
             raise EvidenceFailure("policy.invalid_source")
         if configured and source[field].startswith("CONFIGURE_"):
             raise EvidenceFailure("policy.unconfigured")
+    _validate_source_host(source["host"])
     if source["port"] != 5432 or source["postgres_major"] != 16:
         raise EvidenceFailure("policy.invalid_source")
     hmac_policy = _expect_keys(
@@ -260,6 +300,7 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
     ):
         raise EvidenceFailure("policy.invalid_databases")
     identities: set[str] = set()
+    primary_entries = 0
     for database in databases:
         database = _expect_keys(
             database,
@@ -287,9 +328,19 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
         ):
             raise EvidenceFailure("policy.invalid_database")
         if database["status"] == "connections_disabled":
-            if database["allow_connections"] or database["surfaces"] is not None:
+            if (
+                database["allow_connections"]
+                or not database["is_template"]
+                or database["surfaces"] is not None
+            ):
                 raise EvidenceFailure("policy.invalid_database")
-        elif database["status"] == "fingerprinted":
+        elif database["status"] in {"primary_inventory", "empty"}:
+            if not database["allow_connections"]:
+                raise EvidenceFailure("policy.invalid_database")
+            if database["status"] == "primary_inventory":
+                if database["is_template"]:
+                    raise EvidenceFailure("policy.invalid_database")
+                primary_entries += 1
             surfaces = _expect_keys(
                 database["surfaces"],
                 set(DATABASE_SURFACES),
@@ -297,8 +348,15 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
             )
             for pin in surfaces.values():
                 _validate_pin(pin, configured=configured)
+            if database["status"] == "empty" and any(
+                surfaces[surface]["count"] != 0
+                for surface in NON_PRIMARY_EMPTY_SURFACES
+            ):
+                raise EvidenceFailure("policy.invalid_database")
         else:
             raise EvidenceFailure("policy.invalid_database")
+    if primary_entries != 1:
+        raise EvidenceFailure("policy.invalid_databases")
     evidence = _expect_keys(
         policy["evidence"],
         {"aggregate_only", "forbidden_raw_values"},
@@ -408,6 +466,27 @@ def _database_metadata(record: Any) -> tuple[str, bool, bool]:
     return record["name"], record["is_template"], record["allow_connections"]
 
 
+def _database_scope_status(
+    name: str,
+    *,
+    is_template: bool,
+    allow_connections: bool,
+    primary_database: str,
+) -> str:
+    if not allow_connections:
+        if not is_template:
+            raise EvidenceFailure("database.disabled_non_template")
+        return "connections_disabled"
+    if name == primary_database:
+        return "primary_inventory"
+    return "empty"
+
+
+def _require_non_primary_empty(snapshot: Mapping[str, Sequence[Any]]) -> None:
+    if any(snapshot[surface] for surface in NON_PRIMARY_EMPTY_SURFACES):
+        raise EvidenceFailure("database.non_primary_not_empty")
+
+
 def collect_evidence(
     policy: Mapping[str, Any],
     policy_sha256: str,
@@ -468,12 +547,23 @@ def collect_evidence(
     expected_databases = {
         item["identity_hmac"]: item for item in policy["expected_databases"]
     }
+    primary_database = policy["source"]["primary_database"]
+    primary_identity = _identity_hmac(key, "database", primary_database)
+    primary_expected = expected_databases.get(primary_identity)
+    if primary_expected is None or primary_expected["status"] != "primary_inventory":
+        raise EvidenceFailure("database.primary_binding_mismatch")
     observed_databases: list[dict[str, Any]] = []
-    fingerprinted: list[tuple[str, str, dict[str, dict[str, Any]]]] = []
+    captured: list[tuple[str, str, str, dict[str, dict[str, Any]]]] = []
     seen: set[str] = set()
     for raw_record in sorted(database_records, key=_canonical):
         check_deadline()
         name, is_template, allow_connections = _database_metadata(raw_record)
+        status = _database_scope_status(
+            name,
+            is_template=is_template,
+            allow_connections=allow_connections,
+            primary_database=primary_database,
+        )
         identity = _identity_hmac(key, "database", name)
         expected = expected_databases.get(identity)
         if expected is None:
@@ -487,20 +577,22 @@ def collect_evidence(
         ):
             raise EvidenceFailure("database.metadata_mismatch")
         if not allow_connections:
-            if expected["status"] != "connections_disabled":
+            if expected["status"] != status:
                 raise EvidenceFailure("database.unexpected_inaccessible")
             observed_databases.append(
                 {"identity_hmac": identity, "status": "connections_disabled"}
             )
             continue
-        if expected["status"] != "fingerprinted":
-            raise EvidenceFailure("database.unexpected_accessible")
+        if expected["status"] != status:
+            raise EvidenceFailure("database.scope_mismatch")
         try:
             snapshot = adapter.database_snapshot(name)
         except DatabaseUnavailable:
             raise EvidenceFailure("database.read_blocked") from None
         if set(snapshot) != set(DATABASE_SURFACES):
             raise EvidenceFailure("database.incomplete_surface")
+        if status == "empty":
+            _require_non_primary_empty(snapshot)
         surface_evidence: dict[str, dict[str, Any]] = {}
         for surface in DATABASE_SURFACES:
             pin = _surface_pin(key, f"database:{identity}:{surface}", snapshot[surface])
@@ -514,14 +606,14 @@ def collect_evidence(
         observed_databases.append(
             {
                 "identity_hmac": identity,
-                "status": "fingerprinted",
+                "status": status,
                 "surfaces": surface_evidence,
             }
         )
-        fingerprinted.append((name, identity, surface_evidence))
+        captured.append((name, identity, status, surface_evidence))
     if seen != set(expected_databases):
         raise EvidenceFailure("database.missing")
-    for name, identity, first_pins in fingerprinted:
+    for name, identity, status, first_pins in captured:
         check_deadline()
         try:
             snapshot = adapter.database_snapshot(name)
@@ -529,6 +621,8 @@ def collect_evidence(
             raise EvidenceFailure("database.read_blocked") from None
         if set(snapshot) != set(DATABASE_SURFACES):
             raise EvidenceFailure("database.incomplete_surface")
+        if status == "empty":
+            _require_non_primary_empty(snapshot)
         for surface in DATABASE_SURFACES:
             pin = _surface_pin(key, f"database:{identity}:{surface}", snapshot[surface])
             check_deadline()
@@ -551,6 +645,7 @@ def collect_evidence(
         "source_resource_hmac": _identity_hmac(
             key, "source-resource", source_resource_id
         ),
+        "primary_database_identity_hmac": primary_identity,
         "key_version": key_version,
         "capture_started_at": started.astimezone(UTC)
         .isoformat()
@@ -586,12 +681,26 @@ SCHEMA_QUERIES = (
        'row_security',c.relrowsecurity,'force_row_security',c.relforcerowsecurity,
        'replica_identity',c.relreplident,'partition',c.relispartition,
        'access_method',am.amname,'partition_key',pg_catalog.pg_get_partkeydef(c.oid),
-       'partition_bound',pg_catalog.pg_get_expr(c.relpartbound,c.oid,false))::text
+       'partition_bound',pg_catalog.pg_get_expr(c.relpartbound,c.oid,false),
+       'tablespace',ts.spcname)::text
        FROM pg_catalog.pg_class c
        JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
        JOIN pg_catalog.pg_roles r ON r.oid=c.relowner
        LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam
+       LEFT JOIN pg_catalog.pg_tablespace ts ON ts.oid=COALESCE(
+       NULLIF(c.reltablespace,0),(SELECT d.dattablespace
+       FROM pg_catalog.pg_database d
+       WHERE d.datname=pg_catalog.current_database()))
        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','rewrite_rule','schema',n.nspname,
+       'relation',c.relname,'name',rw.rulename,'enabled',rw.ev_enabled,
+       'is_instead',rw.is_instead,'event',rw.ev_type,
+       'definition',pg_catalog.pg_get_ruledef(rw.oid,false))::text
+       FROM pg_catalog.pg_rewrite rw
+       JOIN pg_catalog.pg_class c ON c.oid=rw.ev_class
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+       ORDER BY n.nspname,c.relname,rw.rulename""",
     """SELECT jsonb_build_object('kind','relation_option','schema',n.nspname,
        'relation',c.relname,'option',o.option)::text FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
        CROSS JOIN LATERAL unnest(c.reloptions) o(option)
@@ -671,6 +780,17 @@ SCHEMA_QUERIES = (
        FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace
        JOIN pg_catalog.pg_roles r ON r.oid=t.typowner
        WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','collation','schema',n.nspname,
+       'name',c.collname,'owner',r.rolname,'provider',c.collprovider,
+       'deterministic',c.collisdeterministic,
+       'encoding',pg_catalog.pg_encoding_to_char(c.collencoding),
+       'collate',c.collcollate,'ctype',c.collctype,
+       'icu_locale',c.colliculocale,'icu_rules',c.collicurules,
+       'version',c.collversion)::text
+       FROM pg_catalog.pg_collation c
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace
+       JOIN pg_catalog.pg_roles r ON r.oid=c.collowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
     """SELECT jsonb_build_object('kind','enum_label','schema',n.nspname,
        'type',t.typname,'sort_order',e.enumsortorder::text,'label',e.enumlabel)::text
        FROM pg_catalog.pg_enum e JOIN pg_catalog.pg_type t ON t.oid=e.enumtypid
@@ -742,13 +862,14 @@ class LivePostgresAdapter:
     def __init__(
         self, dsn: str, policy: Mapping[str, Any], *, allow_local: bool = False
     ):
-        self._dsn = dsn
         self._policy = policy
         self._deadline = 0.0
         self._query_sequence = 0
         self._total_records = 0
         self._total_bytes = 0
-        self._validate_dsn(allow_local=allow_local)
+        self._connection_parameters = MappingProxyType(
+            self._validate_dsn(dsn, allow_local=allow_local)
+        )
         self.start_capture(MAXIMUM_CAPTURE_SECONDS)
 
     def start_capture(self, maximum_seconds: int) -> None:
@@ -763,14 +884,37 @@ class LivePostgresAdapter:
             raise EvidenceFailure("capture.deadline_exceeded")
         return remaining
 
-    def _validate_dsn(self, *, allow_local: bool) -> None:
+    @staticmethod
+    def _reject_libpq_environment(pq: Any) -> None:
         try:
+            environment_names = {
+                option.envvar.decode("ascii")
+                for option in pq.Conninfo.get_defaults()
+                if option.envvar
+            }
+        except Exception:
+            raise EvidenceFailure("database_url.environment_invalid") from None
+        if any(
+            name in os.environ
+            for name in environment_names | ADDITIONAL_CONNECTION_ENVIRONMENT_VARIABLES
+        ):
+            raise EvidenceFailure("database_url.environment_override")
+
+    def _validate_dsn(self, dsn: str, *, allow_local: bool) -> dict[str, str | int]:
+        try:
+            from psycopg import pq
             from psycopg.conninfo import conninfo_to_dict
 
-            values = conninfo_to_dict(self._dsn)
+            values = conninfo_to_dict(dsn)
         except Exception:
             raise EvidenceFailure("database_url.invalid") from None
+        self._reject_libpq_environment(pq)
+        if set(values) - ALLOWED_INPUT_CONNECTION_PARAMETERS:
+            raise EvidenceFailure("database_url.unsupported_parameter")
         source = self._policy["source"]
+        expected_host = _validate_source_host(
+            source.get("host"), allow_local=allow_local
+        )
         host = values.get("host")
         raw_port = values.get("port")
         try:
@@ -778,27 +922,63 @@ class LivePostgresAdapter:
         except ValueError:
             raise EvidenceFailure("database_url.invalid") from None
         database = values.get("dbname")
+        user = values.get("user")
+        password = values.get("password")
+        if (
+            not isinstance(user, str)
+            or not user
+            or not isinstance(password, str)
+            or not password
+        ):
+            raise EvidenceFailure("database_url.credentials_required")
         if (host, port, database) != (
-            source["host"],
+            expected_host,
             source["port"],
             source["maintenance_database"],
         ):
-            if not allow_local or host not in {"localhost", "127.0.0.1", "::1"}:
+            raise EvidenceFailure("database_url.target_mismatch")
+        sslmode = values.get("sslmode")
+        sslrootcert = values.get("sslrootcert")
+        if allow_local:
+            if host not in LOCAL_DATABASE_HOSTS:
                 raise EvidenceFailure("database_url.target_mismatch")
-        if not allow_local and values.get("sslmode") != "verify-full":
+            if (sslmode, sslrootcert) not in {
+                (None, None),
+                ("disable", None),
+                ("verify-full", SYSTEM_SSL_ROOT_CERT),
+            }:
+                raise EvidenceFailure("database_url.tls_invalid")
+            normalized_sslmode = sslmode or "disable"
+        elif (sslmode, sslrootcert) != ("verify-full", SYSTEM_SSL_ROOT_CERT):
             raise EvidenceFailure("database_url.tls_required")
+        else:
+            normalized_sslmode = "verify-full"
+
+        parameters: dict[str, str | int] = {
+            "host": str(host),
+            "port": port,
+            "user": user,
+            "password": password,
+            "sslmode": normalized_sslmode,
+            "sslcertmode": "disable",
+            "gssencmode": "disable",
+        }
+        if sslrootcert is not None:
+            parameters["sslrootcert"] = sslrootcert
+        return parameters
 
     def _connect(self, database: str) -> Any:
         try:
             import psycopg
 
+            self._reject_libpq_environment(psycopg.pq)
             remaining = self._remaining()
             if remaining < 1:
                 raise EvidenceFailure("capture.deadline_exceeded")
             timeout = min(10, int(remaining))
-            connection = psycopg.connect(
-                self._dsn, dbname=database, connect_timeout=timeout
-            )
+            parameters: dict[str, Any] = dict(self._connection_parameters)
+            parameters.update(dbname=database, connect_timeout=timeout)
+            connection = psycopg.connect(**parameters)
             self._remaining()
             return connection
         except EvidenceFailure:
@@ -855,19 +1035,25 @@ class LivePostgresAdapter:
             )
             bounds = connection.execute(
                 "SELECT count(*)::bigint,"
-                "COALESCE(sum(pg_catalog.pg_column_size(q)),0)::bigint,"
-                "COALESCE(max(pg_catalog.pg_column_size(q)),0)::bigint "
-                f"FROM ({query}) q",
+                "COALESCE(sum(rendered.bytes),0)::bigint,"
+                "COALESCE(max(rendered.bytes),0)::bigint FROM ("
+                "SELECT pg_catalog.octet_length("
+                "pg_catalog.row_to_json(q)::text)::bigint AS bytes "
+                f"FROM ({query}) q) rendered",
                 parameters,
             ).fetchone()
             self._remaining()
+            rendered_bytes = bounds[1] * MAXIMUM_JSON_ASCII_EXPANSION if bounds else 0
+            rendered_row_bytes = (
+                bounds[2] * MAXIMUM_JSON_ASCII_EXPANSION if bounds else 0
+            )
             if (
                 not bounds
                 or bounds[0] > MAXIMUM_RECORDS_PER_SURFACE
-                or bounds[1] > MAXIMUM_BYTES_PER_SURFACE
-                or bounds[2] > MAXIMUM_ROW_BYTES
+                or rendered_bytes > MAXIMUM_BYTES_PER_SURFACE
+                or rendered_row_bytes > MAXIMUM_ROW_BYTES
                 or self._total_records + bounds[0] > MAXIMUM_TOTAL_RECORDS
-                or self._total_bytes + bounds[1] > MAXIMUM_TOTAL_BYTES
+                or self._total_bytes + rendered_bytes > MAXIMUM_TOTAL_BYTES
             ):
                 raise EvidenceFailure("catalog.resource_limit")
             self._query_sequence += 1
@@ -883,6 +1069,8 @@ class LivePostgresAdapter:
                     self._remaining()
                     record = list(row)
                     size = len(_canonical(record))
+                    if size > MAXIMUM_ROW_BYTES:
+                        raise EvidenceFailure("catalog.resource_limit")
                     query_records += 1
                     query_bytes += size
                     self._total_records += 1
@@ -1085,11 +1273,45 @@ class LivePostgresAdapter:
                 schema.extend(row[0] for row in self._rows(connection, query))
             return {
                 "schema": schema,
+                "user_relations": self._rows(
+                    connection,
+                    """SELECT n.nspname,c.relname,c.relkind
+                    FROM pg_catalog.pg_class c
+                    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+                    WHERE n.nspname !~ '^pg_'
+                    AND n.nspname <> 'information_schema'
+                    AND c.relkind IN ('r','p','v','m','S','f')
+                    ORDER BY n.nspname,c.relname,c.relkind""",
+                ),
+                "shared_dependencies": self._rows(
+                    connection,
+                    """SELECT jsonb_build_object(
+                    'dependent_type',dependent_object.type,
+                    'dependent_names',dependent_object.object_names,
+                    'dependent_arguments',dependent_object.object_args,
+                    'referenced_type',referenced_object.type,
+                    'referenced_names',referenced_object.object_names,
+                    'referenced_arguments',referenced_object.object_args,
+                    'dependency_type',dependency.deptype)::text
+                    FROM pg_catalog.pg_shdepend dependency
+                    CROSS JOIN LATERAL pg_catalog.pg_identify_object_as_address(
+                    dependency.classid,dependency.objid,
+                    dependency.objsubid) dependent_object
+                    CROSS JOIN LATERAL pg_catalog.pg_identify_object_as_address(
+                    dependency.refclassid,dependency.refobjid,0) referenced_object
+                    WHERE dependency.dbid=(SELECT oid FROM pg_catalog.pg_database
+                    WHERE datname=pg_catalog.current_database())
+                    ORDER BY dependent_object.type,dependent_object.object_names,
+                    dependent_object.object_args,referenced_object.type,
+                    referenced_object.object_names,referenced_object.object_args,
+                    dependency.deptype""",
+                ),
                 "extensions": self._rows(
                     connection,
-                    """SELECT e.extname,e.extversion,n.nspname,e.extrelocatable
+                    """SELECT e.extname,e.extversion,n.nspname,r.rolname,e.extrelocatable
                     FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n
-                    ON n.oid=e.extnamespace ORDER BY e.extname""",
+                    ON n.oid=e.extnamespace JOIN pg_catalog.pg_roles r
+                    ON r.oid=e.extowner ORDER BY e.extname""",
                 ),
                 "foreign_data_wrappers": self._rows(
                     connection,
