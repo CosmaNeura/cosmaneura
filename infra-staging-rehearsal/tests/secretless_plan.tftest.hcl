@@ -80,7 +80,7 @@ run "default_is_dormant" {
   }
 
   assert {
-    condition     = length(azurerm_virtual_network.control) == 0 && length(azurerm_subnet.marker_private_endpoint) == 0 && length(azurerm_subnet.private_executor_reserved) == 0 && length(azurerm_private_dns_zone.marker_blob) == 0 && length(azurerm_private_dns_zone_virtual_network_link.marker_blob) == 0 && length(azurerm_private_endpoint.marker) == 0
+    condition     = length(azurerm_virtual_network.control) == 0 && length(azurerm_subnet.marker_private_endpoint) == 0 && length(azurerm_subnet.private_executor_reserved) == 0 && length(azurerm_subnet.private_executor_service_endpoints) == 0 && length(azurerm_private_dns_zone.marker_blob) == 0 && length(azurerm_private_dns_zone_virtual_network_link.marker_blob) == 0 && length(azurerm_private_endpoint.marker) == 0
     error_message = "The default plan must not create network or private-link resources"
   }
 
@@ -118,6 +118,11 @@ run "default_is_dormant" {
     condition     = output.marker_store_binding == null && length(output.restore_identity_bindings) == 0
     error_message = "Default-off outputs must not imply live marker or identity bindings"
   }
+
+  assert {
+    condition     = !output.private_executor_network_contract.enabled && output.private_executor_network_contract.vnet_resource_id == null && output.private_executor_network_contract.subnets.private_service_endpoints.resource_id == null
+    error_message = "The default outputs must not imply an enabled or deployed private-executor network"
+  }
 }
 
 run "reversible_control_plane" {
@@ -140,12 +145,12 @@ run "reversible_control_plane" {
   }
 
   assert {
-    condition     = length(azurerm_virtual_network.control[0].address_space) == 1 && contains(azurerm_virtual_network.control[0].address_space, "10.76.0.0/24") && length(azurerm_subnet.private_executor_reserved[0].address_prefixes) == 1 && azurerm_subnet.private_executor_reserved[0].address_prefixes[0] == "10.76.0.32/27"
+    condition     = length(azurerm_virtual_network.control[0].address_space) == 1 && contains(azurerm_virtual_network.control[0].address_space, "10.76.0.0/24") && length(azurerm_subnet.private_executor_reserved[0].address_prefixes) == 1 && azurerm_subnet.private_executor_reserved[0].address_prefixes[0] == "10.76.0.32/27" && length(azurerm_subnet.private_executor_reserved[0].delegation) == 0 && length(azurerm_subnet.private_executor_service_endpoints) == 0
     error_message = "The persistent control network and reserved executor subnet must remain distinct from the target"
   }
 
   assert {
-    condition     = output.private_executor_blocker.implemented == false && output.private_executor_blocker.ephemeral_target_reachability == "not-implemented"
+    condition     = output.private_executor_blocker.implemented == false && output.private_executor_blocker.network_foundation_enabled == false && output.private_executor_blocker.ephemeral_target_reachability == "not-implemented"
     error_message = "A subnet reservation must not claim private-executor or target reachability"
   }
 
@@ -182,6 +187,82 @@ run "reversible_control_plane" {
   assert {
     condition     = output.marker_store_binding.role_assignment_ids.provision_intent == null && output.marker_store_binding.role_assignment_ids.provision_submission == null && output.marker_store_binding.role_assignment_ids.cleanup_marker == null && length(output.marker_store_binding.immutability_policy_ids) == 0 && output.marker_store_binding.evidence_immutability_policy_id == null
     error_message = "Create-role and immutability IDs must remain null or empty while their gates are off"
+  }
+}
+
+run "private_executor_network_requires_exact_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "approved_private_executor_network_foundation" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_private_executor_network_foundation = true
+    private_executor_network_plan_approved     = true
+  }
+
+  assert {
+    condition     = azurerm_virtual_network.control[0].location == "eastus" && azurerm_virtual_network.control[0].address_space == toset(["10.76.0.0/24"])
+    error_message = "The executor foundation must remain in the exact East US control VNet"
+  }
+
+  assert {
+    condition     = azurerm_subnet.marker_private_endpoint[0].address_prefixes == tolist(["10.76.0.0/27"]) && !azurerm_subnet.marker_private_endpoint[0].default_outbound_access_enabled && azurerm_subnet.marker_private_endpoint[0].private_endpoint_network_policies == "Disabled"
+    error_message = "The first /27 must remain the outbound-disabled Blob private-endpoint subnet"
+  }
+
+  assert {
+    condition = (
+      azurerm_subnet.private_executor_reserved[0].address_prefixes == tolist(["10.76.0.32/27"]) &&
+      !azurerm_subnet.private_executor_reserved[0].default_outbound_access_enabled &&
+      length(azurerm_subnet.private_executor_reserved[0].delegation) == 1 &&
+      alltrue([
+        for delegation in azurerm_subnet.private_executor_reserved[0].delegation :
+        delegation.service_delegation[0].name == "Microsoft.App/environments" &&
+        delegation.service_delegation[0].actions == toset(["Microsoft.Network/virtualNetworks/subnets/join/action"])
+      ])
+    )
+    error_message = "The second /27 must be outbound-disabled and delegated only to Container Apps environments"
+  }
+
+  assert {
+    condition = (
+      length(azurerm_subnet.private_executor_service_endpoints) == 1 &&
+      azurerm_subnet.private_executor_service_endpoints[0].address_prefixes == tolist(["10.76.0.64/27"]) &&
+      !azurerm_subnet.private_executor_service_endpoints[0].default_outbound_access_enabled &&
+      azurerm_subnet.private_executor_service_endpoints[0].private_endpoint_network_policies == "Disabled" &&
+      azurerm_subnet.private_executor_service_endpoints[0].private_link_service_network_policies_enabled &&
+      length(azurerm_subnet.private_executor_service_endpoints[0].delegation) == 0 &&
+      try(length(azurerm_subnet.private_executor_service_endpoints[0].service_endpoints), 0) == 0
+    )
+    error_message = "The third /27 must be an undelegated, outbound-disabled private-endpoint subnet"
+  }
+
+  assert {
+    condition = (
+      output.private_executor_network_contract.enabled &&
+      !output.private_executor_network_contract.vnet_peering &&
+      !output.private_executor_network_contract.public_ingress &&
+      !output.private_executor_network_contract.route_table &&
+      !output.private_executor_network_contract.nat_gateway &&
+      !output.private_executor_network_contract.container_apps_environment &&
+      !output.private_executor_network_contract.private_endpoints &&
+      output.private_executor_blocker.implemented == false
+    )
+    error_message = "The network foundation must not claim compute, endpoints, routing, ingress, peering, or executor binding"
   }
 }
 

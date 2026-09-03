@@ -26,16 +26,65 @@ output "target_topology_contract" {
 }
 
 output "private_executor_blocker" {
-  description = "Explicit activation hold: subnet reservation is not a runner or a route to an ephemeral restore target."
+  description = "Explicit activation hold: the optional network foundation is not a runner or a route to an ephemeral restore target."
   value = {
-    implemented                    = local.private_executor_binding_implemented
-    control_vnet_address_space     = local.control_vnet_address_space
-    reserved_subnet_address_prefix = local.private_executor_reserved_subnet
-    ephemeral_target_reachability  = "not-implemented"
-    workflow_binding               = "not-implemented"
-    job_identity_binding           = "not-implemented"
-    trusted_evidence_binding       = "not-implemented"
-    pre_apply_cidr_revalidation    = var.control_cidr_inventory_revalidated
+    implemented                          = local.private_executor_binding_implemented
+    network_foundation_in_source         = local.private_executor_network_foundation_source
+    network_foundation_enabled           = var.enable_private_executor_network_foundation
+    control_vnet_address_space           = local.control_vnet_address_space
+    infrastructure_subnet_address_prefix = local.private_executor_infrastructure_subnet
+    service_endpoint_subnet_prefix       = local.private_executor_service_endpoint_subnet
+    ephemeral_target_reachability        = "not-implemented"
+    container_apps_environment           = "not-implemented"
+    private_service_endpoints            = "not-implemented"
+    workflow_binding                     = "not-implemented"
+    job_identity_binding                 = "not-implemented"
+    trusted_evidence_binding             = "not-implemented"
+    pre_apply_cidr_revalidation          = var.control_cidr_inventory_revalidated
+  }
+}
+
+output "private_executor_network_contract" {
+  description = "Non-secret exact topology for later live readback; no compute, endpoint, DNS, peering, or ingress is implied."
+  value = {
+    enabled            = var.enable_private_executor_network_foundation
+    location           = local.control_location
+    vnet_address_space = local.control_vnet_address_space
+    vnet_resource_id = var.deploy_staging_restore_control_plane ? (
+      azurerm_virtual_network.control[0].id
+    ) : null
+    subnets = {
+      marker_blob_private_endpoint = {
+        address_prefix = local.marker_private_endpoint_subnet
+        delegated_to   = null
+        resource_id = var.deploy_staging_restore_control_plane ? (
+          azurerm_subnet.marker_private_endpoint[0].id
+        ) : null
+      }
+      container_apps_infrastructure = {
+        address_prefix = local.private_executor_infrastructure_subnet
+        delegated_to = var.enable_private_executor_network_foundation ? (
+          "Microsoft.App/environments"
+        ) : null
+        resource_id = var.deploy_staging_restore_control_plane ? (
+          azurerm_subnet.private_executor_reserved[0].id
+        ) : null
+      }
+      private_service_endpoints = {
+        address_prefix = local.private_executor_service_endpoint_subnet
+        purposes       = ["acr", "key-vault", "per-rehearsal-postgresql"]
+        resource_id = (
+          var.deploy_staging_restore_control_plane &&
+          var.enable_private_executor_network_foundation
+        ) ? azurerm_subnet.private_executor_service_endpoints[0].id : null
+      }
+    }
+    vnet_peering               = false
+    public_ingress             = false
+    route_table                = false
+    nat_gateway                = false
+    container_apps_environment = false
+    private_endpoints          = false
   }
 }
 

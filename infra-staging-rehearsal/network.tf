@@ -25,19 +25,54 @@ resource "azurerm_subnet" "marker_private_endpoint" {
   private_link_service_network_policies_enabled = false
 }
 
-# Reservation only: no delegation, workload, NAT, route table, peering, or NSG
-# is created in this rung. A later reviewed private-executor change must choose
-# the runtime and prove a route to both marker storage and each ephemeral target.
+# This subnet remains an inert reservation in the base control-plane plan. The
+# independently approved network-foundation plan adds only the exact Container
+# Apps environment delegation. It does not create an environment, workload,
+# ingress path, NAT, route table, peering, or NSG.
 resource "azurerm_subnet" "private_executor_reserved" {
   count = var.deploy_staging_restore_control_plane ? 1 : 0
 
   name                 = "private-executor-reserved"
   resource_group_name  = azurerm_resource_group.control[0].name
   virtual_network_name = azurerm_virtual_network.control[0].name
-  address_prefixes     = [local.private_executor_reserved_subnet]
+  address_prefixes     = [local.private_executor_infrastructure_subnet]
 
   default_outbound_access_enabled               = false
   private_endpoint_network_policies             = "Enabled"
+  private_link_service_network_policies_enabled = true
+
+  dynamic "delegation" {
+    for_each = var.enable_private_executor_network_foundation ? [true] : []
+
+    content {
+      name = "private-executor-container-apps"
+
+      service_delegation {
+        name = "Microsoft.App/environments"
+        actions = [
+          "Microsoft.Network/virtualNetworks/subnets/join/action",
+        ]
+      }
+    }
+  }
+}
+
+# Reserved only for private endpoints to a later digest-pinned ACR, private Key
+# Vault, and one second PostgreSQL private endpoint per rehearsal. No endpoint
+# or DNS zone is created in this network-only rung.
+resource "azurerm_subnet" "private_executor_service_endpoints" {
+  count = (
+    var.deploy_staging_restore_control_plane &&
+    var.enable_private_executor_network_foundation
+  ) ? 1 : 0
+
+  name                 = "private-executor-service-endpoints"
+  resource_group_name  = azurerm_resource_group.control[0].name
+  virtual_network_name = azurerm_virtual_network.control[0].name
+  address_prefixes     = [local.private_executor_service_endpoint_subnet]
+
+  default_outbound_access_enabled               = false
+  private_endpoint_network_policies             = "Disabled"
   private_link_service_network_policies_enabled = true
 }
 

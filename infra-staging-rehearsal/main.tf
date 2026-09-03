@@ -13,13 +13,16 @@ locals {
   target_private_endpoint_subnet_name = "private-endpoints"
 
   # The marker store and a future private executor use a distinct persistent
-  # control network. Reserving the executor subnet does not create a runner or
-  # make the ephemeral target reachable.
-  control_vnet_address_space           = "10.76.0.0/24"
-  marker_private_endpoint_subnet       = "10.76.0.0/27"
-  private_executor_reserved_subnet     = "10.76.0.32/27"
-  private_executor_binding_implemented = false
-  trusted_evidence_binding_implemented = false
+  # control network. The network-foundation flag delegates the reserved
+  # infrastructure subnet and adds the private-service-endpoint subnet; it does
+  # not create a runner, endpoint, route, or ephemeral-target connection.
+  control_vnet_address_space                 = "10.76.0.0/24"
+  marker_private_endpoint_subnet             = "10.76.0.0/27"
+  private_executor_infrastructure_subnet     = "10.76.0.32/27"
+  private_executor_service_endpoint_subnet   = "10.76.0.64/27"
+  private_executor_network_foundation_source = true
+  private_executor_binding_implemented       = false
+  trusted_evidence_binding_implemented       = false
 
   source_postgres_resource_id = "${local.subscription_scope}/resourceGroups/cosmaneura-staging/providers/Microsoft.DBforPostgreSQL/flexibleServers/cosmaneura-staging-postgres"
 
@@ -56,6 +59,8 @@ locals {
   )
   any_control_requested = (
     var.deploy_staging_restore_control_plane ||
+    var.enable_private_executor_network_foundation ||
+    var.private_executor_network_plan_approved ||
     var.enable_marker_create_assignments ||
     local.irreversible_controls_requested
   )
@@ -68,6 +73,8 @@ resource "terraform_data" "activation_guard" {
     deploy_control_plane                = var.deploy_staging_restore_control_plane
     target_cidr_inventory_revalidated   = var.target_cidr_inventory_revalidated
     control_cidr_inventory_revalidated  = var.control_cidr_inventory_revalidated
+    private_executor_network_foundation = var.enable_private_executor_network_foundation
+    private_executor_network_approved   = var.private_executor_network_plan_approved
     marker_create_assignments           = var.enable_marker_create_assignments
     marker_create_authorization_proven  = var.marker_create_authorization_proven
     irreversible_controls_approved      = var.irreversible_marker_controls_approved
@@ -87,6 +94,14 @@ resource "terraform_data" "activation_guard" {
     precondition {
       condition     = var.target_cidr_inventory_revalidated && var.control_cidr_inventory_revalidated
       error_message = "Revalidate both 10.75.0.0/24 and 10.76.0.0/24 against the complete connected-network inventory immediately before an apply"
+    }
+
+    precondition {
+      condition = (
+        var.enable_private_executor_network_foundation ==
+        var.private_executor_network_plan_approved
+      )
+      error_message = "The private executor network foundation and its exact saved-plan approval must be enabled or disabled together"
     }
 
     precondition {
@@ -180,7 +195,10 @@ resource "terraform_data" "private_executor_topology_blocker" {
 
   input = {
     implemented                   = local.private_executor_binding_implemented
-    reserved_subnet               = local.private_executor_reserved_subnet
+    network_foundation_in_source  = local.private_executor_network_foundation_source
+    network_foundation_enabled    = var.enable_private_executor_network_foundation
+    infrastructure_subnet         = local.private_executor_infrastructure_subnet
+    service_endpoint_subnet       = local.private_executor_service_endpoint_subnet
     ephemeral_target_reachability = "not-implemented"
     workflow_binding              = "not-implemented"
   }
