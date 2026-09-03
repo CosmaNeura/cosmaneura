@@ -21,7 +21,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-envelope-policy.json"
-POLICY_SHA256 = "e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c"
+POLICY_SHA256 = "6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -126,8 +126,8 @@ def _validate_policy(policy: dict[str, Any], *, executable: bool) -> None:
         "name_prefix": "cnr",
         "default_ttl_hours": 6,
         "maximum_ttl_hours": 24,
-        "vnet_address_prefix": "10.254.0.0/24",
-        "private_endpoint_subnet_prefix": "10.254.0.0/27",
+        "vnet_address_prefix": "10.75.0.0/24",
+        "private_endpoint_subnet_prefix": "10.75.0.0/27",
         "private_endpoint_subnet_name": "private-endpoints",
         "private_dns_zone": "privatelink.postgres.database.azure.com",
         "postgres_group_id": "postgresqlServer",

@@ -31,7 +31,7 @@ INVENTORY_POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
 CANONICAL_POLICY_SHA256 = (
-    "a51466ee7e41ccc044330cfee8088f87bf8faf4014594db297719f618dc14ae7"
+    "e648fa0e1a37ccbdd98b6793f8e943d21eb6f5cd554dd0690ac529c37296183a"
 )
 APP_NAME = "cosmaneura-staging-restore-sanitizer-v1"
 HMAC_DOMAIN = "cosmaneura:staging-restore-sanitizer:v1"
@@ -525,7 +525,7 @@ def _validate_policy(
     if (
         receipt["policy_id"] != "cosmaneura-staging-restore-envelope-v1"
         or receipt["policy_sha256"]
-        != "sha256:e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c"
+        != "sha256:6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
         or receipt["nested_fields_are_exact_and_unknowns_are_rejected"] is not True
         or set(receipt["required_top_level_fields"]) != RECEIPT_TOP_LEVEL
         or set(receipt["required_source_inventory_fields"]) != RECEIPT_SOURCE_INVENTORY

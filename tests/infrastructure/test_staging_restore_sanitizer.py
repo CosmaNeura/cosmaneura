@@ -61,7 +61,7 @@ def _receipt() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "policy_id": "cosmaneura-staging-restore-envelope-v1",
-        "policy_sha256": "sha256:e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c",
+        "policy_sha256": "sha256:6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92",
         "repository": "CosmaNeura/cosmaneura",
         "workflow_sha": "a" * 40,
         "run_id": "901",

@@ -35,7 +35,7 @@
   },
   "policy_digests": {
     "synthetic_data": "sha256:daaf7fc72c9e44dd5b9ae3467e39bb137697868a2beba848d48681ff0141886b",
-    "restore_envelope": "sha256:e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c"
+    "restore_envelope": "sha256:6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
   },
   "schema_fields": {
     "manifest": ["schema_version", "manifest_id", "source_sha", "candidate_sha", "hmac_key_version", "source_resource", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "artifacts", "evidence_set_sha256"],
