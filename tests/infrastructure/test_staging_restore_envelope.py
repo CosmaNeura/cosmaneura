@@ -227,7 +227,7 @@ class FakeAzure:
             if self.vnet_extra_subnet:
                 subnets.append({"name": "unexpected"})
             return {
-                "addressSpace": {"addressPrefixes": ["10.254.0.0/24"]},
+                "addressSpace": {"addressPrefixes": ["10.75.0.0/24"]},
                 "dhcpOptions": {"dnsServers": self.vnet_dns_servers},
                 "subnets": subnets,
             }
@@ -235,7 +235,7 @@ class FakeAzure:
             return {}
         if args[:4] == ("network", "vnet", "subnet", "show"):
             subnet = {
-                "addressPrefix": "10.254.0.0/27",
+                "addressPrefix": "10.75.0.0/27",
                 "privateEndpointNetworkPolicies": "Disabled",
                 "defaultOutboundAccess": False,
                 "routeTable": None,
@@ -293,7 +293,7 @@ class FakeAzure:
         if key == ("network", "nic", "show"):
             nic_name = args[args.index("--name") + 1]
             vnet_id = self.ctx.resource_id("Microsoft.Network/virtualNetworks", nic_name.replace("-nic", "-vnet"))
-            return {"ipConfigurations": [{"privateIPAddress": "10.254.0.4", "publicIPAddress": None, "subnet": {"id": self.nic_subnet_id or vnet_id + "/subnets/private-endpoints"}}]}
+            return {"ipConfigurations": [{"privateIPAddress": "10.75.0.4", "publicIPAddress": None, "subnet": {"id": self.nic_subnet_id or vnet_id + "/subnets/private-endpoints"}}]}
         # fmt: on
         if key == ("network", "public-ip", "list"):
             return []

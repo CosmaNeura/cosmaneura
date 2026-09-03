@@ -29,9 +29,9 @@ SYNTHETIC_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
-POLICY_SHA256 = "55ec99542e8819756dcd476a1cdbfcd01c1ae249f34a8c30d50f051c5bb90aeb"
+POLICY_SHA256 = "9d1b634c705f1487b7d8c117b706a98ce47ffd3b0adf9a4e7e449b89a7b4cf98"
 POLICY_SEMANTIC_SHA256 = (
-    "64724c9dbb8ee1cb903e4ce9a12d1fa8752ace419ba6d8578e43bbac4d096626"
+    "c14e3caddb576719fa4973c8130007f33631c466048186a82aa450889b96e562"
 )
 MAXIMUM_FILE_BYTES = 8 * 1024 * 1024
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")

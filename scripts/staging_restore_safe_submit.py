@@ -29,10 +29,10 @@ POLICY_ROOT = ROOT / "contracts/staging-rehearsal/v1"
 ENVELOPE_POLICY_PATH = POLICY_ROOT / "restore-envelope-policy.json"
 SAFE_SUBMIT_POLICY_PATH = POLICY_ROOT / "restore-safe-submit-policy.json"
 ENVELOPE_POLICY_SHA256 = (
-    "e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c"
+    "6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
 )
 SAFE_SUBMIT_POLICY_SHA256 = (
-    "43036b4fc936440a8b741fdd431ff616966de709c2c5fe9cd128bc4c388c2449"
+    "03923b2479f28e81ff4ec07dd89b3daacd05927761c9b0eebce9d0717bdd85c7"
 )
 
 REHEARSAL_RE = re.compile(r"^[0-9a-f]{12}$")
