@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Validate a closed-world staging evidence bundle without provider access.
 
-Success proves only local contract integrity and cross-binding.  Server-wide
-scope collection and cryptographic attestation verification are deliberately
-unimplemented, so a valid bundle remains ineligible to activate restore or
-sanitizer execution.
+Success proves only local contract integrity and cross-binding.  The committed
+server-scope policy remains unconfigured and cryptographic attestation
+verification is deliberately unimplemented, so a valid bundle remains
+ineligible to activate restore or sanitizer execution.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -29,18 +29,44 @@ SYNTHETIC_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
-POLICY_SHA256 = "9d1b634c705f1487b7d8c117b706a98ce47ffd3b0adf9a4e7e449b89a7b4cf98"
+SERVER_SCOPE_POLICY_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
+)
+POLICY_SHA256 = "c0670cba49a08fb876f55d62a9cae7de14a71d8b68306faad5e220b2bb51d8d5"
 POLICY_SEMANTIC_SHA256 = (
-    "c14e3caddb576719fa4973c8130007f33631c466048186a82aa450889b96e562"
+    "4ec9b86bb2b2fd40756ab581dad175d3cbaa92240ef3f0e6a86e973587aed252"
 )
 MAXIMUM_FILE_BYTES = 8 * 1024 * 1024
+MAXIMUM_SERVER_SCOPE_DATABASES = 64
+MAXIMUM_SERVER_SCOPE_RECORDS_PER_SURFACE = 100_000
+MAXIMUM_SERVER_SCOPE_TOTAL_RECORDS = 500_000
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 RUN_RE = re.compile(r"^[1-9][0-9]{0,19}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{12}$")
+KEY_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+AZURE_POSTGRES_HOST_RE = re.compile(
+    r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.postgres\.database\.azure\.com$"
+)
 MANIFEST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{11,63}$")
 UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+SERVER_SCOPE_UTC_RE = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z$"
+)
+SERVER_SCOPE_SERVER_SURFACES = frozenset(
+    "databases roles memberships role_settings database_privileges tablespaces "
+    "replication_slots replication_origins prepared_transactions subscriptions "
+    "parameter_privileges shared_security_labels shared_descriptions settings".split()
+)
+SERVER_SCOPE_DATABASE_SURFACES = frozenset(
+    "schema user_relations shared_dependencies extensions foreign_data_wrappers "
+    "foreign_servers foreign_tables foreign_privileges language_privileges "
+    "user_mappings publications publication_memberships publication_namespaces "
+    "subscription_state subscription_relations security_labels event_triggers "
+    "large_objects".split()
+)
 
 
 class EvidenceFailure(RuntimeError):
@@ -76,7 +102,19 @@ def _parse_utc(value: Any, code: str) -> datetime:
     return parsed
 
 
-def _expect_keys(value: Any, expected: Sequence[str], code: str) -> Mapping[str, Any]:
+def _parse_server_scope_utc(value: Any, code: str) -> datetime:
+    if not isinstance(value, str) or SERVER_SCOPE_UTC_RE.fullmatch(value) is None:
+        raise EvidenceFailure(code)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except (ValueError, AttributeError):
+        raise EvidenceFailure(code) from None
+    if parsed.isoformat().replace("+00:00", "Z") != value:
+        raise EvidenceFailure(code)
+    return parsed
+
+
+def _expect_keys(value: Any, expected: Collection[str], code: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping) or set(value) != set(expected):
         raise EvidenceFailure(code)
     return value
@@ -130,6 +168,20 @@ def _load_json(raw: bytes, code: str) -> Mapping[str, Any]:
         raise EvidenceFailure(code) from None
     if not isinstance(value, Mapping) or _contains_boolean(value):
         raise EvidenceFailure(code)
+    return value
+
+
+def _load_server_scope_json(raw: bytes) -> Mapping[str, Any]:
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise EvidenceFailure("server_scope.invalid") from None
+    if not isinstance(value, Mapping):
+        raise EvidenceFailure("server_scope.invalid")
+    without_pass = dict(value)
+    passed = without_pass.pop("pass", None)
+    if passed is not True or _contains_boolean(without_pass):
+        raise EvidenceFailure("server_scope.invalid")
     return value
 
 
@@ -187,6 +239,9 @@ def load_policy(path: Path) -> tuple[Mapping[str, Any], str]:
             "inventory",
             "quiescence",
             "server_scope",
+            "server_scope_surface",
+            "server_scope_database_connected",
+            "server_scope_database_disabled",
             "provenance",
             "signer_claims",
             "policy_digests",
@@ -212,6 +267,204 @@ def _load_synthetic_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
     ):
         raise EvidenceFailure("synthetic_policy.invalid")
     return synthetic
+
+
+def _server_scope_policy_pin_valid(value: Any, *, configured: bool) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {"count", "hmac"}:
+        return False
+    count = value["count"]
+    digest = value["hmac"]
+    if isinstance(count, bool) or not isinstance(count, int):
+        return False
+    if configured:
+        return 0 <= count <= MAXIMUM_SERVER_SCOPE_RECORDS_PER_SURFACE and bool(
+            isinstance(digest, str) and HEX_RE.fullmatch(digest)
+        )
+    return (
+        -1 <= count <= MAXIMUM_SERVER_SCOPE_RECORDS_PER_SURFACE
+        and isinstance(digest, str)
+        and (bool(HEX_RE.fullmatch(digest)) or digest.startswith("CONFIGURE_"))
+    )
+
+
+def _load_server_scope_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = _read_regular(SERVER_SCOPE_POLICY_PATH, "server_scope_policy.unreadable")
+    if _digest(raw) != policy["policy_digests"]["server_scope"]:
+        raise EvidenceFailure("server_scope_policy.digest")
+    try:
+        server_policy = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise EvidenceFailure("server_scope_policy.invalid") from None
+    server_policy = _expect_keys(
+        server_policy,
+        {
+            "schema_version",
+            "policy_id",
+            "activation_ready",
+            "source",
+            "hmac",
+            "required_settings",
+            "required_visibility",
+            "expected_server_surfaces",
+            "expected_databases",
+            "evidence",
+        },
+        "server_scope_policy.invalid",
+    )
+    configured = server_policy["activation_ready"] is True
+    source = _expect_keys(
+        server_policy["source"],
+        {
+            "resource_id",
+            "revision",
+            "host",
+            "port",
+            "maintenance_database",
+            "primary_database",
+            "postgres_major",
+        },
+        "server_scope_policy.invalid",
+    )
+    hmac_policy = _expect_keys(
+        server_policy["hmac"],
+        {"algorithm", "key_version"},
+        "server_scope_policy.invalid",
+    )
+    server_surfaces = _expect_keys(
+        server_policy["expected_server_surfaces"],
+        SERVER_SCOPE_SERVER_SURFACES,
+        "server_scope_policy.invalid",
+    )
+    visibility = _expect_keys(
+        server_policy["required_visibility"],
+        {"pg_authid", "pg_monitor", "pg_read_all_settings"},
+        "server_scope_policy.invalid",
+    )
+    evidence = _expect_keys(
+        server_policy["evidence"],
+        {"aggregate_only", "forbidden_raw_values"},
+        "server_scope_policy.invalid",
+    )
+    if (
+        isinstance(server_policy["schema_version"], bool)
+        or not isinstance(server_policy["schema_version"], int)
+        or server_policy["schema_version"] != 1
+        or server_policy["policy_id"] != "cosmaneura-staging-server-scope-evidence-v1"
+        or not isinstance(server_policy["activation_ready"], bool)
+        or any(
+            not isinstance(source[field], str) or not source[field]
+            for field in (
+                "resource_id",
+                "revision",
+                "host",
+                "maintenance_database",
+                "primary_database",
+            )
+        )
+        or AZURE_POSTGRES_HOST_RE.fullmatch(source["host"]) is None
+        or source["primary_database"] != policy["source_resource"]["database_name"]
+        or isinstance(source["port"], bool)
+        or not isinstance(source["port"], int)
+        or source["port"] != 5432
+        or isinstance(source["postgres_major"], bool)
+        or not isinstance(source["postgres_major"], int)
+        or source["postgres_major"] != 16
+        or hmac_policy["algorithm"] != "HMAC-SHA-256"
+        or not isinstance(hmac_policy["key_version"], str)
+        or not all(value is True for value in visibility.values())
+        or evidence["aggregate_only"] is not True
+        or not isinstance(evidence["forbidden_raw_values"], list)
+        or not all(
+            _server_scope_policy_pin_valid(pin, configured=configured)
+            for pin in server_surfaces.values()
+        )
+    ):
+        raise EvidenceFailure("server_scope_policy.invalid")
+    if configured:
+        if (
+            source["resource_id"] != policy["source_resource"]["postgres_server_id"]
+            or SHA_RE.fullmatch(source["revision"]) is None
+            or KEY_VERSION_RE.fullmatch(hmac_policy["key_version"]) is None
+            or hmac_policy["key_version"].startswith("CONFIGURE_")
+        ):
+            raise EvidenceFailure("server_scope_policy.invalid")
+    elif (
+        source["resource_id"] != "CONFIGURE_EXACT_STAGING_POSTGRES_RESOURCE_ID"
+        or source["revision"] != "CONFIGURE_EXACT_SOURCE_REVISION"
+        or hmac_policy["key_version"] != "CONFIGURE_OWNER_CONTROLLED_KEY_VERSION"
+    ):
+        raise EvidenceFailure("server_scope_policy.invalid")
+    settings = server_policy["required_settings"]
+    if (
+        not isinstance(settings, list)
+        or not settings
+        or settings != sorted(set(settings))
+        or not all(isinstance(item, str) and item for item in settings)
+    ):
+        raise EvidenceFailure("server_scope_policy.invalid")
+    databases = server_policy["expected_databases"]
+    if (
+        not isinstance(databases, list)
+        or not 1 <= len(databases) <= MAXIMUM_SERVER_SCOPE_DATABASES
+    ):
+        raise EvidenceFailure("server_scope_policy.invalid")
+    identities: set[str] = set()
+    primary_count = 0
+    for database in databases:
+        database = _expect_keys(
+            database,
+            {"identity_hmac", "is_template", "allow_connections", "status", "surfaces"},
+            "server_scope_policy.invalid",
+        )
+        identity = database["identity_hmac"]
+        if (
+            not isinstance(identity, str)
+            or identity in identities
+            or not isinstance(database["is_template"], bool)
+            or not isinstance(database["allow_connections"], bool)
+        ):
+            raise EvidenceFailure("server_scope_policy.invalid")
+        identities.add(identity)
+        if configured and HEX_RE.fullmatch(identity) is None:
+            raise EvidenceFailure("server_scope_policy.invalid")
+        if not configured and not (
+            HEX_RE.fullmatch(identity) or identity.startswith("CONFIGURE_")
+        ):
+            raise EvidenceFailure("server_scope_policy.invalid")
+        status = database["status"]
+        if status == "connections_disabled":
+            if (
+                database["allow_connections"] is not False
+                or database["is_template"] is not True
+                or database["surfaces"] is not None
+            ):
+                raise EvidenceFailure("server_scope_policy.invalid")
+            continue
+        if status not in {"primary_inventory", "empty"}:
+            raise EvidenceFailure("server_scope_policy.invalid")
+        if database["allow_connections"] is not True:
+            raise EvidenceFailure("server_scope_policy.invalid")
+        if status == "primary_inventory":
+            primary_count += 1
+            if database["is_template"] is not False:
+                raise EvidenceFailure("server_scope_policy.invalid")
+        surfaces = _expect_keys(
+            database["surfaces"],
+            SERVER_SCOPE_DATABASE_SURFACES,
+            "server_scope_policy.invalid",
+        )
+        if not all(
+            _server_scope_policy_pin_valid(pin, configured=configured)
+            for pin in surfaces.values()
+        ):
+            raise EvidenceFailure("server_scope_policy.invalid")
+        if status == "empty" and any(
+            surfaces[name]["count"] != 0 for name in ("user_relations", "large_objects")
+        ):
+            raise EvidenceFailure("server_scope_policy.invalid")
+    if primary_count != 1:
+        raise EvidenceFailure("server_scope_policy.invalid")
+    return server_policy
 
 
 def _inventory_key_sets(synthetic: Mapping[str, Any]) -> dict[str, set[str]]:
@@ -498,6 +751,163 @@ def _validate_candidate(
     return _validate_receipt(candidate, "candidate.receipt")
 
 
+def _validate_server_scope_pin(value: Any, code: str) -> int:
+    value = _expect_keys(value, {"count", "hmac"}, code)
+    count = value["count"]
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or not 0 <= count <= MAXIMUM_SERVER_SCOPE_RECORDS_PER_SURFACE
+        or not isinstance(value["hmac"], str)
+        or HEX_RE.fullmatch(value["hmac"]) is None
+    ):
+        raise EvidenceFailure(code)
+    return count
+
+
+def _validate_server_scope(
+    artifact: Mapping[str, Any],
+    *,
+    manifest: Mapping[str, Any],
+    policy: Mapping[str, Any],
+    server_policy: Mapping[str, Any],
+) -> str:
+    fields = policy["schema_fields"]
+    _expect_keys(artifact, fields["server_scope"], "server_scope.schema")
+    started = _parse_server_scope_utc(
+        artifact["capture_started_at"], "server_scope.capture_time"
+    )
+    completed = _parse_server_scope_utc(
+        artifact["capture_completed_at"], "server_scope.capture_time"
+    )
+    observed = _parse_utc(manifest["observed_at"], "server_scope.capture_time")
+    if (
+        started > completed
+        or completed > observed
+        or (completed - started).total_seconds() > policy["maximum_lifetime_seconds"]
+        or (observed - started).total_seconds() > policy["maximum_lifetime_seconds"]
+    ):
+        raise EvidenceFailure("server_scope.capture_time")
+    if (
+        isinstance(artifact["schema_version"], bool)
+        or not isinstance(artifact["schema_version"], int)
+        or artifact["schema_version"] != 1
+        or artifact["policy_id"] != server_policy["policy_id"]
+        or artifact["policy_sha256"]
+        != policy["policy_digests"]["server_scope"].removeprefix("sha256:")
+        or artifact["source_revision"] != manifest["source_sha"]
+        or not isinstance(artifact["source_resource_hmac"], str)
+        or HEX_RE.fullmatch(artifact["source_resource_hmac"]) is None
+        or not isinstance(artifact["primary_database_identity_hmac"], str)
+        or HEX_RE.fullmatch(artifact["primary_database_identity_hmac"]) is None
+        or not isinstance(artifact["key_version"], str)
+        or KEY_VERSION_RE.fullmatch(artifact["key_version"]) is None
+        or isinstance(artifact["server_version_major"], bool)
+        or not isinstance(artifact["server_version_major"], int)
+        or artifact["server_version_major"] != server_policy["source"]["postgres_major"]
+        or artifact["errors"] != []
+        or artifact["pass"] is not True
+        or not isinstance(artifact["evidence_hmac"], str)
+        or HEX_RE.fullmatch(artifact["evidence_hmac"]) is None
+    ):
+        raise EvidenceFailure("server_scope.invalid")
+
+    server_surfaces = _expect_keys(
+        artifact["server_surfaces"],
+        SERVER_SCOPE_SERVER_SURFACES,
+        "server_scope.server_surfaces",
+    )
+    total_records = sum(
+        _validate_server_scope_pin(pin, "server_scope.server_surface")
+        for pin in server_surfaces.values()
+    )
+    databases = artifact["databases"]
+    if (
+        not isinstance(databases, list)
+        or not 1 <= len(databases) <= MAXIMUM_SERVER_SCOPE_DATABASES
+        or server_surfaces["databases"]["count"] != len(databases)
+        or server_surfaces["settings"]["count"]
+        < len(server_policy["required_settings"])
+    ):
+        raise EvidenceFailure("server_scope.databases")
+    observed_databases: dict[str, Mapping[str, Any]] = {}
+    primary_count = 0
+    for database in databases:
+        if not isinstance(database, Mapping):
+            raise EvidenceFailure("server_scope.database")
+        status = database.get("status")
+        expected_fields = (
+            fields["server_scope_database_disabled"]
+            if status == "connections_disabled"
+            else fields["server_scope_database_connected"]
+        )
+        database = _expect_keys(database, expected_fields, "server_scope.database")
+        identity = database["identity_hmac"]
+        if (
+            not isinstance(identity, str)
+            or HEX_RE.fullmatch(identity) is None
+            or identity in observed_databases
+        ):
+            raise EvidenceFailure("server_scope.database")
+        observed_databases[identity] = database
+        if status == "connections_disabled":
+            continue
+        if status not in {"primary_inventory", "empty"}:
+            raise EvidenceFailure("server_scope.database")
+        if status == "primary_inventory":
+            primary_count += 1
+            if identity != artifact["primary_database_identity_hmac"]:
+                raise EvidenceFailure("server_scope.primary_database")
+        surfaces = _expect_keys(
+            database["surfaces"],
+            SERVER_SCOPE_DATABASE_SURFACES,
+            "server_scope.database_surfaces",
+        )
+        surface_counts = {
+            name: _validate_server_scope_pin(pin, "server_scope.database_surface")
+            for name, pin in surfaces.items()
+        }
+        if status == "empty" and any(
+            surface_counts[name] != 0 for name in ("user_relations", "large_objects")
+        ):
+            raise EvidenceFailure("server_scope.database")
+        total_records += sum(surface_counts.values())
+    if (
+        list(observed_databases) != sorted(observed_databases)
+        or primary_count != 1
+        or total_records > MAXIMUM_SERVER_SCOPE_TOTAL_RECORDS
+    ):
+        raise EvidenceFailure("server_scope.databases")
+
+    if server_policy["activation_ready"] is True:
+        if (
+            artifact["source_revision"] != server_policy["source"]["revision"]
+            or artifact["key_version"] != server_policy["hmac"]["key_version"]
+            or server_surfaces != server_policy["expected_server_surfaces"]
+        ):
+            raise EvidenceFailure("server_scope.policy_binding")
+        expected_databases = {
+            item["identity_hmac"]: item for item in server_policy["expected_databases"]
+        }
+        if set(observed_databases) != set(expected_databases):
+            raise EvidenceFailure("server_scope.policy_binding")
+        for identity, database in observed_databases.items():
+            expected = expected_databases[identity]
+            if database["status"] != expected["status"]:
+                raise EvidenceFailure("server_scope.policy_binding")
+            if database["status"] == "connections_disabled":
+                if expected["surfaces"] is not None:
+                    raise EvidenceFailure("server_scope.policy_binding")
+            elif database["surfaces"] != expected["surfaces"]:
+                raise EvidenceFailure("server_scope.policy_binding")
+
+    # The collector has already domain-separated and HMAC-bound this receipt.
+    # This local validator has no key material and intentionally proves only
+    # exact structure, policy/file binding, and freshness. Attestation and the
+    # authenticated source-resource observation remain activation blockers.
+    return _digest(_canonical(artifact))
+
+
 def _validate_claim_artifact(
     artifact: Mapping[str, Any],
     *,
@@ -520,11 +930,6 @@ def _validate_claim_artifact(
         raise EvidenceFailure(f"{kind}.invalid")
     if kind == "quiescence" and artifact["state"] != "quiesced":
         raise EvidenceFailure("quiescence.invalid")
-    if kind == "server_scope" and (
-        artifact["state"] != "unimplemented"
-        or artifact["blocker"] != "server_scope_collection_unimplemented"
-    ):
-        raise EvidenceFailure("server_scope.invalid")
     return _validate_receipt(artifact, f"{kind}.receipt")
 
 
@@ -538,6 +943,7 @@ def validate_bundle(
     files = _read_bundle(bundle, policy)
     _verify_checksums(files)
     synthetic = _load_synthetic_policy(policy)
+    server_scope_policy = _load_server_scope_policy(policy)
     manifest = _load_json(files["evidence-manifest.json"], "manifest.invalid")
     _expect_keys(manifest, policy["schema_fields"]["manifest"], "manifest.schema")
     policy_digests = _expect_keys(
@@ -610,7 +1016,11 @@ def validate_bundle(
         raise EvidenceFailure("manifest.evidence_set_digest")
 
     values = {
-        kind: _load_json(files[path], f"{kind}.invalid")
+        kind: (
+            _load_server_scope_json(files[path])
+            if kind == "server_scope"
+            else _load_json(files[path], f"{kind}.invalid")
+        )
         for kind, path in artifact_contracts.items()
     }
     receipts = {
@@ -632,11 +1042,11 @@ def validate_bundle(
             manifest=manifest,
             policy=policy,
         ),
-        "server_scope": _validate_claim_artifact(
+        "server_scope": _validate_server_scope(
             values["server_scope"],
-            kind="server_scope",
             manifest=manifest,
             policy=policy,
+            server_policy=server_scope_policy,
         ),
     }
     for kind, entry in entries.items():

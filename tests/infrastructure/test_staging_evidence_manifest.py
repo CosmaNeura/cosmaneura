@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import sys
 from collections.abc import Callable
-from datetime import UTC, datetime
+from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -14,6 +16,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/validate_staging_evidence_manifest.py"
 POLICY = ROOT / "contracts/staging-rehearsal/v1/evidence-manifest-policy.json"
+SERVER_SCOPE_SCRIPT = ROOT / "scripts/staging_server_scope_evidence.py"
+SERVER_SCOPE_POLICY = (
+    ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
+)
+SERVER_SCOPE_KEY = b"server-scope-manifest-test-key-at-least-32-bytes"
 NOW = datetime(2026, 9, 3, 12, 5, tzinfo=UTC)
 
 
@@ -24,8 +31,18 @@ def _load_module() -> ModuleType:
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    import sys
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
+
+def _load_server_scope_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "standalone_staging_server_scope_for_manifest",
+        SERVER_SCOPE_SCRIPT,
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
@@ -43,6 +60,133 @@ def _receipt(module: ModuleType, value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+def _generated_server_scope_receipt(
+    manifest_policy: dict[str, Any],
+    *,
+    source_revision: str,
+    observed_at: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    collector = _load_server_scope_module()
+    server_policy = json.loads(SERVER_SCOPE_POLICY.read_text())
+    database = {
+        "name": manifest_policy["source_resource"]["database_name"],
+        "is_template": False,
+        "allow_connections": True,
+        "owner": "owner-role",
+        "encoding": "UTF8",
+        "collation": "C",
+        "ctype": "C",
+        "locale_provider": "c",
+        "icu_locale": None,
+        "icu_rules": None,
+        "collation_version": None,
+        "default_tablespace": "pg_default",
+        "connection_limit": -1,
+    }
+    disabled_template = {
+        **database,
+        "name": "template0",
+        "is_template": True,
+        "allow_connections": False,
+    }
+    server_surfaces = {name: [] for name in collector.SERVER_SURFACES}
+    server_surfaces["databases"] = [database, disabled_template]
+    server_surfaces["settings"] = [
+        [name, "configured", None, "default", "configured", "configured", False]
+        for name in server_policy["required_settings"]
+    ]
+    database_surfaces = {name: [] for name in collector.DATABASE_SURFACES}
+    snapshot = collector.ServerSnapshot(
+        version_major=16,
+        visibility={
+            "pg_authid": True,
+            "pg_monitor": True,
+            "pg_read_all_settings": True,
+        },
+        surfaces=server_surfaces,
+    )
+
+    class Adapter:
+        def start_capture(self, maximum_seconds: int) -> None:
+            assert maximum_seconds == collector.MAXIMUM_CAPTURE_SECONDS
+
+        def server_snapshot(self, required_settings: list[str]) -> Any:
+            assert required_settings == server_policy["required_settings"]
+            return snapshot
+
+        def database_snapshot(self, database_name: str) -> dict[str, list[Any]]:
+            assert database_name == database["name"]
+            return database_surfaces
+
+    server_policy["activation_ready"] = True
+    server_policy["source"].update(
+        resource_id=manifest_policy["source_resource"]["postgres_server_id"],
+        revision=source_revision,
+        host="test.postgres.database.azure.com",
+        primary_database=database["name"],
+    )
+    server_policy["hmac"]["key_version"] = "staging-server-scope-hmac-v1"
+    server_policy["expected_server_surfaces"] = {
+        name: collector._pin_json(
+            collector._surface_pin(
+                SERVER_SCOPE_KEY,
+                f"server:{name}",
+                server_surfaces[name],
+            )
+        )
+        for name in collector.SERVER_SURFACES
+    }
+    identity = collector._identity_hmac(
+        SERVER_SCOPE_KEY,
+        "database",
+        database["name"],
+    )
+    disabled_identity = collector._identity_hmac(
+        SERVER_SCOPE_KEY,
+        "database",
+        disabled_template["name"],
+    )
+    server_policy["expected_databases"] = [
+        {
+            "identity_hmac": identity,
+            "is_template": False,
+            "allow_connections": True,
+            "status": "primary_inventory",
+            "surfaces": {
+                name: collector._pin_json(
+                    collector._surface_pin(
+                        SERVER_SCOPE_KEY,
+                        f"database:{identity}:{name}",
+                        database_surfaces[name],
+                    )
+                )
+                for name in collector.DATABASE_SURFACES
+            },
+        },
+        {
+            "identity_hmac": disabled_identity,
+            "is_template": True,
+            "allow_connections": False,
+            "status": "connections_disabled",
+            "surfaces": None,
+        },
+    ]
+    completed = datetime.strptime(observed_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    times = iter([completed - timedelta(minutes=1), completed])
+    receipt = collector.collect_evidence(
+        server_policy,
+        manifest_policy["policy_digests"]["server_scope"].removeprefix("sha256:"),
+        Adapter(),
+        SERVER_SCOPE_KEY,
+        source_resource_id=manifest_policy["source_resource"]["postgres_server_id"],
+        source_revision=source_revision,
+        key_version=server_policy["hmac"]["key_version"],
+        clock=lambda: next(times),
+        monotonic=lambda: 0.0,
+    )
+    return receipt, server_policy
+
+
 def _bundle(
     module: ModuleType,
     tmp_path: Path,
@@ -52,7 +196,8 @@ def _bundle(
     observed_at: str = "2026-09-03T12:00:00Z",
     expires_at: str = "2026-09-03T12:15:00Z",
 ) -> Path:
-    policy, policy_sha256 = module.load_policy(POLICY)
+    loaded_policy, policy_sha256 = module.load_policy(POLICY)
+    policy = dict(loaded_policy)
     synthetic = module._load_synthetic_policy(policy)
     inventory_keys = module._inventory_key_sets(synthetic)
     workflow_sha = "3" * 40
@@ -141,14 +286,11 @@ def _bundle(
             **common,
             "policy_digests": policy_digests,
         },
-        "server_scope": {
-            "schema_version": 1,
-            "evidence_type": "server_scope",
-            "state": "unimplemented",
-            "blocker": "server_scope_collection_unimplemented",
-            **common,
-            "policy_digests": policy_digests,
-        },
+        "server_scope": _generated_server_scope_receipt(
+            policy,
+            source_revision=common["source_sha"],
+            observed_at=observed_at,
+        )[0],
     }
     inventory_counts = artifacts["inventory"]["counts"]
     inventory_counts["database.non_system_schemas"] = 1
@@ -165,7 +307,10 @@ def _bundle(
             inventory_counts[f"blob.{name}"] = 1
     if artifact_mutator:
         artifact_mutator(artifacts)
-    artifacts = {name: _receipt(module, value) for name, value in artifacts.items()}
+    artifacts = {
+        name: value if name == "server_scope" else _receipt(module, value)
+        for name, value in artifacts.items()
+    }
 
     encoded = {
         name: module._canonical(value) + b"\n" for name, value in artifacts.items()
@@ -175,7 +320,11 @@ def _bundle(
             "kind": name,
             "path": policy["artifact_contracts"][name],
             "file_sha256": module._digest(encoded[name]),
-            "receipt_sha256": f"sha256:{value['receipt_sha256']}",
+            "receipt_sha256": (
+                module._digest(module._canonical(value))
+                if name == "server_scope"
+                else f"sha256:{value['receipt_sha256']}"
+            ),
         }
         for name, value in sorted(artifacts.items())
     ]
@@ -228,6 +377,60 @@ def _validate(module: ModuleType, bundle: Path) -> dict[str, Any]:
     )
 
 
+def _change_server_scope_entry_digest(
+    manifest: dict[str, Any], field: str = "receipt_sha256"
+) -> None:
+    entry = next(
+        item for item in manifest["artifacts"] if item["kind"] == "server_scope"
+    )
+    entry[field] = "sha256:" + "f" * 64
+
+
+def _add_out_of_order_database(receipt: dict[str, Any]) -> None:
+    identity = "0" * 64
+    assert identity < receipt["databases"][0]["identity_hmac"]
+    receipt["databases"].append(
+        {"identity_hmac": identity, "status": "connections_disabled"}
+    )
+
+
+def _add_too_many_databases(receipt: dict[str, Any]) -> None:
+    receipt["databases"].extend(
+        {
+            "identity_hmac": f"{index:064x}",
+            "status": "connections_disabled",
+        }
+        for index in range(64)
+    )
+
+
+def _exceed_total_record_cap(receipt: dict[str, Any]) -> None:
+    for name in list(receipt["server_surfaces"])[:6]:
+        receipt["server_surfaces"][name]["count"] = 100_000
+
+
+def _primary_database(receipt: dict[str, Any]) -> dict[str, Any]:
+    return next(
+        database
+        for database in receipt["databases"]
+        if database["status"] == "primary_inventory"
+    )
+
+
+def _add_nonempty_empty_database(receipt: dict[str, Any]) -> None:
+    identity = "0" * 64
+    surfaces = deepcopy(_primary_database(receipt)["surfaces"])
+    surfaces["user_relations"]["count"] = 1
+    receipt["databases"].append(
+        {
+            "identity_hmac": identity,
+            "status": "empty",
+            "surfaces": surfaces,
+        }
+    )
+    receipt["databases"].sort(key=lambda item: item["identity_hmac"])
+
+
 def test_exact_bundle_validates_but_remains_blocked(
     module: ModuleType,
     tmp_path: Path,
@@ -237,13 +440,165 @@ def test_exact_bundle_validates_but_remains_blocked(
     assert result["outcome"] == "contract_valid"
     assert result["activation_state"] == "blocked"
     assert result["activation_blockers"] == [
-        "server_scope_collection_unimplemented",
+        "server_scope_policy_unconfigured",
         "attestation_verification_unimplemented",
         "provider_access_unimplemented",
         "workflow_integration_unimplemented",
         "restore_activation_unimplemented",
     ]
     assert result["evidence_set_sha256"].startswith("sha256:")
+
+
+def test_committed_dormant_server_scope_policy_is_valid_and_remains_blocked(
+    module: ModuleType,
+) -> None:
+    loaded_policy, _ = module.load_policy(POLICY)
+
+    server_policy = module._load_server_scope_policy(loaded_policy)
+
+    assert server_policy["activation_ready"] is False
+    assert server_policy["source"]["resource_id"] == (
+        "CONFIGURE_EXACT_STAGING_POSTGRES_RESOURCE_ID"
+    )
+    assert "server_scope_policy_unconfigured" in loaded_policy["activation_blockers"]
+
+
+def test_collector_receipt_matches_an_activated_exact_policy(
+    module: ModuleType,
+) -> None:
+    loaded_policy, _ = module.load_policy(POLICY)
+    policy = dict(loaded_policy)
+    receipt, server_policy = _generated_server_scope_receipt(
+        policy,
+        source_revision="1" * 40,
+        observed_at="2026-09-03T12:00:00Z",
+    )
+
+    digest = module._validate_server_scope(
+        receipt,
+        manifest={"source_sha": "1" * 40, "observed_at": "2026-09-03T12:00:00Z"},
+        policy=policy,
+        server_policy=server_policy,
+    )
+
+    assert digest == module._digest(module._canonical(receipt))
+
+    changed = deepcopy(receipt)
+    changed["server_surfaces"]["roles"]["hmac"] = "f" * 64
+    with pytest.raises(module.EvidenceFailure, match="server_scope.policy_binding"):
+        module._validate_server_scope(
+            changed,
+            manifest={
+                "source_sha": "1" * 40,
+                "observed_at": "2026-09-03T12:00:00Z",
+            },
+            policy=policy,
+            server_policy=server_policy,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda value: value["source"].update(revision="f" * 40),
+        lambda value: value["hmac"].update(key_version="rotated-key-v2"),
+        lambda value: value["expected_server_surfaces"]["roles"].update(count=1),
+    ],
+)
+def test_collector_receipt_rejects_activated_policy_drift(
+    module: ModuleType,
+    mutator: Callable[[dict[str, Any]], None],
+) -> None:
+    loaded_policy, _ = module.load_policy(POLICY)
+    policy = dict(loaded_policy)
+    receipt, server_policy = _generated_server_scope_receipt(
+        policy,
+        source_revision="1" * 40,
+        observed_at="2026-09-03T12:00:00Z",
+    )
+    mutator(server_policy)
+
+    with pytest.raises(module.EvidenceFailure, match="server_scope.policy_binding"):
+        module._validate_server_scope(
+            receipt,
+            manifest={
+                "source_sha": "1" * 40,
+                "observed_at": "2026-09-03T12:00:00Z",
+            },
+            policy=policy,
+            server_policy=server_policy,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda value: value["source"].update(
+            resource_id="CONFIGURE_EXACT_STAGING_POSTGRES_RESOURCE_ID"
+        ),
+        lambda value: value["source"].update(
+            revision="CONFIGURE_EXACT_SOURCE_REVISION"
+        ),
+        lambda value: value["hmac"].update(
+            key_version="CONFIGURE_OWNER_CONTROLLED_KEY_VERSION"
+        ),
+    ],
+)
+def test_activated_server_scope_policy_rejects_placeholders(
+    module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutator: Callable[[dict[str, Any]], None],
+) -> None:
+    loaded_policy, _ = module.load_policy(POLICY)
+    manifest_policy = deepcopy(loaded_policy)
+    _, server_policy = _generated_server_scope_receipt(
+        dict(loaded_policy),
+        source_revision="1" * 40,
+        observed_at="2026-09-03T12:00:00Z",
+    )
+    mutator(server_policy)
+    raw = module._canonical(server_policy) + b"\n"
+    policy_path = tmp_path / "server-scope-policy.json"
+    policy_path.write_bytes(raw)
+    policy_path.chmod(0o600)
+    manifest_policy["policy_digests"] = dict(manifest_policy["policy_digests"])
+    manifest_policy["policy_digests"]["server_scope"] = module._digest(raw)
+    monkeypatch.setattr(module, "SERVER_SCOPE_POLICY_PATH", policy_path)
+
+    with pytest.raises(module.EvidenceFailure, match="server_scope_policy.invalid"):
+        module._load_server_scope_policy(manifest_policy)
+
+
+def test_dormant_empty_database_policy_requires_zero_protected_surfaces(
+    module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded_policy, _ = module.load_policy(POLICY)
+    manifest_policy = deepcopy(loaded_policy)
+    server_policy = json.loads(SERVER_SCOPE_POLICY.read_text())
+    surfaces = deepcopy(server_policy["expected_databases"][0]["surfaces"])
+    surfaces["large_objects"]["count"] = 0
+    server_policy["expected_databases"].append(
+        {
+            "identity_hmac": "CONFIGURE_SECONDARY_DATABASE_IDENTITY_HMAC_SHA256",
+            "is_template": False,
+            "allow_connections": True,
+            "status": "empty",
+            "surfaces": surfaces,
+        }
+    )
+    raw = module._canonical(server_policy) + b"\n"
+    policy_path = tmp_path / "server-scope-policy.json"
+    policy_path.write_bytes(raw)
+    policy_path.chmod(0o600)
+    manifest_policy["policy_digests"] = dict(manifest_policy["policy_digests"])
+    manifest_policy["policy_digests"]["server_scope"] = module._digest(raw)
+    monkeypatch.setattr(module, "SERVER_SCOPE_POLICY_PATH", policy_path)
+
+    with pytest.raises(module.EvidenceFailure, match="server_scope_policy.invalid"):
+        module._load_server_scope_policy(manifest_policy)
 
 
 @pytest.mark.parametrize(
@@ -258,6 +613,9 @@ def test_exact_bundle_validates_but_remains_blocked(
         lambda manifest: manifest["policy_digests"].update(
             synthetic_data="sha256:" + "f" * 64
         ),
+        lambda manifest: manifest["policy_digests"].update(
+            server_scope="sha256:" + "f" * 64
+        ),
         lambda manifest: manifest["artifacts"][0].update(path="../inventory.json"),
     ],
 )
@@ -269,6 +627,31 @@ def test_manifest_claims_fail_closed(
     bundle = _bundle(module, tmp_path, manifest_mutator=mutator)
 
     with pytest.raises(module.EvidenceFailure):
+        _validate(module, bundle)
+
+
+@pytest.mark.parametrize(
+    ("field", "failure"),
+    [
+        ("file_sha256", "artifact.file_digest.server_scope"),
+        ("receipt_sha256", "artifact.receipt_digest.server_scope"),
+    ],
+)
+def test_server_scope_file_and_receipt_digests_are_independent(
+    module: ModuleType,
+    tmp_path: Path,
+    field: str,
+    failure: str,
+) -> None:
+    bundle = _bundle(
+        module,
+        tmp_path,
+        manifest_mutator=lambda manifest: _change_server_scope_entry_digest(
+            manifest, field
+        ),
+    )
+
+    with pytest.raises(module.EvidenceFailure, match=failure):
         _validate(module, bundle)
 
 
@@ -286,7 +669,7 @@ def test_manifest_claims_fail_closed(
         lambda values: values["candidate"].update(approval_pr_number=True),
         lambda values: values["candidate"].update(schema_revision="aaaaaaaaaaaa"),
         lambda values: values["quiescence"].update(state="not_quiesced"),
-        lambda values: values["server_scope"].update(state="collected"),
+        lambda values: values["server_scope"].update(unexpected="value"),
     ],
 )
 def test_artifact_schema_and_bindings_fail_closed(
@@ -297,6 +680,61 @@ def test_artifact_schema_and_bindings_fail_closed(
     bundle = _bundle(module, tmp_path, artifact_mutator=mutator)
 
     with pytest.raises(module.EvidenceFailure):
+        _validate(module, bundle)
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda value: value.update({"pass": False}),
+        lambda value: value.update(schema_version=True),
+        lambda value: value.update(schema_version=1.0),
+        lambda value: value.update(errors=["catalog.read_blocked"]),
+        lambda value: value.update(policy_id="unexpected-policy"),
+        lambda value: value.update(policy_sha256="f" * 64),
+        lambda value: value.update(source_revision="f" * 40),
+        lambda value: value.update(key_version="invalid key version"),
+        lambda value: value.update(capture_started_at="2026-09-03T12:00:01Z"),
+        lambda value: value.update(capture_completed_at="2026-09-03T12:00:01Z"),
+        lambda value: value.update(server_version_major=15),
+        lambda value: value.update(server_version_major=True),
+        lambda value: value.update(server_version_major=16.0),
+        lambda value: value.update(evidence_hmac="not-a-digest"),
+        lambda value: value["server_surfaces"].pop("roles"),
+        lambda value: value["server_surfaces"].update(
+            unexpected={"count": 0, "hmac": "f" * 64}
+        ),
+        lambda value: value["server_surfaces"]["roles"].update(count=True),
+        lambda value: value["server_surfaces"]["roles"].update(count=-1),
+        lambda value: value["server_surfaces"]["roles"].update(hmac="f" * 63),
+        lambda value: value["server_surfaces"]["databases"].update(count=1),
+        lambda value: value["server_surfaces"]["settings"].update(count=0),
+        lambda value: value.update(databases=[]),
+        lambda value: value["databases"].append(deepcopy(value["databases"][0])),
+        lambda value: value["databases"][0].update(status="empty"),
+        lambda value: _primary_database(value)["surfaces"].pop("schema"),
+        lambda value: _primary_database(value)["surfaces"]["schema"].update(
+            count=100_001
+        ),
+        lambda value: value.update(primary_database_identity_hmac="f" * 64),
+        _add_out_of_order_database,
+        _add_too_many_databases,
+        _exceed_total_record_cap,
+        _add_nonempty_empty_database,
+    ],
+)
+def test_server_scope_receipt_fails_closed(
+    module: ModuleType,
+    tmp_path: Path,
+    mutator: Callable[[dict[str, Any]], None],
+) -> None:
+    bundle = _bundle(
+        module,
+        tmp_path,
+        artifact_mutator=lambda artifacts: mutator(artifacts["server_scope"]),
+    )
+
+    with pytest.raises(module.EvidenceFailure, match="server_scope"):
         _validate(module, bundle)
 
 
