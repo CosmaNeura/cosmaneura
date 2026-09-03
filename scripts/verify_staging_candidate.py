@@ -18,6 +18,7 @@ FULL_SHA = re.compile(r"[0-9a-f]{40}")
 PR_NUMBER = re.compile(r"[1-9][0-9]*")
 SCHEMA_REVISION = re.compile(r"[0-9a-f]{12}")
 FOUNDER_LOGIN = "JohnClem"
+GITHUB_HOSTNAME = "github.com"
 MASTER_REF = "refs/heads/master"
 REPOSITORY = "CosmaNeura/cosmaneura"
 MIGRATION_DIRECTORY = "migrations/versions"
@@ -73,6 +74,39 @@ def _is_ancestor(ancestor: str, descendant: str) -> bool:
         ).returncode
         == 0
     )
+
+
+def _protected_master_sha(
+    repository: str,
+    *,
+    stdout: Callable[[list[str]], str],
+) -> str:
+    response = stdout(
+        [
+            "gh",
+            "api",
+            "--hostname",
+            GITHUB_HOSTNAME,
+            f"repos/{repository}/branches/master",
+        ]
+    )
+    try:
+        branch: dict[str, Any] = json.loads(response)
+        commit = branch["commit"]
+        sha = commit["sha"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        raise CandidateVerificationError(
+            "protected master metadata is invalid"
+        ) from None
+    if (
+        branch.get("name") != "master"
+        or branch.get("protected") is not True
+        or not isinstance(commit, dict)
+        or not isinstance(sha, str)
+        or FULL_SHA.fullmatch(sha) is None
+    ):
+        raise CandidateVerificationError("protected master metadata is invalid")
+    return sha
 
 
 def _migration_revisions(source: str, path: str) -> tuple[str, tuple[str, ...]]:
@@ -252,15 +286,13 @@ def verify_candidate(
             "expected schema-after revision must be 12 lowercase hexadecimal characters"
         )
 
-    current_master = stdout(
-        [
-            "gh",
-            "api",
-            f"repos/{context.repository}/git/ref/heads/master",
-            "--jq",
-            ".object.sha",
-        ]
-    )
+    local_head = stdout(["git", "rev-parse", "HEAD"])
+    if local_head != context.workflow_sha:
+        raise CandidateVerificationError(
+            "verifier checkout does not match the workflow SHA"
+        )
+
+    current_master = _protected_master_sha(context.repository, stdout=stdout)
     if current_master != context.workflow_sha:
         raise CandidateVerificationError(
             "master advanced after dispatch; start a new reviewed deployment"
@@ -282,6 +314,8 @@ def verify_candidate(
         [
             "gh",
             "api",
+            "--hostname",
+            GITHUB_HOSTNAME,
             f"repos/{context.repository}/pulls/{context.approval_pr_number}",
         ]
     )
@@ -299,6 +333,12 @@ def verify_candidate(
     ):
         raise CandidateVerificationError(
             "candidate is not the merge commit of the supplied approved master PR"
+        )
+
+    final_master = _protected_master_sha(context.repository, stdout=stdout)
+    if final_master != current_master:
+        raise CandidateVerificationError(
+            "master advanced during candidate verification; start a new reviewed deployment"
         )
 
     return {
