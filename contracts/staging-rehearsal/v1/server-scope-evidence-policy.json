@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-server-scope-evidence-v1",
+  "activation_ready": false,
+  "source": {
+    "resource_id": "CONFIGURE_EXACT_STAGING_POSTGRES_RESOURCE_ID",
+    "revision": "CONFIGURE_EXACT_SOURCE_REVISION",
+    "host": "cosmaneura-staging-postgres.postgres.database.azure.com",
+    "port": 5432,
+    "maintenance_database": "postgres",
+    "postgres_major": 16
+  },
+  "hmac": {
+    "algorithm": "HMAC-SHA-256",
+    "key_version": "CONFIGURE_OWNER_CONTROLLED_KEY_VERSION"
+  },
+  "required_settings": [
+    "archive_mode",
+    "default_transaction_read_only",
+    "hot_standby",
+    "max_connections",
+    "max_replication_slots",
+    "max_wal_senders",
+    "password_encryption",
+    "row_security",
+    "server_version_num",
+    "shared_preload_libraries",
+    "ssl",
+    "wal_level"
+  ],
+  "required_visibility": {
+    "pg_monitor": true,
+    "pg_read_all_settings": true
+  },
+  "expected_server_surfaces": {
+    "databases": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "roles": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "memberships": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "role_settings": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "database_privileges": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "tablespaces": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "replication_slots": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+    "settings": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"}
+  },
+  "expected_databases": [
+    {
+      "identity_hmac": "CONFIGURE_DATABASE_IDENTITY_HMAC_SHA256",
+      "is_template": false,
+      "allow_connections": true,
+      "status": "fingerprinted",
+      "surfaces": {
+        "schema": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "extensions": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "foreign_data_wrappers": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "foreign_servers": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "user_mappings": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "publications": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"},
+        "subscriptions": {"count": -1, "hmac": "CONFIGURE_HMAC_SHA256"}
+      }
+    },
+    {
+      "identity_hmac": "CONFIGURE_TEMPLATE0_IDENTITY_HMAC_SHA256",
+      "is_template": true,
+      "allow_connections": false,
+      "status": "connections_disabled",
+      "surfaces": null
+    }
+  ],
+  "evidence": {
+    "aggregate_only": true,
+    "forbidden_raw_values": [
+      "database_names",
+      "role_names",
+      "object_names",
+      "extension_names",
+      "foreign_server_names",
+      "user_mapping_names",
+      "publication_names",
+      "subscription_names",
+      "slot_names",
+      "setting_values",
+      "connection_strings",
+      "passwords"
+    ]
+  }
+}

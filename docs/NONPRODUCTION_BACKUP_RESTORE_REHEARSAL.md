@@ -55,7 +55,8 @@ The evidence approver must record the applicable class, planned deletion timesta
 2. Read the source server metadata and record only: version, SKU/tier, storage size/autogrow, backup retention days, earliest restore date, public-network setting, HA mode, geo-backup mode, and tags.
 3. Read and record firewall/private-endpoint/DNS metadata. Fail preflight if the drill would require an allow-all rule.
 4. Read current alerts and diagnostic settings. Confirm that restore failure, dependency health, capacity, and synthetic application failure can be observed without payload content.
-5. Record a SHA-256 digest for each redacted evidence file. Do not save CLI responses that contain administrator credentials or connection strings.
+5. Produce passing server-scope evidence under `docs/STAGING_SERVER_SCOPE_EVIDENCE.md`. It must cover every database and global PostgreSQL surface; an enabled database or required catalog that cannot be read blocks the rehearsal.
+6. Record a SHA-256 digest for each redacted evidence file. Do not save CLI responses that contain administrator credentials or connection strings.
 
 Expected preflight result: a second operator can identify the exact non-production source and target without seeing application data or secrets.
 

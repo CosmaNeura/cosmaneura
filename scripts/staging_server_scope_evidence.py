@@ -1,0 +1,949 @@
+#!/usr/bin/env python3
+"""Read-only, closed-world PostgreSQL server-scope evidence collector.
+
+This standalone command emits only counts, SHA-256 policy/schema fingerprints,
+and HMAC-SHA-256 aggregates. Raw catalog identities and settings are never
+written to stdout or evidence files. The committed policy is deliberately
+unconfigured; activation requires a separately reviewed baseline capture.
+"""
+
+from __future__ import annotations
+
+import argparse
+import copy
+import hashlib
+import hmac
+import json
+import os
+import re
+import stat
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Protocol
+
+ROOT = Path(__file__).resolve().parents[1]
+POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
+CANONICAL_POLICY_SHA256 = (
+    "d35506d9f1bbc85e6942e37ab357da479331690f01b4585a8ca8f28a61ad28c7"
+)
+HMAC_DOMAIN = b"cosmaneura:staging-server-scope-evidence:v1\x00"
+HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
+REVISION_RE = re.compile(r"^[0-9a-f]{12,64}$")
+KEY_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+MINIMUM_HMAC_KEY_BYTES = 32
+MAXIMUM_HMAC_KEY_BYTES = 4096
+MAXIMUM_POLICY_BYTES = 1024 * 1024
+MAXIMUM_RECORDS_PER_SURFACE = 100_000
+MAXIMUM_BYTES_PER_SURFACE = 16 * 1024 * 1024
+MAXIMUM_CAPTURE_SECONDS = 900
+SERVER_SURFACES = (
+    "databases",
+    "roles",
+    "memberships",
+    "role_settings",
+    "database_privileges",
+    "tablespaces",
+    "replication_slots",
+    "settings",
+)
+DATABASE_SURFACES = (
+    "schema",
+    "extensions",
+    "foreign_data_wrappers",
+    "foreign_servers",
+    "user_mappings",
+    "publications",
+    "subscriptions",
+)
+
+
+class EvidenceFailure(RuntimeError):
+    """A bounded failure code safe to show to an operator."""
+
+
+class DatabaseUnavailable(RuntimeError):
+    """Internal adapter signal; its underlying exception is never emitted."""
+
+
+@dataclass(frozen=True, slots=True)
+class SurfacePin:
+    count: int
+    hmac: str
+
+
+@dataclass(frozen=True, slots=True)
+class ServerSnapshot:
+    version_major: int
+    visibility: Mapping[str, bool]
+    surfaces: Mapping[str, Sequence[Any]]
+
+
+class EvidenceAdapter(Protocol):
+    def server_snapshot(self, required_settings: Sequence[str]) -> ServerSnapshot: ...
+
+    def database_snapshot(self, database: str) -> Mapping[str, Sequence[Any]]: ...
+
+
+class SnapshotAdapter:
+    """Pure in-memory adapter used for deterministic tests and policy drafting."""
+
+    def __init__(
+        self,
+        server: ServerSnapshot,
+        databases: Mapping[str, Mapping[str, Sequence[Any]] | DatabaseUnavailable],
+    ) -> None:
+        self._server = copy.deepcopy(server)
+        self._databases = copy.deepcopy(databases)
+
+    def server_snapshot(self, required_settings: Sequence[str]) -> ServerSnapshot:
+        del required_settings
+        return copy.deepcopy(self._server)
+
+    def database_snapshot(self, database: str) -> Mapping[str, Sequence[Any]]:
+        value = self._databases[database]
+        if isinstance(value, DatabaseUnavailable):
+            raise DatabaseUnavailable from None
+        return copy.deepcopy(value)
+
+
+def _canonical(value: Any) -> bytes:
+    try:
+        return json.dumps(
+            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+    except (TypeError, ValueError):
+        raise EvidenceFailure("catalog.non_canonical_value") from None
+
+
+def _update_mac(mac: hmac.HMAC, value: bytes) -> None:
+    mac.update(len(value).to_bytes(8, "big"))
+    mac.update(value)
+
+
+def _identity_hmac(key: bytes, kind: str, value: str) -> str:
+    mac = hmac.new(key, HMAC_DOMAIN + b"identity\x00", hashlib.sha256)
+    _update_mac(mac, kind.encode("ascii"))
+    _update_mac(mac, value.encode("utf-8"))
+    return mac.hexdigest()
+
+
+def _surface_pin(key: bytes, domain: str, records: Sequence[Any]) -> SurfacePin:
+    if len(records) > MAXIMUM_RECORDS_PER_SURFACE:
+        raise EvidenceFailure("catalog.surface_too_large")
+    encoded = sorted(_canonical(record) for record in records)
+    if sum(len(record) for record in encoded) > MAXIMUM_BYTES_PER_SURFACE:
+        raise EvidenceFailure("catalog.surface_too_large")
+    mac = hmac.new(key, HMAC_DOMAIN + b"surface\x00", hashlib.sha256)
+    _update_mac(mac, domain.encode("ascii"))
+    for record in encoded:
+        _update_mac(mac, record)
+    return SurfacePin(len(encoded), mac.hexdigest())
+
+
+def _pin_json(pin: SurfacePin) -> dict[str, Any]:
+    return {"count": pin.count, "hmac": pin.hmac}
+
+
+def _expect_keys(value: Any, expected: set[str], code: str) -> Mapping[str, Any]:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise EvidenceFailure(code)
+    return value
+
+
+def _validate_pin(value: Any, *, configured: bool) -> None:
+    pin = _expect_keys(value, {"count", "hmac"}, "policy.invalid_pin")
+    count = pin["count"]
+    digest = pin["hmac"]
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        if configured:
+            raise EvidenceFailure("policy.unconfigured")
+        if count != -1:
+            raise EvidenceFailure("policy.invalid_pin")
+    if not isinstance(digest, str) or not HEX_256_RE.fullmatch(digest):
+        if configured:
+            raise EvidenceFailure("policy.unconfigured")
+        if not isinstance(digest, str) or not digest.startswith("CONFIGURE_"):
+            raise EvidenceFailure("policy.invalid_pin")
+
+
+def validate_policy(policy: Any) -> Mapping[str, Any]:
+    policy = _expect_keys(
+        policy,
+        {
+            "schema_version",
+            "policy_id",
+            "activation_ready",
+            "source",
+            "hmac",
+            "required_settings",
+            "required_visibility",
+            "expected_server_surfaces",
+            "expected_databases",
+            "evidence",
+        },
+        "policy.invalid",
+    )
+    configured = policy["activation_ready"] is True
+    if (
+        policy["schema_version"] != 1
+        or policy["policy_id"] != "cosmaneura-staging-server-scope-evidence-v1"
+        or not isinstance(policy["activation_ready"], bool)
+    ):
+        raise EvidenceFailure("policy.invalid")
+    source = _expect_keys(
+        policy["source"],
+        {
+            "resource_id",
+            "revision",
+            "host",
+            "port",
+            "maintenance_database",
+            "postgres_major",
+        },
+        "policy.invalid_source",
+    )
+    for field in ("resource_id", "revision", "host", "maintenance_database"):
+        if not isinstance(source[field], str) or not source[field]:
+            raise EvidenceFailure("policy.invalid_source")
+        if configured and source[field].startswith("CONFIGURE_"):
+            raise EvidenceFailure("policy.unconfigured")
+    if source["port"] != 5432 or source["postgres_major"] != 16:
+        raise EvidenceFailure("policy.invalid_source")
+    hmac_policy = _expect_keys(
+        policy["hmac"], {"algorithm", "key_version"}, "policy.invalid_hmac"
+    )
+    if hmac_policy["algorithm"] != "HMAC-SHA-256" or not isinstance(
+        hmac_policy["key_version"], str
+    ):
+        raise EvidenceFailure("policy.invalid_hmac")
+    if configured and not KEY_VERSION_RE.fullmatch(hmac_policy["key_version"]):
+        raise EvidenceFailure("policy.unconfigured")
+    if configured and hmac_policy["key_version"].startswith("CONFIGURE_"):
+        raise EvidenceFailure("policy.unconfigured")
+    if configured and not REVISION_RE.fullmatch(source["revision"]):
+        raise EvidenceFailure("policy.unconfigured")
+    settings = policy["required_settings"]
+    if (
+        not isinstance(settings, list)
+        or not settings
+        or not all(isinstance(item, str) and item for item in settings)
+        or settings != sorted(set(settings))
+    ):
+        raise EvidenceFailure("policy.invalid_settings")
+    visibility = _expect_keys(
+        policy["required_visibility"],
+        {"pg_monitor", "pg_read_all_settings"},
+        "policy.invalid_visibility",
+    )
+    if not all(value is True for value in visibility.values()):
+        raise EvidenceFailure("policy.invalid_visibility")
+    server = _expect_keys(
+        policy["expected_server_surfaces"],
+        set(SERVER_SURFACES),
+        "policy.invalid_server_surfaces",
+    )
+    for pin in server.values():
+        _validate_pin(pin, configured=configured)
+    databases = policy["expected_databases"]
+    if not isinstance(databases, list) or not databases:
+        raise EvidenceFailure("policy.invalid_databases")
+    identities: set[str] = set()
+    for database in databases:
+        database = _expect_keys(
+            database,
+            {
+                "identity_hmac",
+                "is_template",
+                "allow_connections",
+                "status",
+                "surfaces",
+            },
+            "policy.invalid_database",
+        )
+        identity = database["identity_hmac"]
+        if not isinstance(identity, str) or identity in identities:
+            raise EvidenceFailure("policy.invalid_database")
+        identities.add(identity)
+        if configured and not HEX_256_RE.fullmatch(identity):
+            raise EvidenceFailure("policy.unconfigured")
+        if not configured and not (
+            HEX_256_RE.fullmatch(identity) or identity.startswith("CONFIGURE_")
+        ):
+            raise EvidenceFailure("policy.invalid_database")
+        if not isinstance(database["is_template"], bool) or not isinstance(
+            database["allow_connections"], bool
+        ):
+            raise EvidenceFailure("policy.invalid_database")
+        if database["status"] == "connections_disabled":
+            if database["allow_connections"] or database["surfaces"] is not None:
+                raise EvidenceFailure("policy.invalid_database")
+        elif database["status"] == "fingerprinted":
+            surfaces = _expect_keys(
+                database["surfaces"],
+                set(DATABASE_SURFACES),
+                "policy.invalid_database_surfaces",
+            )
+            for pin in surfaces.values():
+                _validate_pin(pin, configured=configured)
+        else:
+            raise EvidenceFailure("policy.invalid_database")
+    evidence = _expect_keys(
+        policy["evidence"],
+        {"aggregate_only", "forbidden_raw_values"},
+        "policy.invalid_evidence",
+    )
+    if evidence["aggregate_only"] is not True or not isinstance(
+        evidence["forbidden_raw_values"], list
+    ):
+        raise EvidenceFailure("policy.invalid_evidence")
+    if not configured:
+        raise EvidenceFailure("policy.unconfigured")
+    return policy
+
+
+def _read_regular_file(
+    path: Path, maximum: int, code: str, *, exact_mode: int | None
+) -> bytes:
+    try:
+        before = path.lstat()
+        if (
+            not path.is_absolute()
+            or not stat.S_ISREG(before.st_mode)
+            or (exact_mode is not None and stat.S_IMODE(before.st_mode) != exact_mode)
+            or before.st_uid != os.getuid()
+            or before.st_size > maximum
+        ):
+            raise EvidenceFailure(code)
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            after = os.fstat(descriptor)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise EvidenceFailure(code)
+            with os.fdopen(descriptor, "rb") as handle:
+                descriptor = -1
+                value = handle.read(maximum + 1)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    except EvidenceFailure:
+        raise
+    except OSError:
+        raise EvidenceFailure(code) from None
+    if len(value) > maximum:
+        raise EvidenceFailure(code)
+    return value
+
+
+def read_hmac_key(path: Path) -> bytes:
+    key = _read_regular_file(
+        path, MAXIMUM_HMAC_KEY_BYTES, "hmac_key.unsafe", exact_mode=0o600
+    )
+    if not MINIMUM_HMAC_KEY_BYTES <= len(key) <= MAXIMUM_HMAC_KEY_BYTES:
+        raise EvidenceFailure("hmac_key.invalid")
+    return key
+
+
+def read_policy(path: Path = POLICY_PATH) -> tuple[Mapping[str, Any], str]:
+    raw = _read_regular_file(
+        path, MAXIMUM_POLICY_BYTES, "policy.file_unsafe", exact_mode=None
+    )
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != CANONICAL_POLICY_SHA256:
+        raise EvidenceFailure("policy.hash_mismatch")
+    try:
+        policy = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise EvidenceFailure("policy.invalid_json") from None
+    return validate_policy(policy), digest
+
+
+def _compare_pin(observed: SurfacePin, expected: Any, code: str) -> None:
+    if _pin_json(observed) != expected:
+        raise EvidenceFailure(code)
+
+
+def _database_metadata(record: Any) -> tuple[str, bool, bool]:
+    if (
+        not isinstance(record, dict)
+        or set(record)
+        != {
+            "name",
+            "is_template",
+            "allow_connections",
+            "owner",
+            "encoding",
+            "collation",
+            "ctype",
+            "connection_limit",
+        }
+        or not isinstance(record["name"], str)
+        or not isinstance(record["is_template"], bool)
+        or not isinstance(record["allow_connections"], bool)
+    ):
+        raise EvidenceFailure("catalog.invalid_database_record")
+    return record["name"], record["is_template"], record["allow_connections"]
+
+
+def collect_evidence(
+    policy: Mapping[str, Any],
+    policy_sha256: str,
+    adapter: EvidenceAdapter,
+    key: bytes,
+    *,
+    source_resource_id: str,
+    source_revision: str,
+    key_version: str,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+) -> dict[str, Any]:
+    policy = validate_policy(policy)
+    if not HEX_256_RE.fullmatch(policy_sha256):
+        raise EvidenceFailure("policy.hash_invalid")
+    if source_resource_id != policy["source"]["resource_id"]:
+        raise EvidenceFailure("source.resource_mismatch")
+    if source_revision != policy["source"]["revision"] or not REVISION_RE.fullmatch(
+        source_revision
+    ):
+        raise EvidenceFailure("source.revision_mismatch")
+    if key_version != policy["hmac"]["key_version"]:
+        raise EvidenceFailure("hmac_key.version_mismatch")
+    if not MINIMUM_HMAC_KEY_BYTES <= len(key) <= MAXIMUM_HMAC_KEY_BYTES:
+        raise EvidenceFailure("hmac_key.invalid")
+    started = clock()
+    if started.tzinfo is None:
+        raise EvidenceFailure("capture.invalid_clock")
+    settings = policy["required_settings"]
+    before = adapter.server_snapshot(settings)
+    if before.version_major != policy["source"]["postgres_major"]:
+        raise EvidenceFailure("server.version_mismatch")
+    if dict(before.visibility) != dict(policy["required_visibility"]):
+        raise EvidenceFailure("server.incomplete_visibility")
+    if set(before.surfaces) != set(SERVER_SURFACES):
+        raise EvidenceFailure("server.incomplete_surface")
+    observed_server: dict[str, dict[str, Any]] = {}
+    for name in SERVER_SURFACES:
+        pin = _surface_pin(key, f"server:{name}", before.surfaces[name])
+        _compare_pin(
+            pin,
+            policy["expected_server_surfaces"][name],
+            f"server.{name}_mismatch",
+        )
+        observed_server[name] = _pin_json(pin)
+    database_records = list(before.surfaces["databases"])
+    expected_databases = {
+        item["identity_hmac"]: item for item in policy["expected_databases"]
+    }
+    observed_databases: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw_record in sorted(database_records, key=_canonical):
+        name, is_template, allow_connections = _database_metadata(raw_record)
+        identity = _identity_hmac(key, "database", name)
+        expected = expected_databases.get(identity)
+        if expected is None:
+            raise EvidenceFailure("database.unknown")
+        if identity in seen:
+            raise EvidenceFailure("database.duplicate")
+        seen.add(identity)
+        if (is_template, allow_connections) != (
+            expected["is_template"],
+            expected["allow_connections"],
+        ):
+            raise EvidenceFailure("database.metadata_mismatch")
+        if not allow_connections:
+            if expected["status"] != "connections_disabled":
+                raise EvidenceFailure("database.unexpected_inaccessible")
+            observed_databases.append(
+                {"identity_hmac": identity, "status": "connections_disabled"}
+            )
+            continue
+        if expected["status"] != "fingerprinted":
+            raise EvidenceFailure("database.unexpected_accessible")
+        try:
+            snapshot = adapter.database_snapshot(name)
+        except DatabaseUnavailable:
+            raise EvidenceFailure("database.read_blocked") from None
+        if set(snapshot) != set(DATABASE_SURFACES):
+            raise EvidenceFailure("database.incomplete_surface")
+        surface_evidence: dict[str, dict[str, Any]] = {}
+        for surface in DATABASE_SURFACES:
+            pin = _surface_pin(key, f"database:{identity}:{surface}", snapshot[surface])
+            _compare_pin(
+                pin,
+                expected["surfaces"][surface],
+                f"database.{surface}_mismatch",
+            )
+            surface_evidence[surface] = _pin_json(pin)
+        observed_databases.append(
+            {
+                "identity_hmac": identity,
+                "status": "fingerprinted",
+                "surfaces": surface_evidence,
+            }
+        )
+    if seen != set(expected_databases):
+        raise EvidenceFailure("database.missing")
+    after = adapter.server_snapshot(settings)
+    if after != before:
+        raise EvidenceFailure("server.changed_during_capture")
+    completed = clock()
+    duration = (completed.astimezone(UTC) - started.astimezone(UTC)).total_seconds()
+    if duration < 0 or duration > MAXIMUM_CAPTURE_SECONDS:
+        raise EvidenceFailure("capture.invalid_duration")
+    body: dict[str, Any] = {
+        "schema_version": 1,
+        "policy_id": policy["policy_id"],
+        "policy_sha256": policy_sha256,
+        "source_revision": source_revision,
+        "source_resource_hmac": _identity_hmac(
+            key, "source-resource", source_resource_id
+        ),
+        "key_version": key_version,
+        "capture_started_at": started.astimezone(UTC)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "capture_completed_at": completed.astimezone(UTC)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "server_version_major": before.version_major,
+        "server_surfaces": observed_server,
+        "databases": sorted(observed_databases, key=lambda item: item["identity_hmac"]),
+        "errors": [],
+        "pass": True,
+    }
+    body["evidence_hmac"] = _surface_pin(
+        key, "evidence", [_canonical(body).decode("ascii")]
+    ).hmac
+    return body
+
+
+SCHEMA_QUERIES = (
+    """SELECT jsonb_build_object('kind','namespace_object','object_type',i.type,
+       'names',i.object_names,'arguments',i.object_args)::text
+       FROM pg_catalog.pg_depend d JOIN pg_catalog.pg_namespace n ON n.oid=d.refobjid
+       CROSS JOIN LATERAL pg_catalog.pg_identify_object_as_address(
+       d.classid,d.objid,d.objsubid) i
+       WHERE d.refclassid='pg_catalog.pg_namespace'::pg_catalog.regclass
+       AND d.deptype='n' AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','schema','schema',n.nspname,'owner',r.rolname)::text
+       FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_roles r ON r.oid=n.nspowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','relation','schema',n.nspname,'name',c.relname,
+       'relkind',c.relkind,'persistence',c.relpersistence,'owner',r.rolname,
+       'row_security',c.relrowsecurity,'force_row_security',c.relforcerowsecurity,
+       'replica_identity',c.relreplident,'partition',c.relispartition,
+       'access_method',am.amname,'partition_key',pg_catalog.pg_get_partkeydef(c.oid),
+       'partition_bound',pg_catalog.pg_get_expr(c.relpartbound,c.oid,false))::text
+       FROM pg_catalog.pg_class c
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       JOIN pg_catalog.pg_roles r ON r.oid=c.relowner
+       LEFT JOIN pg_catalog.pg_am am ON am.oid=c.relam
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','column','schema',n.nspname,'relation',c.relname,
+       'name',a.attname,'position',a.attnum,'type',pg_catalog.format_type(a.atttypid,a.atttypmod),
+       'not_null',a.attnotnull,'identity',a.attidentity,'generated',a.attgenerated,
+       'default',pg_catalog.pg_get_expr(d.adbin,d.adrelid,false),
+       'collation',co.collname)::text FROM pg_catalog.pg_attribute a
+       JOIN pg_catalog.pg_class c ON c.oid=a.attrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+       LEFT JOIN pg_catalog.pg_collation co ON co.oid=a.attcollation
+       WHERE a.attnum > 0 AND NOT a.attisdropped AND n.nspname !~ '^pg_'
+       AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','constraint','schema',n.nspname,'relation',c.relname,
+       'name',x.conname,'type',x.contype,'definition',
+       pg_catalog.pg_get_constraintdef(x.oid,false))::text FROM pg_catalog.pg_constraint x
+       JOIN pg_catalog.pg_class c ON c.oid=x.conrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','domain_constraint','schema',n.nspname,
+       'type',t.typname,'name',x.conname,'definition',
+       pg_catalog.pg_get_constraintdef(x.oid,false))::text
+       FROM pg_catalog.pg_constraint x JOIN pg_catalog.pg_type t ON t.oid=x.contypid
+       JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace WHERE x.contypid <> 0
+       AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','index','schema',n.nspname,'relation',c.relname,
+       'name',i.relname,'definition',pg_catalog.pg_get_indexdef(i.oid,0,false))::text
+       FROM pg_catalog.pg_index x JOIN pg_catalog.pg_class i ON i.oid=x.indexrelid
+       JOIN pg_catalog.pg_class c ON c.oid=x.indrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','sequence','schema',n.nspname,'name',c.relname,
+       'type',pg_catalog.format_type(s.seqtypid,NULL),'start',s.seqstart,
+       'increment',s.seqincrement,'max',s.seqmax,'min',s.seqmin,'cache',s.seqcache,
+       'cycle',s.seqcycle)::text FROM pg_catalog.pg_sequence s
+       JOIN pg_catalog.pg_class c ON c.oid=s.seqrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','view','schema',n.nspname,'name',c.relname,
+       'definition',pg_catalog.pg_get_viewdef(c.oid,false))::text
+       FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       WHERE c.relkind IN ('v','m') AND n.nspname !~ '^pg_'
+       AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','routine','schema',n.nspname,'name',p.proname,
+       'identity_args',pg_catalog.pg_get_function_identity_arguments(p.oid),
+       'kind_code',p.prokind,'arguments',pg_catalog.pg_get_function_arguments(p.oid),
+       'result',pg_catalog.pg_get_function_result(p.oid),'language',l.lanname,
+       'volatility',p.provolatile,'parallel',p.proparallel,'strict',p.proisstrict,
+       'security_definer',p.prosecdef,'leakproof',p.proleakproof,'returns_set',p.proretset,
+       'source',p.prosrc,'binary',p.probin,
+       'definition',CASE WHEN p.prokind='a' THEN NULL ELSE pg_catalog.pg_get_functiondef(p.oid) END,
+       'owner',r.rolname,'config',(SELECT array_agg(v ORDER BY v)
+       FROM unnest(p.proconfig) v))::text FROM pg_catalog.pg_proc p
+       JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+       JOIN pg_catalog.pg_roles r ON r.oid=p.proowner
+       JOIN pg_catalog.pg_language l ON l.oid=p.prolang
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','type','schema',n.nspname,'name',t.typname,
+       'type_kind',t.typtype,'category',t.typcategory,'owner',r.rolname,
+       'not_null',t.typnotnull,'default',t.typdefault,
+       'base',pg_catalog.format_type(NULLIF(t.typbasetype,0),t.typtypmod))::text
+       FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace
+       JOIN pg_catalog.pg_roles r ON r.oid=t.typowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','enum_label','schema',n.nspname,
+       'type',t.typname,'sort_order',e.enumsortorder::text,'label',e.enumlabel)::text
+       FROM pg_catalog.pg_enum e JOIN pg_catalog.pg_type t ON t.oid=e.enumtypid
+       JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','trigger','schema',n.nspname,'relation',c.relname,
+       'name',t.tgname,'definition',pg_catalog.pg_get_triggerdef(t.oid,false),
+       'enabled',t.tgenabled)::text FROM pg_catalog.pg_trigger t
+       JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE NOT t.tgisinternal
+       AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','policy','schema',n.nspname,'relation',c.relname,
+       'name',p.polname,'command',p.polcmd,'permissive',p.polpermissive,
+       'roles',(SELECT array_agg(CASE WHEN role_oid=0 THEN 'PUBLIC' ELSE r.rolname END ORDER BY role_oid)
+       FROM unnest(p.polroles) role_oid LEFT JOIN pg_catalog.pg_roles r ON r.oid=role_oid),
+       'using',pg_catalog.pg_get_expr(p.polqual,p.polrelid,false),
+       'check',pg_catalog.pg_get_expr(p.polwithcheck,p.polrelid,false))::text
+       FROM pg_catalog.pg_policy p JOIN pg_catalog.pg_class c ON c.oid=p.polrelid
+       JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'""",
+    """SELECT jsonb_build_object('kind','authorization','object_kind',x.object_kind,
+       'schema',x.schema_name,'object',x.object_name,'owner',x.owner_name,
+       'grantee',CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE grantee.rolname END,
+       'grantor',grantor.rolname,'privilege',a.privilege_type,
+       'grantable',a.is_grantable)::text FROM (
+       SELECT 'schema' object_kind,n.nspname schema_name,n.nspname object_name,
+       owner.rolname owner_name,n.nspacl acl,n.nspowner owner_oid
+       FROM pg_catalog.pg_namespace n JOIN pg_catalog.pg_roles owner ON owner.oid=n.nspowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+       UNION ALL SELECT CASE WHEN c.relkind='S' THEN 'sequence' ELSE 'relation' END,
+       n.nspname,c.relname,owner.rolname,c.relacl,c.relowner
+       FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+       JOIN pg_catalog.pg_roles owner ON owner.oid=c.relowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+       AND c.relkind IN ('r','p','v','m','S','f')
+       UNION ALL SELECT 'routine',n.nspname,p.proname || '(' ||
+       pg_catalog.pg_get_function_identity_arguments(p.oid) || ')',owner.rolname,
+       p.proacl,p.proowner FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n
+       ON n.oid=p.pronamespace JOIN pg_catalog.pg_roles owner ON owner.oid=p.proowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+       UNION ALL SELECT 'type',n.nspname,t.typname,owner.rolname,t.typacl,t.typowner
+       FROM pg_catalog.pg_type t JOIN pg_catalog.pg_namespace n ON n.oid=t.typnamespace
+       JOIN pg_catalog.pg_roles owner ON owner.oid=t.typowner
+       WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema') x
+       LEFT JOIN LATERAL pg_catalog.aclexplode(COALESCE(x.acl,
+       pg_catalog.acldefault(CASE x.object_kind WHEN 'schema' THEN 'n'::"char"
+       WHEN 'relation' THEN 'r'::"char" WHEN 'sequence' THEN 'S'::"char"
+       WHEN 'routine' THEN 'f'::"char"
+       ELSE 'T'::"char" END,x.owner_oid))) a ON true
+       LEFT JOIN pg_catalog.pg_roles grantee ON grantee.oid=a.grantee
+       LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor""",
+    """SELECT jsonb_build_object('kind','default_privilege','owner',r.rolname,
+       'schema',n.nspname,'object_kind',d.defaclobjtype,
+       'grantee',CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE g.rolname END,
+       'grantor',grantor.rolname,'privilege',a.privilege_type,
+       'grantable',a.is_grantable)::text FROM pg_catalog.pg_default_acl d
+       JOIN pg_catalog.pg_roles r ON r.oid=d.defaclrole
+       LEFT JOIN pg_catalog.pg_namespace n ON n.oid=d.defaclnamespace
+       CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) a
+       LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee
+       LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor""",
+)
+
+
+class LivePostgresAdapter:
+    """Psycopg adapter; all catalog reads run in read-only transactions."""
+
+    def __init__(
+        self, dsn: str, policy: Mapping[str, Any], *, allow_local: bool = False
+    ):
+        self._dsn = dsn
+        self._policy = policy
+        self._validate_dsn(allow_local=allow_local)
+
+    def _validate_dsn(self, *, allow_local: bool) -> None:
+        try:
+            from psycopg.conninfo import conninfo_to_dict
+
+            values = conninfo_to_dict(self._dsn)
+        except Exception:
+            raise EvidenceFailure("database_url.invalid") from None
+        source = self._policy["source"]
+        host = values.get("host")
+        raw_port = values.get("port")
+        try:
+            port = int(raw_port) if isinstance(raw_port, (str, int)) else 5432
+        except ValueError:
+            raise EvidenceFailure("database_url.invalid") from None
+        database = values.get("dbname")
+        if (host, port, database) != (
+            source["host"],
+            source["port"],
+            source["maintenance_database"],
+        ):
+            if not allow_local or host not in {"localhost", "127.0.0.1", "::1"}:
+                raise EvidenceFailure("database_url.target_mismatch")
+        if not allow_local and values.get("sslmode") != "verify-full":
+            raise EvidenceFailure("database_url.tls_required")
+
+    def _connect(self, database: str) -> Any:
+        try:
+            import psycopg
+
+            return psycopg.connect(self._dsn, dbname=database, connect_timeout=10)
+        except Exception:
+            raise DatabaseUnavailable from None
+
+    @staticmethod
+    def _configure(connection: Any) -> None:
+        connection.execute(
+            "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY DEFERRABLE"
+        )
+        for statement in (
+            "SET LOCAL statement_timeout = '30s'",
+            "SET LOCAL lock_timeout = '5s'",
+            "SET LOCAL search_path = pg_catalog, public",
+            "SET LOCAL quote_all_identifiers = off",
+            "SET LOCAL extra_float_digits = 3",
+            "SET LOCAL DateStyle = 'ISO, YMD'",
+            "SET LOCAL TimeZone = 'UTC'",
+            "SET LOCAL IntervalStyle = 'postgres'",
+            "SET LOCAL bytea_output = 'hex'",
+            "SET LOCAL row_security = off",
+        ):
+            connection.execute(statement)
+
+    @staticmethod
+    def _rows(connection: Any, query: str, parameters: Any = None) -> list[Any]:
+        try:
+            cursor = connection.execute(query, parameters)
+            return [list(row) for row in cursor.fetchall()]
+        except Exception:
+            raise EvidenceFailure("catalog.read_blocked") from None
+
+    def server_snapshot(self, required_settings: Sequence[str]) -> ServerSnapshot:
+        try:
+            connection = self._connect(self._policy["source"]["maintenance_database"])
+        except DatabaseUnavailable:
+            raise EvidenceFailure("database.connection_blocked") from None
+        try:
+            self._configure(connection)
+            version = int(connection.execute("SHOW server_version_num").fetchone()[0])
+            visibility_row = connection.execute(
+                "SELECT pg_catalog.pg_has_role(current_user,'pg_monitor','MEMBER'),"
+                "pg_catalog.pg_has_role(current_user,'pg_read_all_settings','MEMBER')"
+            ).fetchone()
+            visibility: dict[str, bool] = {
+                "pg_monitor": bool(visibility_row[0]),
+                "pg_read_all_settings": bool(visibility_row[1]),
+            }
+            surfaces: dict[str, Sequence[Any]] = {
+                "databases": self._rows(
+                    connection,
+                    """SELECT d.datname,d.datistemplate,d.datallowconn,r.rolname,
+                    pg_catalog.pg_encoding_to_char(d.encoding),d.datcollate,d.datctype,
+                    d.datconnlimit FROM pg_catalog.pg_database d
+                    JOIN pg_catalog.pg_roles r ON r.oid=d.datdba ORDER BY d.datname""",
+                ),
+                "roles": self._rows(
+                    connection,
+                    """SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,
+                    rolcanlogin,rolreplication,rolbypassrls,rolconnlimit,
+                    rolvaliduntil::text FROM pg_catalog.pg_roles ORDER BY rolname""",
+                ),
+                "memberships": self._rows(
+                    connection,
+                    """SELECT role_role.rolname,member_role.rolname,grantor_role.rolname,
+                    m.admin_option,m.inherit_option,m.set_option
+                    FROM pg_catalog.pg_auth_members m
+                    JOIN pg_catalog.pg_roles role_role ON role_role.oid=m.roleid
+                    JOIN pg_catalog.pg_roles member_role ON member_role.oid=m.member
+                    JOIN pg_catalog.pg_roles grantor_role ON grantor_role.oid=m.grantor
+                    ORDER BY 1,2,3""",
+                ),
+                "role_settings": self._rows(
+                    connection,
+                    """SELECT COALESCE(d.datname,'*'),COALESCE(r.rolname,'*'),s.setting
+                    FROM pg_catalog.pg_db_role_setting x
+                    LEFT JOIN pg_catalog.pg_database d ON d.oid=x.setdatabase
+                    LEFT JOIN pg_catalog.pg_roles r ON r.oid=x.setrole
+                    CROSS JOIN LATERAL unnest(x.setconfig) s(setting) ORDER BY 1,2,3""",
+                ),
+                "database_privileges": self._rows(
+                    connection,
+                    """SELECT d.datname,owner.rolname,
+                    CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE grantee.rolname END,
+                    grantor.rolname,a.privilege_type,a.is_grantable
+                    FROM pg_catalog.pg_database d
+                    JOIN pg_catalog.pg_roles owner ON owner.oid=d.datdba
+                    LEFT JOIN LATERAL pg_catalog.aclexplode(
+                    COALESCE(d.datacl,pg_catalog.acldefault('d',d.datdba))) a ON true
+                    LEFT JOIN pg_catalog.pg_roles grantee ON grantee.oid=a.grantee
+                    LEFT JOIN pg_catalog.pg_roles grantor ON grantor.oid=a.grantor
+                    ORDER BY 1,3,4,5""",
+                ),
+                "tablespaces": self._rows(
+                    connection,
+                    """SELECT t.spcname,r.rolname,
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(t.spcoptions) v),
+                    (SELECT array_agg(ROW(CASE WHEN a.grantee=0 THEN 'PUBLIC'
+                    ELSE g.rolname END,a.privilege_type,a.is_grantable)::text ORDER BY 1)
+                    FROM pg_catalog.aclexplode(COALESCE(t.spcacl,
+                    pg_catalog.acldefault('t',t.spcowner))) a
+                    LEFT JOIN pg_catalog.pg_roles g ON g.oid=a.grantee)
+                    FROM pg_catalog.pg_tablespace t JOIN pg_catalog.pg_roles r
+                    ON r.oid=t.spcowner ORDER BY t.spcname""",
+                ),
+                "replication_slots": self._rows(
+                    connection,
+                    """SELECT slot_name,plugin,slot_type,database,
+                    temporary,active,two_phase,conflicting
+                    FROM pg_catalog.pg_replication_slots ORDER BY slot_name""",
+                ),
+                "settings": self._rows(
+                    connection,
+                    """SELECT name,setting,unit,source,boot_val,reset_val,pending_restart
+                    FROM pg_catalog.pg_settings ORDER BY name""",
+                ),
+            }
+            if not set(required_settings) <= {row[0] for row in surfaces["settings"]}:
+                raise EvidenceFailure("server.missing_setting")
+            database_rows = []
+            for row in surfaces["databases"]:
+                database_rows.append(
+                    {
+                        "name": row[0],
+                        "is_template": row[1],
+                        "allow_connections": row[2],
+                        "owner": row[3],
+                        "encoding": row[4],
+                        "collation": row[5],
+                        "ctype": row[6],
+                        "connection_limit": row[7],
+                    }
+                )
+            surfaces["databases"] = database_rows
+            return ServerSnapshot(version // 10000, visibility, surfaces)
+        except EvidenceFailure:
+            raise
+        except Exception:
+            raise EvidenceFailure("catalog.read_blocked") from None
+        finally:
+            connection.close()
+
+    def database_snapshot(self, database: str) -> Mapping[str, Sequence[Any]]:
+        connection = self._connect(database)
+        try:
+            self._configure(connection)
+            schema: list[Any] = []
+            for query in SCHEMA_QUERIES:
+                schema.extend(row[0] for row in self._rows(connection, query))
+            return {
+                "schema": schema,
+                "extensions": self._rows(
+                    connection,
+                    """SELECT e.extname,e.extversion,n.nspname,e.extrelocatable
+                    FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n
+                    ON n.oid=e.extnamespace ORDER BY e.extname""",
+                ),
+                "foreign_data_wrappers": self._rows(
+                    connection,
+                    """SELECT f.fdwname,r.rolname,f.fdwhandler::regproc::text,
+                    f.fdwvalidator::regproc::text,
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(f.fdwoptions) v)
+                    FROM pg_catalog.pg_foreign_data_wrapper f
+                    JOIN pg_catalog.pg_roles r ON r.oid=f.fdwowner ORDER BY f.fdwname""",
+                ),
+                "foreign_servers": self._rows(
+                    connection,
+                    """SELECT s.srvname,r.rolname,f.fdwname,s.srvtype,s.srvversion,
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(s.srvoptions) v)
+                    FROM pg_catalog.pg_foreign_server s JOIN pg_catalog.pg_roles r ON r.oid=s.srvowner
+                    JOIN pg_catalog.pg_foreign_data_wrapper f ON f.oid=s.srvfdw ORDER BY s.srvname""",
+                ),
+                "user_mappings": self._rows(
+                    connection,
+                    """SELECT s.srvname,CASE WHEN m.umuser=0 THEN 'PUBLIC' ELSE r.rolname END,
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(m.umoptions) v)
+                    FROM pg_catalog.pg_user_mapping m
+                    JOIN pg_catalog.pg_foreign_server s ON s.oid=m.umserver
+                    LEFT JOIN pg_catalog.pg_roles r ON r.oid=m.umuser ORDER BY 1,2""",
+                ),
+                "publications": self._rows(
+                    connection,
+                    """SELECT p.pubname,r.rolname,p.puballtables,p.pubinsert,p.pubupdate,
+                    p.pubdelete,p.pubtruncate,p.pubviaroot FROM pg_catalog.pg_publication p
+                    JOIN pg_catalog.pg_roles r ON r.oid=p.pubowner ORDER BY p.pubname""",
+                ),
+                "subscriptions": self._rows(
+                    connection,
+                    """SELECT s.subname,r.rolname,s.subenabled,s.subbinary,s.substream,
+                    s.subtwophasestate,s.subdisableonerr,s.subpasswordrequired,
+                    s.subrunasowner,s.suborigin,
+                    (SELECT array_agg(v ORDER BY v) FROM unnest(s.subpublications) v)
+                    FROM pg_catalog.pg_subscription s JOIN pg_catalog.pg_roles r
+                    ON r.oid=s.subowner ORDER BY s.subname""",
+                ),
+            }
+        except EvidenceFailure:
+            raise
+        except Exception:
+            raise DatabaseUnavailable from None
+        finally:
+            connection.close()
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--database-url", required=True)
+    parser.add_argument("--hmac-key-file", required=True, type=Path)
+    parser.add_argument("--source-resource-id", required=True)
+    parser.add_argument("--source-revision", required=True)
+    parser.add_argument("--key-version", required=True)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    try:
+        args = _build_parser().parse_args(argv)
+        policy, policy_sha256 = read_policy()
+        key = read_hmac_key(args.hmac_key_file)
+        adapter = LivePostgresAdapter(args.database_url, policy)
+        evidence = collect_evidence(
+            policy,
+            policy_sha256,
+            adapter,
+            key,
+            source_resource_id=args.source_resource_id,
+            source_revision=args.source_revision,
+            key_version=args.key_version,
+        )
+        print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
+        return 0
+    except EvidenceFailure as error:
+        print(json.dumps({"errors": [str(error)], "pass": False}), file=sys.stderr)
+        return 2
+    except Exception:
+        print(
+            json.dumps({"errors": ["internal_error"], "pass": False}), file=sys.stderr
+        )
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
