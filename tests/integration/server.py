@@ -156,9 +156,9 @@ def report_localias_status():
     """
     For integration tests, we require localalias to be running in the background since we use https.
 
-    In CI the `iloveitaly/github-action-localias` action starts the daemon
-    with `sudo -E localias start`, so the daemon process is root but
-    `HOME` is preserved as the runner's home. The pidfile is written under
+    In CI `scripts/start_pinned_localias_ci.sh` starts the digest-verified
+    daemon with `sudo -n -E /usr/local/bin/localias start`, so the daemon is
+    root but `HOME` is preserved as the runner's home. The pidfile is written under
     `$HOME/.local/state/localias/daemon.pid` (resolved via XDG) and the
     enclosing directory ends up as `0o750 root:root`, unreadable to the
     runner user. We need both:
