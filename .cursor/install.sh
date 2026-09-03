@@ -3,6 +3,11 @@
 # Runs after the repo is checked out. Safe to run repeatedly.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Provision OS-level dependencies first (installs mise, which lib.sh needs).
+echo "== [install] system provisioning =="
+bash "$SCRIPT_DIR/system-setup.sh"
+
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 # shellcheck source=/dev/null
