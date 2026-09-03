@@ -20,6 +20,7 @@ import sys
 import urllib.parse
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -33,12 +34,16 @@ CONNECT_TIMEOUT_SECONDS = 10
 STATEMENT_TIMEOUT_MILLISECONDS = 30_000
 LOCK_TIMEOUT_MILLISECONDS = 5_000
 HMAC_DOMAIN = b"cosmaneura:staging-synthetic-inventory:v1\x00"
+SUPPORTED_HMAC_KEY_VERSION = "staging-inventory-hmac-v1"
+MAXIMUM_EVIDENCE_LIFETIME = timedelta(minutes=15)
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX_256_RE = re.compile(r"^[0-9a-f]{64}$")
+RUN_ID_RE = re.compile(r"^[1-9][0-9]{0,19}$")
+UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # fmt: off
-CANONICAL_POLICY_SHA256 = "9bc83f96f82cbaaf3ec0b9acbde107733afebde1bf411d66f14e47405478c39e"
-CANONICAL_POLICY_SEMANTIC_SHA256 = "70fc91062ee09086ec65585fd8b782999e46e3d0db5880cc982d12202693399c"
+CANONICAL_POLICY_SHA256 = "daaf7fc72c9e44dd5b9ae3467e39bb137697868a2beba848d48681ff0141886b"
+CANONICAL_POLICY_SEMANTIC_SHA256 = "37a0cbd9d17bf17b2586ccc6d99321192d9c6cbcd1cd0e5530efd38afb169c82"
 EXPECTED_PROFILES = {"pre": ("89c31f0ae275", 62), "post": ("9a2399212488", 64)}
 EXPECTED_DATABASE_TARGET = ("cosmaneura-staging-postgres.postgres.database.azure.com", "staging", 5432)
 EXPECTED_BLOB_TARGET = "cosmaneurastaginguploads.blob.core.windows.net"
@@ -133,6 +138,93 @@ def _canonical_json(value: Any) -> bytes:
         separators=(",", ":"),
         ensure_ascii=True,
     ).encode()
+
+
+def _parse_utc(value: Any, code: str) -> datetime:
+    if not isinstance(value, str) or UTC_RE.fullmatch(value) is None:
+        raise InventoryFailure(code)
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+    except ValueError:
+        raise InventoryFailure(code) from None
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
+        raise InventoryFailure(code)
+    return parsed
+
+
+def _validate_evidence_context(
+    *,
+    policy: Mapping[str, Any],
+    approved_state_sha256: str,
+    hmac_key_version: str,
+    observed_at: str,
+    expires_at: str,
+    provenance: Mapping[str, Any],
+    signer_claims: Mapping[str, Any],
+) -> None:
+    contract = policy["evidence"]
+    if (
+        not isinstance(approved_state_sha256, str)
+        or HEX_256_RE.fullmatch(approved_state_sha256) is None
+        or not isinstance(hmac_key_version, str)
+        or hmac_key_version != SUPPORTED_HMAC_KEY_VERSION
+        or hmac_key_version != contract["hmac_key_version"]
+    ):
+        raise InventoryFailure("evidence.context_invalid")
+    observed = _parse_utc(observed_at, "evidence.time_invalid")
+    expires = _parse_utc(expires_at, "evidence.time_invalid")
+    if expires <= observed or expires - observed > MAXIMUM_EVIDENCE_LIFETIME:
+        raise InventoryFailure("evidence.time_invalid")
+    expected_provenance_keys = {
+        "repository",
+        "protected_ref",
+        "workflow_path",
+        "workflow_sha",
+        "run_id",
+        "run_attempt",
+        "event_name",
+    }
+    expected_claim_keys = {
+        "issuer",
+        "subject",
+        "repository",
+        "ref",
+        "sha",
+        "workflow_ref",
+        "workflow_sha",
+        "run_id",
+        "run_attempt",
+        "actor",
+        "triggering_actor",
+    }
+    trusted = contract["trusted_context"]
+    if (
+        set(provenance) != expected_provenance_keys
+        or set(signer_claims) != expected_claim_keys
+        or provenance.get("repository") != trusted["repository"]
+        or provenance.get("protected_ref") != trusted["protected_ref"]
+        or provenance.get("workflow_path") != trusted["workflow_path"]
+        or provenance.get("event_name") != "workflow_dispatch"
+        or not isinstance(provenance.get("workflow_sha"), str)
+        or SHA_RE.fullmatch(provenance["workflow_sha"]) is None
+        or not isinstance(provenance.get("run_id"), str)
+        or RUN_ID_RE.fullmatch(provenance["run_id"]) is None
+        or not isinstance(provenance.get("run_attempt"), str)
+        or RUN_ID_RE.fullmatch(provenance["run_attempt"]) is None
+        or signer_claims.get("issuer") != trusted["issuer"]
+        or signer_claims.get("subject") != trusted["subject"]
+        or signer_claims.get("repository") != provenance["repository"]
+        or signer_claims.get("ref") != provenance["protected_ref"]
+        or signer_claims.get("sha") != provenance["workflow_sha"]
+        or signer_claims.get("workflow_sha") != provenance["workflow_sha"]
+        or signer_claims.get("workflow_ref")
+        != f"{provenance['repository']}/{provenance['workflow_path']}@{provenance['protected_ref']}"
+        or signer_claims.get("run_id") != provenance["run_id"]
+        or signer_claims.get("run_attempt") != provenance["run_attempt"]
+        or signer_claims.get("actor") != trusted["founder_actor"]
+        or signer_claims.get("triggering_actor") != trusted["founder_actor"]
+    ):
+        raise InventoryFailure("evidence.provenance_invalid")
 
 
 def _schema_descriptor(
@@ -462,6 +554,72 @@ def validate_policy(policy: Mapping[str, Any]) -> None:
         != EXPECTED_PROFILES
     ):
         raise InventoryFailure("policy.invalid")
+    evidence = policy.get("evidence", {})
+    trusted = evidence.get("trusted_context", {})
+    source_resource = evidence.get("source_resource", {})
+    expected_fields = {
+        "schema_version",
+        "policy_id",
+        "policy_sha256",
+        "approved_state_sha256",
+        "hmac_key_version",
+        "source_resource",
+        "observed_at",
+        "expires_at",
+        "source_sha",
+        "phase",
+        "candidate_sha",
+        "provenance",
+        "signer_claims",
+        "counts",
+        "rule_violation_counts",
+        "identity_hmacs",
+        "catalog_hmac",
+        "schema_descriptor_sha256",
+        "state_hmacs",
+        "blob_state_hmacs",
+        "redis_state_hmac",
+        "errors",
+        "outcome",
+        "receipt_sha256",
+    }
+    if (
+        set(evidence)
+        != {
+            "algorithm",
+            "schema_descriptor_algorithm",
+            "aggregate_only",
+            "hmac_key_version",
+            "maximum_lifetime_seconds",
+            "source_resource",
+            "trusted_context",
+            "allowed_fields",
+            "forbidden_raw_values",
+        }
+        or evidence.get("hmac_key_version") != SUPPORTED_HMAC_KEY_VERSION
+        or evidence.get("maximum_lifetime_seconds") != 900
+        or set(evidence.get("allowed_fields", [])) != expected_fields
+        or set(source_resource)
+        != {
+            "cloud",
+            "postgres_server_id",
+            "database_name",
+            "blob_account_id",
+            "redis_cache_id",
+        }
+        or source_resource.get("cloud") != "azure"
+        or source_resource.get("database_name") != "staging"
+        or set(trusted)
+        != {
+            "repository",
+            "protected_ref",
+            "workflow_path",
+            "issuer",
+            "subject",
+            "founder_actor",
+        }
+    ):
+        raise InventoryFailure("policy.invalid")
     dispositions = {
         "required_empty",
         "synthetic_lineage",
@@ -656,9 +814,14 @@ def verify_inventory(
     profile_name: str,
     source_sha: str,
     candidate_sha: str,
+    approved_state_sha256: str,
+    hmac_key_version: str,
+    observed_at: str,
+    expires_at: str,
+    provenance: Mapping[str, Any],
+    signer_claims: Mapping[str, Any],
     key: bytes,
     provider: InventoryProvider,
-    redis_quiesced: bool,
 ) -> dict[str, Any]:
     """Return PHI-free evidence; all failures are represented by stable codes."""
 
@@ -670,7 +833,21 @@ def verify_inventory(
         policy_sha256=policy_sha256,
         profile=profile_name,
     )
-    if not SHA_RE.fullmatch(source_sha) or not SHA_RE.fullmatch(candidate_sha):
+    _validate_evidence_context(
+        policy=policy,
+        approved_state_sha256=approved_state_sha256,
+        hmac_key_version=hmac_key_version,
+        observed_at=observed_at,
+        expires_at=expires_at,
+        provenance=provenance,
+        signer_claims=signer_claims,
+    )
+    if (
+        not isinstance(source_sha, str)
+        or SHA_RE.fullmatch(source_sha) is None
+        or not isinstance(candidate_sha, str)
+        or SHA_RE.fullmatch(candidate_sha) is None
+    ):
         raise InventoryFailure("revision.invalid")
     expected_tables = _expected_tables(policy, profile_name)
     profile = policy["profiles"][profile_name]
@@ -844,8 +1021,6 @@ def verify_inventory(
     repeated_redis_surface = provider.redis_surface()
     counts["redis.logical_databases_with_keys"] = redis_surface.logical_database_count
     counts["redis.keys"] = redis_surface.key_count
-    if not redis_quiesced:
-        fail("redis.not_quiesced")
     if redis_surface.key_count != 0 or redis_surface.logical_database_count != 0:
         fail("redis.required_empty")
     if redis_surface != repeated_redis_surface:
@@ -865,13 +1040,20 @@ def verify_inventory(
         ],
     )
 
-    return {
-        "schema_version": 1,
+    receipt: dict[str, Any] = {
+        "schema_version": 2,
         "policy_id": policy["policy_id"],
         "policy_sha256": policy_sha256,
+        "approved_state_sha256": approved_state_sha256,
+        "hmac_key_version": hmac_key_version,
+        "source_resource": policy["evidence"]["source_resource"],
+        "observed_at": observed_at,
+        "expires_at": expires_at,
         "source_sha": source_sha,
         "phase": profile_name,
         "candidate_sha": candidate_sha,
+        "provenance": dict(provenance),
+        "signer_claims": dict(signer_claims),
         "counts": counts,
         "rule_violation_counts": rule_counts,
         "identity_hmacs": identity_hmacs,
@@ -881,8 +1063,10 @@ def verify_inventory(
         "blob_state_hmacs": blob_hmacs,
         "redis_state_hmac": redis_hmac,
         "errors": errors,
-        "pass": not errors,
+        "outcome": "pass" if not errors else "fail",
     }
+    receipt["receipt_sha256"] = hashlib.sha256(_canonical_json(receipt)).hexdigest()
+    return receipt
 
 
 class LiveInventoryProvider:
@@ -1934,11 +2118,25 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", choices=("pre", "post"), required=True)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--candidate-sha", required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--protected-ref", required=True)
+    parser.add_argument("--workflow-path", required=True)
+    parser.add_argument("--workflow-sha", required=True)
+    parser.add_argument("--run-id", required=True)
+    parser.add_argument("--run-attempt", required=True)
+    parser.add_argument("--actor", required=True)
+    parser.add_argument("--triggering-actor", required=True)
+    parser.add_argument("--signer-issuer", required=True)
+    parser.add_argument("--signer-subject", required=True)
+    parser.add_argument(
+        "--hmac-key-version",
+        choices=(SUPPORTED_HMAC_KEY_VERSION,),
+        required=True,
+    )
     parser.add_argument("--hmac-key-file", type=Path, required=True)
     parser.add_argument("--blob-account-url", required=True)
     parser.add_argument("--database-url-env", default="STAGING_DATABASE_URL")
     parser.add_argument("--redis-url-env", default="STAGING_REDIS_URL")
-    parser.add_argument("--redis-quiesced", action="store_true")
     return parser
 
 
@@ -1949,7 +2147,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         policy, policy_raw = _load_json(args.policy, "policy.unreadable")
         validate_policy(policy)
         policy_sha256 = hashlib.sha256(policy_raw).hexdigest()
-        approved, _ = _load_json(args.approved_state, "approved_state.unreadable")
+        approved, approved_raw = _load_json(
+            args.approved_state,
+            "approved_state.unreadable",
+        )
         key = read_hmac_key(args.hmac_key_file)
         database_url = os.environ.get(args.database_url_env, "")
         redis_url = os.environ.get(args.redis_url_env, "")
@@ -1965,6 +2166,34 @@ def main(argv: Sequence[str] | None = None) -> int:
             key=key,
             policy_id=policy["policy_id"],
         )
+        observed = datetime.now(UTC).replace(microsecond=0)
+        expires = observed + MAXIMUM_EVIDENCE_LIFETIME
+        observed_at = observed.strftime("%Y-%m-%dT%H:%M:%SZ")
+        expires_at = expires.strftime("%Y-%m-%dT%H:%M:%SZ")
+        provenance = {
+            "repository": args.repository,
+            "protected_ref": args.protected_ref,
+            "workflow_path": args.workflow_path,
+            "workflow_sha": args.workflow_sha,
+            "run_id": args.run_id,
+            "run_attempt": args.run_attempt,
+            "event_name": "workflow_dispatch",
+        }
+        signer_claims = {
+            "issuer": args.signer_issuer,
+            "subject": args.signer_subject,
+            "repository": args.repository,
+            "ref": args.protected_ref,
+            "sha": args.workflow_sha,
+            "workflow_ref": (
+                f"{args.repository}/{args.workflow_path}@{args.protected_ref}"
+            ),
+            "workflow_sha": args.workflow_sha,
+            "run_id": args.run_id,
+            "run_attempt": args.run_attempt,
+            "actor": args.actor,
+            "triggering_actor": args.triggering_actor,
+        }
         evidence = verify_inventory(
             policy=policy,
             policy_sha256=policy_sha256,
@@ -1972,12 +2201,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             profile_name=args.profile,
             source_sha=args.source_sha,
             candidate_sha=args.candidate_sha,
+            approved_state_sha256=hashlib.sha256(approved_raw).hexdigest(),
+            hmac_key_version=args.hmac_key_version,
+            observed_at=observed_at,
+            expires_at=expires_at,
+            provenance=provenance,
+            signer_claims=signer_claims,
             key=key,
             provider=provider,
-            redis_quiesced=args.redis_quiesced,
         )
         print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
-        return 0 if evidence["pass"] else 1
+        return 0 if evidence["outcome"] == "pass" else 1
     except InventoryFailure as exc:
         print(f"staging synthetic inventory failed: {exc}", file=sys.stderr)
         return 2

@@ -55,12 +55,25 @@ python scripts/staging_synthetic_inventory.py \
   --profile post \
   --source-sha <40-hex-source-sha> \
   --candidate-sha <40-hex-candidate-sha> \
+  --repository CosmaNeura/cosmaneura \
+  --protected-ref refs/heads/master \
+  --workflow-path .github/workflows/staging_restore_rehearsal.yml \
+  --workflow-sha <40-hex-protected-workflow-sha> \
+  --run-id <numeric-run-id> \
+  --run-attempt <numeric-run-attempt> \
+  --actor JohnClem \
+  --triggering-actor JohnClem \
+  --signer-issuer https://token.actions.githubusercontent.com \
+  --signer-subject repo:CosmaNeura/cosmaneura:environment:staging-restore-provision \
+  --hmac-key-version staging-inventory-hmac-v1 \
   --hmac-key-file /protected/path/inventory-hmac.key \
   --blob-account-url https://cosmaneurastaginguploads.blob.core.windows.net \
-  --redis-quiesced > /protected/path/inventory-evidence.json
+  > /protected/path/inventory-evidence.json
 ```
 
-The database URL is accepted only for the pinned staging database with `sslmode=verify-full` and an absolute `sslrootcert`. The server must report PostgreSQL major version 16. Redis is accepted only as `rediss` for the pinned staging cache, port 6380, database 0, with `ssl_cert_reqs=required`, `ssl_check_hostname=true`, and an absolute CA path. Optional TLS client private keys and the HMAC key must be owner-only regular files with mode `0600`; symlinks and unsafe parent directories are rejected. The command opens PostgreSQL as repeatable-read/read-only, performs no writes, and emits a single JSON object. Evidence is limited to policy/source/candidate identity, aggregate counts, the schema-descriptor SHA-256, rule-violation counts, and keyed catalog/state digests. It never emits database values, emails, object names, schema definitions, Redis keys, tokens, or connection strings. Exit 0 means every check passed; exit 1 means a policy mismatch; exit 2 means validation/provider failure. Error codes are bounded and contain only policy-defined identifiers. `source_sha` and `candidate_sha` are validated 40-hex operator claims in this standalone phase; the reader cannot prove repository provenance. A later trusted workflow must bind both values to its protected checkout and restore record before this evidence can authorize a rehearsal.
+The database URL is accepted only for the pinned staging database with `sslmode=verify-full` and an absolute `sslrootcert`. The server must report PostgreSQL major version 16. Redis is accepted only as `rediss` for the pinned staging cache, port 6380, database 0, with `ssl_cert_reqs=required`, `ssl_check_hostname=true`, and an absolute CA path. Optional TLS client private keys and the HMAC key must be owner-only regular files with mode `0600`; symlinks and unsafe parent directories are rejected. The command opens PostgreSQL as repeatable-read/read-only, performs no writes, and emits one version-2 JSON receipt. It binds the approved-state SHA-256, supported HMAC key version, exact source-resource identity, a 15-minute freshness window, protected workflow/run claims, source/candidate SHAs, and a canonical receipt SHA-256 to the aggregate-only inventory. It never emits database values, emails, object names, schema definitions, Redis keys, tokens, or connection strings. Exit 0 means the inventory snapshot matched; exit 1 means it did not; exit 2 means validation/provider failure. Error codes are bounded and contain only policy-defined identifiers.
+
+The reader no longer accepts a `--redis-quiesced` boolean. Empty, stable Redis state is measured directly, while workload quiescence is a separate evidence receipt. The command-line provenance and signer values are still unauthenticated claims in this standalone phase. They become useful only when the closed-world manifest validator cross-binds them, and even then attestation verification remains an explicit activation blocker. See `docs/STAGING_TRUSTED_EVIDENCE_MANIFEST.md`.
 
 ## Promotion boundary
 

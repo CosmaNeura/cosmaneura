@@ -19,6 +19,8 @@ POLICY = ROOT / "contracts" / "staging-rehearsal" / "v1" / "synthetic-data-polic
 KEY = b"inventory-test-key-that-is-at-least-32-bytes"
 SOURCE_SHA = "1" * 40
 CANDIDATE_SHA = "2" * 40
+OBSERVED_AT = "2026-09-03T12:00:00Z"
+EXPIRES_AT = "2026-09-03T12:15:00Z"
 
 
 def _load_module() -> ModuleType:
@@ -187,20 +189,58 @@ def _verify(
     provider: FakeProvider,
     *,
     approved: dict[str, Any] | None = None,
-    redis_quiesced: bool = True,
+    provenance: dict[str, Any] | None = None,
+    signer_claims: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    approved_value = (
+        approved
+        if approved is not None
+        else _approval(module, policy, policy_sha256, provider)
+    )
+    trusted = policy["evidence"]["trusted_context"]
+    provenance_value = provenance or {
+        "repository": trusted["repository"],
+        "protected_ref": trusted["protected_ref"],
+        "workflow_path": trusted["workflow_path"],
+        "workflow_sha": "3" * 40,
+        "run_id": "901",
+        "run_attempt": "1",
+        "event_name": "workflow_dispatch",
+    }
+    claims_value = signer_claims or {
+        "issuer": trusted["issuer"],
+        "subject": trusted["subject"],
+        "repository": provenance_value["repository"],
+        "ref": provenance_value["protected_ref"],
+        "sha": provenance_value["workflow_sha"],
+        "workflow_ref": (
+            f"{provenance_value['repository']}/"
+            f"{provenance_value['workflow_path']}@"
+            f"{provenance_value['protected_ref']}"
+        ),
+        "workflow_sha": provenance_value["workflow_sha"],
+        "run_id": provenance_value["run_id"],
+        "run_attempt": provenance_value["run_attempt"],
+        "actor": trusted["founder_actor"],
+        "triggering_actor": trusted["founder_actor"],
+    }
     return module.verify_inventory(
         policy=policy,
         policy_sha256=policy_sha256,
-        approved=approved
-        if approved is not None
-        else _approval(module, policy, policy_sha256, provider),
+        approved=approved_value,
         profile_name=provider.profile,
         source_sha=SOURCE_SHA,
         candidate_sha=CANDIDATE_SHA,
+        approved_state_sha256=hashlib.sha256(
+            module._canonical_json(approved_value)
+        ).hexdigest(),
+        hmac_key_version=module.SUPPORTED_HMAC_KEY_VERSION,
+        observed_at=OBSERVED_AT,
+        expires_at=EXPIRES_AT,
+        provenance=provenance_value,
+        signer_claims=claims_value,
         key=KEY,
         provider=provider,
-        redis_quiesced=redis_quiesced,
     )
 
 
@@ -336,7 +376,7 @@ def test_provider_mock_passes_with_exact_approved_state(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is True
+    assert evidence["outcome"] == "pass"
     assert evidence["errors"] == []
     assert evidence["counts"]["database.alembic_version"] == 1
     assert evidence["counts"]["database.non_system_schemas"] == 1
@@ -350,9 +390,16 @@ def test_provider_mock_passes_with_exact_approved_state(
         "schema_version",
         "policy_id",
         "policy_sha256",
+        "approved_state_sha256",
+        "hmac_key_version",
+        "source_resource",
+        "observed_at",
+        "expires_at",
         "source_sha",
         "phase",
         "candidate_sha",
+        "provenance",
+        "signer_claims",
         "counts",
         "rule_violation_counts",
         "identity_hmacs",
@@ -362,9 +409,77 @@ def test_provider_mock_passes_with_exact_approved_state(
         "blob_state_hmacs",
         "redis_state_hmac",
         "errors",
-        "pass",
+        "outcome",
+        "receipt_sha256",
     }
     assert set(policy["evidence"]["allowed_fields"]) == set(evidence)
+    unsigned = dict(evidence)
+    receipt_sha256 = unsigned.pop("receipt_sha256")
+    assert (
+        receipt_sha256 == hashlib.sha256(module._canonical_json(unsigned)).hexdigest()
+    )
+
+
+def test_inventory_context_is_closed_world_and_cross_bound(module: ModuleType) -> None:
+    policy, policy_sha256 = _policy()
+    provider = FakeProvider(module, policy)
+    trusted = policy["evidence"]["trusted_context"]
+    provenance = {
+        "repository": trusted["repository"],
+        "protected_ref": trusted["protected_ref"],
+        "workflow_path": trusted["workflow_path"],
+        "workflow_sha": "3" * 40,
+        "run_id": "901",
+        "run_attempt": "1",
+        "event_name": "workflow_dispatch",
+    }
+
+    for mutation in (
+        {**provenance, "unexpected": "value"},
+        {**provenance, "repository": "other/repository"},
+        {**provenance, "workflow_sha": "not-a-sha"},
+        {**provenance, "run_attempt": "0"},
+    ):
+        with pytest.raises(
+            module.InventoryFailure, match="evidence.provenance_invalid"
+        ):
+            _verify(
+                module,
+                policy,
+                policy_sha256,
+                provider,
+                provenance=mutation,
+            )
+
+    approved = _approval(module, policy, policy_sha256, provider)
+    with pytest.raises(module.InventoryFailure, match="evidence.context_invalid"):
+        module.verify_inventory(
+            policy=policy,
+            policy_sha256=policy_sha256,
+            approved=approved,
+            profile_name="post",
+            source_sha=SOURCE_SHA,
+            candidate_sha=CANDIDATE_SHA,
+            approved_state_sha256="a" * 64,
+            hmac_key_version="unsupported",
+            observed_at=OBSERVED_AT,
+            expires_at=EXPIRES_AT,
+            provenance=provenance,
+            signer_claims={},
+            key=KEY,
+            provider=provider,
+        )
+
+    with pytest.raises(module.InventoryFailure, match="evidence.time_invalid"):
+        module._validate_evidence_context(
+            policy=policy,
+            approved_state_sha256="a" * 64,
+            hmac_key_version=module.SUPPORTED_HMAC_KEY_VERSION,
+            observed_at=OBSERVED_AT,
+            expires_at="2026-09-03T12:15:01Z",
+            provenance=provenance,
+            signer_claims={},
+        )
 
 
 def test_evidence_contains_no_provider_values(module: ModuleType) -> None:
@@ -434,7 +549,7 @@ def test_database_drift_fails_closed(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert error in evidence["errors"]
 
 
@@ -452,7 +567,7 @@ def test_approved_state_mismatch_fails_closed(module: ModuleType) -> None:
         approved=approved,
     )
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert "database.table.doctor.approved_state" in evidence["errors"]
 
 
@@ -477,7 +592,7 @@ def test_blob_versions_deleted_objects_and_unknown_containers_fail_closed(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert "blob.container_set" in evidence["errors"]
     assert "blob.container.uploads.required_empty" in evidence["errors"]
     assert policy["blob"]["enumerate"] == [
@@ -502,7 +617,7 @@ def test_nontransactional_blob_and_redis_reads_must_be_stable(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert "blob.container.test-uploads.unstable" in evidence["errors"]
     assert "redis.unstable" in evidence["errors"]
     assert all(calls == 2 for calls in provider._blob_calls.values())
@@ -642,38 +757,21 @@ def test_blob_adapter_hashes_streamed_content_metadata_tags_and_all_states(
         state(b"staged", {}, uncommitted=True)
 
 
-@pytest.mark.parametrize(
-    ("logical_databases", "redis_keys", "quiesced", "error"),
-    [
-        (1, 1, True, "redis.required_empty"),
-        (0, 0, False, "redis.not_quiesced"),
-    ],
-)
-def test_every_redis_database_must_be_quiesced_and_empty(
+def test_every_redis_database_must_be_empty(
     module: ModuleType,
-    logical_databases: int,
-    redis_keys: int,
-    quiesced: bool,
-    error: str,
 ) -> None:
     policy, policy_sha256 = _policy()
     provider = FakeProvider(
         module,
         policy,
-        redis_logical_databases=logical_databases,
-        redis_keys=redis_keys,
+        redis_logical_databases=1,
+        redis_keys=1,
     )
 
-    evidence = _verify(
-        module,
-        policy,
-        policy_sha256,
-        provider,
-        redis_quiesced=quiesced,
-    )
+    evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
-    assert error in evidence["errors"]
+    assert evidence["outcome"] == "fail"
+    assert "redis.required_empty" in evidence["errors"]
 
 
 def test_redis_adapter_aggregates_info_keyspace_without_enumerating_keys(
