@@ -727,17 +727,34 @@ exit 99
 
 
 @pytest.mark.parametrize(
-    ("field", "wrong_value"),
+    ("client_id", "tenant_id", "subscription_id"),
     [
-        ("client_id", "00000000-0000-0000-0000-000000000001"),
-        ("tenant_id", "00000000-0000-0000-0000-000000000002"),
-        ("subscription_id", "00000000-0000-0000-0000-000000000003"),
+        (
+            "00000000-0000-0000-0000-000000000001",
+            STAGING_TENANT_ID,
+            STAGING_SUBSCRIPTION_ID,
+        ),
+        (
+            STAGING_CLIENT_ID,
+            "00000000-0000-0000-0000-000000000002",
+            STAGING_SUBSCRIPTION_ID,
+        ),
+        (
+            STAGING_CLIENT_ID,
+            STAGING_TENANT_ID,
+            "00000000-0000-0000-0000-000000000003",
+        ),
     ],
 )
 def test_staging_registry_preflight_rejects_unpinned_identity_inputs(
-    tmp_path: Path, field: str, wrong_value: str
+    tmp_path: Path, client_id: str, tenant_id: str, subscription_id: str
 ) -> None:
-    result, az_calls = _run_staging_registry_preflight(tmp_path, **{field: wrong_value})
+    result, az_calls = _run_staging_registry_preflight(
+        tmp_path,
+        client_id=client_id,
+        tenant_id=tenant_id,
+        subscription_id=subscription_id,
+    )
 
     assert result.returncode != 0
     assert "Configured Azure identity inputs are not the pinned staging identity" in (
