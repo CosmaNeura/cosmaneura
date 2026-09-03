@@ -398,10 +398,14 @@ def _require_roles(
 ) -> None:
     if not isinstance(actual, list) or not required:
         _fail("role_assignment_mismatch")
+    if any(
+        not isinstance(item, dict) or item.get("principalId") != principal
+        for item in actual
+    ):
+        _fail("role_assignment_mismatch")
     found = {
         (_lower_id(item.get("scope")), _lower_id(item.get("roleDefinitionId")))
         for item in actual
-        if item.get("principalId") == principal
     }
     expected = {(_lower_id(scope), _lower_id(role)) for scope, role in required}
     if found != expected:

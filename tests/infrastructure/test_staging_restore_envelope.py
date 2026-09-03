@@ -370,6 +370,12 @@ def test_role_preflight_requires_exact_assignment_set() -> None:
     ]
     expected = [(actual[0]["scope"], required[0])]
     envelope._require_roles(actual, expected, actual[0]["principalId"])
+    actual.append({**actual[0], "principalId": "88888888-8888-4888-8888-888888888888"})
+    with pytest.raises(envelope.EnvelopeError, match="role_assignment_mismatch"):
+        envelope._require_roles(
+            actual, expected, policy["identities"]["provision"]["principal_id"]
+        )
+    actual.pop()
     actual.append(
         {
             **actual[0],
@@ -385,6 +391,11 @@ def test_deny_policy_and_federation_are_verified_before_mutation() -> None:
     fake = FakeAzure(policy)
     envelope._preflight_identity(fake, fake.ctx, "provision")
     calls = [" ".join(item) for item in fake.calls]
+    assert all(
+        "--include-inherited --include-groups" in item
+        for item in calls
+        if "role assignment list" in item
+    )
     assert any("federated-credential list" in item for item in calls)
     assert any("policy assignment show" in item for item in calls)
     assert any("policy definition show" in item for item in calls)
