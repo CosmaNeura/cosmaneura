@@ -44,7 +44,7 @@ function contextTokenResponse(contextToken: string) {
   }
 }
 
-describe("Sovereign panel 401 retry integration", () => {
+describe("Sovereign panel terminal authorization integration", () => {
   afterEach(() => {
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
@@ -56,7 +56,7 @@ describe("Sovereign panel 401 retry integration", () => {
       .forEach((element) => element.remove())
   })
 
-  it("rotates once and preserves the exact turn within one mount session", async () => {
+  it("locks on the first 401 without retrying or rotating the mount token", async () => {
     vi.stubEnv(
       "VITE_SOVEREIGN_PROVIDER_URL",
       "https://provider-sovereign.example",
@@ -115,37 +115,18 @@ describe("Sovereign panel 401 retry integration", () => {
             body: String(init?.body),
             clientTurnId: headers.get("x-cosmaneura-client-turn-id"),
           })
-          if (chatRequests.length === 1) {
-            return json(
-              {
-                type: "https://contracts.cosmaneura.com/problems/token_invalid",
-                title: "Token invalid",
-                status: 401,
-                code: "TOKEN_INVALID",
-                detail: "The assistant session could not be verified.",
-                trace_id: "trace_synthetic_auth_retry",
-                retryable: false,
-              },
-              401,
-            )
-          }
-          const request = JSON.parse(String(init?.body)) as {
-            client_turn_id: string
-          }
-          return json({
-            answer: "Synthetic governed answer",
-            intent: "small_talk",
-            client_turn_id: request.client_turn_id,
-            citations: [],
-            doctrinal_review: null,
-            structured: {},
-            safety_notice: null,
-            presentation: {
-              mode: "standard",
-              suppress: [],
-              human_contact: null,
+          return json(
+            {
+              type: "https://contracts.cosmaneura.com/problems/token_invalid",
+              title: "Token invalid",
+              status: 401,
+              code: "TOKEN_INVALID",
+              detail: "The assistant session could not be verified.",
+              trace_id: "trace_synthetic_auth_lock",
+              retryable: false,
             },
-          })
+            401,
+          )
         }
         throw new Error(`unexpected URL ${url}`)
       }),
@@ -180,21 +161,23 @@ describe("Sovereign panel 401 retry integration", () => {
     input!.value = "synthetic exact retry"
     send!.click()
 
-    await waitFor(() =>
-      expect(document.querySelector(".cnp-retry")).not.toBeNull(),
-    )
-    document.querySelector<HTMLButtonElement>(".cnp-retry")!.click()
-    await waitFor(() => expect(chatRequests).toHaveLength(2))
+    const gate = document.querySelector<HTMLElement>(".cnp-gate")
+    const rail = document.querySelector<HTMLElement>(".cnp-rail")
+    const thread = document.querySelector<HTMLElement>(".cnp-thread")
+    await waitFor(() => expect(gate?.hidden).toBe(false))
 
     expect(exchanges).toBe(1)
-    expect(rotations).toBe(1)
+    expect(rotations).toBe(0)
+    expect(chatRequests).toHaveLength(1)
     expect(chatRequests[0].authorization).toBe(`Bearer ${firstToken}`)
-    expect(chatRequests[1].authorization).toBe(`Bearer ${rotatedToken}`)
-    expect(chatRequests[1].body).toBe(chatRequests[0].body)
-    expect(chatRequests[1].clientTurnId).toBe(chatRequests[0].clientTurnId)
     expect(JSON.parse(chatRequests[0].body).client_turn_id).toBe(
       chatRequests[0].clientTurnId,
     )
+    expect(gate?.textContent).toContain("named beta")
+    expect(rail?.hidden).toBe(true)
+    expect(send?.disabled).toBe(true)
+    expect(thread?.children).toHaveLength(0)
+    expect(document.querySelector(".cnp-retry")).toBeNull()
 
     view.unmount()
   })
