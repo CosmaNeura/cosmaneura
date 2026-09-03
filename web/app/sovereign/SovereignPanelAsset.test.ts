@@ -34,7 +34,7 @@ describe("pinned Sovereign panel asset", () => {
     expect(prettierIgnore.split(/\r?\n/)).toContain(sourceAssetPath)
     expect(eslintConfig).toContain(JSON.stringify(sourceAssetPath))
     expect(SOVEREIGN_PANEL_UPSTREAM_COMMIT).toBe(
-      "471f497d1824535cf2a7903f25406c0fa7ae39e9",
+      "8020b745673a13875aecf32941a6711d22926045",
     )
     expect(bytes.toString("utf8")).toContain(
       "setRecord: function (id) { return loadThreadFor(id); }",
@@ -43,12 +43,16 @@ describe("pinned Sovereign panel asset", () => {
     expect(bytes.toString("utf8")).toContain(
       'if (typeof opts.onHumanContact !== "function")',
     )
-    expect(bytes.toString("utf8")).toContain(
-      "if (r.status === 401) attempt.forceRefresh = true",
-    )
-    expect(bytes.toString("utf8")).toContain("? { forceRefresh: true }")
-    expect(bytes.toString("utf8")).not.toContain(
-      'headers["x-cosmaneura-mount-context"]',
-    )
+    const source = bytes.toString("utf8")
+    expect(source).toContain('url + "/session-prep"')
+    for (const state of ["ready", "refreshing", "pending", "unavailable"])
+      expect(source).toContain(`Session Prep ${state}`)
+    expect(source).toContain("lockNamedBeta();")
+    expect(source).not.toContain("attempt.forceRefresh = true")
+    expect(source).not.toContain("localStorage")
+    expect(source).not.toContain("sessionStorage")
+    expect(source).not.toContain("indexedDB")
+    expect(source).not.toContain("caches.open")
+    expect(source).not.toContain('headers["x-cosmaneura-mount-context"]')
   })
 })
