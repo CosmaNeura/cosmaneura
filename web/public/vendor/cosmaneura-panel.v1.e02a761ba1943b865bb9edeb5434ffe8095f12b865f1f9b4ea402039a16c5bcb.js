@@ -19,6 +19,7 @@
  *     getContext: async () => ({
  *       clientId: openRecord.threadKey,
  *       thread_ref: openRecord.assistantThreadRef,
+ *       // Reserved for the explicit /session-prep action; never sent to /chat.
  *       context_snapshot_ref: openRecord.assistantSnapshotRef,
  *       digest_ref: openRecord.journeyDigestRef,
  *     }),
@@ -620,6 +621,17 @@
         clean.care_model = value.care_model;
       }
       return clean;
+    }
+
+    function governedChatMetadata(context, outputFormat) {
+      // A Session Prep comparison handle has one purpose and one wire path.
+      // Generic chat receives only its independently governed context hints.
+      var meta = { output_format: outputFormat };
+      ["clientId", "thread_ref", "digest_ref", "terminology", "care_model"]
+        .forEach(function (key) {
+          if (context[key] != null && context[key] !== "") meta[key] = context[key];
+        });
+      return meta;
     }
 
     function applyWelcomeUX(w) {
@@ -1408,11 +1420,7 @@
           loadThreadFor(null);
           return;
         }
-        var meta = { output_format: fmt.value };
-        ["clientId", "thread_ref", "context_snapshot_ref", "digest_ref",
-         "terminology", "care_model"].forEach(function (key) {
-          if (context[key] != null && context[key] !== "") meta[key] = context[key];
-        });
+        var meta = governedChatMetadata(context, fmt.value);
         var clientTurnId = freshClientTurnId();
         var body = JSON.stringify({
           client_turn_id: clientTurnId,
