@@ -597,8 +597,7 @@
     }
 
     function governedContext(value, recordId) {
-      var allowed = ["clientId", "thread_ref", "context_snapshot_ref", "digest_ref",
-                     "terminology", "care_model"];
+      var allowed = ["clientId", "thread_ref", "digest_ref", "terminology", "care_model"];
       if (!value || typeof value !== "object" || Array.isArray(value) ||
           Object.keys(value).some(function (key) { return allowed.indexOf(key) < 0; }) ||
           String(value.clientId == null ? "" : value.clientId) !== recordId) return null;
@@ -610,11 +609,6 @@
         return clean[key] != null &&
           (typeof clean[key] !== "string" || !OPAQUE_REF.test(clean[key]));
       })) return null;
-      // Tolerate one legacy host field during migration, but never copy it into
-      // panel state or either browser request contract.
-      if (value.context_snapshot_ref != null &&
-          (typeof value.context_snapshot_ref !== "string" ||
-           !OPAQUE_REF.test(value.context_snapshot_ref))) return null;
       if (value.terminology != null) {
         if (typeof value.terminology !== "string" || value.terminology.length > 40) return null;
         clean.terminology = value.terminology;

@@ -11,7 +11,6 @@ import {
 type PanelContext = {
   clientId: string
   thread_ref?: string
-  context_snapshot_ref?: string
   digest_ref?: string
   terminology?: string
   care_model?: string

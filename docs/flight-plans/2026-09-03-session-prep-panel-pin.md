@@ -11,12 +11,12 @@ feature or authorize real provider data.
 
 - Core base: `d543e035d968d3dccc34cd03baaef90b41a4629c`.
 - Core Session Prep merge: `6cea63e59203a8730af39497a3672b3f4598ba98`.
-- Sovereign corrected source candidate: `f521d09df69653761e3b7e05099476e693d31688`.
+- Sovereign corrected source candidate: `024655cd5196344982d918dad5e09f92e046b544`.
 - Receiver baseline merge: `8020b745673a13875aecf32941a6711d22926045`.
 - Panel SHA-256:
-  `7e4c4594fa57f77229d57f81544ee218271d1dfb73f77eec7bc4521c69a1411f`.
+  `ab64c6d2135d7b217834363791728ab04fb9d86524f1643cb72f88cfeb4e0d5c`.
 - Panel SRI:
-  `sha256-fkxFlPpX93Ip1X+BVE7iGCcdHftz937se8RSHGmhQR8=`.
+  `sha256-q2TG0hNdeyF4NDY3kXKKsE+52GUk8WQ8ty+Iz+tODVw=`.
 
 These panel bytes are the exact output of the corrected Sovereign candidate;
 they are not yet claimed to be present on Sovereign `main`.
@@ -85,7 +85,7 @@ explicitly approved.
 
 - The Core and Sovereign request/result schemas and seven fixtures are
   byte-identical.
-- The vendored file is byte-identical to Sovereign candidate `f521d09df69653761e3b7e05099476e693d31688`
+- The vendored file is byte-identical to Sovereign candidate `024655cd5196344982d918dad5e09f92e046b544`
   and hashes to the pinned SHA-256 above.
 - Sovereign's independent panel contract harness passed against the Core-vendored
   file, including record switching, stale-response suppression, revocation,
