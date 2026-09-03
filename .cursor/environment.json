@@ -1,0 +1,16 @@
+{
+  "name": "cosmaneura",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "bash .cursor/run-backend.sh"
+    },
+    {
+      "name": "frontend",
+      "command": "bash .cursor/run-frontend.sh"
+    }
+  ],
+  "ports": [8205, 8207]
+}
