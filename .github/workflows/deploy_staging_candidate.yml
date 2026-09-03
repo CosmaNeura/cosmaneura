@@ -414,7 +414,7 @@ jobs:
         working-directory: candidate
         env:
           CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
-          CONTAINER_REGISTRY_HOST: cosmaneurastagingregistry.azurecr.io
+          CONTAINER_REGISTRY_HOST: cache.invalid
           JAVASCRIPT_BUILD_ENV_JSON: ${{ runner.temp }}/candidate-build-config/staging-frontend-build.json
           JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
           PYTHON_ENV: staging

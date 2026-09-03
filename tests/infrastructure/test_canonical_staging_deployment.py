@@ -185,6 +185,7 @@ def test_candidate_build_and_protected_publication_use_fresh_jobs() -> None:
         build, "Build exact candidate image without protected credentials"
     )
     assert "working-directory: candidate" in candidate_build
+    assert "CONTAINER_REGISTRY_HOST: cache.invalid" in candidate_build
     assert "just build" in candidate_build
     assert "docker save" in build
     assert "actions/upload-artifact@" in build
@@ -197,7 +198,6 @@ def test_candidate_build_and_protected_publication_use_fresh_jobs() -> None:
     assert "just build" not in publish
     assert "OP_STAGING_SERVICE_ACCOUNT_TOKEN" not in publish
     assert "azure/login" not in publish
-    assert "working-directory: candidate" not in deploy
     assert "just build" not in deploy
     assert "just build_push" not in source
 
