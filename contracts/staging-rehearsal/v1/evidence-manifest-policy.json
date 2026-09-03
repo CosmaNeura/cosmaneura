@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-evidence-manifest-v1",
+  "repository": "CosmaNeura/cosmaneura",
+  "protected_ref": "refs/heads/master",
+  "workflow_path": ".github/workflows/staging_restore_rehearsal.yml",
+  "event_name": "workflow_dispatch",
+  "founder_actor": "JohnClem",
+  "signer": {
+    "issuer": "https://token.actions.githubusercontent.com",
+    "subject": "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision"
+  },
+  "source_resource": {
+    "cloud": "azure",
+    "postgres_server_id": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.DBforPostgreSQL/flexibleServers/cosmaneura-staging-postgres",
+    "database_name": "staging",
+    "blob_account_id": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.Storage/storageAccounts/cosmaneurastaginguploads",
+    "redis_cache_id": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging/providers/Microsoft.Cache/Redis/cosmaneura-staging-redis"
+  },
+  "hmac_key_versions": ["staging-inventory-hmac-v1"],
+  "maximum_lifetime_seconds": 900,
+  "required_files": [
+    "SHA256SUMS",
+    "candidate.json",
+    "evidence-manifest.json",
+    "inventory.json",
+    "quiescence.json",
+    "server-scope.json"
+  ],
+  "artifact_contracts": {
+    "candidate": "candidate.json",
+    "inventory": "inventory.json",
+    "quiescence": "quiescence.json",
+    "server_scope": "server-scope.json"
+  },
+  "policy_digests": {
+    "synthetic_data": "sha256:daaf7fc72c9e44dd5b9ae3467e39bb137697868a2beba848d48681ff0141886b",
+    "restore_envelope": "sha256:e9d894ef8418c092d61539ddd02e434d8863af4923cdae86468064fd0d65163c"
+  },
+  "schema_fields": {
+    "manifest": ["schema_version", "manifest_id", "source_sha", "candidate_sha", "hmac_key_version", "source_resource", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "artifacts", "evidence_set_sha256"],
+    "artifact": ["kind", "path", "file_sha256", "receipt_sha256"],
+    "candidate": ["schema_version", "evidence_type", "state", "approval_pr_number", "protected_master_sha", "schema_revision", "source_sha", "candidate_sha", "source_resource", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "receipt_sha256"],
+    "inventory": ["schema_version", "policy_id", "policy_sha256", "approved_state_sha256", "hmac_key_version", "source_resource", "observed_at", "expires_at", "source_sha", "phase", "candidate_sha", "provenance", "signer_claims", "counts", "rule_violation_counts", "identity_hmacs", "catalog_hmac", "schema_descriptor_sha256", "state_hmacs", "blob_state_hmacs", "redis_state_hmac", "errors", "outcome", "receipt_sha256"],
+    "quiescence": ["schema_version", "evidence_type", "state", "source_sha", "candidate_sha", "source_resource", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "receipt_sha256"],
+    "server_scope": ["schema_version", "evidence_type", "state", "blocker", "source_sha", "candidate_sha", "source_resource", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "receipt_sha256"],
+    "provenance": ["repository", "protected_ref", "workflow_path", "workflow_sha", "run_id", "run_attempt", "event_name"],
+    "signer_claims": ["issuer", "subject", "repository", "ref", "sha", "workflow_ref", "workflow_sha", "run_id", "run_attempt", "actor", "triggering_actor"],
+    "policy_digests": ["evidence_manifest", "synthetic_data", "restore_envelope"],
+    "source_resource": ["cloud", "postgres_server_id", "database_name", "blob_account_id", "redis_cache_id"]
+  },
+  "activation_blockers": [
+    "server_scope_collection_unimplemented",
+    "attestation_verification_unimplemented",
+    "provider_access_unimplemented",
+    "workflow_integration_unimplemented",
+    "restore_activation_unimplemented"
+  ]
+}

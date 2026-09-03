@@ -9,7 +9,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, LiteralString
 
 import pytest
 
@@ -19,6 +19,8 @@ POLICY = ROOT / "contracts" / "staging-rehearsal" / "v1" / "synthetic-data-polic
 KEY = b"inventory-test-key-that-is-at-least-32-bytes"
 SOURCE_SHA = "1" * 40
 CANDIDATE_SHA = "2" * 40
+OBSERVED_AT = "2026-09-03T12:00:00Z"
+EXPIRES_AT = "2026-09-03T12:15:00Z"
 
 
 def _load_module() -> ModuleType:
@@ -51,6 +53,8 @@ class FakeProvider:
     non_system_schema_count: int = 1
     sequence_count: int = 0
     large_object_count: int = 0
+    schema_descriptor_sha256: str | None = None
+    schema_descriptor_counts: dict[str, int] | None = None
     column_mutation: tuple[str, int, tuple[str, str, bool]] | None = None
     relation_mutations: dict[str, tuple[str, bool]] = field(default_factory=dict)
     revisions: list[str] | None = None
@@ -96,6 +100,13 @@ class FakeProvider:
             table, index, column = self.column_mutation
             catalog[table][2][index] = column
         return catalog
+
+    def database_schema_descriptor(self) -> Any:
+        expected = self.policy["profiles"][self.profile]["schema_descriptor"]
+        return self.module.SchemaDescriptor(
+            self.schema_descriptor_sha256 or expected["sha256"],
+            self.schema_descriptor_counts or dict(expected["counts"]),
+        )
 
     def alembic_revisions(self) -> list[str]:
         if self.revisions is not None:
@@ -178,26 +189,87 @@ def _verify(
     provider: FakeProvider,
     *,
     approved: dict[str, Any] | None = None,
-    redis_quiesced: bool = True,
+    provenance: dict[str, Any] | None = None,
+    signer_claims: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    approved_value = (
+        approved
+        if approved is not None
+        else _approval(module, policy, policy_sha256, provider)
+    )
+    trusted = policy["evidence"]["trusted_context"]
+    provenance_value = provenance or {
+        "repository": trusted["repository"],
+        "protected_ref": trusted["protected_ref"],
+        "workflow_path": trusted["workflow_path"],
+        "workflow_sha": "3" * 40,
+        "run_id": "901",
+        "run_attempt": "1",
+        "event_name": "workflow_dispatch",
+    }
+    claims_value = signer_claims or {
+        "issuer": trusted["issuer"],
+        "subject": trusted["subject"],
+        "repository": provenance_value["repository"],
+        "ref": provenance_value["protected_ref"],
+        "sha": provenance_value["workflow_sha"],
+        "workflow_ref": (
+            f"{provenance_value['repository']}/"
+            f"{provenance_value['workflow_path']}@"
+            f"{provenance_value['protected_ref']}"
+        ),
+        "workflow_sha": provenance_value["workflow_sha"],
+        "run_id": provenance_value["run_id"],
+        "run_attempt": provenance_value["run_attempt"],
+        "actor": trusted["founder_actor"],
+        "triggering_actor": trusted["founder_actor"],
+    }
     return module.verify_inventory(
         policy=policy,
         policy_sha256=policy_sha256,
-        approved=approved
-        if approved is not None
-        else _approval(module, policy, policy_sha256, provider),
+        approved=approved_value,
         profile_name=provider.profile,
         source_sha=SOURCE_SHA,
         candidate_sha=CANDIDATE_SHA,
+        approved_state_sha256=hashlib.sha256(
+            module._canonical_json(approved_value)
+        ).hexdigest(),
+        hmac_key_version=module.SUPPORTED_HMAC_KEY_VERSION,
+        observed_at=OBSERVED_AT,
+        expires_at=EXPIRES_AT,
+        provenance=provenance_value,
+        signer_claims=claims_value,
         key=KEY,
         provider=provider,
-        redis_quiesced=redis_quiesced,
     )
 
 
 @pytest.fixture
 def module() -> ModuleType:
     return _load_module()
+
+
+def test_schema_descriptor_is_canonical_and_bounded(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sections = {name: [] for name in module.SCHEMA_DESCRIPTOR_SECTIONS}
+    sections["relations"] = [{"name": "second"}, {"name": "first"}]
+    forward = module._schema_descriptor(sections)
+    sections["relations"].reverse()
+    reverse = module._schema_descriptor(sections)
+
+    assert forward == reverse
+    assert forward.counts["relations"] == 2
+    with pytest.raises(
+        module.InventoryFailure, match="database.schema_descriptor_failed"
+    ):
+        module._schema_descriptor(sections | {"unexpected": []})
+    monkeypatch.setattr(module, "MAXIMUM_SCHEMA_DESCRIPTOR_RECORDS", 1)
+    with pytest.raises(
+        module.InventoryFailure, match="database.schema_descriptor_failed"
+    ):
+        module._schema_descriptor(sections)
 
 
 def test_policy_is_closed_world_and_covers_both_exact_catalogs(
@@ -246,6 +318,47 @@ def test_policy_is_closed_world_and_covers_both_exact_catalogs(
     assert policy["database"]["sequences"] == []
     assert policy["database"]["reject_large_objects"] is True
     assert policy["redis"]["scan_all_logical_databases"] is True
+    assert policy["evidence"]["schema_descriptor_algorithm"] == "SHA-256"
+    assert policy["profiles"]["pre"]["schema_descriptor"] == {
+        "format": "postgresql-16-public-v2",
+        "sha256": "b6dd67990533bec013f9db94c9c24940fabf9388ba97b585db45db24ca786849",
+        "counts": {
+            "namespace_objects": 88,
+            "relations": 63,
+            "columns": 744,
+            "constraints": 346,
+            "indexes": 186,
+            "triggers": 19,
+            "trigger_functions": 9,
+            "rls_policies": 0,
+            "types": 154,
+            "enum_labels": 37,
+            "views": 0,
+            "routines": 11,
+            "authorizations": 1944,
+            "default_privileges": 0,
+        },
+    }
+    assert policy["profiles"]["post"]["schema_descriptor"] == {
+        "format": "postgresql-16-public-v2",
+        "sha256": "3857d3b44c40f88cf2da464acbc8cd76068884979cc9b4bc6276c9ebb73c9295",
+        "counts": {
+            "namespace_objects": 92,
+            "relations": 65,
+            "columns": 784,
+            "constraints": 372,
+            "indexes": 195,
+            "triggers": 22,
+            "trigger_functions": 11,
+            "rls_policies": 0,
+            "types": 158,
+            "enum_labels": 37,
+            "views": 0,
+            "routines": 13,
+            "authorizations": 2035,
+            "default_privileges": 0,
+        },
+    }
 
     pre_practice_columns = [column[0] for column in pre["practice"]["columns"]]
     assert "acquisition_source" not in pre_practice_columns
@@ -263,7 +376,7 @@ def test_provider_mock_passes_with_exact_approved_state(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is True
+    assert evidence["outcome"] == "pass"
     assert evidence["errors"] == []
     assert evidence["counts"]["database.alembic_version"] == 1
     assert evidence["counts"]["database.non_system_schemas"] == 1
@@ -272,23 +385,101 @@ def test_provider_mock_passes_with_exact_approved_state(
     assert evidence["counts"]["redis.logical_databases_with_keys"] == 0
     assert evidence["counts"]["redis.keys"] == 0
     assert len(evidence["catalog_hmac"]) == 64
+    assert len(evidence["schema_descriptor_sha256"]) == 64
     assert set(evidence) == {
         "schema_version",
         "policy_id",
         "policy_sha256",
+        "approved_state_sha256",
+        "hmac_key_version",
+        "source_resource",
+        "observed_at",
+        "expires_at",
         "source_sha",
         "phase",
         "candidate_sha",
+        "provenance",
+        "signer_claims",
         "counts",
         "rule_violation_counts",
         "identity_hmacs",
         "catalog_hmac",
+        "schema_descriptor_sha256",
         "state_hmacs",
         "blob_state_hmacs",
         "redis_state_hmac",
         "errors",
-        "pass",
+        "outcome",
+        "receipt_sha256",
     }
+    assert set(policy["evidence"]["allowed_fields"]) == set(evidence)
+    unsigned = dict(evidence)
+    receipt_sha256 = unsigned.pop("receipt_sha256")
+    assert (
+        receipt_sha256 == hashlib.sha256(module._canonical_json(unsigned)).hexdigest()
+    )
+
+
+def test_inventory_context_is_closed_world_and_cross_bound(module: ModuleType) -> None:
+    policy, policy_sha256 = _policy()
+    provider = FakeProvider(module, policy)
+    trusted = policy["evidence"]["trusted_context"]
+    provenance = {
+        "repository": trusted["repository"],
+        "protected_ref": trusted["protected_ref"],
+        "workflow_path": trusted["workflow_path"],
+        "workflow_sha": "3" * 40,
+        "run_id": "901",
+        "run_attempt": "1",
+        "event_name": "workflow_dispatch",
+    }
+
+    for mutation in (
+        {**provenance, "unexpected": "value"},
+        {**provenance, "repository": "other/repository"},
+        {**provenance, "workflow_sha": "not-a-sha"},
+        {**provenance, "run_attempt": "0"},
+    ):
+        with pytest.raises(
+            module.InventoryFailure, match="evidence.provenance_invalid"
+        ):
+            _verify(
+                module,
+                policy,
+                policy_sha256,
+                provider,
+                provenance=mutation,
+            )
+
+    approved = _approval(module, policy, policy_sha256, provider)
+    with pytest.raises(module.InventoryFailure, match="evidence.context_invalid"):
+        module.verify_inventory(
+            policy=policy,
+            policy_sha256=policy_sha256,
+            approved=approved,
+            profile_name="post",
+            source_sha=SOURCE_SHA,
+            candidate_sha=CANDIDATE_SHA,
+            approved_state_sha256="a" * 64,
+            hmac_key_version="unsupported",
+            observed_at=OBSERVED_AT,
+            expires_at=EXPIRES_AT,
+            provenance=provenance,
+            signer_claims={},
+            key=KEY,
+            provider=provider,
+        )
+
+    with pytest.raises(module.InventoryFailure, match="evidence.time_invalid"):
+        module._validate_evidence_context(
+            policy=policy,
+            approved_state_sha256="a" * 64,
+            hmac_key_version=module.SUPPORTED_HMAC_KEY_VERSION,
+            observed_at=OBSERVED_AT,
+            expires_at="2026-09-03T12:15:01Z",
+            provenance=provenance,
+            signer_claims={},
+        )
 
 
 def test_evidence_contains_no_provider_values(module: ModuleType) -> None:
@@ -329,6 +520,10 @@ def test_evidence_contains_no_provider_values(module: ModuleType) -> None:
         ({"non_system_schema_count": 2}, "database.schema_set"),
         ({"sequence_count": 1}, "database.sequence_set"),
         ({"large_object_count": 1}, "database.large_objects"),
+        (
+            {"schema_descriptor_sha256": "f" * 64},
+            "database.schema_descriptor",
+        ),
         ({"revisions": ["wrong"]}, "database.alembic_version"),
         (
             {"table_counts": {"zoom_meeting": 1}},
@@ -354,7 +549,7 @@ def test_database_drift_fails_closed(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert error in evidence["errors"]
 
 
@@ -372,7 +567,7 @@ def test_approved_state_mismatch_fails_closed(module: ModuleType) -> None:
         approved=approved,
     )
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert "database.table.doctor.approved_state" in evidence["errors"]
 
 
@@ -397,7 +592,7 @@ def test_blob_versions_deleted_objects_and_unknown_containers_fail_closed(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert "blob.container_set" in evidence["errors"]
     assert "blob.container.uploads.required_empty" in evidence["errors"]
     assert policy["blob"]["enumerate"] == [
@@ -422,7 +617,7 @@ def test_nontransactional_blob_and_redis_reads_must_be_stable(
 
     evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
+    assert evidence["outcome"] == "fail"
     assert "blob.container.test-uploads.unstable" in evidence["errors"]
     assert "redis.unstable" in evidence["errors"]
     assert all(calls == 2 for calls in provider._blob_calls.values())
@@ -562,38 +757,21 @@ def test_blob_adapter_hashes_streamed_content_metadata_tags_and_all_states(
         state(b"staged", {}, uncommitted=True)
 
 
-@pytest.mark.parametrize(
-    ("logical_databases", "redis_keys", "quiesced", "error"),
-    [
-        (1, 1, True, "redis.required_empty"),
-        (0, 0, False, "redis.not_quiesced"),
-    ],
-)
-def test_every_redis_database_must_be_quiesced_and_empty(
+def test_every_redis_database_must_be_empty(
     module: ModuleType,
-    logical_databases: int,
-    redis_keys: int,
-    quiesced: bool,
-    error: str,
 ) -> None:
     policy, policy_sha256 = _policy()
     provider = FakeProvider(
         module,
         policy,
-        redis_logical_databases=logical_databases,
-        redis_keys=redis_keys,
+        redis_logical_databases=1,
+        redis_keys=1,
     )
 
-    evidence = _verify(
-        module,
-        policy,
-        policy_sha256,
-        provider,
-        redis_quiesced=quiesced,
-    )
+    evidence = _verify(module, policy, policy_sha256, provider)
 
-    assert evidence["pass"] is False
-    assert error in evidence["errors"]
+    assert evidence["outcome"] == "fail"
+    assert "redis.required_empty" in evidence["errors"]
 
 
 def test_redis_adapter_aggregates_info_keyspace_without_enumerating_keys(
@@ -763,7 +941,7 @@ def test_policy_catalog_matches_migration_replay(
         for profile_name in ("pre", "post"):
             profile = policy["profiles"][profile_name]
             command.upgrade(config, profile["revision"])
-            with psycopg.connect(database_url, autocommit=True) as connection:
+            with psycopg.connect(database_url) as connection:
                 provider = object.__new__(module.LiveInventoryProvider)
                 provider._connection = connection
                 observed = provider.database_catalog()
@@ -784,7 +962,188 @@ def test_policy_catalog_matches_migration_replay(
                 assert provider.database_global_counts() == module.DatabaseGlobalCounts(
                     1, 0, 0
                 )
+                descriptor_policy = profile["schema_descriptor"]
+                observed_descriptor = provider.database_schema_descriptor()
+                assert observed_descriptor == module.SchemaDescriptor(
+                    descriptor_policy["sha256"], descriptor_policy["counts"]
+                )
                 assert len(observed) - 1 == profile["table_count"]
+        with psycopg.connect(database_url) as connection:
+            provider = object.__new__(module.LiveInventoryProvider)
+            provider._connection = connection
+            baseline = provider.database_schema_descriptor()
+
+            connection.execute("SET LOCAL search_path = pg_catalog")
+            assert provider.database_schema_descriptor() == baseline
+
+            def isolated_change(
+                statement: LiteralString,
+                *,
+                count_changes: tuple[str, ...] = (),
+            ) -> None:
+                before = provider.database_schema_descriptor()
+                connection.execute("SAVEPOINT descriptor_isolated_change")
+                connection.execute(statement)
+                changed = provider.database_schema_descriptor()
+                assert changed.sha256 != before.sha256
+                for section in count_changes:
+                    assert changed.counts[section] != before.counts[section]
+                connection.execute("ROLLBACK TO SAVEPOINT descriptor_isolated_change")
+
+            for statement in (
+                "CREATE DOMAIN public.descriptor_probe_domain AS text",
+                "CREATE TYPE public.descriptor_probe_range AS RANGE "
+                "(subtype = integer)",
+                "CREATE TYPE public.descriptor_probe_composite AS (value integer)",
+                "CREATE TYPE public.descriptor_probe_shell",
+            ):
+                isolated_change(
+                    statement,
+                    count_changes=("namespace_objects", "types"),
+                )
+            isolated_change(
+                "ALTER TABLE public.doctor OWNER TO pg_database_owner",
+            )
+            for statement in (
+                "GRANT SELECT ON TABLE public.doctor TO PUBLIC",
+                "GRANT SELECT (id) ON TABLE public.doctor TO PUBLIC",
+                "REVOKE EXECUTE ON FUNCTION public.typeid_parse(text) FROM PUBLIC",
+                "REVOKE USAGE ON TYPE public.zoommeetingstatus FROM PUBLIC",
+                "REVOKE USAGE ON SCHEMA public FROM PUBLIC",
+            ):
+                isolated_change(statement)
+            isolated_change(
+                "ALTER DEFAULT PRIVILEGES IN SCHEMA public "
+                "GRANT SELECT ON TABLES TO PUBLIC",
+                count_changes=("default_privileges",),
+            )
+            isolated_change(
+                "CREATE ROLE descriptor_probe_default_owner; "
+                "ALTER DEFAULT PRIVILEGES FOR ROLE "
+                "descriptor_probe_default_owner IN SCHEMA public "
+                "GRANT SELECT ON TABLES TO PUBLIC",
+                count_changes=("default_privileges",),
+            )
+
+            connection.execute("SAVEPOINT descriptor_timezone_stability")
+            connection.execute(
+                "CREATE TABLE public.descriptor_timezone_probe ("
+                "captured_at timestamptz NOT NULL DEFAULT "
+                "'2026-01-02 03:04:05+00'::timestamptz)"
+            )
+            connection.execute("SET LOCAL TimeZone = 'America/New_York'")
+            new_york = provider.database_schema_descriptor()
+            connection.execute("SET LOCAL TimeZone = 'Pacific/Honolulu'")
+            honolulu = provider.database_schema_descriptor()
+            assert new_york == honolulu
+            connection.execute("ROLLBACK TO SAVEPOINT descriptor_timezone_stability")
+
+            connection.execute(
+                "CREATE TYPE public.descriptor_probe_enum AS ENUM ('first')"
+            )
+            connection.execute(
+                "CREATE TABLE public.descriptor_probe ("
+                "id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY, "
+                "base integer NOT NULL DEFAULT 7, "
+                "generated integer GENERATED ALWAYS AS (base + 1) STORED, "
+                "CONSTRAINT descriptor_probe_positive CHECK (base > 0))"
+            )
+            connection.execute(
+                "CREATE INDEX descriptor_probe_generated_idx "
+                "ON public.descriptor_probe (generated)"
+            )
+            connection.execute(
+                "CREATE FUNCTION public.descriptor_probe_trigger() RETURNS trigger "
+                "LANGUAGE plpgsql AS $$ BEGIN NEW.base := NEW.base; RETURN NEW; END $$"
+            )
+            connection.execute(
+                "CREATE TRIGGER descriptor_probe_trigger BEFORE INSERT "
+                "ON public.descriptor_probe FOR EACH ROW "
+                "EXECUTE FUNCTION public.descriptor_probe_trigger()"
+            )
+            connection.execute(
+                "ALTER TABLE public.descriptor_probe ENABLE ROW LEVEL SECURITY"
+            )
+            connection.execute(
+                "CREATE POLICY descriptor_probe_policy ON public.descriptor_probe "
+                "USING (base > 0)"
+            )
+            connection.execute(
+                "CREATE VIEW public.descriptor_probe_view AS "
+                "SELECT base, generated FROM public.descriptor_probe"
+            )
+            connection.execute(
+                "CREATE MATERIALIZED VIEW public.descriptor_probe_materialized AS "
+                "SELECT base FROM public.descriptor_probe WITH NO DATA"
+            )
+            connection.execute(
+                "CREATE FUNCTION public.descriptor_probe_routine(value integer = 2) "
+                "RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT value + 1 $$"
+            )
+            expanded = provider.database_schema_descriptor()
+            assert expanded.sha256 != baseline.sha256
+            assert all(
+                expanded.counts[section] > baseline.counts[section]
+                for section in (
+                    "namespace_objects",
+                    "relations",
+                    "columns",
+                    "constraints",
+                    "indexes",
+                    "triggers",
+                    "trigger_functions",
+                    "rls_policies",
+                    "types",
+                    "enum_labels",
+                    "views",
+                    "routines",
+                    "authorizations",
+                )
+            )
+
+            for statement in (
+                "ALTER TABLE public.descriptor_probe ALTER COLUMN base SET DEFAULT 8",
+                "ALTER TABLE public.descriptor_probe ALTER COLUMN id "
+                "SET GENERATED BY DEFAULT",
+                "ALTER TABLE public.descriptor_probe "
+                "DROP CONSTRAINT descriptor_probe_positive; "
+                "ALTER TABLE public.descriptor_probe ADD CONSTRAINT "
+                "descriptor_probe_positive CHECK (base > 1)",
+                "DROP INDEX public.descriptor_probe_generated_idx; "
+                "CREATE INDEX descriptor_probe_generated_idx "
+                "ON public.descriptor_probe (base)",
+                "ALTER TABLE public.descriptor_probe FORCE ROW LEVEL SECURITY",
+                "ALTER TABLE public.descriptor_probe "
+                "DISABLE TRIGGER descriptor_probe_trigger",
+                "ALTER POLICY descriptor_probe_policy ON public.descriptor_probe "
+                "USING (base > 1)",
+                "ALTER TYPE public.descriptor_probe_enum "
+                "RENAME VALUE 'first' TO 'second'",
+                "CREATE OR REPLACE FUNCTION public.descriptor_probe_trigger() "
+                "RETURNS trigger LANGUAGE plpgsql AS "
+                "$$ BEGIN NEW.base := NEW.base + 0; RETURN NEW; END $$",
+                "CREATE OR REPLACE FUNCTION "
+                "public.descriptor_probe_routine(value integer = 2) "
+                "RETURNS integer LANGUAGE sql IMMUTABLE "
+                "AS $$ SELECT value + 2 $$",
+                "CREATE OR REPLACE VIEW public.descriptor_probe_view AS "
+                "SELECT base, generated FROM public.descriptor_probe "
+                "WHERE base > 0",
+                "DROP MATERIALIZED VIEW public.descriptor_probe_materialized; "
+                "CREATE MATERIALIZED VIEW public.descriptor_probe_materialized AS "
+                "SELECT generated AS base FROM public.descriptor_probe WITH NO DATA",
+                "DROP VIEW public.descriptor_probe_view; "
+                "DROP INDEX public.descriptor_probe_generated_idx; "
+                "ALTER TABLE public.descriptor_probe DROP COLUMN generated; "
+                "ALTER TABLE public.descriptor_probe ADD COLUMN generated integer "
+                "GENERATED ALWAYS AS (base + 2) STORED; "
+                "CREATE INDEX descriptor_probe_generated_idx "
+                "ON public.descriptor_probe (generated); "
+                "CREATE VIEW public.descriptor_probe_view AS "
+                "SELECT base, generated FROM public.descriptor_probe",
+            ):
+                isolated_change(statement)
+            connection.rollback()
         with psycopg.connect(database_url, autocommit=True) as temporary_connection:
             temporary_connection.execute(
                 "CREATE TEMP SEQUENCE unexpected_temp_sequence"
@@ -800,6 +1159,48 @@ def test_policy_catalog_matches_migration_replay(
                 assert provider.database_global_counts() == module.DatabaseGlobalCounts(
                     2, 2, 1
                 )
+
+        repeat_name = f"inventory_repeat_{secrets.token_hex(8)}"
+        repeat_url = urllib.parse.urlunsplit(parsed._replace(path=f"/{repeat_name}"))
+        repeat_created = False
+        try:
+            with psycopg.connect(base_url, autocommit=True) as admin:
+                admin.execute(
+                    sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
+                        sql.Identifier(repeat_name)
+                    )
+                )
+            repeat_created = True
+            monkeypatch.setenv("TEST_DATABASE_URL", repeat_url)
+            repeat_config = Config(os.fspath(ROOT / "alembic.ini"))
+            repeat_config.set_main_option(
+                "script_location", os.fspath(ROOT / "migrations")
+            )
+            for profile_name in ("pre", "post"):
+                profile = policy["profiles"][profile_name]
+                command.upgrade(repeat_config, profile["revision"])
+                with psycopg.connect(repeat_url) as connection:
+                    provider = object.__new__(module.LiveInventoryProvider)
+                    provider._connection = connection
+                    descriptor = profile["schema_descriptor"]
+                    assert provider.database_schema_descriptor() == (
+                        module.SchemaDescriptor(
+                            descriptor["sha256"], descriptor["counts"]
+                        )
+                    )
+        finally:
+            if repeat_created:
+                with psycopg.connect(base_url, autocommit=True) as admin:
+                    admin.execute(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                        "WHERE datname = %s AND pid <> pg_backend_pid()",
+                        (repeat_name,),
+                    )
+                    admin.execute(
+                        sql.SQL("DROP DATABASE {} WITH (FORCE)").format(
+                            sql.Identifier(repeat_name)
+                        )
+                    )
     finally:
         if created:
             with psycopg.connect(base_url, autocommit=True) as admin:
@@ -826,8 +1227,17 @@ def test_script_is_standalone_and_never_imports_app_or_alembic() -> None:
     }
     assert "REPEATABLE READ READ ONLY DEFERRABLE" in source
     assert "SET LOCAL row_security = off" in source
-    assert "SET LOCAL search_path = pg_catalog" in source
+    assert "SET LOCAL search_path = pg_catalog, public" in source
+    assert "pg_catalog.pg_identify_object_as_address" in source
+    assert "pg_catalog.aclexplode" in source
     assert "SET LOCAL lock_timeout" in source
+    assert "current_setting('server_version_num')" in source
+    assert "server_version // 10_000 != 16" in source
     assert "LEFT JOIN pg_catalog.pg_attribute" in source
+    assert "pg_catalog.pg_get_constraintdef" in source
+    assert "pg_catalog.pg_get_indexdef" in source
+    assert "pg_catalog.pg_get_triggerdef" in source
+    assert "pg_catalog.pg_get_functiondef" in source
+    assert "pg_catalog.pg_get_viewdef" in source
     assert "row_to_json(source)::text" in source
     assert "include_system=True" in source
