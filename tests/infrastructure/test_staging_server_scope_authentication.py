@@ -313,10 +313,9 @@ def test_mints_atomic_deterministic_server_authenticated_partial(
 
     assert first_result == second_result
     assert first_binding == second_binding
+    original_receipt_digest = first_result["server_scope_authentication_receipt_sha256"]
     expected = fixture["snapshot"].result["evidence_binding"]
-    expected["server_scope_authentication_receipt_sha256"] = first_result[
-        "server_scope_authentication_receipt_sha256"
-    ]
+    expected["server_scope_authentication_receipt_sha256"] = original_receipt_digest
     assert first_binding.record == expected
     assert first_binding.record_bytes == module._canonical(expected)
     assert set(first_binding.record) == module.SERVER_AUTHENTICATED_SAFE_SUBMIT_FIELDS
@@ -342,7 +341,7 @@ def test_mints_atomic_deterministic_server_authenticated_partial(
     for forbidden in (
         KEY.decode(),
         receipt["server_scope_evidence_hmac"],
-        first_result["server_scope_authentication_receipt_sha256"],
+        original_receipt_digest,
     ):
         assert forbidden not in rendered
 
