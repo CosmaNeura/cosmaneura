@@ -180,6 +180,42 @@ workflow call, executor handoff, restore request, provider access, or mutation;
 workflow integration, trusted-executor integration, and restore activation are
 explicit blockers requiring separate reviewed work.
 
+The protected rehearsal workflow now removes the legacy direct provision path
+that accepted caller-supplied digests. Its `provision` job is a one-minute
+credentialless tombstone with `permissions: {}`: no checkout, protected
+environment, OIDC token, Azure login, receipt upload, controller provision, or
+safe-submit call is reachable. It always reports the missing trusted
+coordinator and fails. Exact manual cleanup and the gated hourly sweep remain
+on the established cleanup identity and controller; there is no failed-run
+compensation branch because this provision tombstone cannot create resources.
+
+This is not composition activation. The upstream proofs and final binding are
+opaque, module-sealed Python objects rather than bearer JSON. GitHub outputs or
+artifacts would serialize only their records; a later step or job cannot
+reconstruct the exact sealed object and is rejected by the consumer. A future
+trusted coordinator must therefore run manifest validation, server receipt
+authentication, provider observation, offline attestation verification,
+composition, the last freshness check, and direct safe-submit invocation in
+one process. Its review must keep original bytes available for revalidation and
+must not add a deserialization minter.
+
+Exact activation blockers remain fail-closed: composition has
+`activation_ready: false` and all of
+`trusted_composite_verifier_implemented`, `workflow_integrated`,
+`trusted_executor_integrated`, and `restore_activation_authorized` false;
+its blocker codes are `restore_evidence_composition_policy_disabled`,
+`upstream_policies_disabled`, `trusted_composite_verifier_unimplemented`,
+`workflow_integration_unimplemented`,
+`trusted_executor_integration_unimplemented`, and
+`restore_activation_unimplemented`. Safe-submit has
+`blob_marker_store_implemented`,
+`blob_marker_provider_fidelity_proven`, `private_runner_binding_implemented`,
+`workflow_integrated`, and `trusted_evidence_binding_implemented` false.
+Upstream policies are disabled, the Linux verifier and GitHub-only root digests
+are unconfigured, and storage/network/RBAC/WORM/provider-fidelity pins remain
+`CONFIGURE_EXACT_...`. No dispatch, live proof, restore, cutover, or Azure
+mutation occurred.
+
 The checked-in `server-scope-authentication-policy.json` and server-scope policy
 are both disabled, so the authenticator refuses before reading a key or bundle.
 Even a successful future authentication result remains blocked
