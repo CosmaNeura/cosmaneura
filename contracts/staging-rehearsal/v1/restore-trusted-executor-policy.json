@@ -52,7 +52,7 @@
     "restore_safe_submit": {
       "path": "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json",
       "policy_id": "cosmaneura-staging-restore-safe-submit-v4",
-      "sha256": "sha256:3e3758a1f3756b5e922b22d4b740d1de0fc2aa8140c07589d7d39369d244a02d"
+      "sha256": "sha256:dd437ff02e201f01e8ec097345b444f8fc7786a7964b9345af097d3e1464f501"
     },
     "restore_runtime_binding": {
       "path": "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json",
@@ -180,6 +180,12 @@
     "provider_and_attestation_receipts_bound_to_same_server_binding": true,
     "direct_safe_submit_required": true,
     "maximum_submit_invocations": 1,
+    "provision_cleanup_handoff": {
+      "kind": "exact-dominant-tombstone-v1",
+      "create_and_read_back_required": true,
+      "resource_delete_permitted": false,
+      "cleanup_entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.cleanup_intent"
+    },
     "side_effects_before_safe_submit_permitted": false
   },
   "trusted_clock": {
@@ -250,7 +256,6 @@
     "allowed_statuses": [
       "ready",
       "cleanup_marker_unproven",
-      "cleaned",
       "cleanup_pending",
       "pending_late_materialization"
     ],

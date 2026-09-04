@@ -34,7 +34,7 @@ ENVELOPE_POLICY_SHA256 = (
     "6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
 )
 SAFE_SUBMIT_POLICY_SHA256 = (
-    "3e3758a1f3756b5e922b22d4b740d1de0fc2aa8140c07589d7d39369d244a02d"
+    "dd437ff02e201f01e8ec097345b444f8fc7786a7964b9345af097d3e1464f501"
 )
 EVIDENCE_MANIFEST_POLICY_SHA256 = (
     "8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53"
@@ -840,6 +840,7 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
         "activation",
         "arm",
         "marker_store",
+        "operation_authority",
         "outcomes",
         "retention",
     } or (
@@ -960,7 +961,7 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
             "read_role_permissions_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_READ_ROLE_PERMISSIONS_SHA256",
             "provision_intent_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_INTENT_ROLE_ASSIGNMENT_ID",
             "provision_submission_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_SUBMISSION_ROLE_ASSIGNMENT_ID",
-            "provision_cleanup_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_CLEANUP_READ_ROLE_ASSIGNMENT_ID",
+            "provision_cleanup_tombstone_assignment_id": "CONFIGURE_EXACT_RESTORE_PROVISION_CLEANUP_TOMBSTONE_ROLE_ASSIGNMENT_ID",
             "cleanup_intent_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_INTENT_READ_ROLE_ASSIGNMENT_ID",
             "cleanup_submission_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_SUBMISSION_READ_ROLE_ASSIGNMENT_ID",
             "cleanup_marker_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_MARKER_ROLE_ASSIGNMENT_ID",
@@ -990,6 +991,22 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
         },
     }:
         _fail("safe_submit_marker_store_policy_mismatch")
+    if policy.get("operation_authority") != {
+        "provision": {
+            "entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.submit",
+            "arm_resource_delete_permitted": False,
+            "cleanup_handoff": "exact_dominant_tombstone_create_and_read_back",
+            "cleanup_tombstone_required_after_partial_or_unknown_outcome": True,
+        },
+        "cleanup": {
+            "entrypoint": (
+                "staging_restore_safe_submit.SafeRestoreSubmitter.cleanup_intent"
+            ),
+            "arm_resource_delete_permitted": True,
+            "exact_dominant_tombstone_required_before_delete": True,
+        },
+    }:
+        _fail("safe_submit_operation_authority_mismatch")
     if policy.get("outcomes") != {
         "ready_state": "Ready",
         "failed_states": ["Disabled", "Failed"],
@@ -1654,15 +1671,16 @@ class SafeRestoreSubmitter:
             raw = self.marker_store.read("cleanup", intent["rehearsal_id"])
         except MarkerOutcomeUnknown:
             return UNKNOWN
-        except MarkerPresentInvalid:
+        except Exception:
             return CLEANUP_PRESENT_UNPROVEN
         if raw is None:
             return False
         try:
             actual = self._parse_marker(raw, "cleanup_record_invalid")
-            _ = actual == self._cleanup_record(intent, intent_digest)
         except SafeSubmitError:
-            pass
+            return CLEANUP_PRESENT_UNPROVEN
+        if actual != self._cleanup_record(intent, intent_digest):
+            return CLEANUP_PRESENT_UNPROVEN
         return True
 
     def _mark_cleanup(self, intent: dict[str, Any], intent_digest: str) -> bool:
@@ -1677,16 +1695,16 @@ class SafeRestoreSubmitter:
                 "cleanup", intent["rehearsal_id"], _canonical(record)
             )
         except MarkerConflict:
-            return True
+            return False
         except MarkerPresentInvalid:
             return False
         except MarkerOutcomeUnknown:
             return False
         try:
-            _ = self._parse_marker(raw, "cleanup_record_invalid") == record
+            actual = self._parse_marker(raw, "cleanup_record_invalid")
         except SafeSubmitError:
-            pass
-        return True
+            return False
+        return actual == record
 
     def _restore_body(
         self, intent: dict[str, Any], intent_digest: str
@@ -1849,7 +1867,36 @@ class SafeRestoreSubmitter:
             cleanup_required=cleanup_required,
         )
 
-    def _cleanup_target(
+    def _defer_cleanup(
+        self,
+        intent: dict[str, Any],
+        intent_digest: str,
+        *,
+        observed: bool,
+    ) -> SubmitOutcome:
+        """Persist the dominant tombstone without exercising delete authority."""
+
+        try:
+            cleanup_proven = self._mark_cleanup(intent, intent_digest)
+        except Exception:
+            cleanup_proven = False
+        if not cleanup_proven:
+            return self._outcome(
+                "cleanup_marker_unproven",
+                intent,
+                intent_digest,
+                observed=observed,
+                cleanup_required=True,
+            )
+        return self._outcome(
+            "cleanup_pending" if observed else "pending_late_materialization",
+            intent,
+            intent_digest,
+            observed=observed,
+            cleanup_required=True,
+        )
+
+    def _delete_target_for_cleanup(
         self, intent: dict[str, Any], intent_digest: str
     ) -> SubmitOutcome:
         if not self._mark_cleanup(intent, intent_digest):
@@ -1913,40 +1960,56 @@ class SafeRestoreSubmitter:
         )
 
     def _poll_restore(
-        self, intent: dict[str, Any], intent_digest: str
+        self,
+        intent: dict[str, Any],
+        intent_digest: str,
+        *,
+        observed: bool = False,
     ) -> SubmitOutcome:
         target_id = intent["target_server_resource_id"]
         for attempt in range(self.config.restore_poll_attempts):
-            cleanup_requested = self._cleanup_requested(intent, intent_digest)
-            if cleanup_requested is not False:
-                return self._cleanup_target(intent, intent_digest)
-            if self._intent_expired(intent):
-                return self._cleanup_target(intent, intent_digest)
-            response = self._get_target(target_id)
-            if isinstance(response, ArmResponse):
-                target = self._verify_target(response, intent, intent_digest)
-                state = self._target_state(target)
-                if state in self.config.failed_states:
-                    return self._cleanup_target(intent, intent_digest)
-                isolation = self._request_isolation(target, target_id)
-                if isolation == ISOLATION_REFUSED:
-                    return self._cleanup_target(intent, intent_digest)
+            try:
                 cleanup_requested = self._cleanup_requested(intent, intent_digest)
                 if cleanup_requested is not False:
-                    return self._cleanup_target(intent, intent_digest)
+                    return self._defer_cleanup(intent, intent_digest, observed=observed)
                 if self._intent_expired(intent):
-                    return self._cleanup_target(intent, intent_digest)
-                if state == self.config.ready_state and self._is_disabled(target):
-                    return self._outcome(
-                        "ready",
-                        intent,
-                        intent_digest,
-                        observed=True,
-                        cleanup_required=False,
-                    )
-            if attempt + 1 < self.config.restore_poll_attempts:
-                self.sleeper(self.config.poll_interval_seconds)
-        return self._cleanup_target(intent, intent_digest)
+                    return self._defer_cleanup(intent, intent_digest, observed=observed)
+                response = self._get_target(target_id)
+                if isinstance(response, ArmResponse):
+                    observed = True
+                    target = self._verify_target(response, intent, intent_digest)
+                    state = self._target_state(target)
+                    if state in self.config.failed_states:
+                        return self._defer_cleanup(
+                            intent, intent_digest, observed=observed
+                        )
+                    isolation = self._request_isolation(target, target_id)
+                    if isolation == ISOLATION_REFUSED:
+                        return self._defer_cleanup(
+                            intent, intent_digest, observed=observed
+                        )
+                    cleanup_requested = self._cleanup_requested(intent, intent_digest)
+                    if cleanup_requested is not False:
+                        return self._defer_cleanup(
+                            intent, intent_digest, observed=observed
+                        )
+                    if self._intent_expired(intent):
+                        return self._defer_cleanup(
+                            intent, intent_digest, observed=observed
+                        )
+                    if state == self.config.ready_state and self._is_disabled(target):
+                        return self._outcome(
+                            "ready",
+                            intent,
+                            intent_digest,
+                            observed=True,
+                            cleanup_required=False,
+                        )
+                if attempt + 1 < self.config.restore_poll_attempts:
+                    self.sleeper(self.config.poll_interval_seconds)
+            except Exception:
+                return self._defer_cleanup(intent, intent_digest, observed=observed)
+        return self._defer_cleanup(intent, intent_digest, observed=observed)
 
     def submit(self, request: RestoreRequest) -> SubmitOutcome:
         self._require_marker_fidelity()
@@ -1972,69 +2035,93 @@ class SafeRestoreSubmitter:
         intent_digest = f"sha256:{_sha256(_canonical(intent))}"
         cleanup_requested = self._cleanup_requested(intent, intent_digest)
         if cleanup_requested is UNKNOWN:
-            _fail("cleanup_record_preflight_unknown")
+            return self._defer_cleanup(intent, intent_digest, observed=False)
         if cleanup_requested is not False:
-            return self._cleanup_target(intent, intent_digest)
+            return self._defer_cleanup(intent, intent_digest, observed=False)
         try:
             existing_submission = self._read_marker("submission", request.rehearsal_id)
-        except MarkerPresentInvalid:
-            return self._cleanup_target(intent, intent_digest)
+        except Exception:
+            return self._defer_cleanup(intent, intent_digest, observed=False)
         submission = self._submission_record(intent, intent_digest)
-        if self._intent_expired(intent):
+        try:
+            intent_expired = self._intent_expired(intent)
+        except Exception:
+            return self._defer_cleanup(intent, intent_digest, observed=False)
+        if intent_expired:
             if existing_submission is UNKNOWN:
-                return self._cleanup_target(intent, intent_digest)
+                return self._defer_cleanup(intent, intent_digest, observed=False)
             if existing_submission is None:
                 _fail("intent_expired")
             if existing_submission != submission:
-                return self._cleanup_target(intent, intent_digest)
-            return self._cleanup_target(intent, intent_digest)
-        target = self._get_target(intent["target_server_resource_id"])
+                return self._defer_cleanup(intent, intent_digest, observed=False)
+            return self._defer_cleanup(intent, intent_digest, observed=False)
+        try:
+            target = self._get_target(intent["target_server_resource_id"])
+        except Exception:
+            return self._defer_cleanup(intent, intent_digest, observed=False)
         if target is UNKNOWN:
-            _fail("target_preflight_unknown")
+            return self._defer_cleanup(intent, intent_digest, observed=False)
         if isinstance(target, ArmResponse) and existing_submission != submission:
-            return self._cleanup_target(intent, intent_digest)
-        if target is None and self._evidence_expired(intent):
-            return self._cleanup_target(intent, intent_digest)
+            try:
+                self._verify_target(target, intent, intent_digest)
+            except Exception:
+                return self._defer_cleanup(intent, intent_digest, observed=True)
+            return self._defer_cleanup(intent, intent_digest, observed=True)
+        if target is None:
+            try:
+                if self._evidence_expired(intent):
+                    return self._defer_cleanup(intent, intent_digest, observed=False)
+            except Exception:
+                return self._defer_cleanup(intent, intent_digest, observed=False)
         try:
             self._ensure_marker("submission", request.rehearsal_id, submission)
-        except (MarkerConflict, MarkerPresentInvalid):
-            return self._cleanup_target(intent, intent_digest)
+        except Exception:
+            return self._defer_cleanup(
+                intent,
+                intent_digest,
+                observed=isinstance(target, ArmResponse),
+            )
         if isinstance(target, ArmResponse):
-            self._verify_target(target, intent, intent_digest)
-            return self._poll_restore(intent, intent_digest)
-        if self._intent_expired(intent):
-            return self._cleanup_target(intent, intent_digest)
+            try:
+                self._verify_target(target, intent, intent_digest)
+            except Exception:
+                return self._defer_cleanup(intent, intent_digest, observed=True)
+            return self._poll_restore(intent, intent_digest, observed=True)
+        try:
+            if self._intent_expired(intent):
+                return self._defer_cleanup(intent, intent_digest, observed=False)
+        except Exception:
+            return self._defer_cleanup(intent, intent_digest, observed=False)
         cleanup_requested = self._cleanup_requested(intent, intent_digest)
         if cleanup_requested is not False:
-            return self._cleanup_target(intent, intent_digest)
-        if self._evidence_expired(intent):
-            return self._cleanup_target(intent, intent_digest)
-        if self._intent_expired(intent):
-            return self._cleanup_target(intent, intent_digest)
-        response = self._request(
-            "PUT",
-            intent["target_server_resource_id"],
-            api_version=self.config.postgres_api_version,
-            body=self._restore_body(intent, intent_digest),
-            headers={"If-None-Match": "*"},
-        )
-        if (
-            isinstance(response, ArmResponse)
-            and response.status
-            not in {
+            return self._defer_cleanup(intent, intent_digest, observed=False)
+        try:
+            if self._evidence_expired(intent) or self._intent_expired(intent):
+                return self._defer_cleanup(intent, intent_digest, observed=False)
+        except Exception:
+            return self._defer_cleanup(intent, intent_digest, observed=False)
+        try:
+            response = self._request(
+                "PUT",
+                intent["target_server_resource_id"],
+                api_version=self.config.postgres_api_version,
+                body=self._restore_body(intent, intent_digest),
+                headers={"If-None-Match": "*"},
+            )
+        except Exception:
+            return self._defer_cleanup(intent, intent_digest, observed=False)
+        try:
+            if not isinstance(response, ArmResponse) or response.status not in {
                 200,
                 201,
                 202,
-                409,
-                412,
-                429,
-            }
-            and response.status < 500
-        ):
-            _fail("restore_submission_refused")
-        cleanup_requested = self._cleanup_requested(intent, intent_digest)
-        if cleanup_requested is not False:
-            return self._cleanup_target(intent, intent_digest)
+            }:
+                return self._defer_cleanup(intent, intent_digest, observed=False)
+            cleanup_requested = self._cleanup_requested(intent, intent_digest)
+            if cleanup_requested is not False:
+                return self._defer_cleanup(intent, intent_digest, observed=False)
+        except Exception:
+            return self._defer_cleanup(intent, intent_digest, observed=False)
         return self._poll_restore(intent, intent_digest)
 
     def cleanup_intent(self, rehearsal_id: str) -> SubmitOutcome:
@@ -2051,9 +2138,9 @@ class SafeRestoreSubmitter:
         try:
             actual = self._read_marker("submission", rehearsal_id)
         except MarkerPresentInvalid:
-            return self._cleanup_target(intent, intent_digest)
+            return self._delete_target_for_cleanup(intent, intent_digest)
         if actual is UNKNOWN:
-            return self._cleanup_target(intent, intent_digest)
+            return self._delete_target_for_cleanup(intent, intent_digest)
         if actual is None:
             target = self._get_target(intent["target_server_resource_id"])
             if target is None:
@@ -2072,9 +2159,9 @@ class SafeRestoreSubmitter:
                     observed=False,
                     cleanup_required=True,
                 )
-            return self._cleanup_target(intent, intent_digest)
+            return self._delete_target_for_cleanup(intent, intent_digest)
         assert isinstance(actual, dict)
-        return self._cleanup_target(intent, intent_digest)
+        return self._delete_target_for_cleanup(intent, intent_digest)
 
 
 def request_from_binding(

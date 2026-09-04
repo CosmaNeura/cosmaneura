@@ -165,6 +165,7 @@ resource "azurerm_management_lock" "marker" {
   depends_on = [
     azapi_resource_action.marker_legal_hold,
     azurerm_role_assignment.marker_create,
+    azurerm_role_assignment.marker_provision_cleanup,
     azurerm_storage_container_immutability_policy.marker,
   ]
 }

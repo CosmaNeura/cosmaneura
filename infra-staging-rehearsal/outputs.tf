@@ -209,7 +209,7 @@ output "marker_store_binding" {
       provision_submission = var.enable_marker_create_assignments ? (
         azurerm_role_assignment.marker_create["provision_submission"].id
       ) : null
-      provision_cleanup_read  = azurerm_role_assignment.marker_read["provision_cleanup"].id
+      provision_cleanup       = azurerm_role_assignment.marker_provision_cleanup[0].id
       cleanup_intent_read     = azurerm_role_assignment.marker_read["cleanup_intent"].id
       cleanup_submission_read = azurerm_role_assignment.marker_read["cleanup_submission"].id
       cleanup_marker = var.enable_marker_create_assignments ? (
@@ -224,9 +224,11 @@ output "marker_store_binding" {
     evidence_immutability_policy_id = var.lock_marker_immutability_policies ? (
       azurerm_storage_container_immutability_policy.marker[local.evidence_container_name].id
     ) : null
-    legal_hold_requested    = var.enable_marker_legal_holds
-    locked_worm_requested   = var.lock_marker_immutability_policies
-    readonly_lock_requested = var.enable_marker_readonly_lock
+    legal_hold_requested                  = var.enable_marker_legal_holds
+    legal_hold_readback_proven            = var.marker_legal_hold_readback_proven
+    locked_worm_requested                 = var.lock_marker_immutability_policies
+    private_marker_network_posture_proven = var.private_marker_network_posture_proven
+    readonly_lock_requested               = var.enable_marker_readonly_lock
     management_lock_id = var.enable_marker_readonly_lock ? (
       azurerm_management_lock.marker[0].id
     ) : null

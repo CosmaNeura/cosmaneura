@@ -75,8 +75,9 @@ All nineteen activation assertions remain false and executable validation refuse
   enforced no-override request; `jobs/start/action` RBAC alone is insufficient.
   Their current subscription `control_reader` assignments must be removed or
   re-homed. Only unfederated job UAMIs attach to compute. Provision's fourth
-  cleanup-marker create assignment is future work; neither tombstone create
-  grant precedes approved legal hold and locked WORM.
+  cleanup-marker create assignment is now modeled behind the dormant gates;
+  neither tombstone create grant precedes exact private-network proof,
+  approved legal hold, locked WORM, and provider create-only proof.
 - The checked-in policy excludes resulting image/record/signature digests. A
   post-publication signed record binds the image and pre-binding job templates.
   All four fields in exact provision/cleanup job-configuration pointers are compared field-for-field before record validation. Its separately reviewed
@@ -124,13 +125,23 @@ They are not usable by a workload until the later executor rung attaches them.
 
 The minimum Blob permission for conditional BlockBlob creation is intentionally
 unsettled. The known read-only role is modeled immediately. The create/read role
-and its three marker-container-scoped assignments remain absent unless
+and its three ordinary marker-container-scoped assignments remain absent unless
 `enable_marker_create_assignments=true`,
 `marker_create_authorization_proven=true`, and exactly `read` plus one of `add`
-or `write` is supplied from live provider-fidelity evidence. Those assignments
-also require the approved legal-hold and locked-WORM phase. They never include
-the evidence container. WORM and legal hold, not RBAC, must provide the
-non-overwrite guarantee if `write` is required.
+or `write` is supplied from live provider-fidelity evidence that demonstrates
+conditional create/read success and overwrite/delete denial. They also require
+`private_marker_network_posture_proven=true`, exact private account/Blob
+endpoint/DNS/VNet-link configuration, and the approved legal-hold and locked
+90-day WORM phase. Because the AzAPI action's read is state-only,
+`marker_legal_hold_readback_proven=true` must independently attest that the
+legal hold is still active at action time. They never include the evidence
+container. Provision's one `provision_cleanup` assignment remains present with
+read-only authority while create grants are disabled; under the same activation
+gates it uses create/read with no read-only duplicate. The output remains one
+logical `provision_cleanup` ID, for exactly two read plus four create assignments
+in the enabled desired state. The saved plan and credentialed readback must
+account for any replacement interval. WORM and legal hold, not RBAC, must
+provide the non-overwrite guarantee if `write` is required.
 
 The GitHub environments, environment reviewers and branch policies are not
 managed here. The existing workflow is not changed to use either UAMI or the
@@ -192,8 +203,11 @@ ordered and independently default off:
    does not POST the action again.
 2. `lock_marker_immutability_policies` sets all seven retained containers to
    locked 90-day WORM. Azure cannot unlock or delete those policies.
-3. The three live-proven marker-create assignments must be installed on the job
-   UAMIs and read back. The evidence container receives no marker runtime role.
+3. The four live-proven marker-create assignments must be installed on the job
+   UAMIs and read back only after exact private marker-network proof. The
+   provision cleanup grant replaces its prior read-only grant, yielding six
+   logical assignments with no duplicate. The evidence container receives no
+   marker runtime role.
 4. `enable_marker_readonly_lock` is last, but cannot pass this rung's
    preconditions while the private-executor and trusted-evidence bindings remain
    unimplemented. Once a later reviewed rung implements both, the lock still
@@ -208,9 +222,11 @@ operator procedure, and locked WORM remains irreversible. Do not edit the
 AzAPI legal-hold resource after ReadOnly is installed: AzAPI updates perform the
 action, and the account lock intentionally blocks such management-plane writes.
 
-`marker_store_binding` exposes the six exact marker role-assignment IDs and the
+`marker_store_binding` exposes the six exact logical marker role-assignment IDs and the
 three marker immutability-policy IDs needed for later contract reconciliation;
-create-role and policy values remain null or empty while their gates are off.
+`provision_cleanup` names either its dormant read grant or its activated
+create/read replacement. Other create-role and policy values remain null or
+empty while their gates are off.
 The evidence policy ID is separate. Evidence-content digests must come from
 authenticated readback, not from Terraform configuration.
 

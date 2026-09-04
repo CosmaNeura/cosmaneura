@@ -82,8 +82,10 @@ resource "terraform_data" "activation_guard" {
     private_executor_network_approved   = var.private_executor_network_plan_approved
     marker_create_assignments           = var.enable_marker_create_assignments
     marker_create_authorization_proven  = var.marker_create_authorization_proven
+    private_marker_network_posture      = var.private_marker_network_posture_proven
     irreversible_controls_approved      = var.irreversible_marker_controls_approved
     marker_legal_holds                  = var.enable_marker_legal_holds
+    marker_legal_hold_readback_proven   = var.marker_legal_hold_readback_proven
     locked_marker_immutability_policies = var.lock_marker_immutability_policies
     marker_readonly_lock                = var.enable_marker_readonly_lock
     private_executor_binding            = local.private_executor_binding_implemented
@@ -122,7 +124,12 @@ resource "terraform_data" "activation_guard" {
           length(var.marker_create_data_actions) == 2
         )
       )
-      error_message = "Marker create assignments require exactly read plus one live-proven create action (add or write)"
+      error_message = "Marker create assignments require exactly read plus one action (add or write) with live proof of conditional create/read success and overwrite/delete denial"
+    }
+
+    precondition {
+      condition     = !var.enable_marker_create_assignments || var.private_marker_network_posture_proven
+      error_message = "Marker create assignments require action-time proof of the exact private marker account, Blob endpoint, DNS zone, and control-VNet link posture"
     }
 
 
@@ -132,10 +139,11 @@ resource "terraform_data" "activation_guard" {
         (
           var.irreversible_marker_controls_approved &&
           var.enable_marker_legal_holds &&
+          var.marker_legal_hold_readback_proven &&
           var.lock_marker_immutability_policies
         )
       )
-      error_message = "Runtime marker-create assignments require the approved legal-hold and locked-WORM phase"
+      error_message = "Runtime marker-create assignments require approved legal-hold creation, authenticated action-time legal-hold readback, and the locked-WORM phase"
     }
 
     precondition {
@@ -157,7 +165,7 @@ resource "terraform_data" "activation_guard" {
           var.enable_marker_create_assignments
         )
       )
-      error_message = "The ReadOnly management lock is last: legal holds, locked WORM policies, and all three proven marker-create assignments must already be enabled"
+      error_message = "The ReadOnly management lock is last: legal holds, locked WORM policies, and all four proven marker-create assignments must already be enabled"
     }
 
     precondition {

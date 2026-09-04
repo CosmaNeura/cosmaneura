@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import importlib.util
+import inspect
 import json
 import sys
 import urllib.error
@@ -194,6 +195,7 @@ class FakeArm:
         self.target: dict[str, Any] | None = None
         self.calls: list[dict[str, Any]] = []
         self.restore_put_unknown = False
+        self.target_get_unknowns = 0
         self.patch_status = 202
         self.restore_public_access = "Disabled"
 
@@ -218,6 +220,9 @@ class FakeArm:
             }
         )
         if method == "GET":
+            if self.target_get_unknowns:
+                self.target_get_unknowns -= 1
+                raise safe_submit.ArmOutcomeUnknown
             if self.target is None:
                 return safe_submit.ArmResponse(404)
             return safe_submit.ArmResponse(200, deepcopy(self.target))
@@ -777,6 +782,10 @@ def test_canonical_contract_is_pinned_and_dormant() -> None:
     assert policy["marker_store"]["rbac"]["create_read_data_actions"].startswith(
         "CONFIGURE_EXACT_"
     )
+    assert (
+        policy["marker_store"]["rbac"]["provision_cleanup_tombstone_assignment_id"]
+        == "CONFIGURE_EXACT_RESTORE_PROVISION_CLEANUP_TOMBSTONE_ROLE_ASSIGNMENT_ID"
+    )
     assert policy["marker_store"]["immutability"] == {
         "scope": "container",
         "mode": "Locked",
@@ -790,6 +799,21 @@ def test_canonical_contract_is_pinned_and_dormant() -> None:
         "configuration_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_IMMUTABILITY_CONFIGURATION_EVIDENCE_SHA256",
     }
     assert len(safe_submit._placeholder_values(policy["marker_store"])) >= 25
+    assert policy["operation_authority"] == {
+        "provision": {
+            "entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.submit",
+            "arm_resource_delete_permitted": False,
+            "cleanup_handoff": "exact_dominant_tombstone_create_and_read_back",
+            "cleanup_tombstone_required_after_partial_or_unknown_outcome": True,
+        },
+        "cleanup": {
+            "entrypoint": (
+                "staging_restore_safe_submit.SafeRestoreSubmitter.cleanup_intent"
+            ),
+            "arm_resource_delete_permitted": True,
+            "exact_dominant_tombstone_required_before_delete": True,
+        },
+    }
     with pytest.raises(safe_submit.SafeSubmitError, match="safe_submit_not_activated"):
         safe_submit.config_from_policies(envelope, policy, executable=True)
     config = safe_submit.config_from_policies(envelope, policy, executable=False)
@@ -1005,6 +1029,156 @@ def test_unknown_submission_never_claims_absence_or_completion() -> None:
     assert len(_mutations(fake, "PUT")) == 1
 
 
+@pytest.mark.parametrize("put_result", ["unknown", 409, 412, 429, 500])
+def test_ambiguous_put_materialization_immediately_enters_handoff(
+    put_result: str | int,
+) -> None:
+    class AmbiguousPutArm(FakeArm):
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            response = super().request(*args, **kwargs)
+            if args[0] != "PUT":
+                return response
+            assert self.target is not None
+            if put_result == "unknown":
+                raise safe_submit.ArmOutcomeUnknown
+            return safe_submit.ArmResponse(put_result)
+
+    fake = AmbiguousPutArm()
+    markers = FakeMarkers()
+    outcome = _engine(fake, markers).submit(_request())
+
+    assert outcome.status == "pending_late_materialization"
+    assert outcome.target_observed is False
+    assert outcome.cleanup_required is True
+    assert fake.target is not None
+    assert ("cleanup", REHEARSAL_ID) in markers.records
+    assert len(_mutations(fake, "GET")) == 1
+    assert len(_mutations(fake, "PUT")) == 1
+    assert _mutations(fake, "DELETE") == []
+
+
+def test_unknown_target_preflight_creates_tombstone_without_submission_or_delete() -> (
+    None
+):
+    fake = FakeArm()
+    fake.target_get_unknowns = 1
+    markers = FakeMarkers()
+    outcome = _engine(fake, markers).submit(_request())
+
+    assert outcome.status == "pending_late_materialization"
+    assert outcome.target_observed is False
+    assert outcome.cleanup_required is True
+    assert set(markers.records) == {
+        ("intent", REHEARSAL_ID),
+        ("cleanup", REHEARSAL_ID),
+    }
+    assert _mutations(fake, "PUT") == []
+    assert _mutations(fake, "DELETE") == []
+
+
+def test_initial_target_read_failure_after_exact_submission_returns_handoff() -> None:
+    class TargetReadFailureArm(FakeArm):
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            if args[0] == "GET":
+                super().request(*args, **kwargs)
+                raise safe_submit.SafeSubmitError("target_read_refused")
+            return super().request(*args, **kwargs)
+
+    fake = TargetReadFailureArm()
+    markers = FakeMarkers()
+    engine = _engine(fake, markers)
+    intent = engine._build_intent(_request())
+    intent_digest = f"sha256:{safe_submit._sha256(safe_submit._canonical(intent))}"
+    markers.records[("intent", REHEARSAL_ID)] = safe_submit._canonical(intent)
+    markers.records[("submission", REHEARSAL_ID)] = safe_submit._canonical(
+        engine._submission_record(intent, intent_digest)
+    )
+
+    outcome = engine.submit(_request())
+
+    assert outcome.status == "pending_late_materialization"
+    assert outcome.target_observed is False
+    assert outcome.cleanup_required is True
+    assert markers.records[("cleanup", REHEARSAL_ID)] == safe_submit._canonical(
+        engine._cleanup_record(intent, intent_digest)
+    )
+    assert _mutations(fake, "PUT") == []
+    assert _mutations(fake, "DELETE") == []
+
+
+@pytest.mark.parametrize(
+    ("preexisting_target", "status", "observed", "put_count"),
+    [
+        (False, "pending_late_materialization", False, 1),
+        (True, "cleanup_pending", True, 0),
+    ],
+)
+def test_poll_target_read_failure_returns_handoff_and_preserves_observation(
+    preexisting_target: bool, status: str, observed: bool, put_count: int
+) -> None:
+    class PollReadFailureArm(FakeArm):
+        def __init__(self) -> None:
+            super().__init__()
+            self.get_count = 0
+
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            if args[0] == "GET":
+                self.get_count += 1
+                if self.get_count == 2:
+                    super().request(*args, **kwargs)
+                    raise safe_submit.SafeSubmitError("target_read_refused")
+            return super().request(*args, **kwargs)
+
+    fake = PollReadFailureArm()
+    markers = FakeMarkers()
+    engine = _engine(fake, markers)
+    if preexisting_target:
+        intent = engine._build_intent(_request())
+        intent_digest = f"sha256:{safe_submit._sha256(safe_submit._canonical(intent))}"
+        markers.records[("intent", REHEARSAL_ID)] = safe_submit._canonical(intent)
+        markers.records[("submission", REHEARSAL_ID)] = safe_submit._canonical(
+            engine._submission_record(intent, intent_digest)
+        )
+        fake.materialize(
+            intent["target_server_resource_id"],
+            body=engine._restore_body(intent, intent_digest),
+        )
+
+    outcome = engine.submit(_request())
+
+    assert outcome.status == status
+    assert outcome.target_observed is observed
+    assert outcome.cleanup_required is True
+    assert ("cleanup", REHEARSAL_ID) in markers.records
+    assert len(_mutations(fake, "PUT")) == put_count
+    assert _mutations(fake, "DELETE") == []
+
+
+def test_unknown_cleanup_preflight_reconciles_exact_tombstone_without_arm() -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+    markers.unknown_reads[("cleanup", REHEARSAL_ID)] = 1
+
+    outcome = _engine(fake, markers).submit(_request())
+
+    assert outcome.status == "pending_late_materialization"
+    assert ("cleanup", REHEARSAL_ID) in markers.records
+    assert fake.calls == []
+
+
+def test_provision_call_graph_has_no_cleanup_delete_path() -> None:
+    source = "\n".join(
+        (
+            inspect.getsource(safe_submit.SafeRestoreSubmitter.submit),
+            inspect.getsource(safe_submit.SafeRestoreSubmitter._poll_restore),
+            inspect.getsource(safe_submit.SafeRestoreSubmitter._defer_cleanup),
+        )
+    )
+
+    assert "_delete_target_for_cleanup" not in source
+    assert '"DELETE"' not in source
+
+
 def test_expired_fresh_intent_is_rejected_before_any_target_access() -> None:
     fake = FakeArm()
     markers = FakeMarkers()
@@ -1023,7 +1197,10 @@ def test_expired_fresh_intent_is_rejected_before_any_target_access() -> None:
 
 @pytest.mark.parametrize(
     ("before_count", "status", "put_count", "delete_count"),
-    [(5, "pending_late_materialization", 0, 0), (8, "cleaned", 1, 1)],
+    [
+        (5, "pending_late_materialization", 0, 0),
+        (8, "pending_late_materialization", 1, 0),
+    ],
 )
 def test_expiry_at_late_submission_boundaries_enters_cleanup(
     before_count: int, status: str, put_count: int, delete_count: int
@@ -1043,7 +1220,7 @@ def test_expiry_at_late_submission_boundaries_enters_cleanup(
     )
     outcome = engine.submit(_request(cleanup_not_after=at_expiry))
     assert outcome.status == status
-    assert outcome.cleanup_required is (status != "cleaned")
+    assert outcome.cleanup_required is True
     assert ("cleanup", REHEARSAL_ID) in markers.records
     assert len(_mutations(fake, "PUT")) == put_count
     assert len(_mutations(fake, "DELETE")) == delete_count
@@ -1053,7 +1230,7 @@ def test_expiry_at_late_submission_boundaries_enters_cleanup(
     ("mode", "status", "put_count", "delete_count"),
     [
         ("before-put", "pending_late_materialization", 0, 0),
-        ("during-put", "cleaned", 1, 1),
+        ("during-put", "pending_late_materialization", 1, 0),
     ],
 )
 def test_cleanup_tombstone_wins_restore_put_races(
@@ -1088,7 +1265,7 @@ def test_cleanup_tombstone_wins_restore_put_races(
     markers.on_read = on_read
     outcome = engine.submit(_request())
     assert outcome.status == status
-    assert outcome.cleanup_required is (status != "cleaned")
+    assert outcome.cleanup_required is True
     assert len(_mutations(fake, "PUT")) == put_count
     assert len(_mutations(fake, "DELETE")) == delete_count
 
@@ -1163,17 +1340,250 @@ def test_malformed_cleanup_marker_presence_cancels_submit(
     else:
         markers.records[key] = b"not-json"
     outcome = engine.submit(_request())
-    assert outcome.status == (
-        "cleanup_marker_unproven"
-        if invalid_properties
-        else "pending_late_materialization"
-    )
+    assert outcome.status == "cleanup_marker_unproven"
     assert outcome.cleanup_required is True
     assert _mutations(fake, "PUT") == []
     if invalid_properties:
         cleanup = engine.cleanup_intent(REHEARSAL_ID)
         assert cleanup.status == "cleanup_marker_unproven"
         assert cleanup.cleanup_required is True
+
+
+@pytest.mark.parametrize("mode", ["mismatch", "wrong-readback"])
+def test_cleanup_requires_exact_canonical_tombstone_before_delete(mode: str) -> None:
+    class WrongReadbackMarkers(FakeMarkers):
+        def create_if_absent(self, kind: str, rehearsal_id: str, raw: bytes) -> bytes:
+            if kind == "cleanup":
+                self.calls.append(("PUT", kind, rehearsal_id))
+                return b"{}"
+            return super().create_if_absent(kind, rehearsal_id, raw)
+
+    fake = FakeArm()
+    markers = WrongReadbackMarkers() if mode == "wrong-readback" else FakeMarkers()
+    engine = _engine(fake, markers)
+    intent = engine._build_intent(_request())
+    markers.records[("intent", REHEARSAL_ID)] = safe_submit._canonical(intent)
+    if mode == "mismatch":
+        wrong = engine._cleanup_record(
+            intent,
+            f"sha256:{'f' * 64}",
+        )
+        markers.records[("cleanup", REHEARSAL_ID)] = safe_submit._canonical(wrong)
+
+    outcome = engine.cleanup_intent(REHEARSAL_ID)
+
+    assert outcome.status == "cleanup_marker_unproven"
+    assert outcome.cleanup_required is True
+    assert _mutations(fake, "PATCH") == []
+    assert _mutations(fake, "DELETE") == []
+
+
+def test_invalid_materialized_target_is_tombstoned_without_delete() -> None:
+    class InvalidAfterPutArm(FakeArm):
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            response = super().request(*args, **kwargs)
+            if args[0] == "PUT":
+                assert self.target is not None
+                self.target["name"] = "wrong-target"
+            return response
+
+    fake = InvalidAfterPutArm()
+    markers = FakeMarkers()
+    outcome = _engine(fake, markers).submit(_request())
+
+    assert outcome.status == "cleanup_pending"
+    assert outcome.target_observed is True
+    assert outcome.cleanup_required is True
+    assert ("cleanup", REHEARSAL_ID) in markers.records
+    assert _mutations(fake, "DELETE") == []
+
+
+@pytest.mark.parametrize("exact_submission", [False, True])
+def test_preexisting_invalid_target_returns_observed_handoff(
+    exact_submission: bool,
+) -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+    engine = _engine(fake, markers)
+    intent = engine._build_intent(_request())
+    intent_digest = f"sha256:{safe_submit._sha256(safe_submit._canonical(intent))}"
+    markers.records[("intent", REHEARSAL_ID)] = safe_submit._canonical(intent)
+    if exact_submission:
+        markers.records[("submission", REHEARSAL_ID)] = safe_submit._canonical(
+            engine._submission_record(intent, intent_digest)
+        )
+    fake.materialize(
+        intent["target_server_resource_id"],
+        body=engine._restore_body(intent, intent_digest),
+    )
+    assert fake.target is not None
+    fake.target["name"] = "wrong-target"
+
+    outcome = engine.submit(_request())
+
+    assert outcome.status == "cleanup_pending"
+    assert outcome.target_observed is True
+    assert outcome.cleanup_required is True
+    assert _mutations(fake, "PUT") == []
+    assert _mutations(fake, "DELETE") == []
+
+
+@pytest.mark.parametrize("failure_mode", ["write", "readback", "unexpected"])
+def test_tombstone_failure_returns_bounded_unproven_handoff(
+    failure_mode: str,
+) -> None:
+    class InvalidAfterPutArm(FakeArm):
+        def request(self, *args: Any, **kwargs: Any) -> Any:
+            response = super().request(*args, **kwargs)
+            if args[0] == "PUT":
+                assert self.target is not None
+                self.target["name"] = "wrong-target"
+            return response
+
+    class FailingCleanupMarkers(FakeMarkers):
+        def create_if_absent(self, kind: str, rehearsal_id: str, raw: bytes) -> bytes:
+            if kind == "cleanup" and failure_mode == "unexpected":
+                raise RuntimeError("untrusted marker failure text")
+            return super().create_if_absent(kind, rehearsal_id, raw)
+
+    fake = InvalidAfterPutArm()
+    markers = FailingCleanupMarkers()
+    key = ("cleanup", REHEARSAL_ID)
+    if failure_mode == "write":
+        markers.fail_create_before.add(key)
+    elif failure_mode == "readback":
+        markers.fail_create_after.add(key)
+
+    outcome = _engine(fake, markers).submit(_request())
+
+    assert outcome.status == "cleanup_marker_unproven"
+    assert outcome.target_observed is True
+    assert outcome.cleanup_required is True
+    assert _mutations(fake, "DELETE") == []
+
+
+def test_post_put_cleanup_read_failure_returns_bounded_unproven_handoff() -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+    cleanup_reads = 0
+
+    def fail_post_put_cleanup_reads(kind: str, _rehearsal_id: str) -> None:
+        nonlocal cleanup_reads
+        if kind == "cleanup":
+            cleanup_reads += 1
+            if cleanup_reads >= 3:
+                raise safe_submit.SafeSubmitError("marker_read_refused")
+
+    markers.on_read = fail_post_put_cleanup_reads
+    outcome = _engine(fake, markers).submit(_request())
+
+    assert outcome.status == "cleanup_marker_unproven"
+    assert outcome.target_observed is False
+    assert outcome.cleanup_required is True
+    assert len(_mutations(fake, "PUT")) == 1
+    assert _mutations(fake, "DELETE") == []
+
+
+def test_post_put_trusted_clock_failure_returns_bounded_handoff() -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+
+    def clock() -> datetime:
+        if _mutations(fake, "PUT"):
+            raise safe_submit.SafeSubmitError("trusted_clock_unavailable")
+        return TEST_NOW
+
+    engine = safe_submit.SafeRestoreSubmitter(
+        fake,
+        markers,
+        _config(),
+        sleeper=lambda _: None,
+        clock=clock,
+    )
+    outcome = engine.submit(_request())
+
+    assert outcome.status == "pending_late_materialization"
+    assert outcome.target_observed is False
+    assert outcome.cleanup_required is True
+    assert len(_mutations(fake, "PUT")) == 1
+    assert _mutations(fake, "DELETE") == []
+
+
+def test_post_put_target_state_failure_returns_observed_handoff() -> None:
+    class TargetStateFailureSubmitter(safe_submit.SafeRestoreSubmitter):
+        def _target_state(self, target: dict[str, Any]) -> str:
+            raise RuntimeError("untrusted target state failure")
+
+    fake = FakeArm()
+    markers = FakeMarkers()
+    engine = TargetStateFailureSubmitter(
+        fake,
+        markers,
+        _config(),
+        sleeper=lambda _: None,
+        clock=lambda: TEST_NOW,
+    )
+    outcome = engine.submit(_request())
+
+    assert outcome.status == "cleanup_pending"
+    assert outcome.target_observed is True
+    assert outcome.cleanup_required is True
+    assert len(_mutations(fake, "PUT")) == 1
+    assert _mutations(fake, "DELETE") == []
+
+
+@pytest.mark.parametrize(
+    ("marker_readback_fails", "status"),
+    [(False, "cleanup_pending"), (True, "cleanup_marker_unproven")],
+)
+def test_isolation_failure_returns_bounded_handoff_without_delete(
+    marker_readback_fails: bool, status: str
+) -> None:
+    class IsolationFailureArm(FakeArm):
+        def request(
+            self,
+            method: str,
+            resource_id: str,
+            *,
+            api_version: str,
+            body: dict[str, Any] | None = None,
+            headers: Mapping[str, str] | None = None,
+            timeout_seconds: int,
+        ) -> Any:
+            if method == "PATCH":
+                self.calls.append(
+                    {
+                        "method": method,
+                        "resource_id": resource_id,
+                        "api_version": api_version,
+                        "body": deepcopy(body),
+                        "headers": dict(headers or {}),
+                        "timeout_seconds": timeout_seconds,
+                    }
+                )
+                raise safe_submit.SafeSubmitError("arm_authentication_failed")
+            return super().request(
+                method,
+                resource_id,
+                api_version=api_version,
+                body=body,
+                headers=headers,
+                timeout_seconds=timeout_seconds,
+            )
+
+    fake = IsolationFailureArm()
+    fake.restore_public_access = "Enabled"
+    markers = FakeMarkers()
+    if marker_readback_fails:
+        markers.fail_create_after.add(("cleanup", REHEARSAL_ID))
+
+    outcome = _engine(fake, markers).submit(_request())
+
+    assert outcome.status == status
+    assert outcome.target_observed is True
+    assert outcome.cleanup_required is True
+    assert len(_mutations(fake, "PATCH")) == 1
+    assert _mutations(fake, "DELETE") == []
 
 
 @pytest.mark.parametrize("tags", [None, {}, {"rehearsal-id": REHEARSAL_ID}])
@@ -1269,15 +1679,15 @@ def test_isolation_refusal_still_attempts_guarded_deletion() -> None:
     assert len(_mutations(fake, "DELETE")) == 1
 
 
-def test_submit_enters_cleanup_immediately_on_definite_isolation_refusal() -> None:
+def test_submit_defers_cleanup_immediately_on_definite_isolation_refusal() -> None:
     fake = FakeArm()
     fake.restore_public_access = "Enabled"
     fake.patch_status = 403
     engine = _engine(fake, restore_poll_attempts=3)
     outcome = engine.submit(_request())
-    assert outcome.status == "cleaned"
-    assert len(_mutations(fake, "PATCH")) == 2
-    assert len(_mutations(fake, "DELETE")) == 1
+    assert outcome.status == "cleanup_pending"
+    assert len(_mutations(fake, "PATCH")) == 1
+    assert _mutations(fake, "DELETE") == []
 
 
 def test_unknown_submission_record_never_claims_prepared_only() -> None:

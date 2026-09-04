@@ -44,9 +44,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "7df6bb5e2de1c35aa4e353e0b4bd7009a1c0b0fc59804ecb83781bf3a39408c4"
+POLICY_SHA256 = "a7542d8f03164ca72fda998d3ffe8f8d1ee6df4925ed09a3be9a09f70d89fe3c"
 POLICY_TEMPLATE_SHA256 = (
-    "5c448d8f1329c205c3fb57bbaf6dcf3c02c048d2e68d14ab35f27c774ca46235"
+    "ec4b75928b57fe40cdeeda46c5889a61ba461000a74b6e4e6db081a5a6ffc541"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -69,8 +69,7 @@ SUBMIT_OUTCOME_FIELDS = (
 )
 OUTCOME_STATUS_FLAGS = {
     "ready": frozenset({(True, False)}),
-    "cleanup_marker_unproven": frozenset({(False, True)}),
-    "cleaned": frozenset({(True, False)}),
+    "cleanup_marker_unproven": frozenset({(False, True), (True, True)}),
     "cleanup_pending": frozenset({(True, True)}),
     "pending_late_materialization": frozenset({(False, True)}),
 }

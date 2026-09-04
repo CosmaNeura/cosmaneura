@@ -93,7 +93,7 @@
       "read_role_permissions_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_READ_ROLE_PERMISSIONS_SHA256",
       "provision_intent_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_INTENT_ROLE_ASSIGNMENT_ID",
       "provision_submission_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_SUBMISSION_ROLE_ASSIGNMENT_ID",
-      "provision_cleanup_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_PROVISION_CLEANUP_READ_ROLE_ASSIGNMENT_ID",
+      "provision_cleanup_tombstone_assignment_id": "CONFIGURE_EXACT_RESTORE_PROVISION_CLEANUP_TOMBSTONE_ROLE_ASSIGNMENT_ID",
       "cleanup_intent_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_INTENT_READ_ROLE_ASSIGNMENT_ID",
       "cleanup_submission_read_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_SUBMISSION_READ_ROLE_ASSIGNMENT_ID",
       "cleanup_marker_assignment_id": "CONFIGURE_EXACT_RESTORE_MARKER_CLEANUP_MARKER_ROLE_ASSIGNMENT_ID"
@@ -120,6 +120,19 @@
       "overwrite_delete_denial_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_OVERWRITE_DELETE_DENIAL_EVIDENCE_SHA256",
       "private_reachability_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_PRIVATE_REACHABILITY_EVIDENCE_SHA256",
       "review_evidence_sha256": "CONFIGURE_EXACT_RESTORE_MARKER_PROVIDER_FIDELITY_REVIEW_SHA256"
+    }
+  },
+  "operation_authority": {
+    "provision": {
+      "entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.submit",
+      "arm_resource_delete_permitted": false,
+      "cleanup_handoff": "exact_dominant_tombstone_create_and_read_back",
+      "cleanup_tombstone_required_after_partial_or_unknown_outcome": true
+    },
+    "cleanup": {
+      "entrypoint": "staging_restore_safe_submit.SafeRestoreSubmitter.cleanup_intent",
+      "arm_resource_delete_permitted": true,
+      "exact_dominant_tombstone_required_before_delete": true
     }
   },
   "outcomes": {
