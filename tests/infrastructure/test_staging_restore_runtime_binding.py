@@ -212,7 +212,6 @@ def _job_observation(
             api_version="2024-03-01",
             status_code=200,
             content_type="application/json",
-            etag=f'"{action}-etag"',
             observed_at=launch.datetime(2026, 9, 4, 12, 2, tzinfo=launch.UTC),
             body=body,
         )

@@ -21,7 +21,7 @@ def _policy() -> dict[str, Any]:
     return helpers._configured_policy()
 def _arm_response(policy: dict[str, Any], action: str, *, body: dict[str, Any] | None = None) -> launch.AuthenticatedArmGetResponse:
     document = body or helpers._job_document(policy, action)
-    return launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=policy["runtime"]["jobs"][action]["resource_id"], api_version="2024-03-01", status_code=200, content_type="application/json; charset=utf-8", etag=f'"{action}-etag"', observed_at=datetime(2026, 9, 4, 12, 2, tzinfo=UTC), body=runtime._canonical(document))
+    return launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=policy["runtime"]["jobs"][action]["resource_id"], api_version="2024-03-01", status_code=200, content_type="application/json; charset=utf-8", observed_at=datetime(2026, 9, 4, 12, 2, tzinfo=UTC), body=runtime._canonical(document))
 def _observations(policy: dict[str, Any], pointers: dict[str, str] | None = None) -> tuple[launch.AuthenticatedJobConfigurationObservation, launch.AuthenticatedJobConfigurationObservation]:
     values = pointers or helpers._pointer_values()
     observations = [launch.validate_job_configuration_observation(policy, job_kind=action, response=_arm_response(policy, action, body=helpers._job_document(policy, action, values))) for action in ("provision", "cleanup")]
@@ -198,35 +198,38 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
     job_body = helpers._job_document(policy, "provision", pointer)
     execution_id = f"{provision.job_resource_id}/executions/execution-1"
     execution_body = {
-        "id": execution_id,
         "name": "execution-1",
-        "type": "Microsoft.App/jobs/executions",
-        "properties": {
-            "status": "Running",
-            "template": job_body["properties"]["template"],
-        },
+        "properties": {"template": job_body["properties"]["template"]},
     }
     response = launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(
         resource_id=execution_id,
         api_version="2024-03-01",
         status_code=200,
         content_type="application/json",
-        etag='"execution-etag"',
         observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC),
         body=runtime._canonical(execution_body),
     )
     execution = launch.validate_execution_observation(policy, action="provision", response=response)
+    for extra in ({"id": execution_id}, {"type": "Microsoft.App/jobs/executions"}):
+        assert launch.validate_execution_observation(policy, action="provision", response=launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=execution_id, api_version="2024-03-01", status_code=200, content_type="application/json", observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC), body=runtime._canonical(execution_body | extra))).execution_resource_id == execution_id
+    for extra in ({"id": f"{execution_id}-wrong"}, {"type": "microsoft.app/jobs/executions"}, {"name": "execution-2"}, {"properties": {}}):
+        with pytest.raises(launch.LaunchBindingFailure, match="execution_observation"):
+            launch.validate_execution_observation(policy, action="provision", response=launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=execution_id, api_version="2024-03-01", status_code=200, content_type="application/json", observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC), body=runtime._canonical(execution_body | extra)))
     authorization = _start(policy, "provision", record)
+    start_body = {"id": execution_id, "name": "execution-1"}
     start_arguments: dict[str, Any] = {
         "authorization": authorization,
         "status_code": 200,
         "content_type": "application/json",
-        "response_body": runtime._canonical(execution_body),
+        "response_body": runtime._canonical(start_body),
         "echoed_client_request_id": authorization.client_request_id,
         "observed_at": datetime(2026, 9, 4, 12, 2, 30, tzinfo=UTC),
     }
     with pytest.raises(launch.LaunchBindingFailure, match="job_start_response.invalid"):
         launch.AuthenticatedBrokerStartResponse._from_reviewed_broker_transport(**start_arguments, provider_request_id="x" * 65_536)
+    for status, body in ((202, start_body), (200, start_body | {"type": "Microsoft.App/jobs/executions"}), (200, start_body | {"id": f"{cleanup.job_resource_id}/executions/execution-1"}), (200, start_body | {"name": "execution-2"})):
+        with pytest.raises(launch.LaunchBindingFailure, match="job_start_response"):
+            launch.AuthenticatedBrokerStartResponse._from_reviewed_broker_transport(**(start_arguments | {"status_code": status, "response_body": runtime._canonical(body)}), provider_request_id="12345678-1234-1234-1234-123456789abc")
     start_response = launch.AuthenticatedBrokerStartResponse._from_reviewed_broker_transport(
         **start_arguments,
         provider_request_id="12345678-1234-1234-1234-123456789abc",
@@ -265,7 +268,7 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
     )
     assert receipt["launch_record_sha256"] == record.record_sha256
     assert receipt["execution_template_sha256"] == (provision.execution_template_sha256)
-    assert receipt["provision_job_etag"] == '"provision-etag"'
+    assert not {"provision_job_etag", "cleanup_job_etag", "execution_etag"} & set(receipt)
     def authenticate(raw: bytes) -> launch.AuthenticatedBrokerLaunchReceipt:
         return launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"receipt_bytes": raw, "verified_receipt_sha256": runtime._digest(raw)}))
     for field, value, code in (("provision_job_projection_sha256", f"sha256:{'0' * 64}", "binding"), ("start_client_request_id", "00000000-0000-4000-8000-000000000000", "binding"), ("schema_version", True, "authentication")):

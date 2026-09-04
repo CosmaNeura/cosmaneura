@@ -21,7 +21,6 @@ try:
 except ModuleNotFoundError:  # Direct ``python scripts/...`` imports.
     import validate_staging_restore_runtime_binding as runtime_binding
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-ETAG_RE = re.compile(r'^(?:W/)?"[\x21\x23-\x7e]{1,508}"$')
 LAUNCH_ID_RE = re.compile(r"^launch-[0-9a-f]{16,64}$")
 REHEARSAL_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -133,6 +132,8 @@ def validate_launch_binding_policy(policy: Any) -> dict[str, Any]:
     mailbox = launch["mailbox"]
     signing = launch["receipt_signing"]
     signing_role = signing["role_definition"]
+    start_response = launch["job_start"]["response"]
+    execution_observation = launch["execution_observation"]
     if (
         reference["fixed_plain_environment_variables"] != list(POINTER_ENV_TO_FIELD)
         or launch["pointer_environment"]["exact_names"] != list(POINTER_ENV_TO_FIELD)
@@ -140,6 +141,13 @@ def validate_launch_binding_policy(policy: Any) -> dict[str, Any]:
         or launch["job_start"]["query_parameters"] != [{"name": "api-version", "value": "2024-03-01"}]
         or launch["job_start"]["management_origin"] != launch["job_configuration_observation"]["management_origin"]
         or launch["job_start"]["resource_path_suffix"] != "/start"
+        or start_response["body_required_fields"] != ["id", "name"]
+        or start_response["body_unknown_fields_permitted"] is not False
+        or start_response["exact_execution_resource_id_format"] != "{selected_job_resource_id}/executions/{response_json.name}"
+        or execution_observation["body_required_fields"] != ["name", "properties"]
+        or execution_observation["body_optional_fields"] != ["id", "type", "systemData"]
+        or execution_observation["properties_required_fields"] != ["template"]
+        or execution_observation["optional_id_and_type_must_be_exact"] is not True
         or launch["broker_request_authentication"]["launch_record_claim_bindings"]
         != {
             "workflow_sha": "workflow_sha",
@@ -207,7 +215,6 @@ class AuthenticatedArmGetResponse:
     api_version: str
     status_code: int
     content_type: str
-    etag: str
     observed_at: datetime
     body: bytes
     _seal: object = dataclass_field(repr=False, compare=False)
@@ -221,11 +228,10 @@ class AuthenticatedArmGetResponse:
         api_version: str,
         status_code: int,
         content_type: str,
-        etag: str,
         observed_at: datetime,
         body: bytes,
     ) -> AuthenticatedArmGetResponse:
-        if cls is not AuthenticatedArmGetResponse or type(resource_id) is not str or not runtime_binding._azure_resource_id(resource_id) or api_version != "2024-03-01" or status_code != 200 or type(content_type) is not str or content_type.split(";", 1)[0].strip().lower() != "application/json" or type(etag) is not str or ETAG_RE.fullmatch(etag) is None or type(body) is not bytes:
+        if cls is not AuthenticatedArmGetResponse or type(resource_id) is not str or not runtime_binding._azure_resource_id(resource_id) or api_version != "2024-03-01" or status_code != 200 or type(content_type) is not str or content_type.split(";", 1)[0].strip().lower() != "application/json" or type(body) is not bytes:
             _fail("arm_get.invalid")
         instant = _exact_time(observed_at, "arm_get.invalid")
         return _sealed(cls, _ARM_GET_SEAL, {
@@ -233,7 +239,6 @@ class AuthenticatedArmGetResponse:
             "api_version": api_version,
             "status_code": status_code,
             "content_type": content_type,
-            "etag": etag,
             "observed_at": instant,
             "body": bytes(body),
         })
@@ -243,7 +248,6 @@ class AuthenticatedArmGetResponse:
 class AuthenticatedJobConfigurationObservation:
     job_kind: str
     job_resource_id: str
-    etag: str
     observed_at: datetime
     body_sha256: str
     projection_sha256: str
@@ -397,7 +401,6 @@ def validate_job_configuration_observation(policy: Any, *, job_kind: str, respon
     return _sealed(AuthenticatedJobConfigurationObservation, _JOB_OBSERVATION_SEAL, {
         "job_kind": job_kind,
         "job_resource_id": response.resource_id,
-        "etag": response.etag,
         "observed_at": response.observed_at,
         "body_sha256": _digest(response.body),
         "projection_sha256": projection_digest,
@@ -716,18 +719,12 @@ class AuthenticatedBrokerStartResponse:
             _fail("job_start_response.expired")
         body = _parse(response_body, maximum=1_048_576, code="job_start_response.invalid")
         if (
-            set(body) - {"id", "name", "type", "properties", "systemData"}
-            or not {"id", "name", "type", "properties"} <= set(body)
+            set(body) != {"id", "name"}
             or type(body["id"]) is not str
             or len(body["id"]) > 2048
-            or type(body["type"]) is not str
             or type(body["name"]) is not str
             or EXECUTION_NAME_RE.fullmatch(body["name"]) is None
-            or not body["id"].startswith(f"{authorization.selected_job_resource_id}/executions/")
-            or "/" in body["id"].removeprefix(f"{authorization.selected_job_resource_id}/executions/")
-            or body["type"].lower() != "microsoft.app/jobs/executions"
-            or body["name"] != body["id"].rsplit("/", 1)[-1]
-            or type(body["properties"]) is not dict
+            or body["id"] != f"{authorization.selected_job_resource_id}/executions/{body['name']}"
         ):
             _fail("job_start_response.execution_identity")
         return _sealed(cls, _START_RESPONSE_SEAL, {
@@ -748,7 +745,6 @@ class AuthenticatedBrokerStartResponse:
 class AuthenticatedExecutionObservation:
     action: str
     execution_resource_id: str
-    etag: str
     observed_at: datetime
     body_sha256: str
     template_sha256: str
@@ -763,7 +759,7 @@ def validate_execution_observation(policy: Any, *, action: str, response: Authen
     if len(response.resource_id) > 2048 or not response.resource_id.startswith(f"{job_id}/executions/") or "/" in response.resource_id.removeprefix(f"{job_id}/executions/") or EXECUTION_NAME_RE.fullmatch(response.resource_id.rsplit("/", 1)[-1]) is None:
         _fail("execution_observation.identity")
     body = _parse(response.body, maximum=document["launch_binding"]["job_configuration_observation"]["maximum_bytes"], code="execution_observation.invalid")
-    if set(body) - {"id", "name", "type", "properties", "systemData"} or not {"id", "name", "type", "properties"} <= set(body) or body["id"] != response.resource_id or body["name"] != response.resource_id.rsplit("/", 1)[-1] or type(body["type"]) is not str or body["type"].lower() != "microsoft.app/jobs/executions":
+    if set(body) - {"id", "name", "type", "properties", "systemData"} or not {"name", "properties"} <= set(body) or body["name"] != response.resource_id.rsplit("/", 1)[-1] or ("id" in body and body["id"] != response.resource_id) or ("type" in body and body["type"] != "Microsoft.App/jobs/executions"):
         _fail("execution_observation.identity")
     properties = body["properties"]
     if type(properties) is not dict or "template" not in properties or set(properties) - {"template"} - EXECUTION_COMPUTED:
@@ -771,7 +767,6 @@ def validate_execution_observation(policy: Any, *, action: str, response: Authen
     return _sealed(AuthenticatedExecutionObservation, _EXECUTION_OBSERVATION_SEAL, {
         "action": action,
         "execution_resource_id": response.resource_id,
-        "etag": response.etag,
         "observed_at": response.observed_at,
         "body_sha256": _digest(response.body),
         "template_sha256": _digest(_canonical(properties["template"])),
@@ -833,12 +828,10 @@ def serialize_broker_launch_receipt(
         "broker_oidc_jti_sha256": start_response.oidc_jti_sha256,
         "broker_oidc_replay_receipt_sha256": start_response.oidc_replay_receipt_sha256,
         "provision_job_body_sha256": provision_observation.body_sha256,
-        "provision_job_etag": provision_observation.etag,
         "provision_job_projection_sha256": provision_observation.projection_sha256,
         "provision_job_execution_template_sha256": provision_observation.execution_template_sha256,
         "provision_job_image_reference": provision_observation.image_reference,
         "cleanup_job_body_sha256": cleanup_observation.body_sha256,
-        "cleanup_job_etag": cleanup_observation.etag,
         "cleanup_job_projection_sha256": cleanup_observation.projection_sha256,
         "cleanup_job_execution_template_sha256": cleanup_observation.execution_template_sha256,
         "cleanup_job_image_reference": cleanup_observation.image_reference,
@@ -847,7 +840,6 @@ def serialize_broker_launch_receipt(
         "start_provider_request_id": start_response.provider_request_id,
         "execution_resource_id": execution_observation.execution_resource_id,
         "execution_body_sha256": execution_observation.body_sha256,
-        "execution_etag": execution_observation.etag,
         "execution_template_sha256": execution_observation.template_sha256,
         "observed_at": execution_observation.observed_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -1023,7 +1015,6 @@ def validate_received_launch_receipt(
         or type(receipt["start_provider_request_id"]) is not str
         or UUID_RE.fullmatch(receipt["start_provider_request_id"]) is None
         or any(type(receipt[name]) is not str or DIGEST_RE.fullmatch(receipt[name]) is None for name in digest_fields)
-        or any(type(receipt[name]) is not str or ETAG_RE.fullmatch(receipt[name]) is None for name in ("provision_job_etag", "cleanup_job_etag", "execution_etag"))
     ):
         _fail("launch_receipt.binding")
     receipt_time = _time(receipt["observed_at"], "launch_receipt.time")
