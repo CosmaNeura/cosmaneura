@@ -9,6 +9,7 @@ are intentionally absent.
 
 from __future__ import annotations
 
+import ctypes
 import fcntl
 import hashlib
 import ipaddress
@@ -669,15 +670,24 @@ def _write_all(descriptor: int, raw: bytes) -> None:
         offset += written
 
 
+def _create_linux_memfd() -> int:
+    try:
+        create: Any = ctypes.CDLL(None, use_errno=True).memfd_create
+        create.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+        create.restype = ctypes.c_int
+        descriptor = int(create(b"cosmaneura-gh-verifier", 0x0001 | 0x0002))
+    except (AttributeError, OSError, TypeError, ValueError):
+        _fail("offline_verifier.platform_unsupported")
+    if descriptor < 0:
+        _fail("offline_verifier.unavailable")
+    return descriptor
+
+
 @contextmanager
 def _sealed_linux_executable(
     path: Path, expected_sha256: str
 ) -> Iterator[tuple[int, str]]:
-    if (
-        sys.platform != "linux"
-        or not hasattr(os, "memfd_create")
-        or not Path("/proc/self/fd").is_dir()
-    ):
+    if sys.platform != "linux" or not Path("/proc/self/fd").is_dir():
         _fail("offline_verifier.platform_unsupported")
     if (
         not isinstance(path, Path)
@@ -708,10 +718,7 @@ def _sealed_linux_executable(
             or not 1 <= opened.st_size <= MAXIMUM_EXECUTABLE_BYTES
         ):
             _fail("offline_verifier.executable_invalid")
-        sealed_fd = os.memfd_create(
-            "cosmaneura-gh-verifier",
-            os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
-        )
+        sealed_fd = _create_linux_memfd()
         digest = hashlib.sha256()
         total = 0
         prefix = b""

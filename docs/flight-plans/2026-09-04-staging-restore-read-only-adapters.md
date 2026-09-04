@@ -2,16 +2,13 @@
 
 ## Outcome and boundaries
 
-- Problem and measurable outcome: provide the two missing read-only runtime
-  adapters needed by the trusted executor: one exact, bounded Azure Resource
-  Manager GET using the job's managed identity, and one bounded invocation of
-  the digest-pinned GitHub CLI offline attestation verifier.
+- Problem/outcome: provide the trusted executor one exact bounded managed-
+  identity ARM GET and one bounded digest-pinned offline GitHub CLI verifier.
 - In scope: adapter implementations, dependency injection for unit tests, strict
   target/input validation, bounded response/process handling, tests, and docs.
-- Explicit non-goals: binding adapters into the public executor, changing an
-  activation flag or policy pin, provisioning a private runner, granting an
-  identity, enabling network access, invoking Azure, dispatching a workflow,
-  restoring or sanitizing data, staging cutover, or production promotion.
+- Non-goals: wiring the public executor, changing activation or policy pins,
+  provisioning/granting/networking, Azure/workflow invocation, restore,
+  sanitization, cutover, or production promotion.
 - Affected users, services, environments, and data classes: future operators of
   the isolated non-PHI rehearsal; no environment or data is changed.
 
@@ -32,10 +29,9 @@
 
 - Live evidence: none collected or changed. `master` at `6c2c7240` contains the
   dormant executor; provision remains a credentialless failing tombstone.
-- Difference from `master` and deployed-only behavior: repository state gains
-  reusable adapter code and tests only. No runtime calls the adapters.
-- Reconciliation decision: retain the disabled workflow and all existing
-  cleanup controls. Do not reconcile or mutate live Azure state in this PR.
+- Difference from `master`: repository-only adapter code/tests; no runtime call.
+- Reconciliation: retain the disabled workflow and cleanup controls; do not
+  reconcile or mutate live Azure state.
 - Previous known-good/recovery boundary: no artifact is published and no restore
   request is submitted.
 
@@ -50,9 +46,8 @@
 
 ## Rollout and promotion
 
-- Ordered hold points: focused adapter tests → full staging restore suite →
-  lint/type checks → independent review of the final commit → protected PR
-  checks → merge dormant. Hold after merge.
+- Hold points: focused/full tests → lint/type checks → final-commit independent
+  review → protected PR checks → merge dormant → hold.
 - Health signals and abort thresholds: any redirect, unexpected endpoint,
   caller-selected resource, second ARM request, oversized or malformed body,
   inherited credential-bearing environment, unpinned verifier or executable
@@ -83,8 +78,7 @@
 - Network isolation is still a required runtime control; process flags and a
   scrubbed environment are defense in depth, not a substitute for the future
   private-runner egress policy and PID/cgroup containment.
-- Recovery move: keep the executor and policies disabled or revert this
-  code-only PR. There is no live side effect to undo.
+- Recovery: keep the executor/policies disabled or revert; no live side effect.
 
 ## Completion
 
