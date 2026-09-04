@@ -19,7 +19,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "96093f0cb922a426854e09135961c6eac6c8a1b85aef5428ff0988fb32aa740a"
+    "7df6bb5e2de1c35aa4e353e0b4bd7009a1c0b0fc59804ecb83781bf3a39408c4"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
@@ -40,7 +40,8 @@ EXPECTED_BLOCKERS = (
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",
     "private_runner_binding_unimplemented",
-    "trusted_runtime_pins_unconfigured",
+    "restore_runtime_binding_policy_disabled",
+    "external_runtime_record_unconfigured",
     "attestation_verifier_and_root_pins_unconfigured",
     "restore_envelope_policy_unconfigured",
     "restore_safe_submit_policy_unconfigured",
@@ -363,6 +364,17 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
     assert policy["activation"] == EXPECTED_ACTIVATION
     assert tuple(policy["activation_blockers"]) == EXPECTED_BLOCKERS
     assert tuple(policy["activation_blockers"]) == executor.ACTIVATION_BLOCKERS
+    runtime_pin = policy["policy_pins"]["restore_runtime_binding"]
+    assert runtime_pin["sha256"] == (
+        f"sha256:{executor.runtime_binding.CANONICAL_POLICY_SHA256}"
+    )
+    assert policy["adapters"]["runtime"] == {
+        "implemented": False,
+        "policy_pin": "policy_pins.restore_runtime_binding",
+        "external_record_source": "exact_container_app_job_configuration",
+        "image_digest_source": "verified_external_runtime_record",
+        "caller_override_permitted": False,
+    }
 
     signature = inspect.signature(executor.execute_trusted_restore)
     assert list(signature.parameters) == [

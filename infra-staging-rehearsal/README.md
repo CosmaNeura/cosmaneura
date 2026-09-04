@@ -63,6 +63,41 @@ binding. Those are separate reviewed slices. A provider-mocked plan proves the
 HCL shape only; live provider validation must still prove that Azure accepts a
 `/27` workload-profile infrastructure subnet and the exact delegation action.
 
+## Dormant restore runtime binding v1
+
+`restore-runtime-binding-policy.json` and
+`validate_staging_restore_runtime_binding.py` define and validate the future
+private-runtime boundary; see the [runtime-binding flight
+plan](../docs/flight-plans/2026-09-04-staging-restore-runtime-binding.md).
+All nineteen activation assertions remain false and executable validation refuses.
+
+- Federated dispatchers may later read/start only their exact jobs through an
+  enforced no-override request; `jobs/start/action` RBAC alone is insufficient.
+  Their current subscription `control_reader` assignments must be removed or
+  re-homed. Only unfederated job UAMIs attach to compute. Provision's fourth
+  cleanup-marker create assignment is future work; neither tombstone create
+  grant precedes approved legal hold and locked WORM.
+- The checked-in policy excludes resulting image/record/signature digests. A
+  post-publication signed record binds the image and pre-binding job templates.
+  All four fields in exact provision/cleanup job-configuration pointers are compared field-for-field before record validation. Its separately reviewed
+  create-only publisher authority is not live-bound or configured here. Both jobs use exact
+  UAMIs to pull that digest only from private ACR; tags, admin/password,
+  anonymous, and ambient/default credentials are barred.
+- Both jobs read digest-in-path record/signature objects from locked, create-only
+  private `restore-runtime-bindings-v1`; provision alone reads versioned evidence
+  from `restore-evidence-v1` in an account distinct from markers, plus the HMAC key. Both read the
+  exact root from private Key Vault. Egress allows only MI, ARM, evidence/binding/
+  marker Blob, Key Vault, PostgreSQL, and VNet DNS; provision runs two offline
+  `gh` checks and cleanup one under network and PID/cgroup containment.
+- A second PostgreSQL private endpoint in `10.76.0.64/27` plus private DNS is only
+  the target network path; authenticated v2 receipt and provision-UAMI Entra DB auth remain
+  required. Cleanup validates record/signature, authenticates receipt/ownership, observes/creates and reads back the
+  tombstone, deletes only receipt-bound resources, then proves all absent; shared subnets remain.
+
+This contract/validator PR activates no workflow, provisions no compute, runs
+no Azure apply, publishes no image, restores or mutates no data, performs no
+cutover, and authorizes no production/PHI action. It contains no live evidence.
+
 ## Deliberate blockers
 
 The optionally delegated `10.76.0.32/27` subnet is not a runner, Container Apps

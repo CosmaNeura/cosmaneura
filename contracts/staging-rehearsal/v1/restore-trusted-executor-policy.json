@@ -53,6 +53,11 @@
       "path": "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json",
       "policy_id": "cosmaneura-staging-restore-safe-submit-v4",
       "sha256": "sha256:3e3758a1f3756b5e922b22d4b740d1de0fc2aa8140c07589d7d39369d244a02d"
+    },
+    "restore_runtime_binding": {
+      "path": "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json",
+      "policy_id": "cosmaneura-staging-restore-runtime-binding-v1",
+      "sha256": "sha256:27efa1fa7a58d79349cf30a0e7dc564a00f6aeb4a8f115d5156cade14689b16e"
     }
   },
   "entrypoints": {
@@ -190,13 +195,10 @@
   "adapters": {
     "runtime": {
       "implemented": false,
-      "job_resource_id": "CONFIGURE_EXACT_TRUSTED_EXECUTOR_JOB_RESOURCE_ID",
-      "environment_resource_id": "CONFIGURE_EXACT_TRUSTED_EXECUTOR_ENVIRONMENT_RESOURCE_ID",
-      "image_digest": "CONFIGURE_EXACT_TRUSTED_EXECUTOR_IMAGE_SHA256",
-      "managed_identity_client_id": "CONFIGURE_EXACT_TRUSTED_EXECUTOR_CLIENT_UUID",
-      "managed_identity_principal_id": "CONFIGURE_EXACT_TRUSTED_EXECUTOR_PRINCIPAL_UUID",
-      "subnet_resource_id": "CONFIGURE_EXACT_TRUSTED_EXECUTOR_SUBNET_RESOURCE_ID",
-      "network_policy_sha256": "CONFIGURE_EXACT_TRUSTED_EXECUTOR_NETWORK_POLICY_SHA256"
+      "policy_pin": "policy_pins.restore_runtime_binding",
+      "external_record_source": "exact_container_app_job_configuration",
+      "image_digest_source": "verified_external_runtime_record",
+      "caller_override_permitted": false
     },
     "source_provider": {
       "implemented": false,
@@ -266,7 +268,8 @@
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",
     "private_runner_binding_unimplemented",
-    "trusted_runtime_pins_unconfigured",
+    "restore_runtime_binding_policy_disabled",
+    "external_runtime_record_unconfigured",
     "attestation_verifier_and_root_pins_unconfigured",
     "restore_envelope_policy_unconfigured",
     "restore_safe_submit_policy_unconfigured",

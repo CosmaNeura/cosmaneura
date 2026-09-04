@@ -26,6 +26,7 @@ try:
     from scripts import compose_staging_restore_evidence_binding as composition
     from scripts import staging_restore_safe_submit as safe_submit
     from scripts import validate_staging_evidence_manifest as evidence_manifest
+    from scripts import validate_staging_restore_runtime_binding as runtime_binding
     from scripts import (
         verify_staging_source_provider_observation as provider_observation,
     )
@@ -35,6 +36,7 @@ except ModuleNotFoundError:  # Direct `python scripts/...` execution.
     import compose_staging_restore_evidence_binding as composition
     import staging_restore_safe_submit as safe_submit
     import validate_staging_evidence_manifest as evidence_manifest
+    import validate_staging_restore_runtime_binding as runtime_binding
     import verify_staging_source_provider_observation as provider_observation
 
 
@@ -42,9 +44,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "96093f0cb922a426854e09135961c6eac6c8a1b85aef5428ff0988fb32aa740a"
+POLICY_SHA256 = "7df6bb5e2de1c35aa4e353e0b4bd7009a1c0b0fc59804ecb83781bf3a39408c4"
 POLICY_TEMPLATE_SHA256 = (
-    "9959373fd63302bf02c0c6543545eb38916d2a1ccdc2d0f81d680022178cbbec"
+    "5c448d8f1329c205c3fb57bbaf6dcf3c02c048d2e68d14ab35f27c774ca46235"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -106,7 +108,8 @@ ACTIVATION_BLOCKERS = (
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",
     "private_runner_binding_unimplemented",
-    "trusted_runtime_pins_unconfigured",
+    "restore_runtime_binding_policy_disabled",
+    "external_runtime_record_unconfigured",
     "attestation_verifier_and_root_pins_unconfigured",
     "restore_envelope_policy_unconfigured",
     "restore_safe_submit_policy_unconfigured",
@@ -204,6 +207,11 @@ def _expected_policy_pins() -> dict[str, dict[str, str]]:
             "path": "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json",
             "policy_id": "cosmaneura-staging-restore-safe-submit-v4",
             "sha256": f"sha256:{safe_submit.SAFE_SUBMIT_POLICY_SHA256}",
+        },
+        "restore_runtime_binding": {
+            "path": "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json",
+            "policy_id": "cosmaneura-staging-restore-runtime-binding-v1",
+            "sha256": f"sha256:{runtime_binding.CANONICAL_POLICY_SHA256}",
         },
     }
 
