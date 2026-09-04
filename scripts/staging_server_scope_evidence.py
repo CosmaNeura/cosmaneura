@@ -97,6 +97,14 @@ class ServerSnapshot:
     surfaces: Mapping[str, Sequence[Any]]
 
 
+@dataclass(frozen=True, slots=True)
+class VerifiedEvidenceReceipt:
+    source_resource_id: str
+    primary_database: str
+    capture_started_at: datetime
+    capture_completed_at: datetime
+
+
 class EvidenceAdapter(Protocol):
     def start_capture(self, maximum_seconds: int) -> None: ...
 
@@ -135,8 +143,16 @@ def _canonical(value: Any) -> bytes:
         return json.dumps(
             value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         raise EvidenceFailure("catalog.non_canonical_value") from None
+
+
+def _require_hmac_key(key: Any) -> bytes:
+    if type(key) is not bytes or not (
+        MINIMUM_HMAC_KEY_BYTES <= len(key) <= MAXIMUM_HMAC_KEY_BYTES
+    ):
+        raise EvidenceFailure("hmac_key.invalid")
+    return key
 
 
 def _update_mac(mac: hmac.HMAC, value: bytes) -> None:
@@ -168,6 +184,16 @@ def _surface_pin(key: bytes, domain: str, records: Sequence[Any]) -> SurfacePin:
     for record in encoded:
         _update_mac(mac, record)
     return SurfacePin(len(encoded), mac.hexdigest())
+
+
+def evidence_hmac(key: bytes, unsigned_receipt: Mapping[str, Any]) -> str:
+    """Return the collector's domain-separated HMAC for one unsigned receipt."""
+
+    key = _require_hmac_key(key)
+    if not isinstance(unsigned_receipt, Mapping) or "evidence_hmac" in unsigned_receipt:
+        raise EvidenceFailure("receipt.invalid")
+    canonical_receipt = _canonical(dict(unsigned_receipt)).decode("ascii")
+    return _surface_pin(key, "evidence", [canonical_receipt]).hmac
 
 
 def _pin_json(pin: SurfacePin) -> dict[str, Any]:
@@ -225,7 +251,8 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
     )
     configured = policy["activation_ready"] is True
     if (
-        policy["schema_version"] != 1
+        type(policy["schema_version"]) is not int
+        or policy["schema_version"] != 1
         or policy["policy_id"] != "cosmaneura-staging-server-scope-evidence-v1"
         or not isinstance(policy["activation_ready"], bool)
     ):
@@ -255,7 +282,12 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
         if configured and source[field].startswith("CONFIGURE_"):
             raise EvidenceFailure("policy.unconfigured")
     _validate_source_host(source["host"])
-    if source["port"] != 5432 or source["postgres_major"] != 16:
+    if (
+        type(source["port"]) is not int
+        or source["port"] != 5432
+        or type(source["postgres_major"]) is not int
+        or source["postgres_major"] != 16
+    ):
         raise EvidenceFailure("policy.invalid_source")
     hmac_policy = _expect_keys(
         policy["hmac"], {"algorithm", "key_version"}, "policy.invalid_hmac"
@@ -327,17 +359,20 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
             database["allow_connections"], bool
         ):
             raise EvidenceFailure("policy.invalid_database")
-        if database["status"] == "connections_disabled":
+        status = database["status"]
+        if not isinstance(status, str):
+            raise EvidenceFailure("policy.invalid_database")
+        if status == "connections_disabled":
             if (
                 database["allow_connections"]
                 or not database["is_template"]
                 or database["surfaces"] is not None
             ):
                 raise EvidenceFailure("policy.invalid_database")
-        elif database["status"] in {"primary_inventory", "empty"}:
+        elif status in {"primary_inventory", "empty"}:
             if not database["allow_connections"]:
                 raise EvidenceFailure("policy.invalid_database")
-            if database["status"] == "primary_inventory":
+            if status == "primary_inventory":
                 if database["is_template"]:
                     raise EvidenceFailure("policy.invalid_database")
                 primary_entries += 1
@@ -348,7 +383,7 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
             )
             for pin in surfaces.values():
                 _validate_pin(pin, configured=configured)
-            if database["status"] == "empty" and any(
+            if status == "empty" and any(
                 surfaces[surface]["count"] != 0
                 for surface in NON_PRIMARY_EMPTY_SURFACES
             ):
@@ -369,6 +404,237 @@ def validate_policy(policy: Any) -> Mapping[str, Any]:
     if not configured:
         raise EvidenceFailure("policy.unconfigured")
     return policy
+
+
+def parse_policy_document(raw: bytes, policy_sha256: str) -> Mapping[str, Any]:
+    """Parse and validate the exact policy bytes named by ``policy_sha256``."""
+
+    if (
+        type(raw) is not bytes
+        or not 0 < len(raw) <= MAXIMUM_POLICY_BYTES
+        or not isinstance(policy_sha256, str)
+        or HEX_256_RE.fullmatch(policy_sha256) is None
+    ):
+        raise EvidenceFailure("policy.hash_invalid")
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if not hmac.compare_digest(actual_sha256, policy_sha256):
+        raise EvidenceFailure("policy.hash_mismatch")
+    try:
+        policy = json.loads(raw)
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise EvidenceFailure("policy.invalid_json") from None
+    try:
+        return validate_policy(policy)
+    except EvidenceFailure:
+        raise
+    except (TypeError, ValueError, RecursionError):
+        raise EvidenceFailure("policy.invalid") from None
+
+
+def _receipt_pin(value: Any) -> Mapping[str, Any]:
+    pin = _expect_keys(value, {"count", "hmac"}, "receipt.invalid")
+    count = pin["count"]
+    digest = pin["hmac"]
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or not 0 <= count <= MAXIMUM_RECORDS_PER_SURFACE
+        or not isinstance(digest, str)
+        or HEX_256_RE.fullmatch(digest) is None
+    ):
+        raise EvidenceFailure("receipt.invalid")
+    return pin
+
+
+def _receipt_pin_matches(observed: Mapping[str, Any], expected: Any) -> bool:
+    return bool(
+        isinstance(expected, Mapping)
+        and observed["count"] == expected.get("count")
+        and isinstance(expected.get("hmac"), str)
+        and hmac.compare_digest(observed["hmac"], expected["hmac"])
+    )
+
+
+def _receipt_time(value: Any) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise EvidenceFailure("receipt.invalid")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+    except (AttributeError, ValueError):
+        raise EvidenceFailure("receipt.invalid") from None
+    if parsed.isoformat().replace("+00:00", "Z") != value:
+        raise EvidenceFailure("receipt.invalid")
+    return parsed
+
+
+def verify_evidence_hmac(
+    receipt: Mapping[str, Any],
+    policy_bytes: bytes,
+    policy_sha256: str,
+    key: bytes,
+) -> VerifiedEvidenceReceipt:
+    """Authenticate one exact collector receipt against an active policy."""
+
+    policy = parse_policy_document(policy_bytes, policy_sha256)
+    key = _require_hmac_key(key)
+    receipt = _expect_keys(
+        receipt,
+        {
+            "schema_version",
+            "policy_id",
+            "policy_sha256",
+            "source_revision",
+            "source_resource_hmac",
+            "primary_database_identity_hmac",
+            "key_version",
+            "capture_started_at",
+            "capture_completed_at",
+            "server_version_major",
+            "server_surfaces",
+            "databases",
+            "errors",
+            "pass",
+            "evidence_hmac",
+        },
+        "receipt.invalid",
+    )
+    if (
+        isinstance(receipt["schema_version"], bool)
+        or not isinstance(receipt["schema_version"], int)
+        or receipt["schema_version"] != 1
+        or not isinstance(receipt["policy_id"], str)
+        or not isinstance(receipt["policy_sha256"], str)
+        or not isinstance(receipt["source_revision"], str)
+        or not isinstance(receipt["source_resource_hmac"], str)
+        or HEX_256_RE.fullmatch(receipt["source_resource_hmac"]) is None
+        or not isinstance(receipt["primary_database_identity_hmac"], str)
+        or HEX_256_RE.fullmatch(receipt["primary_database_identity_hmac"]) is None
+        or not isinstance(receipt["key_version"], str)
+        or isinstance(receipt["server_version_major"], bool)
+        or not isinstance(receipt["server_version_major"], int)
+        or receipt["errors"] != []
+        or receipt["pass"] is not True
+        or not isinstance(receipt["evidence_hmac"], str)
+        or HEX_256_RE.fullmatch(receipt["evidence_hmac"]) is None
+    ):
+        raise EvidenceFailure("receipt.invalid")
+    if (
+        receipt["policy_id"] != policy["policy_id"]
+        or receipt["policy_sha256"] != policy_sha256
+    ):
+        raise EvidenceFailure("receipt.policy_mismatch")
+    if receipt["source_revision"] != policy["source"]["revision"]:
+        raise EvidenceFailure("receipt.source_revision_mismatch")
+    if receipt["key_version"] != policy["hmac"]["key_version"]:
+        raise EvidenceFailure("receipt.key_version_mismatch")
+    if receipt["server_version_major"] != policy["source"]["postgres_major"]:
+        raise EvidenceFailure("receipt.server_version_mismatch")
+
+    started = _receipt_time(receipt["capture_started_at"])
+    completed = _receipt_time(receipt["capture_completed_at"])
+    duration = (completed - started).total_seconds()
+    if duration < 0 or duration > MAXIMUM_CAPTURE_SECONDS:
+        raise EvidenceFailure("receipt.invalid")
+
+    expected_source = _identity_hmac(
+        key, "source-resource", policy["source"]["resource_id"]
+    )
+    if not hmac.compare_digest(receipt["source_resource_hmac"], expected_source):
+        raise EvidenceFailure("receipt.source_resource_hmac_mismatch")
+    expected_primary = _identity_hmac(
+        key, "database", policy["source"]["primary_database"]
+    )
+    if not hmac.compare_digest(
+        receipt["primary_database_identity_hmac"], expected_primary
+    ):
+        raise EvidenceFailure("receipt.primary_database_hmac_mismatch")
+
+    server_surfaces = _expect_keys(
+        receipt["server_surfaces"], set(SERVER_SURFACES), "receipt.invalid"
+    )
+    total_records = 0
+    for name in SERVER_SURFACES:
+        observed = _receipt_pin(server_surfaces[name])
+        total_records += observed["count"]
+        if not _receipt_pin_matches(observed, policy["expected_server_surfaces"][name]):
+            raise EvidenceFailure("receipt.server_surfaces_mismatch")
+
+    databases = receipt["databases"]
+    if (
+        not isinstance(databases, list)
+        or not databases
+        or len(databases) > MAXIMUM_DATABASES
+    ):
+        raise EvidenceFailure("receipt.invalid")
+    expected_databases = {
+        item["identity_hmac"]: item for item in policy["expected_databases"]
+    }
+    identities: list[str] = []
+    primary_count = 0
+    for database in databases:
+        if not isinstance(database, dict):
+            raise EvidenceFailure("receipt.invalid")
+        status = database.get("status")
+        expected_fields = (
+            {"identity_hmac", "status"}
+            if status == "connections_disabled"
+            else {"identity_hmac", "status", "surfaces"}
+        )
+        database = _expect_keys(database, expected_fields, "receipt.invalid")
+        identity = database["identity_hmac"]
+        if (
+            not isinstance(identity, str)
+            or HEX_256_RE.fullmatch(identity) is None
+            or not isinstance(status, str)
+            or status not in {"connections_disabled", "primary_inventory", "empty"}
+        ):
+            raise EvidenceFailure("receipt.invalid")
+        identities.append(identity)
+        expected = expected_databases.get(identity)
+        if expected is None or status != expected["status"]:
+            raise EvidenceFailure("receipt.databases_mismatch")
+        if status == "connections_disabled":
+            continue
+        if status == "primary_inventory":
+            primary_count += 1
+            if not hmac.compare_digest(identity, expected_primary):
+                raise EvidenceFailure("receipt.primary_database_hmac_mismatch")
+        surfaces = _expect_keys(
+            database["surfaces"], set(DATABASE_SURFACES), "receipt.invalid"
+        )
+        expected_surfaces = expected["surfaces"]
+        if not isinstance(expected_surfaces, Mapping):
+            raise EvidenceFailure("receipt.databases_mismatch")
+        for name in DATABASE_SURFACES:
+            observed = _receipt_pin(surfaces[name])
+            total_records += observed["count"]
+            if not _receipt_pin_matches(observed, expected_surfaces[name]):
+                raise EvidenceFailure("receipt.databases_mismatch")
+        if status == "empty" and any(
+            surfaces[name]["count"] != 0 for name in NON_PRIMARY_EMPTY_SURFACES
+        ):
+            raise EvidenceFailure("receipt.databases_mismatch")
+    if (
+        identities != sorted(identities)
+        or len(identities) != len(set(identities))
+        or set(identities) != set(expected_databases)
+        or primary_count != 1
+        or server_surfaces["databases"]["count"] != len(databases)
+        or total_records > MAXIMUM_TOTAL_RECORDS
+    ):
+        raise EvidenceFailure("receipt.databases_mismatch")
+
+    unsigned_receipt = dict(receipt)
+    supplied_hmac = unsigned_receipt.pop("evidence_hmac")
+    expected_hmac = evidence_hmac(key, unsigned_receipt)
+    if not hmac.compare_digest(supplied_hmac, expected_hmac):
+        raise EvidenceFailure("receipt.evidence_hmac_mismatch")
+    return VerifiedEvidenceReceipt(
+        source_resource_id=policy["source"]["resource_id"],
+        primary_database=policy["source"]["primary_database"],
+        capture_started_at=started,
+        capture_completed_at=completed,
+    )
 
 
 def _read_regular_file(
@@ -408,8 +674,7 @@ def read_hmac_key(path: Path) -> bytes:
     key = _read_regular_file(
         path, MAXIMUM_HMAC_KEY_BYTES, "hmac_key.unsafe", exact_mode=0o600
     )
-    if not MINIMUM_HMAC_KEY_BYTES <= len(key) <= MAXIMUM_HMAC_KEY_BYTES:
-        raise EvidenceFailure("hmac_key.invalid")
+    _require_hmac_key(key)
     return key
 
 
@@ -420,7 +685,9 @@ def database_url_from_environment() -> str:
     return value
 
 
-def read_policy(path: Path = POLICY_PATH) -> tuple[Mapping[str, Any], str]:
+def read_policy_document(
+    path: Path = POLICY_PATH,
+) -> tuple[Mapping[str, Any], str, bytes]:
     raw = _read_regular_file(
         path, MAXIMUM_POLICY_BYTES, "policy.file_unsafe", exact_mode=None
     )
@@ -429,9 +696,14 @@ def read_policy(path: Path = POLICY_PATH) -> tuple[Mapping[str, Any], str]:
         raise EvidenceFailure("policy.hash_mismatch")
     try:
         policy = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise EvidenceFailure("policy.invalid_json") from None
-    return validate_policy(policy), digest
+    return validate_policy(policy), digest, raw
+
+
+def read_policy(path: Path = POLICY_PATH) -> tuple[Mapping[str, Any], str]:
+    policy, digest, _raw = read_policy_document(path)
+    return policy, digest
 
 
 def _compare_pin(observed: SurfacePin, expected: Any, code: str) -> None:
@@ -510,8 +782,7 @@ def collect_evidence(
         raise EvidenceFailure("source.revision_mismatch")
     if key_version != policy["hmac"]["key_version"]:
         raise EvidenceFailure("hmac_key.version_mismatch")
-    if not MINIMUM_HMAC_KEY_BYTES <= len(key) <= MAXIMUM_HMAC_KEY_BYTES:
-        raise EvidenceFailure("hmac_key.invalid")
+    key = _require_hmac_key(key)
     deadline = monotonic() + MAXIMUM_CAPTURE_SECONDS
     adapter.start_capture(MAXIMUM_CAPTURE_SECONDS)
 
@@ -659,9 +930,7 @@ def collect_evidence(
         "errors": [],
         "pass": True,
     }
-    body["evidence_hmac"] = _surface_pin(
-        key, "evidence", [_canonical(body).decode("ascii")]
-    ).hmac
+    body["evidence_hmac"] = evidence_hmac(key, body)
     return body
 
 

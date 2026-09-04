@@ -17,6 +17,8 @@ import re
 import stat
 import sys
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -71,6 +73,60 @@ SERVER_SCOPE_DATABASE_SURFACES = frozenset(
 
 class EvidenceFailure(RuntimeError):
     """Bounded contract failure safe to report without artifact contents."""
+
+
+_VALIDATED_BUNDLE_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ValidatedEvidenceBundle:
+    """Opaque immutable bytes minted only after complete bundle validation."""
+
+    result_bytes: bytes
+    server_scope_bytes: bytes
+    _validation_seal: object = dataclass_field(repr=False, compare=False)
+
+    @classmethod
+    def _from_validated_bytes(
+        cls,
+        *,
+        result_bytes: bytes,
+        server_scope_bytes: bytes,
+    ) -> ValidatedEvidenceBundle:
+        if type(result_bytes) is not bytes or type(server_scope_bytes) is not bytes:
+            raise EvidenceFailure("validated_bundle.invalid")
+        value = object.__new__(cls)
+        object.__setattr__(value, "result_bytes", result_bytes)
+        object.__setattr__(value, "server_scope_bytes", server_scope_bytes)
+        object.__setattr__(value, "_validation_seal", _VALIDATED_BUNDLE_SEAL)
+        return value
+
+    def _is_validated_snapshot(self) -> bool:
+        return self._validation_seal is _VALIDATED_BUNDLE_SEAL
+
+    @property
+    def result(self) -> dict[str, Any]:
+        """Return a caller-owned copy of the validated public projection."""
+
+        try:
+            value = json.loads(self.result_bytes)
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise EvidenceFailure("validated_bundle.invalid") from None
+        if not isinstance(value, dict):
+            raise EvidenceFailure("validated_bundle.invalid")
+        return value
+
+    @property
+    def server_scope_receipt(self) -> dict[str, Any]:
+        """Return a caller-owned copy parsed from the authoritative file bytes."""
+
+        try:
+            value = json.loads(self.server_scope_bytes)
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise EvidenceFailure("validated_bundle.invalid") from None
+        if not isinstance(value, dict):
+            raise EvidenceFailure("validated_bundle.invalid")
+        return value
 
 
 def _canonical(value: Any) -> bytes:
@@ -164,9 +220,13 @@ def _read_regular(path: Path, code: str) -> bytes:
 def _load_json(raw: bytes, code: str) -> Mapping[str, Any]:
     try:
         value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise EvidenceFailure(code) from None
-    if not isinstance(value, Mapping) or _contains_boolean(value):
+    try:
+        invalid = not isinstance(value, Mapping) or _contains_boolean(value)
+    except RecursionError:
+        raise EvidenceFailure(code) from None
+    if invalid:
         raise EvidenceFailure(code)
     return value
 
@@ -174,13 +234,17 @@ def _load_json(raw: bytes, code: str) -> Mapping[str, Any]:
 def _load_server_scope_json(raw: bytes) -> Mapping[str, Any]:
     try:
         value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise EvidenceFailure("server_scope.invalid") from None
     if not isinstance(value, Mapping):
         raise EvidenceFailure("server_scope.invalid")
     without_pass = dict(value)
     passed = without_pass.pop("pass", None)
-    if passed is not True or _contains_boolean(without_pass):
+    try:
+        invalid = passed is not True or _contains_boolean(without_pass)
+    except RecursionError:
+        raise EvidenceFailure("server_scope.invalid") from None
+    if invalid:
         raise EvidenceFailure("server_scope.invalid")
     return value
 
@@ -197,7 +261,7 @@ def load_policy(path: Path) -> tuple[Mapping[str, Any], str]:
     raw_sha256 = _sha256(raw)
     try:
         policy = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise EvidenceFailure("policy.invalid") from None
     if (
         raw_sha256 != POLICY_SHA256
@@ -258,7 +322,7 @@ def _load_synthetic_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
         raise EvidenceFailure("synthetic_policy.digest")
     try:
         synthetic = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise EvidenceFailure("synthetic_policy.invalid") from None
     if (
         not isinstance(synthetic, Mapping)
@@ -293,7 +357,7 @@ def _load_server_scope_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
         raise EvidenceFailure("server_scope_policy.digest")
     try:
         server_policy = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, ValueError, RecursionError):
         raise EvidenceFailure("server_scope_policy.invalid") from None
     server_policy = _expect_keys(
         server_policy,
@@ -398,8 +462,8 @@ def _load_server_scope_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
     if (
         not isinstance(settings, list)
         or not settings
-        or settings != sorted(set(settings))
         or not all(isinstance(item, str) and item for item in settings)
+        or settings != sorted(set(settings))
     ):
         raise EvidenceFailure("server_scope_policy.invalid")
     databases = server_policy["expected_databases"]
@@ -432,6 +496,8 @@ def _load_server_scope_policy(policy: Mapping[str, Any]) -> Mapping[str, Any]:
         ):
             raise EvidenceFailure("server_scope_policy.invalid")
         status = database["status"]
+        if not isinstance(status, str):
+            raise EvidenceFailure("server_scope_policy.invalid")
         if status == "connections_disabled":
             if (
                 database["allow_connections"] is not False
@@ -849,6 +915,8 @@ def _validate_server_scope(
             else fields["server_scope_database_connected"]
         )
         database = _expect_keys(database, expected_fields, "server_scope.database")
+        if not isinstance(status, str):
+            raise EvidenceFailure("server_scope.database")
         identity = database["identity_hmac"]
         if (
             not isinstance(identity, str)
@@ -940,13 +1008,13 @@ def _validate_claim_artifact(
     return _validate_receipt(artifact, f"{kind}.receipt")
 
 
-def validate_bundle(
+def validate_bundle_snapshot(
     *,
     policy: Mapping[str, Any],
     policy_sha256: str,
     bundle: Path,
     now: datetime,
-) -> dict[str, Any]:
+) -> ValidatedEvidenceBundle:
     files = _read_bundle(bundle, policy)
     _verify_checksums(files)
     synthetic = _load_synthetic_policy(policy)
@@ -1100,7 +1168,7 @@ def validate_bundle(
         "signer_issuer": signer_claims["issuer"],
         "signer_subject": signer_claims["subject"],
     }
-    return {
+    result = {
         "schema_version": 1,
         "policy_id": policy["policy_id"],
         "manifest_id": manifest["manifest_id"],
@@ -1110,6 +1178,25 @@ def validate_bundle(
         "activation_state": "blocked",
         "activation_blockers": policy["activation_blockers"],
     }
+    return ValidatedEvidenceBundle._from_validated_bytes(
+        result_bytes=_canonical(result),
+        server_scope_bytes=files[artifact_contracts["server_scope"]],
+    )
+
+
+def validate_bundle(
+    *,
+    policy: Mapping[str, Any],
+    policy_sha256: str,
+    bundle: Path,
+    now: datetime,
+) -> dict[str, Any]:
+    return validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=policy_sha256,
+        bundle=bundle,
+        now=now,
+    ).result
 
 
 def _parser() -> argparse.ArgumentParser:
