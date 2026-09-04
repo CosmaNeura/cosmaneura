@@ -303,10 +303,14 @@ trusted executor's private launch-material seam. It fixes the action to
 `provision`, derives both runtime references only from the authenticated
 receipt, bounds and digest-checks the launch/runtime bytes, cross-binds the
 sealed external-runtime signature proof, and rechecks the platform execution
-name between authority stages. Exact record ingress and external-runtime
-Sigstore authentication are still injected and unimplemented; the public
-executor dependency factory still refuses and all activation bits remain
-false. See the [executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
+name between authority stages. External-runtime Sigstore authentication now
+has a separate dormant offline implementation that binds the exact record,
+bundle, root, SLSA subject, workflow certificate claims, and verified timestamp
+before minting the sealed proof. Exact private record/root ingress and the
+public executor dependency factory remain injected and unimplemented; all
+activation bits remain false. See the
+[signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
+the [executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
 
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of

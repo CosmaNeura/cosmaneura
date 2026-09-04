@@ -187,9 +187,13 @@ A dormant same-process handoff now carries that sealed receipt into the trusted
 executor's private seam. It admits only `provision`, derives both runtime
 pointers from the authenticated receipt, bounds and digest-checks exact record
 bytes, cross-binds the sealed external-runtime signature proof, and rechecks
-the platform execution name between stages. Exact private record readers,
-external-runtime Sigstore authentication, the public dependency factory,
-sender, and every activation gate remain unimplemented or false; see the
+the platform execution name between stages. External-runtime Sigstore
+authentication now has a separate dormant offline implementation that binds
+the exact record, bundle, root, SLSA subject, workflow certificate claims, and
+verified timestamp before minting the sealed runtime proof. Exact private
+readers, the public dependency factory, sender, and every activation gate
+remain unimplemented or false; see the
+[signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
 [executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
 
 ## Dormant restore-sanitizer contract

@@ -167,12 +167,32 @@ def _offline_files() -> dict[str, bytes]:
     }
 
 
+def _runtime_verifier_arguments() -> tuple[str, ...]:
+    identity = (
+        "https://github.com/CosmaNeura/cosmaneura/.github/workflows/"
+        "build_and_publish_manual.yml@refs/heads/master"
+    )
+    return tuple(
+        adapters.RUNTIME_SIGNATURE_STATIC_ARGUMENTS.get(index, identity)
+        for index in range(25)
+    )
+
+
+def _runtime_offline_files() -> dict[str, bytes]:
+    return {
+        "runtime-record.json": b'{"runtime":true}',
+        "runtime-record.sigstore.json": b'{"signature":true}',
+        "github-trusted-root.jsonl": b'{"root":true}\n',
+    }
+
+
 class FakeVerifierRuntime:
-    def __init__(self) -> None:
+    def __init__(self, expected_files: Mapping[str, bytes] | None = None) -> None:
         self.loader_calls: list[tuple[Path, str]] = []
         self.runner_calls: list[dict[str, Any]] = []
         self.result: tuple[Any, Any, Any] = (0, b"[]", b"")
         self.loader_digest = VERIFIER_DIGEST
+        self.expected_files = dict(expected_files or _offline_files())
 
     @contextmanager
     def loader(self, path: Path, expected_sha256: str) -> Iterator[tuple[int, str]]:
@@ -184,7 +204,7 @@ class FakeVerifierRuntime:
         workspace = kwargs["cwd"]
         assert stat.S_IMODE(workspace.stat().st_mode) == 0o700
         assert stat.S_IMODE((workspace / "gh").stat().st_mode) == 0o700
-        for name, raw in _offline_files().items():
+        for name, raw in self.expected_files.items():
             path = workspace / name
             assert path.read_bytes() == raw
             assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -193,6 +213,8 @@ class FakeVerifierRuntime:
 
 def _verifier(
     runtime: FakeVerifierRuntime | None = None,
+    *,
+    profile: str = adapters.EVIDENCE_ATTESTATION_PROFILE,
 ) -> tuple[adapters.DigestPinnedGitHubCliVerifier, FakeVerifierRuntime]:
     runtime = runtime or FakeVerifierRuntime()
     return (
@@ -200,6 +222,7 @@ def _verifier(
             executable_path=Path("/opt/cosmaneura/bin/gh"),
             expected_sha256=VERIFIER_DIGEST,
             expected_version=adapters.GH_VERSION,
+            profile=profile,
             executable_loader=runtime.loader,
             process_runner=runtime.runner,
         ),
@@ -664,6 +687,87 @@ def test_offline_verifier_stages_exact_files_and_scrubs_environment() -> None:
         )
 
 
+def test_runtime_signature_profile_stages_only_its_exact_files_and_is_one_shot() -> (
+    None
+):
+    files = _runtime_offline_files()
+    verifier, runtime = _verifier(
+        FakeVerifierRuntime(files),
+        profile=adapters.RUNTIME_RECORD_SIGNATURE_PROFILE,
+    )
+    result = verifier.verify(
+        arguments=_runtime_verifier_arguments(),
+        files=files,
+        timeout_seconds=30,
+        maximum_output_bytes=4_194_304,
+    )
+    assert result.returncode == 0
+    assert runtime.runner_calls[0]["arguments"] == _runtime_verifier_arguments()
+    with pytest.raises(adapters.RuntimeAdapterFailure, match="already_used"):
+        verifier.verify(
+            arguments=_runtime_verifier_arguments(),
+            files=files,
+            timeout_seconds=30,
+            maximum_output_bytes=4_194_304,
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "arguments", "files"),
+    [
+        (
+            adapters.EVIDENCE_ATTESTATION_PROFILE,
+            _runtime_verifier_arguments(),
+            _runtime_offline_files(),
+        ),
+        (
+            adapters.RUNTIME_RECORD_SIGNATURE_PROFILE,
+            _verifier_arguments(),
+            _offline_files(),
+        ),
+        (
+            adapters.RUNTIME_RECORD_SIGNATURE_PROFILE,
+            _runtime_verifier_arguments(),
+            {**_runtime_offline_files(), "attestation.json": b"cross-profile"},
+        ),
+    ],
+)
+def test_offline_verifier_profiles_refuse_cross_profile_requests(
+    profile: str, arguments: tuple[str, ...], files: dict[str, bytes]
+) -> None:
+    verifier, runtime = _verifier(profile=profile)
+    with pytest.raises(adapters.RuntimeAdapterFailure):
+        verifier.verify(
+            arguments=arguments,
+            files=files,
+            timeout_seconds=30,
+            maximum_output_bytes=4_194_304,
+        )
+    assert runtime.loader_calls == runtime.runner_calls == []
+
+
+def test_runtime_signature_profile_rejects_identity_and_file_variations() -> None:
+    bad_arguments = list(_runtime_verifier_arguments())
+    bad_arguments[7] = "https://github.com/attacker/workflow.yml@refs/heads/main"
+    requests = [
+        (tuple(bad_arguments), _runtime_offline_files()),
+        (
+            _runtime_verifier_arguments(),
+            {**_runtime_offline_files(), "runtime-record.json": b""},
+        ),
+    ]
+    for arguments, files in requests:
+        verifier, runtime = _verifier(profile=adapters.RUNTIME_RECORD_SIGNATURE_PROFILE)
+        with pytest.raises(adapters.RuntimeAdapterFailure):
+            verifier.verify(
+                arguments=arguments,
+                files=files,
+                timeout_seconds=30,
+                maximum_output_bytes=4_194_304,
+            )
+        assert runtime.loader_calls == runtime.runner_calls == []
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -727,6 +831,13 @@ def test_offline_verifier_constructor_requires_absolute_pinned_linux_version() -
             executable_path=Path("/opt/gh"),
             expected_sha256=VERIFIER_DIGEST,
             expected_version="latest",
+        )
+    with pytest.raises(adapters.RuntimeAdapterFailure, match="configuration_invalid"):
+        adapters.DigestPinnedGitHubCliVerifier(
+            executable_path=Path("/opt/gh"),
+            expected_sha256=VERIFIER_DIGEST,
+            expected_version=adapters.GH_VERSION,
+            profile="caller-selected",
         )
 
 
@@ -850,6 +961,9 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
         adapters.attestation.POLICY_PATH,
         Path(adapters.attestation.ROOT).joinpath(
             "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
+        ),
+        Path(adapters.attestation.ROOT).joinpath(
+            "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
         ),
     ):
         policy = json.loads(policy_path.read_text())
