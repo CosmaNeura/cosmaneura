@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "920f9bd414dd2d6e875c68afdf4d132cfb390275069d8f9468de92a42b5d28df"
+CANONICAL_POLICY_SHA256 = "95032e3d1e281b59604bd8070350b0993562972d5b5ea67a0f151e75dfcd25e5"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -48,6 +48,11 @@ HOST_RE = re.compile(
     r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 )
 RECORD_ID_RE = re.compile(r"^runtime-[0-9a-f]{16,64}$")
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+GITHUB_RUN_INVOCATION_RE = re.compile(
+    r"^https://github\.com/CosmaNeura/cosmaneura/actions/runs/"
+    r"[1-9][0-9]{0,19}/attempts/[1-9][0-9]{0,19}$"
+)
 UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 JWK_COORDINATE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 KEY_VAULT_SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9-]{1,127}$")
@@ -95,6 +100,8 @@ RUNTIME_RECORD_FIELDS = (
     "policy_binding_sha256",
     "repository",
     "protected_ref",
+    "publisher_source_sha",
+    "publisher_run_invocation_uri",
     "image_repository",
     "image_digest",
     "provision_job_image_reference",
@@ -232,11 +239,11 @@ def _pin(value: Any, kind: str, code: str) -> str:
             and re.fullmatch(r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*", repository) is not None
         )
     elif kind == "signer_identity":
-        valid = (
-            value.startswith("https://github.com/CosmaNeura/cosmaneura/")
-            and value.endswith("@refs/heads/master")
-            and len(value) <= 512
-        )
+        valid = re.fullmatch(
+            r"https://github\.com/CosmaNeura/cosmaneura/\.github/workflows/"
+            r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml@refs/heads/master",
+            value,
+        ) is not None
     if not valid:
         _fail(code)
     return value
@@ -923,6 +930,11 @@ def validate_external_runtime_binding(
     if (
         type(record["record_id"]) is not str
         or RECORD_ID_RE.fullmatch(record["record_id"]) is None
+        or type(record["publisher_source_sha"]) is not str
+        or GIT_SHA_RE.fullmatch(record["publisher_source_sha"]) is None
+        or type(record["publisher_run_invocation_uri"]) is not str
+        or GITHUB_RUN_INVOCATION_RE.fullmatch(record["publisher_run_invocation_uri"])
+        is None
         or type(record["image_digest"]) is not str
         or DIGEST_RE.fullmatch(record["image_digest"]) is None
     ):

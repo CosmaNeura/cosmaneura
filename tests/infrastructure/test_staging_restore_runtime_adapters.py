@@ -172,9 +172,14 @@ def _runtime_verifier_arguments() -> tuple[str, ...]:
         "https://github.com/CosmaNeura/cosmaneura/.github/workflows/"
         "build_and_publish_manual.yml@refs/heads/master"
     )
+    dynamic = {7: identity, 24: "a" * 40, 26: "a" * 40}
     return tuple(
-        adapters.RUNTIME_SIGNATURE_STATIC_ARGUMENTS.get(index, identity)
-        for index in range(25)
+        (
+            adapters.RUNTIME_SIGNATURE_STATIC_ARGUMENTS[index]
+            if index in adapters.RUNTIME_SIGNATURE_STATIC_ARGUMENTS
+            else dynamic[index]
+        )
+        for index in range(29)
     )
 
 
@@ -749,8 +754,11 @@ def test_offline_verifier_profiles_refuse_cross_profile_requests(
 def test_runtime_signature_profile_rejects_identity_and_file_variations() -> None:
     bad_arguments = list(_runtime_verifier_arguments())
     bad_arguments[7] = "https://github.com/attacker/workflow.yml@refs/heads/main"
+    bad_digest_arguments = list(_runtime_verifier_arguments())
+    bad_digest_arguments[26] = "b" * 40
     requests = [
         (tuple(bad_arguments), _runtime_offline_files()),
+        (tuple(bad_digest_arguments), _runtime_offline_files()),
         (
             _runtime_verifier_arguments(),
             {**_runtime_offline_files(), "runtime-record.json": b""},

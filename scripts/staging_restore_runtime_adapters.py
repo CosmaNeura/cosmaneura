@@ -135,8 +135,10 @@ RUNTIME_SIGNATURE_STATIC_ARGUMENTS = {
     20: "https://slsa.dev/provenance/v1",
     21: "--repo",
     22: "CosmaNeura/cosmaneura",
-    23: "--source-ref",
-    24: "refs/heads/master",
+    23: "--signer-digest",
+    25: "--source-digest",
+    27: "--source-ref",
+    28: "refs/heads/master",
 }
 RUNTIME_SIGNER_IDENTITY_RE = re.compile(
     r"^https://github\.com/CosmaNeura/cosmaneura/\.github/workflows/"
@@ -675,7 +677,7 @@ def _validate_verifier_arguments(
         static_arguments = STATIC_VERIFIER_ARGUMENTS
         files = OFFLINE_FILES
     elif profile == RUNTIME_RECORD_SIGNATURE_PROFILE:
-        expected_length = 25
+        expected_length = 29
         static_arguments = RUNTIME_SIGNATURE_STATIC_ARGUMENTS
         files = RUNTIME_SIGNATURE_FILES
     else:
@@ -696,6 +698,8 @@ def _validate_verifier_arguments(
         _fail("offline_verifier.arguments_invalid")
     if profile == RUNTIME_RECORD_SIGNATURE_PROFILE and (
         RUNTIME_SIGNER_IDENTITY_RE.fullmatch(arguments[7]) is None
+        or SHA_RE.fullmatch(arguments[24]) is None
+        or arguments[26] != arguments[24]
     ):
         _fail("offline_verifier.arguments_invalid")
     return files

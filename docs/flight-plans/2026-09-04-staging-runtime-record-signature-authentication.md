@@ -36,12 +36,13 @@
 
 ## Activation, risk, and recovery
 
-- The checked-in runtime policy remains byte-for-byte unchanged, disabled, and
-  placeholder-bound. No executor or workflow imports the verifier adapter; the
+- The checked-in runtime policy remains disabled and placeholder-bound. No
+  executor or workflow imports the verifier adapter; the
   public dependency factory continues to refuse unconditionally.
-- The policy binds the signer to an exact workflow on protected `master`, but
-  does not pin the publisher's immutable commit/run. This proves branch-scoped
-  GitHub identity, not immutable publication authority;
+- A later dormant receiver-side slice binds the certificate's three source
+  digests and run invocation URI to explicit signed runtime-record fields; see
+  the [publisher invocation binding flight plan](2026-09-04-staging-runtime-publisher-record-binding.md).
+  The actual create-only publisher remains unimplemented, so
   `runtime_record_publication_authority_bound` remains false.
 - Proxy scrubbing and sealed executable bytes do not prove a no-network
   namespace. `offline_verifier_containment_proven` remains false until runtime

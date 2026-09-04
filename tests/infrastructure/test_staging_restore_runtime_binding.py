@@ -267,6 +267,8 @@ def _job_observation(
 
 def _external_binding(
     policy: dict[str, Any],
+    *,
+    record_changes: dict[str, Any] | None = None,
 ) -> tuple[
     bytes,
     binding.ExternalRuntimeBindingReference,
@@ -284,6 +286,10 @@ def _external_binding(
         "policy_binding_sha256": binding._policy_binding_digest(policy),
         "repository": "CosmaNeura/cosmaneura",
         "protected_ref": "refs/heads/master",
+        "publisher_source_sha": "c" * 40,
+        "publisher_run_invocation_uri": (
+            "https://github.com/CosmaNeura/cosmaneura/actions/runs/901/attempts/1"
+        ),
         "image_repository": jobs["provision"]["image_repository"],
         "image_digest": f"sha256:{'a' * 64}",
         "provision_job_image_reference": (
@@ -307,6 +313,7 @@ def _external_binding(
         "network_policy_sha256": environment["network_policy_sha256"],
         "created_at": "2026-09-04T12:01:00Z",
     }
+    record.update(record_changes or {})
     raw = binding._canonical(record)
     record_digest = binding._digest(raw)
     bundle_digest = f"sha256:{'b' * 64}"
@@ -529,6 +536,15 @@ def test_record_ingress_network_and_cleanup_contracts_are_fail_closed() -> None:
     )
     assert record["record"]["unknown_fields_permitted"] is False
     assert record["signature"]["offline_verification_required"] is True
+    assert record["signature"]["publisher_invocation_binding"] == {
+        "source_sha_field": "publisher_source_sha",
+        "source_sha_semantics": (
+            "runtime-record-signing-workflow-and-executor-image-build-source"
+        ),
+        "run_invocation_uri_field": "publisher_run_invocation_uri",
+        "run_invocation_uri_semantics": "runtime-record-signing-workflow-run-attempt",
+        "image_build_provenance_proven": False,
+    }
     assert ingress["only_sources"] == [
         "immutable_launch_record",
         "private_restore_evidence_container",
@@ -645,6 +661,20 @@ def test_fully_pinned_activated_fixture_passes_executable_checks() -> None:
     configured = _configured_policy()
 
     assert binding.validate_policy(configured, executable=True) is configured
+
+
+def test_policy_rejects_noncanonical_runtime_record_signer_workflow_path() -> None:
+    policy = _configured_policy()
+    policy["external_runtime_record"]["signature"]["certificate_identity"] = (
+        "https://github.com/CosmaNeura/cosmaneura/attacker/.github/workflows/"
+        "build_and_publish_manual.yml@refs/heads/master"
+    )
+
+    with pytest.raises(
+        binding.RuntimeBindingFailure,
+        match="policy.external_runtime_record.signature.certificate_identity",
+    ):
+        binding.validate_policy(policy, executable=True)
 
 
 def test_executable_mailbox_account_and_container_resource_ids_are_exact() -> None:
@@ -833,6 +863,10 @@ def test_external_record_is_content_addressed_signed_and_sealed() -> None:
         binding._canonical(policy)
     )
     assert result.record["image_digest"] == f"sha256:{'a' * 64}"
+    assert result.record["publisher_source_sha"] == "c" * 40
+    assert result.record["publisher_run_invocation_uri"].endswith(
+        "/actions/runs/901/attempts/1"
+    )
     assert result.image_reference == (
         f"restoreexecutor.azurecr.io/cosmaneura/restore-executor@sha256:{'a' * 64}"
     )
@@ -852,6 +886,43 @@ def test_external_record_is_content_addressed_signed_and_sealed() -> None:
         binding.ExternalRuntimeBindingReference()
     with pytest.raises(binding.RuntimeBindingFailure, match="reference_invalid"):
         binding.ExternalRuntimeBindingReference._from_values([], "invalid", {})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("publisher_source_sha", "C" * 40),
+        ("publisher_source_sha", "c" * 39),
+        (
+            "publisher_run_invocation_uri",
+            "https://github.com/CosmaNeura/cosmaneura/actions/runs/0901/attempts/1",
+        ),
+        (
+            "publisher_run_invocation_uri",
+            "https://github.com/CosmaNeura/cosmaneura/actions/runs/901/attempts/0",
+        ),
+        (
+            "publisher_run_invocation_uri",
+            "https://github.com/CosmaNeura/cosmaneura/actions/runs/901/attempts/1?x=1",
+        ),
+    ],
+)
+def test_external_record_rejects_invalid_publisher_invocation_authority(
+    field: str, value: str
+) -> None:
+    policy = _configured_policy()
+    raw, provision_reference, cleanup_reference, signature = _external_binding(
+        policy, record_changes={field: value}
+    )
+
+    with pytest.raises(binding.RuntimeBindingFailure, match="runtime_record.identity"):
+        binding.validate_external_runtime_binding(
+            policy,
+            raw,
+            provision_reference=provision_reference,
+            cleanup_reference=cleanup_reference,
+            signature_verification=signature,
+        )
 
 
 def test_external_record_rejects_unsealed_signature_and_circular_layout() -> None:
@@ -886,6 +957,25 @@ def test_external_record_rejects_unsealed_signature_and_circular_layout() -> Non
         binding.RuntimeBindingFailure, match="external_runtime_record.record"
     ):
         binding.validate_runtime_binding_policy(final_digest)
+
+
+def test_external_record_rejects_sealed_proof_for_another_publisher_record() -> None:
+    policy = _configured_policy()
+    _original, _provision, _cleanup, other_signature = _external_binding(policy)
+    changed, provision_reference, cleanup_reference, _changed_signature = (
+        _external_binding(policy, record_changes={"publisher_source_sha": "d" * 40})
+    )
+
+    with pytest.raises(
+        binding.RuntimeBindingFailure, match="signature_verification.binding"
+    ):
+        binding.validate_external_runtime_binding(
+            policy,
+            changed,
+            provision_reference=provision_reference,
+            cleanup_reference=cleanup_reference,
+            signature_verification=other_signature,
+        )
 
 
 def test_external_record_rejects_noncanonical_content_addressed_path() -> None:

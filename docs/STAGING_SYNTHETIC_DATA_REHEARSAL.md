@@ -190,11 +190,17 @@ bytes, cross-binds the sealed external-runtime signature proof, and rechecks
 the platform execution name between stages. External-runtime Sigstore
 authentication now has a separate dormant offline implementation that binds
 the exact record, bundle, root, SLSA subject, workflow certificate claims, and
-verified timestamp before minting the sealed runtime proof. Exact private
-readers, the public dependency factory, sender, and every activation gate
-remain unimplemented or false; see the
+verified timestamp before minting the sealed runtime proof. Its receiver-side
+contract also requires the certificate's signer/source/config digests and run
+invocation URI to equal explicit signed runtime-record publisher fields; this
+authenticates the workflow's assertion that the same source SHA built the
+referenced image but is not independent image-build proof. A future sender must
+refuse build/OCI revision mismatches. This does not implement the publisher or
+equate the publisher run with the later launch run.
+The public dependency factory, sender, and every activation gate remain
+unimplemented or false; see the
 [signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
-[executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
+[publisher invocation binding flight plan](flight-plans/2026-09-04-staging-runtime-publisher-record-binding.md).
 
 The next dormant boundary now supplies that handoff with exact private readers.
 It uses the selected job UAMI for separate storage and vault audiences, performs
