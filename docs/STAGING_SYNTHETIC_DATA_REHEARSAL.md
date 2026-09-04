@@ -177,10 +177,11 @@ but dormant. It accepts only a canonical `.signature.json` envelope and a
 sealed offline ES256 proof over the exact receipt bytes, using the exact
 policy-pinned P-256 JWK and Azure Key Vault digest/P1363 semantics. High-S,
 DER-on-wire, malformed, mismatched, or cross-input reused proofs refuse. The separate
-external runtime record continues to use `.sigstore.json`. No mailbox
-transport, executor integration, sender, Azure resource, workflow, or
-activation change is included; see the
-[receipt-authentication flight plan](flight-plans/2026-09-04-staging-broker-launch-receipt-authentication.md).
+external runtime record continues to use `.sigstore.json`. A dormant exact-object
+receiver now uses the selected job UAMI and a no-proxy/no-redirect private-Blob
+transport with bounded 404-only polling before returning the sealed receipt.
+Executor integration, sender, Azure resource, workflow, and activation remain
+out of scope; see the [mailbox receiver flight plan](flight-plans/2026-09-04-staging-launch-receipt-mailbox-receiver.md).
 
 ## Dormant restore-sanitizer contract
 

@@ -81,6 +81,35 @@ def _configured_policy() -> dict[str, Any]:
             replacements[placeholder] = "restoreexecutor.azurecr.io"
         elif placeholder.endswith("_VAULT_HOST"):
             replacements[placeholder] = "restoresecrets.vault.azure.net"
+        elif (
+            placeholder
+            == "CONFIGURE_EXACT_RESTORE_LAUNCH_MAILBOX_STORAGE_ACCOUNT_RESOURCE_ID"
+        ):
+            replacements[placeholder] = (
+                "/subscriptions/11111111-1111-4111-8111-111111111111/"
+                "resourceGroups/runtime/providers/Microsoft.Storage/"
+                "storageAccounts/restorelaunch"
+            )
+        elif (
+            placeholder
+            == "CONFIGURE_EXACT_RESTORE_PROVISION_LAUNCH_MAILBOX_CONTAINER_RESOURCE_ID"
+        ):
+            replacements[placeholder] = (
+                "/subscriptions/11111111-1111-4111-8111-111111111111/"
+                "resourceGroups/runtime/providers/Microsoft.Storage/"
+                "storageAccounts/restorelaunch/blobServices/default/containers/"
+                "restore-provision-launches-v1"
+            )
+        elif (
+            placeholder
+            == "CONFIGURE_EXACT_RESTORE_CLEANUP_LAUNCH_MAILBOX_CONTAINER_RESOURCE_ID"
+        ):
+            replacements[placeholder] = (
+                "/subscriptions/11111111-1111-4111-8111-111111111111/"
+                "resourceGroups/runtime/providers/Microsoft.Storage/"
+                "storageAccounts/restorelaunch/blobServices/default/containers/"
+                "restore-cleanup-launches-v1"
+            )
         elif placeholder.endswith("_VERSION"):
             replacements[placeholder] = f"version-{resource_index}"
             resource_index += 1
@@ -616,6 +645,40 @@ def test_fully_pinned_activated_fixture_passes_executable_checks() -> None:
     configured = _configured_policy()
 
     assert binding.validate_policy(configured, executable=True) is configured
+
+
+def test_executable_mailbox_account_and_container_resource_ids_are_exact() -> None:
+    wrong_account = _configured_policy()
+    mailbox = wrong_account["launch_binding"]["mailbox"]
+    original_account = mailbox["account_resource_id"]
+    mailbox["account_resource_id"] = original_account.replace(
+        "/restorelaunch", "/otherlaunch"
+    )
+    mailbox["container_resource_ids"] = {
+        action: resource_id.replace(original_account, mailbox["account_resource_id"])
+        for action, resource_id in mailbox["container_resource_ids"].items()
+    }
+    mailbox["role_scopes"] = {
+        name: resource_id.replace(original_account, mailbox["account_resource_id"])
+        for name, resource_id in mailbox["role_scopes"].items()
+    }
+    with pytest.raises(
+        binding.RuntimeBindingFailure, match="evidence_ingress.private_binding"
+    ):
+        binding.validate_policy(wrong_account, executable=True)
+
+    wrong_container = _configured_policy()
+    mailbox = wrong_container["launch_binding"]["mailbox"]
+    wrong_id = mailbox["container_resource_ids"]["cleanup"].replace(
+        "restore-cleanup-launches-v1", "wrong-container"
+    )
+    mailbox["container_resource_ids"]["cleanup"] = wrong_id
+    mailbox["role_scopes"]["cleanup_broker_create"] = wrong_id
+    mailbox["role_scopes"]["cleanup_job_read"] = wrong_id
+    with pytest.raises(
+        binding.RuntimeBindingFailure, match="evidence_ingress.private_binding"
+    ):
+        binding.validate_policy(wrong_container, executable=True)
 
 
 @pytest.mark.parametrize(
