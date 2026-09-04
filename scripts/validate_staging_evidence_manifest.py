@@ -84,7 +84,14 @@ class ValidatedEvidenceBundle:
 
     result_bytes: bytes
     server_scope_bytes: bytes
+    manifest_bytes: bytes
     _validation_seal: object = dataclass_field(repr=False, compare=False)
+    _manifest_validation_seal: object | None = dataclass_field(
+        repr=False, compare=False
+    )
+
+    def __init__(self) -> None:
+        raise EvidenceFailure("validated_bundle.invalid")
 
     @classmethod
     def _from_validated_bytes(
@@ -93,40 +100,85 @@ class ValidatedEvidenceBundle:
         result_bytes: bytes,
         server_scope_bytes: bytes,
     ) -> ValidatedEvidenceBundle:
-        if type(result_bytes) is not bytes or type(server_scope_bytes) is not bytes:
+        if (
+            cls is not ValidatedEvidenceBundle
+            or type(result_bytes) is not bytes
+            or type(server_scope_bytes) is not bytes
+        ):
             raise EvidenceFailure("validated_bundle.invalid")
         value = object.__new__(cls)
         object.__setattr__(value, "result_bytes", result_bytes)
         object.__setattr__(value, "server_scope_bytes", server_scope_bytes)
+        object.__setattr__(value, "manifest_bytes", b"")
         object.__setattr__(value, "_validation_seal", _VALIDATED_BUNDLE_SEAL)
+        object.__setattr__(value, "_manifest_validation_seal", None)
+        return value
+
+    @classmethod
+    def _from_validated_manifest_bytes(
+        cls,
+        *,
+        result_bytes: bytes,
+        server_scope_bytes: bytes,
+        manifest_bytes: bytes,
+    ) -> ValidatedEvidenceBundle:
+        if cls is not ValidatedEvidenceBundle or type(manifest_bytes) is not bytes:
+            raise EvidenceFailure("validated_bundle.invalid")
+        value = cls._from_validated_bytes(
+            result_bytes=result_bytes,
+            server_scope_bytes=server_scope_bytes,
+        )
+        object.__setattr__(value, "manifest_bytes", manifest_bytes)
+        object.__setattr__(value, "_manifest_validation_seal", _VALIDATED_BUNDLE_SEAL)
         return value
 
     def _is_validated_snapshot(self) -> bool:
-        return self._validation_seal is _VALIDATED_BUNDLE_SEAL
+        return (
+            type(self) is ValidatedEvidenceBundle
+            and getattr(self, "_validation_seal", None) is _VALIDATED_BUNDLE_SEAL
+            and type(getattr(self, "result_bytes", None)) is bytes
+            and type(getattr(self, "server_scope_bytes", None)) is bytes
+            and type(getattr(self, "manifest_bytes", None)) is bytes
+        )
+
+    def _has_validated_manifest_snapshot(self) -> bool:
+        return (
+            self._is_validated_snapshot()
+            and getattr(self, "_manifest_validation_seal", None)
+            is _VALIDATED_BUNDLE_SEAL
+            and 0 < len(self.manifest_bytes) <= MAXIMUM_FILE_BYTES
+        )
+
+    def _parse_projection(self, raw: bytes) -> dict[str, Any]:
+        if not self._is_validated_snapshot():
+            raise EvidenceFailure("validated_bundle.invalid")
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise EvidenceFailure("validated_bundle.invalid") from None
+        if not isinstance(value, dict):
+            raise EvidenceFailure("validated_bundle.invalid")
+        return value
 
     @property
     def result(self) -> dict[str, Any]:
         """Return a caller-owned copy of the validated public projection."""
 
-        try:
-            value = json.loads(self.result_bytes)
-        except (UnicodeDecodeError, ValueError, RecursionError):
-            raise EvidenceFailure("validated_bundle.invalid") from None
-        if not isinstance(value, dict):
-            raise EvidenceFailure("validated_bundle.invalid")
-        return value
+        return self._parse_projection(self.result_bytes)
 
     @property
     def server_scope_receipt(self) -> dict[str, Any]:
         """Return a caller-owned copy parsed from the authoritative file bytes."""
 
-        try:
-            value = json.loads(self.server_scope_bytes)
-        except (UnicodeDecodeError, ValueError, RecursionError):
-            raise EvidenceFailure("validated_bundle.invalid") from None
-        if not isinstance(value, dict):
+        return self._parse_projection(self.server_scope_bytes)
+
+    @property
+    def manifest(self) -> dict[str, Any]:
+        """Return a caller-owned projection of the exact validated manifest."""
+
+        if not self._has_validated_manifest_snapshot():
             raise EvidenceFailure("validated_bundle.invalid")
-        return value
+        return self._parse_projection(self.manifest_bytes)
 
 
 def _canonical(value: Any) -> bytes:
@@ -1178,9 +1230,10 @@ def validate_bundle_snapshot(
         "activation_state": "blocked",
         "activation_blockers": policy["activation_blockers"],
     }
-    return ValidatedEvidenceBundle._from_validated_bytes(
+    return ValidatedEvidenceBundle._from_validated_manifest_bytes(
         result_bytes=_canonical(result),
         server_scope_bytes=files[artifact_contracts["server_scope"]],
+        manifest_bytes=files["evidence-manifest.json"],
     )
 
 

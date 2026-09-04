@@ -516,7 +516,7 @@ def test_exact_bundle_validates_but_remains_blocked(
     }
 
 
-def test_validated_snapshot_returns_the_same_read_server_scope_bytes(
+def test_validated_snapshot_returns_the_same_read_manifest_and_server_scope_bytes(
     module: ModuleType,
     tmp_path: Path,
 ) -> None:
@@ -531,16 +531,74 @@ def test_validated_snapshot_returns_the_same_read_server_scope_bytes(
     )
 
     assert snapshot.result == _validate(module, bundle)
+    original_manifest_bytes = (bundle / "evidence-manifest.json").read_bytes()
     original_bytes = (bundle / "server-scope.json").read_bytes()
+    assert snapshot.manifest_bytes == original_manifest_bytes
+    assert snapshot.manifest == json.loads(snapshot.manifest_bytes)
     assert snapshot.server_scope_bytes == original_bytes
     assert snapshot.server_scope_receipt == json.loads(snapshot.server_scope_bytes)
     assert snapshot.result["evidence_binding"]["server_scope_receipt_sha256"] == (
         module._digest(module._canonical(snapshot.server_scope_receipt))
     )
 
+    (bundle / "evidence-manifest.json").write_bytes(b"changed after validation\n")
     (bundle / "server-scope.json").write_bytes(b"changed after validation\n")
+    assert snapshot.manifest_bytes == original_manifest_bytes
+    assert snapshot.manifest == json.loads(original_manifest_bytes)
     assert snapshot.server_scope_bytes == original_bytes
     assert snapshot.server_scope_receipt == json.loads(original_bytes)
+
+
+def test_validated_manifest_projection_is_caller_owned(
+    module: ModuleType,
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(module, tmp_path)
+    policy, digest = module.load_policy(POLICY)
+    snapshot = module.validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=digest,
+        bundle=bundle,
+        now=NOW,
+    )
+    original_bytes = snapshot.manifest_bytes
+    original_manifest = snapshot.manifest
+
+    changed = snapshot.manifest
+    changed["manifest_id"] = "rehearsal-mutated"
+    changed["artifacts"].clear()
+
+    assert snapshot.manifest_bytes == original_bytes
+    assert snapshot.manifest == original_manifest
+
+
+def test_validated_snapshot_rejects_direct_construction_and_subclasses(
+    module: ModuleType,
+) -> None:
+    with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
+        module.ValidatedEvidenceBundle()
+
+    class SnapshotSubclass(module.ValidatedEvidenceBundle):
+        pass
+
+    with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
+        SnapshotSubclass._from_validated_manifest_bytes(
+            result_bytes=b"{}",
+            server_scope_bytes=b"{}",
+            manifest_bytes=b"{}",
+        )
+
+    forged = object.__new__(SnapshotSubclass)
+    object.__setattr__(forged, "result_bytes", b"{}")
+    object.__setattr__(forged, "server_scope_bytes", b"{}")
+    object.__setattr__(forged, "manifest_bytes", b"{}")
+    object.__setattr__(forged, "_validation_seal", module._VALIDATED_BUNDLE_SEAL)
+    object.__setattr__(
+        forged, "_manifest_validation_seal", module._VALIDATED_BUNDLE_SEAL
+    )
+    assert forged._is_validated_snapshot() is False
+    with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
+        _ = forged.manifest
 
 
 def test_json_loaders_reject_oversized_integer_with_bounded_errors(
@@ -558,15 +616,33 @@ def test_public_snapshot_properties_reject_malformed_bytes_with_bounded_errors(
     module: ModuleType,
 ) -> None:
     oversized_integer = b'{"schema_version":' + b"9" * 5_000 + b"}"
-    malformed = module.ValidatedEvidenceBundle._from_validated_bytes(
+    malformed = module.ValidatedEvidenceBundle._from_validated_manifest_bytes(
         result_bytes=oversized_integer,
         server_scope_bytes=b"[]",
+        manifest_bytes=b"[]",
     )
 
     with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
         _ = malformed.result
     with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
         _ = malformed.server_scope_receipt
+    with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
+        _ = malformed.manifest
+
+
+def test_private_snapshot_helper_remains_compatible_but_omits_attestation_data(
+    module: ModuleType,
+) -> None:
+    snapshot = module.ValidatedEvidenceBundle._from_validated_bytes(
+        result_bytes=b"{}",
+        server_scope_bytes=b"{}",
+    )
+
+    assert snapshot._is_validated_snapshot() is True
+    assert snapshot._has_validated_manifest_snapshot() is False
+    assert snapshot.manifest_bytes == b""
+    with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
+        _ = snapshot.manifest
 
 
 def test_server_scope_boolean_walk_recursion_is_bounded(
