@@ -24,6 +24,7 @@ try:
     from scripts import authenticate_staging_github_attestation as github_attestation
     from scripts import authenticate_staging_server_scope_receipt as server_auth
     from scripts import compose_staging_restore_evidence_binding as composition
+    from scripts import staging_restore_launch_material as launch_material
     from scripts import staging_restore_safe_submit as safe_submit
     from scripts import validate_staging_evidence_manifest as evidence_manifest
     from scripts import validate_staging_restore_launch_binding as launch_binding
@@ -35,6 +36,7 @@ except ModuleNotFoundError:  # Direct `python scripts/...` execution.
     import authenticate_staging_github_attestation as github_attestation
     import authenticate_staging_server_scope_receipt as server_auth
     import compose_staging_restore_evidence_binding as composition
+    import staging_restore_launch_material as launch_material
     import staging_restore_safe_submit as safe_submit
     import validate_staging_evidence_manifest as evidence_manifest
     import validate_staging_restore_launch_binding as launch_binding
@@ -361,16 +363,7 @@ def load_executor_policy_document(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class ExecutorLaunchMaterial:
-    """Exact launch inputs; this carrier grants no authority without sealed proofs."""
-
-    authenticated_receipt: launch_binding.AuthenticatedBrokerLaunchReceipt
-    launch_record_bytes: bytes
-    runtime_record_bytes: bytes
-    runtime_signature_verification: (
-        runtime_binding.VerifiedExternalRuntimeRecordSignature
-    )
+ExecutorLaunchMaterial = launch_material.ProvisionLaunchMaterial
 
 
 @dataclass(frozen=True, slots=True)
@@ -536,7 +529,7 @@ def _validate_provision_launch(
         runtime_policy=runtime_document,
         clock=clock,
     )
-    if type(material) is not ExecutorLaunchMaterial:
+    if type(material) is not launch_material.ProvisionLaunchMaterial:
         _fail("launch_receipt.result_invalid")
     authenticated_receipt = material.authenticated_receipt
     signature = material.runtime_signature_verification
