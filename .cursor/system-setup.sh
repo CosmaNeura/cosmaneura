@@ -10,7 +10,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 APT_CONFOLD=(-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef)
-CURSOR_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CURSOR_SETUP_DIR="$(cd -P "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=/dev/null
 source "$CURSOR_SETUP_DIR/credential-neutral.sh"
 cursor_require_credential_neutral

@@ -2,7 +2,7 @@
 # Backend dev server (FastAPI/uvicorn with autoreload) on PYTHON_SERVER_PORT.
 # Reachable directly on http://localhost:8205 and via https://api.cosma.localhost.
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -P "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 # shellcheck source=/dev/null
@@ -13,5 +13,5 @@ source "$SCRIPT_DIR/services.sh"
 ensure_dockerd
 ensure_infra
 
-exec "$CURSOR_MISE_BIN" exec -- \
-  direnv exec . env PORT="${PYTHON_SERVER_PORT:-8205}" python main.py
+exec "$CURSOR_MISE_BIN" exec -- "$CURSOR_DIRENV_BIN" exec . \
+  /usr/bin/env PORT="${PYTHON_SERVER_PORT:-8205}" "$CURSOR_PYTHON_BIN" main.py
