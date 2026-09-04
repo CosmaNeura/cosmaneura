@@ -848,7 +848,9 @@ def receive_broker_launch_receipt(
     transport: LaunchReceiptMailboxTransport,
     monotonic: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
-    wall_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    wall_clock: Callable[[], datetime] = lambda: datetime.now(UTC).replace(
+        microsecond=0
+    ),
 ) -> launch_binding.AuthenticatedBrokerLaunchReceipt:
     """Retrieve and authenticate one execution-addressed receipt/envelope pair."""
 

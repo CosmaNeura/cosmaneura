@@ -795,3 +795,13 @@ def test_configuration_and_transport_failures_are_bounded(
             wall_clock=lambda: (_ for _ in ()).throw(RuntimeError(secret)),
         )
     assert secret not in str(error.value)
+
+
+def test_default_clock_is_exact_utc_second(monkeypatch: pytest.MonkeyPatch) -> None:
+    policy = _policy()
+    objects = _mailbox_objects(policy, "provision")
+    monkeypatch.setenv(launch.EXECUTION_NAME_ENV, EXECUTION_NAME)
+    result = receiver.receive_broker_launch_receipt(
+        policy, action="provision", transport=FakeTransport(objects)
+    )
+    assert (result.observed_at.tzinfo, result.observed_at.microsecond) == (UTC, 0)
