@@ -25,7 +25,16 @@ RESOURCE_ID = (
     "flexibleServers/staging-postgres"
 )
 REVISION = "1" * 40
-POLICY_SHA256 = "2" * 64
+
+
+def _policy_bytes(policy: Any) -> bytes:
+    return (json.dumps(policy, separators=(",", ":"), ensure_ascii=True) + "\n").encode(
+        "ascii"
+    )
+
+
+def _policy_sha256(policy: Any) -> str:
+    return hashlib.sha256(_policy_bytes(policy)).hexdigest()
 
 
 def _load_module() -> ModuleType:
@@ -281,7 +290,7 @@ def _collect(
 ) -> dict[str, Any]:
     return module.collect_evidence(
         policy,
-        POLICY_SHA256,
+        _policy_sha256(policy),
         adapter,
         KEY,
         source_resource_id=RESOURCE_ID,
@@ -289,6 +298,14 @@ def _collect(
         key_version="test-v1",
         clock=_clock(),
     )
+
+
+def _policy_and_receipt(module: ModuleType) -> tuple[dict[str, Any], dict[str, Any]]:
+    server = _server(module)
+    databases = _databases()
+    policy = _policy(module, server, databases)
+    receipt = _collect(module, policy, module.SnapshotAdapter(server, databases))
+    return policy, receipt
 
 
 def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
@@ -329,6 +346,245 @@ def test_collects_only_keyed_aggregate_evidence(module: ModuleType) -> None:
         assert raw_value not in rendered
     assert len(evidence["evidence_hmac"]) == 64
     assert evidence["capture_started_at"] == "2026-09-03T12:00:00Z"
+
+
+def test_evidence_hmac_authenticates_the_exact_collector_receipt(
+    module: ModuleType,
+) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    unsigned = dict(receipt)
+    supplied_hmac = unsigned.pop("evidence_hmac")
+
+    assert module.evidence_hmac(KEY, unsigned) == supplied_hmac
+    verified = module.verify_evidence_hmac(
+        receipt, _policy_bytes(policy), _policy_sha256(policy), KEY
+    )
+    assert verified.source_resource_id == RESOURCE_ID
+    assert verified.primary_database == "appdb"
+    assert verified.capture_started_at == datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    assert verified.capture_completed_at == datetime(2026, 9, 3, 12, 1, tzinfo=UTC)
+
+
+def test_evidence_hmac_rejects_wrong_key_and_invalid_key_length(
+    module: ModuleType,
+) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    wrong_key = b"different-server-scope-key-at-least-thirty-two-bytes"
+
+    with pytest.raises(
+        module.EvidenceFailure, match="receipt.source_resource_hmac_mismatch"
+    ):
+        module.verify_evidence_hmac(
+            receipt, _policy_bytes(policy), _policy_sha256(policy), wrong_key
+        )
+    with pytest.raises(module.EvidenceFailure, match="hmac_key.invalid"):
+        module.verify_evidence_hmac(
+            receipt, _policy_bytes(policy), _policy_sha256(policy), b"short"
+        )
+
+
+def test_evidence_hmac_rejects_nested_and_authenticated_body_mutation(
+    module: ModuleType,
+) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    nested = deepcopy(receipt)
+    nested["server_surfaces"]["roles"]["count"] += 1
+    with pytest.raises(
+        module.EvidenceFailure, match="receipt.server_surfaces_mismatch"
+    ):
+        module.verify_evidence_hmac(
+            nested, _policy_bytes(policy), _policy_sha256(policy), KEY
+        )
+
+    authenticated_body = deepcopy(receipt)
+    authenticated_body["capture_completed_at"] = "2026-09-03T12:00:59Z"
+    with pytest.raises(module.EvidenceFailure, match="receipt.evidence_hmac_mismatch"):
+        module.verify_evidence_hmac(
+            authenticated_body, _policy_bytes(policy), _policy_sha256(policy), KEY
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("schema_version", 1.0, "receipt.invalid"),
+        ("policy_id", "unexpected-policy", "receipt.policy_mismatch"),
+        ("policy_sha256", "3" * 64, "receipt.policy_mismatch"),
+        ("source_revision", "3" * 40, "receipt.source_revision_mismatch"),
+        ("key_version", "other-v1", "receipt.key_version_mismatch"),
+        ("server_version_major", 15, "receipt.server_version_mismatch"),
+        ("errors", ["catalog.read_blocked"], "receipt.invalid"),
+        ("pass", False, "receipt.invalid"),
+    ],
+)
+def test_evidence_hmac_rejects_receipt_metadata_mismatch(
+    module: ModuleType, field: str, value: Any, error: str
+) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    receipt[field] = value
+
+    with pytest.raises(module.EvidenceFailure, match=error):
+        module.verify_evidence_hmac(
+            receipt, _policy_bytes(policy), _policy_sha256(policy), KEY
+        )
+
+
+@pytest.mark.parametrize("mutation", ["pin", "status"])
+def test_evidence_hmac_rejects_database_policy_mismatch(
+    module: ModuleType, mutation: str
+) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    primary = next(
+        item for item in receipt["databases"] if item["status"] == "primary_inventory"
+    )
+    if mutation == "pin":
+        primary["surfaces"]["schema"]["count"] += 1
+    else:
+        primary["status"] = "empty"
+
+    with pytest.raises(module.EvidenceFailure, match="receipt.databases_mismatch"):
+        module.verify_evidence_hmac(
+            receipt, _policy_bytes(policy), _policy_sha256(policy), KEY
+        )
+
+
+def test_evidence_hmac_rejects_non_string_database_status(module: ModuleType) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    receipt["databases"][0]["status"] = []
+
+    with pytest.raises(module.EvidenceFailure, match="receipt.invalid"):
+        module.verify_evidence_hmac(
+            receipt, _policy_bytes(policy), _policy_sha256(policy), KEY
+        )
+
+
+@pytest.mark.parametrize("invalid_status", [[], {}])
+def test_policy_rejects_unhashable_database_status_with_bounded_error(
+    module: ModuleType,
+    invalid_status: Any,
+) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    policy["expected_databases"][0]["status"] = invalid_status
+    raw = _policy_bytes(policy)
+
+    with pytest.raises(module.EvidenceFailure, match="policy.invalid_database"):
+        module.verify_evidence_hmac(
+            receipt,
+            raw,
+            hashlib.sha256(raw).hexdigest(),
+            KEY,
+        )
+
+
+def test_policy_parser_rejects_deep_nesting_with_bounded_error(
+    module: ModuleType,
+) -> None:
+    raw = b"[" * 20_000 + b"]" * 20_000
+
+    with pytest.raises(module.EvidenceFailure, match="policy.invalid_json"):
+        module.parse_policy_document(raw, hashlib.sha256(raw).hexdigest())
+
+
+def test_policy_parser_rejects_oversized_integer_with_bounded_error(
+    module: ModuleType,
+) -> None:
+    raw = b'{"schema_version":' + b"9" * 5_000 + b"}"
+
+    with pytest.raises(module.EvidenceFailure, match="policy.invalid_json"):
+        module.parse_policy_document(raw, hashlib.sha256(raw).hexdigest())
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("schema_version", True, "policy.invalid"),
+        ("schema_version", 1.0, "policy.invalid"),
+        ("port", 5432.0, "policy.invalid_source"),
+        ("postgres_major", 16.0, "policy.invalid_source"),
+    ],
+)
+def test_policy_requires_exact_integer_types(
+    module: ModuleType,
+    field: str,
+    value: Any,
+    error: str,
+) -> None:
+    policy, _receipt = _policy_and_receipt(module)
+    if field == "schema_version":
+        policy[field] = value
+    else:
+        policy["source"][field] = value
+
+    with pytest.raises(module.EvidenceFailure, match=error):
+        module.validate_policy(policy)
+
+
+def test_hmac_key_rejects_bytes_subclass_with_spoofed_length(
+    module: ModuleType,
+) -> None:
+    class SpoofedLength(bytes):
+        def __len__(self) -> int:
+            return module.MINIMUM_HMAC_KEY_BYTES
+
+    with pytest.raises(module.EvidenceFailure, match="hmac_key.invalid"):
+        module._require_hmac_key(SpoofedLength(b"x"))
+
+
+def test_evidence_hmac_rejects_policy_source_and_primary_mismatches(
+    module: ModuleType,
+) -> None:
+    policy, receipt = _policy_and_receipt(module)
+    with pytest.raises(module.EvidenceFailure, match="policy.hash_mismatch"):
+        module.verify_evidence_hmac(receipt, _policy_bytes(policy), "3" * 64, KEY)
+
+    changed_source = deepcopy(policy)
+    changed_source["source"]["resource_id"] = f"{RESOURCE_ID}-other"
+    changed_source_digest = _policy_sha256(changed_source)
+    source_receipt = deepcopy(receipt)
+    source_receipt["policy_sha256"] = changed_source_digest
+    source_unsigned = dict(source_receipt)
+    source_unsigned.pop("evidence_hmac")
+    source_receipt["evidence_hmac"] = module.evidence_hmac(KEY, source_unsigned)
+    with pytest.raises(
+        module.EvidenceFailure, match="receipt.source_resource_hmac_mismatch"
+    ):
+        module.verify_evidence_hmac(
+            source_receipt,
+            _policy_bytes(changed_source),
+            changed_source_digest,
+            KEY,
+        )
+
+    changed_primary = deepcopy(policy)
+    changed_primary["source"]["primary_database"] = "postgres"
+    changed_primary_digest = _policy_sha256(changed_primary)
+    primary_receipt = deepcopy(receipt)
+    primary_receipt["policy_sha256"] = changed_primary_digest
+    primary_unsigned = dict(primary_receipt)
+    primary_unsigned.pop("evidence_hmac")
+    primary_receipt["evidence_hmac"] = module.evidence_hmac(KEY, primary_unsigned)
+    with pytest.raises(
+        module.EvidenceFailure, match="receipt.primary_database_hmac_mismatch"
+    ):
+        module.verify_evidence_hmac(
+            primary_receipt,
+            _policy_bytes(changed_primary),
+            changed_primary_digest,
+            KEY,
+        )
+
+
+def test_evidence_hmac_rejects_dormant_policy(module: ModuleType) -> None:
+    _policy_value, receipt = _policy_and_receipt(module)
+    dormant_policy = json.loads(POLICY.read_text())
+
+    with pytest.raises(module.EvidenceFailure, match="policy.unconfigured"):
+        module.verify_evidence_hmac(
+            receipt,
+            _policy_bytes(dormant_policy),
+            _policy_sha256(dormant_policy),
+            KEY,
+        )
 
 
 def test_non_primary_user_data_and_disabled_non_template_fail_closed(
@@ -584,7 +840,7 @@ def test_source_revision_key_and_capture_window_are_bound(module: ModuleType) ->
     adapter = module.SnapshotAdapter(server, databases)
     kwargs = {
         "policy": policy,
-        "policy_sha256": POLICY_SHA256,
+        "policy_sha256": _policy_sha256(policy),
         "adapter": adapter,
         "key": KEY,
         "source_resource_id": RESOURCE_ID,
@@ -623,7 +879,7 @@ def test_monotonic_deadline_and_resource_limits_fail_closed(
     with pytest.raises(module.EvidenceFailure, match="capture.deadline_exceeded"):
         module.collect_evidence(
             policy,
-            POLICY_SHA256,
+            _policy_sha256(policy),
             module.SnapshotAdapter(server, databases),
             KEY,
             source_resource_id=RESOURCE_ID,
@@ -996,12 +1252,35 @@ def test_committed_policy_is_hash_pinned_and_deliberately_dormant(
         module.read_policy()
 
 
-def test_hmac_key_file_must_be_private(module: ModuleType, tmp_path: Path) -> None:
+def test_hmac_key_file_must_be_private(
+    module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     path = tmp_path / "evidence.key"
     path.write_bytes(KEY)
     path.chmod(0o600)
     assert module.read_hmac_key(path) == KEY
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(module.EvidenceFailure, match="hmac_key.unsafe"):
+        module.read_hmac_key(Path("evidence.key"))
+
+    link = tmp_path / "evidence-link.key"
+    link.symlink_to(path)
+    with pytest.raises(module.EvidenceFailure, match="hmac_key.unsafe"):
+        module.read_hmac_key(link)
+
     path.chmod(0o644)
+    with pytest.raises(module.EvidenceFailure, match="hmac_key.unsafe"):
+        module.read_hmac_key(path)
+
+    path.write_bytes(b"short")
+    path.chmod(0o600)
+    with pytest.raises(module.EvidenceFailure, match="hmac_key.invalid"):
+        module.read_hmac_key(path)
+
+    path.write_bytes(b"x" * (module.MAXIMUM_HMAC_KEY_BYTES + 1))
     with pytest.raises(module.EvidenceFailure, match="hmac_key.unsafe"):
         module.read_hmac_key(path)
 

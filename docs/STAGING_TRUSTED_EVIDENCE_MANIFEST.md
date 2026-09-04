@@ -108,6 +108,41 @@ trusted authorization: the local validator cannot create the attestation,
 provider-observation, or server-scope-authentication receipts required by the
 safe-submit v4 receiver.
 
+## Dormant server-scope authentication receipt
+
+`contracts/staging-rehearsal/v1/server-scope-authentication-policy.json` and
+`scripts/authenticate_staging_server_scope_receipt.py` define the first trusted
+producer slice. Its supported entry point invokes the closed-world validator
+itself and loads the exact hash-pinned checked-in authentication, manifest, and
+server-scope policies; callers cannot inject replacement policies or supply a
+purportedly validated projection. The validator
+mints an opaque immutable snapshot from the public-result and
+`server-scope.json` bytes read in that one pass, and only a private helper
+consumes it. The authenticator never reopens an evidence file after validation
+and reparses each snapshot byte string exactly once into owned objects. It then
+uses the collector's shared
+HMAC implementation to verify the source-resource identity, primary-database
+identity, complete signed receipt, configured policy pins, revision, and key
+version. Authentication and server-scope policy mappings are likewise parsed
+from the exact raw bytes named by their SHA-256 digests, with the latter digest
+pinned inside the former policy; byte subclasses are not accepted. Their source
+resource and primary-database claims must agree. The trusted clock is sampled
+only after HMAC verification; that one value controls both freshness and
+`authenticated_at`, while the authenticated capture interval must remain inside
+the manifest observation window.
+Its canonical aggregate-only receipt carries independently derived
+digests for the exact file and canonical receipt and emits the digest required
+by safe-submit's `server_scope_authentication_receipt_sha256` field.
+
+This component has no network, subprocess, provider, restore, sanitizer, or
+deployment capability. Both its own checked-in policy and the server-scope
+policy are disabled, and the command refuses before reading a key. A future
+activation must deliver the exact owner-controlled key through the private
+executor, configure and re-pin the server-scope baseline, and preserve the key
+file byte semantics (including any trailing newline). A successful HMAC receipt
+still leaves provider observation, GitHub attestation verification, workflow
+integration, and restore activation blocked.
+
 No valid v2 bundle authorizes a restore, sanitizer, rehearsal, staging cutover,
 or production action. A later, independently reviewed milestone must configure
 and re-pin the server-scope policy, verify the receipt HMAC and signer

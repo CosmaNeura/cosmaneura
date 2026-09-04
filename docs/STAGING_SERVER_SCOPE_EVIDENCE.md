@@ -34,6 +34,41 @@ restore-activation blockers. When a reviewed policy becomes active, the
 validator additionally requires exact revision, key-version, server-surface,
 database-status, and database-surface agreement with that policy.
 
+`scripts/authenticate_staging_server_scope_receipt.py` is the next dormant,
+offline boundary. Its supported `authenticate_evidence_bundle` entry point
+loads all three exact hash-pinned checked-in policies, refuses while either
+authentication policy is disabled, validates the closed-world bundle itself,
+and passes the resulting opaque one-read snapshot only to private,
+dependency-injected helpers used by unit tests. Callers cannot replace the
+canonical policy bytes through the supported interface, and the snapshot cannot
+be constructed through its public class interface. The helper reparses the immutable result and
+`server-scope.json` bytes, while the command reads the collector HMAC key
+from an absolute owner-owned mode-`0600` regular file, and calls the collector's
+shared verifier for the original domain and length framing. The verifier
+constant-time checks the source-resource, primary-database, and whole-receipt
+HMACs and requires every server/database pin to match an active, configured
+server-scope policy. Both policy mappings are parsed from the exact raw bytes
+named by their SHA-256 digests, and the authentication policy pins the same
+server-policy byte digest used by the verifier; byte subclasses are rejected so
+hashing and parsing cannot observe different content. The server policy's source
+resource and primary database must also equal the authentication policy's source.
+The authentication receipt binds the manifest, checksum
+index, evidence set, exact server-scope bytes and canonical receipt, source
+revision/resource/database, key version, observation/expiry window, and trusted
+authentication time. That time is sampled after HMAC verification and is used
+for both the final freshness decision and `authenticated_at`; the HMAC-bound
+capture interval must end no later than the manifest observation and begin no
+more than 15 minutes before it. Key bytes include
+every byte of the key file, including a
+trailing newline, and are never stripped, emitted, or logged.
+
+The checked-in `server-scope-authentication-policy.json` and server-scope policy
+are both disabled, so the authenticator refuses before reading a key or bundle.
+Even a successful future authentication result remains blocked
+(`activation_state: blocked`): provider observation, GitHub attestation
+verification, protected workflow storage/integration, and restore activation
+are separate milestones.
+
 Activation still requires a separately reviewed, trusted baseline capture, an
 exact primary-database binding to the full inventory, proof that every
 non-primary connectable database is relation-free, and confirmation that the
