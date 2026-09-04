@@ -119,7 +119,9 @@ def _sealed_final_binding() -> Any:
     config = executor.safe_submit.config_from_policies(
         envelope, safe_policy, executable=False
     )
-    record = dict.fromkeys(executor.composition.OUTPUT_FIELDS, f"sha256:{'1' * 64}")
+    record: dict[str, Any] = dict.fromkeys(
+        executor.composition.OUTPUT_FIELDS, f"sha256:{'1' * 64}"
+    )
     record.update(
         schema_version=1,
         binding_policy_id=config.evidence_binding_policy_id,
@@ -162,18 +164,15 @@ class SequenceClock:
 class Harness:
     def __init__(
         self,
+        inputs: dict[str, Path],
         *,
-        bundle_dir: Path,
-        hmac_key_path: Path,
-        attestation_bundle_path: Path,
-        trusted_root_path: Path,
         outcome: Any | None = None,
         mutate_inputs_during_validation: bool = False,
     ) -> None:
-        self.bundle_dir = bundle_dir
-        self.hmac_key_path = hmac_key_path
-        self.attestation_bundle_path = attestation_bundle_path
-        self.trusted_root_path = trusted_root_path
+        self.bundle_dir = inputs["bundle_dir"]
+        self.hmac_key_path = inputs["hmac_key_path"]
+        self.attestation_bundle_path = inputs["attestation_bundle_path"]
+        self.trusted_root_path = inputs["trusted_root_path"]
         self.snapshot = _sealed_snapshot()
         self.server_binding = _sealed_server_binding()
         self.server_receipt = b'{"pass":true}'
@@ -425,7 +424,7 @@ def test_closed_world_policy_and_every_activation_flag_fail_before_stages(
 def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
     inputs: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    harness = Harness(**inputs, mutate_inputs_during_validation=True)
+    harness = Harness(inputs, mutate_inputs_during_validation=True)
     values = [NOW + timedelta(seconds=index) for index in range(6)]
     clock = SequenceClock(values)
     reads: list[Path] = []
@@ -475,7 +474,7 @@ def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
 def test_regressing_shared_clock_refuses_before_provider(
     inputs: dict[str, Path],
 ) -> None:
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
     clock = SequenceClock([NOW, NOW - timedelta(seconds=1)])
     with pytest.raises(
         executor.TrustedExecutorFailure, match="trusted_clock.regressed"
@@ -494,7 +493,7 @@ def test_symlink_inputs_refuse_before_any_stage(
     link = tmp_path / f"linked-{name}"
     link.symlink_to(inputs[name], target_is_directory=name == "bundle_dir")
     changed = {**inputs, name: link}
-    harness = Harness(**changed)
+    harness = Harness(changed)
     with pytest.raises(executor.TrustedExecutorFailure, match="input.untrusted_path"):
         _execute(changed, harness.dependencies(), lambda: NOW)
     assert harness.calls == []
@@ -512,7 +511,7 @@ def test_unsafe_input_modes_refuse_before_any_stage(
     name: str, mode: int, inputs: dict[str, Path]
 ) -> None:
     inputs[name].chmod(mode)
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
     with pytest.raises(executor.TrustedExecutorFailure, match="input.untrusted_path"):
         _execute(inputs, harness.dependencies(), lambda: NOW)
     assert harness.calls == []
@@ -531,7 +530,7 @@ def test_external_inputs_are_nonempty_and_policy_bounded(
 ) -> None:
     policy = json.loads(executor.POLICY_PATH.read_text())
     maximum = policy["inputs"][policy_key]["maximum_bytes"]
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
     for raw_value in (b"", b"x" * (maximum + 1)):
         inputs[name].write_bytes(raw_value)
         with pytest.raises(executor.TrustedExecutorFailure, match="input.invalid"):
@@ -550,14 +549,14 @@ def test_external_inputs_are_nonempty_and_policy_bounded(
 def test_unbounded_or_untyped_submit_result_never_escapes(
     bad_outcome: Any, inputs: dict[str, Path]
 ) -> None:
-    harness = Harness(**inputs, outcome=bad_outcome)
+    harness = Harness(inputs, outcome=bad_outcome)
     with pytest.raises(executor.TrustedExecutorFailure, match="submit.result_invalid"):
         _run(harness, inputs, lambda: NOW)
     assert harness.calls[-1] == "submit"
 
 
 def test_request_and_outcome_are_slotted_closed_world(inputs: dict[str, Path]) -> None:
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
     assert not hasattr(harness.request, "__dict__")
     assert not hasattr(harness.outcome, "__dict__")
     for value in (harness.request, harness.outcome):
@@ -571,7 +570,7 @@ def test_request_and_outcome_are_slotted_closed_world(inputs: dict[str, Path]) -
 def test_exact_typed_invalid_submit_results_are_bounded(
     case: str, inputs: dict[str, Path]
 ) -> None:
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
     if case == "wrong_target":
         harness.outcome = replace(
             harness.outcome,
@@ -614,7 +613,7 @@ def test_exact_typed_invalid_submit_results_are_bounded(
 def test_exact_submit_status_contract(
     status: str, observed: bool, cleanup: bool, inputs: dict[str, Path]
 ) -> None:
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
     harness.outcome = replace(
         harness.outcome,
         status=status,
@@ -635,7 +634,7 @@ def test_request_derivation_is_rechecked_before_submit(inputs: dict[str, Path]) 
         {"run_attempt": "2"},
     )
     for mutation in mutations:
-        harness = Harness(**inputs)
+        harness = Harness(inputs)
         harness.request = replace(harness.request, **mutation)
         with pytest.raises(
             executor.TrustedExecutorFailure, match="request.result_invalid"
@@ -644,7 +643,7 @@ def test_request_derivation_is_rechecked_before_submit(inputs: dict[str, Path]) 
         assert harness.calls[-1] == "request"
         assert "submit" not in harness.calls
 
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
     harness.request = object.__new__(executor.safe_submit.RestoreRequest)
     with pytest.raises(executor.TrustedExecutorFailure, match="request.result_invalid"):
         _run(harness, inputs, lambda: NOW)
@@ -652,7 +651,7 @@ def test_request_derivation_is_rechecked_before_submit(inputs: dict[str, Path]) 
 
 
 def test_submit_cannot_mutate_validated_request(inputs: dict[str, Path]) -> None:
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
 
     def mutate_request(**kwargs: Any) -> Any:
         outcome = harness.submit(**kwargs)
@@ -665,7 +664,7 @@ def test_submit_cannot_mutate_validated_request(inputs: dict[str, Path]) -> None
 
 
 def test_dependency_exception_text_is_never_exposed(inputs: dict[str, Path]) -> None:
-    harness = Harness(**inputs)
+    harness = Harness(inputs)
 
     def leak(**_kwargs: Any) -> None:
         raise executor.TrustedExecutorFailure(RAW_STAGE_SENTINEL)
