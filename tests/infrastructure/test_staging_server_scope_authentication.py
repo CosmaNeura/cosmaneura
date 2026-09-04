@@ -20,6 +20,12 @@ POLICY = ROOT / "contracts/staging-rehearsal/v1/server-scope-authentication-poli
 SERVER_POLICY = (
     ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
 )
+ENVELOPE_POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-envelope-policy.json"
+SAFE_SUBMIT_POLICY = (
+    ROOT / "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json"
+)
+SANITIZER_POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-policy.json"
+WORKFLOW_ROOT = ROOT / ".github/workflows"
 KEY = b"server-scope-authentication-test-key-with-32-bytes"
 SOURCE_SHA = "1" * 40
 AUTHENTICATED_AT = datetime(2026, 9, 3, 12, 5, tzinfo=UTC)
@@ -268,6 +274,12 @@ def _authenticate(module: ModuleType, fixture: dict[str, Any]) -> dict[str, Any]
     return module._authenticate_validated_bundle(**fixture)
 
 
+def _authenticate_with_binding(
+    module: ModuleType, fixture: dict[str, Any]
+) -> tuple[dict[str, Any], Any]:
+    return module._authenticate_validated_bundle_with_binding(**fixture)
+
+
 def test_authenticates_exact_snapshot_and_emits_deterministic_aggregate_receipt(
     module: ModuleType,
 ) -> None:
@@ -291,6 +303,114 @@ def test_authenticates_exact_snapshot_and_emits_deterministic_aggregate_receipt(
         assert forbidden not in rendered
 
 
+def test_mints_atomic_deterministic_server_authenticated_partial(
+    module: ModuleType,
+) -> None:
+    fixture = _fixture(module)
+
+    first_result, first_binding = _authenticate_with_binding(module, fixture)
+    second_result, second_binding = _authenticate_with_binding(module, fixture)
+
+    assert first_result == second_result
+    assert first_binding == second_binding
+    expected = fixture["snapshot"].result["evidence_binding"]
+    expected["server_scope_authentication_receipt_sha256"] = first_result[
+        "server_scope_authentication_receipt_sha256"
+    ]
+    assert first_binding.record == expected
+    assert first_binding.record_bytes == module._canonical(expected)
+    assert set(first_binding.record) == module.SERVER_AUTHENTICATED_SAFE_SUBMIT_FIELDS
+    assert "provider_receipt_sha256" not in first_binding.record
+    assert "attestation_receipt_sha256" not in first_binding.record
+    assert first_binding._is_authenticator_minted()
+
+    original_bytes = first_binding.record_bytes
+    projection = first_binding.record
+    projection["manifest_id"] = "attacker-controlled"
+    first_result["server_scope_authentication_receipt"]["source_sha"] = "f" * 40
+    first_result["server_scope_authentication_receipt_sha256"] = f"sha256:{'f' * 64}"
+    assert first_binding.record_bytes == original_bytes
+    assert first_binding.record["manifest_id"] == "rehearsal-20260903"
+    assert first_binding.record["source_sha"] == SOURCE_SHA
+    assert (
+        first_binding.record["server_scope_authentication_receipt_sha256"]
+        != (first_result["server_scope_authentication_receipt_sha256"])
+    )
+
+    rendered = repr(first_binding)
+    receipt = first_result["server_scope_authentication_receipt"]
+    for forbidden in (
+        KEY.decode(),
+        receipt["server_scope_evidence_hmac"],
+        first_result["server_scope_authentication_receipt_sha256"],
+    ):
+        assert forbidden not in rendered
+
+
+def test_server_authenticated_partial_rejects_public_construction_and_wrong_seal(
+    module: ModuleType,
+) -> None:
+    fixture = _fixture(module)
+    _result, sealed = _authenticate_with_binding(module, fixture)
+
+    with pytest.raises(TypeError):
+        module.ServerAuthenticatedSafeSubmitBinding(
+            _record_bytes=sealed.record_bytes,
+            _authentication_seal=object(),
+        )
+
+    unsealed = module.ServerAuthenticatedSafeSubmitBinding()
+    with pytest.raises(
+        module.AuthenticationFailure, match="safe_submit_binding.invalid"
+    ):
+        _ = unsealed.record
+
+    forged = object.__new__(module.ServerAuthenticatedSafeSubmitBinding)
+    object.__setattr__(forged, "_record_bytes", sealed.record_bytes)
+    object.__setattr__(forged, "_authentication_seal", object())
+    with pytest.raises(
+        module.AuthenticationFailure, match="safe_submit_binding.invalid"
+    ):
+        _ = forged.record
+
+
+def test_authentication_time_is_bound_into_the_sealed_partial(
+    module: ModuleType,
+) -> None:
+    fixture = _fixture(module)
+    first_result, first_binding = _authenticate_with_binding(module, fixture)
+    later_fixture = {
+        **fixture,
+        "clock": lambda: AUTHENTICATED_AT + timedelta(minutes=1),
+    }
+
+    later_result, later_binding = _authenticate_with_binding(module, later_fixture)
+
+    assert first_result["server_scope_authentication_receipt"]["authenticated_at"] == (
+        "2026-09-03T12:05:00Z"
+    )
+    assert later_result["server_scope_authentication_receipt"]["authenticated_at"] == (
+        "2026-09-03T12:06:00Z"
+    )
+    assert first_binding.record_bytes != later_binding.record_bytes
+    first_record = first_binding.record
+    later_record = later_binding.record
+    assert first_record.pop("server_scope_authentication_receipt_sha256") != (
+        later_record.pop("server_scope_authentication_receipt_sha256")
+    )
+    assert first_record == later_record
+
+
+def test_future_observation_refuses_before_partial_is_returned(
+    module: ModuleType,
+) -> None:
+    fixture = _fixture(module)
+    fixture["clock"] = lambda: datetime(2026, 9, 3, 11, 59, 59, tzinfo=UTC)
+
+    with pytest.raises(module.AuthenticationFailure, match="validated_bundle.stale"):
+        _authenticate_with_binding(module, fixture)
+
+
 def test_public_authentication_boundary_uses_canonical_disabled_policies(
     module: ModuleType,
     tmp_path: Path,
@@ -302,14 +422,18 @@ def test_public_authentication_boundary_uses_canonical_disabled_policies(
         lambda **_kwargs: pytest.fail("disabled policy must refuse before validation"),
     )
 
-    with pytest.raises(
-        module.AuthenticationFailure, match="authentication_policy.disabled"
+    for entrypoint in (
+        module.authenticate_evidence_bundle,
+        module.authenticate_evidence_bundle_with_binding,
     ):
-        module.authenticate_evidence_bundle(
-            bundle=(tmp_path / "missing-bundle").resolve(),
-            key=KEY,
-            validation_now=AUTHENTICATED_AT,
-        )
+        with pytest.raises(
+            module.AuthenticationFailure, match="authentication_policy.disabled"
+        ):
+            entrypoint(
+                bundle=(tmp_path / "missing-bundle").resolve(),
+                key=KEY,
+                validation_now=AUTHENTICATED_AT,
+            )
 
 
 def test_private_injected_path_still_validates_bundle_itself(
@@ -325,6 +449,50 @@ def test_private_injected_path_still_validates_bundle_itself(
             bundle=(tmp_path / "missing-bundle").resolve(),
             validation_now=AUTHENTICATED_AT,
         )
+
+
+def test_bundle_path_validates_once_and_returns_sealed_partial_without_reread(
+    module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _fixture(module)
+    snapshot = fixture.pop("snapshot")
+    calls = 0
+
+    def validate_bundle_snapshot(**kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        assert kwargs["bundle"] == (tmp_path / "bundle").resolve()
+        assert kwargs["now"] == AUTHENTICATED_AT
+        return snapshot
+
+    monkeypatch.setattr(
+        module.evidence_manifest,
+        "validate_bundle_snapshot",
+        validate_bundle_snapshot,
+    )
+    result, sealed = module._authenticate_evidence_bundle_with_documents_and_binding(
+        **fixture,
+        bundle=(tmp_path / "bundle").resolve(),
+        validation_now=AUTHENTICATED_AT,
+    )
+
+    assert calls == 1
+    original_bytes = sealed.record_bytes
+    projected = snapshot.result
+    projected["evidence_binding"]["manifest_id"] = "attacker-controlled"
+    monkeypatch.setattr(
+        module.evidence_manifest,
+        "validate_bundle_snapshot",
+        lambda **_kwargs: pytest.fail("sealed binding must not reread the bundle"),
+    )
+    assert sealed.record_bytes == original_bytes
+    assert sealed.record["manifest_id"] == "rehearsal-20260903"
+    assert (
+        sealed.record["server_scope_authentication_receipt_sha256"]
+        == result["server_scope_authentication_receipt_sha256"]
+    )
 
 
 def test_wrong_key_fails_closed(module: ModuleType) -> None:
@@ -632,11 +800,12 @@ def test_snapshot_projection_mutation_cannot_change_authenticated_bytes(
     result_copy["evidence_binding"]["source_sha"] = "f" * 40
     receipt_copy["source_revision"] = "f" * 40
 
-    result = _authenticate(module, fixture)
+    result, sealed_binding = _authenticate_with_binding(module, fixture)
 
     receipt = result["server_scope_authentication_receipt"]
     assert receipt["source_sha"] == SOURCE_SHA
     assert receipt["server_scope_evidence_hmac"] != "f" * 64
+    assert sealed_binding.record["source_sha"] == SOURCE_SHA
 
 
 def test_collector_capture_time_is_bound_to_manifest_observation(
@@ -878,6 +1047,26 @@ def test_policy_is_hash_pinned_and_cli_refuses_before_reading_key(
     assert hashlib.sha256(POLICY.read_bytes()).hexdigest() == module.POLICY_SHA256
     assert digest == module.POLICY_SHA256
     assert policy["activation_ready"] is False
+    assert json.loads(SERVER_POLICY.read_text())["activation_ready"] is False
+    assert (
+        json.loads(ENVELOPE_POLICY.read_text())["trusted_evidence_binding_implemented"]
+        is False
+    )
+    assert all(
+        value is False
+        for value in json.loads(SAFE_SUBMIT_POLICY.read_text())["activation"].values()
+    )
+    sanitizer = json.loads(SANITIZER_POLICY.read_text())
+    assert sanitizer["status"]["executable"] is False
+    assert sanitizer["status"]["trusted_evidence_binding_implemented"] is False
+    assert sanitizer["status"]["database_mutation_implemented"] is False
+    assert sanitizer["execution_contract"]["implemented"] is False
+    assert sanitizer["execution_contract"]["database_connections_permitted"] is False
+    assert sanitizer["execution_contract"]["sql_mutation_permitted"] is False
+    for workflow_path in (*WORKFLOW_ROOT.glob("*.yml"), *WORKFLOW_ROOT.glob("*.yaml")):
+        workflow = workflow_path.read_text()
+        assert "authenticate_staging_server_scope_receipt" not in workflow
+        assert "staging_restore_safe_submit" not in workflow
 
     monkeypatch.setattr(
         module.server_scope,

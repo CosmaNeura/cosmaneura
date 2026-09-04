@@ -112,8 +112,9 @@ safe-submit v4 receiver.
 
 `contracts/staging-rehearsal/v1/server-scope-authentication-policy.json` and
 `scripts/authenticate_staging_server_scope_receipt.py` define the first trusted
-producer slice. Its supported entry point invokes the closed-world validator
-itself and loads the exact hash-pinned checked-in authentication, manifest, and
+producer slice. Its supported handoff entry point returns the public result and
+opaque partial after invoking the closed-world validator itself and loading the
+exact hash-pinned checked-in authentication, manifest, and
 server-scope policies; callers cannot inject replacement policies or supply a
 purportedly validated projection. The validator
 mints an opaque immutable snapshot from the public-result and
@@ -136,6 +137,19 @@ by safe-submit's `server_scope_authentication_receipt_sha256` field.
 The CLI writes the complete result only to the required absolute
 `--output-file`, created exclusively with mode `0600`; it does not print the
 receipt or stable keyed identifiers to job logs.
+
+Authentication also atomically derives a sealed in-memory partial handoff from
+the same owned snapshot bytes. The partial contains the validator's exact base
+binding plus the newly computed server-scope authentication-receipt digest and
+deliberately omits provider and attestation receipt digests. It is neither a
+serialized trust token nor a final restore authorization. The safe-submit
+model's final evidence type is separately sealed and has no production minter,
+so direct construction, lookalikes, subclasses, raw mappings, and this partial
+cannot reach marker or ARM operations. A future composite verifier must join
+three independently authenticated outputs and recheck freshness before minting
+that final type. The module-identity guards protect trusted code from
+deserialized or accidental substitution, not from arbitrary code execution in
+the same Python process; cryptographic verification remains mandatory.
 
 This component has no network, subprocess, provider, restore, sanitizer, or
 deployment capability. Both its own checked-in policy and the server-scope

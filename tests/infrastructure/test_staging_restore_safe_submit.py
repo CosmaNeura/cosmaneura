@@ -19,6 +19,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/staging_restore_safe_submit.py"
+AUTHENTICATION_SCRIPT = ROOT / "scripts/authenticate_staging_server_scope_receipt.py"
 ENVELOPE_POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-envelope-policy.json"
 SAFE_POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json"
 
@@ -28,11 +29,34 @@ def _load_module() -> ModuleType:
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    sys.path.insert(0, str(ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
 safe_submit = _load_module()
+
+
+def _load_authentication_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "staging_server_scope_authentication_for_safe_submit",
+        AUTHENTICATION_SCRIPT,
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    sys.path.insert(0, str(ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+server_authentication = _load_authentication_module()
 TEST_NOW = datetime(2026, 9, 3, 12, 1, tzinfo=UTC)
 
 
@@ -107,7 +131,18 @@ def _binding(**changes: Any) -> Any:
         "server_scope_authentication_receipt_sha256": f"sha256:{'d' * 64}",
     }
     values.update(changes)
-    return safe_submit.RestoreEvidenceBinding(**values)
+    # Deliberately breach the module-internal seal for fake transport tests.
+    # Production code has no raw-value constructor; a later composite verifier
+    # will be the only supported minter after all three proofs exist.
+    binding = object.__new__(safe_submit.RestoreEvidenceBinding)
+    for name, value in values.items():
+        object.__setattr__(binding, name, value)
+    object.__setattr__(
+        binding,
+        "_binding_seal",
+        safe_submit._RESTORE_EVIDENCE_BINDING_SEAL,
+    )
+    return binding
 
 
 def _rehearsal_id(binding: Any) -> str:
@@ -881,6 +916,59 @@ def test_raw_evidence_mapping_cannot_cross_the_typed_submit_boundary() -> None:
         safe_submit.SafeSubmitError, match="evidence_binding_type_invalid"
     ):
         engine.submit(request)
+    assert markers.calls == []
+    assert fake.calls == []
+
+
+def test_unsealed_final_binding_and_sealed_partial_cannot_reach_submit() -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+    engine = _engine(fake, markers)
+
+    with pytest.raises(TypeError):
+        safe_submit.RestoreEvidenceBinding(schema_version=1)
+
+    unsealed = safe_submit.RestoreEvidenceBinding()
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="evidence_binding_type_invalid"
+    ):
+        engine.submit(replace(_request(), evidence_binding=unsealed))
+
+    class BindingSubclass(safe_submit.RestoreEvidenceBinding):
+        pass
+
+    trusted_test_binding = _binding()
+    subclass = object.__new__(BindingSubclass)
+    for name in safe_submit.RestoreEvidenceBinding.__slots__:
+        object.__setattr__(subclass, name, getattr(trusted_test_binding, name))
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="evidence_binding_type_invalid"
+    ):
+        engine.submit(replace(_request(), evidence_binding=subclass))
+
+    final_record = safe_submit.SafeRestoreSubmitter._binding_record(_binding())
+    partial_record = {
+        name: value
+        for name, value in final_record.items()
+        if name not in {"attestation_receipt_sha256", "provider_receipt_sha256"}
+    }
+    # Deliberately breach the authenticator's internal seal to prove that even
+    # its exact sealed partial type is not a final safe-submit authorization.
+    partial = object.__new__(server_authentication.ServerAuthenticatedSafeSubmitBinding)
+    object.__setattr__(
+        partial,
+        "_record_bytes",
+        server_authentication._canonical(partial_record),
+    )
+    object.__setattr__(
+        partial,
+        "_authentication_seal",
+        server_authentication._SERVER_AUTHENTICATED_SAFE_SUBMIT_SEAL,
+    )
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="evidence_binding_type_invalid"
+    ):
+        engine.submit(replace(_request(), evidence_binding=partial))
     assert markers.calls == []
     assert fake.calls == []
 

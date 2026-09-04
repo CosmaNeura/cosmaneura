@@ -35,10 +35,12 @@ validator additionally requires exact revision, key-version, server-surface,
 database-status, and database-surface agreement with that policy.
 
 `scripts/authenticate_staging_server_scope_receipt.py` is the next dormant,
-offline boundary. Its supported `authenticate_evidence_bundle` entry point
-loads all three exact hash-pinned checked-in policies, refuses while either
-authentication policy is disabled, validates the closed-world bundle itself,
-and passes the resulting opaque one-read snapshot only to private,
+offline boundary. Its supported `authenticate_evidence_bundle_with_binding`
+handoff entry point loads all three exact hash-pinned checked-in policies and
+returns both the public result and opaque partial; `authenticate_evidence_bundle`
+is the compatibility projection that discards the partial. Both entry points
+refuse while either checked-in policy is disabled, validate the closed-world
+bundle themselves, and pass the resulting opaque one-read snapshot only to private,
 dependency-injected helpers used by unit tests. Callers cannot replace the
 canonical policy bytes through the supported interface, and the snapshot cannot
 be constructed through its public class interface. The helper reparses the immutable result and
@@ -65,6 +67,28 @@ The CLI likewise never prints the authenticated receipt: a successful future
 run requires `--output-file` and creates that file once with owner-only
 mode `0600`, preventing receipt HMACs and resource identifiers from entering
 job logs.
+
+The same private authentication transaction now also mints an opaque,
+immutable `ServerAuthenticatedSafeSubmitBinding` from the validator-owned
+snapshot and the freshly derived authentication-receipt digest. Its canonical
+bytes contain exactly the manifest evidence-binding fields plus
+`server_scope_authentication_receipt_sha256`; provider and GitHub-attestation
+receipt fields are intentionally absent. Mutable projections cannot change the
+sealed bytes, the object retains no key, and its representation reveals no
+receipt or HMAC. It is an in-process partial handoff only: it cannot be decoded
+back into trusted state, converted to `RestoreEvidenceBinding`, or used to mint
+a `RestoreRequest`.
+
+The final `RestoreEvidenceBinding` accepted by the safe-submit model is now
+sealed as well. Direct construction, subclasses, raw mappings, unsealed
+instances, and the valid server-authenticated partial all fail before marker or
+ARM access. No production minter exists yet; a later composite verifier must
+require independently sealed provider-observation and GitHub-attestation
+outputs alongside this partial before it can create the final binding.
+These module-identity guards prevent deserialized or accidental type
+substitution inside trusted executor code; they are not a sandbox against
+arbitrary Python code already executing in the process and must never replace
+cryptographic receipt verification at the future composite boundary.
 
 The checked-in `server-scope-authentication-policy.json` and server-scope policy
 are both disabled, so the authenticator refuses before reading a key or bundle.
