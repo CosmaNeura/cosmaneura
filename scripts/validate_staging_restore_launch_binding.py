@@ -132,12 +132,15 @@ def validate_launch_binding_policy(policy: Any) -> dict[str, Any]:
     mailbox = launch["mailbox"]
     signing = launch["receipt_signing"]
     signing_role = signing["role_definition"]
+    job_projection = launch["canonical_job_projection"]
     start_response = launch["job_start"]["response"]
     execution_observation = launch["execution_observation"]
     if (
         reference["fixed_plain_environment_variables"] != list(POINTER_ENV_TO_FIELD)
         or launch["pointer_environment"]["exact_names"] != list(POINTER_ENV_TO_FIELD)
-        or launch["canonical_job_projection"]["excluded_environment_variables"] != list(POINTER_ENV_TO_FIELD)
+        or job_projection["excluded_environment_variables"] != list(POINTER_ENV_TO_FIELD)
+        or job_projection["exact_manual_trigger_config"] != {"parallelism": 1, "replicaCompletionCount": 1}
+        or job_projection["normalized_execution_template_projection"] != {"required_fields": ["containers"], "optional_empty_fields": ["initContainers"], "output_fields": ["containers", "initContainers"], "job_template_volumes_required_empty": True}
         or launch["job_start"]["query_parameters"] != [{"name": "api-version", "value": "2024-03-01"}]
         or launch["job_start"]["management_origin"] != launch["job_configuration_observation"]["management_origin"]
         or launch["job_start"]["resource_path_suffix"] != "/start"
@@ -148,6 +151,7 @@ def validate_launch_binding_policy(policy: Any) -> dict[str, Any]:
         or execution_observation["body_optional_fields"] != ["id", "type", "systemData"]
         or execution_observation["properties_required_fields"] != ["template"]
         or execution_observation["optional_id_and_type_must_be_exact"] is not True
+        or execution_observation["execution_template_schema"] != {"required_fields": ["containers"], "optional_fields": ["initContainers"], "unknown_fields_permitted": False, "init_containers": "absent-or-empty-list", "volumes_permitted": False}
         or launch["broker_request_authentication"]["launch_record_claim_bindings"]
         != {
             "workflow_sha": "workflow_sha",
@@ -259,6 +263,14 @@ class AuthenticatedJobConfigurationObservation:
         _fail("job_observation.unsealed")
     def _is_authenticated(self) -> bool:
         return type(self) is AuthenticatedJobConfigurationObservation and getattr(self, "_seal", None) is _JOB_OBSERVATION_SEAL
+def _execution_template_projection(value: Any, *, job_template: bool, code: str) -> dict[str, Any]:
+    allowed = {"containers", "initContainers", "volumes"} if job_template else {"containers", "initContainers"}
+    if type(value) is not dict or set(value) - allowed or not (allowed if job_template else {"containers"}) <= set(value):
+        _fail(code)
+    containers, init_containers = value["containers"], value.get("initContainers", [])
+    if type(containers) is not list or not containers or any(type(item) is not dict for item in containers) or type(init_containers) is not list or init_containers or (job_template and value["volumes"] != []):
+        _fail(code)
+    return {"containers": containers, "initContainers": []}
 def _job_projection(document: dict[str, Any], *, policy: dict[str, Any], job_kind: str) -> tuple[dict[str, Any], dict[str, str], str]:
     job = policy["runtime"]["jobs"][job_kind]
     identity_policy = policy["identities"]["jobs"][job_kind]
@@ -293,12 +305,8 @@ def _job_projection(document: dict[str, Any], *, policy: dict[str, Any], job_kin
         },
         "job_observation.configuration",
     )
-    manual = _mapping(
-        configuration["manualTriggerConfig"],
-        {"parallelism", "replicaCompletionCount"},
-        "job_observation.manual_trigger",
-    )
-    if configuration["triggerType"] != "Manual" or type(configuration["replicaTimeout"]) is not int or configuration["replicaTimeout"] <= 0 or type(configuration["replicaRetryLimit"]) is not int or configuration["replicaRetryLimit"] != 0 or any(type(manual[name]) is not int or manual[name] <= 0 for name in manual):
+    manual = _mapping(configuration["manualTriggerConfig"], {"parallelism", "replicaCompletionCount"}, "job_observation.manual_trigger")
+    if configuration["triggerType"] != "Manual" or type(configuration["replicaTimeout"]) is not int or configuration["replicaTimeout"] <= 0 or type(configuration["replicaRetryLimit"]) is not int or configuration["replicaRetryLimit"] != 0 or any(type(manual[name]) is not int or manual[name] != 1 for name in manual):
         _fail("job_observation.trigger")
     registries = configuration["registries"]
     expected_registry = {
@@ -307,18 +315,11 @@ def _job_projection(document: dict[str, Any], *, policy: dict[str, Any], job_kin
     }
     if type(registries) is not list or registries != [expected_registry]:
         _fail("job_observation.registry")
-    template = _mapping(
-        properties["template"],
-        {"containers", "initContainers", "volumes"},
-        "job_observation.template",
-    )
-    if template["initContainers"] != [] or template["volumes"] != [] or type(template["containers"]) is not list or len(template["containers"]) != 1:
+    template = properties["template"]
+    execution_template = _execution_template_projection(template, job_template=True, code="job_observation.template")
+    if len(execution_template["containers"]) != 1:
         _fail("job_observation.template")
-    container = _mapping(
-        template["containers"][0],
-        {"name", "image", "command", "args", "env", "resources"},
-        "job_observation.container",
-    )
+    container = _mapping(template["containers"][0], {"name", "image", "command", "args", "env", "resources"}, "job_observation.container")
     if (
         type(container["name"]) is not str
         or not container["name"]
@@ -384,7 +385,7 @@ def _job_projection(document: dict[str, Any], *, policy: dict[str, Any], job_kin
             "template": projected_template,
         },
     }
-    return projection, pointer, _digest(_canonical(template))
+    return projection, pointer, _digest(_canonical(execution_template))
 def validate_job_configuration_observation(policy: Any, *, job_kind: str, response: AuthenticatedArmGetResponse) -> AuthenticatedJobConfigurationObservation:
     document_policy = validate_launch_binding_policy(policy)
     if job_kind not in JOB_KINDS or type(response) is not AuthenticatedArmGetResponse or not response._is_authenticated() or response.resource_id != document_policy["runtime"]["jobs"][job_kind]["resource_id"]:
@@ -764,12 +765,13 @@ def validate_execution_observation(policy: Any, *, action: str, response: Authen
     properties = body["properties"]
     if type(properties) is not dict or "template" not in properties or set(properties) - {"template"} - EXECUTION_COMPUTED:
         _fail("execution_observation.closed_world")
+    template = _execution_template_projection(properties["template"], job_template=False, code="execution_observation.template")
     return _sealed(AuthenticatedExecutionObservation, _EXECUTION_OBSERVATION_SEAL, {
         "action": action,
         "execution_resource_id": response.resource_id,
         "observed_at": response.observed_at,
         "body_sha256": _digest(response.body),
-        "template_sha256": _digest(_canonical(properties["template"])),
+        "template_sha256": _digest(_canonical(template)),
     })
 def _execution_receipt_uris(policy: dict[str, Any], action: str, execution_name: str) -> tuple[str, str]:
     if action not in JOB_KINDS or type(execution_name) is not str or EXECUTION_NAME_RE.fullmatch(execution_name) is None:

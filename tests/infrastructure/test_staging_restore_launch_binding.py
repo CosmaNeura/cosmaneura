@@ -7,12 +7,8 @@ from typing import Any
 
 import pytest
 
-from scripts import (
-    validate_staging_restore_launch_binding as launch,
-)
-from scripts import (
-    validate_staging_restore_runtime_binding as runtime,
-)
+from scripts import validate_staging_restore_launch_binding as launch
+from scripts import validate_staging_restore_runtime_binding as runtime
 
 from tests.infrastructure import test_staging_restore_runtime_binding as helpers
 
@@ -101,6 +97,7 @@ def _start(policy: dict[str, Any], action: str, record: launch.ValidatedLaunchRe
     [
         lambda body: body["properties"]["template"]["containers"].append(deepcopy(body["properties"]["template"]["containers"][0])),
         lambda body: body["properties"]["template"].update(initContainers=[{"name": "untrusted"}]),
+        lambda body: body["properties"]["template"].update(volumes=[{"name": "untrusted"}]),
         lambda body: body.update(type={}),
         lambda body: next(iter(body["identity"]["userAssignedIdentities"].values())).update(clientId="00000000-0000-4000-8000-000000000000"),
         lambda body: body["properties"]["template"]["containers"][0]["env"].append({"name": "COSMANEURA_RUNTIME_RECORD_URI", "value": "https://duplicate.invalid"}),
@@ -119,6 +116,17 @@ def test_job_projection_rejects_override_surfaces(mutate: Any) -> None:
             job_kind="provision",
             response=_arm_response(policy, "provision", body=body),
         )
+@pytest.mark.parametrize(("field", "value"), [("parallelism", 2), ("replicaCompletionCount", 2), ("parallelism", True), ("replicaCompletionCount", "1")])
+@pytest.mark.parametrize("action", ("provision", "cleanup"))
+def test_manual_trigger_cardinality_is_exact_even_with_matching_job_digest(action: str, field: str, value: Any) -> None:
+    policy = _policy()
+    body = helpers._job_document(policy, action)
+    projection, _pointer, _template = launch._job_projection(body, policy=policy, job_kind=action)
+    body["properties"]["configuration"]["manualTriggerConfig"][field] = value
+    projection["properties"]["configuration"]["manualTriggerConfig"][field] = value
+    policy["runtime"]["jobs"][action]["configuration_template_sha256"] = runtime._digest(runtime._canonical(projection))
+    with pytest.raises(launch.LaunchBindingFailure, match="job_observation.trigger"):
+        launch.validate_job_configuration_observation(policy, job_kind=action, response=_arm_response(policy, action, body=body))
 @pytest.mark.parametrize("mutate", [lambda value: value["payload"]["evidence_files"]["SHA256SUMS"].update(versioned_https_uri=value["payload"]["evidence_files"]["SHA256SUMS"]["versioned_https_uri"].replace("0123456789ab", "fedcba987654")), lambda value: value["payload"]["evidence_files"]["SHA256SUMS"].update(sha256={}), lambda value: value.update(schema_version=True)])
 def test_launch_record_materializes_exact_versioned_evidence_and_action_union(mutate: Any) -> None:
     policy = _policy()
@@ -195,11 +203,11 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
         action="provision",
         runtime_record_sha256=runtime._digest(runtime_raw),
     )
-    job_body = helpers._job_document(policy, "provision", pointer)
+    execution_template = {"containers": helpers._job_document(policy, "provision", pointer)["properties"]["template"]["containers"]}
     execution_id = f"{provision.job_resource_id}/executions/execution-1"
     execution_body = {
         "name": "execution-1",
-        "properties": {"template": job_body["properties"]["template"]},
+        "properties": {"template": execution_template},
     }
     response = launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(
         resource_id=execution_id,
@@ -210,11 +218,15 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
         body=runtime._canonical(execution_body),
     )
     execution = launch.validate_execution_observation(policy, action="provision", response=response)
-    for extra in ({"id": execution_id}, {"type": "Microsoft.App/jobs/executions"}):
-        assert launch.validate_execution_observation(policy, action="provision", response=launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=execution_id, api_version="2024-03-01", status_code=200, content_type="application/json", observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC), body=runtime._canonical(execution_body | extra))).execution_resource_id == execution_id
+    assert execution.template_sha256 == provision.execution_template_sha256
+    for allowed_body in (execution_body | {"id": execution_id}, execution_body | {"type": "Microsoft.App/jobs/executions"}, {"name": "execution-1", "properties": {"template": execution_template | {"initContainers": []}}}):
+        assert launch.validate_execution_observation(policy, action="provision", response=launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=execution_id, api_version="2024-03-01", status_code=200, content_type="application/json", observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC), body=runtime._canonical(allowed_body))).template_sha256 == provision.execution_template_sha256
     for extra in ({"id": f"{execution_id}-wrong"}, {"type": "microsoft.app/jobs/executions"}, {"name": "execution-2"}, {"properties": {}}):
         with pytest.raises(launch.LaunchBindingFailure, match="execution_observation"):
             launch.validate_execution_observation(policy, action="provision", response=launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=execution_id, api_version="2024-03-01", status_code=200, content_type="application/json", observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC), body=runtime._canonical(execution_body | extra)))
+    for invalid_template in ({}, {"containers": {}}, execution_template | {"initContainers": [{}]}, execution_template | {"initContainers": {}}, execution_template | {"volumes": []}, execution_template | {"unknown": []}):
+        with pytest.raises(launch.LaunchBindingFailure, match="execution_observation.template"):
+            launch.validate_execution_observation(policy, action="provision", response=launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=execution_id, api_version="2024-03-01", status_code=200, content_type="application/json", observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC), body=runtime._canonical({"name": "execution-1", "properties": {"template": invalid_template}})))
     authorization = _start(policy, "provision", record)
     start_body = {"id": execution_id, "name": "execution-1"}
     start_arguments: dict[str, Any] = {
