@@ -161,6 +161,8 @@
       "quiescence.json",
       "SHA256SUMS"
     ],
+    "launch_digest_binding_proof_required": true,
+    "launch_digest_binding_proof_exact_map_match_required": true,
     "path_reopen_permitted": false,
     "serialized_reconstruction_permitted": false
   },
@@ -217,6 +219,9 @@
     "timezone_aware_utc_required": true,
     "whole_second_normalization_required": true,
     "non_regressing_required": true,
+    "launch_receipt_validation_freshness_reads": 1,
+    "launch_authorization_final_pre_submit_reads": 1,
+    "launch_authorization_fresh_at_submit_start_required": true,
     "composition_final_freshness_reads": 1,
     "composition_final_freshness_after_all_receipts_and_digests": true,
     "safe_submit_freshness_rechecks_required": true

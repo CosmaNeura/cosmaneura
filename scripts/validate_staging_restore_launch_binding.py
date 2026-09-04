@@ -973,6 +973,7 @@ class ValidatedReceivedLaunchReceipt:
     execution_resource_id: str
     execution_template_sha256: str
     observed_at: datetime
+    validated_at: datetime
     _seal: object = dataclass_field(repr=False, compare=False)
     def __init__(self) -> None:
         _fail("launch_receipt.unsealed")
@@ -1059,6 +1060,7 @@ def validate_received_launch_receipt(
         "execution_resource_id": execution_id,
         "execution_template_sha256": receipt["execution_template_sha256"],
         "observed_at": receipt_time,
+        "validated_at": instant,
     })
 def main() -> int:
     try:

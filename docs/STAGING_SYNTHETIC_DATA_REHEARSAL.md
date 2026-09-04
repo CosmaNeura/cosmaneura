@@ -115,8 +115,9 @@ TTL, every expected input digest, and the workflow/run identity; callers cannot
 override them. Each path input is captured once with a bounded no-follow read;
 opaque objects and exact receipt bytes never cross a process, step, artifact,
 or JSON handoff. The sealed snapshot retains the validated result, manifest,
-and server-scope bytes; accepted digests bind the candidate, inventory,
-quiescence, and checksum files without reopening them.
+and server-scope bytes. Its separate launch-digest proof is minted only after
+full validation of those same-read files and carries the exact digest tuple the
+executor rechecks; generic validated snapshots are insufficient.
 
 The fixed order is provision-launch validation, manifest validation, server
 authentication, one provider observation, one offline attestation verification,
@@ -126,6 +127,8 @@ private-runner, workflow, and restore flags are all false, and exact runtime
 resource pins remain `CONFIGURE_EXACT_...`; the external image record is
 unconfigured. Mailbox/broker/receipt, Azure, and workflow adapters remain
 unimplemented, so this contract cannot restore anything.
+The received-launch proof binds its validation instant, and launch authorization
+must still be fresh at the executor's final read immediately before submit.
 
 The dormant read-only adapter layer now implements the narrow provider and
 verifier interfaces without enabling them. It uses one exact managed-identity

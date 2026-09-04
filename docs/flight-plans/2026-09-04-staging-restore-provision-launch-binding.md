@@ -45,9 +45,13 @@ Status: **implemented at the private seam; deliberately non-executable**.
   attempt. Callers can supply paths only; they cannot override those values.
 - Singleton files are captured once and hashed before manifest validation. The
   manifest validator compares the launch digests to the bytes from its one
-  bounded directory read, then continues its existing checksum validation.
+  bounded directory read, then continues its existing full validation. Only a
+  successful full validation mints the opaque proof carrying that exact digest
+  tuple; the executor compares the proof to the launch record before continuing.
 - One shared whole-second non-regressing clock covers receipt freshness,
-  evidence freshness, proof composition, and submit.
+  evidence freshness, proof composition, and submit. The received-receipt proof
+  binds its exact validation instant, and launch expiry is rechecked immediately
+  before the sole submit call.
 - Container Apps `replicaRetryLimit=0`, job timeout, POST response handling, and
   receipt polling are unchanged. With no transport adapter, no raw 202 response
   can produce a receipt or enter this executor.

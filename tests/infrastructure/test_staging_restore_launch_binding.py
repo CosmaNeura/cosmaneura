@@ -300,6 +300,7 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
     assert receipt._is_validated()
     assert receipt.launch_record_sha256 == record.record_sha256
     assert receipt.execution_template_sha256 == provision.execution_template_sha256
+    assert receipt.validated_at == VALIDATION_NOW
     assert not hasattr(receipt, "__dict__")
     def authenticate(raw: bytes) -> launch.AuthenticatedBrokerLaunchReceipt:
         return launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"receipt_bytes": raw, "verified_receipt_sha256": runtime._digest(raw)}))

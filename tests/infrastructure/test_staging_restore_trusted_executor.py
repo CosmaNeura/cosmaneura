@@ -21,7 +21,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "ca2996d18593df0ba9c036de163f843a1955b4ba7b434a3984d879d9a2ea021b"
+    "dc2d5667c2586208438524955ed14698759522143e2d0de19fbd01ba40c7fedf"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
@@ -102,10 +102,26 @@ def _activated_policy(
     return raw, hashlib.sha256(raw).hexdigest()
 
 
-def _sealed_snapshot() -> Any:
-    return executor.evidence_manifest.ValidatedEvidenceBundle._from_validated_manifest_bytes(
+def _sealed_snapshot(
+    expected_file_sha256s: dict[str, str] | None = None,
+) -> Any:
+    snapshot = executor.evidence_manifest.ValidatedEvidenceBundle._from_validated_manifest_bytes(
         result_bytes=b"{}", server_scope_bytes=b"{}", manifest_bytes=b"{}"
     )
+    if expected_file_sha256s is not None:
+        proof = object.__new__(executor.evidence_manifest._LaunchDigestValidation)
+        object.__setattr__(
+            proof,
+            "file_sha256s",
+            tuple(sorted(expected_file_sha256s.items())),
+        )
+        object.__setattr__(
+            proof,
+            "_seal",
+            executor.evidence_manifest._LAUNCH_DIGEST_VALIDATION_SEAL,
+        )
+        object.__setattr__(snapshot, "_launch_digest_validation", proof)
+    return snapshot
 
 
 def _sealed_server_binding() -> Any:
@@ -208,7 +224,6 @@ class Harness:
         self.hmac_key_path = inputs["hmac_key_path"]
         self.attestation_bundle_path = inputs["attestation_bundle_path"]
         self.trusted_root_path = inputs["trusted_root_path"]
-        self.snapshot = _sealed_snapshot()
         self.server_binding = _sealed_server_binding()
         self.server_receipt = b'{"pass":true}'
         self.provider = _sealed_provider()
@@ -279,6 +294,7 @@ class Harness:
             name: executor.launch_binding._digest((self.bundle_dir / name).read_bytes())
             for name in evidence_names
         }
+        self.snapshot = _sealed_snapshot(self.expected_file_sha256s)
         self.launch_record = object.__new__(
             executor.launch_binding.ValidatedLaunchRecord
         )
@@ -341,6 +357,7 @@ class Harness:
             ),
             "execution_template_sha256": f"sha256:{'4' * 64}",
             "observed_at": NOW,
+            "validated_at": NOW,
             "_seal": executor.launch_binding._VALIDATED_RECEIPT_SEAL,
         }
         for name, value in received_values.items():
@@ -436,6 +453,11 @@ class Harness:
         assert kwargs["authenticated_receipt"] is self.authenticated_receipt
         assert kwargs["launch_record"] is self.launch_record
         assert kwargs["runtime_record"] is self.runtime_record
+        object.__setattr__(
+            self.received_receipt,
+            "validated_at",
+            self.launch_validation_now,
+        )
         return self.received_receipt
 
     def validate_snapshot(self, **kwargs: Any) -> Any:
@@ -634,6 +656,17 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
         ),
     }
     assert "cleaned" not in policy["output"]["allowed_statuses"]
+    assert policy["snapshot_rules"]["launch_digest_binding_proof_required"] is True
+    assert (
+        policy["snapshot_rules"]["launch_digest_binding_proof_exact_map_match_required"]
+        is True
+    )
+    assert policy["trusted_clock"]["launch_receipt_validation_freshness_reads"] == 1
+    assert policy["trusted_clock"]["launch_authorization_final_pre_submit_reads"] == 1
+    assert (
+        policy["trusted_clock"]["launch_authorization_fresh_at_submit_start_required"]
+        is True
+    )
 
     signature = inspect.signature(executor.execute_trusted_restore)
     assert list(signature.parameters) == [
@@ -714,7 +747,7 @@ def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
     inputs: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     harness = Harness(inputs, mutate_inputs_during_validation=True)
-    values = [NOW + timedelta(seconds=index) for index in range(8)]
+    values = [NOW + timedelta(seconds=index) for index in range(9)]
     clock = SequenceClock(values)
     reads: list[Path] = []
     original_read = executor._read_input_file
@@ -740,7 +773,7 @@ def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
         "submit",
     ]
     assert len({id(value) for value in harness.clocks}) == 1
-    assert harness.clock_values == [values[0], *values[3:]]
+    assert harness.clock_values == [values[0], *values[3:7], values[8]]
     assert harness.launch_validation_now == values[1]
     assert harness.manifest_validation_now == values[2]
     assert clock.calls == len(values)
@@ -827,6 +860,86 @@ def test_malformed_sealed_launch_result_is_bounded(
         executor.TrustedExecutorFailure, match="launch_binding.result_invalid"
     ):
         _execute(inputs, dependencies, lambda: NOW)
+
+
+def test_generic_snapshot_from_validator_that_ignores_launch_hashes_is_rejected(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+    generic_snapshot = _sealed_snapshot()
+
+    def ignore_launch_hashes(**_kwargs: Any) -> Any:
+        harness.calls.append("manifest")
+        return generic_snapshot
+
+    dependencies = replace(
+        harness.dependencies(),
+        validate_snapshot=ignore_launch_hashes,
+    )
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="manifest.result_invalid"
+    ):
+        _execute(inputs, dependencies, lambda: NOW)
+    assert harness.calls == [*LAUNCH_CALLS, "manifest"]
+    assert "server" not in harness.calls
+
+
+def test_validator_cannot_replace_the_mutable_expected_hash_map(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+
+    def replace_expected_hashes(**kwargs: Any) -> Any:
+        harness.calls.append("manifest")
+        supplied = kwargs["expected_file_sha256s"]
+        supplied["candidate.json"] = f"sha256:{'0' * 64}"
+        return _sealed_snapshot(supplied)
+
+    dependencies = replace(
+        harness.dependencies(),
+        validate_snapshot=replace_expected_hashes,
+    )
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="manifest.result_invalid"
+    ):
+        _execute(inputs, dependencies, lambda: NOW)
+    assert harness.calls == [*LAUNCH_CALLS, "manifest"]
+    assert "server" not in harness.calls
+
+
+def test_stale_received_launch_proof_is_rejected_before_input_reads(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+
+    def return_stale_proof(**_kwargs: Any) -> Any:
+        harness.calls.append("launch_binding")
+        return harness.received_receipt
+
+    dependencies = replace(
+        harness.dependencies(),
+        validate_launch_receipt=return_stale_proof,
+    )
+    clock = SequenceClock([NOW, NOW + timedelta(seconds=1)])
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="launch_binding.result_invalid"
+    ):
+        _execute(inputs, dependencies, clock)
+    assert harness.calls == LAUNCH_CALLS
+
+
+def test_launch_must_remain_fresh_immediately_before_submit(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+    values = [NOW] * 7 + [harness.launch_record.expires_at]
+    clock = SequenceClock(values)
+
+    with pytest.raises(executor.TrustedExecutorFailure, match="launch_binding.expired"):
+        _run(harness, inputs, clock)
+    assert harness.calls[-1] == "request"
+    assert "submit" not in harness.calls
+    assert clock.calls == len(values)
 
 
 @pytest.mark.parametrize(

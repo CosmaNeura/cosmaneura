@@ -231,8 +231,10 @@ singleton-input digests, and workflow/run identity; no caller TTL remains. The
 exact six-file directory, HMAC key,
 attestation bundle, and independently delivered GitHub-only root must each be
 opened once with bounded no-follow reads. The sealed snapshot retains the exact
-validated result, evidence manifest, and server-scope receipt bytes; accepted
-digests bind the candidate, inventory, quiescence, and checksum inputs without
+validated result, evidence manifest, and server-scope receipt bytes. A distinct
+opaque proof is minted only after full validation of the same-read files and
+carries the exact launch digest tuple the executor rechecks. Accepted digests
+therefore bind the candidate, inventory, quiescence, and checksum inputs without
 reopening them. The key, attestation bundle, root, snapshot, and opaque seals
 remain in the same process until the direct safe-submit call returns.
 Caller-supplied restore, workflow, receipt-digest, or identity fields are not
@@ -248,6 +250,8 @@ launch, mailbox, broker, receipt-integration, provider, verifier, submitter,
 private-runner, workflow, and restore activation remain false; runtime resource
 pins are placeholders and the external image record is unconfigured. No
 transport, Azure, or workflow behavior is added.
+The receipt proof binds its exact validation instant, and the executor performs
+one final launch-expiry check immediately before entering safe-submit.
 No workflow or live environment was changed.
 
 ### Dormant restore runtime binding v1

@@ -46,9 +46,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "ca2996d18593df0ba9c036de163f843a1955b4ba7b434a3984d879d9a2ea021b"
+POLICY_SHA256 = "dc2d5667c2586208438524955ed14698759522143e2d0de19fbd01ba40c7fedf"
 POLICY_TEMPLATE_SHA256 = (
-    "a3233a06ad6e44444c9c470fb7e10284da7e9bd6b217e492028145b4aee2e766"
+    "9a2b06a9344ac0e5ab0e39dd5d7a9fba19e2e9332d4efe7b87dc7ca39a64a570"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -629,6 +629,14 @@ def _validate_provision_launch(
         or received.launch_record_sha256 != launch_record.record_sha256
         or received.runtime_record_sha256 != runtime_record.record_sha256
         or received.execution_resource_id != expected_execution_resource_id
+        or received.validated_at != validation_now
+        or not (
+            launch_record.created_at
+            <= received.observed_at
+            <= authenticated_receipt.observed_at
+            <= validation_now
+            < launch_record.expires_at
+        )
         or expected_names != executor_names
         or tuple(name for name, _digest_value in evidence_sha256s) != expected_names
         or any(
@@ -853,16 +861,17 @@ def _execute_trusted_restore_with_dependencies(
     ):
         _fail("input.launch_binding")
     validation_now = trusted_clock()
+    expected_file_sha256s = dict(launch_record.evidence_file_sha256s)
     snapshot = _stage(
         dependencies.validate_snapshot,
         "manifest.failed",
         bundle_dir=bundle,
         validation_now=validation_now,
-        expected_file_sha256s=dict(launch_record.evidence_file_sha256s),
+        expected_file_sha256s=expected_file_sha256s,
     )
     if (
         type(snapshot) is not evidence_manifest.ValidatedEvidenceBundle
-        or not snapshot._has_validated_manifest_snapshot()
+        or not snapshot._has_launch_digest_binding(launch_record.evidence_file_sha256s)
     ):
         _fail("manifest.result_invalid")
     authentication = _stage(
@@ -946,6 +955,9 @@ def _execute_trusted_restore_with_dependencies(
     expected_target_resource_id, expected_intent_sha256 = _expected_outcome_identity(
         config=safe_submit_config, request=request
     )
+    submit_now = trusted_clock()
+    if not launch_record.created_at <= submit_now < launch_record.expires_at:
+        _fail("launch_binding.expired")
     outcome = _stage(
         dependencies.submit,
         "submit.failed",

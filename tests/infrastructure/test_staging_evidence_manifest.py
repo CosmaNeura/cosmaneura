@@ -567,6 +567,20 @@ def test_validated_snapshot_binds_every_same_read_file_to_launch_digests(
         expected_file_sha256s=expected,
     )
     assert snapshot._has_validated_manifest_snapshot()
+    expected_tuple = tuple(expected.items())
+    assert snapshot._has_launch_digest_binding(expected_tuple)
+
+    generic_snapshot = module.validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=digest,
+        bundle=bundle,
+        now=NOW,
+    )
+    assert generic_snapshot._has_validated_manifest_snapshot()
+    assert not generic_snapshot._has_launch_digest_binding(expected_tuple)
+    changed_expected = dict(expected)
+    changed_expected["candidate.json"] = f"sha256:{'0' * 64}"
+    assert not snapshot._has_launch_digest_binding(tuple(changed_expected.items()))
 
     mismatched = dict(expected)
     mismatched["candidate.json"] = f"sha256:{'0' * 64}"

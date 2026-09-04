@@ -76,6 +76,29 @@ class EvidenceFailure(RuntimeError):
 
 
 _VALIDATED_BUNDLE_SEAL = object()
+_LAUNCH_DIGEST_VALIDATION_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class _LaunchDigestValidation:
+    """Opaque proof that one exact expected digest map matched one bundle read."""
+
+    file_sha256s: tuple[tuple[str, str], ...]
+    _seal: object = dataclass_field(repr=False, compare=False)
+
+    def __init__(self) -> None:
+        raise EvidenceFailure("bundle.launch_binding")
+
+    def _matches(self, expected_file_sha256s: tuple[tuple[str, str], ...]) -> bool:
+        try:
+            return (
+                type(self) is _LaunchDigestValidation
+                and getattr(self, "_seal", None) is _LAUNCH_DIGEST_VALIDATION_SEAL
+                and type(expected_file_sha256s) is tuple
+                and self.file_sha256s == tuple(sorted(expected_file_sha256s))
+            )
+        except (AttributeError, TypeError):
+            return False
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -87,6 +110,9 @@ class ValidatedEvidenceBundle:
     manifest_bytes: bytes
     _validation_seal: object = dataclass_field(repr=False, compare=False)
     _manifest_validation_seal: object | None = dataclass_field(
+        repr=False, compare=False
+    )
+    _launch_digest_validation: _LaunchDigestValidation | None = dataclass_field(
         repr=False, compare=False
     )
 
@@ -112,6 +138,7 @@ class ValidatedEvidenceBundle:
         object.__setattr__(value, "manifest_bytes", b"")
         object.__setattr__(value, "_validation_seal", _VALIDATED_BUNDLE_SEAL)
         object.__setattr__(value, "_manifest_validation_seal", None)
+        object.__setattr__(value, "_launch_digest_validation", None)
         return value
 
     @classmethod
@@ -147,6 +174,16 @@ class ValidatedEvidenceBundle:
             and getattr(self, "_manifest_validation_seal", None)
             is _VALIDATED_BUNDLE_SEAL
             and 0 < len(self.manifest_bytes) <= MAXIMUM_FILE_BYTES
+        )
+
+    def _has_launch_digest_binding(
+        self, expected_file_sha256s: tuple[tuple[str, str], ...]
+    ) -> bool:
+        proof = getattr(self, "_launch_digest_validation", None)
+        return (
+            self._has_validated_manifest_snapshot()
+            and type(proof) is _LaunchDigestValidation
+            and proof._matches(expected_file_sha256s)
         )
 
     def _parse_projection(self, raw: bytes) -> dict[str, Any]:
@@ -663,7 +700,7 @@ def _verify_checksums(files: Mapping[str, bytes]) -> None:
 
 def _verify_expected_file_sha256s(
     files: Mapping[str, bytes], expected_file_sha256s: Mapping[str, str]
-) -> None:
+) -> tuple[tuple[str, str], ...]:
     if (
         type(expected_file_sha256s) is not dict
         or set(expected_file_sha256s) != set(files)
@@ -676,6 +713,7 @@ def _verify_expected_file_sha256s(
         )
     ):
         raise EvidenceFailure("bundle.launch_binding")
+    return tuple((name, _digest(files[name])) for name in sorted(files))
 
 
 def _validate_provenance(
@@ -1086,8 +1124,11 @@ def validate_bundle_snapshot(
     expected_file_sha256s: Mapping[str, str] | None = None,
 ) -> ValidatedEvidenceBundle:
     files = _read_bundle(bundle, policy)
+    launch_file_sha256s = None
     if expected_file_sha256s is not None:
-        _verify_expected_file_sha256s(files, expected_file_sha256s)
+        launch_file_sha256s = _verify_expected_file_sha256s(
+            files, expected_file_sha256s
+        )
     _verify_checksums(files)
     synthetic = _load_synthetic_policy(policy)
     server_scope_policy = _load_server_scope_policy(policy)
@@ -1250,11 +1291,29 @@ def validate_bundle_snapshot(
         "activation_state": "blocked",
         "activation_blockers": policy["activation_blockers"],
     }
-    return ValidatedEvidenceBundle._from_validated_manifest_bytes(
+    snapshot = ValidatedEvidenceBundle._from_validated_manifest_bytes(
         result_bytes=_canonical(result),
         server_scope_bytes=files[artifact_contracts["server_scope"]],
         manifest_bytes=files["evidence-manifest.json"],
     )
+    if launch_file_sha256s is not None:
+        launch_digest_validation = object.__new__(_LaunchDigestValidation)
+        object.__setattr__(
+            launch_digest_validation,
+            "file_sha256s",
+            launch_file_sha256s,
+        )
+        object.__setattr__(
+            launch_digest_validation,
+            "_seal",
+            _LAUNCH_DIGEST_VALIDATION_SEAL,
+        )
+        object.__setattr__(
+            snapshot,
+            "_launch_digest_validation",
+            launch_digest_validation,
+        )
+    return snapshot
 
 
 def validate_bundle(
