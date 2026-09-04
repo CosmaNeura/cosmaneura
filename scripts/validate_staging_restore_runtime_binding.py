@@ -27,7 +27,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "27efa1fa7a58d79349cf30a0e7dc564a00f6aeb4a8f115d5156cade14689b16e"
+CANONICAL_POLICY_SHA256 = "9111b25f790de3e45c31a389185720f553e44742729a0ed18e78ae35ec266dd0"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -55,8 +55,13 @@ ACTIVATION = (
     ("private_runtime_record_ingress_bound", "private_runtime_record_ingress_unbound"),
     ("runtime_record_publication_authority_bound", "runtime_record_publication_authority_unbound"),
     ("private_registry_binding_implemented", "private_registry_binding_unimplemented"),
-    ("dispatcher_job_control_bound", "dispatcher_job_control_unbound"),
+    ("broker_oidc_authentication_bound", "broker_oidc_authentication_unbound"),
+    ("broker_exact_job_observation_bound", "broker_exact_job_observation_unbound"),
+    ("broker_job_control_bound", "broker_job_control_unbound"),
     ("job_start_override_prevention_proven", "job_start_override_prevention_unproven"),
+    ("job_start_no_retry_semantics_proven", "job_start_no_retry_semantics_unproven"),
+    ("immutable_launch_record_mailbox_bound", "immutable_launch_record_mailbox_unbound"),
+    ("launch_receipt_binding_implemented", "launch_receipt_binding_unimplemented"),
     ("job_identity_attachments_bound", "job_identity_attachments_unbound"),
     ("private_evidence_ingress_bound", "private_evidence_ingress_unbound"),
     ("private_secret_ingress_bound", "private_secret_ingress_unbound"),
@@ -384,10 +389,25 @@ def _cross_bind(policy: dict[str, Any]) -> None:
     for action in ("provision", "cleanup"):
         job = jobs[action]
         dispatcher = identities["dispatchers"][action]
+        broker = identities["brokers"][action]
         job_identity = identities["jobs"][action]
         if (
             job["environment_resource_id"] != environment["resource_id"]
-            or dispatcher["job_control"]["scope"] != job["resource_id"]
+            or dispatcher["broker_request"]["broker_identity_resource_id"] != broker["resource_id"]
+            or dispatcher["broker_request"]["endpoint_resource_id"] != broker["endpoint_resource_id"]
+            or dispatcher["broker_request"]["oidc_audience_client_id"] != broker["client_id"]
+            or dispatcher["broker_request"]["job_read_or_start_actions"]
+            or dispatcher["broker_request"]["role_assignment_ids"]
+            or broker["caller_identity_resource_id"] != dispatcher["resource_id"]
+            or broker["job_control"]["selected_job_resource_id"] != job["resource_id"]
+            or broker["job_control"]["readable_job_resource_ids"] != [jobs[name]["resource_id"] for name in ("provision", "cleanup")]
+            or broker["job_control"]["read_role_assignment_scopes"] != {name: jobs[name]["resource_id"] for name in ("provision", "cleanup")}
+            or broker["job_control"]["start_role_assignment_scope"] != job["resource_id"]
+            or broker["job_control"]["actions"] != {"read": ["Microsoft.App/jobs/read"], "start": ["Microsoft.App/jobs/start/action"]}
+            or broker["launch_receipt_sign_role_assignment_id"] != policy["launch_binding"]["receipt_signing"]["broker_role_assignment_ids"][action]
+            or policy["launch_binding"]["receipt_signing"]["broker_role_assignment_scopes"][action] != policy["launch_binding"]["receipt_signing"]["key_resource_id"]
+            or broker["federated_credential_ids"]
+            or broker["other_role_assignment_ids"]
             or job_identity["attached_job_resource_ids"] != [job["resource_id"]]
             or job["user_assigned_identity_resource_ids"] != [job_identity["resource_id"]]
             or job["registry_identity_resource_id"] != job_identity["resource_id"]
@@ -395,10 +415,10 @@ def _cross_bind(policy: dict[str, Any]) -> None:
             or dispatcher["other_role_assignment_ids"]
         ):
             _fail(f"identities.{action}.binding")
-        resources.extend((job["resource_id"], dispatcher["resource_id"], dispatcher["federated_credential"]["resource_id"], job_identity["resource_id"]))
-        clients.extend((dispatcher["client_id"], job_identity["client_id"]))
-        principals.extend((dispatcher["principal_id"], job_identity["principal_id"]))
-        role_assignments.extend((dispatcher["job_control"]["role_assignment_id"], *job_identity["role_assignment_ids"].values()))
+        resources.extend((job["resource_id"], dispatcher["resource_id"], dispatcher["federated_credential"]["resource_id"], broker["resource_id"], broker["endpoint_resource_id"], job_identity["resource_id"]))
+        clients.extend((dispatcher["client_id"], broker["client_id"], job_identity["client_id"]))
+        principals.extend((dispatcher["principal_id"], broker["principal_id"], job_identity["principal_id"]))
+        role_assignments.extend((*broker["job_control"]["read_role_assignment_ids"].values(), broker["job_control"]["start_role_assignment_id"], broker["launch_mailbox_create_role_assignment_id"], broker["launch_receipt_sign_role_assignment_id"], *job_identity["role_assignment_ids"].values()))
     if (
         jobs["provision"]["resource_id"] == jobs["cleanup"]["resource_id"]
         or jobs["provision"]["image_repository"] != jobs["cleanup"]["image_repository"]
@@ -409,6 +429,8 @@ def _cross_bind(policy: dict[str, Any]) -> None:
     runtime_ingress = policy["runtime_record_ingress"]
     registry = policy["private_registry"]
     marker = policy["private_control_marker_store"]
+    launch = policy["launch_binding"]
+    mailbox = launch["mailbox"]
     publisher = runtime_ingress["publisher"]
     blob = ingress["private_restore_evidence_container"]
     secret = ingress["private_versioned_secret_source"]
@@ -433,6 +455,7 @@ def _cross_bind(policy: dict[str, Any]) -> None:
         or runtime_ingress["allowed_job_identity_resource_ids"] != both_job_ids
         or registry["pull_identity_resource_ids"] != both_job_ids
         or marker["allowed_job_identity_resource_ids"] != both_job_ids
+        or mailbox["linked_vnet_resource_ids"] != [vnet_id]
         or blob["linked_vnet_resource_ids"] != [vnet_id]
         or secret["linked_vnet_resource_ids"] != [vnet_id]
         or runtime_ingress["linked_vnet_resource_ids"] != [vnet_id]
@@ -455,9 +478,19 @@ def _cross_bind(policy: dict[str, Any]) -> None:
         or blob["account_host"] == marker["account_host"]
         or runtime_ingress["account_resource_id"] == marker["account_resource_id"]
         or runtime_ingress["account_host"] == marker["account_host"]
-        or len({blob["container_resource_id"], runtime_ingress["container_resource_id"], *marker["container_resource_ids"].values()}) != 5
+        or len({blob["container_resource_id"], runtime_ingress["container_resource_id"], *marker["container_resource_ids"].values(), *mailbox["container_resource_ids"].values()}) != 7
         or runtime_ingress["role_assignment_ids"]["provision"] != provision_identity["role_assignment_ids"].get("runtime_binding_reader")
         or runtime_ingress["role_assignment_ids"]["cleanup"] != cleanup_identity["role_assignment_ids"].get("runtime_binding_reader")
+        or mailbox["role_assignment_ids"]["provision_job_read"] != provision_identity["role_assignment_ids"].get("launch_mailbox_read")
+        or mailbox["role_assignment_ids"]["cleanup_job_read"] != cleanup_identity["role_assignment_ids"].get("launch_mailbox_read")
+        or mailbox["role_assignment_ids"]["provision_broker_create"] != identities["brokers"]["provision"]["launch_mailbox_create_role_assignment_id"]
+        or mailbox["role_assignment_ids"]["cleanup_broker_create"] != identities["brokers"]["cleanup"]["launch_mailbox_create_role_assignment_id"]
+        or mailbox["role_scopes"] != {"provision_broker_create": mailbox["container_resource_ids"]["provision"], "cleanup_broker_create": mailbox["container_resource_ids"]["cleanup"], "provision_job_read": mailbox["container_resource_ids"]["provision"], "cleanup_job_read": mailbox["container_resource_ids"]["cleanup"]}
+        or mailbox["role_assignment_role_definition_ids"] != {"provision_broker_create": mailbox["role_definitions"]["broker_create"]["role_definition_id"], "cleanup_broker_create": mailbox["role_definitions"]["broker_create"]["role_definition_id"], "provision_job_read": mailbox["role_definitions"]["job_read"]["role_definition_id"], "cleanup_job_read": mailbox["role_definitions"]["job_read"]["role_definition_id"]}
+        or len(set(mailbox["container_names"].values())) != 2
+        or len(set(mailbox["container_resource_ids"].values())) != 2
+        or mailbox["account_resource_id"] in {blob["account_resource_id"], runtime_ingress["account_resource_id"], marker["account_resource_id"]}
+        or mailbox["account_host"] in {blob["account_host"], runtime_ingress["account_host"], marker["account_host"]}
         or registry["acrpull_role_assignment_ids"]["provision"] != provision_identity["role_assignment_ids"]["registry_pull"]
         or registry["acrpull_role_assignment_ids"]["cleanup"] != cleanup_identity["role_assignment_ids"]["registry_pull"]
         or hmac["role_assignment_ids"]["provision"] != provision_identity["role_assignment_ids"]["hmac_secret_reader"]
@@ -485,6 +518,7 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
     runtime_ingress = policy["runtime_record_ingress"]
     registry = policy["private_registry"]
     marker = policy["private_control_marker_store"]
+    mailbox = policy["launch_binding"]["mailbox"]
     registry_host, _, _repository_path = registry["repository"].partition("/")
     if (
         not blob["account_host"].endswith(".blob.core.windows.net")
@@ -493,6 +527,7 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
         or registry_host != registry["host"]
         or not secret["vault_host"].endswith(".vault.azure.net")
         or not marker["account_host"].endswith(".blob.core.windows.net")
+        or not mailbox["account_host"].endswith(".blob.core.windows.net")
     ):
         _fail("evidence_ingress.private_binding")
     for item in secret["secrets"].values():
@@ -500,11 +535,8 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
         parts = [part for part in uri.path.split("/") if part]
         if uri.hostname != secret["vault_host"] or len(parts) != 3 or parts[0] != "secrets" or parts[2] != item["version"]:
             _fail("evidence_ingress.secret.version_binding")
-    for item in blob["objects"].values():
-        uri = urllib.parse.urlsplit(item["versioned_https_uri"])
-        versions = urllib.parse.parse_qs(uri.query, strict_parsing=True).get("versionid", [])
-        if uri.hostname != blob["account_host"] or not uri.path.startswith("/restore-evidence-v1/") or versions != [item["version_id"]]:
-            _fail("evidence_ingress.blob.version_binding")
+    if blob["objects"]["source"] != "validated_immutable_launch_record.provision":
+        _fail("evidence_ingress.blob.launch_binding")
 
 
 def validate_runtime_binding_policy(policy: Any, *, executable: bool = False) -> dict[str, Any]:
@@ -547,21 +579,27 @@ class ExternalRuntimeBindingReference:
         _fail("runtime_record.reference_invalid")
 
     @classmethod
-    def _from_job_configuration(
+    def _from_authenticated_job_observation(
         cls,
-        *,
-        source_job_kind: str,
-        source_job_resource_id: str,
-        record_uri: str,
-        record_sha256: str,
-        signature_bundle_uri: str,
-        signature_bundle_sha256: str,
+        observation: Any,
     ) -> ExternalRuntimeBindingReference:
-        """Internal hook reserved for a reviewed exact-job-config adapter."""
+        """Derive a pointer only from one sealed authenticated GET observation."""
 
-        if cls is not ExternalRuntimeBindingReference:
+        try:
+            from scripts import (
+                validate_staging_restore_launch_binding as launch_binding,
+            )
+        except ModuleNotFoundError:
+            import validate_staging_restore_launch_binding as launch_binding
+        if (
+            cls is not ExternalRuntimeBindingReference
+            or type(observation) is not launch_binding.AuthenticatedJobConfigurationObservation
+            or not observation._is_authenticated()
+        ):
             _fail("runtime_record.reference_invalid")
-        values = locals()
+        source_job_kind = observation.job_kind
+        source_job_resource_id = observation.job_resource_id
+        values = dict(observation.runtime_reference)
         if source_job_kind not in {"provision", "cleanup"}:
             _fail("runtime_record.reference_invalid")
         _pin(source_job_resource_id, "resource_id", "runtime_record.reference_invalid")
@@ -572,7 +610,9 @@ class ExternalRuntimeBindingReference:
             if PLACEHOLDER_RE.fullmatch(values[name]):
                 _fail("runtime_record.reference_invalid")
         result = object.__new__(cls)
-        for name in ("source_job_kind", "source_job_resource_id", *RUNTIME_REFERENCE_FIELDS):
+        object.__setattr__(result, "source_job_kind", source_job_kind)
+        object.__setattr__(result, "source_job_resource_id", source_job_resource_id)
+        for name in RUNTIME_REFERENCE_FIELDS:
             object.__setattr__(result, name, values[name])
         object.__setattr__(result, "_seal", _RUNTIME_REFERENCE_SEAL)
         return result
@@ -633,24 +673,30 @@ class ValidatedExternalRuntimeBinding:
     """Opaque exact record bytes accepted against an executable policy."""
 
     record_bytes: bytes
+    record_uri: str
     record_sha256: str
+    signature_bundle_uri: str
+    signature_bundle_sha256: str
     _seal: object = dataclass_field(repr=False, compare=False)
 
     def __init__(self) -> None:
         _fail("runtime_record.invalid")
 
     @classmethod
-    def _from_validated(cls, *, record_bytes: bytes, record_sha256: str) -> ValidatedExternalRuntimeBinding:
+    def _from_validated(
+        cls, *, record_bytes: bytes, reference: ExternalRuntimeBindingReference
+    ) -> ValidatedExternalRuntimeBinding:
         if (
             cls is not ValidatedExternalRuntimeBinding
             or type(record_bytes) is not bytes
-            or type(record_sha256) is not str
-            or DIGEST_RE.fullmatch(record_sha256) is None
+            or type(reference) is not ExternalRuntimeBindingReference
+            or not reference._is_bound()
         ):
             _fail("runtime_record.invalid")
         result = object.__new__(cls)
         object.__setattr__(result, "record_bytes", record_bytes)
-        object.__setattr__(result, "record_sha256", record_sha256)
+        for field in RUNTIME_REFERENCE_FIELDS:
+            object.__setattr__(result, field, getattr(reference, field))
         object.__setattr__(result, "_seal", _VALIDATED_RUNTIME_BINDING_SEAL)
         return result
 
@@ -759,7 +805,9 @@ def validate_external_runtime_binding(
         _fail("runtime_record.identity")
     if _utc(record["created_at"], "runtime_record.time") <= _utc(record["image_published_at"], "runtime_record.time"):
         _fail("runtime_record.publication_order")
-    return ValidatedExternalRuntimeBinding._from_validated(record_bytes=record_bytes, record_sha256=observed_digest)
+    return ValidatedExternalRuntimeBinding._from_validated(
+        record_bytes=record_bytes, reference=pointer
+    )
 
 
 def load_policy(path: Path = POLICY_PATH, *, executable: bool = False) -> dict[str, Any]:

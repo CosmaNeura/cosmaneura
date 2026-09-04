@@ -19,11 +19,15 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "a7542d8f03164ca72fda998d3ffe8f8d1ee6df4925ed09a3be9a09f70d89fe3c"
+    "0337b9a9edcd66a219dad628e47afdd30ba56a6b8a97cb48b1615fdd79f4912f"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
     "runtime_adapter_implemented": False,
+    "launch_binding_validator_implemented": False,
+    "launch_mailbox_adapter_implemented": False,
+    "launch_broker_adapter_implemented": False,
+    "launch_receipt_validation_integrated": False,
     "source_provider_adapter_implemented": False,
     "offline_attestation_verifier_adapter_implemented": False,
     "safe_submit_adapter_implemented": False,
@@ -36,6 +40,10 @@ EXPECTED_BLOCKERS = (
     "upstream_policies_disabled",
     "trusted_executor_unimplemented",
     "runtime_adapter_unimplemented",
+    "launch_binding_validator_unimplemented",
+    "launch_mailbox_adapter_unimplemented",
+    "launch_broker_adapter_unimplemented",
+    "launch_receipt_validation_unintegrated",
     "source_provider_adapter_unimplemented",
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",
@@ -371,10 +379,24 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
     assert policy["adapters"]["runtime"] == {
         "implemented": False,
         "policy_pin": "policy_pins.restore_runtime_binding",
-        "external_record_source": "exact_container_app_job_configuration",
+        "external_record_source": (
+            "authenticated_exact_container_app_job_get_observations"
+        ),
         "image_digest_source": "verified_external_runtime_record",
         "caller_override_permitted": False,
     }
+    launch_adapter = policy["adapters"]["launch_binding"]
+    assert launch_adapter["implemented"] is False
+    assert launch_adapter["broker_receipt_authentication"] == (
+        "pinned-key-signature-over-canonical-bytes"
+    )
+    assert launch_adapter["broker_side_validation_runs_in_trusted_executor"] is False
+    assert policy["execution"]["stage_order"][:4] == [
+        "validate_staging_restore_launch_binding.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter",
+        "validate_staging_restore_launch_binding.validate_launch_record",
+        "validate_staging_restore_runtime_binding.validate_external_runtime_binding",
+        "validate_staging_restore_launch_binding.validate_received_launch_receipt",
+    ]
     assert policy["execution"]["provision_cleanup_handoff"] == {
         "kind": "exact-dominant-tombstone-v1",
         "create_and_read_back_required": True,

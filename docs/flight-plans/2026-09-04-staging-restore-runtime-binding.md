@@ -38,17 +38,18 @@ record/bundle authority, and has no read, overwrite, delete, source, target, sec
 
 | Identity | Future authority | Forbidden |
 |---|---|---|
-| Federated provision dispatcher | Read/start only the exact provision job through a validated no-override request | Job mutation/overrides; evidence, secret, source, target, or marker access |
-| Federated cleanup dispatcher | Read/start only the exact cleanup job through a validated no-override request | Job mutation/overrides; restore, evidence, secret, marker, or delete access |
+| Federated provision caller | Invoke only the exact provision broker endpoint with the pinned GitHub OIDC tuple | Azure job read/start or runtime/data authority |
+| Federated cleanup caller | Invoke only the exact cleanup broker endpoint with the pinned GitHub OIDC tuple | Azure job read/start or runtime/data authority |
+| Unfederated per-action broker UAMI | Consume one verified JWT, read both jobs, start one selected job with exact API version, and create/sign its immutable handoff | Job writes, retries, overrides, evidence, secret, source, target, or marker access |
 | Unfederated provision job UAMI | Attach only to provision; exact evidence/secret/source/target/marker rights | GitHub federation, general subscription rights, resource deletion |
 | Unfederated cleanup job UAMI | Attach only to cleanup; read its binding/root, tombstone, then delete exact owned resources | GitHub federation, broad evidence/HMAC/data/sanitize access, restore submission |
 
-Runtime pins must name a job UAMI, never a dispatcher. Current Terraform models provision
+Runtime pins must name a job UAMI, never a caller or broker. Current Terraform models provision
 cleanup-marker read only and three create assignments. A separate change must add the
 fourth provision cleanup-tombstone create assignment and safe-submit correction for partial or
-unknown outcomes; cleanup remains the only resource deleter. `jobs/start/action` RBAC alone does
-not block execution-template overrides; an empty client body is also insufficient without
-provider-enforced or fixed-body broker mediation evidence.
+unknown outcomes; cleanup remains the only resource deleter. Start requires atomic replay consumption,
+exact API query/body, and authenticated observations. The broker signs the receipt; the job derives
+its immutable path from `CONTAINER_APP_JOB_EXECUTION_NAME`, with no listing/current pointer.
 Current dispatcher subscription `control_reader` assignments must also be removed or re-homed
 before the contract's exact-job-only, `other_role_assignment_ids: []` boundary can pass.
 
@@ -96,8 +97,8 @@ and `restore_activation_authorized`.
 5. **Artifact/runtime template:** publish the immutable image; create the environment, exact
    pointer-free job templates, network policy, job-UAMI attachments, and four marker grants.
 6. **External binding/dispatch:** separately bind the create-only publisher, sign only after gate
-   5 supplies exact IDs/digests, attach the pointer, reconcile dispatchers, enforce fixed-body
-   starts, and prove MI, ARM, private Blob/Key Vault, DNS, and offline `gh` containment.
+   5 supplies exact IDs/digests, then implement four pointers, private mailbox, per-action brokers,
+   replay-safe `workflow_ref`/`workflow_sha` observations/start, exact per-job RBAC scopes, bounded execution-name receipt polling, signed cross-process receipt consumption, and containment.
 7. **Target/cleanup:** authenticate a v2 receipt with DB role/FQDN, target server/VNet/subnet/PE/NIC/
    DNS zone/link/group IDs, and executor PE/NIC/DNS zone/link/group IDs; bind exact provision-UAMI
    Entra DB auth, then prove isolation, ownership, TTL, late materialization, tombstone, and cleanup. Apply the marker ReadOnly management lock last.

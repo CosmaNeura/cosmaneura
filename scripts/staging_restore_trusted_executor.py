@@ -44,9 +44,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "a7542d8f03164ca72fda998d3ffe8f8d1ee6df4925ed09a3be9a09f70d89fe3c"
+POLICY_SHA256 = "0337b9a9edcd66a219dad628e47afdd30ba56a6b8a97cb48b1615fdd79f4912f"
 POLICY_TEMPLATE_SHA256 = (
-    "ec4b75928b57fe40cdeeda46c5889a61ba461000a74b6e4e6db081a5a6ffc541"
+    "0c6fa4c4e150ae60d04c3736a756bb52a35d85c8deaa74601f5a86f39dca830f"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -90,6 +90,10 @@ DEPENDENCY_NAMES = (
 ACTIVATION_FLAGS = (
     "trusted_executor_implemented",
     "runtime_adapter_implemented",
+    "launch_binding_validator_implemented",
+    "launch_mailbox_adapter_implemented",
+    "launch_broker_adapter_implemented",
+    "launch_receipt_validation_integrated",
     "source_provider_adapter_implemented",
     "offline_attestation_verifier_adapter_implemented",
     "safe_submit_adapter_implemented",
@@ -103,6 +107,10 @@ ACTIVATION_BLOCKERS = (
     "upstream_policies_disabled",
     "trusted_executor_unimplemented",
     "runtime_adapter_unimplemented",
+    "launch_binding_validator_unimplemented",
+    "launch_mailbox_adapter_unimplemented",
+    "launch_broker_adapter_unimplemented",
+    "launch_receipt_validation_unintegrated",
     "source_provider_adapter_unimplemented",
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",

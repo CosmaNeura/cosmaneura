@@ -7,7 +7,12 @@ from typing import Any
 
 import pytest
 
-from scripts import validate_staging_restore_runtime_binding as binding
+from scripts import (
+    validate_staging_restore_launch_binding as launch,
+)
+from scripts import (
+    validate_staging_restore_runtime_binding as binding,
+)
 
 POLICY = binding.POLICY_PATH
 
@@ -55,6 +60,8 @@ def _configured_policy() -> dict[str, Any]:
                 "https://github.com/CosmaNeura/cosmaneura/.github/workflows/"
                 "build_and_publish_manual.yml@refs/heads/master"
             )
+        elif "LAUNCH_MAILBOX_STORAGE_ACCOUNT_HOST" in placeholder:
+            replacements[placeholder] = "restorelaunch.blob.core.windows.net"
         elif "MARKER_STORAGE_ACCOUNT_HOST" in placeholder:
             replacements[placeholder] = "restoremarkers.blob.core.windows.net"
         elif placeholder.endswith("_STORAGE_ACCOUNT_HOST"):
@@ -76,19 +83,6 @@ def _configured_policy() -> dict[str, Any]:
             )
             resource_index += 1
 
-    blob_objects = policy["evidence_ingress"]["private_restore_evidence_container"][
-        "objects"
-    ]
-    for name, version in (
-        ("evidence_bundle", "blob-version-1"),
-        ("github_attestation_bundle", "blob-version-2"),
-    ):
-        item = blob_objects[name]
-        replacements[item["version_id"]] = version
-        replacements[item["versioned_https_uri"]] = (
-            "https://restoreevidence.blob.core.windows.net/"
-            f"restore-evidence-v1/{name}.json?versionid={version}"
-        )
     secrets = policy["evidence_ingress"]["private_versioned_secret_source"]["secrets"]
     for name, version in (
         ("server_scope_hmac_key", "secret-version-1"),
@@ -111,7 +105,114 @@ def _configured_policy() -> dict[str, Any]:
 
     configured = replace(policy)
     assert not binding._placeholder_values(configured)
+    for action in ("provision", "cleanup"):
+        projection, _pointer, _template = launch._job_projection(
+            _job_document(configured, action), policy=configured, job_kind=action
+        )
+        configured["runtime"]["jobs"][action]["configuration_template_sha256"] = (
+            binding._digest(binding._canonical(projection))
+        )
     return configured
+
+
+def _pointer_values() -> dict[str, str]:
+    record_digest = f"sha256:{'a' * 64}"
+    bundle_digest = f"sha256:{'b' * 64}"
+    return {
+        "record_uri": (
+            "https://restoreevidence.blob.core.windows.net/restore-runtime-bindings-v1/"
+            f"{record_digest[7:]}.json"
+        ),
+        "record_sha256": record_digest,
+        "signature_bundle_uri": (
+            "https://restoreevidence.blob.core.windows.net/restore-runtime-bindings-v1/"
+            f"{bundle_digest[7:]}.sigstore.json"
+        ),
+        "signature_bundle_sha256": bundle_digest,
+    }
+
+
+def _job_document(
+    policy: dict[str, Any], action: str, pointers: dict[str, str] | None = None
+) -> dict[str, Any]:
+    job = policy["runtime"]["jobs"][action]
+    identity = policy["identities"]["jobs"][action]["resource_id"]
+    pointer_values = pointers or _pointer_values()
+    env_names = policy["external_runtime_record"]["reference"][
+        "fixed_plain_environment_variables"
+    ]
+    fields = tuple(binding.RUNTIME_REFERENCE_FIELDS)
+    return {
+        "id": job["resource_id"],
+        "name": job["name"],
+        "type": "Microsoft.App/jobs",
+        "location": "eastus",
+        "identity": {
+            "type": "UserAssigned",
+            "userAssignedIdentities": {
+                identity: {
+                    "clientId": policy["identities"]["jobs"][action]["client_id"],
+                    "principalId": policy["identities"]["jobs"][action]["principal_id"],
+                }
+            },
+        },
+        "properties": {
+            "environmentId": job["environment_resource_id"],
+            "workloadProfileName": "Consumption",
+            "configuration": {
+                "triggerType": "Manual",
+                "replicaTimeout": 3600,
+                "replicaRetryLimit": 0,
+                "manualTriggerConfig": {
+                    "parallelism": 1,
+                    "replicaCompletionCount": 1,
+                },
+                "registries": [
+                    {
+                        "server": policy["private_registry"]["host"],
+                        "identity": identity,
+                    }
+                ],
+            },
+            "template": {
+                "containers": [
+                    {
+                        "name": f"restore-{action}",
+                        "image": (f"{job['image_repository']}@sha256:{'a' * 64}"),
+                        "command": ["python"],
+                        "args": [f"restore_{action}.py"],
+                        "env": [
+                            {"name": name, "value": pointer_values[field]}
+                            for name, field in zip(env_names, fields, strict=True)
+                        ],
+                        "resources": {"cpu": 1, "memory": "2Gi"},
+                    }
+                ],
+                "initContainers": [],
+                "volumes": [],
+            },
+        },
+    }
+
+
+def _job_observation(
+    policy: dict[str, Any], action: str, pointers: dict[str, str]
+) -> launch.AuthenticatedJobConfigurationObservation:
+    body = binding._canonical(_job_document(policy, action, pointers))
+    response = (
+        launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(
+            resource_id=policy["runtime"]["jobs"][action]["resource_id"],
+            api_version="2024-03-01",
+            status_code=200,
+            content_type="application/json",
+            etag=f'"{action}-etag"',
+            observed_at=launch.datetime(2026, 9, 4, 12, 2, tzinfo=launch.UTC),
+            body=body,
+        )
+    )
+    return launch.validate_job_configuration_observation(
+        policy, job_kind=action, response=response
+    )
 
 
 def _external_binding(
@@ -171,13 +272,15 @@ def _external_binding(
         ),
         "signature_bundle_sha256": bundle_digest,
     }
-    references = tuple(
-        binding.ExternalRuntimeBindingReference._from_job_configuration(
-            source_job_kind=job_kind,
-            source_job_resource_id=jobs[job_kind]["resource_id"],
-            **pointer_values,
-        )
+    observations = tuple(
+        _job_observation(policy, job_kind, pointer_values)
         for job_kind in ("provision", "cleanup")
+    )
+    references = tuple(
+        binding.ExternalRuntimeBindingReference._from_authenticated_job_observation(
+            observation
+        )
+        for observation in observations
     )
     signature = (
         binding.VerifiedExternalRuntimeRecordSignature._mint_from_reviewed_verifier(
@@ -227,7 +330,8 @@ def test_canonical_policy_is_strict_and_dormant(capsys: Any) -> None:
         ("identities",),
         ("identities", "dispatchers", "provision"),
         ("identities", "dispatchers", "provision", "federated_credential"),
-        ("identities", "dispatchers", "provision", "job_control"),
+        ("identities", "dispatchers", "provision", "broker_request"),
+        ("identities", "brokers", "provision", "job_control"),
         ("identities", "jobs", "cleanup"),
         ("identities", "jobs", "cleanup", "role_assignment_ids"),
         ("evidence_ingress",),
@@ -256,12 +360,18 @@ def test_policy_rejects_unknown_fields_at_every_boundary(
     ("path", "field", "value"),
     [
         (
-            ("identities", "dispatchers", "provision", "job_control"),
+            ("identities", "brokers", "provision", "job_control"),
             "actions",
-            [*binding.ACTIONS, "Microsoft.Resources/subscriptions/resourceGroups/read"],
+            {
+                "read": [
+                    "Microsoft.App/jobs/read",
+                    "Microsoft.Resources/subscriptions/resourceGroups/read",
+                ],
+                "start": ["Microsoft.App/jobs/start/action"],
+            },
         ),
         (
-            ("identities", "dispatchers", "cleanup", "job_control"),
+            ("identities", "brokers", "cleanup", "job_control"),
             "data_actions",
             ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"],
         ),
@@ -308,12 +418,22 @@ def test_dispatchers_and_unfederated_jobs_are_exactly_cross_bound() -> None:
         assert dispatcher["federated_credential"]["subject"] == (
             f"repo:CosmaNeura/cosmaneura:environment:staging-restore-{action}"
         )
-        assert dispatcher["job_control"]["scope"] == runtime_jobs[action]["resource_id"]
-        assert dispatcher["job_control"]["actions"] == list(binding.ACTIONS)
-        assert dispatcher["job_control"]["data_actions"] == []
-        start = dispatcher["job_control"]["start_request"]
-        assert start["platform_or_broker_enforcement_required"] is True
+        broker = identities["brokers"][action]
+        assert dispatcher["broker_request"]["job_read_or_start_actions"] == []
+        assert (
+            broker["job_control"]["selected_job_resource_id"]
+            == runtime_jobs[action]["resource_id"]
+        )
+        assert broker["job_control"]["actions"] == {
+            "read": ["Microsoft.App/jobs/read"],
+            "start": ["Microsoft.App/jobs/start/action"],
+        }
+        assert broker["job_control"]["data_actions"] == []
+        start = broker["job_control"]["start_request"]
+        assert start["entity"] == "absent-or-zero-length"
         assert start["execution_template_overrides_permitted"] is False
+        assert start["maximum_attempts"] == 1
+        assert start["retries"] == 0
         assert job["federated_credential_ids"] == []
         assert job["attached_job_resource_ids"] == [runtime_jobs[action]["resource_id"]]
         assert runtime_jobs[action]["user_assigned_identity_resource_ids"] == [
@@ -343,8 +463,13 @@ def test_record_ingress_network_and_cleanup_contracts_are_fail_closed() -> None:
         "configuration_template_digest": {
             "algorithm": "sha256",
             "serialization": "canonical-json-no-trailing-newline",
-            "computed_before_pointer_attachment": True,
-            "excluded_fields": ["external_runtime_record_pointer"],
+            "projection": "closed-world-aca-job-pointer-free-v1",
+            "computed_from_authenticated_exact_get": True,
+            "excluded_environment_variables": list(launch.POINTER_ENV_TO_FIELD),
+            "excluded_arm_computed_fields": policy["launch_binding"][
+                "canonical_job_projection"
+            ]["excluded_arm_computed_fields"],
+            "other_exclusions_permitted": False,
         },
     }
     assert all(
@@ -355,6 +480,7 @@ def test_record_ingress_network_and_cleanup_contracts_are_fail_closed() -> None:
     assert record["record"]["unknown_fields_permitted"] is False
     assert record["signature"]["offline_verification_required"] is True
     assert ingress["only_sources"] == [
+        "immutable_launch_record",
         "private_restore_evidence_container",
         "private_versioned_secret_source",
     ]
@@ -372,6 +498,7 @@ def test_record_ingress_network_and_cleanup_contracts_are_fail_closed() -> None:
         "managed_identity",
         "private_evidence_blob",
         "private_runtime_binding_blob",
+        "private_launch_mailbox_blob",
         "private_secret_vault",
         "private_control_marker_blob",
         "private_rehearsal_postgres",
@@ -548,13 +675,8 @@ def test_executable_mode_rejects_identity_registry_or_digest_aliasing(
         (
             lambda policy: policy["evidence_ingress"][
                 "private_restore_evidence_container"
-            ]["objects"]["evidence_bundle"].update(
-                versioned_https_uri=(
-                    "https://restoreevidence.blob.core.windows.net/"
-                    "other/evidence.json?versionid=blob-version-1"
-                )
-            ),
-            "evidence_ingress.blob.version_binding",
+            ]["objects"].update(source="caller_supplied"),
+            "policy.evidence_ingress.private_restore_evidence_container.objects.source",
         ),
     ],
 )
@@ -647,21 +769,21 @@ def test_external_record_rejects_unsealed_signature_and_circular_layout() -> Non
 def test_external_record_rejects_noncanonical_content_addressed_path() -> None:
     policy = _configured_policy()
     raw, provision_reference, cleanup_reference, signature = _external_binding(policy)
-    misplaced = binding.ExternalRuntimeBindingReference._from_job_configuration(
-        source_job_kind="provision",
-        source_job_resource_id=provision_reference.source_job_resource_id,
-        record_uri=provision_reference.record_uri.replace(".json", "/record.json"),
-        record_sha256=provision_reference.record_sha256,
-        signature_bundle_uri=provision_reference.signature_bundle_uri,
-        signature_bundle_sha256=provision_reference.signature_bundle_sha256,
+    bad_pointer = {
+        "record_uri": provision_reference.record_uri.replace(".json", "/record.json"),
+        "record_sha256": provision_reference.record_sha256,
+        "signature_bundle_uri": provision_reference.signature_bundle_uri,
+        "signature_bundle_sha256": provision_reference.signature_bundle_sha256,
+    }
+    misplaced = (
+        binding.ExternalRuntimeBindingReference._from_authenticated_job_observation(
+            _job_observation(policy, "provision", bad_pointer)
+        )
     )
-    misplaced_cleanup = binding.ExternalRuntimeBindingReference._from_job_configuration(
-        source_job_kind="cleanup",
-        source_job_resource_id=cleanup_reference.source_job_resource_id,
-        record_uri=misplaced.record_uri,
-        record_sha256=misplaced.record_sha256,
-        signature_bundle_uri=misplaced.signature_bundle_uri,
-        signature_bundle_sha256=misplaced.signature_bundle_sha256,
+    misplaced_cleanup = (
+        binding.ExternalRuntimeBindingReference._from_authenticated_job_observation(
+            _job_observation(policy, "cleanup", bad_pointer)
+        )
     )
 
     with pytest.raises(binding.RuntimeBindingFailure, match="reference_binding"):
@@ -678,16 +800,19 @@ def test_external_record_rejects_divergent_job_configuration_pointers() -> None:
     policy = _configured_policy()
     raw, provision_reference, cleanup_reference, signature = _external_binding(policy)
     other_bundle_digest = f"sha256:{'c' * 64}"
-    divergent_cleanup = binding.ExternalRuntimeBindingReference._from_job_configuration(
-        source_job_kind="cleanup",
-        source_job_resource_id=cleanup_reference.source_job_resource_id,
-        record_uri=cleanup_reference.record_uri,
-        record_sha256=cleanup_reference.record_sha256,
-        signature_bundle_uri=(
+    divergent_pointer = {
+        "record_uri": cleanup_reference.record_uri,
+        "record_sha256": cleanup_reference.record_sha256,
+        "signature_bundle_uri": (
             "https://restoreevidence.blob.core.windows.net/restore-runtime-bindings-v1/"
             f"{other_bundle_digest[7:]}.sigstore.json"
         ),
-        signature_bundle_sha256=other_bundle_digest,
+        "signature_bundle_sha256": other_bundle_digest,
+    }
+    divergent_cleanup = (
+        binding.ExternalRuntimeBindingReference._from_authenticated_job_observation(
+            _job_observation(policy, "cleanup", divergent_pointer)
+        )
     )
 
     with pytest.raises(binding.RuntimeBindingFailure, match="reference_divergence"):
