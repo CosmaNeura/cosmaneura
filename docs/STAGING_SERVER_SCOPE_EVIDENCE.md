@@ -90,6 +90,41 @@ substitution inside trusted executor code; they are not a sandbox against
 arbitrary Python code already executing in the process and must never replace
 cryptographic receipt verification at the future composite boundary.
 
+`source-provider-observation-policy.json` and
+`scripts/verify_staging_source_provider_observation.py` define the next dormant
+handoff. The verifier accepts only the exact sealed server-authenticated
+partial, snapshots its canonical bytes once, and binds their SHA-256 into an
+immutable provider receipt. A narrow provider interface permits one logical
+GET of the pinned Azure PostgreSQL server and returns one bounded raw response;
+this module itself has no HTTP, token, subprocess, Azure SDK, restore, marker,
+database, or deployment capability. The checked-in policy additionally pins
+the Azure management origin and OAuth resource, API version, GET-only method,
+no-redirect and one-request contract, timeout, media type, and response-size
+limit. A future trusted transport must implement and independently prove those
+constraints before the policy can be enabled.
+
+The response verifier hashes the exact raw bytes, rejects duplicate JSON keys,
+and requires the exact ARM resource identity, type, normalized location,
+PostgreSQL major version, FQDN, `Ready` state, enabled public-access state,
+seven-day retention, disabled geo-redundant backup, and `Primary` replication
+role. The database name in the receipt is copied from the authenticated base
+binding; Azure's server GET does not observe a database. Extra provider fields
+are ignored but remain covered by the raw-response digest. The provider's
+fractional `earliestRestoreDate` is preserved exactly and must be no later than
+the approved whole-second restore point. Receipt expiry is the earlier of the
+base-binding expiry and 60 seconds after the post-response trusted clock read.
+
+This evidence supports only the claim `provider_advertised_window_only`.
+Azure's server response exposes an earliest restore point, not a
+latest-restorable point or proof that a restore will succeed. Recoverability
+therefore remains an approved live-rehearsal result. The sealed provider result
+is another partial, not a final `RestoreEvidenceBinding`; the later composite
+boundary must reverify the cryptographic server receipt, recompute both byte
+digests, join the GitHub-attestation result, and recheck freshness immediately
+before minting final authorization. The canonical provider policy is disabled,
+all transport/workflow/network activation flags are false, and the supported
+entry point refuses before invoking a provider.
+
 The checked-in `server-scope-authentication-policy.json` and server-scope policy
 are both disabled, so the authenticator refuses before reading a key or bundle.
 Even a successful future authentication result remains blocked
