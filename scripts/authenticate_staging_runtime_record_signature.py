@@ -305,7 +305,16 @@ def _validate_inputs(
         runtime_binding.RUNTIME_RECORD_FIELDS,
         "runtime_signature.input_invalid",
     )
-    if _canonical(record) != record_bytes:
+    if (
+        _canonical(record) != record_bytes
+        or type(record.get("publisher_source_sha")) is not str
+        or SHA_RE.fullmatch(record["publisher_source_sha"]) is None
+        or type(record.get("publisher_run_invocation_uri")) is not str
+        or runtime_binding.GITHUB_RUN_INVOCATION_RE.fullmatch(
+            record["publisher_run_invocation_uri"]
+        )
+        is None
+    ):
         _fail("runtime_signature.input_invalid")
     created_at = _utc(record.get("created_at"), "runtime_signature.input_invalid")
     if created_at <= _utc(
@@ -401,7 +410,9 @@ def _validate_bundle(raw: bytes, expected_media_type: str) -> Mapping[str, Any]:
     return bundle
 
 
-def _arguments(document: Mapping[str, Any]) -> tuple[str, ...]:
+def _arguments(
+    document: Mapping[str, Any], record: Mapping[str, Any]
+) -> tuple[str, ...]:
     signature = document["external_runtime_record"]["signature"]
     record_binding = document["external_runtime_record"]["binding"]
     verifier = document["offline_github_verifier"]
@@ -455,6 +466,10 @@ def _arguments(document: Mapping[str, Any]) -> tuple[str, ...]:
         PREDICATE_TYPE,
         "--repo",
         record_binding["repository"],
+        "--signer-digest",
+        record["publisher_source_sha"],
+        "--source-digest",
+        record["publisher_source_sha"],
         "--source-ref",
         record_binding["protected_ref"],
     )
@@ -674,6 +689,7 @@ def _validate_certificate(
     bundle: Mapping[str, Any],
     summary: Mapping[str, Any],
     document: Mapping[str, Any],
+    record: Mapping[str, Any],
 ) -> tuple[datetime, datetime]:
     try:
         material = _mapping(
@@ -736,7 +752,7 @@ def _validate_certificate(
     claims = {
         field: _certificate_claim(certificate, field) for field in CERTIFICATE_OIDS
     }
-    source_digest = claims["sourceRepositoryDigest"]
+    source_digest = record["publisher_source_sha"]
     expected = {
         "issuer": signature["certificate_oidc_issuer"],
         "buildSignerURI": identity,
@@ -753,7 +769,7 @@ def _validate_certificate(
         "buildConfigURI": identity,
         "buildConfigDigest": source_digest,
         "buildTrigger": "workflow_dispatch",
-        "runInvocationURI": claims["runInvocationURI"],
+        "runInvocationURI": record["publisher_run_invocation_uri"],
         "sourceRepositoryVisibilityAtSigning": "private",
     }
     run_prefix = f"https://github.com/{repository}/actions/runs/"
@@ -762,7 +778,13 @@ def _validate_certificate(
     if (
         claims != expected
         or any(summary.get(field) != value for field, value in expected.items())
+        or type(source_digest) is not str
         or SHA_RE.fullmatch(source_digest) is None
+        or type(record["publisher_run_invocation_uri"]) is not str
+        or runtime_binding.GITHUB_RUN_INVOCATION_RE.fullmatch(
+            record["publisher_run_invocation_uri"]
+        )
+        is None
         or DECIMAL_RE.fullmatch(claims["sourceRepositoryIdentifier"]) is None
         or DECIMAL_RE.fullmatch(claims["sourceRepositoryOwnerIdentifier"]) is None
         or not claims["runInvocationURI"].startswith(run_prefix)
@@ -772,7 +794,7 @@ def _validate_certificate(
         _fail("runtime_signature.certificate_invalid")
     optional_expected = {
         "githubWorkflowTrigger": "workflow_dispatch",
-        "githubWorkflowSHA": source_digest,
+        "githubWorkflowSHA": record["publisher_source_sha"],
         "githubWorkflowRepository": repository,
         "githubWorkflowRef": protected_ref,
     }
@@ -832,14 +854,37 @@ def _authenticate_runtime_record_signature(
     """Verify exact offline Sigstore material and mint one sealed proof."""
 
     try:
-        document = runtime_binding.validate_runtime_binding_policy(
+        validated = runtime_binding.validate_runtime_binding_policy(
             policy, executable=True
         )
+        policy_snapshot = _canonical(validated)
+        document = runtime_binding.validate_runtime_binding_policy(
+            _load_json(policy_snapshot, "runtime_signature.policy_invalid"),
+            executable=True,
+        )
+        if _canonical(document) != policy_snapshot:
+            _fail("runtime_signature.policy_invalid")
     except Exception:
         raise RuntimeRecordSignatureFailure(
             "runtime_signature.policy_invalid"
         ) from None
     pointer = _validate_references(document, provision_reference, cleanup_reference)
+    pointer_values = {
+        field: getattr(pointer, field)
+        for field in runtime_binding.RUNTIME_REFERENCE_FIELDS
+    }
+    try:
+        reference_snapshots = {
+            job_kind: runtime_binding.ExternalRuntimeBindingReference._from_values(
+                job_kind,
+                document["runtime"]["jobs"][job_kind]["resource_id"],
+                pointer_values,
+            )
+            for job_kind in ("provision", "cleanup")
+        }
+    except Exception:
+        _fail("runtime_signature.reference_invalid")
+    pointer = reference_snapshots["provision"]
     record, created_at = _validate_inputs(
         document,
         pointer,
@@ -857,7 +902,7 @@ def _authenticate_runtime_record_signature(
     )
     output = _invoke_verifier(
         verifier=verifier,
-        arguments=_arguments(document),
+        arguments=_arguments(document, record),
         record_bytes=record_bytes,
         bundle_bytes=signature_bundle_bytes,
         root_bytes=trusted_root_bytes,
@@ -873,6 +918,7 @@ def _authenticate_runtime_record_signature(
         bundle=bundle,
         summary=summary,
         document=document,
+        record=record,
     )
     _validate_timestamps(
         timestamps,
@@ -894,8 +940,8 @@ def _authenticate_runtime_record_signature(
         runtime_binding.validate_external_runtime_binding(
             document,
             record_bytes,
-            provision_reference=provision_reference,
-            cleanup_reference=cleanup_reference,
+            provision_reference=reference_snapshots["provision"],
+            cleanup_reference=reference_snapshots["cleanup"],
             signature_verification=proof,
         )
     except Exception:

@@ -22,6 +22,9 @@ from tests.infrastructure import test_staging_restore_runtime_binding as helpers
 
 NOW = datetime(2026, 9, 4, 12, 5, tzinfo=UTC)
 SOURCE_SHA = "c" * 40
+RUN_INVOCATION_URI = (
+    "https://github.com/CosmaNeura/cosmaneura/actions/runs/901/attempts/1"
+)
 VERIFIER_DIGEST = f"sha256:{'d' * 64}"
 ISSUER = x509.Name(
     [
@@ -94,9 +97,7 @@ def _claims(policy: dict[str, Any], **changes: str) -> dict[str, str]:
         "buildConfigURI": identity,
         "buildConfigDigest": SOURCE_SHA,
         "buildTrigger": "workflow_dispatch",
-        "runInvocationURI": (
-            f"https://github.com/{repository}/actions/runs/901/attempts/1"
-        ),
+        "runInvocationURI": RUN_INVOCATION_URI,
         "sourceRepositoryVisibilityAtSigning": "private",
     }
     values.update(changes)
@@ -151,7 +152,7 @@ def _summary(
         "subjectAlternativeName": identity,
         **claims,
         "githubWorkflowTrigger": "workflow_dispatch",
-        "githubWorkflowSHA": SOURCE_SHA,
+        "githubWorkflowSHA": claims["sourceRepositoryDigest"],
         "githubWorkflowName": "Build and Publish",
         "githubWorkflowRepository": repository,
         "githubWorkflowRef": "refs/heads/master",
@@ -351,7 +352,16 @@ def test_happy_path_uses_exact_offline_profile_and_mints_bound_proof() -> None:
     )
     assert validated.record_bytes == case["record_bytes"]
     call = case["verifier"].calls[0]
-    assert call["arguments"] == authentication._arguments(policy)
+    record = json.loads(case["record_bytes"])
+    assert call["arguments"] == authentication._arguments(policy, record)
+    assert call["arguments"][-6:] == (
+        "--signer-digest",
+        SOURCE_SHA,
+        "--source-digest",
+        SOURCE_SHA,
+        "--source-ref",
+        "refs/heads/master",
+    )
     assert type(call["files"]) is MappingProxyType
     assert call["files"] == {
         "runtime-record.json": case["record_bytes"],
@@ -578,6 +588,56 @@ def test_certificate_der_summary_and_github_claims_are_cross_checked(
         match=rf"^runtime_signature\.{expected}$",
     ):
         _authenticate(case)
+
+
+@pytest.mark.parametrize(
+    "claim_changes",
+    [
+        {
+            "buildSignerDigest": "e" * 40,
+            "sourceRepositoryDigest": "e" * 40,
+            "buildConfigDigest": "e" * 40,
+        },
+        {
+            "runInvocationURI": (
+                "https://github.com/CosmaNeura/cosmaneura/actions/runs/902/attempts/1"
+            )
+        },
+    ],
+)
+def test_coordinated_certificate_authority_cannot_replace_signed_record_authority(
+    claim_changes: dict[str, str],
+) -> None:
+    case = _case(claim_changes=claim_changes)
+
+    with pytest.raises(
+        authentication.RuntimeRecordSignatureFailure,
+        match="^runtime_signature.certificate_invalid$",
+    ):
+        _authenticate(case)
+
+
+def test_verifier_callback_cannot_mutate_policy_or_reference_authority() -> None:
+    case = _case()
+    verifier = case["verifier"]
+    original_verify = verifier.verify
+
+    def mutate_then_verify(**kwargs: Any) -> Any:
+        case["policy"]["external_runtime_record"]["signature"][
+            "certificate_identity"
+        ] = "https://attacker.invalid/workflow.yml@refs/heads/main"
+        for reference in case["references"]:
+            object.__setattr__(reference, "record_sha256", f"sha256:{'e' * 64}")
+        case["record_bytes"] = b'{"attacker":true}'
+        return original_verify(**kwargs)
+
+    verifier.verify = mutate_then_verify  # type: ignore[method-assign]
+    proof = _authenticate(case)
+
+    assert proof.record_sha256 != authentication._digest(case["record_bytes"])
+    assert proof.certificate_identity.endswith(
+        "build_and_publish_manual.yml@refs/heads/master"
+    )
 
 
 @pytest.mark.parametrize(
