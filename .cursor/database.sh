@@ -6,9 +6,11 @@ CURSOR_DATABASE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CURSOR_DATABASE_GUARD="${CURSOR_DATABASE_SCRIPT_DIR}/../scripts/assert_cursor_local_database.py"
 
 cursor_database_dev() {
-  CI="" direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode dev -- "$@"
+  CI="" "${CURSOR_MISE_BIN:?}" exec -- \
+    direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode dev -- "$@"
 }
 
 cursor_database_test() {
-  CI=true direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode test -- "$@"
+  CI=true "${CURSOR_MISE_BIN:?}" exec -- \
+    direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode test -- "$@"
 }

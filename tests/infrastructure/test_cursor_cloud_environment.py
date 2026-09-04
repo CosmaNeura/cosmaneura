@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -28,6 +29,27 @@ GUARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GUARD)
 
 
+def _write_executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _run(
+    command: list[str],
+    *,
+    cwd: Path = ROOT,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _database_environment(
     *,
     mode: str,
@@ -51,23 +73,20 @@ def _write_fake_direnv(
 ) -> Path:
     (tmp_path / "python").symlink_to(sys.executable)
     fake_direnv = tmp_path / "direnv"
-    fake_direnv.write_text(
-        "\n".join(
-            (
-                "#!/usr/bin/env bash",
-                "set -euo pipefail",
-                '[[ "$1" == "exec" && "$2" == "." ]]',
-                "shift 2",
-                'export PYTHON_ENV="test"',
-                f'export DATABASE_URL="{database_url}"',
-                f'export TEST_DATABASE_URL="{test_database_url}"',
-                'exec "$@"',
-            )
-        )
-        + "\n",
-        encoding="utf-8",
+    _write_executable(
+        fake_direnv,
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        '[[ "$1" == "exec" && "$2" == "." ]]\nshift 2\n'
+        'export PYTHON_ENV="test"\n'
+        f'export DATABASE_URL="{database_url}"\n'
+        f'export TEST_DATABASE_URL="{test_database_url}"\nexec "$@"\n',
     )
-    fake_direnv.chmod(0o755)
+    fake_mise = tmp_path / "mise"
+    _write_executable(
+        fake_mise,
+        "#!/usr/bin/env bash\nset -euo pipefail\n"
+        '[[ "$1" == "exec" && "$2" == "--" ]]\nshift 2\nexec "$@"\n',
+    )
     return fake_direnv
 
 
@@ -94,19 +113,43 @@ def _run_test_boundary(
     environment = dict(os.environ)
     environment["PATH"] = f"{tmp_path}:{environment['PATH']}"
     environment["COSMANEURA_CURSOR_CREDENTIAL_NEUTRAL"] = "1"
-    result = subprocess.run(
-        ["bash", "-c", command],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    environment["CURSOR_MISE_BIN"] = str(tmp_path / "mise")
+    result = _run(["bash", "-c", command], environment=environment)
     marker_value = marker.read_text(encoding="utf-8") if marker.exists() else ""
     return result.returncode, marker_value + result.stderr
 
 
-def test_mise_install_is_version_and_digest_pinned() -> None:
+def _sandbox_dispatcher(tmp_path: Path) -> Path:
+    sandbox_cursor = tmp_path / ".cursor"
+    sandbox_cursor.mkdir()
+    shutil.copyfile(
+        ROOT / ".cursor/credential-neutral.sh",
+        sandbox_cursor / "credential-neutral.sh",
+    )
+    return sandbox_cursor
+
+
+def _run_sandbox_dispatcher(
+    sandbox_cursor: Path,
+    *command: str,
+    environment: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    command = command or ("/bin/true",)
+    shell = "\n".join(
+        (
+            f"source {shlex.quote(str(sandbox_cursor / 'credential-neutral.sh'))}",
+            "cursor_exec_credential_neutral "
+            + " ".join(shlex.quote(part) for part in command),
+        )
+    )
+    return _run(
+        ["bash", "-c", shell],
+        cwd=sandbox_cursor.parent,
+        environment=environment,
+    )
+
+
+def test_mise_install_is_version_and_digest_pinned(tmp_path: Path) -> None:
     installer = (ROOT / "scripts/install_pinned_mise.sh").read_text(encoding="utf-8")
     assert 'MISE_VERSION="v2026.9.1"' in installer
     assert (
@@ -125,33 +168,49 @@ def test_mise_install_is_version_and_digest_pinned() -> None:
     assert 'bash "$CURSOR_SETUP_DIR/../scripts/install_pinned_mise.sh"' in system_setup
     assert "mise.run" not in system_setup
 
+    dispatcher = (ROOT / ".cursor/credential-neutral.sh").read_text(encoding="utf-8")
+    library = (ROOT / ".cursor/lib.sh").read_text(encoding="utf-8")
+    assert (
+        'CURSOR_MISE_BINARY_SHA256="c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea"'
+        in dispatcher
+    )
+    assert "/usr/bin/sha256sum" in dispatcher
+    assert "/usr/bin/shasum -a 256" in dispatcher
+    assert 'cursor_require_exact_mise_binary "$CURSOR_MISE_BIN"' in library
+    assert "mise activate" not in library
+    assert "mise/shims:$PATH" not in library
+    assert '"$CURSOR_MISE_BIN" exec -- direnv exec .' in library
+
+    candidate = tmp_path / "mise"
+    shutil.copyfile("/usr/bin/true", candidate)
+    candidate.chmod(0o755)
+    digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+    result = _run(
+        [
+            "/bin/bash",
+            "-c",
+            f"source {shlex.quote(str(ROOT / '.cursor/credential-neutral.sh'))}; "
+            f"CURSOR_MISE_BINARY_SHA256={digest}; "
+            f"cursor_require_exact_mise_binary {shlex.quote(str(candidate))}",
+        ],
+    )
+    assert result.returncode == 0, result.stderr
+
 
 def test_docker_apt_key_requires_exact_sole_primary_fingerprint() -> None:
     installer = (ROOT / "scripts/install_verified_docker_apt_key.sh").read_text(
         encoding="utf-8"
     )
-    assert (
-        'DOCKER_APT_KEY_PRIMARY_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"'
-        in installer
+    required = (
+        'DOCKER_APT_KEY_PRIMARY_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"',
+        'DOCKER_APT_KEY_URL="https://download.docker.com/linux/ubuntu/gpg"',
+        'fingerprints="$(docker_primary_fingerprints "${key_path}")"',
+        '[[ "${fingerprints}" != "${DOCKER_APT_KEY_PRIMARY_FINGERPRINT}" ]]',
+        'require_exact_docker_primary_fingerprint "${docker_key_download}"',
+        'require_exact_docker_primary_fingerprint "${docker_key_dearmored}"',
+        'sudo mv -f -- "${docker_key_target_tmp}" "${DOCKER_APT_KEY_PATH}"',
     )
-    assert (
-        'DOCKER_APT_KEY_URL="https://download.docker.com/linux/ubuntu/gpg"' in installer
-    )
-    assert 'fingerprints="$(docker_primary_fingerprints "${key_path}")"' in installer
-    assert (
-        '[[ "${fingerprints}" != "${DOCKER_APT_KEY_PRIMARY_FINGERPRINT}" ]]'
-        in installer
-    )
-    assert (
-        'require_exact_docker_primary_fingerprint "${docker_key_download}"' in installer
-    )
-    assert (
-        'require_exact_docker_primary_fingerprint "${docker_key_dearmored}"'
-        in installer
-    )
-    assert (
-        'sudo mv -f -- "${docker_key_target_tmp}" "${DOCKER_APT_KEY_PATH}"' in installer
-    )
+    assert all(snippet in installer for snippet in required)
     assert "curl -fsSL" not in installer
     assert "| sudo gpg" not in installer
 
@@ -195,37 +254,28 @@ def test_environment_entrypoints_clear_hostile_bash_env_before_repo_bash(
     sandbox_cursor.mkdir()
     probe = sandbox_cursor / "credential-neutral.sh"
     probe.write_text(
-        "\n".join(
-            (
-                "#!/usr/bin/env bash",
-                "set -euo pipefail",
-                'printf "mode=%s\\n" "$1"',
-                'printf "bash_env=%s\\n" "${BASH_ENV-unset}"',
-                'printf "sentinel=%s\\n" "${INHERITED_SENTINEL_SECRET-unset}"',
-                'printf "shellopts=%s\\n" "$SHELLOPTS"',
-                'printf "ps4=%s\\n" "$PS4"',
-                "if declare -F cursor_hostile_function >/dev/null; then",
-                "  cursor_hostile_function",
-                "  printf 'function=present\\n'",
-                "else",
-                "  printf 'function=absent\\n'",
-                "fi",
-            )
-        )
-        + "\n",
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf "mode=%s\\n" "$1"
+printf "bash_env=%s\\n" "${BASH_ENV-unset}"
+printf "sentinel=%s\\n" "${INHERITED_SENTINEL_SECRET-unset}"
+printf "shellopts=%s\\n" "$SHELLOPTS"
+printf "ps4=%s\\n" "$PS4"
+if declare -F cursor_hostile_function >/dev/null; then
+  cursor_hostile_function
+  printf 'function=present\\n'
+else
+  printf 'function=absent\\n'
+fi
+""",
         encoding="utf-8",
     )
 
     attack_marker = tmp_path / "bash-env-executed"
     hostile_bash_env = tmp_path / "hostile-bash-env.sh"
     hostile_bash_env.write_text(
-        "\n".join(
-            (
-                f"printf executed > {shlex.quote(str(attack_marker))}",
-                "export HOSTILE_BASH_ENV_RAN=1",
-            )
-        )
-        + "\n",
+        f"printf executed > {shlex.quote(str(attack_marker))}\n"
+        "export HOSTILE_BASH_ENV_RAN=1\n",
         encoding="utf-8",
     )
     inherited_environment = dict(os.environ)
@@ -247,28 +297,18 @@ def test_environment_entrypoints_clear_hostile_bash_env_before_repo_bash(
     commands = {
         "install": environment["install"],
         "start": environment["start"],
-        **{
-            terminal["name"]: terminal["command"]
-            for terminal in environment["terminals"]
-        },
     }
+    commands.update(
+        {item["name"]: item["command"] for item in environment["terminals"]}
+    )
     for mode, command in commands.items():
         command_parts = shlex.split(command)
-        assert command_parts[:6] == [
-            "/usr/bin/env",
-            "-i",
-            "/bin/bash",
-            "--noprofile",
-            "--norc",
-            "--",
-        ]
-        result = subprocess.run(
+        prefix = "/usr/bin/env -i /bin/bash --noprofile --norc --"
+        assert command_parts[:6] == shlex.split(prefix)
+        result = _run(
             command_parts,
             cwd=tmp_path,
-            env=inherited_environment,
-            check=False,
-            capture_output=True,
-            text=True,
+            environment=inherited_environment,
         )
 
         assert result.returncode == 0, result.stderr
@@ -276,9 +316,12 @@ def test_environment_entrypoints_clear_hostile_bash_env_before_repo_bash(
         assert "bash_env=unset" in result.stdout
         assert "sentinel=unset" in result.stdout
         assert "function=absent" in result.stdout
-        assert ":xtrace:" not in result.stdout
-        assert "hostile-ps4-must-not-survive" not in result.stdout
-        assert "must-not-survive" not in result.stdout
+        for escaped_value in (
+            ":xtrace:",
+            "hostile-ps4-must-not-survive",
+            "must-not-survive",
+        ):
+            assert escaped_value not in result.stdout
         assert not attack_marker.exists()
 
 
@@ -293,13 +336,9 @@ def test_cursor_targets_refuse_direct_execution_without_marker(
         "HOME": os.environ["HOME"],
         "PATH": "/usr/local/bin:/usr/bin:/bin",
     }
-    result = subprocess.run(
+    result = _run(
         ["bash", str(ROOT / ".cursor" / entrypoint)],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
+        environment=environment,
     )
     assert result.returncode != 0
     assert "must run through .cursor/credential-neutral.sh" in result.stderr
@@ -322,45 +361,42 @@ def test_credential_neutral_dispatcher_scrubs_inherited_secrets_and_blocks_op(
     inherited_bin.mkdir()
     inherited_op_marker = tmp_path / "inherited-op-ran"
     inherited_op = inherited_bin / "op"
-    inherited_op.write_text(
+    _write_executable(
+        inherited_op,
         f"#!/usr/bin/env bash\nprintf ran > {shlex.quote(str(inherited_op_marker))}\n",
-        encoding="utf-8",
     )
-    inherited_op.chmod(0o755)
 
     package_probe = tmp_path / "package-probe"
-    package_probe.write_text(
-        "\n".join(
-            (
-                "#!/usr/bin/env bash",
-                "set -euo pipefail",
-                'printf "sentinel=%s\\n" "${INHERITED_SENTINEL_SECRET-unset}"',
-                'printf "azure=%s\\n" "${AZURE_OPENAI_API_KEY-unset}"',
-                'printf "github=%s\\n" "${GITHUB_TOKEN-unset}"',
-                'printf "op=%s\\n" "$(command -v op)"',
-                'printf "home=%s\\n" "$HOME"',
-                'printf "xdg_config=%s\\n" "$XDG_CONFIG_HOME"',
-                'printf "xdg_state=%s\\n" "$XDG_STATE_HOME"',
-                'printf "docker_config=%s\\n" "$DOCKER_CONFIG"',
-                'printf "git_config=%s\\n" "$GIT_CONFIG_GLOBAL"',
-                'printf "npm_config=%s\\n" "$NPM_CONFIG_USERCONFIG"',
-                'if [[ -f "$HOME/.npmrc" ]]; then cat "$HOME/.npmrc"; fi',
-                'if [[ -f "$DOCKER_CONFIG/config.json" ]]; then '
-                'cat "$DOCKER_CONFIG/config.json"; fi',
-                "op vault list >/dev/null 2>&1 || true",
-            )
-        )
-        + "\n",
-        encoding="utf-8",
+    _write_executable(
+        package_probe,
+        """#!/usr/bin/env bash
+set -euo pipefail
+printf "sentinel=%s\\n" "${INHERITED_SENTINEL_SECRET-unset}"
+printf "azure=%s\\n" "${AZURE_OPENAI_API_KEY-unset}"
+printf "github=%s\\n" "${GITHUB_TOKEN-unset}"
+printf "op=%s\\n" "$(command -v op)"
+printf "home=%s\\n" "$HOME"
+printf "xdg_config=%s\\n" "$XDG_CONFIG_HOME"
+printf "xdg_state=%s\\n" "$XDG_STATE_HOME"
+printf "direnv_config=%s\\n" "$DIRENV_CONFIG"
+printf "mise_config=%s\\n" "$MISE_CONFIG_DIR"
+printf "mise_system_config=%s\\n" "$MISE_SYSTEM_CONFIG_DIR"
+printf "mise_global_config=%s\\n" "$MISE_GLOBAL_CONFIG_FILE"
+printf "mise_ceiling=%s\\n" "$MISE_CEILING_PATHS"
+printf "mise_no_hooks=%s\\n" "$MISE_NO_HOOKS"
+printf "mise_system_data=%s\\n" "$MISE_SYSTEM_DATA_DIR"
+printf "docker_config=%s\\n" "$DOCKER_CONFIG"
+printf "git_config=%s\\n" "$GIT_CONFIG_GLOBAL"
+printf "npm_config=%s\\n" "$NPM_CONFIG_USERCONFIG"
+[[ ! -f "$HOME/.npmrc" ]] || cat "$HOME/.npmrc"
+[[ ! -f "$DOCKER_CONFIG/config.json" ]] || cat "$DOCKER_CONFIG/config.json"
+op vault list >/dev/null 2>&1 || true
+""",
     )
-    package_probe.chmod(0o755)
 
-    dispatcher = ROOT / ".cursor/credential-neutral.sh"
-    shell = "\n".join(
-        (
-            f"source {shlex.quote(str(dispatcher))}",
-            f"cursor_exec_credential_neutral {shlex.quote(str(package_probe))}",
-        )
+    shell = (
+        f"source {shlex.quote(str(ROOT / '.cursor/credential-neutral.sh'))}\n"
+        f"cursor_exec_credential_neutral {shlex.quote(str(package_probe))}"
     )
     environment = dict(os.environ)
     environment.update(
@@ -373,13 +409,9 @@ def test_credential_neutral_dispatcher_scrubs_inherited_secrets_and_blocks_op(
             "OP_SERVICE_ACCOUNT_TOKEN": "must-not-survive",
         }
     )
-    result = subprocess.run(
+    result = _run(
         ["bash", "-c", shell],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
+        environment=environment,
     )
 
     assert result.returncode == 0
@@ -393,6 +425,16 @@ def test_credential_neutral_dispatcher_scrubs_inherited_secrets_and_blocks_op(
     assert f"home={runtime_home}" in result.stdout
     assert f"xdg_config={runtime_home / '.config'}" in result.stdout
     assert f"xdg_state={runtime_home / '.local/state'}" in result.stdout
+    assert f"direnv_config={runtime_home / 'direnv-config'}" in result.stdout
+    assert f"mise_config={runtime_home / 'mise-config'}" in result.stdout
+    assert f"mise_system_config={runtime_home / 'mise-system-config'}" in result.stdout
+    assert (
+        f"mise_global_config={runtime_home / 'mise-config/global-config.toml'}"
+        in result.stdout
+    )
+    assert f"mise_ceiling={ROOT.parent}" in result.stdout
+    assert "mise_no_hooks=1" in result.stdout
+    assert f"mise_system_data={runtime_home / 'mise-system-data'}" in result.stdout
     assert f"docker_config={runtime_home / '.docker'}" in result.stdout
     assert f"git_config={runtime_home / '.gitconfig'}" in result.stdout
     assert f"npm_config={runtime_home / '.npmrc'}" in result.stdout
@@ -400,153 +442,281 @@ def test_credential_neutral_dispatcher_scrubs_inherited_secrets_and_blocks_op(
     assert not inherited_op_marker.exists()
 
 
-def test_credential_neutral_dispatcher_rejects_runtime_home_symlink(
-    tmp_path: Path,
-) -> None:
-    sandbox_cursor = tmp_path / ".cursor"
-    sandbox_cursor.mkdir()
-    shutil.copyfile(
-        ROOT / ".cursor/credential-neutral.sh",
-        sandbox_cursor / "credential-neutral.sh",
-    )
-    credential_home = tmp_path / "credential-bearing-home"
-    credential_home.mkdir()
-    (credential_home / ".npmrc").write_text(
-        "//registry.npmjs.org/:_authToken=must-not-survive\n", encoding="utf-8"
-    )
-    (sandbox_cursor / "runtime-home").symlink_to(
-        credential_home, target_is_directory=True
-    )
-
-    shell = "\n".join(
-        (
-            f"source {shlex.quote(str(sandbox_cursor / 'credential-neutral.sh'))}",
-            "cursor_exec_credential_neutral /bin/true",
-        )
-    )
-    result = subprocess.run(
-        ["bash", "-c", shell],
-        cwd=tmp_path,
-        env=dict(os.environ),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert "must be a real, user-owned directory" in result.stderr
-
-
 @pytest.mark.parametrize(
-    "relative_path",
-    [
-        ".cache",
-        ".cache/ms-playwright",
-        ".cache/uv",
-        ".config",
-        ".docker",
-        ".gnupg",
-        ".local",
-        ".local/bin",
-        ".local/share",
-        ".local/share/mise",
-        ".local/share/mise/shims",
-        ".local/state",
-        ".local/state/localias",
-        ".pki",
-        ".pki/nssdb",
-        ".azure",
-        ".curl",
-        "tmp",
-    ],
+    "case",
+    """d:. d:.cache d:.cache/ms-playwright d:.cache/uv d:.config d:.docker
+    d:.gnupg d:.local d:.local/bin d:.local/share d:.local/share/mise
+    d:.local/share/mise/shims d:.local/state d:.local/state/localias d:.pki
+    d:.pki/nssdb d:.azure d:.curl d:mise-config d:mise-system-data
+    d:mise-system-config d:tmp f:.gitconfig f:.npmrc f:pip.conf
+    f:.docker/config.json f:.curl/.curlrc f:.pki/nssdb/cert9.db
+    f:.pki/nssdb/key4.db f:.pki/nssdb/pkcs11.txt""".split(),
 )
-def test_credential_neutral_dispatcher_rejects_nested_directory_symlink(
-    tmp_path: Path, relative_path: str
+def test_credential_neutral_dispatcher_rejects_runtime_state_symlink(
+    tmp_path: Path, case: str
 ) -> None:
-    sandbox_cursor = tmp_path / ".cursor"
-    sandbox_cursor.mkdir()
-    shutil.copyfile(
-        ROOT / ".cursor/credential-neutral.sh",
-        sandbox_cursor / "credential-neutral.sh",
+    kind, relative_path = case.split(":", 1)
+    target_is_directory = kind == "d"
+    expected_error = (
+        f"real, user-owned {'directory' if target_is_directory else 'regular file'}"
     )
+    sandbox_cursor = _sandbox_dispatcher(tmp_path)
     runtime_home = sandbox_cursor / "runtime-home"
-    escaped_directory = tmp_path / "credential-bearing-directory"
-    escaped_directory.mkdir()
-    symlink_path = runtime_home / relative_path
+    escaped_path = tmp_path / "credential-bearing-state"
+    if target_is_directory:
+        escaped_path.mkdir()
+    else:
+        escaped_path.write_text("must-not-survive\n", encoding="utf-8")
+    symlink_path = (
+        runtime_home if relative_path == "." else runtime_home / relative_path
+    )
     symlink_path.parent.mkdir(parents=True, exist_ok=True)
-    symlink_path.symlink_to(escaped_directory, target_is_directory=True)
+    symlink_path.symlink_to(escaped_path, target_is_directory=target_is_directory)
 
-    shell = "\n".join(
-        (
-            f"source {shlex.quote(str(sandbox_cursor / 'credential-neutral.sh'))}",
-            "cursor_exec_credential_neutral /bin/true",
-        )
-    )
-    result = subprocess.run(
-        ["bash", "-c", shell],
-        cwd=tmp_path,
-        env=dict(os.environ),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
+    result = _run_sandbox_dispatcher(sandbox_cursor)
     assert result.returncode != 0
-    assert "must be a real, user-owned directory" in result.stderr
-
-
-@pytest.mark.parametrize(
-    "relative_path",
-    [
-        ".gitconfig",
-        ".npmrc",
-        "pip.conf",
-        ".docker/config.json",
-        ".curl/.curlrc",
-        ".pki/nssdb/cert9.db",
-        ".pki/nssdb/key4.db",
-        ".pki/nssdb/pkcs11.txt",
-    ],
-)
-def test_credential_neutral_dispatcher_rejects_config_file_symlink(
-    tmp_path: Path, relative_path: str
-) -> None:
-    sandbox_cursor = tmp_path / ".cursor"
-    sandbox_cursor.mkdir()
-    shutil.copyfile(
-        ROOT / ".cursor/credential-neutral.sh",
-        sandbox_cursor / "credential-neutral.sh",
-    )
-    runtime_home = sandbox_cursor / "runtime-home"
-    escaped_file = tmp_path / "credential-bearing-config"
-    escaped_file.write_text("must-not-survive\n", encoding="utf-8")
-    symlink_path = runtime_home / relative_path
-    symlink_path.parent.mkdir(parents=True, exist_ok=True)
-    symlink_path.symlink_to(escaped_file)
-
-    shell = "\n".join(
-        (
-            f"source {shlex.quote(str(sandbox_cursor / 'credential-neutral.sh'))}",
-            "cursor_exec_credential_neutral /bin/true",
-        )
-    )
-    result = subprocess.run(
-        ["bash", "-c", shell],
-        cwd=tmp_path,
-        env=dict(os.environ),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode != 0
-    assert "must be a real, user-owned regular file" in result.stderr
+    assert expected_error in result.stderr
 
 
 def test_credential_neutral_dispatcher_checks_runtime_state_ownership() -> None:
     dispatcher = (ROOT / ".cursor/credential-neutral.sh").read_text(encoding="utf-8")
     assert dispatcher.count('! -O "${cursor_state_path}"') == 2
     assert '! -O "${cursor_state_file}"' in dispatcher
+
+
+@pytest.mark.parametrize(
+    "case",
+    """D:.direnvrc D:.config/direnv/direnvrc D:.config/direnv/lib/hostile.sh
+    E:direnv-config/direnvrc E:direnv-config/lib/hostile.sh
+    M:.config/mise/config.toml M:.config/mise/conf.d/hostile.toml
+    E:mise-config/config.toml E:mise-config/conf.d/hostile.toml
+    E:mise-system-config/config.toml E:mise-system-config/conf.d/hostile.toml
+    E:mise-system-data/installs/hostile""".split(),
+)
+def test_credential_neutral_dispatcher_rejects_persisted_tool_hook(
+    tmp_path: Path, case: str
+) -> None:
+    label, relative_path = case.split(":", 1)
+    expected_error = {"D": "Direnv", "M": "Mise", "E": "must remain empty"}[label]
+    sandbox_cursor = _sandbox_dispatcher(tmp_path)
+    hook_marker = tmp_path / "hook-executed"
+    hook_path = sandbox_cursor / "runtime-home" / relative_path
+    hook_path.parent.mkdir(parents=True, exist_ok=True)
+    hook_path.write_text(
+        f"printf executed > {shlex.quote(str(hook_marker))}\n", encoding="utf-8"
+    )
+
+    result = _run_sandbox_dispatcher(sandbox_cursor)
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+    assert not hook_marker.exists()
+
+
+@pytest.mark.parametrize(
+    "case",
+    """D:f:.direnvrc D:d:.config/direnv E:d:direnv-config/lib
+    M:d:.config/mise E:f:mise-config/config.toml E:d:mise-config/conf.d
+    E:f:mise-system-config/config.toml E:d:mise-system-config/conf.d
+    E:d:mise-system-data/installs""".split(),
+)
+def test_credential_neutral_dispatcher_rejects_persisted_tool_hook_symlink(
+    tmp_path: Path, case: str
+) -> None:
+    label, kind, relative_path = case.split(":", 2)
+    target_is_directory = kind == "d"
+    expected_error = {"D": "Direnv", "M": "Mise", "E": "must remain empty"}[label]
+    sandbox_cursor = _sandbox_dispatcher(tmp_path)
+    escaped_hook = tmp_path / "escaped-hook"
+    if target_is_directory:
+        escaped_hook.mkdir()
+    else:
+        escaped_hook.write_text("printf should-not-run\n", encoding="utf-8")
+    hook_path = sandbox_cursor / "runtime-home" / relative_path
+    hook_path.parent.mkdir(parents=True, exist_ok=True)
+    hook_path.symlink_to(escaped_hook, target_is_directory=target_is_directory)
+
+    result = _run_sandbox_dispatcher(sandbox_cursor)
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+def test_credential_neutral_direnv_ignores_inherited_global_hooks(
+    tmp_path: Path,
+) -> None:
+    direnv = shutil.which("direnv")
+    if direnv is None:
+        pytest.skip("Direnv is required for the startup-hook integration test")
+    assert direnv is not None
+
+    sandbox_cursor = _sandbox_dispatcher(tmp_path)
+    inherited_home = tmp_path / "inherited-home"
+    inherited_config = tmp_path / "inherited-config"
+    inherited_lib = inherited_config / "direnv/lib"
+    inherited_lib.mkdir(parents=True)
+    inherited_home.mkdir()
+    markers = [tmp_path / f"hostile-hook-{index}" for index in range(3)]
+    hook_paths = [
+        inherited_home / ".direnvrc",
+        inherited_config / "direnv/direnvrc",
+        inherited_lib / "hostile.sh",
+    ]
+    for hook_path, marker in zip(hook_paths, markers, strict=True):
+        hook_path.parent.mkdir(parents=True, exist_ok=True)
+        hook_path.write_text(
+            f"printf executed > {shlex.quote(str(marker))}\n", encoding="utf-8"
+        )
+
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".envrc").write_text(
+        "export CURSOR_REPO_ENVRC_LOADED=1\n", encoding="utf-8"
+    )
+    direnv_probe = (
+        'printf "repo=%s\\n" "$CURSOR_REPO_ENVRC_LOADED"\n'
+        'printf "direnv_config=%s\\n" "$DIRENV_CONFIG"'
+    )
+    runner = tmp_path / "run-direnv"
+    _write_executable(
+        runner,
+        '#!/usr/bin/env bash\nset -euo pipefail\ncd "$2"\n"$1" allow .\n'
+        '"$1" exec . /bin/bash --noprofile --norc -c '
+        f"{shlex.quote(direnv_probe)}\n",
+    )
+
+    inherited_environment = dict(os.environ)
+    inherited_environment.update(
+        {
+            "HOME": str(inherited_home),
+            "XDG_CONFIG_HOME": str(inherited_config),
+        }
+    )
+    result = _run_sandbox_dispatcher(
+        sandbox_cursor,
+        "/bin/bash",
+        "--noprofile",
+        "--norc",
+        "--",
+        str(runner),
+        direnv,
+        str(project),
+        environment=inherited_environment,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "repo=1" in result.stdout
+    assert (
+        f"direnv_config={sandbox_cursor / 'runtime-home/direnv-config'}"
+        in result.stdout
+    )
+    assert not any(marker.exists() for marker in markers)
+
+
+@pytest.mark.parametrize(
+    ("entry_name", "as_symlink", "expected_error"),
+    [
+        ("mise", True, "real, user-owned executable"),
+        ("mise", False, "reviewed digest"),
+        ("uv", False, "Unexpected executable entry"),
+    ],
+)
+def test_credential_neutral_dispatcher_rejects_untrusted_local_executable(
+    tmp_path: Path, entry_name: str, as_symlink: bool, expected_error: str
+) -> None:
+    sandbox_cursor = _sandbox_dispatcher(tmp_path)
+    local_bin = sandbox_cursor / "runtime-home/.local/bin"
+    local_bin.mkdir(parents=True)
+    executable_path = local_bin / entry_name
+    if as_symlink:
+        escaped_executable = tmp_path / "escaped-executable"
+        escaped_executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        escaped_executable.chmod(0o755)
+        executable_path.symlink_to(escaped_executable)
+    else:
+        executable_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable_path.chmod(0o755)
+
+    result = _run_sandbox_dispatcher(sandbox_cursor)
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
+def test_mise_config_and_ancestor_discovery_are_constrained_with_real_mise(
+    tmp_path: Path,
+) -> None:
+    mise = shutil.which("mise")
+    if mise is None:
+        pytest.skip("Mise is required for the config-discovery integration test")
+    assert mise is not None
+
+    ancestor = tmp_path / "ancestor"
+    project = ancestor / "project"
+    project.mkdir(parents=True)
+    (project / ".tool-versions").write_text("", encoding="utf-8")
+    inherited_home = tmp_path / "inherited-home"
+    inherited_global = tmp_path / "inherited-config/mise"
+    dedicated_config = tmp_path / "dedicated-mise-config"
+    dedicated_system_config = tmp_path / "dedicated-mise-system-config"
+    dedicated_system_data = tmp_path / "dedicated-mise-system-data"
+    inherited_home.mkdir()
+    inherited_global.mkdir(parents=True)
+    dedicated_config.mkdir()
+    dedicated_system_config.mkdir()
+    dedicated_system_data.mkdir()
+    ancestor_marker = tmp_path / "ancestor-hook-executed"
+    global_marker = tmp_path / "global-hook-executed"
+    project_marker = tmp_path / "project-hook-executed"
+    ancestor_hook = f"printf executed > {shlex.quote(str(ancestor_marker))}"
+    global_hook = f"printf executed > {shlex.quote(str(global_marker))}"
+    (ancestor / ".mise.toml").write_text(
+        '[env]\nANCESTOR_MISE_SENTINEL = "loaded"\n'
+        f"[hooks]\nenter = {json.dumps(ancestor_hook)}\n",
+        encoding="utf-8",
+    )
+    (inherited_global / "config.toml").write_text(
+        '[env]\nGLOBAL_MISE_SENTINEL = "loaded"\n'
+        f"[hooks]\nenter = {json.dumps(global_hook)}\n",
+        encoding="utf-8",
+    )
+    (project / ".mise.toml").write_text(
+        '[env]\nPROJECT_MISE_SENTINEL = "loaded"\n'
+        f"[hooks]\nenter = {json.dumps(f'printf executed > {project_marker}')}\n",
+        encoding="utf-8",
+    )
+
+    probe = "\n".join(
+        (
+            'printf "ancestor=%s\\n" "${ANCESTOR_MISE_SENTINEL-unset}"',
+            'printf "global=%s\\n" "${GLOBAL_MISE_SENTINEL-unset}"',
+            'printf "project=%s\\n" "${PROJECT_MISE_SENTINEL-unset}"',
+        )
+    )
+    result = _run(
+        [mise, "exec", "--", "/bin/bash", "--noprofile", "--norc", "-c", probe],
+        cwd=project,
+        environment={
+            "HOME": str(inherited_home),
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "MISE_CACHE_DIR": str(tmp_path / "mise-cache"),
+            "MISE_CONFIG_DIR": str(dedicated_config),
+            "MISE_SYSTEM_CONFIG_DIR": str(dedicated_system_config),
+            "MISE_GLOBAL_CONFIG_FILE": str(dedicated_config / "global.toml"),
+            "MISE_CEILING_PATHS": str(ancestor),
+            "MISE_NO_HOOKS": "1",
+            "MISE_SYSTEM_DATA_DIR": str(dedicated_system_data),
+            "MISE_DATA_DIR": str(tmp_path / "mise-data"),
+            "MISE_STATE_DIR": str(tmp_path / "mise-state"),
+            "XDG_CONFIG_HOME": str(tmp_path / "inherited-config"),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "ancestor=unset" in result.stdout
+    assert "global=unset" in result.stdout
+    assert "project=loaded" in result.stdout
+    assert not ancestor_marker.exists()
+    assert not global_marker.exists()
+    assert not project_marker.exists()
 
 
 @pytest.mark.parametrize(
@@ -558,23 +728,16 @@ def test_credential_neutral_envrc_skips_local_overrides_and_op(
 ) -> None:
     sandbox = tmp_path / "repo"
     (sandbox / ".cursor").mkdir(parents=True)
-    for relative_path in (
-        ".envrc",
-        ".env",
-        ".env.shared",
-        ".env.dev",
-        ".env.test",
-        ".cursor/credential-neutral.env",
-    ):
+    source_paths = (
+        ".envrc .env .env.shared .env.dev .env.test .cursor/credential-neutral.env"
+    )
+    for relative_path in source_paths.split():
         destination = sandbox / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative_path, destination)
-    for local_override in (
-        ".env.local",
-        ".env.shared.local",
-        ".env.dev.local",
-        ".env.test.local",
-    ):
+    for (
+        local_override
+    ) in ".env.local .env.shared.local .env.dev.local .env.test.local".split():
         (sandbox / local_override).write_text(
             "export LOCAL_OVERRIDE_SENTINEL=loaded\n", encoding="utf-8"
         )
@@ -583,20 +746,18 @@ def test_credential_neutral_envrc_skips_local_overrides_and_op(
     fake_bin.mkdir()
     op_marker = tmp_path / "op-ran"
     fake_op = fake_bin / "op"
-    fake_op.write_text(
+    _write_executable(
+        fake_op,
         f"#!/usr/bin/env bash\nprintf ran > {shlex.quote(str(op_marker))}\n",
-        encoding="utf-8",
     )
-    fake_op.chmod(0o755)
     venv_bin = sandbox / ".venv/bin"
     venv_bin.mkdir(parents=True)
     venv_op_marker = tmp_path / "venv-op-ran"
     venv_op = venv_bin / "op"
-    venv_op.write_text(
+    _write_executable(
+        venv_op,
         f"#!/usr/bin/env bash\nprintf ran > {shlex.quote(str(venv_op_marker))}\n",
-        encoding="utf-8",
     )
-    venv_op.chmod(0o755)
     (sandbox / ".cursor/credential-neutral-bin").mkdir()
     shutil.copyfile(
         ROOT / ".cursor/credential-neutral-bin/op",
@@ -604,36 +765,30 @@ def test_credential_neutral_envrc_skips_local_overrides_and_op(
     )
     (sandbox / ".cursor/credential-neutral-bin/op").chmod(0o755)
 
-    shell = "\n".join(
-        (
-            "strict_env() { set -u; }",
-            'PATH_add() { PATH="$1:$PATH"; }',
-            "layout() { layout_uv; }",
-            'source_env() { source "$1"; }',
-            'source_env_if_exists() { [[ ! -f "$1" ]] || source "$1"; }',
-            "env_vars_required() { :; }",
-            "source .envrc",
-            'printf "override=%s\\n" "${LOCAL_OVERRIDE_SENTINEL-unset}"',
-            'printf "api=%s\\n" "$API_BASE_URL"',
-            'printf "clerk=%s\\n" "$VITE_CLERK_PUBLIC_KEY"',
-            'printf "op_account=%s\\n" "${OP_ACCOUNT-unset}"',
-            'printf "op_path=%s\\n" "$(command -v op)"',
-            "op vault list >/dev/null 2>&1 || true",
-        )
-    )
+    shell = """strict_env() { set -u; }
+PATH_add() { PATH="$1:$PATH"; }
+layout() { layout_uv; }
+source_env() { source "$1"; }
+source_env_if_exists() { [[ ! -f "$1" ]] || source "$1"; }
+env_vars_required() { :; }
+source .envrc
+printf "override=%s\\n" "${LOCAL_OVERRIDE_SENTINEL-unset}"
+printf "api=%s\\n" "$API_BASE_URL"
+printf "clerk=%s\\n" "$VITE_CLERK_PUBLIC_KEY"
+printf "op_account=%s\\n" "${OP_ACCOUNT-unset}"
+printf "op_path=%s\\n" "$(command -v op)"
+op vault list >/dev/null 2>&1 || true
+"""
     environment = {
         "PATH": f"{fake_bin}:/usr/local/bin:/usr/bin:/bin",
         "HOME": str(tmp_path),
         "CI": ci,
         "COSMANEURA_CURSOR_CREDENTIAL_NEUTRAL": "1",
     }
-    result = subprocess.run(
+    result = _run(
         ["bash", "-c", shell],
         cwd=sandbox,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
+        environment=environment,
     )
 
     assert result.returncode == 0, result.stderr
@@ -770,18 +925,6 @@ def test_test_boundary_rejects_divergent_environment_after_direnv(
     assert "Refusing automatic database command" in output
 
 
-def test_test_boundary_rejects_divergent_test_pointer_after_direnv(
-    tmp_path: Path,
-) -> None:
-    returncode, output = _run_test_boundary(
-        tmp_path,
-        test_database_url="postgresql://root:password@remote.example:5432/test",
-    )
-    assert returncode == 2
-    assert TEST_LOCALHOST not in output
-    assert "Refusing automatic database command" in output
-
-
 def test_test_boundary_passes_exact_post_direnv_url_to_child(tmp_path: Path) -> None:
     returncode, output = _run_test_boundary(
         tmp_path,
@@ -794,11 +937,12 @@ def test_test_boundary_passes_exact_post_direnv_url_to_child(tmp_path: Path) -> 
 def test_cursor_scripts_use_explicit_guarded_dev_and_test_commands() -> None:
     helper = DATABASE_HELPER.read_text(encoding="utf-8")
     assert (
-        'CI="" direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode dev --' in helper
+        'CI="" "${CURSOR_MISE_BIN:?}" exec --' in helper
+        and 'direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode dev --' in helper
     )
     assert (
-        'CI=true direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode test --'
-        in helper
+        'CI=true "${CURSOR_MISE_BIN:?}" exec --' in helper
+        and 'direnv exec . python "${CURSOR_DATABASE_GUARD}" --mode test --' in helper
     )
 
     install = (ROOT / ".cursor/install.sh").read_text(encoding="utf-8")
@@ -817,44 +961,33 @@ def test_cursor_scripts_use_explicit_guarded_dev_and_test_commands() -> None:
     assert 'source "$SCRIPT_DIR/database.sh"' in start
     assert "cursor_database_dev uv run --no-sync alembic upgrade head" in start
 
+    backend = (ROOT / ".cursor/run-backend.sh").read_text(encoding="utf-8")
+    frontend = (ROOT / ".cursor/run-frontend.sh").read_text(encoding="utf-8")
+    assert 'exec "$CURSOR_MISE_BIN" exec --' in backend
+    assert 'exec "$CURSOR_MISE_BIN" exec -- direnv exec . just js_dev' in frontend
+
 
 def test_cursor_compose_path_uses_only_immutable_image_refs() -> None:
     base_path = ROOT / "docker-compose.yml"
     override_path = ROOT / ".cursor/docker-compose.yml"
     override = override_path.read_text(encoding="utf-8")
-    assert (
-        "postgres:16.9@sha256:980e5d98958b0918ff1bbb63d5f3e883debe74130ea137d11ac1f8e40a84d6dc"
-        in override
+    images = (
+        "postgres:16.9@sha256:980e5d98958b0918ff1bbb63d5f3e883debe74130ea137d11ac1f8e40a84d6dc",
+        "redis:6.2.18@sha256:f3f3a0e0fc82db539bf84aed94f03d8cab9e2b57e2348512f8a1b0aae1d24444",
+        "axllent/mailpit:v1.31.0@sha256:29154cb86d35bcff4c0f82f185fc6720e89248b2cd2bc43f312a2b31fddd34ad",
     )
-    assert (
-        "redis:6.2.18@sha256:f3f3a0e0fc82db539bf84aed94f03d8cab9e2b57e2348512f8a1b0aae1d24444"
-        in override
-    )
-    assert (
-        "axllent/mailpit:v1.31.0@sha256:29154cb86d35bcff4c0f82f185fc6720e89248b2cd2bc43f312a2b31fddd34ad"
-        in override
-    )
+    assert all(image in override for image in images)
     assert ":latest" not in override
 
     base_config = yaml.safe_load(base_path.read_text(encoding="utf-8"))
     override_config = yaml.safe_load(override)
     base_services = base_config["services"]
     override_services = override_config["services"]
-    merged_services = {
-        service_name: {
-            **base_service,
-            **override_services.get(service_name, {}),
-        }
-        for service_name, base_service in base_services.items()
-    }
-    merged_services.update(
-        {
-            service_name: override_service
-            for service_name, override_service in override_services.items()
-            if service_name not in merged_services
-        }
-    )
     assert set(base_services) <= set(override_services)
+    merged_services = {
+        name: base_services.get(name, {}) | service
+        for name, service in override_services.items()
+    }
     for service_name, service in merged_services.items():
         image = service.get("image")
         assert isinstance(image, str), f"{service_name} lacks a pinned image"

@@ -11,22 +11,17 @@ cursor_require_credential_neutral
 echo "== [install] system provisioning =="
 bash "$SCRIPT_DIR/system-setup.sh"
 
+echo "== [install] ensure pinned toolchain (.tool-versions) =="
+CURSOR_MISE_BIN="$HOME/.local/bin/mise"
+cursor_require_exact_mise_binary "$CURSOR_MISE_BIN"
+"$CURSOR_MISE_BIN" install
+
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/lib.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/services.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/database.sh"
-
-echo "== [install] ensure pinned toolchain (.tool-versions) =="
-mise install
-
-# lib.sh's direnv allow runs before the toolchain is installed on a fresh image,
-# so direnv may not exist yet and the allow is skipped. Now that mise has
-# installed direnv, allow the .envrc so `direnv exec` (denv) works.
-echo "== [install] allow direnv =="
-hash -r 2>/dev/null || true
-direnv allow .
 
 echo "== [install] use committed credential-neutral environment defaults =="
 

@@ -2,10 +2,9 @@
 
 ## Outcome and boundaries
 
-- Outcome: every repository-managed Cursor Bash entrypoint starts behind
-  `/usr/bin/env -i`, cannot read 1Password-backed local overrides, uses
-  immutable bootstrap and Compose trust roots, and can mutate only exact local
-  development databases.
+- Outcome: every repository-managed Cursor Bash entrypoint starts behind `env -i`,
+  cannot read 1Password overrides, uses immutable bootstrap/Compose trust roots,
+  and can mutate only exact local development databases.
 - In scope: `.cursor/` install/start/server paths, their narrow `.envrc` marker
   branch, immutable installers, and focused policy tests.
 - Non-goals: application behavior, shared developer Just recipes, live staging
@@ -21,9 +20,9 @@
 
 ## Current deployed state
 
-- Protected `master` already includes PR #257. This follow-up starts from exact
-  baseline `8a62f57e456ddf131172b5f6be191c8f6fa02b29`, whose repo-managed
-  `.cursor/environment.json` may be consumed by new or rebuilt Cloud Agents.
+- Protected `master` includes PR #257. This follow-up starts from exact baseline
+  `8a62f57e456ddf131172b5f6be191c8f6fa02b29`; new or rebuilt Cloud Agents may
+  consume its repo-managed `.cursor/environment.json`.
 - No staging or production application runtime consumes this Cloud Agent
   configuration. Deployed application-artifact reconciliation is N/A.
 
@@ -40,26 +39,26 @@
 
 - Merge only after focused tests, repository CI, and exact-head independent
   review are green; then validate a newly created credential-free Cloud Agent.
-- Abort if a sentinel secret reaches a child command, an `op` probe executes,
-  a noncanonical database URL reaches a command, or a tag-only image appears in
-  the Cursor Compose configuration.
+- Abort if a child receives a sentinel secret or noncanonical database URL, an `op`
+  probe executes, or the Cursor Compose configuration contains a tag-only image.
 - No staging, production, migration, or founder promotion action is part of
   this rollout.
 
 ## Security and recovery
 
-- Residual dev-only trust: signed apt repositories are not snapshot-pinned;
-  Mise-managed exact-version tools rely on their upstream channels; Playwright
-  fixes Chromium revision 1161 but does not repository-verify the browser
-  archive digest. No credentials or live data may enter this environment.
-- Cursor's platform-owned outer command interpreter, if present, necessarily
-  executes before the configured `/usr/bin/env -i` command and remains outside
-  repository control. The Cloud Agent host must itself remain
-  credential-neutral.
-- Recovery: do not revert to the credential-exposing PR #257 behavior. Disable
-  the Cloud Agent entrypoints or roll forward with a reviewed repair, discard
-  and rebuild every affected disposable agent, and rotate any potentially
-  exposed credential before reuse.
+- Residual dev-only trust: apt is not snapshot-pinned; Mise-managed exact-version tools
+  rely on upstream channels; Playwright fixes Chromium revision 1161 but does not
+  repository-verify its archive digest. No credentials or live data may enter.
+- A platform-owned outer interpreter, if present, runs before `/usr/bin/env -i` and is
+  outside repository control. The Cloud Agent host must remain credential-neutral.
+- Direnv uses a dedicated, empty configuration root; persisted global or HOME
+  Direnv hooks are forbidden rather than trusted.
+- Mise uses dedicated empty user/system configuration roots, isolated system
+  data, disabled hooks, an explicit global-config binding, and an ancestor
+  discovery ceiling that retains repository config. Only its exact reviewed
+  binary is accepted in `.local/bin`; generated shims are not entry paths.
+- Recovery: never revert to credential-exposing PR #257 behavior. Disable entrypoints or
+  roll forward, discard/rebuild affected agents, and rotate potentially exposed secrets.
 - No irreversible cleanup or observation window applies.
 
 ## Completion

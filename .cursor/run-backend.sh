@@ -13,4 +13,5 @@ source "$SCRIPT_DIR/services.sh"
 ensure_dockerd
 ensure_infra
 
-exec direnv exec . env PORT="${PYTHON_SERVER_PORT:-8205}" python main.py
+exec "$CURSOR_MISE_BIN" exec -- \
+  direnv exec . env PORT="${PYTHON_SERVER_PORT:-8205}" python main.py

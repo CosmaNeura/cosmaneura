@@ -1,42 +1,42 @@
 # Cursor Cloud Agent environment
 
-This environment is for credential-neutral local development. Do not inject
-production or staging database credentials, Azure credentials, PHI, or live
-restore bindings into it.
+This environment is for credential-neutral local development. Do not inject production or
+staging database credentials, Azure credentials, PHI, or live restore bindings into it.
 
-Every repository-managed command in `environment.json` begins with
-`/usr/bin/env -i` before invoking `/bin/bash --noprofile --norc`, so inherited
-variables such as `BASH_ENV` cannot execute in that Bash process. The command
-then runs through `credential-neutral.sh`, which rebuilds the process
-environment again from an empty base with only reviewed OS values and
-`COSMANEURA_CURSOR_CREDENTIAL_NEUTRAL=1`. Target scripts refuse direct use
-without the marker. Direnv honors the marker by skipping every local override
-file and every 1Password probe/read, then supplies only committed non-secret
-development placeholders. A repository-local `op` denial shim remains first on
-`PATH` for defense in depth.
+Every repository-managed command in `environment.json` begins with `/usr/bin/env -i`
+before `/bin/bash --noprofile --norc`, so inherited values such as `BASH_ENV` cannot
+execute there. `credential-neutral.sh` rebuilds the process environment from an empty
+base with reviewed OS values and `COSMANEURA_CURSOR_CREDENTIAL_NEUTRAL=1`; targets
+refuse direct use without that marker. Direnv then skips local overrides and every
+1Password read, supplies committed non-secret placeholders, and retains a local `op`
+denial shim first on `PATH`.
 
-The dispatcher also replaces the real user home with the gitignored,
-per-worktree `.cursor/runtime-home/` directory and points Git, Docker, curl,
-pip, npm, Azure, GnuPG, XDG, and uv configuration/cache discovery into it.
-Every fixed directory and direct configuration-file path consumed there is
-required to be real and user-owned; symlink and wrong-type escapes fail closed.
-This prevents normal tool configuration lookup from reaching credentials in
-the host home. It is an environment/configuration boundary, not an operating
-system sandbox: processes can still read otherwise accessible host paths.
+Direnv receives a dedicated empty `DIRENV_CONFIG`. Startup hooks in `$HOME/.direnvrc`,
+`$XDG_CONFIG_HOME/direnv/direnvrc`, or `$XDG_CONFIG_HOME/direnv/lib/*.sh` are
+forbidden, and any content in the dedicated directory fails closed before Direnv runs.
 
-Cursor may use its own outer command interpreter to launch the command string.
-That interpreter necessarily runs before any repository-controlled token and
-cannot be cleaned by this configuration. The Cloud Agent host itself must
-therefore remain credential-neutral; this boundary covers the repository-owned
-Bash process and all descendants it launches.
+The dispatcher replaces the real home with gitignored `.cursor/runtime-home/` and
+points Git, Docker, curl, pip, npm, Azure, GnuPG, XDG, and uv discovery into it. Every
+consumed directory and direct config path must be real and user-owned; symlink and
+wrong-type escapes fail closed. This blocks normal host-home credential discovery but
+is not an OS sandbox: processes can still read otherwise accessible host paths.
+
+Cursor may use an outer interpreter before any repository-controlled token, which this
+configuration cannot clean. The host must therefore remain credential-neutral; this
+boundary covers the repository-owned Bash process and its descendants.
 
 ## Bootstrap trust
 
-`system-setup.sh` installs Mise through `scripts/install_pinned_mise.sh`. The
-installer downloads one exact Linux x86-64 release archive and verifies both
-the archive and extracted binary SHA-256 before installing or executing Mise.
-Updating Mise requires reviewing a new immutable release and updating both
-digests together.
+`system-setup.sh` uses `scripts/install_pinned_mise.sh`, which downloads one exact Linux
+x86-64 release and verifies archive and binary SHA-256 before execution. Updates require
+reviewing both digests. Every entrypoint revalidates the binary, forbids other
+`.local/bin` entries, excludes generated shims from `PATH`, and uses exact `mise exec`.
+
+Mise receives empty `MISE_CONFIG_DIR` and `MISE_SYSTEM_CONFIG_DIR` roots, an explicit
+nonexistent `MISE_GLOBAL_CONFIG_FILE`, isolated `MISE_SYSTEM_DATA_DIR`, and
+`MISE_NO_HOOKS=1`. Its ceiling excludes the repository parent, retaining repository
+config while blocking ancestors. Persisted `$XDG_CONFIG_HOME/mise` or content in a
+dedicated config/data root fails closed.
 
 Localias is installed through the equivalent repository-pinned installer in
 `scripts/install_pinned_localias.sh`.
@@ -77,8 +77,8 @@ Automatic migration, seed-state inspection, and seeding are wrapped by
 the explicit `cursor_database_dev` or `cursor_database_test` boundary in
 `database.sh`. Each boundary loads its mode-specific direnv configuration and
 then invokes `scripts/assert_cursor_local_database.py`. The guard passes the
-same validated environment snapshot to the command, including after the test
-mode reloads `.env.test.local`.
+same validated environment snapshot to the command, including after the
+test-mode direnv reload of committed `.env.test`.
 
 The approved targets are exact strings, not normalized URLs. They require:
 

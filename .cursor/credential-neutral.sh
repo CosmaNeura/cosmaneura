@@ -3,6 +3,30 @@
 set -euo pipefail
 
 CURSOR_CREDENTIAL_SCRIPT_DIR="$(cd "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CURSOR_MISE_BINARY_SHA256="c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea"
+
+cursor_require_exact_mise_binary() {
+  local mise_binary="$1"
+  local mise_digest
+
+  if [[ -L "${mise_binary}" || ! -f "${mise_binary}" || ! -O "${mise_binary}" || ! -x "${mise_binary}" ]]; then
+    echo "Cursor Mise must be a real, user-owned executable: ${mise_binary}." >&2
+    return 1
+  fi
+  if [[ -x /usr/bin/sha256sum ]]; then
+    mise_digest="$(/usr/bin/sha256sum -- "${mise_binary}")" || return 1
+  elif [[ -x /usr/bin/shasum ]]; then
+    mise_digest="$(/usr/bin/shasum -a 256 -- "${mise_binary}")" || return 1
+  else
+    echo "Unable to hash the Cursor Mise executable." >&2
+    return 1
+  fi
+  mise_digest="${mise_digest%% *}"
+  if [[ "${mise_digest}" != "${CURSOR_MISE_BINARY_SHA256}" ]]; then
+    echo "Cursor Mise executable does not match the reviewed digest." >&2
+    return 1
+  fi
+}
 
 cursor_require_credential_neutral() {
   if [[ "${COSMANEURA_CURSOR_CREDENTIAL_NEUTRAL:-}" != "1" ]]; then
@@ -23,12 +47,28 @@ cursor_require_credential_neutral() {
 }
 
 cursor_exec_credential_neutral() {
+  local cursor_direnv_config
+  local cursor_forbidden_hook
+  local cursor_mise_binary
+  local cursor_mise_config
+  local cursor_mise_system_data
+  local cursor_mise_system_config
+  local cursor_repo_parent
+  local cursor_repo_root
+  local cursor_unexpected_executable
   local cursor_user
   local cursor_runtime_home
   local cursor_state_file
   local cursor_state_path
   cursor_user="$(/usr/bin/id -un)"
+  cursor_repo_root="$(cd "${CURSOR_CREDENTIAL_SCRIPT_DIR}/.." && pwd)"
+  cursor_repo_parent="$(/usr/bin/dirname -- "${cursor_repo_root}")"
   cursor_runtime_home="${CURSOR_CREDENTIAL_SCRIPT_DIR}/runtime-home"
+  cursor_direnv_config="${cursor_runtime_home}/direnv-config"
+  cursor_mise_binary="${cursor_runtime_home}/.local/bin/mise"
+  cursor_mise_config="${cursor_runtime_home}/mise-config"
+  cursor_mise_system_data="${cursor_runtime_home}/mise-system-data"
+  cursor_mise_system_config="${cursor_runtime_home}/mise-system-config"
   umask 077
   for cursor_state_path in \
     "${cursor_runtime_home}" \
@@ -49,6 +89,10 @@ cursor_exec_credential_neutral() {
     "${cursor_runtime_home}/.pki/nssdb" \
     "${cursor_runtime_home}/.azure" \
     "${cursor_runtime_home}/.curl" \
+    "${cursor_direnv_config}" \
+    "${cursor_mise_config}" \
+    "${cursor_mise_system_data}" \
+    "${cursor_mise_system_config}" \
     "${cursor_runtime_home}/tmp"; do
     if [[ -L "${cursor_state_path}" ]] \
       || { [[ -e "${cursor_state_path}" ]] && [[ ! -d "${cursor_state_path}" ]]; } \
@@ -62,6 +106,29 @@ cursor_exec_credential_neutral() {
       return 1
     fi
     /bin/chmod 0700 "${cursor_state_path}"
+  done
+  for cursor_forbidden_hook in \
+    "${cursor_runtime_home}/.direnvrc" \
+    "${cursor_runtime_home}/.config/direnv"; do
+    if [[ -e "${cursor_forbidden_hook}" || -L "${cursor_forbidden_hook}" ]]; then
+      echo "Persisted Direnv hooks are forbidden in the Cursor runtime home: ${cursor_forbidden_hook}." >&2
+      return 1
+    fi
+  done
+  if [[ -e "${cursor_runtime_home}/.config/mise" || -L "${cursor_runtime_home}/.config/mise" ]]; then
+    echo "Persisted global Mise configuration is forbidden in the Cursor runtime home." >&2
+    return 1
+  fi
+  for cursor_state_path in \
+    "${cursor_direnv_config}" \
+    "${cursor_mise_config}" \
+    "${cursor_mise_system_config}" \
+    "${cursor_mise_system_data}"; do
+    if [[ -n "$(/usr/bin/find "${cursor_state_path}" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+      echo "Dedicated Cursor state directory must remain empty: ${cursor_state_path}." >&2
+      return 1
+    fi
+    /bin/chmod 0500 "${cursor_state_path}"
   done
   for cursor_state_file in \
     "${cursor_runtime_home}/.gitconfig" \
@@ -82,6 +149,18 @@ cursor_exec_credential_neutral() {
       /bin/chmod 0600 "${cursor_state_file}"
     fi
   done
+  cursor_unexpected_executable="$(
+    /usr/bin/find "${cursor_runtime_home}/.local/bin" \
+      -mindepth 1 -maxdepth 1 ! -name mise -print -quit
+  )"
+  if [[ -n "${cursor_unexpected_executable}" ]]; then
+    echo "Unexpected executable entry in the Cursor local bin directory." >&2
+    return 1
+  fi
+  if [[ -e "${cursor_mise_binary}" || -L "${cursor_mise_binary}" ]]; then
+    cursor_require_exact_mise_binary "${cursor_mise_binary}"
+  fi
+  cd "${cursor_repo_root}"
   exec /usr/bin/env -i \
     HOME="${cursor_runtime_home}" \
     USER="${cursor_user}" \
@@ -96,6 +175,13 @@ cursor_exec_credential_neutral() {
     XDG_CONFIG_HOME="${cursor_runtime_home}/.config" \
     XDG_DATA_HOME="${cursor_runtime_home}/.local/share" \
     XDG_STATE_HOME="${cursor_runtime_home}/.local/state" \
+    DIRENV_CONFIG="${cursor_direnv_config}" \
+    MISE_CONFIG_DIR="${cursor_mise_config}" \
+    MISE_SYSTEM_CONFIG_DIR="${cursor_mise_system_config}" \
+    MISE_GLOBAL_CONFIG_FILE="${cursor_mise_config}/global-config.toml" \
+    MISE_CEILING_PATHS="${cursor_repo_parent}" \
+    MISE_NO_HOOKS=1 \
+    MISE_SYSTEM_DATA_DIR="${cursor_mise_system_data}" \
     AZURE_CONFIG_DIR="${cursor_runtime_home}/.azure" \
     CURL_HOME="${cursor_runtime_home}/.curl" \
     DOCKER_CONFIG="${cursor_runtime_home}/.docker" \

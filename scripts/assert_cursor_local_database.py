@@ -64,7 +64,7 @@ def validate_database_environment(*, mode: str, environment: Mapping[str, str]) 
     if environment.get("CI", "") != expected_ci:
         raise LocalDatabaseSafetyError(f"CI must be {expected_ci!r} in {mode} mode")
 
-    # Test commands run after `CI=true direnv exec .` reloads .env.test.local.
+    # Test commands run after `CI=true direnv exec .` reloads committed .env.test.
     # Validate both URLs inside that final environment so a divergent override
     # cannot leave any live database pointer available to the child process.
     if mode == "test":
