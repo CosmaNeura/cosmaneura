@@ -30,7 +30,7 @@ import urllib.request
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, NoReturn, Protocol
+from typing import Any, BinaryIO, NoReturn, Protocol, cast
 
 try:
     from scripts import authenticate_staging_github_attestation as attestation
@@ -823,7 +823,7 @@ def _run_bounded_process(
                 if total > maximum_output_bytes:
                     _kill_process_group(process)
                     _fail("offline_verifier.output_too_large")
-                streams[key.fileobj].append(chunk)
+                streams[cast(BinaryIO, key.fileobj)].append(chunk)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _kill_process_group(process)
