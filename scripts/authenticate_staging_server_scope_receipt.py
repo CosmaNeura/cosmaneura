@@ -580,6 +580,10 @@ def _write_private_result(path: Path, result: Mapping[str, Any]) -> None:
             raise AuthenticationFailure("output_file.unsafe")
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
         descriptor = os.open(path, flags, 0o600)
+        os.fchmod(descriptor, 0o600)
+        created = os.fstat(descriptor)
+        if not stat.S_ISREG(created.st_mode) or stat.S_IMODE(created.st_mode) != 0o600:
+            raise AuthenticationFailure("output_file.unsafe")
         with os.fdopen(descriptor, "wb") as handle:
             descriptor = -1
             handle.write(payload)
