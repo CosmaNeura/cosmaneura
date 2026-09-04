@@ -199,6 +199,28 @@ composition, the last freshness check, and direct safe-submit invocation in
 one process. Its review must keep original bytes available for revalidation and
 must not add a deserialization minter.
 
+`restore-trusted-executor-policy.json` now closes that future boundary without
+activating it. Its only public shape is
+`execute_trusted_restore(bundle_dir, hmac_key_path, attestation_bundle_path,
+trusted_root_path, ttl_hours)`. The exact six-file directory, HMAC key,
+attestation bundle, and independently delivered GitHub-only root must each be
+opened once with bounded no-follow reads. The sealed snapshot retains the exact
+validated result, evidence manifest, and server-scope receipt bytes; accepted
+digests bind the candidate, inventory, quiescence, and checksum inputs without
+reopening them. The key, attestation bundle, root, snapshot, and opaque seals
+remain in the same process until the direct safe-submit call returns.
+Caller-supplied restore, workflow, receipt-digest, or identity fields are not
+accepted.
+
+The policy pins all eight upstream, envelope, and safe-submit policy files and
+requires one shared non-regressing clock. The validated snapshot and sealed
+server binding flow unchanged through one provider GET, one offline verifier
+invocation, composition's final freshness read, deterministic request
+derivation, and at most one `SafeRestoreSubmitter.submit` invocation. Runtime,
+provider, verifier, submitter, private-runner, workflow, and restore activation
+remain false; exact job/image/identity/network pins are explicit placeholders.
+No workflow or live environment was changed.
+
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of
 `trusted_composite_verifier_implemented`, `workflow_integrated`,

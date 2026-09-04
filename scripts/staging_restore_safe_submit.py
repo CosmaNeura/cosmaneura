@@ -810,7 +810,7 @@ class RestoreEvidenceBinding:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class RestoreRequest:
     rehearsal_id: str
     evidence_binding: RestoreEvidenceBinding
@@ -821,7 +821,7 @@ class RestoreRequest:
     run_attempt: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class SubmitOutcome:
     status: str
     target_resource_id: str
@@ -2075,3 +2075,38 @@ class SafeRestoreSubmitter:
             return self._cleanup_target(intent, intent_digest)
         assert isinstance(actual, dict)
         return self._cleanup_target(intent, intent_digest)
+
+
+def request_from_binding(
+    *,
+    binding: RestoreEvidenceBinding,
+    config: SafeSubmitConfig,
+    ttl_hours: int,
+) -> RestoreRequest:
+    """Derive the only valid request identity and deadline from a sealed binding."""
+
+    if type(config) is not SafeSubmitConfig:
+        _fail("safe_submit_config_invalid")
+    if (
+        type(ttl_hours) is not int
+        or ttl_hours < 1
+        or ttl_hours > config.maximum_ttl_hours
+    ):
+        _fail("cleanup_deadline_out_of_range")
+    evidence = SafeRestoreSubmitter._binding_record(binding)
+    observed_at = _parse_utc(evidence["observed_at"], "evidence_binding_invalid")
+    authorization = {
+        "schema_version": 1,
+        "safe_submit_policy_id": config.policy_id,
+        "evidence_binding": evidence,
+    }
+    rehearsal_id = _sha256(_canonical(authorization))[:12]
+    return RestoreRequest(
+        rehearsal_id=rehearsal_id,
+        evidence_binding=binding,
+        cleanup_not_after=observed_at + timedelta(hours=ttl_hours),
+        repository=binding.repository,
+        workflow_sha=binding.workflow_sha,
+        run_id=binding.run_id,
+        run_attempt=binding.run_attempt,
+    )
