@@ -44,6 +44,7 @@ def _config(**changes: Any) -> Any:
         "blob_marker_store_implemented": True,
         "blob_marker_provider_fidelity_proven": True,
         "private_runner_binding_implemented": True,
+        "trusted_evidence_binding_implemented": True,
         "execution_authorized": True,
         "provision_client_id": "configured-for-pure-fake-test",
         "provision_principal_id": "configured-for-pure-fake-test",
@@ -59,18 +60,86 @@ def _config(**changes: Any) -> Any:
     return replace(config, **defaults)
 
 
-def _request() -> Any:
-    created = datetime(2026, 9, 3, 12, tzinfo=UTC)
+def _binding(**changes: Any) -> Any:
+    observed = datetime(2026, 9, 3, 12, tzinfo=UTC)
+    policy = json.loads(SAFE_POLICY.read_text())["evidence_binding"]
+    values = {
+        "schema_version": 1,
+        "binding_policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+        "evidence_manifest_policy_id": "cosmaneura-staging-evidence-manifest-v2",
+        "evidence_manifest_policy_sha256": policy["manifest_policy_sha256"],
+        "manifest_id": "rehearsal-20260903",
+        "manifest_file_sha256": f"sha256:{'1' * 64}",
+        "bundle_index_sha256": f"sha256:{'2' * 64}",
+        "evidence_set_sha256": f"sha256:{'3' * 64}",
+        "source_sha": "4" * 40,
+        "candidate_sha": "5" * 40,
+        "source_server_resource_id": (
+            "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/"
+            "resourceGroups/cosmaneura-staging/providers/"
+            "Microsoft.DBforPostgreSQL/flexibleServers/"
+            "cosmaneura-staging-postgres"
+        ),
+        "source_database_name": "staging",
+        "approved_restore_time": observed,
+        "observed_at": observed,
+        "expires_at": observed + timedelta(minutes=15),
+        "candidate_approval_pr_number": 230,
+        "candidate_protected_master_sha": "a" * 40,
+        "candidate_schema_revision": "89c31f0ae275",
+        "candidate_receipt_sha256": f"sha256:{'6' * 64}",
+        "inventory_receipt_sha256": f"sha256:{'7' * 64}",
+        "quiescence_receipt_sha256": f"sha256:{'8' * 64}",
+        "server_scope_receipt_sha256": f"sha256:{'9' * 64}",
+        "repository": "CosmaNeura/cosmaneura",
+        "protected_ref": "refs/heads/master",
+        "workflow_path": ".github/workflows/staging_restore_rehearsal.yml",
+        "workflow_sha": "a" * 40,
+        "run_id": "901",
+        "run_attempt": "1",
+        "event_name": "workflow_dispatch",
+        "signer_issuer": "https://token.actions.githubusercontent.com",
+        "signer_subject": (
+            "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision"
+        ),
+        "attestation_receipt_sha256": f"sha256:{'b' * 64}",
+        "provider_receipt_sha256": f"sha256:{'c' * 64}",
+        "server_scope_authentication_receipt_sha256": f"sha256:{'d' * 64}",
+    }
+    values.update(changes)
+    return safe_submit.RestoreEvidenceBinding(**values)
+
+
+def _rehearsal_id(binding: Any) -> str:
+    policy_id = json.loads(SAFE_POLICY.read_text())["policy_id"]
+    evidence = safe_submit.SafeRestoreSubmitter._binding_record(binding)
+    payload = {
+        "schema_version": 1,
+        "safe_submit_policy_id": policy_id,
+        "evidence_binding": evidence,
+    }
+    return safe_submit._sha256(safe_submit._canonical(payload))[:12]
+
+
+def _request(*, binding: Any | None = None, **changes: Any) -> Any:
+    evidence = binding or _binding()
+    observed = evidence.observed_at
+    values = {
+        "rehearsal_id": _rehearsal_id(evidence),
+        "evidence_binding": evidence,
+        "cleanup_not_after": observed + timedelta(hours=6),
+        "repository": evidence.repository,
+        "workflow_sha": evidence.workflow_sha,
+        "run_id": evidence.run_id,
+        "run_attempt": evidence.run_attempt,
+    }
+    values.update(changes)
     return safe_submit.RestoreRequest(
-        rehearsal_id="012345abcdef",
-        restore_time=created - timedelta(minutes=5),
-        created_at=created,
-        cleanup_not_after=created + timedelta(hours=6),
-        repository="CosmaNeura/cosmaneura",
-        workflow_sha="a" * 40,
-        run_id="901",
-        run_attempt="1",
+        **values,
     )
+
+
+REHEARSAL_ID = _request().rehearsal_id
 
 
 def _engine(
@@ -442,12 +511,12 @@ def test_blob_create_is_exact_conditional_raw_byte_write_with_readback() -> None
         ]
     )
     store = _blob_store(opener)
-    assert store.create_if_absent("intent", "012345abcdef", raw) == raw
+    assert store.create_if_absent("intent", REHEARSAL_ID, raw) == raw
     assert [item[0].get_method() for item in opener.requests] == ["GET", "PUT", "GET"]
     request, timeout = opener.requests[1]
     assert request.full_url == (
         "https://restorecontrol.blob.core.windows.net/"
-        "restore-intents-v3/012345abcdef.json"
+        f"restore-intents-v4/{REHEARSAL_ID}.json"
     )
     headers = {key.lower(): value for key, value in request.header_items()}
     assert headers["authorization"] == "Bearer test-storage-token"
@@ -477,7 +546,7 @@ def test_blob_mutation_response_failures_reconcile_without_resubmit(
             FakeHttpResponse(200, raw, _marker_headers(raw)),
         ]
     )
-    assert _blob_store(opener).create_if_absent("intent", "012345abcdef", raw) == raw
+    assert _blob_store(opener).create_if_absent("intent", REHEARSAL_ID, raw) == raw
     assert [item[0].get_method() for item in opener.requests].count("PUT") == 1
 
 
@@ -485,7 +554,7 @@ def test_blob_mutation_response_failures_reconcile_without_resubmit(
 def test_blob_get_post_status_failures_preserve_present_signal(failure: str) -> None:
     response = FakeHttpResponse(200, failure=failure)
     with pytest.raises(safe_submit.MarkerPresentInvalid):
-        _blob_store(FakeOpener([response])).read("cleanup", "012345abcdef")
+        _blob_store(FakeOpener([response])).read("cleanup", REHEARSAL_ID)
 
 
 @pytest.mark.parametrize(
@@ -507,7 +576,7 @@ def test_blob_read_rejects_partial_worm_or_encryption_proof(missing: str) -> Non
     del headers[missing]
     store = _blob_store(FakeOpener([FakeHttpResponse(200, raw, headers)]))
     with pytest.raises(safe_submit.MarkerPresentInvalid):
-        store.read("intent", "012345abcdef")
+        store.read("intent", REHEARSAL_ID)
 
 
 def test_blob_read_rejects_short_retention_window() -> None:
@@ -516,7 +585,7 @@ def test_blob_read_rejects_short_retention_window() -> None:
     headers = _marker_headers(raw, **{"x-ms-immutability-policy-until-date": too_short})
     with pytest.raises(safe_submit.MarkerPresentInvalid):
         _blob_store(FakeOpener([FakeHttpResponse(200, raw, headers)])).read(
-            "intent", "012345abcdef"
+            "intent", REHEARSAL_ID
         )
 
 
@@ -529,7 +598,7 @@ def test_blob_timeout_reconciliation_never_repeats_put() -> None:
             FakeHttpResponse(200, raw, _marker_headers(raw)),
         ]
     )
-    assert _blob_store(accepted).create_if_absent("intent", "012345abcdef", raw) == raw
+    assert _blob_store(accepted).create_if_absent("intent", REHEARSAL_ID, raw) == raw
     assert [item[0].get_method() for item in accepted.requests].count("PUT") == 1
 
     absent = FakeOpener(
@@ -541,7 +610,7 @@ def test_blob_timeout_reconciliation_never_repeats_put() -> None:
         ]
     )
     with pytest.raises(safe_submit.MarkerOutcomeUnknown):
-        _blob_store(absent).create_if_absent("intent", "012345abcdef", raw)
+        _blob_store(absent).create_if_absent("intent", REHEARSAL_ID, raw)
     assert [item[0].get_method() for item in absent.requests].count("PUT") == 1
 
 
@@ -556,7 +625,7 @@ def test_blob_conditional_conflict_and_unknown_then_404_fail_closed() -> None:
         ]
     )
     assert (
-        _blob_store(replay).create_if_absent("intent", "012345abcdef", expected)
+        _blob_store(replay).create_if_absent("intent", REHEARSAL_ID, expected)
         == expected
     )
     conflict = FakeOpener(
@@ -567,7 +636,7 @@ def test_blob_conditional_conflict_and_unknown_then_404_fail_closed() -> None:
         ]
     )
     with pytest.raises(safe_submit.MarkerConflict):
-        _blob_store(conflict).create_if_absent("intent", "012345abcdef", expected)
+        _blob_store(conflict).create_if_absent("intent", REHEARSAL_ID, expected)
 
     uncertain = FakeOpener(
         [
@@ -576,7 +645,7 @@ def test_blob_conditional_conflict_and_unknown_then_404_fail_closed() -> None:
         ]
     )
     with pytest.raises(safe_submit.MarkerOutcomeUnknown):
-        _blob_store(uncertain).read("intent", "012345abcdef")
+        _blob_store(uncertain).read("intent", REHEARSAL_ID)
 
 
 def test_blob_redirect_and_oversize_are_bounded_refusals() -> None:
@@ -587,16 +656,16 @@ def test_blob_redirect_and_oversize_are_bounded_refusals() -> None:
     )
     redirected = FakeHttpResponse(307, url="https://evil.example/marker")
     with pytest.raises(safe_submit.SafeSubmitError, match="blob_redirect_refused"):
-        _blob_store(FakeOpener([redirected])).read("intent", "012345abcdef")
+        _blob_store(FakeOpener([redirected])).read("intent", REHEARSAL_ID)
     oversized = b"x" * 65_537
     with pytest.raises(safe_submit.MarkerPresentInvalid, match="marker_body_too_large"):
         _blob_store(FakeOpener([FakeHttpResponse(200, oversized)])).read(
-            "intent", "012345abcdef"
+            "intent", REHEARSAL_ID
         )
 
 
 def test_blob_list_is_paginated_and_bounded() -> None:
-    first = b"<EnumerationResults><Blobs><Blob><Name>012345abcdef.json</Name></Blob></Blobs><NextMarker>next page</NextMarker></EnumerationResults>"
+    first = f"<EnumerationResults><Blobs><Blob><Name>{REHEARSAL_ID}.json</Name></Blob></Blobs><NextMarker>next page</NextMarker></EnumerationResults>".encode()
     second = b"<EnumerationResults><Blobs><Blob><Name>fedcba543210.json</Name></Blob></Blobs><NextMarker /></EnumerationResults>"
     list_headers = {"content-type": "application/xml", "x-ms-version": "2021-12-02"}
     opener = FakeOpener(
@@ -606,14 +675,14 @@ def test_blob_list_is_paginated_and_bounded() -> None:
         ]
     )
     assert _blob_store(opener).list_intent_ids() == (
-        "012345abcdef",
+        REHEARSAL_ID,
         "fedcba543210",
     )
     assert "marker=next+page" in opener.requests[1][0].full_url
     overflow = FakeOpener([FakeHttpResponse(200, first, list_headers)])
     with pytest.raises(safe_submit.SafeSubmitError, match="marker_list_bound_exceeded"):
         _blob_store(overflow, marker_list_max_pages=1).list_intent_ids()
-    two = b"<EnumerationResults><Blobs><Blob><Name>012345abcdef.json</Name></Blob><Blob><Name>fedcba543210.json</Name></Blob></Blobs><NextMarker /></EnumerationResults>"
+    two = f"<EnumerationResults><Blobs><Blob><Name>{REHEARSAL_ID}.json</Name></Blob><Blob><Name>fedcba543210.json</Name></Blob></Blobs><NextMarker /></EnumerationResults>".encode()
     with pytest.raises(safe_submit.SafeSubmitError, match="marker_list_bound_exceeded"):
         _blob_store(
             FakeOpener([FakeHttpResponse(200, two, list_headers)]),
@@ -668,7 +737,7 @@ def test_canonical_contract_is_pinned_and_dormant() -> None:
         "workflow_integrated": False,
         "trusted_evidence_binding_implemented": False,
     }
-    assert policy["schema_version"] == 3
+    assert policy["schema_version"] == 4
     assert policy["marker_store"]["kind"] == "azure-blob-immutable-create-only-v1"
     assert policy["marker_store"]["rbac"]["create_read_data_actions"].startswith(
         "CONFIGURE_EXACT_"
@@ -707,6 +776,17 @@ def test_canonical_contract_is_pinned_and_dormant() -> None:
         safe_submit.SafeSubmitError, match="blob_marker_store_not_implemented"
     ):
         engine.submit(_request())
+    engine = _engine(
+        fake,
+        markers,
+        trusted_evidence_binding_implemented=False,
+    )
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="trusted_evidence_binding_unproven"
+    ):
+        engine.submit(_request())
+    assert markers.calls == []
+    assert fake.calls == []
 
 
 @pytest.mark.parametrize("changed", ["envelope", "safe", "both"])
@@ -737,11 +817,12 @@ def test_accepted_restore_persists_both_markers_before_exact_arm_put() -> None:
     assert outcome.status == "ready"
     writes = [call for call in fake.calls if call["method"] == "PUT"]
     assert len(writes) == 1
-    assert markers.calls[:4] == [
-        ("PUT", "intent", "012345abcdef"),
-        ("GET", "cleanup", "012345abcdef"),
-        ("GET", "submission", "012345abcdef"),
-        ("PUT", "submission", "012345abcdef"),
+    assert markers.calls[:5] == [
+        ("GET", "intent", REHEARSAL_ID),
+        ("PUT", "intent", REHEARSAL_ID),
+        ("GET", "cleanup", REHEARSAL_ID),
+        ("GET", "submission", REHEARSAL_ID),
+        ("PUT", "submission", REHEARSAL_ID),
     ]
     restore = writes[0]
     assert restore["api_version"] == "2024-08-01"
@@ -751,9 +832,68 @@ def test_accepted_restore_persists_both_markers_before_exact_arm_put() -> None:
         "publicNetworkAccess": "Disabled"
     }
     assert set(markers.records) == {
-        ("intent", "012345abcdef"),
-        ("submission", "012345abcdef"),
+        ("intent", REHEARSAL_ID),
+        ("submission", REHEARSAL_ID),
     }
+    intent = json.loads(markers.records[("intent", REHEARSAL_ID)])
+    submission = json.loads(markers.records[("submission", REHEARSAL_ID)])
+    assert intent["schema_version"] == 4
+    assert intent["restore_time"] == "2026-09-03T12:00:00Z"
+    assert intent["created_at"] == intent["evidence_binding"]["observed_at"]
+    assert intent["authorization_id"].startswith("sha256:")
+    assert submission["schema_version"] == 4
+    assert submission["intent_sha256"] == outcome.intent_sha256
+    assert restore["body"]["properties"]["pointInTimeUTC"] == intent["restore_time"]
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        _binding(evidence_manifest_policy_sha256=f"sha256:{'f' * 64}"),
+        _binding(source_server_resource_id="/subscriptions/wrong/source"),
+        _binding(source_database_name="other"),
+        _binding(approved_restore_time=datetime(2026, 9, 3, 11, 59, tzinfo=UTC)),
+        _binding(expires_at=datetime(2026, 9, 3, 12, 16, tzinfo=UTC)),
+        _binding(candidate_protected_master_sha="e" * 40),
+        _binding(repository="Other/repository"),
+        _binding(run_id="0"),
+        _binding(attestation_receipt_sha256="not-a-digest"),
+    ],
+)
+def test_invalid_evidence_binding_is_rejected_before_marker_or_arm_access(
+    binding: Any,
+) -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+    engine = _engine(fake, markers)
+    with pytest.raises(safe_submit.SafeSubmitError):
+        engine.submit(_request(binding=binding))
+    assert markers.calls == []
+    assert fake.calls == []
+
+
+def test_raw_evidence_mapping_cannot_cross_the_typed_submit_boundary() -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+    engine = _engine(fake, markers)
+    request = replace(_request(), evidence_binding={})
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="evidence_binding_type_invalid"
+    ):
+        engine.submit(request)
+    assert markers.calls == []
+    assert fake.calls == []
+
+
+def test_rehearsal_id_is_derived_from_the_complete_evidence_authorization() -> None:
+    changed = _binding(provider_receipt_sha256=f"sha256:{'e' * 64}")
+    request = _request(binding=changed, rehearsal_id=REHEARSAL_ID)
+    fake = FakeArm()
+    markers = FakeMarkers()
+    with pytest.raises(safe_submit.SafeSubmitError, match="workflow_identity_invalid"):
+        _engine(fake, markers).submit(request)
+    assert markers.calls == []
+    assert fake.calls == []
 
 
 def test_unknown_submission_never_claims_absence_or_completion() -> None:
@@ -766,9 +906,9 @@ def test_unknown_submission_never_claims_absence_or_completion() -> None:
     assert outcome.target_observed is False
     assert outcome.cleanup_required is True
     assert set(markers.records) == {
-        ("intent", "012345abcdef"),
-        ("submission", "012345abcdef"),
-        ("cleanup", "012345abcdef"),
+        ("intent", REHEARSAL_ID),
+        ("submission", REHEARSAL_ID),
+        ("cleanup", REHEARSAL_ID),
     }
     assert len(_mutations(fake, "PUT")) == 1
     assert _mutations(fake, "DELETE") == []
@@ -787,30 +927,36 @@ def test_expired_fresh_intent_is_rejected_before_any_target_access() -> None:
         sleeper=lambda _: None,
         clock=lambda: datetime(2026, 9, 3, 18, tzinfo=UTC),
     )
-    with pytest.raises(safe_submit.SafeSubmitError, match="intent_expired"):
+    with pytest.raises(safe_submit.SafeSubmitError, match="evidence_expired"):
         engine.submit(_request())
     assert fake.calls == []
-    assert markers.calls == [("GET", "intent", "012345abcdef")]
+    assert markers.calls == [("GET", "intent", REHEARSAL_ID)]
 
 
 @pytest.mark.parametrize(
     ("before_count", "status", "put_count", "delete_count"),
-    [(3, "pending_late_materialization", 0, 0), (4, "cleaned", 1, 1)],
+    [(5, "pending_late_materialization", 0, 0), (8, "cleaned", 1, 1)],
 )
 def test_expiry_at_late_submission_boundaries_enters_cleanup(
     before_count: int, status: str, put_count: int, delete_count: int
 ) -> None:
     fake = FakeArm()
     markers = FakeMarkers()
-    at_expiry = datetime(2026, 9, 3, 18, tzinfo=UTC)
-    times = iter([TEST_NOW] * before_count + [at_expiry])
+    at_expiry = datetime(2026, 9, 3, 12, 10, tzinfo=UTC)
+    clock_calls = 0
+
+    def clock() -> datetime:
+        nonlocal clock_calls
+        clock_calls += 1
+        return TEST_NOW if clock_calls <= before_count else at_expiry
+
     engine = safe_submit.SafeRestoreSubmitter(
-        fake, markers, _config(), sleeper=lambda _: None, clock=lambda: next(times)
+        fake, markers, _config(), sleeper=lambda _: None, clock=clock
     )
-    outcome = engine.submit(_request())
+    outcome = engine.submit(_request(cleanup_not_after=at_expiry))
     assert outcome.status == status
     assert outcome.cleanup_required is (status != "cleaned")
-    assert ("cleanup", "012345abcdef") in markers.records
+    assert ("cleanup", REHEARSAL_ID) in markers.records
     assert len(_mutations(fake, "PUT")) == put_count
     assert len(_mutations(fake, "DELETE")) == delete_count
 
@@ -833,7 +979,7 @@ def test_cleanup_tombstone_wins_restore_put_races(
         def request(self, *args: Any, **kwargs: Any) -> Any:
             method, _resource_id = args
             if mode == "during-put" and method == "PUT":
-                self.markers.records[("cleanup", "012345abcdef")] = (
+                self.markers.records[("cleanup", REHEARSAL_ID)] = (
                     self.markers.cleanup_raw
                 )
             return super().request(*args, **kwargs)
@@ -871,13 +1017,30 @@ def test_retry_reconciles_the_exact_resource_without_a_second_restore_put() -> N
     assert len(markers.records) == 2
 
 
+def test_expired_evidence_retry_reconciles_or_cleans_up_without_a_new_put() -> None:
+    fake = FakeArm()
+    markers = FakeMarkers()
+    assert _engine(fake, markers).submit(_request()).status == "ready"
+    fake.target = None
+    expired = _engine(
+        fake,
+        markers,
+    )
+    expired.clock = lambda: datetime(2026, 9, 3, 12, 15, tzinfo=UTC)
+    outcome = expired.submit(_request())
+    assert outcome.status == "pending_late_materialization"
+    assert outcome.cleanup_required is True
+    assert ("cleanup", REHEARSAL_ID) in markers.records
+    assert len(_mutations(fake, "PUT")) == 1
+
+
 def test_cleanup_tombstone_prevents_a_retry_from_recreating_the_target() -> None:
     fake = FakeArm()
     markers = FakeMarkers()
     engine = _engine(fake, markers)
     ready = engine.submit(_request())
     assert ready.status == "ready"
-    cleaned = engine.cleanup_intent("012345abcdef")
+    cleaned = engine.cleanup_intent(REHEARSAL_ID)
     assert cleaned.status == "cleaned"
     retry = engine.submit(_request())
     assert retry.status == "pending_late_materialization"
@@ -891,9 +1054,9 @@ def test_cleanup_after_intent_before_submission_persists_dominant_tombstone() ->
     markers = FakeMarkers()
     engine = _engine(fake, markers)
     intent = engine._build_intent(_request())
-    markers.records[("intent", "012345abcdef")] = safe_submit._canonical(intent)
-    assert engine.cleanup_intent("012345abcdef").status == "prepared_only"
-    assert ("cleanup", "012345abcdef") in markers.records
+    markers.records[("intent", REHEARSAL_ID)] = safe_submit._canonical(intent)
+    assert engine.cleanup_intent(REHEARSAL_ID).status == "prepared_only"
+    assert ("cleanup", REHEARSAL_ID) in markers.records
     retry = engine.submit(_request())
     assert retry.cleanup_required is True
     assert _mutations(fake, "PUT") == []
@@ -906,7 +1069,7 @@ def test_malformed_cleanup_marker_presence_cancels_submit(
     fake = FakeArm()
     markers = FakeMarkers()
     engine = _engine(fake, markers)
-    key = ("cleanup", "012345abcdef")
+    key = ("cleanup", REHEARSAL_ID)
     if invalid_properties:
         markers.invalid_present.add(key)
     else:
@@ -920,12 +1083,12 @@ def test_malformed_cleanup_marker_presence_cancels_submit(
     assert outcome.cleanup_required is True
     assert _mutations(fake, "PUT") == []
     if invalid_properties:
-        cleanup = engine.cleanup_intent("012345abcdef")
+        cleanup = engine.cleanup_intent(REHEARSAL_ID)
         assert cleanup.status == "cleanup_marker_unproven"
         assert cleanup.cleanup_required is True
 
 
-@pytest.mark.parametrize("tags", [None, {}, {"rehearsal-id": "012345abcdef"}])
+@pytest.mark.parametrize("tags", [None, {}, {"rehearsal-id": REHEARSAL_ID}])
 def test_late_materialization_without_complete_tags_is_isolated_and_deleted(
     tags: dict[str, str] | None,
 ) -> None:
@@ -943,7 +1106,7 @@ def test_late_materialization_without_complete_tags_is_isolated_and_deleted(
         state="Creating",
         include_create_fields=False,
     )
-    cleaned = engine.cleanup_intent("012345abcdef")
+    cleaned = engine.cleanup_intent(REHEARSAL_ID)
     assert cleaned.status == "cleaned"
     assert cleaned.target_observed is True
     assert len(_mutations(fake, "PATCH")) >= 1
@@ -978,7 +1141,7 @@ def test_cleanup_refuses_a_wrong_resource_before_any_mutation(mutate: Any) -> No
     assert fake.target is not None
     mutate(fake.target)
     with pytest.raises(safe_submit.SafeSubmitError):
-        engine.cleanup_intent("012345abcdef")
+        engine.cleanup_intent(REHEARSAL_ID)
     assert _mutations(fake, "PATCH") == []
     assert _mutations(fake, "DELETE") == []
 
@@ -994,7 +1157,7 @@ def test_cleanup_without_a_durable_intent_is_fail_closed() -> None:
         public_access="Enabled",
     )
     with pytest.raises(safe_submit.SafeSubmitError, match="intent_record_missing"):
-        engine.cleanup_intent("012345abcdef")
+        engine.cleanup_intent(REHEARSAL_ID)
     assert _mutations(fake, "PATCH") == []
     assert _mutations(fake, "DELETE") == []
 
@@ -1012,7 +1175,7 @@ def test_isolation_refusal_still_attempts_guarded_deletion() -> None:
         include_create_fields=False,
     )
     fake.patch_status = 403
-    cleaned = engine.cleanup_intent("012345abcdef")
+    cleaned = engine.cleanup_intent(REHEARSAL_ID)
     assert cleaned.status == "cleaned"
     assert len(_mutations(fake, "PATCH")) == 1
     assert len(_mutations(fake, "DELETE")) == 1
@@ -1035,17 +1198,17 @@ def test_unknown_submission_record_never_claims_prepared_only() -> None:
     engine = _engine(fake, markers)
     assert engine.submit(_request()).status == "ready"
     fake.target = None
-    markers.unknown_reads[("submission", "012345abcdef")] = 1
-    outcome = engine.cleanup_intent("012345abcdef")
+    markers.unknown_reads[("submission", REHEARSAL_ID)] = 1
+    outcome = engine.cleanup_intent(REHEARSAL_ID)
     assert outcome.cleanup_required is True
-    assert ("cleanup", "012345abcdef") in markers.records
+    assert ("cleanup", REHEARSAL_ID) in markers.records
     assert _mutations(fake, "DELETE") == []
 
 
 def test_unproven_intent_persistence_blocks_restore_submission() -> None:
     fake = FakeArm()
     markers = FakeMarkers()
-    markers.fail_create_before.add(("intent", "012345abcdef"))
+    markers.fail_create_before.add(("intent", REHEARSAL_ID))
     engine = _engine(fake, markers)
     with pytest.raises(
         safe_submit.SafeSubmitError, match="intent_persistence_unproven"

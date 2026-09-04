@@ -239,30 +239,30 @@ locals {
   marker_read_assignments = {
     provision_cleanup = {
       identity  = "provision"
-      container = "restore-cleanups-v3"
+      container = "restore-cleanups-v4"
     }
     cleanup_intent = {
       identity  = "cleanup"
-      container = "restore-intents-v3"
+      container = "restore-intents-v4"
     }
     cleanup_submission = {
       identity  = "cleanup"
-      container = "restore-submissions-v3"
+      container = "restore-submissions-v4"
     }
   }
 
   marker_create_assignments = {
     provision_intent = {
       identity  = "provision"
-      container = "restore-intents-v3"
+      container = "restore-intents-v4"
     }
     provision_submission = {
       identity  = "provision"
-      container = "restore-submissions-v3"
+      container = "restore-submissions-v4"
     }
     cleanup_cleanup = {
       identity  = "cleanup"
-      container = "restore-cleanups-v3"
+      container = "restore-cleanups-v4"
     }
   }
 }

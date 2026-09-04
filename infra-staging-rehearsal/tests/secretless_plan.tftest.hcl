@@ -165,8 +165,8 @@ run "reversible_control_plane" {
   }
 
   assert {
-    condition     = toset(keys(azapi_resource.marker_container)) == toset(["restore-intents-v3", "restore-submissions-v3", "restore-cleanups-v3", "restore-evidence-v1"])
-    error_message = "All three marker containers and the reserved evidence container must be managed through Azure Resource Manager"
+    condition     = toset(keys(azapi_resource.marker_container)) == toset(["restore-intents-v3", "restore-submissions-v3", "restore-cleanups-v3", "restore-intents-v4", "restore-submissions-v4", "restore-cleanups-v4", "restore-evidence-v1"])
+    error_message = "Both isolated marker namespaces and the reserved evidence container must be managed through Azure Resource Manager"
   }
 
   assert {
@@ -332,7 +332,7 @@ run "approved_prelock_retention_plan" {
   }
 
   assert {
-    condition     = length(azapi_resource_action.marker_legal_hold) == 4 && length(azurerm_storage_container_immutability_policy.marker) == 4
+    condition     = length(azapi_resource_action.marker_legal_hold) == 7 && length(azurerm_storage_container_immutability_policy.marker) == 7
     error_message = "The approved pre-lock retention plan must cover all marker and evidence containers"
   }
 

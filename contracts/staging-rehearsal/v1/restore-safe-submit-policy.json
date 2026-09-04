@@ -1,8 +1,22 @@
 {
-  "schema_version": 3,
-  "policy_id": "cosmaneura-staging-restore-safe-submit-v3",
+  "schema_version": 4,
+  "policy_id": "cosmaneura-staging-restore-safe-submit-v4",
   "envelope_policy_id": "cosmaneura-staging-restore-envelope-v1",
   "envelope_policy_sha256": "sha256:6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92",
+  "evidence_binding": {
+    "schema_version": 1,
+    "policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+    "manifest_policy_id": "cosmaneura-staging-evidence-manifest-v2",
+    "manifest_policy_sha256": "sha256:8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53",
+    "repository": "CosmaNeura/cosmaneura",
+    "protected_ref": "refs/heads/master",
+    "workflow_path": ".github/workflows/staging_restore_rehearsal.yml",
+    "event_name": "workflow_dispatch",
+    "signer_issuer": "https://token.actions.githubusercontent.com",
+    "signer_subject": "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision",
+    "source_database_name": "staging",
+    "maximum_lifetime_seconds": 900
+  },
   "activation": {
     "blob_marker_store_implemented": false,
     "blob_marker_provider_fidelity_proven": false,
@@ -27,9 +41,9 @@
     "oauth_resource": "https://storage.azure.com/",
     "blob_service_version": "2021-12-02",
     "containers": {
-      "intent": "restore-intents-v3",
-      "submission": "restore-submissions-v3",
-      "cleanup": "restore-cleanups-v3"
+      "intent": "restore-intents-v4",
+      "submission": "restore-submissions-v4",
+      "cleanup": "restore-cleanups-v4"
     },
     "blob_name_suffix": ".json",
     "request_timeout_seconds": 30,

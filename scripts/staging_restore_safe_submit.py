@@ -28,16 +28,23 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_ROOT = ROOT / "contracts/staging-rehearsal/v1"
 ENVELOPE_POLICY_PATH = POLICY_ROOT / "restore-envelope-policy.json"
 SAFE_SUBMIT_POLICY_PATH = POLICY_ROOT / "restore-safe-submit-policy.json"
+EVIDENCE_MANIFEST_POLICY_PATH = POLICY_ROOT / "evidence-manifest-policy.json"
 ENVELOPE_POLICY_SHA256 = (
     "6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
 )
 SAFE_SUBMIT_POLICY_SHA256 = (
-    "03923b2479f28e81ff4ec07dd89b3daacd05927761c9b0eebce9d0717bdd85c7"
+    "3e3758a1f3756b5e922b22d4b740d1de0fc2aa8140c07589d7d39369d244a02d"
+)
+EVIDENCE_MANIFEST_POLICY_SHA256 = (
+    "8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53"
 )
 
 REHEARSAL_RE = re.compile(r"^[0-9a-f]{12}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 RUN_RE = re.compile(r"^[1-9][0-9]*$")
+REVISION_RE = re.compile(r"^[0-9a-f]{12}$")
+MANIFEST_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{11,63}$")
 UTC_RE = re.compile(r"^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
 EXPECTED_PLACEHOLDERS = (
@@ -313,6 +320,18 @@ class SafeSubmitConfig:
     policy_id: str
     envelope_policy_id: str
     envelope_policy_sha256: str
+    evidence_binding_schema_version: int
+    evidence_binding_policy_id: str
+    evidence_manifest_policy_id: str
+    evidence_manifest_policy_sha256: str
+    evidence_repository: str
+    evidence_protected_ref: str
+    evidence_workflow_path: str
+    evidence_event_name: str
+    evidence_signer_issuer: str
+    evidence_signer_subject: str
+    evidence_source_database_name: str
+    evidence_maximum_lifetime_seconds: int
     subscription_id: str
     target_group_id: str
     source_server_id: str
@@ -350,6 +369,7 @@ class SafeSubmitConfig:
     blob_marker_store_implemented: bool
     blob_marker_provider_fidelity_proven: bool
     private_runner_binding_implemented: bool
+    trusted_evidence_binding_implemented: bool
 
 
 @dataclass(frozen=True)
@@ -740,10 +760,47 @@ class AzureBlobMarkerStore:
 
 
 @dataclass(frozen=True)
+class RestoreEvidenceBinding:
+    schema_version: int
+    binding_policy_id: str
+    evidence_manifest_policy_id: str
+    evidence_manifest_policy_sha256: str
+    manifest_id: str
+    manifest_file_sha256: str
+    bundle_index_sha256: str
+    evidence_set_sha256: str
+    source_sha: str
+    candidate_sha: str
+    source_server_resource_id: str
+    source_database_name: str
+    approved_restore_time: datetime
+    observed_at: datetime
+    expires_at: datetime
+    candidate_approval_pr_number: int
+    candidate_protected_master_sha: str
+    candidate_schema_revision: str
+    candidate_receipt_sha256: str
+    inventory_receipt_sha256: str
+    quiescence_receipt_sha256: str
+    server_scope_receipt_sha256: str
+    repository: str
+    protected_ref: str
+    workflow_path: str
+    workflow_sha: str
+    run_id: str
+    run_attempt: str
+    event_name: str
+    signer_issuer: str
+    signer_subject: str
+    attestation_receipt_sha256: str
+    provider_receipt_sha256: str
+    server_scope_authentication_receipt_sha256: str
+
+
+@dataclass(frozen=True)
 class RestoreRequest:
     rehearsal_id: str
-    restore_time: datetime
-    created_at: datetime
+    evidence_binding: RestoreEvidenceBinding
     cleanup_not_after: datetime
     repository: str
     workflow_sha: str
@@ -766,18 +823,36 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
         "policy_id",
         "envelope_policy_id",
         "envelope_policy_sha256",
+        "evidence_binding",
         "activation",
         "arm",
         "marker_store",
         "outcomes",
         "retention",
     } or (
-        policy.get("schema_version") != 3
-        or policy.get("policy_id") != "cosmaneura-staging-restore-safe-submit-v3"
+        policy.get("schema_version") != 4
+        or policy.get("policy_id") != "cosmaneura-staging-restore-safe-submit-v4"
         or policy.get("envelope_policy_id") != "cosmaneura-staging-restore-envelope-v1"
         or policy.get("envelope_policy_sha256") != f"sha256:{ENVELOPE_POLICY_SHA256}"
     ):
         _fail("safe_submit_policy_identity_mismatch")
+    if policy.get("evidence_binding") != {
+        "schema_version": 1,
+        "policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+        "manifest_policy_id": "cosmaneura-staging-evidence-manifest-v2",
+        "manifest_policy_sha256": f"sha256:{EVIDENCE_MANIFEST_POLICY_SHA256}",
+        "repository": "CosmaNeura/cosmaneura",
+        "protected_ref": "refs/heads/master",
+        "workflow_path": ".github/workflows/staging_restore_rehearsal.yml",
+        "event_name": "workflow_dispatch",
+        "signer_issuer": "https://token.actions.githubusercontent.com",
+        "signer_subject": (
+            "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision"
+        ),
+        "source_database_name": "staging",
+        "maximum_lifetime_seconds": 900,
+    }:
+        _fail("safe_submit_evidence_policy_mismatch")
     activation = policy.get("activation")
     if (
         not isinstance(activation, dict)
@@ -820,9 +895,9 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
         "oauth_resource": BLOB_OAUTH_RESOURCE,
         "blob_service_version": BLOB_SERVICE_VERSION,
         "containers": {
-            "intent": "restore-intents-v3",
-            "submission": "restore-submissions-v3",
-            "cleanup": "restore-cleanups-v3",
+            "intent": "restore-intents-v4",
+            "submission": "restore-submissions-v4",
+            "cleanup": "restore-cleanups-v4",
         },
         "blob_name_suffix": ".json",
         "request_timeout_seconds": 30,
@@ -918,6 +993,14 @@ def _validate_safe_policy(policy: dict[str, Any], *, executable: bool) -> None:
 def validate_canonical_contracts() -> tuple[dict[str, Any], dict[str, Any]]:
     envelope = _read_object(ENVELOPE_POLICY_PATH, ENVELOPE_POLICY_SHA256)
     safe = _read_object(SAFE_SUBMIT_POLICY_PATH, SAFE_SUBMIT_POLICY_SHA256)
+    evidence = _read_object(
+        EVIDENCE_MANIFEST_POLICY_PATH, EVIDENCE_MANIFEST_POLICY_SHA256
+    )
+    if (
+        evidence.get("schema_version") != 2
+        or evidence.get("policy_id") != "cosmaneura-staging-evidence-manifest-v2"
+    ):
+        _fail("canonical_evidence_policy_identity_mismatch")
     if envelope.get("trusted_evidence_binding_implemented") is not False:
         _fail("canonical_envelope_activation_changed")
     if tuple(sorted(_placeholder_values(envelope))) != EXPECTED_PLACEHOLDERS:
@@ -997,10 +1080,23 @@ def config_from_policies(
     activation = safe["activation"]
     arm = safe["arm"]
     marker = safe["marker_store"]
+    evidence_binding = safe["evidence_binding"]
     return SafeSubmitConfig(
         policy_id=safe["policy_id"],
         envelope_policy_id=envelope["policy_id"],
         envelope_policy_sha256=safe["envelope_policy_sha256"],
+        evidence_binding_schema_version=evidence_binding["schema_version"],
+        evidence_binding_policy_id=evidence_binding["policy_id"],
+        evidence_manifest_policy_id=evidence_binding["manifest_policy_id"],
+        evidence_manifest_policy_sha256=evidence_binding["manifest_policy_sha256"],
+        evidence_repository=evidence_binding["repository"],
+        evidence_protected_ref=evidence_binding["protected_ref"],
+        evidence_workflow_path=evidence_binding["workflow_path"],
+        evidence_event_name=evidence_binding["event_name"],
+        evidence_signer_issuer=evidence_binding["signer_issuer"],
+        evidence_signer_subject=evidence_binding["signer_subject"],
+        evidence_source_database_name=evidence_binding["source_database_name"],
+        evidence_maximum_lifetime_seconds=evidence_binding["maximum_lifetime_seconds"],
         subscription_id=subscription,
         target_group_id=group_id,
         source_server_id=source_id,
@@ -1042,6 +1138,9 @@ def config_from_policies(
         private_runner_binding_implemented=activation[
             "private_runner_binding_implemented"
         ],
+        trusted_evidence_binding_implemented=activation[
+            "trusted_evidence_binding_implemented"
+        ],
     )
 
 
@@ -1081,6 +1180,8 @@ class SafeRestoreSubmitter:
             _fail("blob_marker_provider_fidelity_unproven")
         if not self.config.private_runner_binding_implemented:
             _fail("blob_marker_private_runner_unproven")
+        if not self.config.trusted_evidence_binding_implemented:
+            _fail("trusted_evidence_binding_unproven")
 
     def _request(
         self,
@@ -1103,28 +1204,213 @@ class SafeRestoreSubmitter:
         except ArmOutcomeUnknown:
             return UNKNOWN
 
-    def _validate_request(self, request: RestoreRequest) -> None:
+    @staticmethod
+    def _binding_record(binding: RestoreEvidenceBinding) -> dict[str, Any]:
+        if not isinstance(binding, RestoreEvidenceBinding):
+            _fail("evidence_binding_type_invalid")
+        return {
+            "schema_version": binding.schema_version,
+            "binding_policy_id": binding.binding_policy_id,
+            "evidence_manifest_policy_id": binding.evidence_manifest_policy_id,
+            "evidence_manifest_policy_sha256": binding.evidence_manifest_policy_sha256,
+            "manifest_id": binding.manifest_id,
+            "manifest_file_sha256": binding.manifest_file_sha256,
+            "bundle_index_sha256": binding.bundle_index_sha256,
+            "evidence_set_sha256": binding.evidence_set_sha256,
+            "source_sha": binding.source_sha,
+            "candidate_sha": binding.candidate_sha,
+            "source_server_resource_id": binding.source_server_resource_id,
+            "source_database_name": binding.source_database_name,
+            "approved_restore_time": _iso(binding.approved_restore_time),
+            "observed_at": _iso(binding.observed_at),
+            "expires_at": _iso(binding.expires_at),
+            "candidate_approval_pr_number": binding.candidate_approval_pr_number,
+            "candidate_protected_master_sha": binding.candidate_protected_master_sha,
+            "candidate_schema_revision": binding.candidate_schema_revision,
+            "candidate_receipt_sha256": binding.candidate_receipt_sha256,
+            "inventory_receipt_sha256": binding.inventory_receipt_sha256,
+            "quiescence_receipt_sha256": binding.quiescence_receipt_sha256,
+            "server_scope_receipt_sha256": binding.server_scope_receipt_sha256,
+            "repository": binding.repository,
+            "protected_ref": binding.protected_ref,
+            "workflow_path": binding.workflow_path,
+            "workflow_sha": binding.workflow_sha,
+            "run_id": binding.run_id,
+            "run_attempt": binding.run_attempt,
+            "event_name": binding.event_name,
+            "signer_issuer": binding.signer_issuer,
+            "signer_subject": binding.signer_subject,
+            "attestation_receipt_sha256": binding.attestation_receipt_sha256,
+            "provider_receipt_sha256": binding.provider_receipt_sha256,
+            "server_scope_authentication_receipt_sha256": (
+                binding.server_scope_authentication_receipt_sha256
+            ),
+        }
+
+    def _validate_evidence_record(
+        self, evidence: object, *, require_fresh: bool
+    ) -> tuple[datetime, datetime, datetime]:
+        required = {
+            "schema_version",
+            "binding_policy_id",
+            "evidence_manifest_policy_id",
+            "evidence_manifest_policy_sha256",
+            "manifest_id",
+            "manifest_file_sha256",
+            "bundle_index_sha256",
+            "evidence_set_sha256",
+            "source_sha",
+            "candidate_sha",
+            "source_server_resource_id",
+            "source_database_name",
+            "approved_restore_time",
+            "observed_at",
+            "expires_at",
+            "candidate_approval_pr_number",
+            "candidate_protected_master_sha",
+            "candidate_schema_revision",
+            "candidate_receipt_sha256",
+            "inventory_receipt_sha256",
+            "quiescence_receipt_sha256",
+            "server_scope_receipt_sha256",
+            "repository",
+            "protected_ref",
+            "workflow_path",
+            "workflow_sha",
+            "run_id",
+            "run_attempt",
+            "event_name",
+            "signer_issuer",
+            "signer_subject",
+            "attestation_receipt_sha256",
+            "provider_receipt_sha256",
+            "server_scope_authentication_receipt_sha256",
+        }
+        if not isinstance(evidence, dict) or set(evidence) != required:
+            _fail("evidence_binding_invalid")
+        digests = (
+            "evidence_manifest_policy_sha256",
+            "manifest_file_sha256",
+            "bundle_index_sha256",
+            "evidence_set_sha256",
+            "candidate_receipt_sha256",
+            "inventory_receipt_sha256",
+            "quiescence_receipt_sha256",
+            "server_scope_receipt_sha256",
+            "attestation_receipt_sha256",
+            "provider_receipt_sha256",
+            "server_scope_authentication_receipt_sha256",
+        )
+        approval_pr = evidence["candidate_approval_pr_number"]
+        if (
+            isinstance(evidence["schema_version"], bool)
+            or evidence["schema_version"] != self.config.evidence_binding_schema_version
+            or evidence["binding_policy_id"] != self.config.evidence_binding_policy_id
+            or evidence["evidence_manifest_policy_id"]
+            != self.config.evidence_manifest_policy_id
+            or evidence["evidence_manifest_policy_sha256"]
+            != self.config.evidence_manifest_policy_sha256
+            or not isinstance(evidence["manifest_id"], str)
+            or MANIFEST_ID_RE.fullmatch(evidence["manifest_id"]) is None
+            or any(
+                not isinstance(evidence[field], str)
+                or DIGEST_RE.fullmatch(evidence[field]) is None
+                for field in digests
+            )
+            or any(
+                not isinstance(evidence[field], str)
+                or SHA_RE.fullmatch(evidence[field]) is None
+                for field in (
+                    "source_sha",
+                    "candidate_sha",
+                    "candidate_protected_master_sha",
+                    "workflow_sha",
+                )
+            )
+            or _lower_id(evidence["source_server_resource_id"])
+            != _lower_id(self.config.source_server_id)
+            or evidence["source_database_name"]
+            != self.config.evidence_source_database_name
+            or isinstance(approval_pr, bool)
+            or not isinstance(approval_pr, int)
+            or approval_pr <= 0
+            or not isinstance(evidence["candidate_schema_revision"], str)
+            or REVISION_RE.fullmatch(evidence["candidate_schema_revision"]) is None
+            or evidence["candidate_protected_master_sha"] != evidence["workflow_sha"]
+            or evidence["repository"] != self.config.evidence_repository
+            or evidence["protected_ref"] != self.config.evidence_protected_ref
+            or evidence["workflow_path"] != self.config.evidence_workflow_path
+            or evidence["event_name"] != self.config.evidence_event_name
+            or evidence["signer_issuer"] != self.config.evidence_signer_issuer
+            or evidence["signer_subject"] != self.config.evidence_signer_subject
+            or not isinstance(evidence["run_id"], str)
+            or RUN_RE.fullmatch(evidence["run_id"]) is None
+            or not isinstance(evidence["run_attempt"], str)
+            or RUN_RE.fullmatch(evidence["run_attempt"]) is None
+        ):
+            _fail("evidence_binding_invalid")
+        restore = _parse_utc(
+            evidence["approved_restore_time"], "evidence_binding_invalid"
+        )
+        observed = _parse_utc(evidence["observed_at"], "evidence_binding_invalid")
+        expires = _parse_utc(evidence["expires_at"], "evidence_binding_invalid")
+        if (
+            restore != observed
+            or expires <= observed
+            or (expires - observed).total_seconds()
+            > self.config.evidence_maximum_lifetime_seconds
+        ):
+            _fail("evidence_binding_invalid")
+        if require_fresh:
+            now = self._trusted_now()
+            if observed > now:
+                _fail("evidence_observed_in_future")
+            if now >= expires:
+                _fail("evidence_expired")
+        return restore, observed, expires
+
+    def _authorization_id(self, evidence: dict[str, Any]) -> str:
+        payload = {
+            "schema_version": 1,
+            "safe_submit_policy_id": self.config.policy_id,
+            "evidence_binding": evidence,
+        }
+        return f"sha256:{_sha256(_canonical(payload))}"
+
+    def _validate_request(
+        self, request: RestoreRequest, *, require_fresh: bool = True
+    ) -> dict[str, Any]:
         if not REHEARSAL_RE.fullmatch(request.rehearsal_id):
             _fail("rehearsal_id_invalid")
+        evidence = self._binding_record(request.evidence_binding)
+        _restore, created, _expires = self._validate_evidence_record(
+            evidence, require_fresh=require_fresh
+        )
         if (
-            request.repository != "CosmaNeura/cosmaneura"
+            request.rehearsal_id
+            != self._authorization_id(evidence).removeprefix("sha256:")[:12]
+            or request.repository != evidence["repository"]
+            or request.workflow_sha != evidence["workflow_sha"]
+            or request.run_id != evidence["run_id"]
+            or request.run_attempt != evidence["run_attempt"]
             or not SHA_RE.fullmatch(request.workflow_sha)
             or not RUN_RE.fullmatch(request.run_id)
             or not RUN_RE.fullmatch(request.run_attempt)
         ):
             _fail("workflow_identity_invalid")
-        created = _parse_utc(_iso(request.created_at), "created_at_invalid")
-        restore = _parse_utc(_iso(request.restore_time), "restore_time_invalid")
         cleanup = _parse_utc(
             _iso(request.cleanup_not_after), "cleanup_not_after_invalid"
         )
-        if restore > created or cleanup <= created:
+        if cleanup <= created:
             _fail("restore_timeline_invalid")
         if (cleanup - created).total_seconds() > self.config.maximum_ttl_hours * 3600:
             _fail("cleanup_deadline_out_of_range")
+        return evidence
 
-    def _build_intent(self, request: RestoreRequest) -> dict[str, Any]:
-        self._validate_request(request)
+    def _build_intent(
+        self, request: RestoreRequest, *, require_fresh: bool = True
+    ) -> dict[str, Any]:
+        evidence = self._validate_request(request, require_fresh=require_fresh)
         cleanup_epoch = int(request.cleanup_not_after.timestamp())
         base = f"{self.config.name_prefix}-{request.rehearsal_id}-e{cleanup_epoch}"
         target_name = f"{base}-pg"
@@ -1139,10 +1425,12 @@ class SafeRestoreSubmitter:
             "rehearsal-id": request.rehearsal_id,
         }
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "policy_id": self.config.policy_id,
             "envelope_policy_id": self.config.envelope_policy_id,
             "envelope_policy_sha256": self.config.envelope_policy_sha256,
+            "authorization_id": self._authorization_id(evidence),
+            "evidence_binding": evidence,
             "rehearsal_id": request.rehearsal_id,
             "source_server_resource_id": self.config.source_server_id,
             "provision_client_id": self.config.provision_client_id,
@@ -1150,8 +1438,8 @@ class SafeRestoreSubmitter:
             "target_server_resource_id": target_id,
             "target_server_name": target_name,
             "location": self.config.location,
-            "restore_time": _iso(request.restore_time),
-            "created_at": _iso(request.created_at),
+            "restore_time": evidence["approved_restore_time"],
+            "created_at": evidence["observed_at"],
             "cleanup_not_after": _iso(request.cleanup_not_after),
             "repository": request.repository,
             "workflow_sha": request.workflow_sha,
@@ -1215,6 +1503,8 @@ class SafeRestoreSubmitter:
             "policy_id",
             "envelope_policy_id",
             "envelope_policy_sha256",
+            "authorization_id",
+            "evidence_binding",
             "rehearsal_id",
             "source_server_resource_id",
             "provision_client_id",
@@ -1232,7 +1522,7 @@ class SafeRestoreSubmitter:
             "required_tags",
         }
         if set(intent) != required or (
-            intent.get("schema_version") != 3
+            intent.get("schema_version") != 4
             or intent.get("policy_id") != self.config.policy_id
             or intent.get("envelope_policy_id") != self.config.envelope_policy_id
             or intent.get("envelope_policy_sha256")
@@ -1246,11 +1536,27 @@ class SafeRestoreSubmitter:
             or _location(intent.get("location")) != _location(self.config.location)
         ):
             _fail("intent_record_invalid")
+        evidence = intent.get("evidence_binding")
+        self._validate_evidence_record(evidence, require_fresh=False)
+        assert isinstance(evidence, dict)
         created = _parse_utc(intent.get("created_at"), "intent_record_invalid")
         cleanup = _parse_utc(intent.get("cleanup_not_after"), "intent_record_invalid")
-        _parse_utc(intent.get("restore_time"), "intent_record_invalid")
+        restore = _parse_utc(intent.get("restore_time"), "intent_record_invalid")
         if (
-            cleanup <= created
+            restore
+            != _parse_utc(evidence["approved_restore_time"], "intent_record_invalid")
+            or created != _parse_utc(evidence["observed_at"], "intent_record_invalid")
+            or intent.get("authorization_id") != self._authorization_id(evidence)
+            or _lower_id(intent.get("source_server_resource_id"))
+            != _lower_id(evidence["source_server_resource_id"])
+            or intent.get("repository") != evidence["repository"]
+            or intent.get("workflow_sha") != evidence["workflow_sha"]
+            or intent.get("run_id") != evidence["run_id"]
+            or intent.get("run_attempt") != evidence["run_attempt"]
+            or rehearsal_id
+            != self._authorization_id(evidence).removeprefix("sha256:")[:12]
+            or restore > created
+            or cleanup <= created
             or (cleanup - created).total_seconds()
             > self.config.maximum_ttl_hours * 3600
         ):
@@ -1289,12 +1595,20 @@ class SafeRestoreSubmitter:
         cleanup = _parse_utc(intent.get("cleanup_not_after"), "intent_record_invalid")
         return cleanup <= now
 
+    def _evidence_expired(self, intent: dict[str, Any]) -> bool:
+        evidence = intent.get("evidence_binding")
+        self._validate_evidence_record(evidence, require_fresh=False)
+        assert isinstance(evidence, dict)
+        return _parse_utc(evidence["expires_at"], "intent_record_invalid") <= (
+            self._trusted_now()
+        )
+
     def _submission_record(
         self, intent: dict[str, Any], intent_digest: str
     ) -> dict[str, Any]:
         body = self._restore_body(intent, intent_digest)
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "kind": "restore-submission-authorized",
             "policy_id": self.config.policy_id,
             "rehearsal_id": intent["rehearsal_id"],
@@ -1308,7 +1622,7 @@ class SafeRestoreSubmitter:
         self, intent: dict[str, Any], intent_digest: str
     ) -> dict[str, Any]:
         return {
-            "schema_version": 3,
+            "schema_version": 4,
             "kind": "restore-cleanup-authorized",
             "policy_id": self.config.policy_id,
             "rehearsal_id": intent["rehearsal_id"],
@@ -1620,17 +1934,22 @@ class SafeRestoreSubmitter:
 
     def submit(self, request: RestoreRequest) -> SubmitOutcome:
         self._require_marker_fidelity()
-        expected = self._build_intent(request)
-        if self._intent_expired(expected):
-            existing_intent = self._read_marker("intent", request.rehearsal_id)
-            if existing_intent is UNKNOWN:
-                _fail("intent_record_read_unknown")
-            if existing_intent is None:
+        expected = self._build_intent(request, require_fresh=False)
+        existing_intent = self._read_marker("intent", request.rehearsal_id)
+        if existing_intent is UNKNOWN:
+            _fail("intent_record_read_unknown")
+        if existing_intent is None:
+            self._validate_evidence_record(
+                expected["evidence_binding"], require_fresh=True
+            )
+            if self._intent_expired(expected):
                 _fail("intent_expired")
+            if self._evidence_expired(expected):
+                _fail("evidence_expired")
+            intent = self._ensure_marker("intent", request.rehearsal_id, expected)
+        else:
             assert isinstance(existing_intent, dict)
             intent = existing_intent
-        else:
-            intent = self._ensure_marker("intent", request.rehearsal_id, expected)
         self._validate_intent(intent, request.rehearsal_id)
         if intent != expected:
             _fail("intent_record_conflict")
@@ -1658,6 +1977,8 @@ class SafeRestoreSubmitter:
             _fail("target_preflight_unknown")
         if isinstance(target, ArmResponse) and existing_submission != submission:
             return self._cleanup_target(intent, intent_digest)
+        if target is None and self._evidence_expired(intent):
+            return self._cleanup_target(intent, intent_digest)
         try:
             self._ensure_marker("submission", request.rehearsal_id, submission)
         except (MarkerConflict, MarkerPresentInvalid):
@@ -1669,6 +1990,8 @@ class SafeRestoreSubmitter:
             return self._cleanup_target(intent, intent_digest)
         cleanup_requested = self._cleanup_requested(intent, intent_digest)
         if cleanup_requested is not False:
+            return self._cleanup_target(intent, intent_digest)
+        if self._evidence_expired(intent):
             return self._cleanup_target(intent, intent_digest)
         if self._intent_expired(intent):
             return self._cleanup_target(intent, intent_digest)
