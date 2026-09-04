@@ -48,8 +48,10 @@ Runtime pins must name a job UAMI, never a caller or broker. Current Terraform m
 cleanup-marker read only and three create assignments. A separate change must add the
 fourth provision cleanup-tombstone create assignment and safe-submit correction for partial or
 unknown outcomes; cleanup remains the only resource deleter. Start requires atomic replay consumption,
-exact API query/body, and authenticated observations. The broker signs the receipt; the job derives
-its immutable path from `CONTAINER_APP_JOB_EXECUTION_NAME`, with no listing/current pointer.
+exact `/start` URL/query/body, and authenticated observations. Without reading runtime blobs or
+secrets, the broker binds the equal observed pointers and signs canonical receipt bytes. The job
+derives the immutable receipt path directly from `CONTAINER_APP_JOB_EXECUTION_NAME`, authenticates
+those bytes, then locally validates the referenced launch/runtime records and their cross-binding.
 Current dispatcher subscription `control_reader` assignments must also be removed or re-homed
 before the contract's exact-job-only, `other_role_assignment_ids: []` boundary can pass.
 
@@ -77,8 +79,11 @@ before the contract's exact-job-only, `other_role_assignment_ids: []` boundary c
 `activation_ready` and these assertions remain false: `runtime_record_published`,
 `runtime_record_signature_verified`, `private_runtime_record_ingress_bound`,
 `runtime_record_publication_authority_bound`,
-`private_registry_binding_implemented`, `dispatcher_job_control_bound`,
-`job_start_override_prevention_proven`, `job_identity_attachments_bound`,
+`private_registry_binding_implemented`, `broker_oidc_authentication_bound`,
+`broker_exact_job_observation_bound`, `broker_job_control_bound`,
+`job_start_override_prevention_proven`, `job_start_no_retry_semantics_proven`,
+`immutable_launch_record_mailbox_bound`, `launch_receipt_binding_implemented`,
+`job_identity_attachments_bound`,
 `private_evidence_ingress_bound`,
 `private_secret_ingress_bound`, `private_marker_store_binding_implemented`, `explicit_egress_bound`,
 `offline_verifier_containment_proven`, `target_private_endpoint_binding_implemented`,

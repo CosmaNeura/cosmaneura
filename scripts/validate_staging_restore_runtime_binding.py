@@ -27,7 +27,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "9111b25f790de3e45c31a389185720f553e44742729a0ed18e78ae35ec266dd0"
+CANONICAL_POLICY_SHA256 = "c38fa843c8254609918e861b451b22940a299f221e7709afe1b7a22a7ad16e09"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -75,6 +75,13 @@ ACTIVATION = (
     ("workflow_integrated", "workflow_integration_unimplemented"),
     ("restore_activation_authorized", "restore_activation_unimplemented"),
 )
+IMPLEMENTATION_PATHS = {
+    ("launch_binding", "mailbox", "implemented"),
+    ("launch_binding", "broker_request_authentication", "replay_store", "implemented"),
+    ("launch_binding", "receipt_signing", "implemented"),
+    ("launch_binding", "mailbox", "execution_receipt_handoff", "execution_name_source_adapter_implemented"),
+    ("launch_binding", "mailbox", "execution_receipt_handoff", "platform_source_validation", "adapter_implemented"),
+}
 RUNTIME_RECORD_FIELDS = (
     "schema_version",
     "record_id",
@@ -236,7 +243,7 @@ def _pin_kind(placeholder: str) -> str:
 
 def _shape(value: Any, template: Any, path: tuple[str, ...] = ()) -> None:
     code = "policy." + ".".join(path or ("closed_world",))
-    if path == ("activation_ready",) or (len(path) == 2 and path[0] == "activation"):
+    if path == ("activation_ready",) or (len(path) == 2 and path[0] == "activation") or path in IMPLEMENTATION_PATHS:
         if type(value) is not bool:
             _fail(code)
         return
@@ -373,6 +380,15 @@ def _activation(policy: dict[str, Any], *, executable: bool) -> None:
     blockers = [] if ready else ["restore_runtime_binding_policy_disabled"]
     blockers.extend(blocker for name, blocker in ACTIVATION if not activation[name])
     _exact(policy["activation_blockers"], blockers, "activation_blockers")
+    launch = policy["launch_binding"]
+    handoff = launch["mailbox"]["execution_receipt_handoff"]
+    implementations = {
+        "broker_oidc_authentication_bound": (launch["broker_request_authentication"]["replay_store"]["implemented"],),
+        "immutable_launch_record_mailbox_bound": (launch["mailbox"]["implemented"],),
+        "launch_receipt_binding_implemented": (launch["receipt_signing"]["implemented"], handoff["execution_name_source_adapter_implemented"], handoff["platform_source_validation"]["adapter_implemented"]),
+    }
+    if any(any(type(value) is not bool for value in values) or activation[name] and not all(values) for name, values in implementations.items()):
+        _fail("activation.implementation")
     if executable and not ready:
         _fail("policy.not_activated")
 
@@ -445,7 +461,7 @@ def _cross_bind(policy: dict[str, Any]) -> None:
     clients.append(publisher["client_id"])
     principals.append(publisher["principal_id"])
     role_assignments.append(publisher["role_assignment_id"])
-    if len(set((*resources, *role_assignments))) != len(resources) + len(role_assignments) or len(set((*clients, *principals))) != len(clients) + len(principals):
+    if len({value.casefold() for value in (*resources, *role_assignments)}) != len(resources) + len(role_assignments) or len(set((*clients, *principals))) != len(clients) + len(principals):
         _fail("identities.distinct")
     if (
         blob["allowed_job_identity_resource_ids"] != [provision_id]
@@ -474,11 +490,11 @@ def _cross_bind(policy: dict[str, Any]) -> None:
             "cleanup_submission": cleanup_identity["role_assignment_ids"]["marker_submission_read"],
             "cleanup_cleanup": cleanup_identity["role_assignment_ids"]["cleanup_tombstone_create"],
         }
-        or blob["account_resource_id"] == marker["account_resource_id"]
+        or blob["account_resource_id"].casefold() == marker["account_resource_id"].casefold()
         or blob["account_host"] == marker["account_host"]
-        or runtime_ingress["account_resource_id"] == marker["account_resource_id"]
+        or runtime_ingress["account_resource_id"].casefold() == marker["account_resource_id"].casefold()
         or runtime_ingress["account_host"] == marker["account_host"]
-        or len({blob["container_resource_id"], runtime_ingress["container_resource_id"], *marker["container_resource_ids"].values(), *mailbox["container_resource_ids"].values()}) != 7
+        or len({value.casefold() for value in (blob["container_resource_id"], runtime_ingress["container_resource_id"], *marker["container_resource_ids"].values(), *mailbox["container_resource_ids"].values())}) != 7
         or runtime_ingress["role_assignment_ids"]["provision"] != provision_identity["role_assignment_ids"].get("runtime_binding_reader")
         or runtime_ingress["role_assignment_ids"]["cleanup"] != cleanup_identity["role_assignment_ids"].get("runtime_binding_reader")
         or mailbox["role_assignment_ids"]["provision_job_read"] != provision_identity["role_assignment_ids"].get("launch_mailbox_read")
@@ -487,9 +503,12 @@ def _cross_bind(policy: dict[str, Any]) -> None:
         or mailbox["role_assignment_ids"]["cleanup_broker_create"] != identities["brokers"]["cleanup"]["launch_mailbox_create_role_assignment_id"]
         or mailbox["role_scopes"] != {"provision_broker_create": mailbox["container_resource_ids"]["provision"], "cleanup_broker_create": mailbox["container_resource_ids"]["cleanup"], "provision_job_read": mailbox["container_resource_ids"]["provision"], "cleanup_job_read": mailbox["container_resource_ids"]["cleanup"]}
         or mailbox["role_assignment_role_definition_ids"] != {"provision_broker_create": mailbox["role_definitions"]["broker_create"]["role_definition_id"], "cleanup_broker_create": mailbox["role_definitions"]["broker_create"]["role_definition_id"], "provision_job_read": mailbox["role_definitions"]["job_read"]["role_definition_id"], "cleanup_job_read": mailbox["role_definitions"]["job_read"]["role_definition_id"]}
+        or launch["receipt_signing"]["role_definition"]["data_actions"] != [launch["receipt_signing"]["broker_sign_action"]]
+        or any(launch["receipt_signing"]["role_definition"][name] for name in ("actions", "not_actions", "not_data_actions"))
+        or launch["receipt_signing"]["broker_role_assignment_role_definition_ids"] != dict.fromkeys(("provision", "cleanup"), launch["receipt_signing"]["role_definition"]["role_definition_id"])
         or len(set(mailbox["container_names"].values())) != 2
         or len(set(mailbox["container_resource_ids"].values())) != 2
-        or mailbox["account_resource_id"] in {blob["account_resource_id"], runtime_ingress["account_resource_id"], marker["account_resource_id"]}
+        or mailbox["account_resource_id"].casefold() in {value.casefold() for value in (blob["account_resource_id"], runtime_ingress["account_resource_id"], marker["account_resource_id"])}
         or mailbox["account_host"] in {blob["account_host"], runtime_ingress["account_host"], marker["account_host"]}
         or registry["acrpull_role_assignment_ids"]["provision"] != provision_identity["role_assignment_ids"]["registry_pull"]
         or registry["acrpull_role_assignment_ids"]["cleanup"] != cleanup_identity["role_assignment_ids"]["registry_pull"]
@@ -579,6 +598,25 @@ class ExternalRuntimeBindingReference:
         _fail("runtime_record.reference_invalid")
 
     @classmethod
+    def _from_values(cls, source_job_kind: str, source_job_resource_id: str, values: dict[str, str]) -> ExternalRuntimeBindingReference:
+        if cls is not ExternalRuntimeBindingReference or source_job_kind not in ("provision", "cleanup"):
+            _fail("runtime_record.reference_invalid")
+        _pin(source_job_resource_id, "resource_id", "runtime_record.reference_invalid")
+        if PLACEHOLDER_RE.fullmatch(source_job_resource_id):
+            _fail("runtime_record.reference_invalid")
+        for name in RUNTIME_REFERENCE_FIELDS:
+            _pin(values.get(name), "https_uri" if name.endswith("uri") else "digest", "runtime_record.reference_invalid")
+            if PLACEHOLDER_RE.fullmatch(values[name]):
+                _fail("runtime_record.reference_invalid")
+        result = object.__new__(cls)
+        object.__setattr__(result, "source_job_kind", source_job_kind)
+        object.__setattr__(result, "source_job_resource_id", source_job_resource_id)
+        for name in RUNTIME_REFERENCE_FIELDS:
+            object.__setattr__(result, name, values[name])
+        object.__setattr__(result, "_seal", _RUNTIME_REFERENCE_SEAL)
+        return result
+
+    @classmethod
     def _from_authenticated_job_observation(
         cls,
         observation: Any,
@@ -597,25 +635,22 @@ class ExternalRuntimeBindingReference:
             or not observation._is_authenticated()
         ):
             _fail("runtime_record.reference_invalid")
-        source_job_kind = observation.job_kind
-        source_job_resource_id = observation.job_resource_id
-        values = dict(observation.runtime_reference)
-        if source_job_kind not in {"provision", "cleanup"}:
+        return cls._from_values(observation.job_kind, observation.job_resource_id, dict(observation.runtime_reference))
+
+    @classmethod
+    def _from_authenticated_broker_launch_receipt(cls, policy: Any, receipt: Any, *, source_job_kind: str) -> ExternalRuntimeBindingReference:
+        """Recreate a job-local pointer solely from authenticated receipt bytes."""
+
+        try:
+            from scripts import (
+                validate_staging_restore_launch_binding as launch_binding,
+            )
+        except ModuleNotFoundError:
+            import validate_staging_restore_launch_binding as launch_binding
+        document = validate_runtime_binding_policy(policy, executable=True)
+        if type(receipt) is not launch_binding.AuthenticatedBrokerLaunchReceipt or getattr(receipt, "_seal", None) is not launch_binding._AUTHENTICATED_RECEIPT_SEAL or source_job_kind not in ("provision", "cleanup"):
             _fail("runtime_record.reference_invalid")
-        _pin(source_job_resource_id, "resource_id", "runtime_record.reference_invalid")
-        if PLACEHOLDER_RE.fullmatch(source_job_resource_id):
-            _fail("runtime_record.reference_invalid")
-        for name in RUNTIME_REFERENCE_FIELDS:
-            _pin(values[name], "https_uri" if name.endswith("uri") else "digest", "runtime_record.reference_invalid")
-            if PLACEHOLDER_RE.fullmatch(values[name]):
-                _fail("runtime_record.reference_invalid")
-        result = object.__new__(cls)
-        object.__setattr__(result, "source_job_kind", source_job_kind)
-        object.__setattr__(result, "source_job_resource_id", source_job_resource_id)
-        for name in RUNTIME_REFERENCE_FIELDS:
-            object.__setattr__(result, name, values[name])
-        object.__setattr__(result, "_seal", _RUNTIME_REFERENCE_SEAL)
-        return result
+        return cls._from_values(source_job_kind, document["runtime"]["jobs"][source_job_kind]["resource_id"], dict(receipt.runtime_reference))
 
     def _is_bound(self) -> bool:
         return type(self) is ExternalRuntimeBindingReference and getattr(self, "_seal", None) is _RUNTIME_REFERENCE_SEAL

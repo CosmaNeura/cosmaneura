@@ -61,7 +61,7 @@
     "restore_runtime_binding": {
       "path": "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json",
       "policy_id": "cosmaneura-staging-restore-runtime-binding-v1",
-      "sha256": "sha256:9111b25f790de3e45c31a389185720f553e44742729a0ed18e78ae35ec266dd0"
+      "sha256": "sha256:c38fa843c8254609918e861b451b22940a299f221e7709afe1b7a22a7ad16e09"
     }
   },
   "entrypoints": {
@@ -173,6 +173,7 @@
     ],
     "stage_order": [
       "validate_staging_restore_launch_binding.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter",
+      "validate_staging_restore_runtime_binding.ExternalRuntimeBindingReference._from_authenticated_broker_launch_receipt",
       "validate_staging_restore_launch_binding.validate_launch_record",
       "validate_staging_restore_runtime_binding.validate_external_runtime_binding",
       "validate_staging_restore_launch_binding.validate_received_launch_receipt",
@@ -212,7 +213,7 @@
     "runtime": {
       "implemented": false,
       "policy_pin": "policy_pins.restore_runtime_binding",
-      "external_record_source": "authenticated_exact_container_app_job_get_observations",
+      "external_record_source": "authenticated_broker_launch_receipt_runtime_pointer",
       "image_digest_source": "verified_external_runtime_record",
       "caller_override_permitted": false
     },

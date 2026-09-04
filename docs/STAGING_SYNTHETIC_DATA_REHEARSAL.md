@@ -145,10 +145,8 @@ flight plan](flight-plans/2026-09-04-staging-restore-runtime-binding.md).
 All assertions remain false and no runtime consumes this evidence.
 
 Exact job GETs prove four equal pointers, pinned UAMI IDs, and closed-world templates. A verified
-allowlisted `workflow_ref`/`workflow_sha` JWT projection is atomically consumed before one exact-version, zero-body start. The broker
-signs canonical receipt bytes; the job derives their immutable mailbox path from
-its platform execution name, polling only that object for at most 60 seconds, and verifies all runtime pointers before reading the launch
-record. Replay, mailbox, signing, and broker adapters remain blocked.
+allowlisted `workflow_ref`/`workflow_sha` JWT projection is atomically consumed once per issuer/JTI before one exact-URL, exact-version, zero-body start. Without runtime-blob or secret access, the broker signs canonical receipt bytes derived from both job observations. The job derives their immutable mailbox path directly from
+its platform execution name, polls only that object for at most 60 seconds, authenticates it, then validates the referenced launch/runtime records and their cross-binding. Replay, mailbox, signing, and broker adapters remain blocked.
 
 Sanitization remains blocked until a second per-rehearsal PostgreSQL private
 endpoint in `10.76.0.64/27` and exact private DNS reach only the restored FQDN,

@@ -44,9 +44,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "0337b9a9edcd66a219dad628e47afdd30ba56a6b8a97cb48b1615fdd79f4912f"
+POLICY_SHA256 = "1af5ae9a68bb38a9b545ef6df7eae81b0d280679712fb340158e5b8c7eb26612"
 POLICY_TEMPLATE_SHA256 = (
-    "0c6fa4c4e150ae60d04c3736a756bb52a35d85c8deaa74601f5a86f39dca830f"
+    "e19d2858bf11d0c113a87acba43293cce054356959e69c37d9197fea12b5b544"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -235,9 +235,63 @@ def validate_executor_policy(policy: Any, *, executable: bool) -> Mapping[str, A
         or any(type(value) is not bool for value in activation.values())
     ):
         _fail("executor_policy.invalid")
+    adapters = policy.get("adapters")
+    if not isinstance(adapters, Mapping) or any(
+        not isinstance(adapters.get(name), Mapping)
+        for name in (
+            "runtime",
+            "launch_binding",
+            "source_provider",
+            "offline_attestation_verifier",
+            "safe_submit",
+        )
+    ):
+        _fail("executor_policy.invalid")
+    launch_adapter = adapters["launch_binding"]
+    implementation_bindings = {
+        "runtime_adapter_implemented": adapters["runtime"].get("implemented"),
+        "launch_binding_validator_implemented": launch_adapter.get("implemented"),
+        "launch_mailbox_adapter_implemented": launch_adapter.get(
+            "mailbox_transport_implemented"
+        ),
+        "launch_broker_adapter_implemented": launch_adapter.get(
+            "broker_adapter_implemented"
+        ),
+        "launch_receipt_validation_integrated": launch_adapter.get(
+            "launch_receipt_integration_implemented"
+        ),
+        "source_provider_adapter_implemented": adapters["source_provider"].get(
+            "implemented"
+        ),
+        "offline_attestation_verifier_adapter_implemented": adapters[
+            "offline_attestation_verifier"
+        ].get("implemented"),
+        "safe_submit_adapter_implemented": adapters["safe_submit"].get("implemented"),
+    }
+    if any(
+        type(value) is not bool or activation[name] is not value
+        for name, value in implementation_bindings.items()
+    ):
+        _fail("executor_policy.invalid")
     normalized = dict(policy)
     normalized["activation_ready"] = False
     normalized["activation"] = dict.fromkeys(activation, False)
+    normalized["adapters"] = {name: dict(value) for name, value in adapters.items()}
+    normalized_launch = normalized["adapters"]["launch_binding"]
+    for name in (
+        "runtime",
+        "source_provider",
+        "offline_attestation_verifier",
+        "safe_submit",
+    ):
+        normalized["adapters"][name]["implemented"] = False
+    for name in (
+        "implemented",
+        "mailbox_transport_implemented",
+        "broker_adapter_implemented",
+        "launch_receipt_integration_implemented",
+    ):
+        normalized_launch[name] = False
     if hashlib.sha256(_canonical(normalized)).hexdigest() != POLICY_TEMPLATE_SHA256:
         _fail("executor_policy.invalid")
     output = policy.get("output")

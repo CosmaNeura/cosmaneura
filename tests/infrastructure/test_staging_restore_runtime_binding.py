@@ -34,6 +34,13 @@ def _activated(policy: dict[str, Any]) -> dict[str, Any]:
     policy["activation_ready"] = True
     policy["activation"] = dict.fromkeys(policy["activation"], True)
     policy["activation_blockers"] = []
+    launch = policy["launch_binding"]
+    launch["mailbox"]["implemented"] = True
+    launch["broker_request_authentication"]["replay_store"]["implemented"] = True
+    launch["receipt_signing"]["implemented"] = True
+    handoff = launch["mailbox"]["execution_receipt_handoff"]
+    handoff["execution_name_source_adapter_implemented"] = True
+    handoff["platform_source_validation"]["adapter_implemented"] = True
     return policy
 
 
@@ -582,6 +589,14 @@ def test_executable_mode_rejects_dormancy_then_placeholders() -> None:
     with pytest.raises(binding.RuntimeBindingFailure, match="policy.placeholders"):
         binding.validate_policy(activated, executable=True)
 
+    for path in binding.IMPLEMENTATION_PATHS:
+        inconsistent = _activated(_policy())
+        _at(inconsistent, path[:-1])[path[-1]] = False
+        with pytest.raises(
+            binding.RuntimeBindingFailure, match="activation.implementation"
+        ):
+            binding.validate_policy(inconsistent, executable=True)
+
 
 def test_fully_pinned_activated_fixture_passes_executable_checks() -> None:
     configured = _configured_policy()
@@ -627,6 +642,34 @@ def test_fully_pinned_activated_fixture_passes_executable_checks() -> None:
                 policy["identities"]["jobs"]["provision"]["resource_id"],
             ),
             "identities.distinct",
+        ),
+        (
+            lambda policy: policy["launch_binding"]["mailbox"][
+                "container_resource_ids"
+            ].__setitem__(
+                "provision",
+                policy["runtime_record_ingress"]["container_resource_id"].replace(
+                    "/runtime/", "/RUNTIME/"
+                ),
+            ),
+            "evidence_ingress.binding",
+        ),
+        (
+            lambda policy: policy["runtime_record_ingress"]["publisher"].__setitem__(
+                "identity_resource_id",
+                policy["identities"]["jobs"]["provision"]["resource_id"].replace(
+                    "/runtime/", "/RUNTIME/"
+                ),
+            ),
+            "identities.distinct",
+        ),
+        (
+            lambda policy: policy["launch_binding"]["receipt_signing"][
+                "broker_role_assignment_role_definition_ids"
+            ].__setitem__(
+                "cleanup", policy["identities"]["jobs"]["cleanup"]["resource_id"]
+            ),
+            "evidence_ingress.binding",
         ),
         (
             lambda policy: policy["private_registry"].__setitem__(
@@ -730,6 +773,8 @@ def test_external_record_is_content_addressed_signed_and_sealed() -> None:
         binding.VerifiedExternalRuntimeRecordSignature()
     with pytest.raises(binding.RuntimeBindingFailure):
         binding.ExternalRuntimeBindingReference()
+    with pytest.raises(binding.RuntimeBindingFailure, match="reference_invalid"):
+        binding.ExternalRuntimeBindingReference._from_values([], "invalid", {})  # type: ignore[arg-type]
 
 
 def test_external_record_rejects_unsealed_signature_and_circular_layout() -> None:
