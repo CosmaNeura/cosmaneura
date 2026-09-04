@@ -33,7 +33,7 @@ denv "$CURSOR_UV_BIN" run --no-sync playwright install chromium
 
 echo "== [install] javascript deps (pnpm) =="
 # shellcheck disable=SC2016
-denv /usr/bin/env PATH="$(/usr/bin/dirname "$CURSOR_NODE_BIN"):/usr/local/bin:/usr/bin:/bin" \
+denv /usr/bin/env PATH="${CURSOR_CREDENTIAL_SCRIPT_DIR}/credential-neutral-bin:$(/usr/bin/dirname "$CURSOR_NODE_BIN"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   /bin/bash -c 'cd web && "$1" install --frozen-lockfile && "$1" run typegen' \
   _ "$CURSOR_PNPM_BIN"
 

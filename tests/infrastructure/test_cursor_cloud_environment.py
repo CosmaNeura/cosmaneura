@@ -760,6 +760,7 @@ def test_credential_neutral_envrc_skips_local_overrides_and_op(
 ) -> None:
     sandbox = tmp_path / "repo"
     (sandbox / ".cursor").mkdir(parents=True)
+    (sandbox / "web").mkdir()
     source_paths = (
         ".envrc .env .env.shared .env.dev .env.test .cursor/credential-neutral.env"
     )
@@ -781,6 +782,10 @@ def test_credential_neutral_envrc_skips_local_overrides_and_op(
     _write_executable(
         fake_op,
         f"#!/usr/bin/env bash\nprintf ran > {shlex.quote(str(op_marker))}\n",
+    )
+    _write_executable(
+        fake_bin / "just",
+        "#!/bin/bash\n[[ ! -e web/node_modules ]]\ncommand -v op\n",
     )
     venv_bin = sandbox / ".venv/bin"
     venv_bin.mkdir(parents=True)
@@ -811,47 +816,49 @@ printf "op_account=%s\\n" "${OP_ACCOUNT-unset}"
 printf "op_path=%s\\n" "$(command -v op)"
 op vault list >/dev/null 2>&1 || true
 """
-    environment = {
+    env = {
         "PATH": f"{fake_bin}:/usr/local/bin:/usr/bin:/bin",
         "HOME": str(tmp_path),
         "CI": ci,
         "COSMANEURA_CURSOR_CREDENTIAL_NEUTRAL": "1",
+        "CURSOR_CREDENTIAL_SCRIPT_DIR": str(sandbox / ".cursor"),
+        "CURSOR_JUST_BIN": str(fake_bin / "just"),
+        "CURSOR_NODE_BIN": str(fake_bin / "node"),
+        "CURSOR_PNPM_BIN": str(fake_bin / "just"),
     }
     result = _run(
         ["bash", "-c", shell],
         cwd=sandbox,
-        environment=environment,
+        environment=env,
     )
     assert result.returncode == 0, result.stderr
     assert "override=unset" in result.stdout
     assert f"api={expected_api_base}" in result.stdout
     assert "clerk=pk_test_placeholder" in result.stdout
     assert "op_account=unset" in result.stdout
-    assert "op_path=" in result.stdout
-    assert "/.cursor/credential-neutral-bin/op" in result.stdout
-    assert not op_marker.exists()
-    assert not venv_op_marker.exists()
+    assert not op_marker.exists() and not venv_op_marker.exists()
+    expected_op = str(sandbox / ".cursor/credential-neutral-bin/op")
+    install = (ROOT / ".cursor/install.sh").read_text(encoding="utf-8")
+    marker = "/usr/bin/env PATH="
+    command = install[install.index(marker) :].split("\n\n", 1)[0]
+    command = command.replace("\\\n", " ")
+    result = _run(["bash", "-c", command], cwd=sandbox, environment=env)
+    assert result.returncode == 0 and result.stdout.splitlines() == [expected_op] * 2
+    frontend = (ROOT / ".cursor/run-frontend.sh").read_text(encoding="utf-8")
+    command = frontend[frontend.rindex("/usr/bin/env") :].replace("\\\n", " ")
+    result = _run(["bash", "-c", command], cwd=sandbox, environment=env)
+    assert result.returncode == 0 and result.stdout.strip() == expected_op
+    assert 'dirname "$CURSOR_JUST_BIN"' in frontend
+    assert frontend.index("$CURSOR_PNPM_BIN") < frontend.index("$CURSOR_NODE_BIN")
 
 
-@pytest.mark.parametrize(
-    ("mode", "target"),
-    [
-        ("dev", "postgresql://root:password@localhost:5432/development"),
-        ("dev", "postgresql://root:password@127.0.0.1:5432/development"),
-        ("dev", "postgresql://root:password@[::1]:5432/development"),
-        ("test", "postgresql://root:password@localhost:5432/test"),
-        ("test", "postgresql://root:password@127.0.0.1:5432/test"),
-        ("test", "postgresql://root:password@[::1]:5432/test"),
-    ],
-)
-def test_database_guard_accepts_only_explicit_exact_urls(
-    mode: str, target: str
-) -> None:
+@pytest.mark.parametrize("mode", ("dev", "test"))
+@pytest.mark.parametrize("host", ("localhost", "127.0.0.1", "[::1]"))
+def test_database_guard_accepts_only_explicit_exact_urls(mode: str, host: str) -> None:
+    database = "development" if mode == "dev" else "test"
+    target = f"postgresql://root:password@{host}:5432/{database}"
     environment = _database_environment(mode=mode)
-    if mode == "dev":
-        environment["DATABASE_URL"] = target
-    else:
-        environment["TEST_DATABASE_URL"] = target
+    environment["DATABASE_URL" if mode == "dev" else "TEST_DATABASE_URL"] = target
     assert (
         GUARD.validate_database_environment(mode=mode, environment=environment)
         == target
@@ -994,14 +1001,7 @@ def test_cursor_scripts_use_explicit_guarded_dev_and_test_commands() -> None:
     )
 
     start = (ROOT / ".cursor/start.sh").read_text(encoding="utf-8")
-    assert 'source "$SCRIPT_DIR/database.sh"' in start
-    assert required[0] in start
-
-    backend = (ROOT / ".cursor/run-backend.sh").read_text(encoding="utf-8")
-    frontend = (ROOT / ".cursor/run-frontend.sh").read_text(encoding="utf-8")
-    assert 'exec "$CURSOR_MISE_BIN" exec --' in backend
-    assert '"$CURSOR_PYTHON_BIN" main.py' in backend
-    assert '"$CURSOR_JUST_BIN" js_dev' in frontend
+    assert 'source "$SCRIPT_DIR/database.sh"' in start and required[0] in start
 
 
 def test_cursor_compose_path_uses_only_immutable_image_refs() -> None:
@@ -1039,12 +1039,13 @@ def test_cursor_compose_path_uses_only_immutable_image_refs() -> None:
     assert services.count("denv /usr/bin/docker compose") == 1
 
 
-def test_cursor_python_environment_syncs_once_and_never_implicitly_resolves() -> None:
+def test_cursor_backend_runs_python_via_uv_without_sync(tmp_path: Path) -> None:
     install = (ROOT / ".cursor/install.sh").read_text(encoding="utf-8")
     start = (ROOT / ".cursor/start.sh").read_text(encoding="utf-8")
+    backend = (ROOT / ".cursor/run-backend.sh").read_text(encoding="utf-8")
 
     assert install.count('"$CURSOR_UV_BIN" sync --locked') == 1
-    for script in (install, start):
+    for script in (install, start, backend):
         assert all(
             "--no-sync" in line
             for line in script.splitlines()
@@ -1055,5 +1056,18 @@ def test_cursor_python_environment_syncs_once_and_never_implicitly_resolves() ->
         for value in ("js_generate-openapi", "pnpm dlx", "pnpm run openapi")
     )
     assert "use committed OpenAPI client" in install
-    assert ".env.dev.local" not in install
-    assert ".env.test.local" not in install
+    assert all(value not in install for value in (".env.dev.local", ".env.test.local"))
+
+    uv = tmp_path / "uv"
+    _write_executable(uv, '#!/bin/bash\nprintf "uv=%s\\n" "$*"\n')
+    environment = os.environ | {
+        "CURSOR_UV_BIN": str(uv),
+        "CURSOR_PYTHON_BIN": "/bin/false",
+    }
+
+    command = backend[backend.rindex("/usr/bin/env") :].replace("\\\n", " ")
+    result = _run(["bash", "-c", command], cwd=tmp_path, environment=environment)
+    assert (
+        result.returncode == 0
+        and result.stdout.strip() == "uv=run --no-sync python main.py"
+    )

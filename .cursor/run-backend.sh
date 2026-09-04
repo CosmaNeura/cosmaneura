@@ -14,4 +14,5 @@ ensure_dockerd
 ensure_infra
 
 exec "$CURSOR_MISE_BIN" exec -- "$CURSOR_DIRENV_BIN" exec . \
-  /usr/bin/env PORT="${PYTHON_SERVER_PORT:-8205}" "$CURSOR_PYTHON_BIN" main.py
+  /usr/bin/env PORT="${PYTHON_SERVER_PORT:-8205}" \
+  UV_PYTHON="$CURSOR_PYTHON_BIN" UV_PYTHON_DOWNLOADS=never "$CURSOR_UV_BIN" run --no-sync python main.py
