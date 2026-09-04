@@ -121,6 +121,28 @@ non-regressing clock source. The runtime, provider, verifier, safe-submit,
 private-runner, workflow, and restore flags are all false, and exact runtime
 pins remain `CONFIGURE_EXACT_...`; this contract cannot restore anything.
 
+The dormant read-only adapter layer now implements the narrow provider and
+verifier interfaces without enabling them. It uses one exact managed-identity
+ARM GET with no proxy, redirect, retry, ambient credential, ambient TLS trust
+or TLS key logging, or CLI fallback. The token and ARM exchanges each have a
+hard whole-exchange deadline in a fail-closed single-threaded POSIX executor,
+and ARM trusts only the fixed CA bundle loaded from the immutable runtime
+image. It also provides a Linux-only offline
+verifier that runs one digest-pinned ELF from sealed
+in-memory bytes with exact local inputs, a scrubbed environment, a deadline,
+and a combined output bound. No workflow imports this layer and every
+activation bit remains false. Private-runner network confinement is still
+required because process flags and environment scrubbing alone do not prove
+that the verifier cannot reach the network or escape its process group; the
+future runner must also attest network and PID/cgroup containment.
+
+Before runtime integration, a separate reviewed contract must also remove the
+current image-digest self-reference, distinguish federated dispatcher
+identities from unfederated job identities, define evidence ingress and ARM
+egress, and provide private endpoint/DNS reachability from the sanitizer to the
+restored PostgreSQL target. None of those gaps is treated as configured by the
+presence of adapter code.
+
 ## Dormant restore-sanitizer contract
 
 `restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.

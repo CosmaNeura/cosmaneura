@@ -152,9 +152,29 @@ The resulting `VerifiedGitHubAttestation` is sealed, short-lived, bound to the
 same exact base bytes as the provider receipt, and still cannot cross the final
 safe-submit boundary. The checked-in policy remains disabled: its Linux
 verifier-binary digest and independently delivered GitHub-only trusted-root
-digest are intentionally unconfigured, and no subprocess or network adapter is
-implemented in this module. Workflow integration, composite binding, and live
+digest are intentionally unconfigured, and no adapter is wired into this
+module's public entry point. Workflow integration, composite binding, and live
 restore activation remain separate reviewed steps.
+
+`staging_restore_runtime_adapters.py` now supplies the two dormant read-only
+implementations expected by these interfaces. The source adapter obtains only
+an ARM-audience token for one exact lower-case managed-identity client ID from
+a validated loopback/link-local Container Apps identity endpoint, with no
+ambient credential or Azure CLI fallback. The ID is caller supplied and must
+be bound to the policy pin by the later runtime-integration slice. Proxies and
+redirects are disabled; the identity response and the single exact
+source-server GET have hard whole-exchange deadlines only in a fail-closed
+single-threaded POSIX executor. ARM TLS uses only the fixed immutable-image CA
+bundle with key logging disabled, and the ARM response remains exact raw bytes.
+The offline adapter accepts only the
+authenticator's fixed 29-argument grammar and exact three-file set. On Linux it
+copies a no-follow, root/current-owned ELF with no group/world write access
+into a digest-checked sealed `memfd`,
+executes those exact bytes once from an isolated `0700` directory with `0600`
+inputs and a scrubbed environment, and kills the process group on timeout or
+combined output overflow. This checked-in code is not activation evidence:
+all policy flags remain false, no executable/root/runtime pin is supplied, and
+actual runner-level network confinement still must be independently proven.
 
 `restore-evidence-composition-policy.json` defines the closed-world join for
 these three sealed proofs. It pins the exact evidence-manifest,
@@ -220,6 +240,15 @@ derivation, and at most one `SafeRestoreSubmitter.submit` invocation. Runtime,
 provider, verifier, submitter, private-runner, workflow, and restore activation
 remain false; exact job/image/identity/network pins are explicit placeholders.
 No workflow or live environment was changed.
+
+Runtime activation also remains blocked on two contract corrections discovered
+during adapter review. The immutable runtime binding must avoid making an image
+digest depend on policy bytes that themselves contain that image digest, and it
+must distinguish the federated workflow dispatcher identities from the
+unfederated job identities that hold data-plane permissions. Evidence delivery,
+explicit ARM egress, and restored-target private endpoint/DNS reachability are
+likewise absent. These are separate Tier-2 changes; the dormant adapters do not
+paper over them.
 
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of
