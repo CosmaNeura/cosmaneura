@@ -144,13 +144,9 @@ those missing boundaries but do not implement them; see the [runtime-binding
 flight plan](flight-plans/2026-09-04-staging-restore-runtime-binding.md).
 All assertions remain false and no runtime consumes this evidence.
 
-The checked-in policy excludes resulting image/record/signature digests. A
-post-publication record binds image/templates; exact provision/cleanup job-configuration pointers match field-for-field
-before record validation, avoiding a digest cycle. Federated dispatchers remain control-
-plane-only; unfederated provision/cleanup UAMIs hold the split runtime rights.
-Both jobs read the private content-addressed record/signature path; provision
-alone reads versioned evidence and HMAC; both read the exact root. Egress permits only MI/ARM,
-evidence/binding/marker Blob, Key Vault, PostgreSQL, and VNet DNS; `gh` requires no-network/PID containment.
+Exact job GETs prove four equal pointers, pinned UAMI IDs, and closed-world templates. A verified
+allowlisted `workflow_ref`/`workflow_sha` JWT projection is atomically consumed once per issuer/JTI before one exact-URL, exact-version, zero-body start. Without runtime-blob or secret access, the broker signs canonical receipt bytes derived from both job observations. The job derives their immutable mailbox path directly from
+its platform execution name, polls only that object for at most 60 seconds, authenticates it, then validates the referenced launch/runtime records and their cross-binding. Replay, mailbox, signing, and broker adapters remain blocked.
 
 Sanitization remains blocked until a second per-rehearsal PostgreSQL private
 endpoint in `10.76.0.64/27` and exact private DNS reach only the restored FQDN,

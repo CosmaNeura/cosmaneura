@@ -44,9 +44,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "a7542d8f03164ca72fda998d3ffe8f8d1ee6df4925ed09a3be9a09f70d89fe3c"
+POLICY_SHA256 = "40ce9aa4c99d3b2060ff000d111ca531de9082732f9dcdbfad27ab90a79279c0"
 POLICY_TEMPLATE_SHA256 = (
-    "ec4b75928b57fe40cdeeda46c5889a61ba461000a74b6e4e6db081a5a6ffc541"
+    "13aeab865ef3e5cce23275113923fe8a8dac929dfb15eb428680b77ccebf3d10"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -90,6 +90,10 @@ DEPENDENCY_NAMES = (
 ACTIVATION_FLAGS = (
     "trusted_executor_implemented",
     "runtime_adapter_implemented",
+    "launch_binding_validator_implemented",
+    "launch_mailbox_adapter_implemented",
+    "launch_broker_adapter_implemented",
+    "launch_receipt_validation_integrated",
     "source_provider_adapter_implemented",
     "offline_attestation_verifier_adapter_implemented",
     "safe_submit_adapter_implemented",
@@ -103,6 +107,10 @@ ACTIVATION_BLOCKERS = (
     "upstream_policies_disabled",
     "trusted_executor_unimplemented",
     "runtime_adapter_unimplemented",
+    "launch_binding_validator_unimplemented",
+    "launch_mailbox_adapter_unimplemented",
+    "launch_broker_adapter_unimplemented",
+    "launch_receipt_validation_unintegrated",
     "source_provider_adapter_unimplemented",
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",
@@ -227,9 +235,63 @@ def validate_executor_policy(policy: Any, *, executable: bool) -> Mapping[str, A
         or any(type(value) is not bool for value in activation.values())
     ):
         _fail("executor_policy.invalid")
+    adapters = policy.get("adapters")
+    if not isinstance(adapters, Mapping) or any(
+        not isinstance(adapters.get(name), Mapping)
+        for name in (
+            "runtime",
+            "launch_binding",
+            "source_provider",
+            "offline_attestation_verifier",
+            "safe_submit",
+        )
+    ):
+        _fail("executor_policy.invalid")
+    launch_adapter = adapters["launch_binding"]
+    implementation_bindings = {
+        "runtime_adapter_implemented": adapters["runtime"].get("implemented"),
+        "launch_binding_validator_implemented": launch_adapter.get("implemented"),
+        "launch_mailbox_adapter_implemented": launch_adapter.get(
+            "mailbox_transport_implemented"
+        ),
+        "launch_broker_adapter_implemented": launch_adapter.get(
+            "broker_adapter_implemented"
+        ),
+        "launch_receipt_validation_integrated": launch_adapter.get(
+            "launch_receipt_integration_implemented"
+        ),
+        "source_provider_adapter_implemented": adapters["source_provider"].get(
+            "implemented"
+        ),
+        "offline_attestation_verifier_adapter_implemented": adapters[
+            "offline_attestation_verifier"
+        ].get("implemented"),
+        "safe_submit_adapter_implemented": adapters["safe_submit"].get("implemented"),
+    }
+    if any(
+        type(value) is not bool or activation[name] is not value
+        for name, value in implementation_bindings.items()
+    ):
+        _fail("executor_policy.invalid")
     normalized = dict(policy)
     normalized["activation_ready"] = False
     normalized["activation"] = dict.fromkeys(activation, False)
+    normalized["adapters"] = {name: dict(value) for name, value in adapters.items()}
+    normalized_launch = normalized["adapters"]["launch_binding"]
+    for name in (
+        "runtime",
+        "source_provider",
+        "offline_attestation_verifier",
+        "safe_submit",
+    ):
+        normalized["adapters"][name]["implemented"] = False
+    for name in (
+        "implemented",
+        "mailbox_transport_implemented",
+        "broker_adapter_implemented",
+        "launch_receipt_integration_implemented",
+    ):
+        normalized_launch[name] = False
     if hashlib.sha256(_canonical(normalized)).hexdigest() != POLICY_TEMPLATE_SHA256:
         _fail("executor_policy.invalid")
     output = policy.get("output")

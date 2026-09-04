@@ -19,11 +19,15 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "a7542d8f03164ca72fda998d3ffe8f8d1ee6df4925ed09a3be9a09f70d89fe3c"
+    "40ce9aa4c99d3b2060ff000d111ca531de9082732f9dcdbfad27ab90a79279c0"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
     "runtime_adapter_implemented": False,
+    "launch_binding_validator_implemented": False,
+    "launch_mailbox_adapter_implemented": False,
+    "launch_broker_adapter_implemented": False,
+    "launch_receipt_validation_integrated": False,
     "source_provider_adapter_implemented": False,
     "offline_attestation_verifier_adapter_implemented": False,
     "safe_submit_adapter_implemented": False,
@@ -36,6 +40,10 @@ EXPECTED_BLOCKERS = (
     "upstream_policies_disabled",
     "trusted_executor_unimplemented",
     "runtime_adapter_unimplemented",
+    "launch_binding_validator_unimplemented",
+    "launch_mailbox_adapter_unimplemented",
+    "launch_broker_adapter_unimplemented",
+    "launch_receipt_validation_unintegrated",
     "source_provider_adapter_unimplemented",
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",
@@ -62,6 +70,22 @@ def _activated_policy(
     policy = json.loads(executor.POLICY_PATH.read_text())
     policy["activation_ready"] = True
     policy["activation"] = dict.fromkeys(policy["activation"], True)
+    adapters = policy["adapters"]
+    for name in (
+        "runtime",
+        "source_provider",
+        "offline_attestation_verifier",
+        "safe_submit",
+    ):
+        adapters[name]["implemented"] = True
+    launch = adapters["launch_binding"]
+    for name in (
+        "implemented",
+        "mailbox_transport_implemented",
+        "broker_adapter_implemented",
+        "launch_receipt_integration_implemented",
+    ):
+        launch[name] = True
     if mutate is not None:
         mutate(policy)
     raw = _canonical(policy)
@@ -371,10 +395,23 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
     assert policy["adapters"]["runtime"] == {
         "implemented": False,
         "policy_pin": "policy_pins.restore_runtime_binding",
-        "external_record_source": "exact_container_app_job_configuration",
+        "external_record_source": "authenticated_broker_launch_receipt_runtime_pointer",
         "image_digest_source": "verified_external_runtime_record",
         "caller_override_permitted": False,
     }
+    launch_adapter = policy["adapters"]["launch_binding"]
+    assert launch_adapter["implemented"] is False
+    assert launch_adapter["broker_receipt_authentication"] == (
+        "pinned-key-signature-over-canonical-bytes"
+    )
+    assert launch_adapter["broker_side_validation_runs_in_trusted_executor"] is False
+    assert policy["execution"]["stage_order"][:5] == [
+        "validate_staging_restore_launch_binding.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter",
+        "validate_staging_restore_runtime_binding.ExternalRuntimeBindingReference._from_authenticated_broker_launch_receipt",
+        "validate_staging_restore_launch_binding.validate_launch_record",
+        "validate_staging_restore_runtime_binding.validate_external_runtime_binding",
+        "validate_staging_restore_launch_binding.validate_received_launch_receipt",
+    ]
     assert policy["execution"]["provision_cleanup_handoff"] == {
         "kind": "exact-dominant-tombstone-v1",
         "create_and_read_back_required": True,
@@ -434,6 +471,21 @@ def test_closed_world_policy_and_every_activation_flag_fail_before_stages(
     for flag in json.loads(executor.POLICY_PATH.read_text())["activation"]:
         mutations.append(
             lambda value, flag=flag: value["activation"].__setitem__(flag, False)
+        )
+    for adapter, field in (
+        ("runtime", "implemented"),
+        ("launch_binding", "implemented"),
+        ("launch_binding", "mailbox_transport_implemented"),
+        ("launch_binding", "broker_adapter_implemented"),
+        ("launch_binding", "launch_receipt_integration_implemented"),
+        ("source_provider", "implemented"),
+        ("offline_attestation_verifier", "implemented"),
+        ("safe_submit", "implemented"),
+    ):
+        mutations.append(
+            lambda value, adapter=adapter, field=field: value["adapters"][
+                adapter
+            ].__setitem__(field, False)
         )
 
     for mutate in mutations:

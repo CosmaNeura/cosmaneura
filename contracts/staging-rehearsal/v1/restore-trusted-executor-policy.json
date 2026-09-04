@@ -6,6 +6,10 @@
   "activation": {
     "trusted_executor_implemented": false,
     "runtime_adapter_implemented": false,
+    "launch_binding_validator_implemented": false,
+    "launch_mailbox_adapter_implemented": false,
+    "launch_broker_adapter_implemented": false,
+    "launch_receipt_validation_integrated": false,
     "source_provider_adapter_implemented": false,
     "offline_attestation_verifier_adapter_implemented": false,
     "safe_submit_adapter_implemented": false,
@@ -57,7 +61,7 @@
     "restore_runtime_binding": {
       "path": "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json",
       "policy_id": "cosmaneura-staging-restore-runtime-binding-v1",
-      "sha256": "sha256:27efa1fa7a58d79349cf30a0e7dc564a00f6aeb4a8f115d5156cade14689b16e"
+      "sha256": "sha256:cccda6c097e4172b181f255f57a1f9ec5dcd4df4ccd4103949735a02ae6fb65a"
     }
   },
   "entrypoints": {
@@ -160,12 +164,19 @@
     "single_interpreter_required": true,
     "same_module_instances_required": true,
     "opaque_seals_must_remain_in_process": true,
-    "step_or_job_handoff_permitted": false,
-    "artifact_or_json_handoff_permitted": false,
+    "unsigned_trusted_executor_step_or_job_handoff_permitted": false,
+    "unsigned_artifact_or_json_handoff_permitted": false,
+    "broker_process_is_separate": true,
+    "broker_handoff": "authenticated-signed-canonical-receipt-bytes",
     "subprocesses_permitted_only_for": [
       "digest_pinned_offline_github_attestation_verifier"
     ],
     "stage_order": [
+      "validate_staging_restore_launch_binding.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter",
+      "validate_staging_restore_runtime_binding.ExternalRuntimeBindingReference._from_authenticated_broker_launch_receipt",
+      "validate_staging_restore_launch_binding.validate_launch_record",
+      "validate_staging_restore_runtime_binding.validate_external_runtime_binding",
+      "validate_staging_restore_launch_binding.validate_received_launch_receipt",
       "validate_staging_evidence_manifest.validate_bundle_snapshot",
       "authenticate_staging_server_scope_receipt._authenticate_validated_bundle_with_binding_and_receipt",
       "verify_staging_source_provider_observation._verify_provider_observation_with_document",
@@ -202,9 +213,21 @@
     "runtime": {
       "implemented": false,
       "policy_pin": "policy_pins.restore_runtime_binding",
-      "external_record_source": "exact_container_app_job_configuration",
+      "external_record_source": "authenticated_broker_launch_receipt_runtime_pointer",
       "image_digest_source": "verified_external_runtime_record",
       "caller_override_permitted": false
+    },
+    "launch_binding": {
+      "implemented": false,
+      "validator": "scripts.validate_staging_restore_launch_binding",
+      "launch_record_source": "signed_receipt-bound-content-addressed-exact-object-read",
+      "broker_receipt_source": "execution-name-derived-immutable-mailbox-object",
+      "broker_receipt_authentication": "pinned-key-signature-over-canonical-bytes",
+      "broker_side_validation_runs_in_trusted_executor": false,
+      "caller_job_start_permitted": false,
+      "mailbox_transport_implemented": false,
+      "broker_adapter_implemented": false,
+      "launch_receipt_integration_implemented": false
     },
     "source_provider": {
       "implemented": false,
@@ -269,6 +292,10 @@
     "upstream_policies_disabled",
     "trusted_executor_unimplemented",
     "runtime_adapter_unimplemented",
+    "launch_binding_validator_unimplemented",
+    "launch_mailbox_adapter_unimplemented",
+    "launch_broker_adapter_unimplemented",
+    "launch_receipt_validation_unintegrated",
     "source_provider_adapter_unimplemented",
     "offline_attestation_verifier_adapter_unimplemented",
     "safe_submit_adapter_unimplemented",
