@@ -125,6 +125,37 @@ before minting final authorization. The canonical provider policy is disabled,
 all transport/workflow/network activation flags are false, and the supported
 entry point refuses before invoking a provider.
 
+`github-attestation-authentication-policy.json` and
+`scripts/authenticate_staging_github_attestation.py` define the independent
+offline provenance boundary. The verifier consumes the exact manifest bytes
+retained by the validated one-read snapshot and the same sealed
+server-authenticated partial used by provider observation. It requires an
+independently delivered, exact-digest-pinned GitHub-only Fulcio/TSA root and a
+digest-pinned Linux `gh` 2.97.0 verifier. The exact command uses only the local
+bundle and custom root, disables public-good verification, denies self-hosted
+runners, and pins repository, workflow identity, OIDC issuer, source ref, and
+workflow/source digests.
+
+Successful private-seam verification requires one Sigstore v0.3 bundle, one
+verification result, and one `evidence-manifest.json` subject whose SHA-256 is
+computed over the retained file bytes rather than canonicalized JSON. The
+returned bundle must equal the supplied bundle, and the decoded DSSE payload
+must equal the returned statement. The raw leaf certificate is checked against
+the CLI certificate summary and exact repository/workflow/run claims; its URI
+SAN plus GitHub deployment-environment and raw-token-subject extensions are
+parsed directly from DER. Only GitHub's RFC3161 timestamp authority is accepted,
+and every verified timestamp must remain inside the authenticated manifest
+window. Statement predicates remain workflow-controlled claims, not independent
+identity evidence.
+
+The resulting `VerifiedGitHubAttestation` is sealed, short-lived, bound to the
+same exact base bytes as the provider receipt, and still cannot cross the final
+safe-submit boundary. The checked-in policy remains disabled: its Linux
+verifier-binary digest and independently delivered GitHub-only trusted-root
+digest are intentionally unconfigured, and no subprocess or network adapter is
+implemented in this module. Workflow integration, composite binding, and live
+restore activation remain separate reviewed steps.
+
 The checked-in `server-scope-authentication-policy.json` and server-scope policy
 are both disabled, so the authenticator refuses before reading a key or bundle.
 Even a successful future authentication result remains blocked
