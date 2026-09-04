@@ -196,6 +196,15 @@ remain unimplemented or false; see the
 [signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
 [executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
 
+The next dormant boundary now supplies that handoff with exact private readers.
+It uses the selected job UAMI for separate storage and vault audiences, performs
+only content-addressed record/bundle GETs plus one exact-version Key Vault root
+GET, and hands the exact bytes and shared trusted clock to the offline
+authenticator. The public dependency factory still refuses and no workflow or
+activation bit changed. Before any future rehearsal, the configured GitHub-only
+root must be proven to fit Key Vault and the 25,600-byte policy cap; see the
+[private-reader flight plan](flight-plans/2026-09-04-staging-runtime-record-private-readers.md).
+
 ## Dormant restore-sanitizer contract
 
 `restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.

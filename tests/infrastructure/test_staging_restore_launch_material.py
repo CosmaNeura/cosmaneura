@@ -108,6 +108,7 @@ class Sources:
         self.launch_effect = launch_effect
         self.calls: list[str] = []
         self.receipt: launch.AuthenticatedBrokerLaunchReceipt | None = None
+        self.runtime_clock: Callable[[], datetime] | None = None
 
     def read_launch_record(self, **kwargs: Any) -> Any:
         self.calls.append("launch_record")
@@ -129,6 +130,7 @@ class Sources:
             "authenticated_receipt",
             "provision_reference",
             "cleanup_reference",
+            "clock",
         }
         assert kwargs["policy"] == self.policy
         assert kwargs["authenticated_receipt"] is self.receipt
@@ -140,6 +142,7 @@ class Sources:
             getattr(provision, field) == getattr(cleanup, field)
             for field in binding.RUNTIME_REFERENCE_FIELDS
         )
+        self.runtime_clock = kwargs["clock"]
         if isinstance(self.runtime_result, Exception):
             raise self.runtime_result
         return self.runtime_result
@@ -486,8 +489,11 @@ def test_dependencies_are_closed_and_clock_is_shared_with_receiver(
     monkeypatch.setattr(
         material.receipt_receiver, "receive_broker_launch_receipt", fake_receiver
     )
-    _receive(monkeypatch, policy=policy, wall_clock=shared_clock)
+    _result, sources, _transport = _receive(
+        monkeypatch, policy=policy, wall_clock=shared_clock
+    )
     assert seen == [shared_clock]
+    assert sources.runtime_clock is shared_clock
 
 
 def test_policy_validation_exception_is_bounded(
