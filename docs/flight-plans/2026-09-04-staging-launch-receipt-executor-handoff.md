@@ -22,6 +22,9 @@
 - The launch and runtime byte digests must equal the receipt-derived pins. The
   runtime proof must be the exact sealed verifier result and bind the runtime
   record, Sigstore bundle, independent root, issuer, and certificate identity.
+- Before either record source runs, both runtime URIs must exactly match the
+  policy's HTTPS private-ingress host, container, digest-addressed path, and
+  suffix, with no user info, port, query, fragment, or encoded alternate path.
 - Recheck `CONTAINER_APP_JOB_EXECUTION_NAME` between authority stages. Use the
   executor's one non-regressing clock for receipt observation and later launch
   validation. Do not serialize or reconstruct opaque proof objects.

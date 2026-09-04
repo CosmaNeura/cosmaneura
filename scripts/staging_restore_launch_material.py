@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -114,6 +115,42 @@ def _validate_runtime_material(
     return result
 
 
+def _validate_runtime_reference_ingress(
+    reference: runtime_binding.ExternalRuntimeBindingReference,
+    *,
+    document: dict[str, Any],
+) -> None:
+    ingress = document["runtime_record_ingress"]
+    expected_host = ingress["account_host"]
+    container = ingress["container_name"]
+    for uri_name, digest_name, suffix in (
+        ("record_uri", "record_sha256", ".json"),
+        ("signature_bundle_uri", "signature_bundle_sha256", ".sigstore.json"),
+    ):
+        value = getattr(reference, uri_name)
+        digest = getattr(reference, digest_name)
+        try:
+            parsed = urllib.parse.urlsplit(value)
+            port = parsed.port
+        except (TypeError, ValueError):
+            _fail("launch_material.runtime_reference_binding_invalid")
+        expected_path = f"/{container}/{digest[7:]}{suffix}"
+        expected_uri = f"https://{expected_host}{expected_path}"
+        if (
+            value != expected_uri
+            or parsed.scheme != "https"
+            or parsed.hostname != expected_host
+            or parsed.netloc != expected_host
+            or parsed.username is not None
+            or parsed.password is not None
+            or port is not None
+            or parsed.path != expected_path
+            or parsed.query
+            or parsed.fragment
+        ):
+            _fail("launch_material.runtime_reference_binding_invalid")
+
+
 def receive_provision_launch_material(
     runtime_policy: Any,
     *,
@@ -191,6 +228,8 @@ def receive_provision_launch_material(
         for field in runtime_binding.RUNTIME_REFERENCE_FIELDS
     ):
         _fail("launch_material.runtime_reference_result_invalid")
+    for reference in references.values():
+        _validate_runtime_reference_ingress(reference, document=document)
 
     launch_record_bytes = _stage(
         dependencies.read_launch_record,

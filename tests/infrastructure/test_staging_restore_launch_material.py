@@ -28,7 +28,11 @@ RUNTIME_SIGNATURE_BYTES = b'{"sigstore":"exact"}'
 _DEFAULT_RUNTIME_RESULT = object()
 
 
-def _mailbox_objects(policy: dict[str, Any]) -> dict[str, bytes]:
+def _mailbox_objects(
+    policy: dict[str, Any],
+    *,
+    runtime_reference_overrides: dict[str, str] | None = None,
+) -> dict[str, bytes]:
     receipt = json.loads(mailbox_helpers._receipt(policy, "provision"))
     launch_sha256 = binding._digest(LAUNCH_BYTES)
     runtime_sha256 = binding._digest(RUNTIME_BYTES)
@@ -56,6 +60,7 @@ def _mailbox_objects(policy: dict[str, Any]) -> dict[str, bytes]:
             "runtime_signature_bundle_sha256": runtime_signature_sha256,
         }
     )
+    receipt.update(runtime_reference_overrides or {})
     raw = binding._canonical(receipt)
     return {
         "receipt": raw,
@@ -292,6 +297,92 @@ def test_runtime_signature_proof_is_exactly_cross_bound(
         match="^launch_material.runtime_record_result_invalid$",
     ):
         _receive(monkeypatch, policy=policy, sources=sources)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("runtime_record_uri", "runtime_signature_bundle_uri"),
+)
+@pytest.mark.parametrize(
+    ("variant", "error"),
+    (
+        (
+            "attacker-host",
+            "launch_material.runtime_reference_binding_invalid",
+        ),
+        (
+            "alternate-path",
+            "launch_material.runtime_reference_binding_invalid",
+        ),
+        (
+            "explicit-port",
+            "launch_material.receipt_failed",
+        ),
+        (
+            "query",
+            "launch_material.receipt_failed",
+        ),
+        (
+            "fragment",
+            "launch_material.receipt_failed",
+        ),
+        (
+            "encoded-path",
+            "launch_material.runtime_reference_binding_invalid",
+        ),
+        (
+            "empty-query",
+            "launch_material.runtime_reference_binding_invalid",
+        ),
+        (
+            "empty-fragment",
+            "launch_material.runtime_reference_binding_invalid",
+        ),
+    ),
+)
+def test_runtime_reference_is_policy_bound_before_record_sources(
+    monkeypatch: pytest.MonkeyPatch, field: str, variant: str, error: str
+) -> None:
+    policy = helpers._configured_policy()
+    ingress = policy["runtime_record_ingress"]
+    digest = (
+        binding._digest(RUNTIME_BYTES)
+        if field == "runtime_record_uri"
+        else binding._digest(RUNTIME_SIGNATURE_BYTES)
+    )
+    suffix = ".json" if field == "runtime_record_uri" else ".sigstore.json"
+    exact_path = f"/{ingress['container_name']}/{digest[7:]}{suffix}"
+    values = {
+        "attacker-host": f"https://attacker.invalid{exact_path}",
+        "alternate-path": f"https://{ingress['account_host']}/exfil/{digest[7:]}{suffix}",
+        "explicit-port": f"https://{ingress['account_host']}:443{exact_path}",
+        "query": f"https://{ingress['account_host']}{exact_path}?x=1",
+        "fragment": f"https://{ingress['account_host']}{exact_path}#fragment",
+        "encoded-path": (
+            f"https://{ingress['account_host']}/{ingress['container_name']}/"
+            f"%2e%2e/{digest[7:]}{suffix}"
+        ),
+        "empty-query": f"https://{ingress['account_host']}{exact_path}?",
+        "empty-fragment": f"https://{ingress['account_host']}{exact_path}#",
+    }
+    transport = mailbox_helpers.FakeTransport(
+        _mailbox_objects(
+            policy,
+            runtime_reference_overrides={field: values[variant]},
+        )
+    )
+    sources = Sources(policy)
+    with pytest.raises(
+        material.LaunchMaterialFailure,
+        match=f"^{error}$",
+    ):
+        _receive(
+            monkeypatch,
+            policy=policy,
+            sources=sources,
+            transport=transport,
+        )
+    assert sources.calls == []
 
 
 def test_unsealed_signature_and_cleanup_receipt_are_refused(
