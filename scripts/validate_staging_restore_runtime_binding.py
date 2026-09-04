@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -27,7 +28,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "26da634ab0ad863b5ebdbdd1652c0ff19016302036fbfcd02688f55a3016dabc"
+CANONICAL_POLICY_SHA256 = "a28bd90de455f6a551dbf997f4483d577299d3bec40ed31ccebba51a3bfa2b78"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -143,7 +144,10 @@ def _exact(value: Any, expected: Any, code: str) -> None:
 
 
 def _canonical(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()
+    except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
+        raise RuntimeBindingFailure("canonical.invalid") from None
 
 
 def _digest(value: bytes) -> str:
@@ -320,7 +324,7 @@ def _parse_json_object(raw: bytes, code: str) -> dict[str, Any]:
         _fail(f"{code}.nonfinite_number")
 
     try:
-        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=nonfinite)
+        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=nonfinite, parse_float=lambda raw_float: number if math.isfinite(number := float(raw_float)) else nonfinite(raw_float))
     except RuntimeBindingFailure:
         raise
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):

@@ -15,12 +15,14 @@ from tests.infrastructure import test_staging_restore_runtime_binding as helpers
 NOW = datetime(2026, 9, 4, 12, 1, tzinfo=UTC)
 def _policy() -> dict[str, Any]:
     return helpers._configured_policy()
-def _arm_response(policy: dict[str, Any], action: str, *, body: dict[str, Any] | None = None) -> launch.AuthenticatedArmGetResponse:
+def _arm_response(policy: dict[str, Any], action: str, *, body: dict[str, Any] | bytes | None = None) -> launch.AuthenticatedArmGetResponse:
     document = body or helpers._job_document(policy, action)
-    return launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=policy["runtime"]["jobs"][action]["resource_id"], api_version="2024-03-01", status_code=200, content_type="application/json; charset=utf-8", observed_at=datetime(2026, 9, 4, 12, 2, tzinfo=UTC), body=runtime._canonical(document))
+    return launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=policy["runtime"]["jobs"][action]["resource_id"], api_version="2024-03-01", status_code=200, content_type="application/json; charset=utf-8", observed_at=datetime(2026, 9, 4, 12, 2, tzinfo=UTC), body=document if type(document) is bytes else runtime._canonical(document))
 def _observations(policy: dict[str, Any], pointers: dict[str, str] | None = None) -> tuple[launch.AuthenticatedJobConfigurationObservation, launch.AuthenticatedJobConfigurationObservation]:
     values = pointers or helpers._pointer_values()
-    observations = [launch.validate_job_configuration_observation(policy, job_kind=action, response=_arm_response(policy, action, body=helpers._job_document(policy, action, values))) for action in ("provision", "cleanup")]
+    documents = [helpers._job_document(policy, action, values) for action in ("provision", "cleanup")]
+    documents[0]["properties"]["template"].pop("initContainers")
+    observations = [launch.validate_job_configuration_observation(policy, job_kind=action, response=_arm_response(policy, action, body=body)) for action, body in zip(("provision", "cleanup"), documents, strict=True)]
     return observations[0], observations[1]
 def _record(policy: dict[str, Any], *, action: str, runtime_record_sha256: str) -> tuple[bytes, str, str]:
     secret_policy = policy["evidence_ingress"]["private_versioned_secret_source"]
@@ -127,6 +129,19 @@ def test_manual_trigger_cardinality_is_exact_even_with_matching_job_digest(actio
     policy["runtime"]["jobs"][action]["configuration_template_sha256"] = runtime._digest(runtime._canonical(projection))
     with pytest.raises(launch.LaunchBindingFailure, match="job_observation.trigger"):
         launch.validate_job_configuration_observation(policy, job_kind=action, response=_arm_response(policy, action, body=body))
+@pytest.mark.parametrize("literal", (b"1e400", b"-1e400"))
+def test_job_observation_rejects_exponent_overflow_before_matching_digest(literal: bytes) -> None:
+    policy, number = _policy(), float(literal)
+    body = helpers._job_document(policy, "provision")
+    projection, _pointer, _template = launch._job_projection(body, policy=policy, job_kind="provision")
+    raw = runtime._canonical(body).replace(b'"cpu":1', b'"cpu":' + literal, 1)
+    body["properties"]["template"]["containers"][0]["resources"]["cpu"] = number
+    projection["properties"]["template"]["containers"][0]["resources"]["cpu"] = number
+    policy["runtime"]["jobs"]["provision"]["configuration_template_sha256"] = runtime._digest(runtime.json.dumps(projection, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode())
+    with pytest.raises(launch.LaunchBindingFailure, match="job_observation.invalid"):
+        launch.validate_job_configuration_observation(policy, job_kind="provision", response=_arm_response(policy, "provision", body=raw))
+    with pytest.raises(launch.LaunchBindingFailure, match="canonical.invalid"):
+        launch._canonical({"value": number})
 @pytest.mark.parametrize("mutate", [lambda value: value["payload"]["evidence_files"]["SHA256SUMS"].update(versioned_https_uri=value["payload"]["evidence_files"]["SHA256SUMS"]["versioned_https_uri"].replace("0123456789ab", "fedcba987654")), lambda value: value["payload"]["evidence_files"]["SHA256SUMS"].update(sha256={}), lambda value: value.update(schema_version=True)])
 def test_launch_record_materializes_exact_versioned_evidence_and_action_union(mutate: Any) -> None:
     policy = _policy()
@@ -209,14 +224,7 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
         "name": "execution-1",
         "properties": {"template": execution_template},
     }
-    response = launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(
-        resource_id=execution_id,
-        api_version="2024-03-01",
-        status_code=200,
-        content_type="application/json",
-        observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC),
-        body=runtime._canonical(execution_body),
-    )
+    response = launch.AuthenticatedArmGetResponse._from_reviewed_managed_identity_adapter(resource_id=execution_id, api_version="2024-03-01", status_code=200, content_type="application/json", observed_at=datetime(2026, 9, 4, 12, 3, tzinfo=UTC), body=runtime._canonical(execution_body))
     execution = launch.validate_execution_observation(policy, action="provision", response=response)
     assert execution.template_sha256 == provision.execution_template_sha256
     for allowed_body in (execution_body | {"id": execution_id}, execution_body | {"type": "Microsoft.App/jobs/executions"}, {"name": "execution-1", "properties": {"template": execution_template | {"initContainers": []}}}):
@@ -242,18 +250,8 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
     for status, body in ((202, start_body), (200, start_body | {"type": "Microsoft.App/jobs/executions"}), (200, start_body | {"id": f"{cleanup.job_resource_id}/executions/execution-1"}), (200, start_body | {"name": "execution-2"})):
         with pytest.raises(launch.LaunchBindingFailure, match="job_start_response"):
             launch.AuthenticatedBrokerStartResponse._from_reviewed_broker_transport(**(start_arguments | {"status_code": status, "response_body": runtime._canonical(body)}), provider_request_id="12345678-1234-1234-1234-123456789abc")
-    start_response = launch.AuthenticatedBrokerStartResponse._from_reviewed_broker_transport(
-        **start_arguments,
-        provider_request_id="12345678-1234-1234-1234-123456789abc",
-    )
-    receipt_bytes = launch.serialize_broker_launch_receipt(
-        policy,
-        launch_record=record,
-        provision_observation=provision,
-        cleanup_observation=cleanup,
-        start_response=start_response,
-        execution_observation=execution,
-    )
+    start_response = launch.AuthenticatedBrokerStartResponse._from_reviewed_broker_transport(**start_arguments, provider_request_id="12345678-1234-1234-1234-123456789abc")
+    receipt_bytes = launch.serialize_broker_launch_receipt(policy, launch_record=record, provision_observation=provision, cleanup_observation=cleanup, start_response=start_response, execution_observation=execution)
     receipt_uri, signature_uri = launch._execution_receipt_uris(policy, "provision", "execution-1")
     signing = policy["launch_binding"]["receipt_signing"]
     adapter_arguments: dict[str, Any] = {"policy": policy, "action": "provision", "receipt_uri": receipt_uri, "signature_bundle_uri": signature_uri, "retrieval_statuses": (404, 404, 200), "retrieval_elapsed_seconds": 4, "receipt_bytes": receipt_bytes, "signature_bundle_bytes": b"verified-signature-bundle", "verified_receipt_sha256": runtime._digest(receipt_bytes), "verified_algorithm": signing["algorithm"], "verified_signing_key_resource_id": signing["key_resource_id"], "verified_signing_key_version": signing["key_version"], "verified_public_key_sha256": signing["public_key_sha256"], "observed_at": datetime(2026, 9, 4, 12, 4, tzinfo=UTC)}

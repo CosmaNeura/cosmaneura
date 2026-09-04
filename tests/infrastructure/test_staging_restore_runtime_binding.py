@@ -870,9 +870,16 @@ def test_external_record_rejects_divergent_job_configuration_pointers() -> None:
 
 
 def test_parser_rejects_duplicate_keys_and_nonfinite_numbers() -> None:
-    for raw in (b'{"schema_version":1,"schema_version":1}', b'{"x":NaN}'):
+    for raw in (
+        b'{"schema_version":1,"schema_version":1}',
+        b'{"x":NaN}',
+        b'{"x":1e400}',
+        b'{"x":-1e400}',
+    ):
         with pytest.raises(binding.RuntimeBindingFailure):
             binding._parse_policy(raw)
+    with pytest.raises(binding.RuntimeBindingFailure, match="canonical.invalid"):
+        binding._canonical({"x": float("inf")})
     for resource_id in (
         "/subscriptions/------------------------------------/providers/Microsoft.X/types/name",
         "/subscriptions/11111111-1111-4111-8111-111111111111/providers/Microsoft.X/types//name",

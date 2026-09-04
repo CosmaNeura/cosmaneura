@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -46,7 +47,7 @@ def _fail(code: str) -> NoReturn:
     raise LaunchBindingFailure(code)
 def _canonical(value: Any) -> bytes:
     try:
-        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
     except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
         raise LaunchBindingFailure("canonical.invalid") from None
 def _digest(raw: bytes) -> str:
@@ -70,7 +71,7 @@ def _parse(raw: bytes, *, maximum: int, code: str) -> dict[str, Any]:
             result[key] = value
         return result
     try:
-        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda _value: _fail(code))
+        value = json.loads(raw, object_pairs_hook=pairs, parse_constant=lambda _value: _fail(code), parse_float=lambda raw_float: number if math.isfinite(number := float(raw_float)) else _fail(code))
     except LaunchBindingFailure:
         raise
     except (UnicodeDecodeError, ValueError, RecursionError):
@@ -140,7 +141,7 @@ def validate_launch_binding_policy(policy: Any) -> dict[str, Any]:
         or launch["pointer_environment"]["exact_names"] != list(POINTER_ENV_TO_FIELD)
         or job_projection["excluded_environment_variables"] != list(POINTER_ENV_TO_FIELD)
         or job_projection["exact_manual_trigger_config"] != {"parallelism": 1, "replicaCompletionCount": 1}
-        or job_projection["normalized_execution_template_projection"] != {"required_fields": ["containers"], "optional_empty_fields": ["initContainers"], "output_fields": ["containers", "initContainers"], "job_template_volumes_required_empty": True}
+        or job_projection["normalized_execution_template_projection"] != {"required_fields": ["containers"], "optional_empty_fields": ["initContainers"], "output_fields": ["containers", "initContainers"], "job_template_required_fields": ["containers", "volumes"], "job_template_volumes_required_empty": True}
         or launch["job_start"]["query_parameters"] != [{"name": "api-version", "value": "2024-03-01"}]
         or launch["job_start"]["management_origin"] != launch["job_configuration_observation"]["management_origin"]
         or launch["job_start"]["resource_path_suffix"] != "/start"
@@ -265,7 +266,7 @@ class AuthenticatedJobConfigurationObservation:
         return type(self) is AuthenticatedJobConfigurationObservation and getattr(self, "_seal", None) is _JOB_OBSERVATION_SEAL
 def _execution_template_projection(value: Any, *, job_template: bool, code: str) -> dict[str, Any]:
     allowed = {"containers", "initContainers", "volumes"} if job_template else {"containers", "initContainers"}
-    if type(value) is not dict or set(value) - allowed or not (allowed if job_template else {"containers"}) <= set(value):
+    if type(value) is not dict or set(value) - allowed or not ({"containers", "volumes"} if job_template else {"containers"}) <= set(value):
         _fail(code)
     containers, init_containers = value["containers"], value.get("initContainers", [])
     if type(containers) is not list or not containers or any(type(item) is not dict for item in containers) or type(init_containers) is not list or init_containers or (job_template and value["volumes"] != []):
@@ -294,17 +295,7 @@ def _job_projection(document: dict[str, Any], *, policy: dict[str, Any], job_kin
     }
     if type(properties) is not dict or set(properties) - required_properties - PROPERTY_COMPUTED or not required_properties <= set(properties) or properties["environmentId"] != job["environment_resource_id"] or type(properties["workloadProfileName"]) is not str or not properties["workloadProfileName"]:
         _fail("job_observation.properties")
-    configuration = _mapping(
-        properties["configuration"],
-        {
-            "triggerType",
-            "replicaTimeout",
-            "replicaRetryLimit",
-            "manualTriggerConfig",
-            "registries",
-        },
-        "job_observation.configuration",
-    )
+    configuration = _mapping(properties["configuration"], {"triggerType", "replicaTimeout", "replicaRetryLimit", "manualTriggerConfig", "registries"}, "job_observation.configuration")
     manual = _mapping(configuration["manualTriggerConfig"], {"parallelism", "replicaCompletionCount"}, "job_observation.manual_trigger")
     if configuration["triggerType"] != "Manual" or type(configuration["replicaTimeout"]) is not int or configuration["replicaTimeout"] <= 0 or type(configuration["replicaRetryLimit"]) is not int or configuration["replicaRetryLimit"] != 0 or any(type(manual[name]) is not int or manual[name] != 1 for name in manual):
         _fail("job_observation.trigger")
@@ -390,11 +381,7 @@ def validate_job_configuration_observation(policy: Any, *, job_kind: str, respon
     document_policy = validate_launch_binding_policy(policy)
     if job_kind not in JOB_KINDS or type(response) is not AuthenticatedArmGetResponse or not response._is_authenticated() or response.resource_id != document_policy["runtime"]["jobs"][job_kind]["resource_id"]:
         _fail("job_observation.authentication")
-    raw_document = _parse(
-        response.body,
-        maximum=document_policy["launch_binding"]["job_configuration_observation"]["maximum_bytes"],
-        code="job_observation.invalid",
-    )
+    raw_document = _parse(response.body, maximum=document_policy["launch_binding"]["job_configuration_observation"]["maximum_bytes"], code="job_observation.invalid")
     projection, pointer, template_digest = _job_projection(raw_document, policy=document_policy, job_kind=job_kind)
     projection_digest = _digest(_canonical(projection))
     if projection_digest != document_policy["runtime"]["jobs"][job_kind]["configuration_template_sha256"]:

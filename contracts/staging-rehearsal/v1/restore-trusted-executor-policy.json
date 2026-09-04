@@ -61,7 +61,7 @@
     "restore_runtime_binding": {
       "path": "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json",
       "policy_id": "cosmaneura-staging-restore-runtime-binding-v1",
-      "sha256": "sha256:26da634ab0ad863b5ebdbdd1652c0ff19016302036fbfcd02688f55a3016dabc"
+      "sha256": "sha256:a28bd90de455f6a551dbf997f4483d577299d3bec40ed31ccebba51a3bfa2b78"
     }
   },
   "entrypoints": {
