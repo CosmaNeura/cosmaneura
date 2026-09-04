@@ -156,6 +156,30 @@ digest are intentionally unconfigured, and no subprocess or network adapter is
 implemented in this module. Workflow integration, composite binding, and live
 restore activation remain separate reviewed steps.
 
+`restore-evidence-composition-policy.json` defines the closed-world join for
+these three sealed proofs. It pins the exact evidence-manifest,
+server-authentication, provider-observation, and GitHub-attestation policy
+bytes. Both independent receipts must name the SHA-256 of the exact sealed
+server-authenticated record; every overlapping manifest, source, candidate,
+workflow, and restore-time field must equal that record. The composition also
+recomputes the provider and attestation receipt digests and carries the exact
+server-authentication receipt digest, so the final binding contains precisely
+three upstream receipt digests.
+
+Composition permits one trusted-clock read only after all seals, the exact
+canonical server-authentication/provider/attestation receipt bytes, policy
+pins, digests, and cross-bindings have been revalidated.
+The read cannot precede any upstream trusted observation, authentication, or
+verification time. Final expiry is the minimum of the three receipt expiries,
+and the clock must remain strictly before it; composition can only shorten an
+authorization window. The output field set is exactly the sealed
+`RestoreEvidenceBinding` accepted by safe-submit, with no unknown fields.
+
+The policy and every activation flag remain disabled. The contract adds no
+workflow call, executor handoff, restore request, provider access, or mutation;
+workflow integration, trusted-executor integration, and restore activation are
+explicit blockers requiring separate reviewed work.
+
 The checked-in `server-scope-authentication-policy.json` and server-scope policy
 are both disabled, so the authenticator refuses before reading a key or bundle.
 Even a successful future authentication result remains blocked
