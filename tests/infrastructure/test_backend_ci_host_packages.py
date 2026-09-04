@@ -43,7 +43,7 @@ def test_localias_install_is_version_and_digest_pinned() -> None:
 
     cursor_setup = (ROOT / ".cursor/system-setup.sh").read_text(encoding="utf-8")
     assert (
-        'CURSOR_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"'
+        'CURSOR_SETUP_DIR="$(cd -P "$(/usr/bin/dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"'
         in cursor_setup
     )
     assert (

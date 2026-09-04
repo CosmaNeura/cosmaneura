@@ -12,6 +12,7 @@ __pycache__
 *.superadmin-capabilities.private.json
 
 .nixpacks
+.cursor/runtime-home/
 
 # TODO this should really be redirected to a tmp/ directory
 .coverage
