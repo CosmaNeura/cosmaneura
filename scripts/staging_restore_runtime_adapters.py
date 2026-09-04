@@ -56,6 +56,9 @@ MAXIMUM_TOKEN_BYTES = 65_536
 MAXIMUM_EXECUTABLE_BYTES = 268_435_456
 MAXIMUM_CA_BUNDLE_BYTES = 8_388_608
 RUNTIME_CA_BUNDLE_PATH = Path("/etc/ssl/certs/ca-certificates.crt")
+LINUX_F_ADD_SEALS = 1033
+LINUX_F_GET_SEALS = 1034
+LINUX_REQUIRED_SEALS = 0x000F
 GH_VERSION = "2.97.0"
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 UUID_RE = re.compile(
@@ -744,13 +747,9 @@ def _sealed_linux_executable(
         ):
             _fail("offline_verifier.executable_invalid")
         os.fchmod(sealed_fd, 0o500)
-        seals = (
-            fcntl.F_SEAL_SEAL
-            | fcntl.F_SEAL_SHRINK
-            | fcntl.F_SEAL_GROW
-            | fcntl.F_SEAL_WRITE
-        )
-        fcntl.fcntl(sealed_fd, fcntl.F_ADD_SEALS, seals)
+        fcntl.fcntl(sealed_fd, LINUX_F_ADD_SEALS, LINUX_REQUIRED_SEALS)
+        if fcntl.fcntl(sealed_fd, LINUX_F_GET_SEALS) != LINUX_REQUIRED_SEALS:
+            _fail("offline_verifier.executable_invalid")
         os.lseek(sealed_fd, 0, os.SEEK_SET)
         yield sealed_fd, observed_sha256
     except RuntimeAdapterFailure:
