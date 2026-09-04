@@ -281,13 +281,13 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
     assert ".sigstore.json" not in signature_uri
     signature_envelope_bytes = receipt_auth_helpers._envelope(policy, receipt_bytes)
     signature_verification = receipt_auth.authenticate_broker_launch_receipt_signature(policy, receipt_bytes=receipt_bytes, signature_envelope_bytes=signature_envelope_bytes)
-    adapter_arguments: dict[str, Any] = {"policy": policy, "action": "provision", "receipt_uri": receipt_uri, "signature_envelope_uri": signature_uri, "retrieval_statuses": (404, 404, 200), "retrieval_elapsed_seconds": 4, "receipt_bytes": receipt_bytes, "signature_envelope_bytes": signature_envelope_bytes, "signature_verification": signature_verification, "observed_at": datetime(2026, 9, 4, 12, 4, tzinfo=UTC)}
+    adapter_arguments: dict[str, Any] = {"policy": policy, "action": "provision", "receipt_uri": receipt_uri, "signature_envelope_uri": signature_uri, "receipt_retrieval_statuses": (404, 404, 200), "signature_envelope_retrieval_statuses": (404, 200), "retrieval_elapsed_seconds": 4, "receipt_bytes": receipt_bytes, "signature_envelope_bytes": signature_envelope_bytes, "signature_verification": signature_verification, "observed_at": datetime(2026, 9, 4, 12, 4, tzinfo=UTC)}
     monkeypatch.delenv(launch.EXECUTION_NAME_ENV, raising=False)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.authentication"):
         launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**adapter_arguments)
     monkeypatch.setenv(launch.EXECUTION_NAME_ENV, "execution-1")
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.authentication"):
-        launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"retrieval_statuses": (404,)}))
+        launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"signature_envelope_retrieval_statuses": (404,)}))
     monkeypatch.setenv(launch.EXECUTION_NAME_ENV, "invalid/name")
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt"):
         launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**adapter_arguments)

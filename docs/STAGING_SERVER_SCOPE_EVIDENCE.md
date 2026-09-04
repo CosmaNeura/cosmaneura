@@ -292,9 +292,11 @@ offline with a policy-pinned P-256 JWK before minting a sealed proof. Its
 closed-world `.signature.json` envelope binds the policy, receipt digest,
 ES256 key resource/version, and public-key digest; signatures are strict
 base64url-no-padding 64-byte P1363 low-S values. External runtime-record
-`.sigstore.json` bundles are unchanged. Mailbox transport, executor wiring,
-broker signing, workflow integration, and every activation bit remain off; see
-the [receipt-authentication flight plan](flight-plans/2026-09-04-staging-broker-launch-receipt-authentication.md).
+`.sigstore.json` bundles are unchanged. A dormant exact-object receiver now
+uses the selected job UAMI and bounded no-proxy/no-redirect private-Blob GETs;
+the mailbox account/host and exact container resource IDs are cross-bound.
+Executor wiring, broker signing, workflow integration, and every activation
+bit remain off; see the [mailbox receiver flight plan](flight-plans/2026-09-04-staging-launch-receipt-mailbox-receiver.md).
 
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of

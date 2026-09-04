@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "c10fa7eaf2b45a8930ec044bef00d02c4ac82403e501a9d400426d3ac497e7c2"
+CANONICAL_POLICY_SHA256 = "baf28f05a692971dd20f3360543de46cdc4f23e93dffa9e112873d55458afdee"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -559,6 +559,17 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
     mailbox = policy["launch_binding"]["mailbox"]
     signing = policy["launch_binding"]["receipt_signing"]
     registry_host, _, _repository_path = registry["repository"].partition("/")
+    mailbox_account_name = mailbox["account_host"].removesuffix(
+        ".blob.core.windows.net"
+    )
+    mailbox_account_parts = mailbox["account_resource_id"].split("/")
+    expected_mailbox_containers = {
+        action: (
+            f"{mailbox['account_resource_id']}/blobServices/default/containers/"
+            f"{mailbox['container_names'][action]}"
+        )
+        for action in ("provision", "cleanup")
+    }
     if (
         not blob["account_host"].endswith(".blob.core.windows.net")
         or not runtime_ingress["account_host"].endswith(".blob.core.windows.net")
@@ -567,6 +578,12 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
         or not secret["vault_host"].endswith(".vault.azure.net")
         or not marker["account_host"].endswith(".blob.core.windows.net")
         or not mailbox["account_host"].endswith(".blob.core.windows.net")
+        or not mailbox_account_name
+        or len(mailbox_account_parts) != 9
+        or mailbox_account_parts[5:8]
+        != ["providers", "Microsoft.Storage", "storageAccounts"]
+        or mailbox_account_parts[8] != mailbox_account_name
+        or mailbox["container_resource_ids"] != expected_mailbox_containers
         or signing["key_resource_id"]
         != f"{secret['vault_resource_id']}/keys/{signing['key_name']}"
         or signing["public_key_sha256"] != _digest(_canonical(signing["public_key_jwk"]))

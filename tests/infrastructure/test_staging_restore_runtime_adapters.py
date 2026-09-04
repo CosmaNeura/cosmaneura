@@ -816,8 +816,10 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
         .read_text()
     )
     assert "staging_restore_runtime_adapters" not in executor_source
+    assert "receive_staging_broker_launch_receipt" not in executor_source
     adapter_symbols = (
         "staging_restore_runtime_adapters",
+        "receive_staging_broker_launch_receipt",
         "ManagedIdentityTokenSource",
         "AzureSourceObservationProvider",
         "DigestPinnedGitHubCliVerifier",
@@ -829,7 +831,10 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
         *Path(adapters.attestation.ROOT).joinpath(".github/workflows").glob("*.yaml"),
     ]
     for path in executable_paths:
-        if path.resolve() == Path(adapters.__file__).resolve():
+        if path.name in {
+            "staging_restore_runtime_adapters.py",
+            "receive_staging_broker_launch_receipt.py",
+        }:
             continue
         text = path.read_text()
         assert all(symbol not in text for symbol in adapter_symbols), path

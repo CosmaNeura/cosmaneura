@@ -892,7 +892,8 @@ class AuthenticatedBrokerLaunchReceipt:
         action: str,
         receipt_uri: str,
         signature_envelope_uri: str,
-        retrieval_statuses: tuple[int, ...],
+        receipt_retrieval_statuses: tuple[int, ...],
+        signature_envelope_retrieval_statuses: tuple[int, ...],
         retrieval_elapsed_seconds: int,
         receipt_bytes: bytes,
         signature_envelope_bytes: bytes,
@@ -912,10 +913,9 @@ class AuthenticatedBrokerLaunchReceipt:
             cls is not AuthenticatedBrokerLaunchReceipt
             or receipt_uri != expected_receipt_uri
             or signature_envelope_uri != expected_signature_uri
-            or type(retrieval_statuses) is not tuple
-            or not 1 <= len(retrieval_statuses) <= retrieval["maximum_attempts"]
-            or retrieval_statuses[-1] != retrieval["successful_status"]
-            or any(status not in retrieval["retryable_statuses_before_success"] for status in retrieval_statuses[:-1])
+            or any(type(statuses) is not tuple or not 1 <= len(statuses) <= retrieval["maximum_attempts"] for statuses in (receipt_retrieval_statuses, signature_envelope_retrieval_statuses))
+            or len(receipt_retrieval_statuses) + len(signature_envelope_retrieval_statuses) > retrieval["maximum_total_requests"]
+            or any(statuses[-1] != retrieval["successful_status"] or any(status not in retrieval["retryable_statuses_before_success"] for status in statuses[:-1]) for statuses in (receipt_retrieval_statuses, signature_envelope_retrieval_statuses))
             or type(retrieval_elapsed_seconds) is not int
             or not 0 <= retrieval_elapsed_seconds <= retrieval["maximum_elapsed_seconds"]
             or type(receipt_bytes) is not bytes
