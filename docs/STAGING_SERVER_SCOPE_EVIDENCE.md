@@ -354,3 +354,14 @@ path. The PostgreSQL connection cannot independently attest its Azure resource
 ID, and the local validator deliberately has no HMAC key with which to verify
 `source_resource_hmac` or `evidence_hmac`; authenticated provider binding and
 cryptographic attestation remain separate activation prerequisites.
+
+The dormant launch-material handoff now has a one-shot concrete reader for the
+exact provision launch-record Blob named by its authenticated receipt. The
+reader freezes and rechecks receipt and execution authority around one sealed
+request, binds the provision job UAMI and storage audience, and requires strict
+length/media/size/digest framing for the Blob object response. Only the default
+concrete transport claims no-proxy/no-redirect/TLS behavior; injected transports
+remain test seams. The private-endpoint ID is metadata, not routing proof, so
+private DNS, public-network, RBAC, and egress evidence remain activation holds.
+Default dependency assembly still refuses and all gates remain false; see the
+[launch-record reader flight plan](flight-plans/2026-09-04-staging-launch-record-private-reader.md).

@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "124b93fc3394fcebe177b30a2c61b22040c8a7c15e1c5673da26d454209fc21a"
+CANONICAL_POLICY_SHA256 = "920f9bd414dd2d6e875c68afdf4d132cfb390275069d8f9468de92a42b5d28df"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -479,6 +479,8 @@ def _cross_bind(policy: dict[str, Any]) -> None:
     cleanup_identity = identities["jobs"]["cleanup"]
     runtime_retrieval = runtime_ingress["retrieval"]
     secret_retrieval = secret["retrieval"]
+    launch_retrieval = mailbox["launch_record_retrieval"]
+    receipt_retrieval = mailbox["execution_receipt_handoff"]["retrieval"]
     both_job_ids = [provision_identity["resource_id"], cleanup_identity["resource_id"]]
     resources.append(publisher["identity_resource_id"])
     clients.append(publisher["client_id"])
@@ -548,6 +550,30 @@ def _cross_bind(policy: dict[str, Any]) -> None:
         != [{"name": "api-version", "value": secret_retrieval["api_version"]}]
         or secret_retrieval["maximum_response_bytes"]
         <= root["maximum_bytes"]
+        or launch_retrieval["maximum_total_http_requests"]
+        != launch_retrieval["maximum_object_get_requests"]
+        + launch_retrieval["maximum_managed_identity_token_requests"]
+        or any(
+            launch_retrieval[name] != receipt_retrieval[name]
+            for name in (
+                "service_api_version",
+                "managed_identity_api_version",
+                "managed_identity_endpoint_source",
+                "managed_identity_secret_header_source",
+                "managed_identity_response_maximum_bytes",
+                "managed_identity_response_required_fields",
+                "managed_identity_response_optional_bound_fields",
+                "managed_identity_response_unknown_fields_permitted",
+                "managed_identity_expiry_skew_seconds",
+                "managed_identity_maximum_token_lifetime_seconds",
+                "ambient_credential_permitted",
+                "ambient_proxy_permitted",
+                "minimum_tls_version",
+                "runtime_ca_bundle_path",
+                "request_query_parameters",
+                "content_encoding",
+            )
+        )
     ):
         _fail("evidence_ingress.binding")
     receipt_fields = ["target_fqdn", "approved_database_role", *TARGET_CLEANUP_FIELDS, *EXECUTOR_CLEANUP_FIELDS]

@@ -393,9 +393,12 @@ def test_storage_token_cache_refresh_and_expiry_bounds() -> None:
         {"access_token": "minimal.token", "expires_on": EPOCH_NOW + 3_600}
     ).encode()
     assert (
-        _token_source(policy, HttpOpener([HttpResponse(minimal)])).get_token(
-            **arguments
-        )
+        _token_source(
+            policy,
+            HttpOpener(
+                [HttpResponse(minimal, headers={"Content-Type": "application/json"})]
+            ),
+        ).get_token(**arguments)
         == "minimal.token"
     )
 
@@ -408,6 +411,7 @@ def test_storage_token_cache_refresh_and_expiry_bounds() -> None:
         ({"token_type": "bearer"}, {}),
         ({"expires_on": str(EPOCH_NOW + 30)}, {}),
         ({"expires_on": str(EPOCH_NOW + 86_401)}, {}),
+        ({"expires_on": f"0{EPOCH_NOW + 3_600}"}, {}),
         ({}, {"status": 401}),
         ({}, {"status": 302}),
         ({}, {"url": "http://127.0.0.1:42356/other"}),
