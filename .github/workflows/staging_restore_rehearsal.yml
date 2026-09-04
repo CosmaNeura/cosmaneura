@@ -3,37 +3,11 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: Provision an isolated restore or clean up one exact rehearsal
+        description: Check the dormant provision gate or clean up one exact rehearsal
         required: true
-        default: provision
+        default: cleanup
         type: choice
         options: [provision, cleanup]
-      restore_time:
-        description: UTC point in time inside the advertised source restore window
-        required: false
-        type: string
-      source_sha:
-        description: Exact 40-hex SHA from the accepted pre-migration inventory
-        required: false
-        type: string
-      candidate_sha:
-        description: Exact 40-hex canonical candidate SHA
-        required: false
-        type: string
-      inventory_digest:
-        description: sha256 digest of the independently accepted inventory artifact
-        required: false
-        type: string
-      quiescence_digest:
-        description: sha256 digest of the independently accepted workload-quiescence record
-        required: false
-        type: string
-      ttl_hours:
-        description: Active restore-resource lifetime; 24 hours is the hard maximum
-        required: true
-        default: "6"
-        type: choice
-        options: ["1", "2", "4", "6", "12", "24"]
       rehearsal_id:
         description: Cleanup only; exact 12-lowercase-hex rehearsal ID from the receipt
         required: false
@@ -49,15 +23,11 @@ jobs:
   authorize:
     if: >-
       (github.event_name == 'workflow_dispatch' &&
-       (inputs.action == 'cleanup' ||
-        (inputs.action == 'provision' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true'))) ||
+       (inputs.action == 'cleanup' || inputs.action == 'provision')) ||
       (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true')
     runs-on: ubuntu-latest
-    outputs:
-      rehearsal_id: ${{ steps.context.outputs.rehearsal_id }}
     steps:
       - name: Require protected repository, ref, and action
-        id: context
         env:
           EXPECTED_REPOSITORY: CosmaNeura/cosmaneura
           EXPECTED_REF: refs/heads/master
@@ -69,8 +39,6 @@ jobs:
           ACTION: ${{ inputs.action }}
           ACTOR: ${{ github.actor }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
           WORKFLOW_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -86,14 +54,14 @@ jobs:
           else
             test "$EVENT_NAME" = "schedule"
           fi
-          rehearsal_id="$(printf '%s' "$RUN_ID:$RUN_ATTEMPT" | sha256sum | cut -c1-12)"
-          printf 'rehearsal_id=%s\n' "$rehearsal_id" >> "$GITHUB_OUTPUT"
       - name: Check out policy from exact protected commit
+        if: github.event_name == 'schedule' || inputs.action == 'cleanup'
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
       - name: Fail closed while policy contains placeholders
+        if: github.event_name == 'schedule' || inputs.action == 'cleanup'
         env:
           REPOSITORY: ${{ github.repository }}
           REF: ${{ github.ref }}
@@ -116,94 +84,19 @@ jobs:
     needs: [authorize]
     if: github.event_name == 'workflow_dispatch' && inputs.action == 'provision'
     runs-on: ubuntu-latest
-    environment: staging-restore-provision
-    permissions:
-      attestations: write
-      contents: read
-      id-token: write
+    timeout-minutes: 1
+    permissions: {}
     steps:
-      - name: Check out exact authorized protected commit
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - name: Reauthorize protected head after environment approval
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Refuse provision until the trusted in-process coordinator exists
         run: |
-          set -euo pipefail
-          test "$GITHUB_REPOSITORY:$GITHUB_REF:$GITHUB_REF_PROTECTED" = "CosmaNeura/cosmaneura:refs/heads/master:true"
-          test "$GITHUB_ACTOR:$GITHUB_TRIGGERING_ACTOR" = "JohnClem:JohnClem"
-          test "$GITHUB_SHA" = "$(gh api repos/CosmaNeura/cosmaneura/git/ref/heads/master --jq .object.sha)"
-      - name: Authenticate dedicated provision identity
-        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
-        with:
-          client-id: ${{ vars.STAGING_RESTORE_PROVISION_CLIENT_ID }}
-          tenant-id: ${{ vars.STAGING_RESTORE_TENANT_ID }}
-          subscription-id: ${{ vars.STAGING_RESTORE_SUBSCRIPTION_ID }}
-      - name: Provision isolated restore envelope
-        id: execute
-        continue-on-error: true
-        env:
-          REHEARSAL_ID: ${{ needs.authorize.outputs.rehearsal_id }}
-          RESTORE_TIME: ${{ inputs.restore_time }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-          INVENTORY_DIGEST: ${{ inputs.inventory_digest }}
-          QUIESCENCE_DIGEST: ${{ inputs.quiescence_digest }}
-          TTL_HOURS: ${{ inputs.ttl_hours }}
-          REPOSITORY: ${{ github.repository }}
-          REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          RUN_ATTEMPT: ${{ github.run_attempt }}
-          EVENT_NAME: ${{ github.event_name }}
-          ACTOR: ${{ github.actor }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-        run: |
-          set -euo pipefail
-          umask 077
-          mkdir evidence
-          python scripts/staging_restore_envelope.py provision \
-            --repository "$REPOSITORY" \
-            --ref "$REF" \
-            --workflow-sha "$WORKFLOW_SHA" \
-            --run-id "$RUN_ID" \
-            --run-attempt "$RUN_ATTEMPT" \
-            --event-name "$EVENT_NAME" \
-            --actor "$ACTOR" \
-            --triggering-actor "$TRIGGERING_ACTOR" \
-            --rehearsal-id "$REHEARSAL_ID" \
-            --restore-time "$RESTORE_TIME" \
-            --source-sha "$SOURCE_SHA" \
-            --candidate-sha "$CANDIDATE_SHA" \
-            --inventory-digest "$INVENTORY_DIGEST" \
-            --quiescence-digest "$QUIESCENCE_DIGEST" \
-            --ttl-hours "$TTL_HOURS" \
-            --receipt evidence/restore-envelope.json
-      - name: Sign receipt provenance
-        if: always() && hashFiles('evidence/restore-envelope.json') != ''
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
-        with:
-          subject-path: evidence/restore-envelope.json
-      - name: Preserve aggregate receipt
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: staging-restore-${{ needs.authorize.outputs.rehearsal_id }}
-          path: evidence/
-          if-no-files-found: warn
-          retention-days: 90
-      - name: Enforce provision result
-        if: always() && steps.execute.outcome != 'success'
-        run: exit 1
+          echo "::error::Provision is disabled. Activation requires one trusted process to authenticate server, provider, and GitHub proofs, compose their opaque seals, and directly invoke safe-submit."
+          exit 1
   cleanup:
-    needs: [authorize, provision]
+    needs: [authorize]
     if: >-
       always() &&
       needs.authorize.result == 'success' &&
       ((github.event_name == 'workflow_dispatch' && inputs.action == 'cleanup') ||
-       (github.event_name == 'workflow_dispatch' && inputs.action == 'provision' && needs.provision.result != 'success') ||
        (github.event_name == 'schedule' && vars.STAGING_RESTORE_CLEANUP_ENABLED == 'true'))
     runs-on: ubuntu-latest
     environment: staging-restore-cleanup
@@ -240,7 +133,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           REQUESTED_ACTION: ${{ inputs.action }}
           REQUESTED_ID: ${{ inputs.rehearsal_id }}
-          FAILED_ID: ${{ needs.authorize.outputs.rehearsal_id }}
           REPOSITORY: ${{ github.repository }}
           REF: ${{ github.ref }}
           WORKFLOW_SHA: ${{ github.sha }}
@@ -259,14 +151,12 @@ jobs:
               --event-name "$EVENT_NAME" --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
               --receipt evidence/cleanup-envelope.json
           else
-            rehearsal_id="$REQUESTED_ID"
-            extra=()
-            if [ "$REQUESTED_ACTION" = "provision" ]; then rehearsal_id="$FAILED_ID"; extra=(--allow-missing); fi
+            test "$REQUESTED_ACTION" = "cleanup"
             python scripts/staging_restore_envelope.py cleanup \
               --repository "$REPOSITORY" --ref "$REF" --workflow-sha "$WORKFLOW_SHA" \
               --run-id "$RUN_ID" --run-attempt "$RUN_ATTEMPT" \
               --event-name "$EVENT_NAME" --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
-              --rehearsal-id "$rehearsal_id" --force "${extra[@]}" \
+              --rehearsal-id "$REQUESTED_ID" --force \
               --receipt evidence/cleanup-envelope.json
           fi
       - name: Sign cleanup receipt provenance
