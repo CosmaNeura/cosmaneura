@@ -11,6 +11,8 @@ from typing import Any, Callable
 
 import pytest
 
+from tests.infrastructure import test_staging_restore_runtime_binding as runtime_helpers
+
 executor = importlib.import_module("scripts.staging_restore_trusted_executor")
 
 NOW = datetime(2026, 9, 4, 12, 0, tzinfo=UTC)
@@ -19,7 +21,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "40ce9aa4c99d3b2060ff000d111ca531de9082732f9dcdbfad27ab90a79279c0"
+    "ca2996d18593df0ba9c036de163f843a1955b4ba7b434a3984d879d9a2ea021b"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
@@ -56,6 +58,14 @@ EXPECTED_BLOCKERS = (
     "workflow_integration_unimplemented",
     "restore_activation_unimplemented",
 )
+LAUNCH_CALLS = [
+    "launch_receipt",
+    "runtime_reference.provision",
+    "runtime_reference.cleanup",
+    "launch_record",
+    "runtime_record",
+    "launch_binding",
+]
 
 
 def _canonical(value: Any) -> bytes:
@@ -204,12 +214,142 @@ class Harness:
         self.provider = _sealed_provider()
         self.attestation = _sealed_attestation()
         self.final_binding = _sealed_final_binding()
+        self.runtime_policy = runtime_helpers._configured_policy()
         envelope, safe_policy = executor.safe_submit.validate_canonical_contracts()
         config = executor.safe_submit.config_from_policies(
             envelope, safe_policy, executable=False
         )
         self.request = executor.safe_submit.request_from_binding(
             binding=self.final_binding, config=config, ttl_hours=6
+        )
+        self.runtime_record_bytes = b'{"runtime":true}'
+        runtime_record_sha256 = executor.launch_binding._digest(
+            self.runtime_record_bytes
+        )
+        runtime_signature_sha256 = f"sha256:{'2' * 64}"
+        pointer = {
+            "record_uri": (
+                "https://restoreevidence.blob.core.windows.net/"
+                f"restore-runtime-bindings-v1/{runtime_record_sha256[7:]}.json"
+            ),
+            "record_sha256": runtime_record_sha256,
+            "signature_bundle_uri": (
+                "https://restoreevidence.blob.core.windows.net/"
+                "restore-runtime-bindings-v1/"
+                f"{runtime_signature_sha256[7:]}.sigstore.json"
+            ),
+            "signature_bundle_sha256": runtime_signature_sha256,
+        }
+        self.references = {
+            job_kind: executor.runtime_binding.ExternalRuntimeBindingReference._from_values(
+                job_kind,
+                self.runtime_policy["runtime"]["jobs"][job_kind]["resource_id"],
+                pointer,
+            )
+            for job_kind in ("provision", "cleanup")
+        }
+        self.runtime_signature = executor.runtime_binding.VerifiedExternalRuntimeRecordSignature._mint_from_reviewed_verifier(
+            record_sha256=runtime_record_sha256,
+            bundle_sha256=runtime_signature_sha256,
+            trusted_root_sha256=self.runtime_policy["evidence_ingress"][
+                "private_versioned_secret_source"
+            ]["secrets"]["github_trusted_root"]["sha256"],
+            certificate_oidc_issuer="https://token.actions.githubusercontent.com",
+            certificate_identity=self.runtime_policy["external_runtime_record"][
+                "signature"
+            ]["certificate_identity"],
+        )
+        self.runtime_record = (
+            executor.runtime_binding.ValidatedExternalRuntimeBinding._from_validated(
+                record_bytes=self.runtime_record_bytes,
+                reference=self.references["provision"],
+            )
+        )
+        self.launch_record_bytes = b'{"launch":true}'
+        launch_record_sha256 = executor.launch_binding._digest(self.launch_record_bytes)
+        launch_record_uri = (
+            "https://restorelaunch.blob.core.windows.net/"
+            "restore-provision-launch-v1/"
+            f"{launch_record_sha256[7:]}.json"
+        )
+        evidence_names = self.runtime_policy["launch_binding"]["launch_record"][
+            "provision"
+        ]["exact_evidence_file_names"]
+        self.expected_file_sha256s = {
+            name: executor.launch_binding._digest((self.bundle_dir / name).read_bytes())
+            for name in evidence_names
+        }
+        self.launch_record = object.__new__(
+            executor.launch_binding.ValidatedLaunchRecord
+        )
+        launch_values = {
+            "record_bytes": self.launch_record_bytes,
+            "record_sha256": launch_record_sha256,
+            "record_uri": launch_record_uri,
+            "action": "provision",
+            "rehearsal_id": self.request.rehearsal_id,
+            "created_at": NOW - timedelta(minutes=1),
+            "expires_at": NOW + timedelta(hours=6),
+            "runtime_record_sha256": runtime_record_sha256,
+            "workflow_sha": self.request.workflow_sha,
+            "run_id": self.request.run_id,
+            "run_attempt": self.request.run_attempt,
+            "evidence_file_sha256s": tuple(self.expected_file_sha256s.items()),
+            "attestation_bundle_sha256": executor.launch_binding._digest(
+                ATTESTATION_BYTES
+            ),
+            "server_scope_hmac_key_sha256": executor.launch_binding._digest(KEY_BYTES),
+            "trusted_root_sha256": executor.launch_binding._digest(TRUSTED_ROOT_BYTES),
+            "ttl_hours": 6,
+            "_seal": executor.launch_binding._LAUNCH_RECORD_SEAL,
+        }
+        for name, value in launch_values.items():
+            object.__setattr__(self.launch_record, name, value)
+        self.authenticated_receipt = object.__new__(
+            executor.launch_binding.AuthenticatedBrokerLaunchReceipt
+        )
+        receipt_bytes = b'{"receipt":true}'
+        receipt_values = {
+            "receipt_bytes": receipt_bytes,
+            "receipt_sha256": executor.launch_binding._digest(receipt_bytes),
+            "action": "provision",
+            "execution_name": "execution-1",
+            "launch_record_uri": launch_record_uri,
+            "launch_record_sha256": launch_record_sha256,
+            "runtime_reference": pointer,
+            "receipt_uri": "https://restorelaunch.blob.core.windows.net/receipt.json",
+            "signature_bundle_uri": (
+                "https://restorelaunch.blob.core.windows.net/receipt.sigstore.json"
+            ),
+            "signature_bundle_sha256": f"sha256:{'3' * 64}",
+            "observed_at": NOW,
+            "_seal": executor.launch_binding._AUTHENTICATED_RECEIPT_SEAL,
+        }
+        for name, value in receipt_values.items():
+            object.__setattr__(self.authenticated_receipt, name, value)
+        self.received_receipt = object.__new__(
+            executor.launch_binding.ValidatedReceivedLaunchReceipt
+        )
+        received_values = {
+            "receipt_sha256": receipt_values["receipt_sha256"],
+            "action": "provision",
+            "launch_record_sha256": launch_record_sha256,
+            "runtime_record_sha256": runtime_record_sha256,
+            "execution_resource_id": (
+                f"{self.runtime_policy['runtime']['jobs']['provision']['resource_id']}"
+                "/executions/execution-1"
+            ),
+            "execution_template_sha256": f"sha256:{'4' * 64}",
+            "observed_at": NOW,
+            "_seal": executor.launch_binding._VALIDATED_RECEIPT_SEAL,
+        }
+        for name, value in received_values.items():
+            object.__setattr__(self.received_receipt, name, value)
+        self.launch_material = executor.ExecutorLaunchMaterial(
+            authenticated_receipt=self.authenticated_receipt,
+            launch_record_bytes=self.launch_record_bytes,
+            runtime_record_bytes=self.runtime_record_bytes,
+            runtime_signature_verification=self.runtime_signature,
         )
         submitter = object.__new__(executor.safe_submit.SafeRestoreSubmitter)
         submitter.config = config
@@ -229,6 +369,8 @@ class Harness:
         self.calls: list[str] = []
         self.clocks: list[Callable[[], datetime]] = []
         self.clock_values: list[datetime] = []
+        self.launch_validation_now: datetime | None = None
+        self.manifest_validation_now: datetime | None = None
         self.submitted_request: Any | None = None
 
     def _clock(self, kwargs: dict[str, Any]) -> None:
@@ -236,11 +378,76 @@ class Harness:
         self.clocks.append(clock)
         self.clock_values.append(clock())
 
+    def receive_launch(self, **kwargs: Any) -> Any:
+        self.calls.append("launch_receipt")
+        self._clock(kwargs)
+        assert set(kwargs) == {"runtime_policy"}
+        assert kwargs["runtime_policy"] == self.runtime_policy
+        return self.launch_material
+
+    def runtime_reference_from_receipt(self, **kwargs: Any) -> Any:
+        job_kind = kwargs["source_job_kind"]
+        self.calls.append(f"runtime_reference.{job_kind}")
+        assert set(kwargs) == {"policy", "receipt", "source_job_kind"}
+        assert kwargs["policy"] == self.runtime_policy
+        assert kwargs["receipt"] is self.authenticated_receipt
+        return self.references[job_kind]
+
+    def validate_launch_record(self, **kwargs: Any) -> Any:
+        self.calls.append("launch_record")
+        assert set(kwargs) == {
+            "policy",
+            "record_bytes",
+            "record_sha256",
+            "record_uri",
+        }
+        assert kwargs["policy"] == self.runtime_policy
+        assert kwargs["record_bytes"] is self.launch_record_bytes
+        assert kwargs["record_sha256"] == self.launch_record.record_sha256
+        assert kwargs["record_uri"] == self.launch_record.record_uri
+        return self.launch_record
+
+    def validate_runtime_binding(self, **kwargs: Any) -> Any:
+        self.calls.append("runtime_record")
+        assert set(kwargs) == {
+            "policy",
+            "record_bytes",
+            "provision_reference",
+            "cleanup_reference",
+            "signature_verification",
+        }
+        assert kwargs["policy"] == self.runtime_policy
+        assert kwargs["record_bytes"] is self.runtime_record_bytes
+        assert kwargs["provision_reference"] is self.references["provision"]
+        assert kwargs["cleanup_reference"] is self.references["cleanup"]
+        assert kwargs["signature_verification"] is self.runtime_signature
+        return self.runtime_record
+
+    def validate_launch_receipt(self, **kwargs: Any) -> Any:
+        self.calls.append("launch_binding")
+        self.launch_validation_now = kwargs.pop("validation_now")
+        assert set(kwargs) == {
+            "policy",
+            "authenticated_receipt",
+            "launch_record",
+            "runtime_record",
+        }
+        assert kwargs["policy"] == self.runtime_policy
+        assert kwargs["authenticated_receipt"] is self.authenticated_receipt
+        assert kwargs["launch_record"] is self.launch_record
+        assert kwargs["runtime_record"] is self.runtime_record
+        return self.received_receipt
+
     def validate_snapshot(self, **kwargs: Any) -> Any:
         self.calls.append("manifest")
-        assert set(kwargs) == {"bundle_dir", "validation_now"}
+        assert set(kwargs) == {
+            "bundle_dir",
+            "validation_now",
+            "expected_file_sha256s",
+        }
         assert kwargs["bundle_dir"] == self.bundle_dir
-        assert kwargs["validation_now"] == NOW
+        self.manifest_validation_now = kwargs["validation_now"]
+        assert kwargs["expected_file_sha256s"] == self.expected_file_sha256s
         if self.mutate_inputs:
             self.hmac_key_path.write_bytes(b"changed-key")
             self.attestation_bundle_path.write_bytes(b"changed-attestation")
@@ -315,6 +522,11 @@ class Harness:
 
     def dependencies(self) -> Any:
         return executor.ExecutorDependencies(
+            receive_launch=self.receive_launch,
+            runtime_reference_from_receipt=self.runtime_reference_from_receipt,
+            validate_launch_record=self.validate_launch_record,
+            validate_runtime_binding=self.validate_runtime_binding,
+            validate_launch_receipt=self.validate_launch_receipt,
             validate_snapshot=self.validate_snapshot,
             authenticate_server=self.authenticate_server,
             observe_provider=self.observe_provider,
@@ -360,13 +572,14 @@ def _execute(
     dependencies: Any,
     clock: Any,
     mutate_policy: Callable[[dict[str, Any]], None] | None = None,
+    runtime_policy: Any | None = None,
 ) -> Any:
     policy_bytes, policy_sha256 = _activated_policy(mutate_policy)
     return executor._execute_trusted_restore_with_dependencies(
         policy_bytes=policy_bytes,
         policy_sha256=policy_sha256,
+        runtime_policy=runtime_policy or runtime_helpers._configured_policy(),
         **inputs,
-        ttl_hours=6,
         dependencies=dependencies,
         clock=clock,
     )
@@ -428,7 +641,6 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
         "hmac_key_path",
         "attestation_bundle_path",
         "trusted_root_path",
-        "ttl_hours",
     ]
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
@@ -443,7 +655,6 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
             hmac_key_path=missing,
             attestation_bundle_path=missing,
             trusted_root_path=missing,
-            ttl_hours=6,
         )
 
 
@@ -456,6 +667,11 @@ def test_closed_world_policy_and_every_activation_flag_fail_before_stages(
         calls.append("unexpected")
 
     dependencies = executor.ExecutorDependencies(
+        receive_launch=unexpected,
+        runtime_reference_from_receipt=unexpected,
+        validate_launch_record=unexpected,
+        validate_runtime_binding=unexpected,
+        validate_launch_receipt=unexpected,
         validate_snapshot=unexpected,
         authenticate_server=unexpected,
         observe_provider=unexpected,
@@ -498,7 +714,7 @@ def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
     inputs: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     harness = Harness(inputs, mutate_inputs_during_validation=True)
-    values = [NOW + timedelta(seconds=index) for index in range(6)]
+    values = [NOW + timedelta(seconds=index) for index in range(8)]
     clock = SequenceClock(values)
     reads: list[Path] = []
     original_read = executor._read_input_file
@@ -514,6 +730,7 @@ def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
     assert outcome == harness.outcome
     assert outcome is not harness.outcome
     assert harness.calls == [
+        *LAUNCH_CALLS,
         "manifest",
         "server",
         "provider",
@@ -523,7 +740,9 @@ def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
         "submit",
     ]
     assert len({id(value) for value in harness.clocks}) == 1
-    assert harness.clock_values == values[1:]
+    assert harness.clock_values == [values[0], *values[3:]]
+    assert harness.launch_validation_now == values[1]
+    assert harness.manifest_validation_now == values[2]
     assert clock.calls == len(values)
     assert reads == [
         inputs["hmac_key_path"],
@@ -553,14 +772,111 @@ def test_regressing_shared_clock_refuses_before_provider(
         executor.TrustedExecutorFailure, match="trusted_clock.regressed"
     ):
         _run(harness, inputs, clock)
-    assert harness.calls == ["manifest", "server"]
+    assert harness.calls == LAUNCH_CALLS[:-1]
+
+
+@pytest.mark.parametrize("failure", ["cleanup", "unsealed", "receipt_digest"])
+def test_launch_validation_refuses_before_any_restore_input_read(
+    failure: str,
+    inputs: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = Harness(inputs)
+    reads: list[Path] = []
+    monkeypatch.setattr(
+        executor,
+        "_read_input_file",
+        lambda path, **_kwargs: reads.append(path),
+    )
+    if failure == "cleanup":
+        object.__setattr__(harness.launch_record, "action", "cleanup")
+        expected_calls = LAUNCH_CALLS[:4]
+    elif failure == "unsealed":
+        object.__setattr__(harness.launch_record, "_seal", object())
+        expected_calls = LAUNCH_CALLS[:4]
+    else:
+        object.__setattr__(
+            harness.received_receipt,
+            "runtime_record_sha256",
+            f"sha256:{'0' * 64}",
+        )
+        expected_calls = LAUNCH_CALLS
+
+    with pytest.raises(executor.TrustedExecutorFailure, match="result_invalid"):
+        _run(harness, inputs, lambda: NOW)
+    assert harness.calls == expected_calls
+    assert reads == []
+
+
+def test_malformed_sealed_launch_result_is_bounded(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+    malformed = object.__new__(executor.launch_binding.ValidatedLaunchRecord)
+    object.__setattr__(
+        malformed,
+        "_seal",
+        executor.launch_binding._LAUNCH_RECORD_SEAL,
+    )
+    dependencies = replace(
+        harness.dependencies(),
+        validate_launch_record=lambda **_kwargs: malformed,
+    )
+
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="launch_binding.result_invalid"
+    ):
+        _execute(inputs, dependencies, lambda: NOW)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "server_scope_hmac_key_sha256",
+        "attestation_bundle_sha256",
+        "trusted_root_sha256",
+    ],
+)
+def test_singleton_input_digest_mismatch_refuses_before_manifest(
+    field: str,
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+    object.__setattr__(harness.launch_record, field, f"sha256:{'0' * 64}")
+
+    with pytest.raises(executor.TrustedExecutorFailure, match="input.launch_binding"):
+        _run(harness, inputs, lambda: NOW)
+    assert harness.calls == LAUNCH_CALLS
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("rehearsal_id", "000000000000"),
+        ("workflow_sha", "f" * 40),
+        ("run_id", "902"),
+        ("run_attempt", "2"),
+    ],
+)
+def test_request_identity_must_match_validated_provision_launch(
+    field: str,
+    value: str,
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+    object.__setattr__(harness.launch_record, field, value)
+
+    with pytest.raises(executor.TrustedExecutorFailure, match="request.result_invalid"):
+        _run(harness, inputs, lambda: NOW)
+    assert harness.calls[-1] == "request"
+    assert "submit" not in harness.calls
 
 
 @pytest.mark.parametrize(
     "name",
     ["bundle_dir", "hmac_key_path", "attestation_bundle_path", "trusted_root_path"],
 )
-def test_symlink_inputs_refuse_before_any_stage(
+def test_symlink_inputs_refuse_after_launch_binding_before_manifest(
     name: str, inputs: dict[str, Path], tmp_path: Path
 ) -> None:
     link = tmp_path / f"linked-{name}"
@@ -569,7 +885,7 @@ def test_symlink_inputs_refuse_before_any_stage(
     harness = Harness(changed)
     with pytest.raises(executor.TrustedExecutorFailure, match="input.untrusted_path"):
         _execute(changed, harness.dependencies(), lambda: NOW)
-    assert harness.calls == []
+    assert harness.calls == LAUNCH_CALLS
 
 
 @pytest.mark.parametrize(
@@ -580,14 +896,14 @@ def test_symlink_inputs_refuse_before_any_stage(
         ("trusted_root_path", 0o602),
     ],
 )
-def test_unsafe_input_modes_refuse_before_any_stage(
+def test_unsafe_input_modes_refuse_after_launch_binding_before_manifest(
     name: str, mode: int, inputs: dict[str, Path]
 ) -> None:
     inputs[name].chmod(mode)
     harness = Harness(inputs)
     with pytest.raises(executor.TrustedExecutorFailure, match="input.untrusted_path"):
         _execute(inputs, harness.dependencies(), lambda: NOW)
-    assert harness.calls == []
+    assert harness.calls == LAUNCH_CALLS
 
 
 @pytest.mark.parametrize(
@@ -608,7 +924,7 @@ def test_external_inputs_are_nonempty_and_policy_bounded(
         inputs[name].write_bytes(raw_value)
         with pytest.raises(executor.TrustedExecutorFailure, match="input.invalid"):
             _execute(inputs, harness.dependencies(), lambda: NOW)
-    assert harness.calls == []
+    assert harness.calls == LAUNCH_CALLS * 2
 
 
 @pytest.mark.parametrize(

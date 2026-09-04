@@ -71,8 +71,7 @@
       "bundle_dir",
       "hmac_key_path",
       "attestation_bundle_path",
-      "trusted_root_path",
-      "ttl_hours"
+      "trusted_root_path"
     ],
     "additional_public_inputs_permitted": false
   },
@@ -95,7 +94,8 @@
       "maximum_total_bytes": 50331648,
       "owner_or_root_owned_files_required": true,
       "group_or_world_writable_files_permitted": false,
-      "symlinks_permitted": false
+      "symlinks_permitted": false,
+      "expected_sha256_source": "validated_provision_launch_record.payload.evidence_files"
     },
     "hmac_key": {
       "type": "absolute_file_path",
@@ -105,7 +105,8 @@
       "exact_mode": "0600",
       "owner_owned_required": true,
       "symlinks_permitted": false,
-      "all_file_bytes_are_key_material": true
+      "all_file_bytes_are_key_material": true,
+      "expected_sha256_source": "validated_provision_launch_record.payload.server_scope_hmac_key.decoded_sha256"
     },
     "attestation_bundle": {
       "type": "absolute_file_path",
@@ -114,7 +115,8 @@
       "maximum_bytes": 2097152,
       "owner_or_root_owned_required": true,
       "group_or_world_writable_permitted": false,
-      "symlinks_permitted": false
+      "symlinks_permitted": false,
+      "expected_sha256_source": "validated_provision_launch_record.payload.github_attestation_bundle.sha256"
     },
     "trusted_root": {
       "type": "absolute_file_path",
@@ -124,12 +126,15 @@
       "owner_or_root_owned_required": true,
       "group_or_world_writable_permitted": false,
       "symlinks_permitted": false,
-      "delivery": "independent_of_attestation_bundle_and_subject"
+      "delivery": "independent_of_attestation_bundle_and_subject",
+      "expected_sha256_source": "validated_provision_launch_record.github_trusted_root.sha256"
     },
     "ttl_hours": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 24
+      "maximum": 24,
+      "source": "validated_provision_launch_record.payload.ttl_hours",
+      "caller_override_permitted": false
     },
     "caller_authority_overrides_permitted": [],
     "environment_authority_inputs_permitted": false
@@ -184,6 +189,13 @@
       "compose_staging_restore_evidence_binding._compose_restore_evidence_binding_with_document",
       "staging_restore_safe_submit.request_from_binding",
       "staging_restore_safe_submit.SafeRestoreSubmitter.submit"
+    ],
+    "validated_provision_launch_required_before_input_reads": true,
+    "request_identity_bound_to_validated_provision_launch": [
+      "rehearsal_id",
+      "workflow_sha",
+      "run_id",
+      "run_attempt"
     ],
     "exact_validated_snapshot_reused": true,
     "exact_server_binding_reused": true,

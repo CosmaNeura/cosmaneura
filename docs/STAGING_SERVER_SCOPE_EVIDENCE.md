@@ -222,7 +222,13 @@ must not add a deserialization minter.
 `restore-trusted-executor-policy.json` now closes that future boundary without
 activating it. Its only public shape is
 `execute_trusted_restore(bundle_dir, hmac_key_path, attestation_bundle_path,
-trusted_root_path, ttl_hours)`. The exact six-file directory, HMAC key,
+trusted_root_path)`. Before any of those paths are read, the private seam now
+requires a sealed authenticated provision receipt, derives both job-scoped
+runtime references, validates the exact launch and external runtime records,
+and validates their receipt binding against the shared trusted clock. The
+validated launch record is the sole authority for TTL, evidence-file digests,
+singleton-input digests, and workflow/run identity; no caller TTL remains. The
+exact six-file directory, HMAC key,
 attestation bundle, and independently delivered GitHub-only root must each be
 opened once with bounded no-follow reads. The sealed snapshot retains the exact
 validated result, evidence manifest, and server-scope receipt bytes; accepted
@@ -238,9 +244,10 @@ requires one shared non-regressing clock. The validated snapshot and sealed
 server binding flow unchanged through one provider GET, one offline verifier
 invocation, composition's final freshness read, deterministic request
 derivation, and at most one `SafeRestoreSubmitter.submit` invocation. Runtime,
-provider, verifier, submitter, private-runner, workflow, and restore activation
-remain false; runtime resource pins are placeholders and the external image
-record is unconfigured.
+launch, mailbox, broker, receipt-integration, provider, verifier, submitter,
+private-runner, workflow, and restore activation remain false; runtime resource
+pins are placeholders and the external image record is unconfigured. No
+transport, Azure, or workflow behavior is added.
 No workflow or live environment was changed.
 
 ### Dormant restore runtime binding v1

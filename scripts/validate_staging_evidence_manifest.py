@@ -661,6 +661,23 @@ def _verify_checksums(files: Mapping[str, bytes]) -> None:
         raise EvidenceFailure("bundle.checksums")
 
 
+def _verify_expected_file_sha256s(
+    files: Mapping[str, bytes], expected_file_sha256s: Mapping[str, str]
+) -> None:
+    if (
+        type(expected_file_sha256s) is not dict
+        or set(expected_file_sha256s) != set(files)
+        or any(
+            type(value) is not str or DIGEST_RE.fullmatch(value) is None
+            for value in expected_file_sha256s.values()
+        )
+        or any(
+            expected_file_sha256s[name] != _digest(raw) for name, raw in files.items()
+        )
+    ):
+        raise EvidenceFailure("bundle.launch_binding")
+
+
 def _validate_provenance(
     provenance: Any,
     claims: Any,
@@ -1066,8 +1083,11 @@ def validate_bundle_snapshot(
     policy_sha256: str,
     bundle: Path,
     now: datetime,
+    expected_file_sha256s: Mapping[str, str] | None = None,
 ) -> ValidatedEvidenceBundle:
     files = _read_bundle(bundle, policy)
+    if expected_file_sha256s is not None:
+        _verify_expected_file_sha256s(files, expected_file_sha256s)
     _verify_checksums(files)
     synthetic = _load_synthetic_policy(policy)
     server_scope_policy = _load_server_scope_policy(policy)

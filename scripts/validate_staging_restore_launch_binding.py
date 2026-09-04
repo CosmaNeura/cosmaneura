@@ -208,6 +208,7 @@ _VERIFIED_OIDC_SEAL = object()
 _START_AUTHORIZATION_SEAL = object()
 _START_RESPONSE_SEAL = object()
 _AUTHENTICATED_RECEIPT_SEAL = object()
+_VALIDATED_RECEIPT_SEAL = object()
 def _sealed(cls: type[Any], seal: object, values: Mapping[str, Any]) -> Any:
     result = object.__new__(cls)
     for name, value in values.items():
@@ -409,6 +410,11 @@ class ValidatedLaunchRecord:
     workflow_sha: str
     run_id: str
     run_attempt: str
+    evidence_file_sha256s: tuple[tuple[str, str], ...]
+    attestation_bundle_sha256: str | None
+    server_scope_hmac_key_sha256: str | None
+    trusted_root_sha256: str
+    ttl_hours: int | None
     _seal: object = dataclass_field(repr=False, compare=False)
     def __init__(self) -> None:
         _fail("launch_record.unsealed")
@@ -472,6 +478,10 @@ def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: s
         _fail("launch_record.trusted_root")
     payload = record["payload"]
     rehearsal_id: str | None
+    evidence_file_sha256s: tuple[tuple[str, str], ...] = ()
+    attestation_bundle_sha256: str | None = None
+    server_scope_hmac_key_sha256: str | None = None
+    ttl_hours: int | None = None
     if action == "provision":
         provision = contract["provision"]
         payload = _mapping(payload, set(provision["payload_fields"]), "launch_record.provision")
@@ -516,6 +526,13 @@ def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: s
             or expires != created + timedelta(hours=payload["ttl_hours"])
         ):
             _fail("launch_record.hmac")
+        evidence_file_sha256s = tuple(
+            (name, evidence[name]["sha256"])
+            for name in provision["exact_evidence_file_names"]
+        )
+        attestation_bundle_sha256 = attestation["sha256"]
+        server_scope_hmac_key_sha256 = hmac["decoded_sha256"]
+        ttl_hours = payload["ttl_hours"]
     else:
         cleanup = contract["cleanup"]
         if type(payload) is not dict or payload.get("mode") not in cleanup["allowed_modes"]:
@@ -540,6 +557,11 @@ def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: s
         "workflow_sha": record["workflow_sha"],
         "run_id": record["run_id"],
         "run_attempt": record["run_attempt"],
+        "evidence_file_sha256s": evidence_file_sha256s,
+        "attestation_bundle_sha256": attestation_bundle_sha256,
+        "server_scope_hmac_key_sha256": server_scope_hmac_key_sha256,
+        "trusted_root_sha256": root["sha256"],
+        "ttl_hours": ttl_hours,
     })
 @dataclass(frozen=True, slots=True, init=False)
 class BrokerStartAuthorization:
@@ -855,6 +877,8 @@ class AuthenticatedBrokerLaunchReceipt:
     _seal: object = dataclass_field(repr=False, compare=False)
     def __init__(self) -> None:
         _fail("launch_receipt.unsealed")
+    def _is_authenticated(self) -> bool:
+        return type(self) is AuthenticatedBrokerLaunchReceipt and getattr(self, "_seal", None) is _AUTHENTICATED_RECEIPT_SEAL
     @classmethod
     def _from_reviewed_platform_metadata_mailbox_signature_adapter(
         cls,
@@ -939,13 +963,30 @@ class AuthenticatedBrokerLaunchReceipt:
             "signature_bundle_sha256": _digest(signature_bundle_bytes),
             "observed_at": _exact_time(observed_at, "launch_receipt.authentication"),
         })
+
+@dataclass(frozen=True, slots=True, init=False)
+class ValidatedReceivedLaunchReceipt:
+    receipt_sha256: str
+    action: str
+    launch_record_sha256: str
+    runtime_record_sha256: str
+    execution_resource_id: str
+    execution_template_sha256: str
+    observed_at: datetime
+    _seal: object = dataclass_field(repr=False, compare=False)
+    def __init__(self) -> None:
+        _fail("launch_receipt.unsealed")
+    def _is_validated(self) -> bool:
+        return type(self) is ValidatedReceivedLaunchReceipt and getattr(self, "_seal", None) is _VALIDATED_RECEIPT_SEAL
+
 def validate_received_launch_receipt(
     policy: Any,
     *,
     authenticated_receipt: AuthenticatedBrokerLaunchReceipt,
     launch_record: ValidatedLaunchRecord,
     runtime_record: runtime_binding.ValidatedExternalRuntimeBinding,
-) -> dict[str, Any]:
+    validation_now: datetime,
+) -> ValidatedReceivedLaunchReceipt:
     document = validate_launch_binding_policy(policy)
     if (
         type(authenticated_receipt) is not AuthenticatedBrokerLaunchReceipt
@@ -1007,9 +1048,18 @@ def validate_received_launch_receipt(
     ):
         _fail("launch_receipt.binding")
     receipt_time = _time(receipt["observed_at"], "launch_receipt.time")
-    if not (launch_record.created_at <= receipt_time <= authenticated_receipt.observed_at < launch_record.expires_at):
+    instant = _exact_time(validation_now, "launch_receipt.time")
+    if not (launch_record.created_at <= receipt_time <= authenticated_receipt.observed_at <= instant < launch_record.expires_at):
         _fail("launch_receipt.expired")
-    return receipt
+    return _sealed(ValidatedReceivedLaunchReceipt, _VALIDATED_RECEIPT_SEAL, {
+        "receipt_sha256": authenticated_receipt.receipt_sha256,
+        "action": selected,
+        "launch_record_sha256": launch_record.record_sha256,
+        "runtime_record_sha256": runtime_record.record_sha256,
+        "execution_resource_id": execution_id,
+        "execution_template_sha256": receipt["execution_template_sha256"],
+        "observed_at": receipt_time,
+    })
 def main() -> int:
     try:
         policy = validate_launch_binding_policy(runtime_binding.load_policy())
