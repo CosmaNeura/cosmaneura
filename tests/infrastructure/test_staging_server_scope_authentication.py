@@ -782,6 +782,54 @@ def test_snapshot_parser_rejects_oversized_integer_with_bounded_error(
         _authenticate(module, fixture)
 
 
+def test_malformed_immutable_snapshot_bytes_fail_closed(module: ModuleType) -> None:
+    fixture = _fixture(module)
+    snapshot = fixture["snapshot"]
+    fixture["snapshot"] = _validated_snapshot(
+        module,
+        result_bytes=b"[]",
+        server_scope_bytes=snapshot.server_scope_bytes,
+    )
+
+    with pytest.raises(module.AuthenticationFailure, match="validated_bundle.invalid"):
+        _authenticate(module, fixture)
+
+
+def test_authenticator_rejects_snapshot_not_minted_by_validator(
+    module: ModuleType,
+) -> None:
+    fixture = _fixture(module)
+    validated = fixture["snapshot"]
+
+    class ForgedSnapshot:
+        result_bytes = validated.result_bytes
+        server_scope_bytes = validated.server_scope_bytes
+
+    fixture["snapshot"] = ForgedSnapshot()
+    with pytest.raises(module.AuthenticationFailure, match="validated_bundle.invalid"):
+        _authenticate(module, fixture)
+
+    with pytest.raises(TypeError):
+        module.evidence_manifest.ValidatedEvidenceBundle(
+            result_bytes=validated.result_bytes,
+            server_scope_bytes=validated.server_scope_bytes,
+        )
+
+
+def test_private_result_writer_is_exclusive_and_owner_only(
+    module: ModuleType, tmp_path: Path
+) -> None:
+    path = tmp_path / "receipt.json"
+    result = {"activation_state": "blocked"}
+
+    module._write_private_result(path, result)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_bytes()) == result
+    with pytest.raises(module.AuthenticationFailure, match="output_file.unsafe"):
+        module._write_private_result(path, result)
+
+
 def test_cli_writes_private_result_without_logging(
     module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
@@ -817,51 +865,6 @@ def test_cli_writes_private_result_without_logging(
     captured = capsys.readouterr()
     assert (captured.out, captured.err) == ("", "")
     assert stat.S_IMODE(output.stat().st_mode) == 0o600
-    assert json.loads(output.read_bytes()) == result
-
-
-def test_cli_writes_authenticated_result_without_stdout(
-    module: ModuleType,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    result = {"activation_state": "blocked"}
-    monkeypatch.setattr(
-        module,
-        "load_authentication_policy_document",
-        lambda: ({}, "a" * 64, b"{}"),
-    )
-    monkeypatch.setattr(module, "validate_authentication_policy", lambda *_a, **_k: {})
-    monkeypatch.setattr(
-        module.server_scope,
-        "read_policy_document",
-        lambda: ({}, "b" * 64, b"{}"),
-    )
-    monkeypatch.setattr(module.server_scope, "read_hmac_key", lambda _path: b"key")
-    monkeypatch.setattr(
-        module,
-        "_authenticate_evidence_bundle_with_documents",
-        lambda **_kwargs: result,
-    )
-    output = tmp_path / "receipt.json"
-
-    assert (
-        module.main(
-            [
-                "--bundle",
-                str(tmp_path / "bundle"),
-                "--hmac-key-file",
-                str(tmp_path / "key"),
-                "--output-file",
-                str(output),
-            ]
-        )
-        == 0
-    )
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
     assert json.loads(output.read_bytes()) == result
 
 
