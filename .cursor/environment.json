@@ -1,15 +1,15 @@
 {
   "name": "cosmaneura",
-  "install": "bash .cursor/install.sh",
-  "start": "bash .cursor/start.sh",
+  "install": "bash .cursor/credential-neutral.sh install",
+  "start": "bash .cursor/credential-neutral.sh start",
   "terminals": [
     {
       "name": "backend",
-      "command": "bash .cursor/run-backend.sh"
+      "command": "bash .cursor/credential-neutral.sh backend"
     },
     {
       "name": "frontend",
-      "command": "bash .cursor/run-frontend.sh"
+      "command": "bash .cursor/credential-neutral.sh frontend"
     }
   ],
   "ports": [8205, 8207]

@@ -11,6 +11,9 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 APT_CONFOLD=(-o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef)
 CURSOR_SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$CURSOR_SETUP_DIR/credential-neutral.sh"
+cursor_require_credential_neutral
 
 echo "== [system] apt packages =="
 APT_PACKAGES=(
@@ -31,9 +34,7 @@ fi
 
 echo "== [system] docker engine =="
 if ! command -v docker >/dev/null 2>&1; then
-  sudo install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  sudo chmod a+r /etc/apt/keyrings/docker.gpg
+  bash "$CURSOR_SETUP_DIR/../scripts/install_verified_docker_apt_key.sh"
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
   sudo apt-get "${APT_CONFOLD[@]}" -o Acquire::Retries=3 update -qq
@@ -51,9 +52,7 @@ if [ ! -f /etc/docker/daemon.json ]; then
 fi
 
 echo "== [system] mise (pinned toolchain manager) =="
-if ! command -v mise >/dev/null 2>&1 && [ ! -x "$HOME/.local/bin/mise" ]; then
-  curl -fsSL https://mise.run | sh
-fi
+bash "$CURSOR_SETUP_DIR/../scripts/install_pinned_mise.sh"
 
 echo "== [system] localias (local TLS reverse proxy) =="
 bash "$CURSOR_SETUP_DIR/../scripts/install_pinned_localias.sh"

@@ -24,7 +24,11 @@ ensure_dockerd() {
 
 ensure_infra() {
   echo "[services] bringing up postgres/redis/mailpit..."
-  denv docker compose up -d --wait
+  denv docker compose \
+    --project-directory "$REPO_ROOT" \
+    --file "$REPO_ROOT/docker-compose.yml" \
+    --file "$REPO_ROOT/.cursor/docker-compose.yml" \
+    up -d --wait
 }
 
 ensure_localias() {

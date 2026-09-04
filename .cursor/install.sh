@@ -3,6 +3,9 @@
 # Runs after the repo is checked out. Safe to run repeatedly.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/credential-neutral.sh"
+cursor_require_credential_neutral
 
 # Provision OS-level dependencies first (installs mise, which lib.sh needs).
 echo "== [install] system provisioning =="
@@ -12,6 +15,8 @@ bash "$SCRIPT_DIR/system-setup.sh"
 source "$SCRIPT_DIR/lib.sh"
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/services.sh"
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/database.sh"
 
 echo "== [install] ensure pinned toolchain (.tool-versions) =="
 mise install
@@ -23,41 +28,13 @@ echo "== [install] allow direnv =="
 hash -r 2>/dev/null || true
 direnv allow .
 
-echo "== [install] create developer-local env files (gitignored, no secrets) =="
-# Mirrors `just setup`, plus the two dev values the committed examples omit:
-# API_BASE_URL (required at import time) and a non-secret placeholder Clerk key.
-[ -f .env.local ] || cp .env.local-example .env.local
-if [ ! -f .env.dev.local ]; then
-  cp .env.dev.local-example .env.dev.local
-  cat >> .env.dev.local <<'EOF'
-
-# --- Cloud Agent dev overrides (no secrets) ---
-# Public origin of the backend under the localias dev setup; required at import
-# time by app.configuration.server, with no committed dev default.
-export API_BASE_URL=https://api.cosma.localhost
-# Clerk publishable keys are non-secret (shipped to the browser). Without a real
-# dev key, use the same placeholder the repo's own secretless e2e build uses so
-# the frontend's import-time invariant passes and public pages render.
-export VITE_CLERK_PUBLIC_KEY=${VITE_CLERK_PUBLIC_KEY:-pk_test_placeholder}
-export CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLIC_KEY
-EOF
-fi
-# Test env: CI injects a real Clerk publishable key from 1Password. Provide the
-# same non-secret placeholder so js_test / pytest collection does not fail on the
-# import-time Clerk invariant.
-if [ ! -f .env.test.local ]; then
-  cat > .env.test.local <<'EOF'
-# Local test overrides (no secrets). Generated for Cloud Agent setup.
-export VITE_CLERK_PUBLIC_KEY=${VITE_CLERK_PUBLIC_KEY:-pk_test_placeholder}
-export CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLIC_KEY
-EOF
-fi
+echo "== [install] use committed credential-neutral environment defaults =="
 
 echo "== [install] python deps (uv sync) =="
-denv uv sync
+denv uv sync --locked
 
 echo "== [install] playwright chromium (for integration tests) =="
-denv uv run playwright install chromium
+denv uv run --no-sync playwright install chromium
 
 echo "== [install] javascript deps (pnpm) =="
 denv bash -c 'cd web && pnpm install --frozen-lockfile && pnpm run typegen'
@@ -66,22 +43,87 @@ echo "== [install] bring up dev infrastructure for DB prep =="
 ensure_dockerd
 ensure_infra
 
-echo "== [install] database migrate (dev + test) =="
-denv just db_migrate
+mkdir -p migrations/versions
 
-# Seed only when the dev database is empty. seed.py anchors are idempotent, but
-# it appends synthetic appointments and inserts note schemas that violate a
-# unique constraint on re-run, so guard for idempotence. DATABASE_URL must be
-# expanded inside the direnv environment, not the outer shell.
-seeded="$(denv bash -c 'psql "$DATABASE_URL" -tAc "SELECT COALESCE((SELECT count(*) FROM doctor), 0)"' 2>/dev/null | tr -d '[:space:]' || echo 0)"
-if [ "${seeded:-0}" = "0" ]; then
-  echo "== [install] seeding database (dev + test) =="
-  denv just db_seed
+echo "== [install] ensure local test database exists =="
+if ! test_database_exists="$(
+  # shellcheck disable=SC2016
+  cursor_database_dev bash -c \
+    'psql "$DATABASE_URL" -tAc "SELECT 1 FROM pg_database WHERE datname = '\''test'\''"' \
+    2>/dev/null | tr -d '[:space:]'
+)"; then
+  echo "Unable to inspect the local test database; refusing database setup." >&2
+  exit 1
+fi
+case "$test_database_exists" in
+  "")
+    # shellcheck disable=SC2016
+    cursor_database_dev bash -c \
+      'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE DATABASE test"'
+    ;;
+  1) ;;
+  *)
+    echo "Unexpected local test database existence result; refusing database setup." >&2
+    exit 1
+    ;;
+esac
+
+echo "== [install] migrate local development database =="
+cursor_database_dev uv run --no-sync alembic upgrade head
+
+echo "== [install] migrate local test database =="
+cursor_database_test uv run --no-sync alembic upgrade head
+
+database_doctor_count() {
+  local mode="$1"
+  local count
+  if [[ "$mode" == "dev" ]]; then
+    if ! count="$(
+      # shellcheck disable=SC2016
+      cursor_database_dev bash -c \
+        'psql "$DATABASE_URL" -tAc "SELECT COALESCE((SELECT count(*) FROM doctor), 0)"' \
+        2>/dev/null | tr -d '[:space:]'
+    )"; then
+      echo "Unable to inspect the local development seed state; refusing to seed." >&2
+      return 1
+    fi
+  elif [[ "$mode" == "test" ]]; then
+    if ! count="$(
+      # shellcheck disable=SC2016
+      cursor_database_test bash -c \
+        'psql "$TEST_DATABASE_URL" -tAc "SELECT COALESCE((SELECT count(*) FROM doctor), 0)"' \
+        2>/dev/null | tr -d '[:space:]'
+    )"; then
+      echo "Unable to inspect the local test seed state; refusing to seed." >&2
+      return 1
+    fi
+  else
+    echo "Unknown local database mode; refusing to seed." >&2
+    return 1
+  fi
+  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+    echo "Unexpected local database seed-state result; refusing to seed." >&2
+    return 1
+  fi
+  printf '%s' "$count"
+}
+
+dev_doctor_count="$(database_doctor_count dev)"
+if [[ "$dev_doctor_count" == "0" ]]; then
+  echo "== [install] seed local development database =="
+  cursor_database_dev uv run --no-sync python migrations/seed.py
 else
-  echo "== [install] database already seeded (doctor rows present); skipping seed =="
+  echo "== [install] development database already seeded; skipping seed =="
 fi
 
-echo "== [install] generate OpenAPI client + route types =="
-denv just js_generate-openapi
+test_doctor_count="$(database_doctor_count test)"
+if [[ "$test_doctor_count" == "0" ]]; then
+  echo "== [install] seed local test database =="
+  cursor_database_test uv run --no-sync python migrations/seed.py
+else
+  echo "== [install] test database already seeded; skipping seed =="
+fi
+
+echo "== [install] use committed OpenAPI client (regeneration remains explicit) =="
 
 echo "== [install] done =="
