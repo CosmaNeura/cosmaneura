@@ -183,6 +183,15 @@ transport with bounded 404-only polling before returning the sealed receipt.
 Executor integration, sender, Azure resource, workflow, and activation remain
 out of scope; see the [mailbox receiver flight plan](flight-plans/2026-09-04-staging-launch-receipt-mailbox-receiver.md).
 
+A dormant same-process handoff now carries that sealed receipt into the trusted
+executor's private seam. It admits only `provision`, derives both runtime
+pointers from the authenticated receipt, bounds and digest-checks exact record
+bytes, cross-binds the sealed external-runtime signature proof, and rechecks
+the platform execution name between stages. Exact private record readers,
+external-runtime Sigstore authentication, the public dependency factory,
+sender, and every activation gate remain unimplemented or false; see the
+[executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
+
 ## Dormant restore-sanitizer contract
 
 `restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.

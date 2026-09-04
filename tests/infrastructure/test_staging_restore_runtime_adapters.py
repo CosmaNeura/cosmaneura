@@ -837,7 +837,14 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
         }:
             continue
         text = path.read_text()
-        assert all(symbol not in text for symbol in adapter_symbols), path
+        forbidden_symbols = adapter_symbols
+        if path.name == "staging_restore_launch_material.py":
+            forbidden_symbols = tuple(
+                symbol
+                for symbol in adapter_symbols
+                if symbol != "receive_staging_broker_launch_receipt"
+            )
+        assert all(symbol not in text for symbol in forbidden_symbols), path
     for policy_path in (
         adapters.observation.POLICY_PATH,
         adapters.attestation.POLICY_PATH,

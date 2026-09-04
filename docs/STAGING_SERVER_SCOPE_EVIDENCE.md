@@ -298,6 +298,16 @@ the mailbox account/host and exact container resource IDs are cross-bound.
 Executor wiring, broker signing, workflow integration, and every activation
 bit remain off; see the [mailbox receiver flight plan](flight-plans/2026-09-04-staging-launch-receipt-mailbox-receiver.md).
 
+The receiver output now also has a dormant, same-process handoff into the
+trusted executor's private launch-material seam. It fixes the action to
+`provision`, derives both runtime references only from the authenticated
+receipt, bounds and digest-checks the launch/runtime bytes, cross-binds the
+sealed external-runtime signature proof, and rechecks the platform execution
+name between authority stages. Exact record ingress and external-runtime
+Sigstore authentication are still injected and unimplemented; the public
+executor dependency factory still refuses and all activation bits remain
+false. See the [executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
+
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of
 `trusted_composite_verifier_implemented`, `workflow_integrated`,
