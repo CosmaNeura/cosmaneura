@@ -21,7 +21,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "dc2d5667c2586208438524955ed14698759522143e2d0de19fbd01ba40c7fedf"
+    "c00844c790fe17015e7bafbd8230ff103c16b44aa25de8e684e330b618d11038"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
@@ -334,10 +334,10 @@ class Harness:
             "launch_record_sha256": launch_record_sha256,
             "runtime_reference": pointer,
             "receipt_uri": "https://restorelaunch.blob.core.windows.net/receipt.json",
-            "signature_bundle_uri": (
-                "https://restorelaunch.blob.core.windows.net/receipt.sigstore.json"
+            "signature_envelope_uri": (
+                "https://restorelaunch.blob.core.windows.net/receipt.signature.json"
             ),
-            "signature_bundle_sha256": f"sha256:{'3' * 64}",
+            "signature_envelope_sha256": f"sha256:{'3' * 64}",
             "observed_at": NOW,
             "_seal": executor.launch_binding._AUTHENTICATED_RECEIPT_SEAL,
         }

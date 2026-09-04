@@ -172,6 +172,16 @@ This slice activates no workflow, provisions no compute, runs no Azure apply,
 publishes no image, restores or mutates no data, performs no cutover,
 and authorizes no production/PHI action. No live proof was collected.
 
+The receiver-side broker launch-receipt signature boundary is now implemented
+but dormant. It accepts only a canonical `.signature.json` envelope and a
+sealed offline ES256 proof over the exact receipt bytes, using the exact
+policy-pinned P-256 JWK and Azure Key Vault digest/P1363 semantics. High-S,
+DER-on-wire, malformed, mismatched, or cross-input reused proofs refuse. The separate
+external runtime record continues to use `.sigstore.json`. No mailbox
+transport, executor integration, sender, Azure resource, workflow, or
+activation change is included; see the
+[receipt-authentication flight plan](flight-plans/2026-09-04-staging-broker-launch-receipt-authentication.md).
+
 ## Dormant restore-sanitizer contract
 
 `restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.

@@ -287,6 +287,15 @@ This slice activates no workflow, provisions no compute, runs no Azure apply,
 publishes no image, restores or mutates no data, performs no cutover,
 and authorizes no production/PHI action. It supplies no live evidence.
 
+The dormant broker-receipt receiver now verifies the exact canonical receipt
+offline with a policy-pinned P-256 JWK before minting a sealed proof. Its
+closed-world `.signature.json` envelope binds the policy, receipt digest,
+ES256 key resource/version, and public-key digest; signatures are strict
+base64url-no-padding 64-byte P1363 low-S values. External runtime-record
+`.sigstore.json` bundles are unchanged. Mailbox transport, executor wiring,
+broker signing, workflow integration, and every activation bit remain off; see
+the [receipt-authentication flight plan](flight-plans/2026-09-04-staging-broker-launch-receipt-authentication.md).
+
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of
 `trusted_composite_verifier_implemented`, `workflow_integrated`,
