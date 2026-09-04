@@ -13,6 +13,7 @@ from scripts import validate_staging_restore_runtime_binding as runtime
 from tests.infrastructure import test_staging_restore_runtime_binding as helpers
 
 NOW = datetime(2026, 9, 4, 12, 1, tzinfo=UTC)
+VALIDATION_NOW = datetime(2026, 9, 4, 12, 5, tzinfo=UTC)
 def _policy() -> dict[str, Any]:
     return helpers._configured_policy()
 def _arm_response(policy: dict[str, Any], action: str, *, body: dict[str, Any] | bytes | None = None) -> launch.AuthenticatedArmGetResponse:
@@ -154,6 +155,23 @@ def test_launch_record_materializes_exact_versioned_evidence_and_action_union(mu
         launch.validate_launch_record(policy, b"{", record_sha256=runtime._digest(b"{"), record_uri=provision.record_uri)
     assert provision.action == "provision"
     assert cleanup.action == "cleanup"
+    expected_names = policy["launch_binding"]["launch_record"]["provision"][
+        "exact_evidence_file_names"
+    ]
+    assert provision.evidence_file_sha256s == tuple(
+        (name, f"sha256:{index:064x}")
+        for index, name in enumerate(expected_names, 1)
+    )
+    assert provision.attestation_bundle_sha256 == f"sha256:{'e' * 64}"
+    assert provision.server_scope_hmac_key_sha256 == f"sha256:{'f' * 64}"
+    assert provision.trusted_root_sha256 == policy["evidence_ingress"][
+        "private_versioned_secret_source"
+    ]["secrets"]["github_trusted_root"]["sha256"]
+    assert provision.ttl_hours == 1
+    assert cleanup.evidence_file_sha256s == ()
+    assert cleanup.attestation_bundle_sha256 is None
+    assert cleanup.server_scope_hmac_key_sha256 is None
+    assert cleanup.ttl_hours is None
     raw, digest, uri = _record(policy, action="provision", runtime_record_sha256=runtime_digest)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_record.uri"):
         launch.validate_launch_record(policy, raw, record_sha256=digest, record_uri=7)  # type: ignore[arg-type]
@@ -277,21 +295,32 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
         authenticated_receipt=authenticated,
         launch_record=job_record,
         runtime_record=runtime_record,
+        validation_now=VALIDATION_NOW,
     )
-    assert receipt["launch_record_sha256"] == record.record_sha256
-    assert receipt["execution_template_sha256"] == (provision.execution_template_sha256)
-    assert not {"provision_job_etag", "cleanup_job_etag", "execution_etag"} & set(receipt)
+    assert receipt._is_validated()
+    assert receipt.launch_record_sha256 == record.record_sha256
+    assert receipt.execution_template_sha256 == provision.execution_template_sha256
+    assert receipt.validated_at == VALIDATION_NOW
+    assert not hasattr(receipt, "__dict__")
     def authenticate(raw: bytes) -> launch.AuthenticatedBrokerLaunchReceipt:
         return launch.AuthenticatedBrokerLaunchReceipt._from_reviewed_platform_metadata_mailbox_signature_adapter(**(adapter_arguments | {"receipt_bytes": raw, "verified_receipt_sha256": runtime._digest(raw)}))
     for field, value, code in (("provision_job_projection_sha256", f"sha256:{'0' * 64}", "binding"), ("start_client_request_id", "00000000-0000-4000-8000-000000000000", "binding"), ("schema_version", True, "authentication")):
         changed = runtime._parse_policy(receipt_bytes)
         changed[field] = value
         with pytest.raises(launch.LaunchBindingFailure, match=f"launch_receipt.{code}"):
-            launch.validate_received_launch_receipt(policy, authenticated_receipt=authenticate(runtime._canonical(changed)), launch_record=job_record, runtime_record=runtime_record)
+            launch.validate_received_launch_receipt(policy, authenticated_receipt=authenticate(runtime._canonical(changed)), launch_record=job_record, runtime_record=runtime_record, validation_now=VALIDATION_NOW)
     mismatched_record = copy(job_record)
     object.__setattr__(mismatched_record, "runtime_record_sha256", f"sha256:{'0' * 64}")
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.binding"):
-        launch.validate_received_launch_receipt(policy, authenticated_receipt=authenticated, launch_record=mismatched_record, runtime_record=runtime_record)
+        launch.validate_received_launch_receipt(policy, authenticated_receipt=authenticated, launch_record=mismatched_record, runtime_record=runtime_record, validation_now=VALIDATION_NOW)
+    with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.expired"):
+        launch.validate_received_launch_receipt(
+            policy,
+            authenticated_receipt=authenticated,
+            launch_record=job_record,
+            runtime_record=runtime_record,
+            validation_now=job_record.expires_at,
+        )
     old_execution = copy(execution)
     object.__setattr__(old_execution, "execution_resource_id", f"{provision.job_resource_id}/executions/older-execution")
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.binding"):

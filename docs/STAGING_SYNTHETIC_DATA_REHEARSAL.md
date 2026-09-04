@@ -107,20 +107,28 @@ boundary closed-world. It pins the raw SHA-256 and identity of the manifest,
 server-evidence, server-authentication, provider-observation, attestation,
 composition, envelope, and safe-submit policies. Its only external inputs are
 the exact six-file bundle, one server-scope HMAC key, one offline attestation
-bundle, one independently delivered GitHub-only root, and a one-to-24-hour
-TTL. Each path input is captured once with a bounded no-follow read; opaque
-objects and exact receipt bytes never cross a process, step, artifact, or JSON
-handoff. The sealed snapshot retains the validated result, manifest, and
-server-scope bytes; accepted digests bind the candidate, inventory,
-quiescence, and checksum files without reopening them.
+bundle, and one independently delivered GitHub-only root. The private seam
+first validates a sealed authenticated provision receipt, both receipt-derived
+runtime references, the exact launch and external runtime records, and the
+received-receipt cross-binding. That launch record supplies the one-to-24-hour
+TTL, every expected input digest, and the workflow/run identity; callers cannot
+override them. Each path input is captured once with a bounded no-follow read;
+opaque objects and exact receipt bytes never cross a process, step, artifact,
+or JSON handoff. The sealed snapshot retains the validated result, manifest,
+and server-scope bytes. Its separate launch-digest proof is minted only after
+full validation of those same-read files and carries the exact digest tuple the
+executor rechecks; generic validated snapshots are insufficient.
 
-The fixed order is manifest validation, server authentication, one provider
-observation, one offline attestation verification, composition,
-`request_from_binding`, and one direct safe-submit call using the same
-non-regressing clock source. The runtime, provider, verifier, safe-submit,
+The fixed order is provision-launch validation, manifest validation, server
+authentication, one provider observation, one offline attestation verification,
+composition, `request_from_binding`, and one direct safe-submit call using the
+same non-regressing clock source. The runtime, provider, verifier, safe-submit,
 private-runner, workflow, and restore flags are all false, and exact runtime
 resource pins remain `CONFIGURE_EXACT_...`; the external image record is
-unconfigured, and this contract cannot restore anything.
+unconfigured. Mailbox/broker/receipt, Azure, and workflow adapters remain
+unimplemented, so this contract cannot restore anything.
+The received-launch proof binds its validation instant, and launch authorization
+must still be fresh at the executor's final read immediately before submit.
 
 The dormant read-only adapter layer now implements the narrow provider and
 verifier interfaces without enabling them. It uses one exact managed-identity

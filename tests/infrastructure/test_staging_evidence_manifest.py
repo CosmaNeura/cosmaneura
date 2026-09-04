@@ -549,6 +549,62 @@ def test_validated_snapshot_returns_the_same_read_manifest_and_server_scope_byte
     assert snapshot.server_scope_receipt == json.loads(original_bytes)
 
 
+def test_validated_snapshot_binds_every_same_read_file_to_launch_digests(
+    module: ModuleType,
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(module, tmp_path)
+    policy, digest = module.load_policy(POLICY)
+    expected = {
+        path.name: module._digest(path.read_bytes()) for path in bundle.iterdir()
+    }
+
+    snapshot = module.validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=digest,
+        bundle=bundle,
+        now=NOW,
+        expected_file_sha256s=expected,
+    )
+    assert snapshot._has_validated_manifest_snapshot()
+    expected_tuple = tuple(expected.items())
+    assert snapshot._has_launch_digest_binding(expected_tuple)
+
+    generic_snapshot = module.validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=digest,
+        bundle=bundle,
+        now=NOW,
+    )
+    assert generic_snapshot._has_validated_manifest_snapshot()
+    assert not generic_snapshot._has_launch_digest_binding(expected_tuple)
+    changed_expected = dict(expected)
+    changed_expected["candidate.json"] = f"sha256:{'0' * 64}"
+    assert not snapshot._has_launch_digest_binding(tuple(changed_expected.items()))
+
+    mismatched = dict(expected)
+    mismatched["candidate.json"] = f"sha256:{'0' * 64}"
+    with pytest.raises(module.EvidenceFailure, match="bundle.launch_binding"):
+        module.validate_bundle_snapshot(
+            policy=policy,
+            policy_sha256=digest,
+            bundle=bundle,
+            now=NOW,
+            expected_file_sha256s=mismatched,
+        )
+
+    missing = dict(expected)
+    missing.pop("SHA256SUMS")
+    with pytest.raises(module.EvidenceFailure, match="bundle.launch_binding"):
+        module.validate_bundle_snapshot(
+            policy=policy,
+            policy_sha256=digest,
+            bundle=bundle,
+            now=NOW,
+            expected_file_sha256s=missing,
+        )
+
+
 def test_validated_manifest_projection_is_caller_owned(
     module: ModuleType,
     tmp_path: Path,
