@@ -561,10 +561,44 @@ def authenticate_evidence_bundle(
     )
 
 
+def _write_private_result(path: Path, result: Mapping[str, Any]) -> None:
+    """Write authenticated evidence once without exposing it to job logs."""
+
+    payload = _canonical(result) + b"\n"
+    descriptor = -1
+    try:
+        parent = path.parent.resolve(strict=True)
+        parent_stat = parent.stat()
+        if (
+            not path.is_absolute()
+            or parent != path.parent
+            or not stat.S_ISDIR(parent_stat.st_mode)
+            or parent_stat.st_uid not in {0, os.geteuid()}
+            or parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+            or len(payload) > MAXIMUM_POLICY_BYTES
+        ):
+            raise AuthenticationFailure("output_file.unsafe")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = -1
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except AuthenticationFailure:
+        raise
+    except (OSError, ValueError):
+        raise AuthenticationFailure("output_file.unsafe") from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", required=True, type=Path)
     parser.add_argument("--hmac-key-file", required=True, type=Path)
+    parser.add_argument("--output-file", required=True, type=Path)
     return parser
 
 
@@ -596,7 +630,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             validation_now=validation_now,
             clock=_utc_now,
         )
-        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        _write_private_result(args.output_file, result)
         return 0
     except (AuthenticationFailure, evidence_manifest.EvidenceFailure) as exc:
         print(

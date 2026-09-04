@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import stat
 import sys
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -814,6 +815,20 @@ def test_authenticator_rejects_snapshot_not_minted_by_validator(
         )
 
 
+def test_private_result_writer_is_exclusive_and_owner_only(
+    module: ModuleType, tmp_path: Path
+) -> None:
+    path = tmp_path / "receipt.json"
+    result = {"activation_state": "blocked"}
+
+    module._write_private_result(path, result)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_bytes()) == result
+    with pytest.raises(module.AuthenticationFailure, match="output_file.unsafe"):
+        module._write_private_result(path, result)
+
+
 def test_policy_is_hash_pinned_and_cli_refuses_before_reading_key(
     module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
@@ -837,6 +852,8 @@ def test_policy_is_hash_pinned_and_cli_refuses_before_reading_key(
                 str(tmp_path / "missing-bundle"),
                 "--hmac-key-file",
                 str(tmp_path / "missing-key"),
+                "--output-file",
+                str(tmp_path / "receipt.json"),
             ]
         )
         == 1
