@@ -61,8 +61,9 @@
 
 - Exactly five HTTP requests are possible: storage token, record, bundle,
   vault token, and exact-version secret. Storage and vault tokens use distinct
-  exact audiences and must echo token type, resource, and selected job client
-  ID. Default transports disable proxies and redirects and use the reviewed
+  exact audiences; optional token type, resource, and selected-job client-ID
+  echoes must match exactly when ACA returns them. Default transports disable
+  proxies and redirects and use the reviewed
   immutable-image TLS trust path.
 - Both sealed receipt-derived references must be identical, content addressed,
   and bound to the configured Blob host/container before I/O. Receipt state and

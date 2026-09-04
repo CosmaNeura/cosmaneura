@@ -21,7 +21,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "ef2f11ea2a85613c16c99599a2079d73753afd4b39812fb43f0db6ba6994fbef"
+    "3f97d19def15d0f94b359c130afb0bc0c8a72914c5c06b39d0de216a2c3d2c40"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,

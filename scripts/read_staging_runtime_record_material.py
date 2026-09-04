@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, NoReturn, Protocol
@@ -67,6 +68,23 @@ class _OfflineVerifier(Protocol):
         timeout_seconds: int,
         maximum_output_bytes: int,
     ) -> Any: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthoritySnapshot:
+    receipt_sha256: str
+    action: str
+    execution_name: str
+    record_uri: str
+    record_sha256: str
+    signature_bundle_uri: str
+    signature_bundle_sha256: str
+
+    def reference_values(self) -> dict[str, str]:
+        return {
+            field: getattr(self, field)
+            for field in runtime_binding.RUNTIME_REFERENCE_FIELDS
+        }
 
 
 def _header_values(headers: Any, name: str) -> tuple[str, ...]:
@@ -322,17 +340,21 @@ def _managed_identity_token(
         not required <= set(response)
         or type(token) is not str
         or runtime_adapters.SAFE_TOKEN_RE.fullmatch(token) is None
-        or response.get("token_type") != "Bearer"
-        or response.get("resource") != resource
-        or response.get("client_id") != client_id
+        or response.get("token_type", "Bearer") != "Bearer"
+        or response.get("resource", resource) != resource
+        or response.get("client_id", client_id) != client_id
     ):
         _fail("runtime_ingress.identity_response_invalid")
-    if (
-        type(expires_on) is not str
-        or runtime_adapters.UNSIGNED_DECIMAL_RE.fullmatch(expires_on) is None
+    if type(expires_on) is int:
+        expiration = expires_on
+    elif (
+        type(expires_on) is str
+        and runtime_adapters.UNSIGNED_DECIMAL_RE.fullmatch(expires_on) is not None
+        and expires_on == str(int(expires_on))
     ):
+        expiration = int(expires_on)
+    else:
         _fail("runtime_ingress.identity_response_invalid")
-    expiration = int(expires_on)
     now = epoch_timeline.read()
     if (
         expiration <= now + contract["managed_identity_expiry_skew_seconds"]
@@ -354,10 +376,8 @@ def _default_service_opener(ca_bundle_path: str) -> Any:
     return runtime_adapters._default_opener(tls_context=context)
 
 
-def _execution_matches(
-    receipt: launch_binding.AuthenticatedBrokerLaunchReceipt,
-) -> bool:
-    return os.environ.get(launch_binding.EXECUTION_NAME_ENV) == receipt.execution_name
+def _execution_matches(execution_name: str) -> bool:
+    return os.environ.get(launch_binding.EXECUTION_NAME_ENV) == execution_name
 
 
 class ManagedIdentityPrivateRuntimeMaterialReader:
@@ -438,32 +458,36 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             raise PrivateRuntimeMaterialFailure(
                 "runtime_ingress.policy_invalid"
             ) from None
-        action = getattr(authenticated_receipt, "action", None)
-        if (
-            type(authenticated_receipt)
-            is not launch_binding.AuthenticatedBrokerLaunchReceipt
-            or not authenticated_receipt._is_authenticated()
-            or action not in launch_binding.JOB_KINDS
-            or not callable(clock)
-            or type(authenticated_receipt.receipt_bytes) is not bytes
-            or _digest(authenticated_receipt.receipt_bytes)
-            != authenticated_receipt.receipt_sha256
-        ):
+        if not callable(clock):
             _fail("runtime_ingress.receipt_invalid")
-        receipt_state = self._receipt_state(authenticated_receipt)
+        snapshot = self._authority_snapshot(document, authenticated_receipt)
         self._validate_references(
             document=document,
-            receipt=authenticated_receipt,
+            snapshot=snapshot,
             provision_reference=provision_reference,
             cleanup_reference=cleanup_reference,
         )
-        if not _execution_matches(authenticated_receipt):
+        reference_values = snapshot.reference_values()
+        try:
+            authenticated_references = {
+                job_kind: runtime_binding.ExternalRuntimeBindingReference._from_values(
+                    job_kind,
+                    document["runtime"]["jobs"][job_kind]["resource_id"],
+                    reference_values,
+                )
+                for job_kind in launch_binding.JOB_KINDS
+            }
+        except Exception:
+            raise PrivateRuntimeMaterialFailure(
+                "runtime_ingress.reference_invalid"
+            ) from None
+        if not _execution_matches(snapshot.execution_name):
             _fail("runtime_ingress.execution_identity_invalid")
 
         blob_contract = document["runtime_record_ingress"]["retrieval"]
         secret_source = document["evidence_ingress"]["private_versioned_secret_source"]
         secret_contract = secret_source["retrieval"]
-        identity = document["identities"]["jobs"][action]
+        client_id = document["identities"]["jobs"][snapshot.action]["client_id"]
         identity_endpoint = os.environ.get("IDENTITY_ENDPOINT", "")
         identity_header = os.environ.get("IDENTITY_HEADER", "")
         timeline = _Timeline(self._monotonic)
@@ -476,8 +500,20 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             secret_contract["runtime_ca_bundle_path"]
         )
 
+        def checkpoint() -> None:
+            self._checkpoint(
+                document,
+                authenticated_receipt,
+                snapshot,
+                provision_reference,
+                cleanup_reference,
+                timeline,
+                deadline,
+            )
+
+        checkpoint()
         storage_token = _managed_identity_token(
-            client_id=identity["client_id"],
+            client_id=client_id,
             resource=document["runtime_record_ingress"]["oauth_resource"],
             contract=blob_contract,
             identity_opener=identity_opener,
@@ -491,12 +527,12 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             ),
             deadline_factory=self._deadline_factory,
         )
-        self._checkpoint(authenticated_receipt, receipt_state, timeline, deadline)
+        checkpoint()
         record_bytes = self._read_blob(
             opener=blob_opener,
             token=storage_token,
-            uri=provision_reference.record_uri,
-            expected_digest=provision_reference.record_sha256,
+            uri=snapshot.record_uri,
+            expected_digest=snapshot.record_sha256,
             expected_media_type=blob_contract["record_media_type"],
             maximum_bytes=document["external_runtime_record"]["record"][
                 "maximum_bytes"
@@ -506,12 +542,12 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             deadline=deadline,
             failure="runtime_ingress.record_invalid",
         )
-        self._checkpoint(authenticated_receipt, receipt_state, timeline, deadline)
+        checkpoint()
         bundle_bytes = self._read_blob(
             opener=blob_opener,
             token=storage_token,
-            uri=provision_reference.signature_bundle_uri,
-            expected_digest=provision_reference.signature_bundle_sha256,
+            uri=snapshot.signature_bundle_uri,
+            expected_digest=snapshot.signature_bundle_sha256,
             expected_media_type=blob_contract["signature_bundle_media_type"],
             maximum_bytes=authentication.MAXIMUM_BUNDLE_BYTES,
             contract=blob_contract,
@@ -519,10 +555,10 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             deadline=deadline,
             failure="runtime_ingress.signature_bundle_invalid",
         )
-        self._checkpoint(authenticated_receipt, receipt_state, timeline, deadline)
+        checkpoint()
 
         vault_token = _managed_identity_token(
-            client_id=identity["client_id"],
+            client_id=client_id,
             resource=secret_source["oauth_resource"],
             contract=secret_contract,
             identity_opener=identity_opener,
@@ -536,7 +572,7 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             ),
             deadline_factory=self._deadline_factory,
         )
-        self._checkpoint(authenticated_receipt, receipt_state, timeline, deadline)
+        checkpoint()
         trusted_root_bytes = self._read_trusted_root(
             opener=vault_opener,
             token=vault_token,
@@ -545,12 +581,12 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             timeline=timeline,
             deadline=deadline,
         )
-        self._checkpoint(authenticated_receipt, receipt_state, timeline, deadline)
+        checkpoint()
         try:
             proof = authentication.authenticate_runtime_record_signature(
                 document,
-                provision_reference=provision_reference,
-                cleanup_reference=cleanup_reference,
+                provision_reference=authenticated_references["provision"],
+                cleanup_reference=authenticated_references["cleanup"],
                 record_bytes=record_bytes,
                 signature_bundle_bytes=bundle_bytes,
                 trusted_root_bytes=trusted_root_bytes,
@@ -561,32 +597,93 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             raise PrivateRuntimeMaterialFailure(
                 "runtime_ingress.authentication_failed"
             ) from None
-        self._checkpoint(authenticated_receipt, receipt_state, timeline, deadline)
+        checkpoint()
         return launch_material.AuthenticatedRuntimeRecordMaterial(
             record_bytes=bytes(record_bytes), signature_verification=proof
         )
 
     @staticmethod
-    def _receipt_state(
-        receipt: launch_binding.AuthenticatedBrokerLaunchReceipt,
-    ) -> tuple[Any, ...]:
+    def _authority_snapshot(
+        document: Mapping[str, Any], receipt: Any
+    ) -> _AuthoritySnapshot:
         try:
-            return (
+            if (
+                type(receipt) is not launch_binding.AuthenticatedBrokerLaunchReceipt
+                or not receipt._is_authenticated()
+                or type(receipt.receipt_bytes) is not bytes
+                or _digest(receipt.receipt_bytes) != receipt.receipt_sha256
+            ):
+                _fail("runtime_ingress.receipt_invalid")
+            contract = document["launch_binding"]["launch_receipt"]
+            signed = launch_binding._parse(
                 receipt.receipt_bytes,
-                receipt.receipt_sha256,
-                receipt.action,
-                receipt.execution_name,
-                receipt.launch_record_uri,
-                receipt.launch_record_sha256,
-                receipt.receipt_uri,
-                receipt.signature_envelope_uri,
-                receipt.signature_envelope_sha256,
-                receipt.observed_at,
-                *(
-                    receipt.runtime_reference[field]
-                    for field in runtime_binding.RUNTIME_REFERENCE_FIELDS
-                ),
+                maximum=contract["maximum_bytes"],
+                code="launch_receipt.authentication",
             )
+            launch_binding._mapping(
+                signed,
+                set(contract["required_fields"]),
+                "launch_receipt.authentication",
+            )
+            action = signed["action"]
+            execution_name = receipt.execution_name
+            reference_values = {
+                field: signed[f"runtime_{field}"]
+                for field in runtime_binding.RUNTIME_REFERENCE_FIELDS
+            }
+            expected_receipt_uri, expected_signature_uri = (
+                launch_binding._execution_receipt_uris(
+                    dict(document), action, execution_name
+                )
+            )
+            job_id = document["runtime"]["jobs"][action]["resource_id"]
+            mailbox = document["launch_binding"]["mailbox"]
+            launch_sha256 = signed["launch_record_sha256"]
+            expected_launch_uri = (
+                f"https://{mailbox['account_host']}/"
+                f"{mailbox['container_names'][action]}/{launch_sha256[7:]}.json"
+            )
+            if (
+                receipt.receipt_bytes != launch_binding._canonical(signed)
+                or type(signed["schema_version"]) is not int
+                or signed["schema_version"] != 1
+                or action not in launch_binding.JOB_KINDS
+                or receipt.action != action
+                or launch_binding.EXECUTION_NAME_RE.fullmatch(execution_name) is None
+                or signed["selected_job_resource_id"] != job_id
+                or signed["execution_resource_id"]
+                != f"{job_id}/executions/{execution_name}"
+                or receipt.launch_record_sha256 != launch_sha256
+                or receipt.launch_record_uri != signed["launch_record_uri"]
+                or receipt.launch_record_uri != expected_launch_uri
+                or receipt.receipt_uri != expected_receipt_uri
+                or receipt.signature_envelope_uri != expected_signature_uri
+                or not isinstance(receipt.runtime_reference, Mapping)
+                or set(receipt.runtime_reference)
+                != set(runtime_binding.RUNTIME_REFERENCE_FIELDS)
+                or any(
+                    receipt.runtime_reference[field] != value
+                    for field, value in reference_values.items()
+                )
+            ):
+                _fail("runtime_ingress.receipt_invalid")
+            runtime_binding._pin(
+                launch_sha256, "digest", "runtime_ingress.receipt_invalid"
+            )
+            for field, value in reference_values.items():
+                runtime_binding._pin(
+                    value,
+                    "https_uri" if field.endswith("uri") else "digest",
+                    "runtime_ingress.receipt_invalid",
+                )
+            return _AuthoritySnapshot(
+                receipt_sha256=receipt.receipt_sha256,
+                action=action,
+                execution_name=execution_name,
+                **reference_values,
+            )
+        except PrivateRuntimeMaterialFailure:
+            raise
         except Exception:
             raise PrivateRuntimeMaterialFailure(
                 "runtime_ingress.receipt_invalid"
@@ -596,7 +693,7 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
     def _validate_references(
         *,
         document: Mapping[str, Any],
-        receipt: launch_binding.AuthenticatedBrokerLaunchReceipt,
+        snapshot: _AuthoritySnapshot,
         provision_reference: runtime_binding.ExternalRuntimeBindingReference,
         cleanup_reference: runtime_binding.ExternalRuntimeBindingReference,
     ) -> None:
@@ -604,9 +701,6 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
             "provision": provision_reference,
             "cleanup": cleanup_reference,
         }
-        receipt_values = getattr(receipt, "runtime_reference", None)
-        if not isinstance(receipt_values, Mapping):
-            _fail("runtime_ingress.reference_invalid")
         for job_kind, reference in references.items():
             if (
                 type(reference) is not runtime_binding.ExternalRuntimeBindingReference
@@ -615,7 +709,7 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
                 or reference.source_job_resource_id
                 != document["runtime"]["jobs"][job_kind]["resource_id"]
                 or any(
-                    getattr(reference, field, None) != receipt_values.get(field)
+                    getattr(reference, field, None) != getattr(snapshot, field)
                     for field in runtime_binding.RUNTIME_REFERENCE_FIELDS
                 )
             ):
@@ -629,33 +723,40 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
         expected = {
             "record_uri": (
                 f"https://{ingress['account_host']}/{ingress['container_name']}/"
-                f"{provision_reference.record_sha256[7:]}.json"
+                f"{snapshot.record_sha256[7:]}.json"
             ),
             "signature_bundle_uri": (
                 f"https://{ingress['account_host']}/{ingress['container_name']}/"
-                f"{provision_reference.signature_bundle_sha256[7:]}.sigstore.json"
+                f"{snapshot.signature_bundle_sha256[7:]}.sigstore.json"
             ),
         }
-        if any(
-            getattr(provision_reference, name) != value
-            for name, value in expected.items()
-        ):
+        if any(getattr(snapshot, name) != value for name, value in expected.items()):
             _fail("runtime_ingress.reference_invalid")
 
     @staticmethod
     def _checkpoint(
+        document: Mapping[str, Any],
         receipt: launch_binding.AuthenticatedBrokerLaunchReceipt,
-        expected_receipt_state: tuple[Any, ...],
+        expected_snapshot: _AuthoritySnapshot,
+        provision_reference: runtime_binding.ExternalRuntimeBindingReference,
+        cleanup_reference: runtime_binding.ExternalRuntimeBindingReference,
         timeline: _Timeline,
         deadline: float,
     ) -> None:
         if (
-            not receipt._is_authenticated()
-            or ManagedIdentityPrivateRuntimeMaterialReader._receipt_state(receipt)
-            != expected_receipt_state
+            ManagedIdentityPrivateRuntimeMaterialReader._authority_snapshot(
+                document, receipt
+            )
+            != expected_snapshot
         ):
             _fail("runtime_ingress.receipt_invalid")
-        if not _execution_matches(receipt):
+        ManagedIdentityPrivateRuntimeMaterialReader._validate_references(
+            document=document,
+            snapshot=expected_snapshot,
+            provision_reference=provision_reference,
+            cleanup_reference=cleanup_reference,
+        )
+        if not _execution_matches(expected_snapshot.execution_name):
             _fail("runtime_ingress.execution_identity_invalid")
         if timeline.read() > deadline:
             _fail("runtime_ingress.deadline")

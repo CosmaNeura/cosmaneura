@@ -283,19 +283,58 @@ def test_exact_private_reads_feed_same_process_authenticator_once(
     assert authenticated["trusted_root_bytes"] == ROOT_BYTES
     assert authenticated["clock"] is shared_clock
     assert authenticated["verifier"] is case["verifier"]
-    assert authenticated["provision_reference"] is case["references"][0]
-    assert authenticated["cleanup_reference"] is case["references"][1]
+    for action, source in zip(launch.JOB_KINDS, case["references"]):
+        copied = authenticated[f"{action}_reference"]
+        assert copied is not source
+        assert all(
+            getattr(copied, field) == getattr(source, field)
+            for field in binding.RUNTIME_REFERENCE_FIELDS
+        )
     with pytest.raises(ingress.PrivateRuntimeMaterialFailure, match="already_used"):
         _read(case)
 
 
-@pytest.mark.parametrize("missing", ("token_type", "resource", "client_id"))
-def test_managed_identity_requires_exact_echo_fields(
+@pytest.mark.parametrize("expires_on", (EPOCH_NOW + 3_600, str(EPOCH_NOW + 3_600)))
+def test_managed_identity_accepts_optional_echoes_and_extensions(
+    monkeypatch: pytest.MonkeyPatch, expires_on: int | str
+) -> None:
+    case = _case(monkeypatch)
+    body = {
+        "access_token": "storage-token",
+        "expires_on": expires_on,
+        "aca_extension": {"ignored": True},
+    }
+    case["identity"].responses[0] = Response(
+        json.dumps(body, separators=(",", ":")).encode()
+    )
+    assert _read(case).record_bytes == launch_helpers.RUNTIME_BYTES
+
+
+@pytest.mark.parametrize("missing", ("access_token", "expires_on"))
+def test_managed_identity_requires_core_fields(
     monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
     case = _case(monkeypatch)
     body = json.loads(_token(case["policy"], "https://storage.azure.com/", "token"))
     body.pop(missing)
+    case["identity"].responses[0] = Response(
+        json.dumps(body, separators=(",", ":")).encode()
+    )
+    with pytest.raises(
+        ingress.PrivateRuntimeMaterialFailure,
+        match="^runtime_ingress.identity_response_invalid$",
+    ):
+        _read(case)
+    assert case["blob"].calls == []
+
+
+@pytest.mark.parametrize("field", ("token_type", "resource", "client_id"))
+def test_managed_identity_binds_optional_echoes_when_present(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    case = _case(monkeypatch)
+    body = json.loads(_token(case["policy"], "https://storage.azure.com/", "token"))
+    body[field] = "wrong"
     case["identity"].responses[0] = Response(
         json.dumps(body, separators=(",", ":")).encode()
     )
@@ -349,6 +388,16 @@ def test_managed_identity_token_and_clock_are_bounded(
     case["identity"].responses[0] = Response(
         _token(case["policy"], "https://storage.azure.com/", "x" * 16_385)
     )
+    with pytest.raises(
+        ingress.PrivateRuntimeMaterialFailure,
+        match="^runtime_ingress.identity_response_invalid$",
+    ):
+        _read(case)
+
+    case = _case(monkeypatch)
+    body = json.loads(_token(case["policy"], "https://storage.azure.com/", "token"))
+    body["expires_on"] = f"0{EPOCH_NOW + 3_600}"
+    case["identity"].responses[0] = Response(json.dumps(body).encode())
     with pytest.raises(
         ingress.PrivateRuntimeMaterialFailure,
         match="^runtime_ingress.identity_response_invalid$",
@@ -528,7 +577,7 @@ def test_policy_reference_and_execution_refuse_before_private_io(
     assert case["identity"].calls == []
 
     case = _case(monkeypatch)
-    object.__setattr__(case["receipt"], "action", "invalid")
+    object.__setattr__(case["receipt"], "action", "cleanup")
     with pytest.raises(
         ingress.PrivateRuntimeMaterialFailure, match="^runtime_ingress.receipt_invalid$"
     ):
@@ -598,3 +647,23 @@ def test_concurrent_calls_allow_exactly_one_use(
         == 1
     )
     assert outcomes.count("runtime_ingress.already_used") == 1
+
+
+@pytest.mark.parametrize("field", ("record_uri", "signature_bundle_uri"))
+def test_reference_mutation_after_storage_token_refuses_before_blob_get(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    case = _case(monkeypatch)
+    provision = case["references"][0]
+    case["identity"].effects.append(
+        lambda: object.__setattr__(
+            provision, field, "https://attacker.invalid/substituted"
+        )
+    )
+    with pytest.raises(
+        ingress.PrivateRuntimeMaterialFailure,
+        match="^runtime_ingress.reference_invalid$",
+    ):
+        _read(case)
+    assert len(case["identity"].calls) == 1
+    assert case["blob"].calls == []
