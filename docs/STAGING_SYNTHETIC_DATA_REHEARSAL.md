@@ -102,6 +102,25 @@ This layer remains deliberately non-executable. `blob_marker_store_implemented`,
 
 The sealed server-authentication, provider-observation, GitHub-attestation, composite-binding, and final safe-submit objects are deliberately opaque in-process capabilities. GitHub step outputs and artifacts can carry only serialized bytes; a later step or job would reconstruct an unsealed object that the exact-type/module-seal checks reject. Activation therefore requires one separately reviewed trusted coordinator, in one process, to verify the original receipts and policy bytes, mint all upstream seals, compose them, recheck freshness, and directly invoke safe-submit without a serialization boundary. The composition policy still has `activation_ready: false` and all four flags false; safe-submit has the five flags above false; upstream policies remain disabled; the pinned Linux verifier/root digests and storage/network/RBAC/WORM/fidelity `CONFIGURE_EXACT_...` values remain unset. Provider fidelity, private-runner reachability, non-PHI rehearsal evidence, and explicit restore authorization are still required. No workflow was dispatched and no Azure operation was performed.
 
+The dormant `restore-trusted-executor-policy.json` makes that coordinator
+boundary closed-world. It pins the raw SHA-256 and identity of the manifest,
+server-evidence, server-authentication, provider-observation, attestation,
+composition, envelope, and safe-submit policies. Its only external inputs are
+the exact six-file bundle, one server-scope HMAC key, one offline attestation
+bundle, one independently delivered GitHub-only root, and a one-to-24-hour
+TTL. Each path input is captured once with a bounded no-follow read; opaque
+objects and exact receipt bytes never cross a process, step, artifact, or JSON
+handoff. The sealed snapshot retains the validated result, manifest, and
+server-scope bytes; accepted digests bind the candidate, inventory,
+quiescence, and checksum files without reopening them.
+
+The fixed order is manifest validation, server authentication, one provider
+observation, one offline attestation verification, composition,
+`request_from_binding`, and one direct safe-submit call using the same
+non-regressing clock source. The runtime, provider, verifier, safe-submit,
+private-runner, workflow, and restore flags are all false, and exact runtime
+pins remain `CONFIGURE_EXACT_...`; this contract cannot restore anything.
+
 ## Dormant restore-sanitizer contract
 
 `restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.

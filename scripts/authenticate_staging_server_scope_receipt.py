@@ -383,7 +383,7 @@ def load_authentication_policy(
     return policy, digest
 
 
-def _authenticate_validated_bundle_with_binding(
+def _authenticate_validated_bundle_with_binding_and_receipt(
     *,
     authentication_policy_bytes: bytes,
     authentication_policy_sha256: str,
@@ -392,8 +392,8 @@ def _authenticate_validated_bundle_with_binding(
     snapshot: evidence_manifest.ValidatedEvidenceBundle,
     key: bytes,
     clock: Callable[[], datetime] = _utc_now,
-) -> tuple[dict[str, Any], ServerAuthenticatedSafeSubmitBinding]:
-    """Authenticate one snapshot and atomically mint its sealed partial binding."""
+) -> tuple[dict[str, Any], ServerAuthenticatedSafeSubmitBinding, bytes]:
+    """Authenticate one snapshot and retain the exact canonical receipt bytes."""
 
     policy = _parse_authentication_policy_document(
         authentication_policy_bytes,
@@ -528,7 +528,8 @@ def _authenticate_validated_bundle_with_binding(
     }
     if set(receipt) != set(policy["receipt_fields"]):
         raise AuthenticationFailure("authentication_receipt.invalid")
-    authentication_receipt_sha256 = _digest(_canonical(receipt))
+    authentication_receipt_bytes = _canonical(receipt)
+    authentication_receipt_sha256 = _digest(authentication_receipt_bytes)
     authentication_result = {
         "schema_version": 1,
         "policy_id": policy["policy_id"],
@@ -550,7 +551,33 @@ def _authenticate_validated_bundle_with_binding(
         "_authentication_seal",
         _SERVER_AUTHENTICATED_SAFE_SUBMIT_SEAL,
     )
-    return authentication_result, sealed_binding
+    return authentication_result, sealed_binding, authentication_receipt_bytes
+
+
+def _authenticate_validated_bundle_with_binding(
+    *,
+    authentication_policy_bytes: bytes,
+    authentication_policy_sha256: str,
+    server_scope_policy_bytes: bytes,
+    server_scope_policy_sha256: str,
+    snapshot: evidence_manifest.ValidatedEvidenceBundle,
+    key: bytes,
+    clock: Callable[[], datetime] = _utc_now,
+) -> tuple[dict[str, Any], ServerAuthenticatedSafeSubmitBinding]:
+    """Compatibility projection without the coordinator-only receipt bytes."""
+
+    result, binding, _receipt_bytes = (
+        _authenticate_validated_bundle_with_binding_and_receipt(
+            authentication_policy_bytes=authentication_policy_bytes,
+            authentication_policy_sha256=authentication_policy_sha256,
+            server_scope_policy_bytes=server_scope_policy_bytes,
+            server_scope_policy_sha256=server_scope_policy_sha256,
+            snapshot=snapshot,
+            key=key,
+            clock=clock,
+        )
+    )
+    return result, binding
 
 
 def _authenticate_validated_bundle(

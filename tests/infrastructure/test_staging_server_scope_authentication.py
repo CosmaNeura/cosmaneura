@@ -346,6 +346,27 @@ def test_mints_atomic_deterministic_server_authenticated_partial(
         assert forbidden not in rendered
 
 
+def test_coordinator_variant_retains_exact_canonical_authentication_receipt_bytes(
+    module: ModuleType,
+) -> None:
+    fixture = _fixture(module)
+
+    result, binding, receipt_bytes = (
+        module._authenticate_validated_bundle_with_binding_and_receipt(**fixture)
+    )
+
+    assert type(receipt_bytes) is bytes
+    assert receipt_bytes == module._canonical(
+        result["server_scope_authentication_receipt"]
+    )
+    assert (
+        module._digest(receipt_bytes)
+        == (binding.record["server_scope_authentication_receipt_sha256"])
+    )
+    result["server_scope_authentication_receipt"]["source_sha"] = "f" * 40
+    assert json.loads(receipt_bytes)["source_sha"] == SOURCE_SHA
+
+
 def test_server_authenticated_partial_rejects_public_construction_and_wrong_seal(
     module: ModuleType,
 ) -> None:
