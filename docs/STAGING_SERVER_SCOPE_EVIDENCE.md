@@ -61,6 +61,10 @@ capture interval must end no later than the manifest observation and begin no
 more than 15 minutes before it. Key bytes include
 every byte of the key file, including a
 trailing newline, and are never stripped, emitted, or logged.
+The CLI likewise never prints the authenticated receipt: a successful future
+run requires `--output-file` and creates that file once with owner-only
+mode `0600`, preventing receipt HMACs and resource identifiers from entering
+job logs.
 
 The checked-in `server-scope-authentication-policy.json` and server-scope policy
 are both disabled, so the authenticator refuses before reading a key or bundle.

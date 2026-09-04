@@ -133,6 +133,9 @@ the manifest observation window.
 Its canonical aggregate-only receipt carries independently derived
 digests for the exact file and canonical receipt and emits the digest required
 by safe-submit's `server_scope_authentication_receipt_sha256` field.
+The CLI writes the complete result only to the required absolute
+`--output-file`, created exclusively with mode `0600`; it does not print the
+receipt or stable keyed identifiers to job logs.
 
 This component has no network, subprocess, provider, restore, sanitizer, or
 deployment capability. Both its own checked-in policy and the server-scope

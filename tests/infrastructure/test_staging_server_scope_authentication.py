@@ -829,6 +829,51 @@ def test_private_result_writer_is_exclusive_and_owner_only(
         module._write_private_result(path, result)
 
 
+def test_cli_writes_authenticated_result_without_stdout(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    result = {"activation_state": "blocked"}
+    monkeypatch.setattr(
+        module,
+        "load_authentication_policy_document",
+        lambda: ({}, "a" * 64, b"{}"),
+    )
+    monkeypatch.setattr(module, "validate_authentication_policy", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        module.server_scope,
+        "read_policy_document",
+        lambda: ({}, "b" * 64, b"{}"),
+    )
+    monkeypatch.setattr(module.server_scope, "read_hmac_key", lambda _path: b"key")
+    monkeypatch.setattr(
+        module,
+        "_authenticate_evidence_bundle_with_documents",
+        lambda **_kwargs: result,
+    )
+    output = tmp_path / "receipt.json"
+
+    assert (
+        module.main(
+            [
+                "--bundle",
+                str(tmp_path / "bundle"),
+                "--hmac-key-file",
+                str(tmp_path / "key"),
+                "--output-file",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert json.loads(output.read_bytes()) == result
+
+
 def test_policy_is_hash_pinned_and_cli_refuses_before_reading_key(
     module: ModuleType,
     monkeypatch: pytest.MonkeyPatch,
