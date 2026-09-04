@@ -28,7 +28,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "a28bd90de455f6a551dbf997f4483d577299d3bec40ed31ccebba51a3bfa2b78"
+CANONICAL_POLICY_SHA256 = "cccda6c097e4172b181f255f57a1f9ec5dcd4df4ccd4103949735a02ae6fb65a"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")

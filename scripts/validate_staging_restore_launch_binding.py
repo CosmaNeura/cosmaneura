@@ -141,7 +141,7 @@ def validate_launch_binding_policy(policy: Any) -> dict[str, Any]:
         or launch["pointer_environment"]["exact_names"] != list(POINTER_ENV_TO_FIELD)
         or job_projection["excluded_environment_variables"] != list(POINTER_ENV_TO_FIELD)
         or job_projection["exact_manual_trigger_config"] != {"parallelism": 1, "replicaCompletionCount": 1}
-        or job_projection["normalized_execution_template_projection"] != {"required_fields": ["containers"], "optional_empty_fields": ["initContainers"], "output_fields": ["containers", "initContainers"], "job_template_required_fields": ["containers", "volumes"], "job_template_volumes_required_empty": True}
+        or job_projection["normalized_execution_template_projection"] != {"required_fields": ["containers"], "optional_empty_fields": ["initContainers"], "output_fields": ["containers", "initContainers"], "job_template_required_fields": ["containers"], "job_template_optional_empty_fields": ["initContainers", "volumes"]}
         or launch["job_start"]["query_parameters"] != [{"name": "api-version", "value": "2024-03-01"}]
         or launch["job_start"]["management_origin"] != launch["job_configuration_observation"]["management_origin"]
         or launch["job_start"]["resource_path_suffix"] != "/start"
@@ -266,10 +266,10 @@ class AuthenticatedJobConfigurationObservation:
         return type(self) is AuthenticatedJobConfigurationObservation and getattr(self, "_seal", None) is _JOB_OBSERVATION_SEAL
 def _execution_template_projection(value: Any, *, job_template: bool, code: str) -> dict[str, Any]:
     allowed = {"containers", "initContainers", "volumes"} if job_template else {"containers", "initContainers"}
-    if type(value) is not dict or set(value) - allowed or not ({"containers", "volumes"} if job_template else {"containers"}) <= set(value):
+    if type(value) is not dict or set(value) - allowed or "containers" not in value:
         _fail(code)
-    containers, init_containers = value["containers"], value.get("initContainers", [])
-    if type(containers) is not list or not containers or any(type(item) is not dict for item in containers) or type(init_containers) is not list or init_containers or (job_template and value["volumes"] != []):
+    containers, init_containers, volumes = value["containers"], value.get("initContainers", []), value.get("volumes", [])
+    if type(containers) is not list or not containers or any(type(item) is not dict for item in containers) or type(init_containers) is not list or init_containers or (job_template and (type(volumes) is not list or volumes)):
         _fail(code)
     return {"containers": containers, "initContainers": []}
 def _job_projection(document: dict[str, Any], *, policy: dict[str, Any], job_kind: str) -> tuple[dict[str, Any], dict[str, str], str]:

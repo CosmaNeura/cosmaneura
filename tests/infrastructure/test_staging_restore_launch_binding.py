@@ -22,6 +22,7 @@ def _observations(policy: dict[str, Any], pointers: dict[str, str] | None = None
     values = pointers or helpers._pointer_values()
     documents = [helpers._job_document(policy, action, values) for action in ("provision", "cleanup")]
     documents[0]["properties"]["template"].pop("initContainers")
+    documents[1]["properties"]["template"].pop("volumes")
     observations = [launch.validate_job_configuration_observation(policy, job_kind=action, response=_arm_response(policy, action, body=body)) for action, body in zip(("provision", "cleanup"), documents, strict=True)]
     return observations[0], observations[1]
 def _record(policy: dict[str, Any], *, action: str, runtime_record_sha256: str) -> tuple[bytes, str, str]:
@@ -100,6 +101,7 @@ def _start(policy: dict[str, Any], action: str, record: launch.ValidatedLaunchRe
         lambda body: body["properties"]["template"]["containers"].append(deepcopy(body["properties"]["template"]["containers"][0])),
         lambda body: body["properties"]["template"].update(initContainers=[{"name": "untrusted"}]),
         lambda body: body["properties"]["template"].update(volumes=[{"name": "untrusted"}]),
+        lambda body: body["properties"]["template"].update(volumes={}),
         lambda body: body.update(type={}),
         lambda body: next(iter(body["identity"]["userAssignedIdentities"].values())).update(clientId="00000000-0000-4000-8000-000000000000"),
         lambda body: body["properties"]["template"]["containers"][0]["env"].append({"name": "COSMANEURA_RUNTIME_RECORD_URI", "value": "https://duplicate.invalid"}),
