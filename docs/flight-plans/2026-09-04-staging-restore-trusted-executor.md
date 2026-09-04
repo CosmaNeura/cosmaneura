@@ -46,6 +46,6 @@
 
 ## Completion
 
-- Evidence required to call this dormant slice complete: exact raw SHA-256 pins for all eight dependent policies, JSON and diff checks, focused unit tests proving refusal and one-process/read/submit invariants, change-budget compliance, and independent review against the final commit.
+- Evidence required to call this dormant slice complete: exact raw SHA-256 pins for all nine dependent policies, JSON and diff checks, focused unit tests proving refusal and one-process/read/submit invariants, change-budget compliance, and independent review against the final commit.
 - Follow-up owners: infrastructure must supply the exact private job, image, identity, subnet, network, evidence-delivery, verifier/root, marker-store, RBAC, WORM, and provider-fidelity evidence. Workflow integration and restore activation remain separate Tier-2 changes.
 - Documentation and contract records to update: this flight plan, the server-scope evidence runbook, the synthetic rehearsal runbook, and `restore-trusted-executor-policy.json`.
