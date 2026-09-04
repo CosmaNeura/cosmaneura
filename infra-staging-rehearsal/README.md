@@ -18,9 +18,10 @@ persistent, non-PHI prerequisites for the isolated restore controller:
   target-group, and marker-container roles assigned only to job UAMIs;
 - a target-group policy that denies PostgreSQL Flexible Server firewall-rule
   resources;
-- a private `StorageV2` `Standard_ZRS` marker account, three ARM-created private
-  marker containers, a reserved aggregate-only `restore-evidence-v1` container,
-  private Blob endpoint, private DNS zone, and VNet link; and
+- a private `StorageV2` `Standard_ZRS` marker account, six ARM-created private
+  marker containers (three retained v3 containers and three v4 containers), a
+  reserved aggregate-only `restore-evidence-v1` container, private Blob
+  endpoint, private DNS zone, and VNet link; and
 - an unpeered `10.76.0.0/24` control VNet with a `10.76.0.0/27` marker endpoint
   subnet and an inert `10.76.0.32/27` executor reservation; and
 - an independently default-off private-executor network foundation that
@@ -149,13 +150,13 @@ prepare a separate plan with action-time approval. The three switches are
 ordered and independently default off:
 
 1. `enable_marker_legal_holds` invokes the Azure Storage `setLegalHold` ARM
-   action through AzAPI for all four containers. AzureRM has no first-class
-   legal-hold resource; removing this source or state does not clear a live
-   hold. Pinned AzAPI 2.1.0 performs this action only on resource Create/Update;
-   its Read path only restores state, so an unchanged later plan does not POST
-   the action again.
-2. `lock_marker_immutability_policies` sets all four containers to locked
-   90-day WORM. Azure cannot unlock or delete those policies.
+   action through AzAPI for all seven retained containers. AzureRM has no
+   first-class legal-hold resource; removing this source or state does not clear
+   a live hold. Pinned AzAPI 2.1.0 performs this action only on resource
+   Create/Update; its Read path only restores state, so an unchanged later plan
+   does not POST the action again.
+2. `lock_marker_immutability_policies` sets all seven retained containers to
+   locked 90-day WORM. Azure cannot unlock or delete those policies.
 3. The three live-proven marker-create assignments must be installed on the job
    UAMIs and read back. The evidence container receives no marker runtime role.
 4. `enable_marker_readonly_lock` is last, but cannot pass this rung's

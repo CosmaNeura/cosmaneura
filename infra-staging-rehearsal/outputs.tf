@@ -217,9 +217,9 @@ output "marker_store_binding" {
       ) : null
     }
     immutability_policy_ids = var.lock_marker_immutability_policies ? {
-      intent     = azurerm_storage_container_immutability_policy.marker["restore-intents-v3"].id
-      submission = azurerm_storage_container_immutability_policy.marker["restore-submissions-v3"].id
-      cleanup    = azurerm_storage_container_immutability_policy.marker["restore-cleanups-v3"].id
+      intent     = azurerm_storage_container_immutability_policy.marker["restore-intents-v4"].id
+      submission = azurerm_storage_container_immutability_policy.marker["restore-submissions-v4"].id
+      cleanup    = azurerm_storage_container_immutability_policy.marker["restore-cleanups-v4"].id
     } : {}
     evidence_immutability_policy_id = var.lock_marker_immutability_policies ? (
       azurerm_storage_container_immutability_policy.marker[local.evidence_container_name].id

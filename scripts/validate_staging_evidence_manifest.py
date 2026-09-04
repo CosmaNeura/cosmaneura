@@ -33,9 +33,9 @@ SERVER_SCOPE_POLICY_PATH = (
     Path(__file__).resolve().parents[1]
     / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
 )
-POLICY_SHA256 = "c0670cba49a08fb876f55d62a9cae7de14a71d8b68306faad5e220b2bb51d8d5"
+POLICY_SHA256 = "8b1cd30a90782d5596b44415e0abb9e934c78aeaca9bc7960e226d1feee8df53"
 POLICY_SEMANTIC_SHA256 = (
-    "4ec9b86bb2b2fd40756ab581dad175d3cbaa92240ef3f0e6a86e973587aed252"
+    "0ada65005a52e30cda252d2cd690c3980fa63973d8b8d97e9317194265215511"
 )
 MAXIMUM_FILE_BYTES = 8 * 1024 * 1024
 MAXIMUM_SERVER_SCOPE_DATABASES = 64
@@ -203,8 +203,8 @@ def load_policy(path: Path) -> tuple[Mapping[str, Any], str]:
         raw_sha256 != POLICY_SHA256
         or not isinstance(policy, Mapping)
         or _sha256(_canonical(policy)) != POLICY_SEMANTIC_SHA256
-        or policy.get("schema_version") != 1
-        or policy.get("policy_id") != "cosmaneura-staging-evidence-manifest-v1"
+        or policy.get("schema_version") != 2
+        or policy.get("policy_id") != "cosmaneura-staging-evidence-manifest-v2"
     ):
         raise EvidenceFailure("policy.invalid")
     expected_policy_fields = {
@@ -586,13 +586,20 @@ def _validate_provenance(
 
 
 def _validate_time(
+    approved_restore_time: Any,
     observed_at: Any,
     expires_at: Any,
     now: datetime,
     policy: Mapping[str, Any],
 ) -> None:
+    approved_restore = _parse_utc(
+        approved_restore_time,
+        "evidence.approved_restore_time",
+    )
     observed = _parse_utc(observed_at, "evidence.time")
     expires = _parse_utc(expires_at, "evidence.time")
+    if approved_restore != observed:
+        raise EvidenceFailure("evidence.approved_restore_time_mismatch")
     lifetime = int(policy["maximum_lifetime_seconds"])
     if (
         now.tzinfo is None
@@ -961,7 +968,7 @@ def validate_bundle(
         **policy["policy_digests"],
     }
     if (
-        manifest["schema_version"] != 1
+        manifest["schema_version"] != 2
         or not isinstance(manifest["manifest_id"], str)
         or MANIFEST_ID_RE.fullmatch(manifest["manifest_id"]) is None
         or not isinstance(manifest["source_sha"], str)
@@ -974,6 +981,7 @@ def validate_bundle(
     ):
         raise EvidenceFailure("manifest.invalid")
     _validate_time(
+        manifest["approved_restore_time"],
         manifest["observed_at"],
         manifest["expires_at"],
         now,
@@ -1056,11 +1064,48 @@ def validate_bundle(
         if entry["receipt_sha256"] != receipts[kind]:
             raise EvidenceFailure(f"artifact.receipt_digest.{kind}")
 
+    provenance = manifest["provenance"]
+    signer_claims = manifest["signer_claims"]
+    candidate = values["candidate"]
+    evidence_binding = {
+        "schema_version": 1,
+        "binding_policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+        "evidence_manifest_policy_id": policy["policy_id"],
+        "evidence_manifest_policy_sha256": f"sha256:{policy_sha256}",
+        "manifest_id": manifest["manifest_id"],
+        "manifest_file_sha256": _digest(files["evidence-manifest.json"]),
+        "bundle_index_sha256": _digest(files["SHA256SUMS"]),
+        "evidence_set_sha256": supplied_evidence_digest,
+        "source_sha": manifest["source_sha"],
+        "candidate_sha": manifest["candidate_sha"],
+        "source_server_resource_id": source_resource["postgres_server_id"],
+        "source_database_name": source_resource["database_name"],
+        "approved_restore_time": manifest["approved_restore_time"],
+        "observed_at": manifest["observed_at"],
+        "expires_at": manifest["expires_at"],
+        "candidate_approval_pr_number": candidate["approval_pr_number"],
+        "candidate_protected_master_sha": candidate["protected_master_sha"],
+        "candidate_schema_revision": candidate["schema_revision"],
+        "candidate_receipt_sha256": receipts["candidate"],
+        "inventory_receipt_sha256": receipts["inventory"],
+        "quiescence_receipt_sha256": receipts["quiescence"],
+        "server_scope_receipt_sha256": receipts["server_scope"],
+        "repository": provenance["repository"],
+        "protected_ref": provenance["protected_ref"],
+        "workflow_path": provenance["workflow_path"],
+        "workflow_sha": provenance["workflow_sha"],
+        "run_id": provenance["run_id"],
+        "run_attempt": provenance["run_attempt"],
+        "event_name": provenance["event_name"],
+        "signer_issuer": signer_claims["issuer"],
+        "signer_subject": signer_claims["subject"],
+    }
     return {
         "schema_version": 1,
         "policy_id": policy["policy_id"],
         "manifest_id": manifest["manifest_id"],
         "evidence_set_sha256": supplied_evidence_digest,
+        "evidence_binding": evidence_binding,
         "outcome": "contract_valid",
         "activation_state": "blocked",
         "activation_blockers": policy["activation_blockers"],

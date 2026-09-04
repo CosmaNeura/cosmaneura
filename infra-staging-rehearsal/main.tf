@@ -27,9 +27,14 @@ locals {
   source_postgres_resource_id = "${local.subscription_scope}/resourceGroups/cosmaneura-staging/providers/Microsoft.DBforPostgreSQL/flexibleServers/cosmaneura-staging-postgres"
 
   marker_containers = toset([
+    # Retain the dormant v3 namespace so a later apply can never destroy or
+    # reinterpret an immutable marker written outside the current model.
     "restore-intents-v3",
     "restore-submissions-v3",
     "restore-cleanups-v3",
+    "restore-intents-v4",
+    "restore-submissions-v4",
+    "restore-cleanups-v4",
   ])
   evidence_container_name = "restore-evidence-v1"
   retained_containers = setunion(

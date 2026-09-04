@@ -3,7 +3,7 @@
 Status: **CONTRACT VALIDATION ONLY — ACTIVATION BLOCKED**
 
 `contracts/staging-rehearsal/v1/evidence-manifest-policy.json` defines the
-closed-world v1 evidence bundle. `scripts/validate_staging_evidence_manifest.py`
+closed-world v2 evidence bundle. `scripts/validate_staging_evidence_manifest.py`
 is a standalone, pure local validator: it performs no provider, database,
 GitHub, Azure, restore, or sanitizer operation.
 
@@ -36,6 +36,14 @@ window, protected repository/ref, workflow file and SHA, run ID/attempt,
 dispatch event, signer claims, and versioned policy digests. The inventory HMAC
 key identifier must be the supported `staging-inventory-hmac-v1`; key material
 never enters the bundle.
+
+The v2 manifest also names one `approved_restore_time`. For this first
+fail-closed contract it must be canonical UTC and exactly equal
+`observed_at`; the quiescence receipt is bound to that same observation. A
+lagged point-in-time restore is not accepted until quiescence evidence can
+authenticate an interval that contains it. This removes the independent
+operator-supplied restore-time choice without overstating what the current
+evidence proves.
 
 The candidate receipt binds the verified approval PR, protected-master SHA, and
 the exact schema revision required by the inventory profile to the same
@@ -91,7 +99,16 @@ states `activation_state: blocked` with these unresolved milestones:
 - workflow integration and protected evidence storage
 - restore/sanitizer activation
 
-No valid v1 bundle authorizes a restore, sanitizer, rehearsal, staging cutover,
+The result also contains an exact `evidence_binding` projection for the dormant
+safe-submit receiver. It binds the manifest and checksum-file byte digests,
+evidence-set and artifact receipt digests, source/candidate identities,
+approved restore point, candidate approval metadata, protected workflow/run
+provenance, and claimed signer identity. This projection is deliberately not a
+trusted authorization: the local validator cannot create the attestation,
+provider-observation, or server-scope-authentication receipts required by the
+safe-submit v4 receiver.
+
+No valid v2 bundle authorizes a restore, sanitizer, rehearsal, staging cutover,
 or production action. A later, independently reviewed milestone must configure
 and re-pin the server-scope policy, verify the receipt HMAC and signer
 attestations from trusted key/issuer data, bind authenticated provider evidence,

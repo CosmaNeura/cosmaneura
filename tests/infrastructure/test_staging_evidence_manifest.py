@@ -193,6 +193,7 @@ def _bundle(
     *,
     artifact_mutator: Callable[[dict[str, dict[str, Any]]], None] | None = None,
     manifest_mutator: Callable[[dict[str, Any]], None] | None = None,
+    approved_restore_time: str | None = None,
     observed_at: str = "2026-09-03T12:00:00Z",
     expires_at: str = "2026-09-03T12:15:00Z",
 ) -> Path:
@@ -329,12 +330,15 @@ def _bundle(
         for name, value in sorted(artifacts.items())
     ]
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "manifest_id": "rehearsal-20260903",
         "source_sha": common["source_sha"],
         "candidate_sha": common["candidate_sha"],
         "hmac_key_version": "staging-inventory-hmac-v1",
         "source_resource": common["source_resource"],
+        "approved_restore_time": (
+            observed_at if approved_restore_time is None else approved_restore_time
+        ),
         "observed_at": observed_at,
         "expires_at": expires_at,
         "provenance": provenance,
@@ -435,7 +439,15 @@ def test_exact_bundle_validates_but_remains_blocked(
     module: ModuleType,
     tmp_path: Path,
 ) -> None:
-    result = _validate(module, _bundle(module, tmp_path))
+    bundle = _bundle(module, tmp_path)
+    result = _validate(module, bundle)
+    policy, policy_sha256 = module.load_policy(POLICY)
+    manifest_raw = (bundle / "evidence-manifest.json").read_bytes()
+    manifest = json.loads(manifest_raw)
+    candidate = json.loads((bundle / "candidate.json").read_bytes())
+    receipts = {
+        entry["kind"]: entry["receipt_sha256"] for entry in manifest["artifacts"]
+    }
 
     assert result["outcome"] == "contract_valid"
     assert result["activation_state"] == "blocked"
@@ -447,6 +459,87 @@ def test_exact_bundle_validates_but_remains_blocked(
         "restore_activation_unimplemented",
     ]
     assert result["evidence_set_sha256"].startswith("sha256:")
+    assert result["evidence_binding"] == {
+        "schema_version": 1,
+        "binding_policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+        "evidence_manifest_policy_id": "cosmaneura-staging-evidence-manifest-v2",
+        "evidence_manifest_policy_sha256": f"sha256:{policy_sha256}",
+        "manifest_id": "rehearsal-20260903",
+        "manifest_file_sha256": module._digest(manifest_raw),
+        "bundle_index_sha256": module._digest((bundle / "SHA256SUMS").read_bytes()),
+        "evidence_set_sha256": manifest["evidence_set_sha256"],
+        "source_sha": "1" * 40,
+        "candidate_sha": "2" * 40,
+        "source_server_resource_id": policy["source_resource"]["postgres_server_id"],
+        "source_database_name": policy["source_resource"]["database_name"],
+        "approved_restore_time": "2026-09-03T12:00:00Z",
+        "observed_at": "2026-09-03T12:00:00Z",
+        "expires_at": "2026-09-03T12:15:00Z",
+        "candidate_approval_pr_number": 230,
+        "candidate_protected_master_sha": "3" * 40,
+        "candidate_schema_revision": candidate["schema_revision"],
+        "candidate_receipt_sha256": receipts["candidate"],
+        "inventory_receipt_sha256": receipts["inventory"],
+        "quiescence_receipt_sha256": receipts["quiescence"],
+        "server_scope_receipt_sha256": receipts["server_scope"],
+        "repository": policy["repository"],
+        "protected_ref": policy["protected_ref"],
+        "workflow_path": policy["workflow_path"],
+        "workflow_sha": "3" * 40,
+        "run_id": "901",
+        "run_attempt": "1",
+        "event_name": policy["event_name"],
+        "signer_issuer": policy["signer"]["issuer"],
+        "signer_subject": policy["signer"]["subject"],
+    }
+
+
+def test_binding_manifest_tamper_is_bound_by_the_evidence_set(
+    module: ModuleType,
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(module, tmp_path)
+    manifest_path = bundle / "evidence-manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["manifest_id"] = "rehearsal-20260904"
+    manifest_path.write_bytes(module._canonical(manifest) + b"\n")
+    indexed_files = {
+        path.name: path.read_bytes()
+        for path in bundle.iterdir()
+        if path.name != "SHA256SUMS"
+    }
+    (bundle / "SHA256SUMS").write_text(
+        "".join(
+            f"{hashlib.sha256(raw).hexdigest()}  {name}\n"
+            for name, raw in sorted(indexed_files.items())
+        )
+    )
+
+    with pytest.raises(module.EvidenceFailure, match="manifest.evidence_set_digest"):
+        _validate(module, bundle)
+
+
+@pytest.mark.parametrize(
+    ("approved_restore_time", "failure"),
+    [
+        ("2026-09-03T12:00:01Z", "evidence.approved_restore_time_mismatch"),
+        ("2026-09-03T12:00:00+00:00", "evidence.approved_restore_time"),
+    ],
+)
+def test_approved_restore_time_must_be_canonical_and_equal_observation(
+    module: ModuleType,
+    tmp_path: Path,
+    approved_restore_time: str,
+    failure: str,
+) -> None:
+    bundle = _bundle(
+        module,
+        tmp_path,
+        approved_restore_time=approved_restore_time,
+    )
+
+    with pytest.raises(module.EvidenceFailure, match=failure):
+        _validate(module, bundle)
 
 
 def test_committed_dormant_server_scope_policy_is_valid_and_remains_blocked(

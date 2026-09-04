@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "policy_id": "cosmaneura-staging-evidence-manifest-v1",
+  "schema_version": 2,
+  "policy_id": "cosmaneura-staging-evidence-manifest-v2",
   "repository": "CosmaNeura/cosmaneura",
   "protected_ref": "refs/heads/master",
   "workflow_path": ".github/workflows/staging_restore_rehearsal.yml",
@@ -39,7 +39,7 @@
     "server_scope": "sha256:4f91a206c81cc2a0b239ef48d55e5b3249dff944a80b3df28128ef62c9e8adc5"
   },
   "schema_fields": {
-    "manifest": ["schema_version", "manifest_id", "source_sha", "candidate_sha", "hmac_key_version", "source_resource", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "artifacts", "evidence_set_sha256"],
+    "manifest": ["schema_version", "manifest_id", "source_sha", "candidate_sha", "hmac_key_version", "source_resource", "approved_restore_time", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "artifacts", "evidence_set_sha256"],
     "artifact": ["kind", "path", "file_sha256", "receipt_sha256"],
     "candidate": ["schema_version", "evidence_type", "state", "approval_pr_number", "protected_master_sha", "schema_revision", "source_sha", "candidate_sha", "source_resource", "observed_at", "expires_at", "provenance", "signer_claims", "policy_digests", "receipt_sha256"],
     "inventory": ["schema_version", "policy_id", "policy_sha256", "approved_state_sha256", "hmac_key_version", "source_resource", "observed_at", "expires_at", "source_sha", "phase", "candidate_sha", "provenance", "signer_claims", "counts", "rule_violation_counts", "identity_hmacs", "catalog_hmac", "schema_descriptor_sha256", "state_hmacs", "blob_state_hmacs", "redis_state_hmac", "errors", "outcome", "receipt_sha256"],
