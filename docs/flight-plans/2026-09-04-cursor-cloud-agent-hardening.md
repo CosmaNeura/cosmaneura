@@ -2,9 +2,10 @@
 
 ## Outcome and boundaries
 
-- Outcome: every automatic Cursor entrypoint starts with a clean environment,
-  cannot read 1Password-backed local overrides, uses immutable bootstrap and
-  Compose trust roots, and can mutate only exact local development databases.
+- Outcome: every repository-managed Cursor Bash entrypoint starts behind
+  `/usr/bin/env -i`, cannot read 1Password-backed local overrides, uses
+  immutable bootstrap and Compose trust roots, and can mutate only exact local
+  development databases.
 - In scope: `.cursor/` install/start/server paths, their narrow `.envrc` marker
   branch, immutable installers, and focused policy tests.
 - Non-goals: application behavior, shared developer Just recipes, live staging
@@ -51,10 +52,14 @@
   Mise-managed exact-version tools rely on their upstream channels; Playwright
   fixes Chromium revision 1161 but does not repository-verify the browser
   archive digest. No credentials or live data may enter this environment.
-- Recovery: revert this follow-up to restore the prior remote-development
-  behavior, then discard and rebuild any affected disposable Cloud Agent. If
-  boundary tests ever show credential exposure, rotate the affected credential
-  before reuse.
+- Cursor's platform-owned outer command interpreter, if present, necessarily
+  executes before the configured `/usr/bin/env -i` command and remains outside
+  repository control. The Cloud Agent host must itself remain
+  credential-neutral.
+- Recovery: do not revert to the credential-exposing PR #257 behavior. Disable
+  the Cloud Agent entrypoints or roll forward with a reviewed repair, discard
+  and rebuild every affected disposable agent, and rotate any potentially
+  exposed credential before reuse.
 - No irreversible cleanup or observation window applies.
 
 ## Completion

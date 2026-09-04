@@ -25,6 +25,7 @@ cursor_require_credential_neutral() {
 cursor_exec_credential_neutral() {
   local cursor_user
   local cursor_runtime_home
+  local cursor_state_file
   local cursor_state_path
   cursor_user="$(/usr/bin/id -un)"
   cursor_runtime_home="${CURSOR_CREDENTIAL_SCRIPT_DIR}/runtime-home"
@@ -32,12 +33,20 @@ cursor_exec_credential_neutral() {
   for cursor_state_path in \
     "${cursor_runtime_home}" \
     "${cursor_runtime_home}/.cache" \
+    "${cursor_runtime_home}/.cache/ms-playwright" \
     "${cursor_runtime_home}/.cache/uv" \
     "${cursor_runtime_home}/.config" \
     "${cursor_runtime_home}/.docker" \
     "${cursor_runtime_home}/.gnupg" \
     "${cursor_runtime_home}/.local" \
+    "${cursor_runtime_home}/.local/bin" \
     "${cursor_runtime_home}/.local/share" \
+    "${cursor_runtime_home}/.local/share/mise" \
+    "${cursor_runtime_home}/.local/share/mise/shims" \
+    "${cursor_runtime_home}/.local/state" \
+    "${cursor_runtime_home}/.local/state/localias" \
+    "${cursor_runtime_home}/.pki" \
+    "${cursor_runtime_home}/.pki/nssdb" \
     "${cursor_runtime_home}/.azure" \
     "${cursor_runtime_home}/.curl" \
     "${cursor_runtime_home}/tmp"; do
@@ -54,6 +63,25 @@ cursor_exec_credential_neutral() {
     fi
     /bin/chmod 0700 "${cursor_state_path}"
   done
+  for cursor_state_file in \
+    "${cursor_runtime_home}/.gitconfig" \
+    "${cursor_runtime_home}/.npmrc" \
+    "${cursor_runtime_home}/pip.conf" \
+    "${cursor_runtime_home}/.docker/config.json" \
+    "${cursor_runtime_home}/.curl/.curlrc" \
+    "${cursor_runtime_home}/.pki/nssdb/cert9.db" \
+    "${cursor_runtime_home}/.pki/nssdb/key4.db" \
+    "${cursor_runtime_home}/.pki/nssdb/pkcs11.txt"; do
+    if [[ -L "${cursor_state_file}" ]] \
+      || { [[ -e "${cursor_state_file}" ]] && [[ ! -f "${cursor_state_file}" ]]; } \
+      || { [[ -e "${cursor_state_file}" ]] && [[ ! -O "${cursor_state_file}" ]]; }; then
+      echo "Cursor config path must be a real, user-owned regular file: ${cursor_state_file}." >&2
+      return 1
+    fi
+    if [[ -e "${cursor_state_file}" ]]; then
+      /bin/chmod 0600 "${cursor_state_file}"
+    fi
+  done
   exec /usr/bin/env -i \
     HOME="${cursor_runtime_home}" \
     USER="${cursor_user}" \
@@ -67,6 +95,7 @@ cursor_exec_credential_neutral() {
     XDG_CACHE_HOME="${cursor_runtime_home}/.cache" \
     XDG_CONFIG_HOME="${cursor_runtime_home}/.config" \
     XDG_DATA_HOME="${cursor_runtime_home}/.local/share" \
+    XDG_STATE_HOME="${cursor_runtime_home}/.local/state" \
     AZURE_CONFIG_DIR="${cursor_runtime_home}/.azure" \
     CURL_HOME="${cursor_runtime_home}/.curl" \
     DOCKER_CONFIG="${cursor_runtime_home}/.docker" \
@@ -98,5 +127,5 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       ;;
   esac
 
-  cursor_exec_credential_neutral /bin/bash "${cursor_target}"
+  cursor_exec_credential_neutral /bin/bash --noprofile --norc -- "${cursor_target}"
 fi

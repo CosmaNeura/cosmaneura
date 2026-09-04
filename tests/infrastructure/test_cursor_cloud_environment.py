@@ -167,19 +167,119 @@ def test_environment_entrypoints_use_only_credential_neutral_dispatcher() -> Non
     environment = json.loads(
         (ROOT / ".cursor/environment.json").read_text(encoding="utf-8")
     )
-    assert environment["install"] == "bash .cursor/credential-neutral.sh install"
-    assert environment["start"] == "bash .cursor/credential-neutral.sh start"
+    prefix = "/usr/bin/env -i /bin/bash --noprofile --norc --"
+    assert environment["install"] == (f"{prefix} .cursor/credential-neutral.sh install")
+    assert environment["start"] == f"{prefix} .cursor/credential-neutral.sh start"
     assert [terminal["command"] for terminal in environment["terminals"]] == [
-        "bash .cursor/credential-neutral.sh backend",
-        "bash .cursor/credential-neutral.sh frontend",
+        f"{prefix} .cursor/credential-neutral.sh backend",
+        f"{prefix} .cursor/credential-neutral.sh frontend",
     ]
 
     install = (ROOT / ".cursor/install.sh").read_text(encoding="utf-8")
     system_setup = (ROOT / ".cursor/system-setup.sh").read_text(encoding="utf-8")
     library = (ROOT / ".cursor/lib.sh").read_text(encoding="utf-8")
+    dispatcher = (ROOT / ".cursor/credential-neutral.sh").read_text(encoding="utf-8")
     assert "cursor_require_credential_neutral" in install
     assert "cursor_require_credential_neutral" in system_setup
     assert "cursor_require_credential_neutral" in library
+    assert (
+        'cursor_exec_credential_neutral /bin/bash --noprofile --norc -- "${cursor_target}"'
+        in dispatcher
+    )
+
+
+def test_environment_entrypoints_clear_hostile_bash_env_before_repo_bash(
+    tmp_path: Path,
+) -> None:
+    sandbox_cursor = tmp_path / ".cursor"
+    sandbox_cursor.mkdir()
+    probe = sandbox_cursor / "credential-neutral.sh"
+    probe.write_text(
+        "\n".join(
+            (
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                'printf "mode=%s\\n" "$1"',
+                'printf "bash_env=%s\\n" "${BASH_ENV-unset}"',
+                'printf "sentinel=%s\\n" "${INHERITED_SENTINEL_SECRET-unset}"',
+                'printf "shellopts=%s\\n" "$SHELLOPTS"',
+                'printf "ps4=%s\\n" "$PS4"',
+                "if declare -F cursor_hostile_function >/dev/null; then",
+                "  cursor_hostile_function",
+                "  printf 'function=present\\n'",
+                "else",
+                "  printf 'function=absent\\n'",
+                "fi",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    attack_marker = tmp_path / "bash-env-executed"
+    hostile_bash_env = tmp_path / "hostile-bash-env.sh"
+    hostile_bash_env.write_text(
+        "\n".join(
+            (
+                f"printf executed > {shlex.quote(str(attack_marker))}",
+                "export HOSTILE_BASH_ENV_RAN=1",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    inherited_environment = dict(os.environ)
+    inherited_environment.update(
+        {
+            "BASH_ENV": str(hostile_bash_env),
+            "BASH_FUNC_cursor_hostile_function%%": (
+                f"() {{ printf executed > {shlex.quote(str(attack_marker))}; }}"
+            ),
+            "INHERITED_SENTINEL_SECRET": "must-not-survive",
+            "PS4": "hostile-ps4-must-not-survive",
+            "SHELLOPTS": "braceexpand:hashall:interactive-comments:xtrace",
+        }
+    )
+
+    environment = json.loads(
+        (ROOT / ".cursor/environment.json").read_text(encoding="utf-8")
+    )
+    commands = {
+        "install": environment["install"],
+        "start": environment["start"],
+        **{
+            terminal["name"]: terminal["command"]
+            for terminal in environment["terminals"]
+        },
+    }
+    for mode, command in commands.items():
+        command_parts = shlex.split(command)
+        assert command_parts[:6] == [
+            "/usr/bin/env",
+            "-i",
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "--",
+        ]
+        result = subprocess.run(
+            command_parts,
+            cwd=tmp_path,
+            env=inherited_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert f"mode={mode}" in result.stdout
+        assert "bash_env=unset" in result.stdout
+        assert "sentinel=unset" in result.stdout
+        assert "function=absent" in result.stdout
+        assert ":xtrace:" not in result.stdout
+        assert "hostile-ps4-must-not-survive" not in result.stdout
+        assert "must-not-survive" not in result.stdout
+        assert not attack_marker.exists()
 
 
 @pytest.mark.parametrize(
@@ -240,6 +340,7 @@ def test_credential_neutral_dispatcher_scrubs_inherited_secrets_and_blocks_op(
                 'printf "op=%s\\n" "$(command -v op)"',
                 'printf "home=%s\\n" "$HOME"',
                 'printf "xdg_config=%s\\n" "$XDG_CONFIG_HOME"',
+                'printf "xdg_state=%s\\n" "$XDG_STATE_HOME"',
                 'printf "docker_config=%s\\n" "$DOCKER_CONFIG"',
                 'printf "git_config=%s\\n" "$GIT_CONFIG_GLOBAL"',
                 'printf "npm_config=%s\\n" "$NPM_CONFIG_USERCONFIG"',
@@ -291,6 +392,7 @@ def test_credential_neutral_dispatcher_scrubs_inherited_secrets_and_blocks_op(
     runtime_home = ROOT / ".cursor/runtime-home"
     assert f"home={runtime_home}" in result.stdout
     assert f"xdg_config={runtime_home / '.config'}" in result.stdout
+    assert f"xdg_state={runtime_home / '.local/state'}" in result.stdout
     assert f"docker_config={runtime_home / '.docker'}" in result.stdout
     assert f"git_config={runtime_home / '.gitconfig'}" in result.stdout
     assert f"npm_config={runtime_home / '.npmrc'}" in result.stdout
@@ -333,6 +435,118 @@ def test_credential_neutral_dispatcher_rejects_runtime_home_symlink(
 
     assert result.returncode != 0
     assert "must be a real, user-owned directory" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        ".cache",
+        ".cache/ms-playwright",
+        ".cache/uv",
+        ".config",
+        ".docker",
+        ".gnupg",
+        ".local",
+        ".local/bin",
+        ".local/share",
+        ".local/share/mise",
+        ".local/share/mise/shims",
+        ".local/state",
+        ".local/state/localias",
+        ".pki",
+        ".pki/nssdb",
+        ".azure",
+        ".curl",
+        "tmp",
+    ],
+)
+def test_credential_neutral_dispatcher_rejects_nested_directory_symlink(
+    tmp_path: Path, relative_path: str
+) -> None:
+    sandbox_cursor = tmp_path / ".cursor"
+    sandbox_cursor.mkdir()
+    shutil.copyfile(
+        ROOT / ".cursor/credential-neutral.sh",
+        sandbox_cursor / "credential-neutral.sh",
+    )
+    runtime_home = sandbox_cursor / "runtime-home"
+    escaped_directory = tmp_path / "credential-bearing-directory"
+    escaped_directory.mkdir()
+    symlink_path = runtime_home / relative_path
+    symlink_path.parent.mkdir(parents=True, exist_ok=True)
+    symlink_path.symlink_to(escaped_directory, target_is_directory=True)
+
+    shell = "\n".join(
+        (
+            f"source {shlex.quote(str(sandbox_cursor / 'credential-neutral.sh'))}",
+            "cursor_exec_credential_neutral /bin/true",
+        )
+    )
+    result = subprocess.run(
+        ["bash", "-c", shell],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "must be a real, user-owned directory" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        ".gitconfig",
+        ".npmrc",
+        "pip.conf",
+        ".docker/config.json",
+        ".curl/.curlrc",
+        ".pki/nssdb/cert9.db",
+        ".pki/nssdb/key4.db",
+        ".pki/nssdb/pkcs11.txt",
+    ],
+)
+def test_credential_neutral_dispatcher_rejects_config_file_symlink(
+    tmp_path: Path, relative_path: str
+) -> None:
+    sandbox_cursor = tmp_path / ".cursor"
+    sandbox_cursor.mkdir()
+    shutil.copyfile(
+        ROOT / ".cursor/credential-neutral.sh",
+        sandbox_cursor / "credential-neutral.sh",
+    )
+    runtime_home = sandbox_cursor / "runtime-home"
+    escaped_file = tmp_path / "credential-bearing-config"
+    escaped_file.write_text("must-not-survive\n", encoding="utf-8")
+    symlink_path = runtime_home / relative_path
+    symlink_path.parent.mkdir(parents=True, exist_ok=True)
+    symlink_path.symlink_to(escaped_file)
+
+    shell = "\n".join(
+        (
+            f"source {shlex.quote(str(sandbox_cursor / 'credential-neutral.sh'))}",
+            "cursor_exec_credential_neutral /bin/true",
+        )
+    )
+    result = subprocess.run(
+        ["bash", "-c", shell],
+        cwd=tmp_path,
+        env=dict(os.environ),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "must be a real, user-owned regular file" in result.stderr
+
+
+def test_credential_neutral_dispatcher_checks_runtime_state_ownership() -> None:
+    dispatcher = (ROOT / ".cursor/credential-neutral.sh").read_text(encoding="utf-8")
+    assert dispatcher.count('! -O "${cursor_state_path}"') == 2
+    assert '! -O "${cursor_state_file}"' in dispatcher
 
 
 @pytest.mark.parametrize(

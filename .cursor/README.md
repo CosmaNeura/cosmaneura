@@ -4,9 +4,11 @@ This environment is for credential-neutral local development. Do not inject
 production or staging database credentials, Azure credentials, PHI, or live
 restore bindings into it.
 
-Every entrypoint in `environment.json` first runs through
-`credential-neutral.sh`. That dispatcher rebuilds the process environment from
-an empty base with only reviewed OS values and
+Every repository-managed command in `environment.json` begins with
+`/usr/bin/env -i` before invoking `/bin/bash --noprofile --norc`, so inherited
+variables such as `BASH_ENV` cannot execute in that Bash process. The command
+then runs through `credential-neutral.sh`, which rebuilds the process
+environment again from an empty base with only reviewed OS values and
 `COSMANEURA_CURSOR_CREDENTIAL_NEUTRAL=1`. Target scripts refuse direct use
 without the marker. Direnv honors the marker by skipping every local override
 file and every 1Password probe/read, then supplies only committed non-secret
@@ -16,9 +18,17 @@ development placeholders. A repository-local `op` denial shim remains first on
 The dispatcher also replaces the real user home with the gitignored,
 per-worktree `.cursor/runtime-home/` directory and points Git, Docker, curl,
 pip, npm, Azure, GnuPG, XDG, and uv configuration/cache discovery into it.
+Every fixed directory and direct configuration-file path consumed there is
+required to be real and user-owned; symlink and wrong-type escapes fail closed.
 This prevents normal tool configuration lookup from reaching credentials in
 the host home. It is an environment/configuration boundary, not an operating
 system sandbox: processes can still read otherwise accessible host paths.
+
+Cursor may use its own outer command interpreter to launch the command string.
+That interpreter necessarily runs before any repository-controlled token and
+cannot be cleaned by this configuration. The Cloud Agent host itself must
+therefore remain credential-neutral; this boundary covers the repository-owned
+Bash process and all descendants it launches.
 
 ## Bootstrap trust
 
