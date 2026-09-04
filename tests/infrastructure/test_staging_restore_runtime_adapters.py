@@ -965,6 +965,12 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
                     "DigestPinnedGitHubCliVerifier",
                 }
             )
+        elif path.name == "read_staging_restore_launch_record.py":
+            forbidden_symbols = tuple(
+                symbol
+                for symbol in adapter_symbols
+                if symbol != "receive_staging_broker_launch_receipt"
+            )
         assert all(symbol not in text for symbol in forbidden_symbols), path
     for policy_path in (
         adapters.observation.POLICY_PATH,

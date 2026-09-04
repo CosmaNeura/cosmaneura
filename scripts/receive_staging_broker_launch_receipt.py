@@ -61,6 +61,9 @@ class AuthenticatedMailboxGetRequest:
     accept: str
     optional_charset: str
     accept_encoding: str
+    content_length_required: bool
+    content_range_permitted: bool
+    transfer_encoding_permitted: bool
     redirects_permitted: bool
     maximum_bytes: int
     attempt_number: int
@@ -101,6 +104,8 @@ class AuthenticatedMailboxGetResponse:
         content_encoding_values: tuple[str, ...],
         content_length_values: tuple[str, ...],
         body: bytes,
+        content_range_values: tuple[str, ...] = (),
+        transfer_encoding_values: tuple[str, ...] = (),
     ) -> AuthenticatedMailboxGetResponse:
         if (
             cls is not AuthenticatedMailboxGetResponse
@@ -137,7 +142,24 @@ class AuthenticatedMailboxGetResponse:
             _fail("mailbox_receiver.response_invalid")
         content_type = content_type_values[0] if content_type_values else None
         if (
-            content_encoding_values
+            request.content_length_required
+            and len(content_length_values) != 1
+            or not request.content_range_permitted
+            and content_range_values != ()
+            or not request.transfer_encoding_permitted
+            and transfer_encoding_values != ()
+            or request.content_length_required
+            and bool(transfer_encoding_values)
+            or request.content_length_required
+            and len(content_length_values) == 1
+            and content_length_values[0] != str(len(body))
+            or request.content_length_required
+            and not content_length_values[0].isascii()
+            or request.content_length_required
+            and not content_length_values[0].isdigit()
+            or request.content_length_required
+            and content_length_values[0] != str(int(content_length_values[0]))
+            or content_encoding_values
             and content_encoding_values[0].strip().lower() != "identity"
         ):
             _fail("mailbox_receiver.response_invalid")
@@ -213,13 +235,23 @@ def _header_values(headers: Any, name: str) -> tuple[str, ...]:
 
 def _read_wire_response(
     response: Any, *, expected_uri: str, maximum_bytes: int
-) -> tuple[int, tuple[str, ...], tuple[str, ...], tuple[str, ...], bytes]:
+) -> tuple[
+    int,
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    tuple[str, ...],
+    bytes,
+]:
     try:
         status = getattr(response, "status", getattr(response, "code", None))
         final_uri = response.geturl()
         content_types = _header_values(response.headers, "Content-Type")
         content_encodings = _header_values(response.headers, "Content-Encoding")
         content_lengths = _header_values(response.headers, "Content-Length")
+        content_ranges = _header_values(response.headers, "Content-Range")
+        transfer_encodings = _header_values(response.headers, "Transfer-Encoding")
     except LaunchReceiptMailboxFailure:
         raise
     except Exception:
@@ -270,7 +302,15 @@ def _read_wire_response(
     raw = b"".join(chunks)
     if declared_length is not None and declared_length != len(raw):
         _fail("mailbox_receiver.http_response_invalid")
-    return status, content_types, content_encodings, content_lengths, raw
+    return (
+        status,
+        content_types,
+        content_encodings,
+        content_lengths,
+        content_ranges,
+        transfer_encodings,
+        raw,
+    )
 
 
 def _clock_value(clock: Callable[[], float], code: str) -> float:
@@ -414,7 +454,15 @@ class ContainerAppsStorageTokenSource:
                 except urllib.error.HTTPError as error:
                     response = error
                 with response:
-                    status, types, encodings, _lengths, raw = _read_wire_response(
+                    (
+                        status,
+                        types,
+                        encodings,
+                        _lengths,
+                        _ranges,
+                        _transfers,
+                        raw,
+                    ) = _read_wire_response(
                         response,
                         expected_uri=uri,
                         maximum_bytes=self._maximum_response_bytes,
@@ -463,6 +511,7 @@ class ContainerAppsStorageTokenSource:
                 type(expires_on) is str
                 and runtime_adapters.UNSIGNED_DECIMAL_RE.fullmatch(expires_on)
                 is not None
+                and expires_on == str(int(expires_on))
             ):
                 expiration = int(expires_on)
             else:
@@ -553,6 +602,50 @@ class ManagedIdentityPrivateBlobTransport:
             deadline=deadline,
         )
 
+    @classmethod
+    def from_provision_launch_record_environment(
+        cls,
+        policy: Any,
+        *,
+        identity_opener: _HttpOpener | None = None,
+        blob_opener: _HttpOpener | None = None,
+        epoch_clock: Callable[[], float] = time.time,
+        monotonic: Callable[[], float] = time.monotonic,
+        deadline: _DeadlineFactory = runtime_adapters._wall_clock_deadline,
+    ) -> ManagedIdentityPrivateBlobTransport:
+        """Build the exact provision-job transport for one launch-record GET."""
+
+        try:
+            document = runtime_binding.validate_runtime_binding_policy(
+                policy, executable=True
+            )
+            retrieval = document["launch_binding"]["mailbox"]["launch_record_retrieval"]
+            identity = document["identities"]["jobs"]["provision"]
+        except (KeyError, TypeError, IndexError, runtime_binding.RuntimeBindingFailure):
+            raise LaunchReceiptMailboxFailure(
+                "mailbox_receiver.transport_configuration_invalid"
+            ) from None
+        source = ContainerAppsStorageTokenSource(
+            client_id=identity["client_id"],
+            identity_endpoint=os.environ.get("IDENTITY_ENDPOINT", ""),
+            identity_header=os.environ.get("IDENTITY_HEADER", ""),
+            service_api_version=retrieval["managed_identity_api_version"],
+            maximum_response_bytes=retrieval["managed_identity_response_maximum_bytes"],
+            expiry_skew_seconds=retrieval["managed_identity_expiry_skew_seconds"],
+            maximum_lifetime_seconds=retrieval[
+                "managed_identity_maximum_token_lifetime_seconds"
+            ],
+            maximum_timeout_seconds=retrieval["maximum_request_timeout_seconds"],
+            opener=identity_opener,
+            clock=epoch_clock,
+        )
+        return cls(
+            source,
+            opener=blob_opener,
+            monotonic=monotonic,
+            deadline=deadline,
+        )
+
     def get_exact_private_blob(
         self, request: AuthenticatedMailboxGetRequest
     ) -> AuthenticatedMailboxGetResponse:
@@ -608,7 +701,15 @@ class ManagedIdentityPrivateBlobTransport:
                     except urllib.error.HTTPError as error:
                         response = error
                     with response:
-                        status, types, encodings, lengths, body = _read_wire_response(
+                        (
+                            status,
+                            types,
+                            encodings,
+                            lengths,
+                            ranges,
+                            transfers,
+                            body,
+                        ) = _read_wire_response(
                             response,
                             expected_uri=request.uri,
                             maximum_bytes=request.maximum_bytes,
@@ -637,6 +738,8 @@ class ManagedIdentityPrivateBlobTransport:
                 content_encoding_values=encodings,
                 content_length_values=lengths,
                 body=body,
+                content_range_values=ranges,
+                transfer_encoding_values=transfers,
             )
 
 
@@ -728,10 +831,122 @@ def _sealed_request(
         "accept": retrieval["successful_media_type"],
         "optional_charset": retrieval["optional_charset"],
         "accept_encoding": retrieval["content_encoding"],
+        "content_length_required": False,
+        "content_range_permitted": True,
+        "transfer_encoding_permitted": True,
         "redirects_permitted": retrieval["redirects_permitted"],
         "maximum_bytes": maximum_bytes,
         "attempt_number": attempt_number,
         "timeout_seconds": timeout_seconds,
+    }
+    for name, value in values.items():
+        object.__setattr__(result, name, value)
+    object.__setattr__(result, "_seal", _REQUEST_SEAL)
+    return result
+
+
+def _sealed_provision_launch_record_request(
+    *,
+    document: dict[str, Any],
+    authenticated_receipt: launch_binding.AuthenticatedBrokerLaunchReceipt,
+    authority_receipt_sha256: str,
+    authority_execution_name: str,
+    authority_launch_record_uri: str,
+    authority_launch_record_sha256: str,
+) -> AuthenticatedMailboxGetRequest:
+    """Seal the one URI derived from an authenticated provision receipt."""
+
+    mailbox = document["launch_binding"]["mailbox"]
+    retrieval = mailbox["launch_record_retrieval"]
+    identity = document["identities"]["jobs"]["provision"]
+    maximum_bytes = document["launch_binding"]["launch_record"]["maximum_bytes"]
+    if (
+        type(authenticated_receipt)
+        is not launch_binding.AuthenticatedBrokerLaunchReceipt
+        or not authenticated_receipt._is_authenticated()
+        or authenticated_receipt.action != "provision"
+        or authenticated_receipt.receipt_sha256 != authority_receipt_sha256
+        or authenticated_receipt.execution_name != authority_execution_name
+        or authenticated_receipt.launch_record_uri != authority_launch_record_uri
+        or authenticated_receipt.launch_record_sha256 != authority_launch_record_sha256
+        or os.environ.get(launch_binding.EXECUTION_NAME_ENV) != authority_execution_name
+        or type(authenticated_receipt.receipt_bytes) is not bytes
+        or launch_binding._digest(authenticated_receipt.receipt_bytes)
+        != authority_receipt_sha256
+        or type(authority_launch_record_sha256) is not str
+        or launch_binding.DIGEST_RE.fullmatch(authority_launch_record_sha256) is None
+    ):
+        _fail("mailbox_receiver.launch_record_request_invalid")
+    object_path = mailbox["launch_record_path_template"].format(
+        launch_record_sha256_without_prefix=authority_launch_record_sha256[7:]
+    )
+    expected_uri = (
+        f"https://{mailbox['account_host']}/"
+        f"{mailbox['container_names']['provision']}/{object_path}"
+    )
+    try:
+        parsed = urllib.parse.urlsplit(authenticated_receipt.launch_record_uri)
+        port = parsed.port
+    except (TypeError, ValueError):
+        _fail("mailbox_receiver.launch_record_request_invalid")
+    if (
+        authority_launch_record_uri != expected_uri
+        or parsed.scheme != "https"
+        or parsed.hostname != mailbox["account_host"]
+        or parsed.netloc != mailbox["account_host"]
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path != f"/{mailbox['container_names']['provision']}/{object_path}"
+        or parsed.query
+        or parsed.fragment
+        or retrieval["action"] != "provision"
+        or retrieval["object"] != "launch_record"
+        or retrieval["method"] != "GET"
+        or retrieval["managed_identity_required"] is not True
+        or retrieval["exact_object_only"] is not True
+        or retrieval["listing_permitted"] is not False
+        or retrieval["polling_permitted"] is not False
+        or retrieval["retry_permitted"] is not False
+        or retrieval["redirects_permitted"] is not False
+        or retrieval["private_endpoint_required"] is not True
+        or retrieval["maximum_object_get_requests"] != 1
+        or retrieval["maximum_managed_identity_token_requests"] != 1
+        or retrieval["maximum_total_http_requests"] != 2
+        or retrieval["request_query_parameters"] != []
+        or retrieval["content_length_required"] is not True
+        or retrieval["content_range_permitted"] is not False
+        or retrieval["transfer_encoding_permitted"] is not False
+        or retrieval["response_authentication"]
+        != "reviewed-managed-identity-private-blob-adapter-seal"
+        or retrieval["non_success_body_exposed_to_reader"] is not False
+        or retrieval["one_shot_reader_required"] is not True
+        or retrieval["authority_and_execution_recheck"] != "before-and-after-object-get"
+    ):
+        _fail("mailbox_receiver.launch_record_request_invalid")
+    result = object.__new__(AuthenticatedMailboxGetRequest)
+    values = {
+        "action": "provision",
+        "object_kind": "launch_record",
+        "uri": authority_launch_record_uri,
+        "method": retrieval["method"],
+        "oauth_resource": mailbox["oauth_resource"],
+        "account_resource_id": mailbox["account_resource_id"],
+        "container_resource_id": mailbox["container_resource_ids"]["provision"],
+        "managed_identity_resource_id": identity["resource_id"],
+        "managed_identity_client_id": identity["client_id"],
+        "private_endpoint_resource_id": mailbox["private_endpoint_resource_id"],
+        "service_api_version": retrieval["service_api_version"],
+        "accept": retrieval["successful_media_type"],
+        "optional_charset": retrieval["optional_charset"],
+        "accept_encoding": retrieval["content_encoding"],
+        "content_length_required": retrieval["content_length_required"],
+        "content_range_permitted": retrieval["content_range_permitted"],
+        "transfer_encoding_permitted": retrieval["transfer_encoding_permitted"],
+        "redirects_permitted": retrieval["redirects_permitted"],
+        "maximum_bytes": maximum_bytes,
+        "attempt_number": 1,
+        "timeout_seconds": retrieval["maximum_request_timeout_seconds"],
     }
     for name, value in values.items():
         object.__setattr__(result, name, value)

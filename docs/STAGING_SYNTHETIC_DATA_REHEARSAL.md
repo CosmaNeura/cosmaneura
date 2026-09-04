@@ -214,3 +214,14 @@ Activation remains blocked until the controller authenticates and binds the sour
 A future executor must keep guarded append-only tables empty, reject unexpected `ON TRUNCATE` triggers, and prove its isolated-copy `TRUNCATE`/reinsert permissions and rollback behavior; this does not preserve append-only semantics. It must use serializable transactions, `synchronous_commit=on`, bounded timeouts, an `alembic_version` lock, a pre-commit session recheck, and fresh-connection post-commit verification. Any ambiguous outcome is isolated and cleanup-only.
 
 Evidence remains aggregate counts/HMACs and bounded pass/fail codes; small groups and per-table counts are omitted. The contract does not prove erasure from server-wide PITR, global roles, backups, replicas, or logs.
+
+The provision launch-material seam now has a dormant one-shot reader for the
+single content-addressed private Blob derived from the sealed broker receipt.
+It snapshots and rechecks receipt/execution authority, fixes the provision job
+UAMI and storage audience, performs no listing/poll/retry, and strictly checks
+the Blob object's final URI, status, framing, media type, size, and digest. The
+concrete builder disables proxies and redirects; injected transports are test
+seams. The pinned private-endpoint ID does not prove routing, so private DNS,
+public-network, RBAC, and egress evidence remain mandatory before activation.
+The public dependency factory and all activation gates still refuse; see the
+[launch-record reader flight plan](flight-plans/2026-09-04-staging-launch-record-private-reader.md).
