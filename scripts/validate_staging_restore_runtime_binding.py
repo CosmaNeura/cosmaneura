@@ -8,6 +8,8 @@ sealed objects prevent accidental API misuse, not hostile same-process forgery.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import math
@@ -28,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "cccda6c097e4172b181f255f57a1f9ec5dcd4df4ccd4103949735a02ae6fb65a"
+CANONICAL_POLICY_SHA256 = "c10fa7eaf2b45a8930ec044bef00d02c4ac82403e501a9d400426d3ac497e7c2"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -47,6 +49,7 @@ HOST_RE = re.compile(
 )
 RECORD_ID_RE = re.compile(r"^runtime-[0-9a-f]{16,64}$")
 UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
+JWK_COORDINATE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 
 ACTIONS = ("Microsoft.App/jobs/read", "Microsoft.App/jobs/start/action")
 RUNTIME_REFERENCE_FIELDS = ("record_uri", "record_sha256", "signature_bundle_uri", "signature_bundle_sha256")
@@ -189,6 +192,16 @@ def _pin(value: Any, kind: str, code: str) -> str:
         valid = HOST_RE.fullmatch(value) is not None
     elif kind == "version":
         valid = VERSION_RE.fullmatch(value) is not None
+    elif kind == "jwk_coordinate":
+        try:
+            decoded = base64.b64decode(value + "=", altchars=b"-_", validate=True)
+            valid = (
+                JWK_COORDINATE_RE.fullmatch(value) is not None
+                and len(decoded) == 32
+                and base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") == value
+            )
+        except (ValueError, binascii.Error):
+            valid = False
     elif kind in {"https_uri", "blob_version_uri"}:
         try:
             parsed = urllib.parse.urlsplit(value)
@@ -228,6 +241,8 @@ def _pin(value: Any, kind: str, code: str) -> str:
 
 
 def _pin_kind(placeholder: str) -> str:
+    if placeholder.endswith(("_JWK_X", "_JWK_Y")):
+        return "jwk_coordinate"
     if placeholder.endswith("_SHA256"):
         return "digest"
     if placeholder.endswith("_UUID"):
@@ -542,6 +557,7 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
     registry = policy["private_registry"]
     marker = policy["private_control_marker_store"]
     mailbox = policy["launch_binding"]["mailbox"]
+    signing = policy["launch_binding"]["receipt_signing"]
     registry_host, _, _repository_path = registry["repository"].partition("/")
     if (
         not blob["account_host"].endswith(".blob.core.windows.net")
@@ -551,6 +567,9 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
         or not secret["vault_host"].endswith(".vault.azure.net")
         or not marker["account_host"].endswith(".blob.core.windows.net")
         or not mailbox["account_host"].endswith(".blob.core.windows.net")
+        or signing["key_resource_id"]
+        != f"{secret['vault_resource_id']}/keys/{signing['key_name']}"
+        or signing["public_key_sha256"] != _digest(_canonical(signing["public_key_jwk"]))
     ):
         _fail("evidence_ingress.private_binding")
     for item in secret["secrets"].values():

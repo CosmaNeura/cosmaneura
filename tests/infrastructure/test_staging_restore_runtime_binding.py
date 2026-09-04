@@ -52,7 +52,11 @@ def _configured_policy() -> dict[str, Any]:
     resource_index = 1
     uuid_index = 1
     for placeholder in placeholders:
-        if placeholder.endswith("_SHA256"):
+        if placeholder.endswith("_JWK_X"):
+            replacements[placeholder] = "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY"
+        elif placeholder.endswith("_JWK_Y"):
+            replacements[placeholder] = "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+        elif placeholder.endswith("_SHA256"):
             replacements[placeholder] = f"sha256:{digest_index:064x}"
             digest_index += 1
         elif placeholder.endswith("_UUID"):
@@ -101,6 +105,13 @@ def _configured_policy() -> dict[str, Any]:
             f"https://restoresecrets.vault.azure.net/secrets/{name}/{version}"
         )
 
+    secret_source = policy["evidence_ingress"]["private_versioned_secret_source"]
+    receipt_signing = policy["launch_binding"]["receipt_signing"]
+    replacements[receipt_signing["key_resource_id"]] = (
+        f"{replacements[secret_source['vault_resource_id']]}/keys/"
+        f"{receipt_signing['key_name']}"
+    )
+
     def replace(value: Any) -> Any:
         if type(value) is str:
             return replacements.get(value, value)
@@ -111,6 +122,10 @@ def _configured_policy() -> dict[str, Any]:
         return value
 
     configured = replace(policy)
+    signing = configured["launch_binding"]["receipt_signing"]
+    signing["public_key_sha256"] = binding._digest(
+        binding._canonical(signing["public_key_jwk"])
+    )
     assert not binding._placeholder_values(configured)
     for action in ("provision", "cleanup"):
         projection, _pointer, _template = launch._job_projection(

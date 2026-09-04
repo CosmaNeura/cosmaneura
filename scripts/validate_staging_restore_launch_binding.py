@@ -18,8 +18,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping, NoReturn
 
 try:
+    from scripts import authenticate_staging_broker_launch_receipt as receipt_auth
     from scripts import validate_staging_restore_runtime_binding as runtime_binding
 except ModuleNotFoundError:  # Direct ``python scripts/...`` imports.
+    import authenticate_staging_broker_launch_receipt as receipt_auth
     import validate_staging_restore_runtime_binding as runtime_binding
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 LAUNCH_ID_RE = re.compile(r"^launch-[0-9a-f]{16,64}$")
@@ -786,8 +788,11 @@ def _execution_receipt_uris(policy: dict[str, Any], action: str, execution_name:
     if action not in JOB_KINDS or type(execution_name) is not str or EXECUTION_NAME_RE.fullmatch(execution_name) is None:
         _fail("launch_receipt.route")
     mailbox = policy["launch_binding"]["mailbox"]
-    base = f"https://{mailbox['account_host']}/{mailbox['container_names'][action]}/executions/{execution_name}/broker-launch-receipt"
-    return f"{base}.json", f"{base}.sigstore.json"
+    handoff = mailbox["execution_receipt_handoff"]
+    base = f"https://{mailbox['account_host']}/{mailbox['container_names'][action]}"
+    receipt_path = handoff["receipt_path_template"].format(execution_name=execution_name)
+    signature_path = handoff["signature_envelope_path_template"].format(execution_name=execution_name)
+    return f"{base}/{receipt_path}", f"{base}/{signature_path}"
 def serialize_broker_launch_receipt(
     policy: Any,
     *,
@@ -871,8 +876,8 @@ class AuthenticatedBrokerLaunchReceipt:
     launch_record_sha256: str
     runtime_reference: Mapping[str, str]
     receipt_uri: str
-    signature_bundle_uri: str
-    signature_bundle_sha256: str
+    signature_envelope_uri: str
+    signature_envelope_sha256: str
     observed_at: datetime
     _seal: object = dataclass_field(repr=False, compare=False)
     def __init__(self) -> None:
@@ -886,16 +891,12 @@ class AuthenticatedBrokerLaunchReceipt:
         policy: Any,
         action: str,
         receipt_uri: str,
-        signature_bundle_uri: str,
+        signature_envelope_uri: str,
         retrieval_statuses: tuple[int, ...],
         retrieval_elapsed_seconds: int,
         receipt_bytes: bytes,
-        signature_bundle_bytes: bytes,
-        verified_receipt_sha256: str,
-        verified_algorithm: str,
-        verified_signing_key_resource_id: str,
-        verified_signing_key_version: str,
-        verified_public_key_sha256: str,
+        signature_envelope_bytes: bytes,
+        signature_verification: receipt_auth.VerifiedBrokerLaunchReceiptSignature,
         observed_at: datetime,
     ) -> AuthenticatedBrokerLaunchReceipt:
         document = validate_launch_binding_policy(policy)
@@ -910,7 +911,7 @@ class AuthenticatedBrokerLaunchReceipt:
         if (
             cls is not AuthenticatedBrokerLaunchReceipt
             or receipt_uri != expected_receipt_uri
-            or signature_bundle_uri != expected_signature_uri
+            or signature_envelope_uri != expected_signature_uri
             or type(retrieval_statuses) is not tuple
             or not 1 <= len(retrieval_statuses) <= retrieval["maximum_attempts"]
             or retrieval_statuses[-1] != retrieval["successful_status"]
@@ -919,13 +920,10 @@ class AuthenticatedBrokerLaunchReceipt:
             or not 0 <= retrieval_elapsed_seconds <= retrieval["maximum_elapsed_seconds"]
             or type(receipt_bytes) is not bytes
             or not 1 <= len(receipt_bytes) <= maximum
-            or type(signature_bundle_bytes) is not bytes
-            or not 1 <= len(signature_bundle_bytes) <= 1_048_576
-            or verified_receipt_sha256 != _digest(receipt_bytes)
-            or verified_algorithm != signing["algorithm"]
-            or verified_signing_key_resource_id != signing["key_resource_id"]
-            or verified_signing_key_version != signing["key_version"]
-            or verified_public_key_sha256 != signing["public_key_sha256"]
+            or type(signature_envelope_bytes) is not bytes
+            or not 1 <= len(signature_envelope_bytes) <= signing["signature_envelope"]["maximum_bytes"]
+            or type(signature_verification) is not receipt_auth.VerifiedBrokerLaunchReceiptSignature
+            or not signature_verification._matches(policy=document, receipt_bytes=receipt_bytes, signature_envelope_bytes=signature_envelope_bytes)
         ):
             _fail("launch_receipt.authentication")
         receipt = _parse(receipt_bytes, maximum=maximum, code="launch_receipt.authentication")
@@ -952,15 +950,15 @@ class AuthenticatedBrokerLaunchReceipt:
                 _fail("launch_receipt.authentication")
         return _sealed(cls, _AUTHENTICATED_RECEIPT_SEAL, {
             "receipt_bytes": bytes(receipt_bytes),
-            "receipt_sha256": verified_receipt_sha256,
+            "receipt_sha256": signature_verification.receipt_sha256,
             "action": action,
             "execution_name": execution_name,
             "launch_record_uri": receipt["launch_record_uri"],
             "launch_record_sha256": launch_sha,
             "runtime_reference": runtime_reference,
             "receipt_uri": receipt_uri,
-            "signature_bundle_uri": signature_bundle_uri,
-            "signature_bundle_sha256": _digest(signature_bundle_bytes),
+            "signature_envelope_uri": signature_envelope_uri,
+            "signature_envelope_sha256": _digest(signature_envelope_bytes),
             "observed_at": _exact_time(observed_at, "launch_receipt.authentication"),
         })
 
