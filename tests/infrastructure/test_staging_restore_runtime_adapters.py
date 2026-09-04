@@ -800,7 +800,7 @@ def test_linux_runner_kills_background_descendants_after_leader_exit(
     for _attempt in range(100):
         try:
             state = descendant.read_text().split()[2]
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             break
         if state == "Z":
             break
