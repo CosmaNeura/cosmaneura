@@ -68,9 +68,16 @@ UUID_RE = re.compile(
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SAFE_TOKEN_RE = re.compile(r"^[\x21-\x7e]{1,16384}$")
 UNSIGNED_DECIMAL_RE = re.compile(r"^[0-9]{1,20}$")
+EVIDENCE_ATTESTATION_PROFILE = "evidence-github-attestation-v1"
+RUNTIME_RECORD_SIGNATURE_PROFILE = "runtime-record-signature-v1"
 OFFLINE_FILES = {
     "evidence-manifest.json": 8_388_608,
     "attestation.json": 2_097_152,
+    "github-trusted-root.jsonl": 1_048_576,
+}
+RUNTIME_SIGNATURE_FILES = {
+    "runtime-record.json": 65_536,
+    "runtime-record.sigstore.json": 2_097_152,
     "github-trusted-root.jsonl": 1_048_576,
 }
 STATIC_VERIFIER_ARGUMENTS = {
@@ -105,6 +112,36 @@ STATIC_VERIFIER_ARGUMENTS = {
     27: "--source-ref",
     28: "refs/heads/master",
 }
+RUNTIME_SIGNATURE_STATIC_ARGUMENTS = {
+    0: "gh",
+    1: "attestation",
+    2: "verify",
+    3: "runtime-record.json",
+    4: "--bundle",
+    5: "runtime-record.sigstore.json",
+    6: "--cert-identity",
+    8: "--cert-oidc-issuer",
+    9: "https://token.actions.githubusercontent.com",
+    10: "--custom-trusted-root",
+    11: "github-trusted-root.jsonl",
+    12: "--deny-self-hosted-runners",
+    13: "--digest-alg",
+    14: "sha256",
+    15: "--format=json",
+    16: "--hostname",
+    17: "github.com",
+    18: "--no-public-good",
+    19: "--predicate-type",
+    20: "https://slsa.dev/provenance/v1",
+    21: "--repo",
+    22: "CosmaNeura/cosmaneura",
+    23: "--source-ref",
+    24: "refs/heads/master",
+}
+RUNTIME_SIGNER_IDENTITY_RE = re.compile(
+    r"^https://github\.com/CosmaNeura/cosmaneura/\.github/workflows/"
+    r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.ya?ml@refs/heads/master$"
+)
 
 
 class RuntimeAdapterFailure(RuntimeError):
@@ -630,27 +667,47 @@ class AzureSourceObservationProvider:
         )
 
 
-def _validate_verifier_arguments(arguments: tuple[str, ...]) -> None:
+def _validate_verifier_arguments(
+    profile: str, arguments: tuple[str, ...]
+) -> Mapping[str, int]:
+    if profile == EVIDENCE_ATTESTATION_PROFILE:
+        expected_length = 29
+        static_arguments = STATIC_VERIFIER_ARGUMENTS
+        files = OFFLINE_FILES
+    elif profile == RUNTIME_RECORD_SIGNATURE_PROFILE:
+        expected_length = 25
+        static_arguments = RUNTIME_SIGNATURE_STATIC_ARGUMENTS
+        files = RUNTIME_SIGNATURE_FILES
+    else:
+        _fail("offline_verifier.configuration_invalid")
     if (
         type(arguments) is not tuple
-        or len(arguments) != 29
+        or len(arguments) != expected_length
         or any(type(value) is not str or not value for value in arguments)
         or any("\x00" in value or len(value) > 1024 for value in arguments)
         or any(
-            arguments[index] != expected
-            for index, expected in STATIC_VERIFIER_ARGUMENTS.items()
+            arguments[index] != expected for index, expected in static_arguments.items()
         )
-        or SHA_RE.fullmatch(arguments[24]) is None
-        or arguments[26] != arguments[24]
     ):
         _fail("offline_verifier.arguments_invalid")
+    if profile == EVIDENCE_ATTESTATION_PROFILE and (
+        SHA_RE.fullmatch(arguments[24]) is None or arguments[26] != arguments[24]
+    ):
+        _fail("offline_verifier.arguments_invalid")
+    if profile == RUNTIME_RECORD_SIGNATURE_PROFILE and (
+        RUNTIME_SIGNER_IDENTITY_RE.fullmatch(arguments[7]) is None
+    ):
+        _fail("offline_verifier.arguments_invalid")
+    return files
 
 
-def _snapshot_offline_files(files: Mapping[str, bytes]) -> dict[str, bytes]:
-    if not isinstance(files, Mapping) or set(files) != set(OFFLINE_FILES):
+def _snapshot_offline_files(
+    files: Mapping[str, bytes], expected_files: Mapping[str, int]
+) -> dict[str, bytes]:
+    if not isinstance(files, Mapping) or set(files) != set(expected_files):
         _fail("offline_verifier.files_invalid")
     snapshot: dict[str, bytes] = {}
-    for name, maximum in OFFLINE_FILES.items():
+    for name, maximum in expected_files.items():
         try:
             raw = files[name]
         except Exception:
@@ -868,6 +925,7 @@ class DigestPinnedGitHubCliVerifier:
         "_expected_sha256",
         "_expected_version",
         "_lock",
+        "_profile",
         "_process_runner",
         "_used",
     )
@@ -878,6 +936,7 @@ class DigestPinnedGitHubCliVerifier:
         executable_path: Path,
         expected_sha256: str,
         expected_version: str,
+        profile: str = EVIDENCE_ATTESTATION_PROFILE,
         executable_loader: _ExecutableLoader = _sealed_linux_executable,
         process_runner: _ProcessRunner = _run_bounded_process,
     ) -> None:
@@ -887,6 +946,8 @@ class DigestPinnedGitHubCliVerifier:
             or not isinstance(expected_sha256, str)
             or DIGEST_RE.fullmatch(expected_sha256) is None
             or expected_version != GH_VERSION
+            or profile
+            not in {EVIDENCE_ATTESTATION_PROFILE, RUNTIME_RECORD_SIGNATURE_PROFILE}
             or not callable(executable_loader)
             or not callable(process_runner)
         ):
@@ -894,6 +955,7 @@ class DigestPinnedGitHubCliVerifier:
         self._executable_path = executable_path
         self._expected_sha256 = expected_sha256
         self._expected_version = expected_version
+        self._profile = profile
         self._executable_loader = executable_loader
         self._process_runner = process_runner
         self._lock = threading.Lock()
@@ -911,8 +973,8 @@ class DigestPinnedGitHubCliVerifier:
             if self._used:
                 _fail("offline_verifier.already_used")
             self._used = True
-        _validate_verifier_arguments(arguments)
-        file_snapshot = _snapshot_offline_files(files)
+        expected_files = _validate_verifier_arguments(self._profile, arguments)
+        file_snapshot = _snapshot_offline_files(files, expected_files)
         if (
             type(timeout_seconds) is not int
             or timeout_seconds != REQUEST_TIMEOUT_SECONDS
@@ -935,7 +997,7 @@ class DigestPinnedGitHubCliVerifier:
                     | getattr(os, "O_CLOEXEC", 0),
                 )
                 try:
-                    for name in OFFLINE_FILES:
+                    for name in expected_files:
                         descriptor = os.open(
                             name,
                             os.O_WRONLY
