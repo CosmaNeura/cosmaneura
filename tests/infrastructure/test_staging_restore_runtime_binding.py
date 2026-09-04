@@ -124,14 +124,14 @@ def _configured_policy() -> dict[str, Any]:
             resource_index += 1
 
     secrets = policy["evidence_ingress"]["private_versioned_secret_source"]["secrets"]
-    for name, version in (
-        ("server_scope_hmac_key", "secret-version-1"),
-        ("github_trusted_root", "secret-version-2"),
+    for name, secret_name, version in (
+        ("server_scope_hmac_key", "server-scope-hmac-key", "1" * 32),
+        ("github_trusted_root", "github-trusted-root", "2" * 32),
     ):
         item = secrets[name]
         replacements[item["version"]] = version
         replacements[item["versioned_https_uri"]] = (
-            f"https://restoresecrets.vault.azure.net/secrets/{name}/{version}"
+            f"https://restoresecrets.vault.azure.net/secrets/{secret_name}/{version}"
         )
 
     secret_source = policy["evidence_ingress"]["private_versioned_secret_source"]

@@ -254,6 +254,7 @@ def receive_provision_launch_material(
         authenticated_receipt=authenticated_receipt,
         provision_reference=references[PROVISION_ACTION],
         cleanup_reference=references["cleanup"],
+        clock=clock,
     )
     runtime_material = _validate_runtime_material(
         runtime_material,

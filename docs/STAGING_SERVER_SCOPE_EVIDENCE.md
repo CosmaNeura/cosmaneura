@@ -312,6 +312,15 @@ activation bits remain false. See the
 [signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
 the [executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
 
+A dormant one-shot reader now fills the runtime-material seam with exact
+receipt-bound private Blob record/bundle bytes and an exact-version Key Vault
+GitHub root, using distinct selected-job UAMI audiences and the same trusted
+clock passed to the offline authenticator. Default executor dependency assembly
+still refuses, every activation bit remains false, and no Azure call was made.
+Activation also remains blocked on proof that the real root fits Key Vault and
+the 25,600-byte policy cap; see the
+[private-reader flight plan](flight-plans/2026-09-04-staging-runtime-record-private-readers.md).
+
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of
 `trusted_composite_verifier_implemented`, `workflow_integrated`,

@@ -955,6 +955,16 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
                 for symbol in adapter_symbols
                 if symbol != "receive_staging_broker_launch_receipt"
             )
+        elif path.name == "read_staging_runtime_record_material.py":
+            forbidden_symbols = tuple(
+                symbol
+                for symbol in adapter_symbols
+                if symbol
+                not in {
+                    "staging_restore_runtime_adapters",
+                    "DigestPinnedGitHubCliVerifier",
+                }
+            )
         assert all(symbol not in text for symbol in forbidden_symbols), path
     for policy_path in (
         adapters.observation.POLICY_PATH,

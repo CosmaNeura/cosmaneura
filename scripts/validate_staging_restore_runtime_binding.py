@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "baf28f05a692971dd20f3360543de46cdc4f23e93dffa9e112873d55458afdee"
+CANONICAL_POLICY_SHA256 = "124b93fc3394fcebe177b30a2c61b22040c8a7c15e1c5673da26d454209fc21a"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -50,6 +50,8 @@ HOST_RE = re.compile(
 RECORD_ID_RE = re.compile(r"^runtime-[0-9a-f]{16,64}$")
 UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 JWK_COORDINATE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
+KEY_VAULT_SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9-]{1,127}$")
+KEY_VAULT_SECRET_VERSION_RE = re.compile(r"^[0-9a-f]{32}$")
 
 ACTIONS = ("Microsoft.App/jobs/read", "Microsoft.App/jobs/start/action")
 RUNTIME_REFERENCE_FIELDS = ("record_uri", "record_sha256", "signature_bundle_uri", "signature_bundle_sha256")
@@ -475,6 +477,8 @@ def _cross_bind(policy: dict[str, Any]) -> None:
     root = secret["secrets"]["github_trusted_root"]
     provision_identity = identities["jobs"]["provision"]
     cleanup_identity = identities["jobs"]["cleanup"]
+    runtime_retrieval = runtime_ingress["retrieval"]
+    secret_retrieval = secret["retrieval"]
     both_job_ids = [provision_identity["resource_id"], cleanup_identity["resource_id"]]
     resources.append(publisher["identity_resource_id"])
     clients.append(publisher["client_id"])
@@ -536,6 +540,14 @@ def _cross_bind(policy: dict[str, Any]) -> None:
         or root["role_assignment_ids"]["cleanup"] != cleanup_identity["role_assignment_ids"]["github_root_reader"]
         or hmac["versioned_https_uri"] == root["versioned_https_uri"]
         or hmac["version"] == root["version"]
+        or runtime_retrieval["record_media_type"]
+        != policy["external_runtime_record"]["record"]["content_type"]
+        or runtime_retrieval["signature_bundle_media_type"]
+        != policy["external_runtime_record"]["signature"]["format"]
+        or secret_retrieval["request_query_parameters"]
+        != [{"name": "api-version", "value": secret_retrieval["api_version"]}]
+        or secret_retrieval["maximum_response_bytes"]
+        <= root["maximum_bytes"]
     ):
         _fail("evidence_ingress.binding")
     receipt_fields = ["target_fqdn", "approved_database_role", *TARGET_CLEANUP_FIELDS, *EXECUTOR_CLEANUP_FIELDS]
@@ -591,8 +603,19 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
         _fail("evidence_ingress.private_binding")
     for item in secret["secrets"].values():
         uri = urllib.parse.urlsplit(item["versioned_https_uri"])
-        parts = [part for part in uri.path.split("/") if part]
-        if uri.hostname != secret["vault_host"] or len(parts) != 3 or parts[0] != "secrets" or parts[2] != item["version"]:
+        parts = uri.path.split("/")
+        if (
+            uri.scheme != "https"
+            or uri.hostname != secret["vault_host"]
+            or uri.netloc != secret["vault_host"]
+            or uri.query
+            or uri.fragment
+            or len(parts) != 4
+            or parts[:2] != ["", "secrets"]
+            or KEY_VAULT_SECRET_NAME_RE.fullmatch(parts[2]) is None
+            or KEY_VAULT_SECRET_VERSION_RE.fullmatch(parts[3]) is None
+            or parts[3] != item["version"]
+        ):
             _fail("evidence_ingress.secret.version_binding")
     if blob["objects"]["source"] != "validated_immutable_launch_record.provision":
         _fail("evidence_ingress.blob.launch_binding")
