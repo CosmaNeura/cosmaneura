@@ -57,7 +57,13 @@ variable "enable_marker_create_assignments" {
 }
 
 variable "marker_create_authorization_proven" {
-  description = "Action-time attestation that live non-PHI tests proved the exact conditional BlockBlob create/read data actions."
+  description = "Action-time attestation that live non-PHI tests proved conditional BlockBlob create/read success and overwrite/delete denial for the exact selected add-or-write permission."
+  type        = bool
+  default     = false
+}
+
+variable "private_marker_network_posture_proven" {
+  description = "Action-time attestation that readback proved the exact private marker account, Blob private endpoint, private DNS zone, and control-VNet link posture."
   type        = bool
   default     = false
 }
@@ -87,6 +93,12 @@ variable "irreversible_marker_controls_approved" {
 
 variable "enable_marker_legal_holds" {
   description = "Set the restorecontrolactive legal hold through an explicit AzAPI action. Removing this flag does not clear a live hold."
+  type        = bool
+  default     = false
+}
+
+variable "marker_legal_hold_readback_proven" {
+  description = "Action-time attestation that authenticated readback proved the restorecontrolactive legal-hold tag remains active on every retained marker and evidence container."
   type        = bool
   default     = false
 }

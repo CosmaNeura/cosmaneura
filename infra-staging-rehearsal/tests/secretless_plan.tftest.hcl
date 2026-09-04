@@ -66,6 +66,20 @@ mock_provider "azurerm" {
   }
 }
 
+override_resource {
+  target = azurerm_role_definition.marker_reader
+  values = {
+    role_definition_resource_id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/providers/Microsoft.Authorization/roleDefinitions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+  }
+}
+
+override_resource {
+  target = azurerm_role_definition.marker_create_and_read
+  values = {
+    role_definition_resource_id = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/providers/Microsoft.Authorization/roleDefinitions/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+  }
+}
+
 run "default_is_dormant" {
   command = plan
 
@@ -105,7 +119,7 @@ run "default_is_dormant" {
   }
 
   assert {
-    condition     = length(azurerm_role_assignment.control_reader) == 0 && length(azurerm_role_assignment.source_reader) == 0 && length(azurerm_role_assignment.target_provisioner) == 0 && length(azurerm_role_assignment.target_cleanup) == 0 && length(azurerm_role_assignment.marker_read) == 0 && length(azurerm_role_assignment.marker_create) == 0
+    condition     = length(azurerm_role_assignment.control_reader) == 0 && length(azurerm_role_assignment.source_reader) == 0 && length(azurerm_role_assignment.target_provisioner) == 0 && length(azurerm_role_assignment.target_cleanup) == 0 && length(azurerm_role_assignment.marker_read) == 0 && length(azurerm_role_assignment.marker_provision_cleanup) == 0 && length(azurerm_role_assignment.marker_create) == 0
     error_message = "The default plan must not create role assignments"
   }
 
@@ -185,8 +199,13 @@ run "reversible_control_plane" {
   }
 
   assert {
-    condition     = output.marker_store_binding.role_assignment_ids.provision_intent == null && output.marker_store_binding.role_assignment_ids.provision_submission == null && output.marker_store_binding.role_assignment_ids.cleanup_marker == null && length(output.marker_store_binding.immutability_policy_ids) == 0 && output.marker_store_binding.evidence_immutability_policy_id == null
-    error_message = "Create-role and immutability IDs must remain null or empty while their gates are off"
+    condition     = length(azurerm_role_assignment.marker_read) == 2 && length(azurerm_role_assignment.marker_provision_cleanup) == 1 && output.marker_store_binding.role_assignment_ids.provision_intent == null && output.marker_store_binding.role_assignment_ids.provision_submission == null && output.marker_store_binding.role_assignment_ids.provision_cleanup == azurerm_role_assignment.marker_provision_cleanup[0].id && output.marker_store_binding.role_assignment_ids.cleanup_marker == null && !output.marker_store_binding.private_marker_network_posture_proven && !output.marker_store_binding.legal_hold_readback_proven && length(output.marker_store_binding.immutability_policy_ids) == 0 && output.marker_store_binding.evidence_immutability_policy_id == null
+    error_message = "Create-role and immutability IDs must remain null or empty while the one logical provision-cleanup output preserves its read-only grant"
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.marker_provision_cleanup[0].role_definition_id == azurerm_role_definition.marker_reader[0].role_definition_resource_id
+    error_message = "The dormant provision_cleanup assignment must retain marker-reader authority"
   }
 }
 
@@ -285,6 +304,65 @@ run "marker_create_permissions_are_exact" {
     control_cidr_inventory_revalidated    = true
     enable_marker_create_assignments      = true
     marker_create_authorization_proven    = true
+    private_marker_network_posture_proven = true
+    irreversible_marker_controls_approved = true
+    enable_marker_legal_holds             = true
+    marker_legal_hold_readback_proven     = true
+    lock_marker_immutability_policies     = true
+    marker_create_data_actions = [
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+    ]
+  }
+
+  assert {
+    condition     = length(azurerm_role_definition.marker_create_and_read) == 1 && length(azurerm_role_assignment.marker_read) == 2 && length(azurerm_role_assignment.marker_create) == 3 && length(azurerm_role_assignment.marker_provision_cleanup) == 1 && toset(keys(azurerm_role_assignment.marker_read)) == toset(["cleanup_intent", "cleanup_submission"]) && toset(keys(azurerm_role_assignment.marker_create)) == toset(["provision_intent", "provision_submission", "cleanup_cleanup"])
+    error_message = "The enabled desired state must use one provision cleanup create/read grant and retain exactly two read plus four create assignments"
+  }
+
+  assert {
+    condition     = length(azurerm_role_assignment.marker_read) + length(azurerm_role_assignment.marker_create) + length(azurerm_role_assignment.marker_provision_cleanup) == 6 && length(output.marker_store_binding.role_assignment_ids) == 6 && output.marker_store_binding.role_assignment_ids.provision_cleanup == azurerm_role_assignment.marker_provision_cleanup[0].id && output.marker_store_binding.private_marker_network_posture_proven && output.marker_store_binding.legal_hold_readback_proven
+    error_message = "The activated output must expose six logical assignment IDs with one provision_cleanup grant"
+  }
+
+  assert {
+    condition     = azurerm_role_assignment.marker_provision_cleanup[0].role_definition_id == azurerm_role_definition.marker_create_and_read[0].role_definition_resource_id
+    error_message = "The enabled provision_cleanup assignment must use create/read authority"
+  }
+}
+
+run "marker_create_requires_private_marker_network_proof" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane  = true
+    target_cidr_inventory_revalidated     = true
+    control_cidr_inventory_revalidated    = true
+    enable_marker_create_assignments      = true
+    marker_create_authorization_proven    = true
+    irreversible_marker_controls_approved = true
+    enable_marker_legal_holds             = true
+    marker_legal_hold_readback_proven     = true
+    lock_marker_immutability_policies     = true
+    marker_create_data_actions = [
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+      "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+    ]
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "marker_create_requires_legal_hold_readback" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane  = true
+    target_cidr_inventory_revalidated     = true
+    control_cidr_inventory_revalidated    = true
+    enable_marker_create_assignments      = true
+    marker_create_authorization_proven    = true
+    private_marker_network_posture_proven = true
     irreversible_marker_controls_approved = true
     enable_marker_legal_holds             = true
     lock_marker_immutability_policies     = true
@@ -294,10 +372,7 @@ run "marker_create_permissions_are_exact" {
     ]
   }
 
-  assert {
-    condition     = length(azurerm_role_definition.marker_create_and_read) == 1 && length(azurerm_role_assignment.marker_create) == 3
-    error_message = "Live-proven marker create/read permissions must be assigned at exactly three container scopes"
-  }
+  expect_failures = [terraform_data.activation_guard[0]]
 }
 
 run "irreversible_controls_are_independently_gated" {
@@ -322,8 +397,10 @@ run "approved_prelock_retention_plan" {
     control_cidr_inventory_revalidated    = true
     enable_marker_create_assignments      = true
     marker_create_authorization_proven    = true
+    private_marker_network_posture_proven = true
     irreversible_marker_controls_approved = true
     enable_marker_legal_holds             = true
+    marker_legal_hold_readback_proven     = true
     lock_marker_immutability_policies     = true
     marker_create_data_actions = [
       "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
@@ -377,8 +454,10 @@ run "readonly_remains_blocked_until_final_bindings" {
     control_cidr_inventory_revalidated    = true
     enable_marker_create_assignments      = true
     marker_create_authorization_proven    = true
+    private_marker_network_posture_proven = true
     irreversible_marker_controls_approved = true
     enable_marker_legal_holds             = true
+    marker_legal_hold_readback_proven     = true
     lock_marker_immutability_policies     = true
     enable_marker_readonly_lock           = true
     marker_create_data_actions = [

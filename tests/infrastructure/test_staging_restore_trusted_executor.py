@@ -19,7 +19,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "7df6bb5e2de1c35aa4e353e0b4bd7009a1c0b0fc59804ecb83781bf3a39408c4"
+    "a7542d8f03164ca72fda998d3ffe8f8d1ee6df4925ed09a3be9a09f70d89fe3c"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
@@ -375,6 +375,15 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
         "image_digest_source": "verified_external_runtime_record",
         "caller_override_permitted": False,
     }
+    assert policy["execution"]["provision_cleanup_handoff"] == {
+        "kind": "exact-dominant-tombstone-v1",
+        "create_and_read_back_required": True,
+        "resource_delete_permitted": False,
+        "cleanup_entrypoint": (
+            "staging_restore_safe_submit.SafeRestoreSubmitter.cleanup_intent"
+        ),
+    }
+    assert "cleaned" not in policy["output"]["allowed_statuses"]
 
     signature = inspect.signature(executor.execute_trusted_restore)
     assert list(signature.parameters) == [
@@ -577,7 +586,8 @@ def test_request_and_outcome_are_slotted_closed_world(inputs: dict[str, Path]) -
 
 
 @pytest.mark.parametrize(
-    "case", ["wrong_target", "wrong_digest", "cleanup_only", "bad_flags", "raw_key"]
+    "case",
+    ["wrong_target", "wrong_digest", "cleanup_only", "cleaned", "bad_flags", "raw_key"],
 )
 def test_exact_typed_invalid_submit_results_are_bounded(
     case: str, inputs: dict[str, Path]
@@ -599,6 +609,13 @@ def test_exact_typed_invalid_submit_results_are_bounded(
             target_observed=False,
             cleanup_required=False,
         )
+    elif case == "cleaned":
+        harness.outcome = replace(
+            harness.outcome,
+            status="cleaned",
+            target_observed=True,
+            cleanup_required=False,
+        )
     elif case == "bad_flags":
         harness.outcome = replace(harness.outcome, target_observed=False)
     else:
@@ -617,7 +634,7 @@ def test_exact_typed_invalid_submit_results_are_bounded(
     [
         ("ready", True, False),
         ("cleanup_marker_unproven", False, True),
-        ("cleaned", True, False),
+        ("cleanup_marker_unproven", True, True),
         ("cleanup_pending", True, True),
         ("pending_late_materialization", False, True),
     ],

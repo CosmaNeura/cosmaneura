@@ -163,7 +163,8 @@ resource "azurerm_role_definition" "marker_reader" {
 
 # There is intentionally no default create permission. The exact minimum for
 # conditional BlockBlob Put must be proven live first; Azure may require write
-# rather than add. The role and its assignments stay absent until that proof.
+# rather than add. The proof must include create/read success and overwrite/
+# delete denial. The role and its assignments stay absent until that proof.
 resource "azurerm_role_definition" "marker_create_and_read" {
   count = (
     var.deploy_staging_restore_control_plane && var.enable_marker_create_assignments
@@ -237,10 +238,6 @@ resource "azurerm_role_assignment" "target_cleanup" {
 
 locals {
   marker_read_assignments = {
-    provision_cleanup = {
-      identity  = "provision"
-      container = "restore-cleanups-v4"
-    }
     cleanup_intent = {
       identity  = "cleanup"
       container = "restore-intents-v4"
@@ -278,6 +275,101 @@ resource "azurerm_role_assignment" "marker_read" {
   skip_service_principal_aad_check = true
 }
 
+# Preserve the prior state address and Azure assignment UUID for the dormant
+# provision cleanup reader while making its future role selection explicit.
+moved {
+  from = azurerm_role_assignment.marker_read["provision_cleanup"]
+  to   = azurerm_role_assignment.marker_provision_cleanup[0]
+}
+
+# One stable Terraform/Azure role-assignment identity changes from read-only to
+# create/read when the separately proven create rung is enabled. Modeling the
+# handoff as one resource keeps the desired plan free of duplicate grants; a
+# credentialed plan must still expose any provider replacement interval.
+resource "azurerm_role_assignment" "marker_provision_cleanup" {
+  count = var.deploy_staging_restore_control_plane ? 1 : 0
+
+  name  = uuidv5("url", "${local.github_repository}|provision_cleanup|marker-read")
+  scope = azapi_resource.marker_container["restore-cleanups-v4"].id
+  role_definition_id = var.enable_marker_create_assignments ? (
+    azurerm_role_definition.marker_create_and_read[0].role_definition_resource_id
+  ) : azurerm_role_definition.marker_reader[0].role_definition_resource_id
+  principal_id                     = azurerm_user_assigned_identity.job["provision"].principal_id
+  principal_type                   = "ServicePrincipal"
+  skip_service_principal_aad_check = true
+
+  lifecycle {
+    precondition {
+      condition = var.enable_marker_create_assignments ? (
+        var.private_marker_network_posture_proven &&
+        !azurerm_storage_account.marker[0].allow_nested_items_to_be_public &&
+        azurerm_storage_account.marker[0].default_to_oauth_authentication &&
+        azurerm_storage_account.marker[0].https_traffic_only_enabled &&
+        azurerm_storage_account.marker[0].infrastructure_encryption_enabled &&
+        !azurerm_storage_account.marker[0].local_user_enabled &&
+        azurerm_storage_account.marker[0].min_tls_version == "TLS1_2" &&
+        !azurerm_storage_account.marker[0].public_network_access_enabled &&
+        !azurerm_storage_account.marker[0].shared_access_key_enabled &&
+        azurerm_storage_account.marker[0].network_rules[0].default_action == "Deny" &&
+        azurerm_storage_account.marker[0].network_rules[0].bypass == toset(["None"]) &&
+        length(azurerm_storage_account.marker[0].network_rules[0].ip_rules) == 0 &&
+        length(azurerm_storage_account.marker[0].network_rules[0].virtual_network_subnet_ids) == 0 &&
+        !azurerm_subnet.marker_private_endpoint[0].default_outbound_access_enabled &&
+        azurerm_subnet.marker_private_endpoint[0].private_endpoint_network_policies == "Disabled" &&
+        azurerm_private_endpoint.marker[0].subnet_id == azurerm_subnet.marker_private_endpoint[0].id &&
+        azurerm_private_endpoint.marker[0].private_service_connection[0].private_connection_resource_id == azurerm_storage_account.marker[0].id &&
+        toset(azurerm_private_endpoint.marker[0].private_service_connection[0].subresource_names) == toset(["blob"]) &&
+        !azurerm_private_endpoint.marker[0].private_service_connection[0].is_manual_connection &&
+        azurerm_private_endpoint.marker[0].private_dns_zone_group[0].name == "blob" &&
+        azurerm_private_dns_zone.marker_blob[0].name == "privatelink.blob.core.windows.net" &&
+        azurerm_private_dns_zone_virtual_network_link.marker_blob[0].virtual_network_id == azurerm_virtual_network.control[0].id &&
+        !azurerm_private_dns_zone_virtual_network_link.marker_blob[0].registration_enabled &&
+        toset(azurerm_private_endpoint.marker[0].private_dns_zone_group[0].private_dns_zone_ids) == toset([azurerm_private_dns_zone.marker_blob[0].id])
+      ) : true
+      error_message = "Provision cleanup create/read requires the exact private marker account, Blob endpoint, DNS zone, and control-VNet link posture"
+    }
+
+    precondition {
+      condition = var.enable_marker_create_assignments ? (
+        var.marker_create_authorization_proven &&
+        contains(var.marker_create_data_actions, "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read") &&
+        length(setintersection(var.marker_create_data_actions, toset([
+          "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action",
+          "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+        ]))) == 1 &&
+        length(var.marker_create_data_actions) == 2
+      ) : true
+      error_message = "Provision cleanup create/read requires live provider proof of conditional create/read success and overwrite/delete denial with exactly read plus one create action"
+    }
+
+    precondition {
+      condition = var.enable_marker_create_assignments ? (
+        var.irreversible_marker_controls_approved &&
+        var.enable_marker_legal_holds &&
+        var.marker_legal_hold_readback_proven &&
+        var.lock_marker_immutability_policies &&
+        azurerm_storage_container_immutability_policy.marker["restore-cleanups-v4"].locked &&
+        azurerm_storage_container_immutability_policy.marker["restore-cleanups-v4"].immutability_period_in_days == 90 &&
+        !azurerm_storage_container_immutability_policy.marker["restore-cleanups-v4"].protected_append_writes_enabled &&
+        !azurerm_storage_container_immutability_policy.marker["restore-cleanups-v4"].protected_append_writes_all_enabled
+      ) : true
+      error_message = "Provision cleanup create/read requires authenticated action-time legal-hold readback and exact locked 90-day WORM posture without protected append writes"
+    }
+  }
+
+  depends_on = [
+    terraform_data.activation_guard,
+    azapi_resource_action.marker_legal_hold,
+    azurerm_private_dns_zone.marker_blob,
+    azurerm_private_dns_zone_virtual_network_link.marker_blob,
+    azurerm_private_endpoint.marker,
+    azurerm_storage_account.marker,
+    azurerm_storage_container_immutability_policy.marker,
+    azurerm_subnet.marker_private_endpoint,
+    azurerm_virtual_network.control,
+  ]
+}
+
 resource "azurerm_role_assignment" "marker_create" {
   for_each = (
     var.deploy_staging_restore_control_plane && var.enable_marker_create_assignments
@@ -290,8 +382,74 @@ resource "azurerm_role_assignment" "marker_create" {
   principal_type                   = "ServicePrincipal"
   skip_service_principal_aad_check = true
 
+  lifecycle {
+    precondition {
+      condition = (
+        var.private_marker_network_posture_proven &&
+        !azurerm_storage_account.marker[0].allow_nested_items_to_be_public &&
+        azurerm_storage_account.marker[0].https_traffic_only_enabled &&
+        azurerm_storage_account.marker[0].infrastructure_encryption_enabled &&
+        !azurerm_storage_account.marker[0].local_user_enabled &&
+        azurerm_storage_account.marker[0].min_tls_version == "TLS1_2" &&
+        !azurerm_storage_account.marker[0].public_network_access_enabled &&
+        !azurerm_storage_account.marker[0].shared_access_key_enabled &&
+        azurerm_storage_account.marker[0].default_to_oauth_authentication &&
+        azurerm_storage_account.marker[0].network_rules[0].default_action == "Deny" &&
+        azurerm_storage_account.marker[0].network_rules[0].bypass == toset(["None"]) &&
+        length(azurerm_storage_account.marker[0].network_rules[0].ip_rules) == 0 &&
+        length(azurerm_storage_account.marker[0].network_rules[0].virtual_network_subnet_ids) == 0 &&
+        !azurerm_subnet.marker_private_endpoint[0].default_outbound_access_enabled &&
+        azurerm_subnet.marker_private_endpoint[0].private_endpoint_network_policies == "Disabled" &&
+        azurerm_private_endpoint.marker[0].subnet_id == azurerm_subnet.marker_private_endpoint[0].id &&
+        azurerm_private_endpoint.marker[0].private_service_connection[0].private_connection_resource_id == azurerm_storage_account.marker[0].id &&
+        toset(azurerm_private_endpoint.marker[0].private_service_connection[0].subresource_names) == toset(["blob"]) &&
+        !azurerm_private_endpoint.marker[0].private_service_connection[0].is_manual_connection &&
+        azurerm_private_endpoint.marker[0].private_dns_zone_group[0].name == "blob" &&
+        azurerm_private_dns_zone.marker_blob[0].name == "privatelink.blob.core.windows.net" &&
+        azurerm_private_dns_zone_virtual_network_link.marker_blob[0].virtual_network_id == azurerm_virtual_network.control[0].id &&
+        !azurerm_private_dns_zone_virtual_network_link.marker_blob[0].registration_enabled &&
+        toset(azurerm_private_endpoint.marker[0].private_dns_zone_group[0].private_dns_zone_ids) == toset([azurerm_private_dns_zone.marker_blob[0].id])
+      )
+      error_message = "Marker create assignments require the exact private marker account, Blob endpoint, DNS zone, and control-VNet link posture"
+    }
+
+    precondition {
+      condition = (
+        var.marker_create_authorization_proven &&
+        contains(var.marker_create_data_actions, "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read") &&
+        length(setintersection(var.marker_create_data_actions, toset([
+          "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/add/action",
+          "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+        ]))) == 1 &&
+        length(var.marker_create_data_actions) == 2
+      )
+      error_message = "Marker create assignments require live provider proof of conditional create/read success and overwrite/delete denial with exactly read plus one create action"
+    }
+
+    precondition {
+      condition = (
+        var.irreversible_marker_controls_approved &&
+        var.enable_marker_legal_holds &&
+        var.marker_legal_hold_readback_proven &&
+        var.lock_marker_immutability_policies &&
+        azurerm_storage_container_immutability_policy.marker[each.value.container].locked &&
+        azurerm_storage_container_immutability_policy.marker[each.value.container].immutability_period_in_days == 90 &&
+        !azurerm_storage_container_immutability_policy.marker[each.value.container].protected_append_writes_enabled &&
+        !azurerm_storage_container_immutability_policy.marker[each.value.container].protected_append_writes_all_enabled
+      )
+      error_message = "Marker create assignments require authenticated action-time legal-hold readback and exact locked 90-day WORM posture without protected append writes"
+    }
+  }
+
   depends_on = [
+    terraform_data.activation_guard,
     azapi_resource_action.marker_legal_hold,
+    azurerm_private_dns_zone.marker_blob,
+    azurerm_private_dns_zone_virtual_network_link.marker_blob,
+    azurerm_private_endpoint.marker,
+    azurerm_storage_account.marker,
     azurerm_storage_container_immutability_policy.marker,
+    azurerm_subnet.marker_private_endpoint,
+    azurerm_virtual_network.control,
   ]
 }

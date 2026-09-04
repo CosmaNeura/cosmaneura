@@ -264,7 +264,13 @@ must cover all eight deny-by-default egress destinations, offline `gh`
 containment, and the second target PostgreSQL private endpoint/DNS path.
 Cleanup validates record/signature, authenticates receipt/ownership, observes/creates and reads back the tombstone,
 deletes only receipt-bound resources, then proves all absent. Provision's partial-outcome
-tombstone-create assignment/safe-submit change are absent; provision cannot delete.
+tombstone-only handoff is now modeled in dormant source: after exact
+private-marker-network and provider create-only proof, authenticated action-time
+readback of the active legal hold, and locked 90-day WORM proof, its cleanup
+read grant is replaced by create/read with one stable
+logical assignment ID. Provision still cannot delete. Cleanup alone may delete
+authenticated, receipt-bound resources after exact tombstone readback. Runtime
+and dispatcher consumption remain later reviewed work.
 
 This slice activates no workflow, provisions no compute, runs no Azure apply,
 publishes no image, restores or mutates no data, performs no cutover,
