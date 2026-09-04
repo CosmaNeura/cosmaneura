@@ -20,6 +20,12 @@ SERVER_SCOPE_SCRIPT = ROOT / "scripts/staging_server_scope_evidence.py"
 SERVER_SCOPE_POLICY = (
     ROOT / "contracts/staging-rehearsal/v1/server-scope-evidence-policy.json"
 )
+SERVER_SCOPE_AUTHENTICATION_SCRIPT = (
+    ROOT / "scripts/authenticate_staging_server_scope_receipt.py"
+)
+SERVER_SCOPE_AUTHENTICATION_POLICY = (
+    ROOT / "contracts/staging-rehearsal/v1/server-scope-authentication-policy.json"
+)
 SERVER_SCOPE_KEY = b"server-scope-manifest-test-key-at-least-32-bytes"
 NOW = datetime(2026, 9, 3, 12, 5, tzinfo=UTC)
 
@@ -45,6 +51,22 @@ def _load_server_scope_module() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    return module
+
+
+def _load_server_scope_authentication_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "standalone_staging_server_scope_authentication_for_manifest",
+        SERVER_SCOPE_AUTHENTICATION_SCRIPT,
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    sys.path.insert(0, str(ROOT))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
@@ -494,6 +516,132 @@ def test_exact_bundle_validates_but_remains_blocked(
     }
 
 
+def test_validated_snapshot_returns_the_same_read_server_scope_bytes(
+    module: ModuleType,
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(module, tmp_path)
+    policy, digest = module.load_policy(POLICY)
+
+    snapshot = module.validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=digest,
+        bundle=bundle,
+        now=NOW,
+    )
+
+    assert snapshot.result == _validate(module, bundle)
+    original_bytes = (bundle / "server-scope.json").read_bytes()
+    assert snapshot.server_scope_bytes == original_bytes
+    assert snapshot.server_scope_receipt == json.loads(snapshot.server_scope_bytes)
+    assert snapshot.result["evidence_binding"]["server_scope_receipt_sha256"] == (
+        module._digest(module._canonical(snapshot.server_scope_receipt))
+    )
+
+    (bundle / "server-scope.json").write_bytes(b"changed after validation\n")
+    assert snapshot.server_scope_bytes == original_bytes
+    assert snapshot.server_scope_receipt == json.loads(original_bytes)
+
+
+def test_json_loaders_reject_oversized_integer_with_bounded_errors(
+    module: ModuleType,
+) -> None:
+    raw = b'{"schema_version":' + b"9" * 5_000 + b"}"
+
+    with pytest.raises(module.EvidenceFailure, match="manifest.invalid"):
+        module._load_json(raw, "manifest.invalid")
+    with pytest.raises(module.EvidenceFailure, match="server_scope.invalid"):
+        module._load_server_scope_json(raw)
+
+
+def test_public_snapshot_properties_reject_malformed_bytes_with_bounded_errors(
+    module: ModuleType,
+) -> None:
+    oversized_integer = b'{"schema_version":' + b"9" * 5_000 + b"}"
+    malformed = module.ValidatedEvidenceBundle._from_validated_bytes(
+        result_bytes=oversized_integer,
+        server_scope_bytes=b"[]",
+    )
+
+    with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
+        _ = malformed.result
+    with pytest.raises(module.EvidenceFailure, match="validated_bundle.invalid"):
+        _ = malformed.server_scope_receipt
+
+
+def test_server_scope_boolean_walk_recursion_is_bounded(
+    module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_recursion(_value: Any) -> bool:
+        raise RecursionError
+
+    monkeypatch.setattr(module, "_contains_boolean", raise_recursion)
+
+    with pytest.raises(module.EvidenceFailure, match="server_scope.invalid"):
+        module._load_server_scope_json(b'{"pass":true,"nested":{}}')
+
+
+def test_validated_snapshot_is_immutable_and_rejects_an_unbound_active_policy(
+    module: ModuleType,
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(module, tmp_path)
+    policy, digest = module.load_policy(POLICY)
+    snapshot = module.validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=digest,
+        bundle=bundle,
+        now=NOW,
+    )
+    _expected_receipt, server_policy = _generated_server_scope_receipt(
+        dict(policy),
+        source_revision="1" * 40,
+        observed_at="2026-09-03T12:00:00Z",
+    )
+    assert snapshot.server_scope_receipt == _expected_receipt
+    authentication = _load_server_scope_authentication_module()
+    authentication_policy = json.loads(SERVER_SCOPE_AUTHENTICATION_POLICY.read_text())
+    authentication_policy["activation_ready"] = True
+    server_policy_bytes = (
+        json.dumps(server_policy, separators=(",", ":"), ensure_ascii=True) + "\n"
+    ).encode("ascii")
+    server_policy_sha256 = hashlib.sha256(server_policy_bytes).hexdigest()
+    authentication_policy["server_scope_policy"]["sha256"] = (
+        f"sha256:{server_policy_sha256}"
+    )
+    authentication_policy_bytes = (
+        json.dumps(
+            authentication_policy,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        + "\n"
+    ).encode("ascii")
+    authentication_policy_sha256 = hashlib.sha256(
+        authentication_policy_bytes
+    ).hexdigest()
+    authenticated_snapshot = (
+        authentication.evidence_manifest.ValidatedEvidenceBundle._from_validated_bytes(
+            result_bytes=snapshot.result_bytes,
+            server_scope_bytes=snapshot.server_scope_bytes,
+        )
+    )
+
+    (bundle / "server-scope.json").write_bytes(b"changed after validation\n")
+    with pytest.raises(authentication.AuthenticationFailure, match="policy_mismatch"):
+        authentication._authenticate_validated_bundle(
+            authentication_policy_bytes=authentication_policy_bytes,
+            authentication_policy_sha256=authentication_policy_sha256,
+            server_scope_policy_bytes=server_policy_bytes,
+            server_scope_policy_sha256=server_policy_sha256,
+            snapshot=authenticated_snapshot,
+            key=SERVER_SCOPE_KEY,
+            clock=lambda: NOW,
+        )
+    assert snapshot.server_scope_bytes == module._canonical(_expected_receipt) + b"\n"
+
+
 def test_binding_manifest_tamper_is_bound_by_the_evidence_set(
     module: ModuleType,
     tmp_path: Path,
@@ -589,6 +737,19 @@ def test_collector_receipt_matches_an_activated_exact_policy(
             server_policy=server_policy,
         )
 
+    changed = deepcopy(receipt)
+    changed["databases"][0]["status"] = []
+    with pytest.raises(module.EvidenceFailure, match="server_scope.database"):
+        module._validate_server_scope(
+            changed,
+            manifest={
+                "source_sha": "1" * 40,
+                "observed_at": "2026-09-03T12:00:00Z",
+            },
+            policy=policy,
+            server_policy=server_policy,
+        )
+
 
 @pytest.mark.parametrize(
     "mutator",
@@ -651,6 +812,32 @@ def test_activated_server_scope_policy_rejects_placeholders(
         observed_at="2026-09-03T12:00:00Z",
     )
     mutator(server_policy)
+    raw = module._canonical(server_policy) + b"\n"
+    policy_path = tmp_path / "server-scope-policy.json"
+    policy_path.write_bytes(raw)
+    policy_path.chmod(0o600)
+    manifest_policy["policy_digests"] = dict(manifest_policy["policy_digests"])
+    manifest_policy["policy_digests"]["server_scope"] = module._digest(raw)
+    monkeypatch.setattr(module, "SERVER_SCOPE_POLICY_PATH", policy_path)
+
+    with pytest.raises(module.EvidenceFailure, match="server_scope_policy.invalid"):
+        module._load_server_scope_policy(manifest_policy)
+
+
+@pytest.mark.parametrize("mutation", ["status", "required_settings"])
+def test_server_scope_policy_rejects_unhashable_values_with_bounded_error(
+    module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    loaded_policy, _ = module.load_policy(POLICY)
+    manifest_policy = deepcopy(loaded_policy)
+    server_policy = json.loads(SERVER_SCOPE_POLICY.read_text())
+    if mutation == "status":
+        server_policy["expected_databases"][0]["status"] = []
+    else:
+        server_policy["required_settings"] = [[]]
     raw = module._canonical(server_policy) + b"\n"
     policy_path = tmp_path / "server-scope-policy.json"
     policy_path.write_bytes(raw)
