@@ -119,7 +119,8 @@ observation, one offline attestation verification, composition,
 `request_from_binding`, and one direct safe-submit call using the same
 non-regressing clock source. The runtime, provider, verifier, safe-submit,
 private-runner, workflow, and restore flags are all false, and exact runtime
-pins remain `CONFIGURE_EXACT_...`; this contract cannot restore anything.
+resource pins remain `CONFIGURE_EXACT_...`; the external image record is
+unconfigured, and this contract cannot restore anything.
 
 The dormant read-only adapter layer now implements the narrow provider and
 verifier interfaces without enabling them. It uses one exact managed-identity
@@ -136,12 +137,32 @@ required because process flags and environment scrubbing alone do not prove
 that the verifier cannot reach the network or escape its process group; the
 future runner must also attest network and PID/cgroup containment.
 
-Before runtime integration, a separate reviewed contract must also remove the
-current image-digest self-reference, distinguish federated dispatcher
-identities from unfederated job identities, define evidence ingress and ARM
-egress, and provide private endpoint/DNS reachability from the sanitizer to the
-restored PostgreSQL target. None of those gaps is treated as configured by the
-presence of adapter code.
+## Dormant restore runtime binding v1
+
+The new `restore-runtime-binding-policy.json` and offline validator define
+those missing boundaries but do not implement them; see the [runtime-binding
+flight plan](flight-plans/2026-09-04-staging-restore-runtime-binding.md).
+All assertions remain false and no runtime consumes this evidence.
+
+The checked-in policy excludes resulting image/record/signature digests. A
+post-publication record binds image/templates; exact provision/cleanup job-configuration pointers match field-for-field
+before record validation, avoiding a digest cycle. Federated dispatchers remain control-
+plane-only; unfederated provision/cleanup UAMIs hold the split runtime rights.
+Both jobs read the private content-addressed record/signature path; provision
+alone reads versioned evidence and HMAC; both read the exact root. Egress permits only MI/ARM,
+evidence/binding/marker Blob, Key Vault, PostgreSQL, and VNet DNS; `gh` requires no-network/PID containment.
+
+Sanitization remains blocked until a second per-rehearsal PostgreSQL private
+endpoint in `10.76.0.64/27` and exact private DNS reach only the restored FQDN,
+with public access off, zero firewall rules, and no peering/public route/vendor
+egress. This does not prove the source matched the permitted synthetic clinical
+data with allowlisted workforce PII state. Cleanup validates record/signature then receipt/ownership, observes or creates
+and reads back the tombstone, deletes only receipt-bound resources, then proves all absent;
+provision's partial-outcome tombstone-create right remains absent and never includes deletion.
+
+This slice activates no workflow, provisions no compute, runs no Azure apply,
+publishes no image, restores or mutates no data, performs no cutover,
+and authorizes no production/PHI action. No live proof was collected.
 
 ## Dormant restore-sanitizer contract
 

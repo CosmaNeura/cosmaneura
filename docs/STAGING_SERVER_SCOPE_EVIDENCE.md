@@ -232,23 +232,43 @@ remain in the same process until the direct safe-submit call returns.
 Caller-supplied restore, workflow, receipt-digest, or identity fields are not
 accepted.
 
-The policy pins all eight upstream, envelope, and safe-submit policy files and
+The policy pins all nine evidence, envelope, safe-submit, and runtime-binding
+policy files and
 requires one shared non-regressing clock. The validated snapshot and sealed
 server binding flow unchanged through one provider GET, one offline verifier
 invocation, composition's final freshness read, deterministic request
 derivation, and at most one `SafeRestoreSubmitter.submit` invocation. Runtime,
 provider, verifier, submitter, private-runner, workflow, and restore activation
-remain false; exact job/image/identity/network pins are explicit placeholders.
+remain false; runtime resource pins are placeholders and the external image
+record is unconfigured.
 No workflow or live environment was changed.
 
-Runtime activation also remains blocked on two contract corrections discovered
-during adapter review. The immutable runtime binding must avoid making an image
-digest depend on policy bytes that themselves contain that image digest, and it
-must distinguish the federated workflow dispatcher identities from the
-unfederated job identities that hold data-plane permissions. Evidence delivery,
-explicit ARM egress, and restored-target private endpoint/DNS reachability are
-likewise absent. These are separate Tier-2 changes; the dormant adapters do not
-paper over them.
+### Dormant restore runtime binding v1
+
+`restore-runtime-binding-policy.json` and its offline validator now specify the
+missing boundary without implementing it; see the [runtime-binding flight
+plan](flight-plans/2026-09-04-staging-restore-runtime-binding.md). All nineteen
+assertions remain false, executable validation refuses, and no workflow consumes it.
+
+The checked-in policy excludes resulting image/record/signature digests. A
+post-publication signed record binds the image and pre-binding job templates;
+all four fields in exact provision/cleanup job-configuration pointers are compared field-for-field before record validation. It does
+not replace candidate/evidence attestation. Federated dispatchers remain control-plane-only;
+job UAMIs alone hold runtime data-plane rights; the future publisher has create-only binding writes.
+
+Both jobs read content-addressed record/signature objects from private
+`restore-runtime-bindings-v1`; only provision reads exact evidence/attestation
+versions from versioning-enabled `restore-evidence-v1` in an account distinct from marker storage.
+Only provision reads the HMAC key; both read the exact root from private Key Vault. Runtime proof
+must cover all eight deny-by-default egress destinations, offline `gh`
+containment, and the second target PostgreSQL private endpoint/DNS path.
+Cleanup validates record/signature, authenticates receipt/ownership, observes/creates and reads back the tombstone,
+deletes only receipt-bound resources, then proves all absent. Provision's partial-outcome
+tombstone-create assignment/safe-submit change are absent; provision cannot delete.
+
+This slice activates no workflow, provisions no compute, runs no Azure apply,
+publishes no image, restores or mutates no data, performs no cutover,
+and authorizes no production/PHI action. It supplies no live evidence.
 
 Exact activation blockers remain fail-closed: composition has
 `activation_ready: false` and all of
