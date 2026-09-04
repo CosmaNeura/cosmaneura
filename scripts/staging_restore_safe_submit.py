@@ -18,6 +18,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
@@ -759,8 +760,13 @@ class AzureBlobMarkerStore:
         _fail("marker_list_bound_exceeded")
 
 
-@dataclass(frozen=True)
+_RESTORE_EVIDENCE_BINDING_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
 class RestoreEvidenceBinding:
+    """Composite-verifier output, not proof against hostile in-process code."""
+
     schema_version: int
     binding_policy_id: str
     evidence_manifest_policy_id: str
@@ -795,6 +801,13 @@ class RestoreEvidenceBinding:
     attestation_receipt_sha256: str
     provider_receipt_sha256: str
     server_scope_authentication_receipt_sha256: str
+    _binding_seal: object = dataclass_field(repr=False, compare=False)
+
+    def _is_module_minted_binding(self) -> bool:
+        return (
+            type(self) is RestoreEvidenceBinding
+            and getattr(self, "_binding_seal", None) is _RESTORE_EVIDENCE_BINDING_SEAL
+        )
 
 
 @dataclass(frozen=True)
@@ -1206,7 +1219,10 @@ class SafeRestoreSubmitter:
 
     @staticmethod
     def _binding_record(binding: RestoreEvidenceBinding) -> dict[str, Any]:
-        if not isinstance(binding, RestoreEvidenceBinding):
+        if (
+            type(binding) is not RestoreEvidenceBinding
+            or not binding._is_module_minted_binding()
+        ):
             _fail("evidence_binding_type_invalid")
         return {
             "schema_version": binding.schema_version,

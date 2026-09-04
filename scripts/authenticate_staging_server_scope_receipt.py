@@ -17,6 +17,8 @@ import re
 import stat
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -111,10 +113,58 @@ OUTPUT_ACTIVATION_BLOCKERS = (
     "workflow_integration_unimplemented",
     "restore_activation_unimplemented",
 )
+SERVER_AUTHENTICATED_SAFE_SUBMIT_FIELDS = BASE_BINDING_FIELDS | {
+    "server_scope_authentication_receipt_sha256"
+}
 
 
 class AuthenticationFailure(RuntimeError):
     """Bounded authentication failure safe to report without evidence contents."""
+
+
+_SERVER_AUTHENTICATED_SAFE_SUBMIT_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class ServerAuthenticatedSafeSubmitBinding:
+    """Opaque partial binding minted from one authenticated bundle snapshot.
+
+    This capsule intentionally lacks provider-observation and GitHub-attestation
+    proof, so it cannot authorize or describe a restore request. Its identity
+    guard rejects deserialized or accidentally substituted values; it is not a
+    sandbox against arbitrary Python code already executing in this process.
+    """
+
+    _record_bytes: bytes = dataclass_field(repr=False)
+    _authentication_seal: object = dataclass_field(repr=False, compare=False)
+
+    def _is_authenticator_minted(self) -> bool:
+        return (
+            type(self) is ServerAuthenticatedSafeSubmitBinding
+            and getattr(self, "_authentication_seal", None)
+            is _SERVER_AUTHENTICATED_SAFE_SUBMIT_SEAL
+            and type(getattr(self, "_record_bytes", None)) is bytes
+        )
+
+    @property
+    def record_bytes(self) -> bytes:
+        """Return the immutable canonical record bytes for a trusted consumer."""
+
+        if not self._is_authenticator_minted():
+            raise AuthenticationFailure("safe_submit_binding.invalid")
+        return self._record_bytes
+
+    @property
+    def record(self) -> dict[str, Any]:
+        """Return a caller-owned projection of the sealed canonical record."""
+
+        try:
+            value = json.loads(self.record_bytes)
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            raise AuthenticationFailure("safe_submit_binding.invalid") from None
+        if not isinstance(value, dict):
+            raise AuthenticationFailure("safe_submit_binding.invalid")
+        return value
 
 
 def _canonical(value: Any) -> bytes:
@@ -333,7 +383,7 @@ def load_authentication_policy(
     return policy, digest
 
 
-def _authenticate_validated_bundle(
+def _authenticate_validated_bundle_with_binding(
     *,
     authentication_policy_bytes: bytes,
     authentication_policy_sha256: str,
@@ -342,8 +392,8 @@ def _authenticate_validated_bundle(
     snapshot: evidence_manifest.ValidatedEvidenceBundle,
     key: bytes,
     clock: Callable[[], datetime] = _utc_now,
-) -> dict[str, Any]:
-    """Authenticate bytes minted by this module's validated-bundle path."""
+) -> tuple[dict[str, Any], ServerAuthenticatedSafeSubmitBinding]:
+    """Authenticate one snapshot and atomically mint its sealed partial binding."""
 
     policy = _parse_authentication_policy_document(
         authentication_policy_bytes,
@@ -478,17 +528,56 @@ def _authenticate_validated_bundle(
     }
     if set(receipt) != set(policy["receipt_fields"]):
         raise AuthenticationFailure("authentication_receipt.invalid")
-    return {
+    authentication_receipt_sha256 = _digest(_canonical(receipt))
+    authentication_result = {
         "schema_version": 1,
         "policy_id": policy["policy_id"],
         "server_scope_authentication_receipt": receipt,
-        "server_scope_authentication_receipt_sha256": _digest(_canonical(receipt)),
+        "server_scope_authentication_receipt_sha256": authentication_receipt_sha256,
         "activation_state": "blocked",
         "activation_blockers": policy["output_activation_blockers"],
     }
+    partial_record = dict(binding)
+    partial_record["server_scope_authentication_receipt_sha256"] = (
+        authentication_receipt_sha256
+    )
+    if set(partial_record) != SERVER_AUTHENTICATED_SAFE_SUBMIT_FIELDS:
+        raise AuthenticationFailure("safe_submit_binding.invalid")
+    sealed_binding = object.__new__(ServerAuthenticatedSafeSubmitBinding)
+    object.__setattr__(sealed_binding, "_record_bytes", _canonical(partial_record))
+    object.__setattr__(
+        sealed_binding,
+        "_authentication_seal",
+        _SERVER_AUTHENTICATED_SAFE_SUBMIT_SEAL,
+    )
+    return authentication_result, sealed_binding
 
 
-def _authenticate_evidence_bundle_with_documents(
+def _authenticate_validated_bundle(
+    *,
+    authentication_policy_bytes: bytes,
+    authentication_policy_sha256: str,
+    server_scope_policy_bytes: bytes,
+    server_scope_policy_sha256: str,
+    snapshot: evidence_manifest.ValidatedEvidenceBundle,
+    key: bytes,
+    clock: Callable[[], datetime] = _utc_now,
+) -> dict[str, Any]:
+    """Compatibility projection for existing callers and the offline CLI."""
+
+    result, _sealed_binding = _authenticate_validated_bundle_with_binding(
+        authentication_policy_bytes=authentication_policy_bytes,
+        authentication_policy_sha256=authentication_policy_sha256,
+        server_scope_policy_bytes=server_scope_policy_bytes,
+        server_scope_policy_sha256=server_scope_policy_sha256,
+        snapshot=snapshot,
+        key=key,
+        clock=clock,
+    )
+    return result
+
+
+def _authenticate_evidence_bundle_with_documents_and_binding(
     *,
     authentication_policy_bytes: bytes,
     authentication_policy_sha256: str,
@@ -498,8 +587,8 @@ def _authenticate_evidence_bundle_with_documents(
     key: bytes,
     validation_now: datetime,
     clock: Callable[[], datetime] = _utc_now,
-) -> dict[str, Any]:
-    """Dependency-injected implementation for internal use and unit tests."""
+) -> tuple[dict[str, Any], ServerAuthenticatedSafeSubmitBinding]:
+    """Validate once, authenticate owned bytes, and return the sealed handoff."""
 
     policy = _parse_authentication_policy_document(
         authentication_policy_bytes,
@@ -518,7 +607,7 @@ def _authenticate_evidence_bundle_with_documents(
         bundle=bundle,
         now=validation_now,
     )
-    return _authenticate_validated_bundle(
+    return _authenticate_validated_bundle_with_binding(
         authentication_policy_bytes=authentication_policy_bytes,
         authentication_policy_sha256=authentication_policy_sha256,
         server_scope_policy_bytes=server_scope_policy_bytes,
@@ -529,14 +618,40 @@ def _authenticate_evidence_bundle_with_documents(
     )
 
 
-def authenticate_evidence_bundle(
+def _authenticate_evidence_bundle_with_documents(
     *,
+    authentication_policy_bytes: bytes,
+    authentication_policy_sha256: str,
+    server_scope_policy_bytes: bytes,
+    server_scope_policy_sha256: str,
     bundle: Path,
     key: bytes,
     validation_now: datetime,
     clock: Callable[[], datetime] = _utc_now,
 ) -> dict[str, Any]:
-    """Authenticate a bundle under the exact checked-in dormant policies."""
+    """Compatibility projection for the supported offline CLI path."""
+
+    result, _sealed_binding = _authenticate_evidence_bundle_with_documents_and_binding(
+        authentication_policy_bytes=authentication_policy_bytes,
+        authentication_policy_sha256=authentication_policy_sha256,
+        server_scope_policy_bytes=server_scope_policy_bytes,
+        server_scope_policy_sha256=server_scope_policy_sha256,
+        bundle=bundle,
+        key=key,
+        validation_now=validation_now,
+        clock=clock,
+    )
+    return result
+
+
+def authenticate_evidence_bundle_with_binding(
+    *,
+    bundle: Path,
+    key: bytes,
+    validation_now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
+) -> tuple[dict[str, Any], ServerAuthenticatedSafeSubmitBinding]:
+    """Authenticate under exact checked-in policies and return the partial."""
 
     authentication_policy, authentication_policy_sha256, authentication_bytes = (
         load_authentication_policy_document()
@@ -549,7 +664,7 @@ def authenticate_evidence_bundle(
     _, server_scope_policy_sha256, server_scope_policy_bytes = (
         server_scope.read_policy_document()
     )
-    return _authenticate_evidence_bundle_with_documents(
+    return _authenticate_evidence_bundle_with_documents_and_binding(
         authentication_policy_bytes=authentication_bytes,
         authentication_policy_sha256=authentication_policy_sha256,
         server_scope_policy_bytes=server_scope_policy_bytes,
@@ -559,6 +674,24 @@ def authenticate_evidence_bundle(
         validation_now=validation_now,
         clock=clock,
     )
+
+
+def authenticate_evidence_bundle(
+    *,
+    bundle: Path,
+    key: bytes,
+    validation_now: datetime,
+    clock: Callable[[], datetime] = _utc_now,
+) -> dict[str, Any]:
+    """Compatibility projection for callers that need only the public result."""
+
+    result, _sealed_binding = authenticate_evidence_bundle_with_binding(
+        bundle=bundle,
+        key=key,
+        validation_now=validation_now,
+        clock=clock,
+    )
+    return result
 
 
 def _write_private_result(path: Path, result: Mapping[str, Any]) -> None:
