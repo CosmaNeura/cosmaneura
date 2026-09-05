@@ -281,7 +281,6 @@ def _external_binding(
     identities = policy["identities"]["jobs"]
     record = {
         "schema_version": 1,
-        "record_id": "runtime-0123456789abcdef",
         "policy_id": policy["policy_id"],
         "policy_binding_sha256": binding._policy_binding_digest(policy),
         "repository": "CosmaNeura/cosmaneura",
@@ -314,6 +313,8 @@ def _external_binding(
         "created_at": "2026-09-04T12:01:00Z",
     }
     record.update(record_changes or {})
+    if "record_id" not in (record_changes or {}):
+        record["record_id"] = binding._derive_runtime_record_id(record)
     raw = binding._canonical(record)
     record_digest = binding._digest(raw)
     bundle_digest = f"sha256:{'b' * 64}"

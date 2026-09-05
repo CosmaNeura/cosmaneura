@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "95032e3d1e281b59604bd8070350b0993562972d5b5ea67a0f151e75dfcd25e5"
+CANONICAL_POLICY_SHA256 = "9138f192d15f23eb99134f8e5e7143cfebee617232b51ff1041a17576f8ba01a"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -47,7 +47,7 @@ HOST_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
     r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
 )
-RECORD_ID_RE = re.compile(r"^runtime-[0-9a-f]{16,64}$")
+RECORD_ID_RE = re.compile(r"^runtime-[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GITHUB_RUN_INVOCATION_RE = re.compile(
     r"^https://github\.com/CosmaNeura/cosmaneura/actions/runs/"
@@ -654,12 +654,37 @@ def _executable_bindings(policy: dict[str, Any]) -> None:
         _fail("evidence_ingress.blob.launch_binding")
 
 
+def _runtime_record_derivations(policy: dict[str, Any]) -> None:
+    contract = policy["external_runtime_record"]
+    if (
+        tuple(contract["record"]["required_fields"]) != RUNTIME_RECORD_FIELDS
+        or contract["record_id_derivation"]
+        != {
+            "algorithm": "sha256",
+            "serialization": "canonical-json-no-trailing-newline",
+            "projection": "all-required-fields-except-record_id",
+            "prefix": "runtime-",
+            "hex_characters": 64,
+        }
+        or contract["timestamp_binding"]
+        != {
+            "format": "rfc3339-utc-second-Z",
+            "image_published_at_source": "sealed-authenticated-runtime-image-publication",
+            "created_at_source": "sealed-authenticated-publisher-invocation",
+            "created_at_strictly_after_image_published_at": True,
+            "caller_override_permitted": False,
+        }
+    ):
+        _fail("external_runtime_record.derivation")
+
+
 def validate_runtime_binding_policy(policy: Any, *, executable: bool = False) -> dict[str, Any]:
     """Validate one policy object against the digest-pinned closed-world template."""
 
     template = _canonical_template()
     _shape(policy, template)
     document = _object(policy, set(template), "policy.closed_world")
+    _runtime_record_derivations(document)
     _activation(document, executable=executable)
     _cross_bind(document)
     if executable:
@@ -676,6 +701,141 @@ def validate_policy(policy: Any, *, executable: bool = False) -> dict[str, Any]:
 _VERIFIED_SIGNATURE_SEAL = object()
 _VALIDATED_RUNTIME_BINDING_SEAL = object()
 _RUNTIME_REFERENCE_SEAL = object()
+_RUNTIME_RECORD_BUILD_POLICY_SEAL = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class ValidatedRuntimeRecordBuildPolicy:
+    """Detached configured policy authority for the pure record builder."""
+
+    policy_bytes: bytes
+    policy_binding_sha256: str
+    _seal: object = dataclass_field(repr=False, compare=False)
+
+    def __init__(self) -> None:
+        _fail("runtime_record.build_policy_invalid")
+
+    @classmethod
+    def _from_validated(
+        cls, *, policy_bytes: bytes, policy_binding_sha256: str
+    ) -> ValidatedRuntimeRecordBuildPolicy:
+        if (
+            cls is not ValidatedRuntimeRecordBuildPolicy
+            or type(policy_bytes) is not bytes
+            or type(policy_binding_sha256) is not str
+            or DIGEST_RE.fullmatch(policy_binding_sha256) is None
+        ):
+            _fail("runtime_record.build_policy_invalid")
+        result = object.__new__(cls)
+        object.__setattr__(result, "policy_bytes", bytes(policy_bytes))
+        object.__setattr__(result, "policy_binding_sha256", policy_binding_sha256)
+        object.__setattr__(result, "_seal", _RUNTIME_RECORD_BUILD_POLICY_SEAL)
+        return result
+
+    def _is_validated(self) -> bool:
+        return (
+            type(self) is ValidatedRuntimeRecordBuildPolicy
+            and getattr(self, "_seal", None) is _RUNTIME_RECORD_BUILD_POLICY_SEAL
+            and type(getattr(self, "policy_bytes", None)) is bytes
+            and type(getattr(self, "policy_binding_sha256", None)) is str
+        )
+
+    def _document(self) -> dict[str, Any]:
+        if not self._is_validated():
+            _fail("runtime_record.build_policy_invalid")
+        document = _parse_policy(self.policy_bytes)
+        if (
+            _canonical(document) != self.policy_bytes
+            or _placeholder_values(document)
+            or _policy_binding_digest(document) != self.policy_binding_sha256
+        ):
+            _fail("runtime_record.build_policy_invalid")
+        return document
+
+
+def validate_runtime_record_build_policy(
+    policy: Any,
+) -> ValidatedRuntimeRecordBuildPolicy:
+    """Snapshot configured bindings without treating activation as a build gate."""
+
+    document = validate_runtime_binding_policy(policy)
+    policy_bytes = _canonical(document)
+    detached = _parse_policy(policy_bytes)
+    validate_runtime_binding_policy(detached)
+    if _placeholder_values(detached):
+        _fail("runtime_record.build_policy_unconfigured")
+    _executable_bindings(detached)
+    return ValidatedRuntimeRecordBuildPolicy._from_validated(
+        policy_bytes=policy_bytes,
+        policy_binding_sha256=_policy_binding_digest(detached),
+    )
+
+
+def _derive_runtime_record_id(record_without_id: dict[str, Any]) -> str:
+    """Derive the full canonical SHA-256 identifier over every other field."""
+
+    expected = {field for field in RUNTIME_RECORD_FIELDS if field != "record_id"}
+    if type(record_without_id) is not dict or set(record_without_id) != expected:
+        _fail("runtime_record.record_id_projection")
+    return f"runtime-{hashlib.sha256(_canonical(record_without_id)).hexdigest()}"
+
+
+def _validate_external_runtime_record_contents(
+    document: dict[str, Any], record_bytes: bytes
+) -> dict[str, Any]:
+    """Validate canonical closed-world runtime-record contents without I/O."""
+
+    record_policy = document["external_runtime_record"]["record"]
+    if type(record_bytes) is not bytes or not 1 <= len(record_bytes) <= record_policy["maximum_bytes"]:
+        _fail("runtime_record.bytes")
+    record = _parse_json_object(record_bytes, "runtime_record.invalid")
+    if record_bytes != _canonical(record):
+        _fail("runtime_record.noncanonical")
+    _object(record, set(RUNTIME_RECORD_FIELDS), "runtime_record.closed_world")
+    runtime = document["runtime"]
+    environment = runtime["container_apps_environment"]
+    jobs = runtime["jobs"]
+    identities = document["identities"]["jobs"]
+    image_reference = f"{record.get('image_repository')}@{record.get('image_digest')}"
+    expected = {
+        "schema_version": 1,
+        "policy_id": document["policy_id"],
+        "policy_binding_sha256": _policy_binding_digest(document),
+        **document["external_runtime_record"]["binding"],
+        "image_repository": jobs["provision"]["image_repository"],
+        "provision_job_image_reference": image_reference,
+        "cleanup_job_image_reference": image_reference,
+        "environment_resource_id": environment["resource_id"],
+        "provision_job_resource_id": jobs["provision"]["resource_id"],
+        "provision_job_configuration_template_sha256": jobs["provision"]["configuration_template_sha256"],
+        "provision_job_identity_resource_id": identities["provision"]["resource_id"],
+        "cleanup_job_resource_id": jobs["cleanup"]["resource_id"],
+        "cleanup_job_configuration_template_sha256": jobs["cleanup"]["configuration_template_sha256"],
+        "cleanup_job_identity_resource_id": identities["cleanup"]["resource_id"],
+        "network_policy_sha256": environment["network_policy_sha256"],
+    }
+    for name, value in expected.items():
+        _exact(record.get(name), value, f"runtime_record.{name}")
+    if (
+        type(record["publisher_source_sha"]) is not str
+        or GIT_SHA_RE.fullmatch(record["publisher_source_sha"]) is None
+        or type(record["publisher_run_invocation_uri"]) is not str
+        or GITHUB_RUN_INVOCATION_RE.fullmatch(record["publisher_run_invocation_uri"])
+        is None
+        or type(record["image_digest"]) is not str
+        or DIGEST_RE.fullmatch(record["image_digest"]) is None
+    ):
+        _fail("runtime_record.identity")
+    if _utc(record["created_at"], "runtime_record.time") <= _utc(record["image_published_at"], "runtime_record.time"):
+        _fail("runtime_record.publication_order")
+    record_without_id = {name: value for name, value in record.items() if name != "record_id"}
+    if (
+        type(record["record_id"]) is not str
+        or RECORD_ID_RE.fullmatch(record["record_id"]) is None
+        or record["record_id"] != _derive_runtime_record_id(record_without_id)
+    ):
+        _fail("runtime_record.record_id")
+    return record
 
 
 @dataclass(frozen=True, slots=True, init=False)
@@ -874,9 +1034,7 @@ def validate_external_runtime_binding(
     pointer = provision_reference
     if any(getattr(pointer, field) != getattr(cleanup_reference, field) for field in RUNTIME_REFERENCE_FIELDS):
         _fail("runtime_record.reference_divergence")
-    maximum = document["external_runtime_record"]["record"]["maximum_bytes"]
-    if type(record_bytes) is not bytes or not 1 <= len(record_bytes) <= maximum:
-        _fail("runtime_record.bytes")
+    _validate_external_runtime_record_contents(document, record_bytes)
     observed_digest = _digest(record_bytes)
     signature = signature_verification
     if not isinstance(signature, VerifiedExternalRuntimeRecordSignature) or not signature._is_verified():
@@ -899,48 +1057,6 @@ def validate_external_runtime_binding(
         expected_path = f"/restore-runtime-bindings-v1/{getattr(pointer, digest_name)[7:]}{suffix}"
         if uri.hostname != blob_host or uri.path != expected_path:
             _fail("runtime_record.reference_binding")
-    record = _parse_json_object(record_bytes, "runtime_record.invalid")
-    if record_bytes != _canonical(record):
-        _fail("runtime_record.noncanonical")
-    _object(record, set(RUNTIME_RECORD_FIELDS), "runtime_record.closed_world")
-    runtime = document["runtime"]
-    environment = runtime["container_apps_environment"]
-    jobs = runtime["jobs"]
-    identities = document["identities"]["jobs"]
-    image_reference = f"{record.get('image_repository')}@{record.get('image_digest')}"
-    expected = {
-        "schema_version": 1,
-        "policy_id": document["policy_id"],
-        "policy_binding_sha256": _policy_binding_digest(document),
-        **document["external_runtime_record"]["binding"],
-        "image_repository": jobs["provision"]["image_repository"],
-        "provision_job_image_reference": image_reference,
-        "cleanup_job_image_reference": image_reference,
-        "environment_resource_id": environment["resource_id"],
-        "provision_job_resource_id": jobs["provision"]["resource_id"],
-        "provision_job_configuration_template_sha256": jobs["provision"]["configuration_template_sha256"],
-        "provision_job_identity_resource_id": identities["provision"]["resource_id"],
-        "cleanup_job_resource_id": jobs["cleanup"]["resource_id"],
-        "cleanup_job_configuration_template_sha256": jobs["cleanup"]["configuration_template_sha256"],
-        "cleanup_job_identity_resource_id": identities["cleanup"]["resource_id"],
-        "network_policy_sha256": environment["network_policy_sha256"],
-    }
-    for name, value in expected.items():
-        _exact(record.get(name), value, f"runtime_record.{name}")
-    if (
-        type(record["record_id"]) is not str
-        or RECORD_ID_RE.fullmatch(record["record_id"]) is None
-        or type(record["publisher_source_sha"]) is not str
-        or GIT_SHA_RE.fullmatch(record["publisher_source_sha"]) is None
-        or type(record["publisher_run_invocation_uri"]) is not str
-        or GITHUB_RUN_INVOCATION_RE.fullmatch(record["publisher_run_invocation_uri"])
-        is None
-        or type(record["image_digest"]) is not str
-        or DIGEST_RE.fullmatch(record["image_digest"]) is None
-    ):
-        _fail("runtime_record.identity")
-    if _utc(record["created_at"], "runtime_record.time") <= _utc(record["image_published_at"], "runtime_record.time"):
-        _fail("runtime_record.publication_order")
     return ValidatedExternalRuntimeBinding._from_validated(
         record_bytes=record_bytes, reference=pointer
     )

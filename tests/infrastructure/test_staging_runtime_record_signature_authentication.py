@@ -321,6 +321,18 @@ def _refresh_bundle(case: dict[str, Any]) -> None:
     )
 
 
+def _refresh_record(case: dict[str, Any], record: dict[str, Any]) -> None:
+    projected = {name: value for name, value in record.items() if name != "record_id"}
+    record["record_id"] = binding._derive_runtime_record_id(projected)
+    case["record_bytes"] = authentication._canonical(record)
+    case["statement"] = _statement(case["record_bytes"])
+    case["bundle"]["dsseEnvelope"]["payload"] = base64.b64encode(
+        authentication._canonical(case["statement"])
+    ).decode()
+    case["output"][0]["verificationResult"]["statement"] = deepcopy(case["statement"])
+    _refresh_bundle(case)
+
+
 def test_happy_path_uses_exact_offline_profile_and_mints_bound_proof() -> None:
     case = _case()
     proof = _authenticate(case)
@@ -390,6 +402,27 @@ def test_checked_in_policy_refuses_before_references_or_verifier() -> None:
             trusted_root_bytes=b"secret",
             verifier=case["verifier"],
         )
+    assert case["verifier"].calls == []
+
+
+def test_stale_runtime_record_id_refuses_before_offline_verifier() -> None:
+    case = _case()
+    record = json.loads(case["record_bytes"])
+    record["record_id"] = f"runtime-{'f' * 64}"
+    case["record_bytes"] = authentication._canonical(record)
+    case["statement"] = _statement(case["record_bytes"])
+    case["bundle"]["dsseEnvelope"]["payload"] = base64.b64encode(
+        authentication._canonical(case["statement"])
+    ).decode()
+    case["output"][0]["verificationResult"]["statement"] = deepcopy(case["statement"])
+    _refresh_bundle(case)
+
+    with pytest.raises(
+        authentication.RuntimeRecordSignatureFailure,
+        match="^runtime_signature.input_invalid$",
+    ):
+        _authenticate(case)
+
     assert case["verifier"].calls == []
 
 
@@ -474,12 +507,18 @@ def test_root_and_bundle_are_closed_world_offline_inputs(failure: str) -> None:
         case["policy"]["evidence_ingress"]["private_versioned_secret_source"][
             "secrets"
         ]["github_trusted_root"]["sha256"] = authentication._digest(case["root_bytes"])
+        record = json.loads(case["record_bytes"])
+        record["policy_binding_sha256"] = binding._policy_binding_digest(case["policy"])
+        _refresh_record(case, record)
         expected = "trusted_root_invalid"
     elif failure == "root-framing":
         case["root_bytes"] = case["root_bytes"].removesuffix(b"\n")
         case["policy"]["evidence_ingress"]["private_versioned_secret_source"][
             "secrets"
         ]["github_trusted_root"]["sha256"] = authentication._digest(case["root_bytes"])
+        record = json.loads(case["record_bytes"])
+        record["policy_binding_sha256"] = binding._policy_binding_digest(case["policy"])
+        _refresh_record(case, record)
         expected = "trusted_root_invalid"
     else:
         if failure == "bundle-log":
