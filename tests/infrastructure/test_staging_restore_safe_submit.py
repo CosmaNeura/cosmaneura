@@ -3,10 +3,15 @@ from __future__ import annotations
 import http.client
 import importlib.util
 import inspect
+import io
 import json
+import ssl
 import sys
 import urllib.error
+import urllib.parse
+import urllib.request
 from base64 import b64encode
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -23,6 +28,14 @@ SCRIPT = ROOT / "scripts/staging_restore_safe_submit.py"
 AUTHENTICATION_SCRIPT = ROOT / "scripts/authenticate_staging_server_scope_receipt.py"
 ENVELOPE_POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-envelope-policy.json"
 SAFE_POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-safe-submit-policy.json"
+RUNTIME_POLICY = (
+    ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
+)
+PROVISION_JOB_CLIENT_ID = "00000000-0000-4000-8000-000000000001"
+PROVISION_JOB_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000002"
+CLEANUP_JOB_CLIENT_ID = "00000000-0000-4000-8000-000000000003"
+CLEANUP_JOB_PRINCIPAL_ID = "00000000-0000-4000-8000-000000000004"
+IDENTITY_ENDPOINT = "http://169.254.169.254:42342/msi/token"
 
 
 def _load_module() -> ModuleType:
@@ -345,6 +358,20 @@ class FakeHeaders(dict[str, str]):
             raise RuntimeError("headers unavailable")
         return super().items()
 
+    def get_all(self, name: str) -> list[str]:
+        return [value for key, value in self.items() if key.lower() == name.lower()]
+
+
+class HeaderPairs:
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self.pairs = pairs
+
+    def items(self) -> list[tuple[str, str]]:
+        return self.pairs
+
+    def get_all(self, name: str) -> list[str]:
+        return [value for key, value in self.pairs if key.lower() == name.lower()]
+
 
 class FakeHttpResponse:
     def __init__(
@@ -358,9 +385,13 @@ class FakeHttpResponse:
     ) -> None:
         self._status = status
         self.body = body
-        self.headers = FakeHeaders(headers or {}, fail=failure == "headers")
+        response_headers = dict(headers or {})
+        if not any(key.lower() == "content-length" for key in response_headers):
+            response_headers["Content-Length"] = str(len(body))
+        self.headers: Any = FakeHeaders(response_headers, fail=failure == "headers")
         self.url = url
         self.failure = failure
+        self.offset = 0
 
     @property
     def status(self) -> int:
@@ -371,10 +402,12 @@ class FakeHttpResponse:
     def geturl(self) -> str:
         return self.url
 
-    def read(self, _: int) -> bytes:
+    def read(self, maximum: int) -> bytes:
         if self.failure == "read":
             raise http.client.IncompleteRead(b"partial", 10)
-        return self.body
+        chunk = self.body[self.offset : self.offset + maximum]
+        self.offset += len(chunk)
+        return chunk
 
     def __enter__(self) -> FakeHttpResponse:
         return self
@@ -393,10 +426,87 @@ class FakeOpener:
         self.requests.append((request, timeout))
         response = self.responses.pop(0)
         if isinstance(response, Exception):
+            if isinstance(response, urllib.error.HTTPError) and not response.url:
+                response.url = request.full_url
             raise response
         if not response.url:
             response.url = request.full_url
         return response
+
+
+def _token_source(
+    *, client_id: str = PROVISION_JOB_CLIENT_ID, opener: Any | None = None
+) -> Any:
+    source = safe_submit.ContainerAppsManagedIdentityTokenSource(
+        client_id=client_id,
+        identity_endpoint=IDENTITY_ENDPOINT,
+        identity_header="identity-secret",
+        service_api_version="2019-08-01",
+        maximum_response_bytes=65_536,
+        expiry_skew_seconds=90,
+        maximum_lifetime_seconds=86_400,
+        maximum_timeout_seconds=15,
+        opener=opener or FakeOpener([]),
+        clock=lambda: 1_000,
+    )
+    source._tokens = {
+        safe_submit.ARM_OAUTH_RESOURCE: ("arm-token", 2_000),
+        safe_submit.BLOB_OAUTH_RESOURCE: ("blob-token", 2_000),
+    }
+    return source
+
+
+def _identity_response(
+    *,
+    client_id: str,
+    resource: str,
+    document_changes: Mapping[str, Any] | None = None,
+) -> Any:
+    document = {
+        "access_token": f"token-{resource}",
+        "expires_on": "2000",
+        "resource": resource,
+        "client_id": client_id,
+        "token_type": "Bearer",
+    }
+    document.update(document_changes or {})
+    raw = json.dumps(document, separators=(",", ":")).encode()
+    return FakeHttpResponse(200, raw, {"Content-Type": "application/json"})
+
+
+def _runtime_transport_policy() -> dict[str, Any]:
+    config = _config(
+        provision_client_id=PROVISION_JOB_CLIENT_ID,
+        provision_principal_id=PROVISION_JOB_PRINCIPAL_ID,
+    )
+    policy = json.loads(RUNTIME_POLICY.read_text())
+    jobs = policy["identities"]["jobs"]
+    resource_prefix = (
+        "/subscriptions/00000000-0000-4000-8000-000000000000/"
+        "resourceGroups/runtime/providers/Microsoft.ManagedIdentity/"
+        "userAssignedIdentities/"
+    )
+    for action, client_id, principal_id in (
+        ("provision", PROVISION_JOB_CLIENT_ID, PROVISION_JOB_PRINCIPAL_ID),
+        ("cleanup", CLEANUP_JOB_CLIENT_ID, CLEANUP_JOB_PRINCIPAL_ID),
+    ):
+        jobs[action].update(
+            resource_id=f"{resource_prefix}{action}",
+            client_id=client_id,
+            principal_id=principal_id,
+        )
+    marker = policy["private_control_marker_store"]
+    marker.update(
+        policy_id=config.policy_id,
+        account_resource_id=config.marker_account_resource_id,
+        account_host=config.marker_account_host,
+        oauth_resource=config.marker_oauth_resource,
+        container_names=config.marker_containers,
+        allowed_job_identity_resource_ids=[
+            jobs[action]["resource_id"] for action in ("provision", "cleanup")
+        ],
+    )
+    return policy
 
 
 def _marker_headers(raw: bytes, **changes: str) -> dict[str, str]:
@@ -434,19 +544,48 @@ def _create_headers(**changes: str) -> dict[str, str]:
 
 def _blob_store(opener: FakeOpener, **changes: Any) -> Any:
     class TestStore(safe_submit.AzureBlobMarkerStore):
-        def _access_token(self) -> str:
+        def _access_token(self, _timeout_seconds: int) -> str:
             return "test-storage-token"
 
     return TestStore(
         _config(**changes),
+        _token_source(),
+        action="provision",
+        client_id=PROVISION_JOB_CLIENT_ID,
         opener=opener,
         sleeper=lambda _: None,
         clock=lambda: TEST_NOW,
+        monotonic=lambda: 1.0,
+        deadline=lambda _: nullcontext(),
+    )
+
+
+def _arm_transport(
+    opener: FakeOpener, *, action: str = "provision", **changes: Any
+) -> Any:
+    client_id = (
+        PROVISION_JOB_CLIENT_ID if action == "provision" else CLEANUP_JOB_CLIENT_ID
+    )
+    config = _config(
+        provision_client_id=PROVISION_JOB_CLIENT_ID,
+        provision_principal_id=PROVISION_JOB_PRINCIPAL_ID,
+        **changes,
+    )
+    return safe_submit.AzureArmTransport(
+        config,
+        _token_source(client_id=client_id),
+        action=action,
+        client_id=client_id,
+        opener=opener,
+        monotonic=lambda: 1.0,
+        deadline=lambda _: nullcontext(),
     )
 
 
 def _http_error(status: int) -> urllib.error.HTTPError:
-    return urllib.error.HTTPError("test", status, "bounded", Message(), None)
+    headers = Message()
+    headers["Content-Length"] = "0"
+    return urllib.error.HTTPError("", status, "bounded", headers, io.BytesIO(b""))
 
 
 def _target_id(engine: Any, request: Any) -> str:
@@ -476,54 +615,51 @@ def _configure_cleanup_race(markers: Any, engine: Any) -> None:
     ],
 )
 def test_response_processing_failures_have_bounded_method_semantics(
-    monkeypatch: pytest.MonkeyPatch, method: str, failure: str, expected: str
+    method: str, failure: str, expected: str
 ) -> None:
-    class Headers(dict[str, str]):
-        def items(self) -> Any:
-            if failure == "headers":
-                raise RuntimeError("broken headers")
-            return super().items()
-
-    class HttpResponse:
-        @property
-        def status(self) -> int:
-            if failure == "status":
-                raise RuntimeError("broken status")
-            return 202
-
-        headers = Headers({"x-ms-request-id": "test-request"})
-
-        def __enter__(self) -> HttpResponse:
-            return self
-
-        def __exit__(self, *_: Any) -> None:
-            if failure == "exit":
-                raise RuntimeError("broken close")
-
-        def read(self, _: int) -> bytes:
-            if failure == "incomplete":
-                raise http.client.IncompleteRead(b"partial", 10)
-            if failure == "malformed":
-                return b"{"
-            if failure == "oversized":
-                return b"x" * 1_048_577
-            return b"{}"
-
-    transport = safe_submit.AzureArmTransport()
-    monkeypatch.setattr(transport, "_access_token", lambda _: "test-token")
-
-    def urlopen(*_args: Any, **_kwargs: Any) -> HttpResponse:
-        if failure == "http-error":
-            raise _http_error(409)
-        return HttpResponse()
-
-    monkeypatch.setattr(safe_submit.urllib.request, "urlopen", urlopen)
+    body = (
+        b"{"
+        if failure == "malformed"
+        else b"x" * 1_048_577
+        if failure == "oversized"
+        else b"{}"
+    )
+    response: Any = (
+        _http_error(409)
+        if failure == "http-error"
+        else FakeHttpResponse(
+            202,
+            body,
+            {"Content-Type": "application/json"},
+            failure="read" if failure == "incomplete" else failure,
+        )
+    )
+    opener = FakeOpener([response])
+    config = _config(
+        provision_client_id=PROVISION_JOB_CLIENT_ID,
+        provision_principal_id=PROVISION_JOB_PRINCIPAL_ID,
+    )
+    transport = safe_submit.AzureArmTransport(
+        config,
+        _token_source(),
+        action="provision",
+        client_id=PROVISION_JOB_CLIENT_ID,
+        opener=opener,
+        monotonic=lambda: 1.0,
+        deadline=lambda _: nullcontext(),
+    )
+    target_id = (
+        f"{config.target_group_id}/providers/"
+        "Microsoft.DBforPostgreSQL/flexibleServers/cnr-test-target"
+    )
 
     def make_request() -> Any:
         return transport.request(
             method,
-            "/subscriptions/test/resource",
+            target_id,
             api_version="2024-08-01",
+            body={"properties": {}} if method == "PUT" else None,
+            headers={"If-None-Match": "*"} if method == "PUT" else None,
             timeout_seconds=30,
         )
 
@@ -537,6 +673,7 @@ def test_response_processing_failures_have_bounded_method_semantics(
     )
     with pytest.raises(error_type) as raised:
         make_request()
+    assert len(opener.requests) == 1
     if expected != "unknown":
         assert raised.value.code == expected
 
@@ -689,9 +826,24 @@ def test_blob_conditional_conflict_and_unknown_then_404_fail_closed() -> None:
 
 
 def test_blob_redirect_and_oversize_are_bounded_refusals() -> None:
-    default_store = safe_submit.AzureBlobMarkerStore(_config())
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    default_opener = safe_submit._hardened_opener(tls_context=context)
+    default_store = safe_submit.AzureBlobMarkerStore(
+        _config(),
+        _token_source(),
+        action="provision",
+        client_id=PROVISION_JOB_CLIENT_ID,
+        opener=default_opener,
+        monotonic=lambda: 1.0,
+        deadline=lambda _: nullcontext(),
+    )
     assert any(
         isinstance(handler, safe_submit._RefuseRedirects)
+        for handler in default_store.opener.handlers
+    )
+    assert not urllib.request.getproxies() or any(
+        isinstance(handler, urllib.request.ProxyHandler)
+        and not getattr(handler, "proxies", None)
         for handler in default_store.opener.handlers
     )
     redirected = FakeHttpResponse(307, url="https://evil.example/marker")
@@ -730,23 +882,58 @@ def test_blob_list_is_paginated_and_bounded() -> None:
         ).list_intent_ids()
 
 
-def test_blob_oauth_audience_and_dormant_host_are_exact(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    store = _blob_store(FakeOpener([]))
-    seen: list[str] = []
-
-    class Result:
-        returncode = 0
-        stdout = "token"
-
-    def run(command: list[str], **_kwargs: Any) -> Result:
-        seen.extend(command)
-        return Result()
-
-    monkeypatch.setattr(safe_submit.subprocess, "run", run)
-    assert safe_submit.AzureBlobMarkerStore._access_token(store) == "token"
-    assert seen[seen.index("--resource") + 1] == "https://storage.azure.com/"
+def test_blob_oauth_audience_and_dormant_host_are_exact() -> None:
+    token_body = json.dumps(
+        {
+            "access_token": "token",
+            "expires_on": "2000",
+            "resource": safe_submit.BLOB_OAUTH_RESOURCE,
+            "client_id": PROVISION_JOB_CLIENT_ID,
+            "token_type": "Bearer",
+        },
+        separators=(",", ":"),
+    ).encode()
+    identity_opener = FakeOpener(
+        [
+            FakeHttpResponse(
+                200,
+                token_body,
+                {"Content-Type": "application/json"},
+            )
+        ]
+    )
+    source = safe_submit.ContainerAppsManagedIdentityTokenSource(
+        client_id=PROVISION_JOB_CLIENT_ID,
+        identity_endpoint=IDENTITY_ENDPOINT,
+        identity_header="identity-secret",
+        service_api_version="2019-08-01",
+        maximum_response_bytes=65_536,
+        expiry_skew_seconds=90,
+        maximum_lifetime_seconds=86_400,
+        maximum_timeout_seconds=15,
+        opener=identity_opener,
+        clock=lambda: 1_000,
+    )
+    store = safe_submit.AzureBlobMarkerStore(
+        _config(),
+        source,
+        action="provision",
+        client_id=PROVISION_JOB_CLIENT_ID,
+        opener=FakeOpener([]),
+        monotonic=lambda: 1.0,
+        deadline=lambda _: nullcontext(),
+    )
+    assert store._access_token(15) == "token"
+    request = identity_opener.requests[0][0]
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+    assert query == {
+        "api-version": ["2019-08-01"],
+        "resource": ["https://storage.azure.com/"],
+        "client_id": [PROVISION_JOB_CLIENT_ID],
+    }
+    headers = {key.lower(): value for key, value in request.header_items()}
+    assert headers["x-identity-header"] == "identity-secret"
+    assert headers["metadata"] == "true"
     config = safe_submit.config_from_policies(
         json.loads(ENVELOPE_POLICY.read_text()),
         json.loads(SAFE_POLICY.read_text()),
@@ -755,13 +942,463 @@ def test_blob_oauth_audience_and_dormant_host_are_exact(
     with pytest.raises(
         safe_submit.SafeSubmitError, match="blob_store_configuration_invalid"
     ):
-        safe_submit.AzureBlobMarkerStore(config)
+        safe_submit.AzureBlobMarkerStore(
+            config,
+            source,
+            action="provision",
+            client_id=PROVISION_JOB_CLIENT_ID,
+            opener=FakeOpener([]),
+        )
     with pytest.raises(
         safe_submit.SafeSubmitError, match="blob_store_configuration_invalid"
     ):
         safe_submit.AzureBlobMarkerStore(
-            _config(marker_account_host="otheraccount.blob.core.windows.net")
+            _config(marker_account_host="otheraccount.blob.core.windows.net"),
+            source,
+            action="provision",
+            client_id=PROVISION_JOB_CLIENT_ID,
+            opener=FakeOpener([]),
         )
+
+
+@pytest.mark.parametrize(
+    ("action", "client_id"),
+    [
+        ("provision", PROVISION_JOB_CLIENT_ID),
+        ("cleanup", CLEANUP_JOB_CLIENT_ID),
+    ],
+)
+def test_policy_bound_runtime_selects_exact_job_uami_for_arm_and_blob(
+    monkeypatch: pytest.MonkeyPatch, action: str, client_id: str
+) -> None:
+    policy = _runtime_transport_policy()
+    validation_calls: list[bool] = []
+
+    def validate(document: Any, *, executable: bool) -> Any:
+        assert document is policy
+        validation_calls.append(executable)
+        return document
+
+    monkeypatch.setattr(
+        safe_submit.runtime_binding, "validate_runtime_binding_policy", validate
+    )
+    identity_opener = FakeOpener(
+        [
+            _identity_response(
+                client_id=client_id, resource=safe_submit.ARM_OAUTH_RESOURCE
+            ),
+            _identity_response(
+                client_id=client_id, resource=safe_submit.BLOB_OAUTH_RESOURCE
+            ),
+        ]
+    )
+    arm_opener = FakeOpener([FakeHttpResponse(404)])
+    blob_opener = FakeOpener([FakeHttpResponse(404)])
+    deadlines: list[int] = []
+
+    def deadline(seconds: int) -> Any:
+        deadlines.append(seconds)
+        return nullcontext()
+
+    config = _config(
+        provision_client_id=PROVISION_JOB_CLIENT_ID,
+        provision_principal_id=PROVISION_JOB_PRINCIPAL_ID,
+    )
+    runtime = safe_submit.build_policy_bound_runtime(
+        config=config,
+        runtime_policy=policy,
+        action=action,
+        environment={
+            "IDENTITY_ENDPOINT": IDENTITY_ENDPOINT,
+            "IDENTITY_HEADER": "identity-secret",
+            "HTTP_PROXY": "http://ambient.invalid",
+            "SSL_CERT_FILE": "/ambient/ca.pem",
+        },
+        identity_opener=identity_opener,
+        arm_opener=arm_opener,
+        blob_opener=blob_opener,
+        epoch_clock=lambda: 1_000,
+        monotonic=lambda: 1.0,
+        deadline=deadline,
+        sleeper=lambda _: None,
+        trusted_clock=lambda: TEST_NOW,
+    )
+    with pytest.raises(safe_submit.SafeSubmitError, match="marker_list_refused"):
+        runtime.marker_store.list_intent_ids()
+    if action == "cleanup":
+        with pytest.raises(safe_submit.SafeSubmitError, match="marker_write_refused"):
+            runtime.marker_store.create_if_absent("intent", REHEARSAL_ID, b"{}")
+    target_id = (
+        f"{config.target_group_id}/providers/"
+        "Microsoft.DBforPostgreSQL/flexibleServers/cnr-policy-bound"
+    )
+    assert (
+        runtime.arm_transport.request(
+            "GET",
+            target_id,
+            api_version=config.postgres_api_version,
+            timeout_seconds=config.request_timeout_seconds,
+        ).status
+        == 404
+    )
+    assert runtime.marker_store.read("cleanup", REHEARSAL_ID) is None
+    assert validation_calls == [True]
+    assert deadlines == [30, 30]
+    assert runtime.action == action
+    assert runtime.config is config
+    assert len(identity_opener.requests) == 2
+    queries = [
+        urllib.parse.parse_qs(urllib.parse.urlsplit(item[0].full_url).query)
+        for item in identity_opener.requests
+    ]
+    assert [query["client_id"] for query in queries] == [[client_id], [client_id]]
+    assert [query["resource"] for query in queries] == [
+        [safe_submit.ARM_OAUTH_RESOURCE],
+        [safe_submit.BLOB_OAUTH_RESOURCE],
+    ]
+    identity_headers = [
+        {key.lower(): value for key, value in item[0].header_items()}
+        for item in identity_opener.requests
+    ]
+    assert all(
+        headers["x-identity-header"] == "identity-secret"
+        for headers in identity_headers
+    )
+    arm_request = arm_opener.requests[0][0]
+    arm_headers = {key.lower(): value for key, value in arm_request.header_items()}
+    assert arm_request.full_url == (
+        f"{safe_submit.MANAGEMENT_ROOT}{target_id}?api-version=2024-08-01"
+    )
+    assert arm_headers["authorization"] == (
+        f"Bearer token-{safe_submit.ARM_OAUTH_RESOURCE}"
+    )
+    blob_headers = {
+        key.lower(): value for key, value in blob_opener.requests[0][0].header_items()
+    }
+    assert blob_headers["authorization"] == (
+        f"Bearer token-{safe_submit.BLOB_OAUTH_RESOURCE}"
+    )
+
+
+def test_policy_bound_runtime_refuses_dormant_or_cross_identity_policy_before_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = json.loads(RUNTIME_POLICY.read_text())
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="safe_submit_runtime_policy_invalid"
+    ):
+        safe_submit.build_policy_bound_runtime(
+            config=_config(),
+            runtime_policy=canonical,
+            action="provision",
+            environment={},
+            identity_opener=FakeOpener([]),
+            arm_opener=FakeOpener([]),
+            blob_opener=FakeOpener([]),
+        )
+
+    configured = _runtime_transport_policy()
+    monkeypatch.setattr(
+        safe_submit.runtime_binding,
+        "validate_runtime_binding_policy",
+        lambda *_args, **_kwargs: configured,
+    )
+    no_io = FakeOpener([])
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="safe_submit_runtime_policy_mismatch"
+    ):
+        safe_submit.build_policy_bound_runtime(
+            config=_config(
+                provision_client_id="00000000-0000-4000-8000-000000000099",
+                provision_principal_id=PROVISION_JOB_PRINCIPAL_ID,
+            ),
+            runtime_policy=configured,
+            action="provision",
+            environment={
+                "IDENTITY_ENDPOINT": IDENTITY_ENDPOINT,
+                "IDENTITY_HEADER": "identity-secret",
+            },
+            identity_opener=no_io,
+            arm_opener=no_io,
+            blob_opener=no_io,
+        )
+    assert no_io.requests == []
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "header"),
+    [
+        ("https://169.254.169.254:42342/msi/token", "secret"),
+        ("http://example.com:42342/msi/token", "secret"),
+        ("http://169.254.169.254:42342/other", "secret"),
+        ("http://169.254.169.254:42342/MSI/token", "secret"),
+        ("http://169.254.169.254:42342/msi/token/", "secret"),
+        (IDENTITY_ENDPOINT, ""),
+    ],
+)
+def test_managed_identity_rejects_nonlocal_endpoint_or_missing_secret(
+    endpoint: str, header: str
+) -> None:
+    opener = FakeOpener([])
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="managed_identity_configuration_invalid"
+    ):
+        safe_submit.ContainerAppsManagedIdentityTokenSource(
+            client_id=PROVISION_JOB_CLIENT_ID,
+            identity_endpoint=endpoint,
+            identity_header=header,
+            service_api_version="2019-08-01",
+            maximum_response_bytes=65_536,
+            expiry_skew_seconds=90,
+            maximum_lifetime_seconds=86_400,
+            maximum_timeout_seconds=15,
+            opener=opener,
+            clock=lambda: 1_000,
+        )
+    assert opener.requests == []
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"client_id": CLEANUP_JOB_CLIENT_ID},
+        {"resource": safe_submit.BLOB_OAUTH_RESOURCE},
+        {"token_type": "Basic"},
+        {"expires_on": "1090"},
+        {"expires_on": "87401"},
+    ],
+)
+def test_managed_identity_response_is_bound_and_time_limited(
+    changes: dict[str, str],
+) -> None:
+    opener = FakeOpener(
+        [
+            _identity_response(
+                client_id=PROVISION_JOB_CLIENT_ID,
+                resource=safe_submit.ARM_OAUTH_RESOURCE,
+                document_changes=changes,
+            )
+        ]
+    )
+    source = _token_source(opener=opener)
+    source._tokens = {}
+    with pytest.raises(
+        safe_submit.SafeSubmitError, match="managed_identity_response_invalid"
+    ):
+        source.get_token(
+            client_id=PROVISION_JOB_CLIENT_ID,
+            resource=safe_submit.ARM_OAUTH_RESOURCE,
+            timeout_seconds=15,
+        )
+    assert len(opener.requests) == 1
+
+
+def test_managed_identity_rejects_duplicate_json_and_ambiguous_framing() -> None:
+    duplicate = b'{"access_token":"one","access_token":"two","expires_on":"2000"}'
+    responses = [
+        FakeHttpResponse(200, duplicate, {"Content-Type": "application/json"}),
+        FakeHttpResponse(200, b"{}", {"Content-Type": "application/json"}),
+    ]
+    responses[1].headers = HeaderPairs(
+        [
+            ("Content-Type", "application/json"),
+            ("Content-Length", "2"),
+            ("Content-Length", "2"),
+        ]
+    )
+    for response in responses:
+        source = _token_source(opener=FakeOpener([response]))
+        source._tokens = {}
+        with pytest.raises(safe_submit.SafeSubmitError):
+            source.get_token(
+                client_id=PROVISION_JOB_CLIENT_ID,
+                resource=safe_submit.ARM_OAUTH_RESOURCE,
+                timeout_seconds=15,
+            )
+
+
+@pytest.mark.parametrize(
+    ("pairs", "body", "url", "expected"),
+    [
+        ([("Content-Type", "application/json")], b"{}", "", "arm_response_invalid"),
+        (
+            [("Content-Type", "application/json"), ("Content-Length", "02")],
+            b"{}",
+            "",
+            "arm_response_invalid",
+        ),
+        (
+            [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "2"),
+                ("Transfer-Encoding", "chunked"),
+            ],
+            b"{}",
+            "",
+            "arm_response_invalid",
+        ),
+        (
+            [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "2"),
+                ("Content-Range", "bytes 0-1/2"),
+            ],
+            b"{}",
+            "",
+            "arm_response_invalid",
+        ),
+        (
+            [
+                ("Content-Type", "application/json"),
+                ("Content-Length", "2"),
+                ("Content-Encoding", "gzip"),
+            ],
+            b"{}",
+            "",
+            "arm_response_invalid",
+        ),
+        (
+            [("Content-Type", "application/json"), ("Content-Length", "3")],
+            b"{}",
+            "",
+            "arm_response_invalid",
+        ),
+        (
+            [("Content-Type", "application/json"), ("Content-Length", "2")],
+            b"{}",
+            "https://redirect.invalid",
+            "arm_redirect_refused",
+        ),
+    ],
+)
+def test_arm_get_rejects_ambiguous_framing_and_wrong_final_url(
+    pairs: list[tuple[str, str]], body: bytes, url: str, expected: str
+) -> None:
+    response = FakeHttpResponse(200, body, url=url)
+    response.headers = HeaderPairs(pairs)
+    opener = FakeOpener([response])
+    transport = _arm_transport(opener)
+    target_id = (
+        f"{transport.config.target_group_id}/providers/"
+        "Microsoft.DBforPostgreSQL/flexibleServers/cnr-framing"
+    )
+    with pytest.raises(safe_submit.SafeSubmitError, match=expected):
+        transport.request(
+            "GET",
+            target_id,
+            api_version="2024-08-01",
+            timeout_seconds=30,
+        )
+    assert len(opener.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("extra", "length"),
+    [
+        ([("Content-Length", "2")], "2"),
+        ([("Transfer-Encoding", "chunked")], "2"),
+        ([("Content-Range", "bytes 0-1/2")], "2"),
+        ([("Content-Encoding", "gzip")], "2"),
+        ([], "3"),
+    ],
+)
+def test_marker_get_preserves_presence_on_ambiguous_framing(
+    extra: list[tuple[str, str]], length: str
+) -> None:
+    raw = b"{}"
+    response = FakeHttpResponse(200, raw)
+    response.headers = HeaderPairs(
+        [("Content-Type", "application/json"), ("Content-Length", length), *extra]
+    )
+    opener = FakeOpener([response])
+    with pytest.raises(safe_submit.MarkerPresentInvalid):
+        _blob_store(opener).read("cleanup", REHEARSAL_ID)
+    assert len(opener.requests) == 1
+
+
+def test_mutation_auth_failure_does_not_dispatch_and_service_failure_is_unknown() -> (
+    None
+):
+    identity = FakeOpener([TimeoutError("secret must not escape")])
+    source = _token_source(opener=identity)
+    source._tokens = {}
+    service = FakeOpener([])
+    config = _config(
+        provision_client_id=PROVISION_JOB_CLIENT_ID,
+        provision_principal_id=PROVISION_JOB_PRINCIPAL_ID,
+    )
+    transport = safe_submit.AzureArmTransport(
+        config,
+        source,
+        action="provision",
+        client_id=PROVISION_JOB_CLIENT_ID,
+        opener=service,
+        monotonic=lambda: 1.0,
+        deadline=lambda _: nullcontext(),
+    )
+    target_id = (
+        f"{config.target_group_id}/providers/"
+        "Microsoft.DBforPostgreSQL/flexibleServers/cnr-unknown"
+    )
+    with pytest.raises(safe_submit.SafeSubmitError) as raised:
+        transport.request(
+            "PUT",
+            target_id,
+            api_version="2024-08-01",
+            body={},
+            headers={"If-None-Match": "*"},
+            timeout_seconds=30,
+        )
+    assert "secret" not in str(raised.value)
+    assert len(identity.requests) == 1 and service.requests == []
+
+    service.responses.append(TimeoutError("ambiguous provider failure"))
+    transport = _arm_transport(service)
+    with pytest.raises(safe_submit.ArmOutcomeUnknown):
+        transport.request(
+            "PUT",
+            target_id,
+            api_version="2024-08-01",
+            body={},
+            headers={"If-None-Match": "*"},
+            timeout_seconds=30,
+        )
+    assert len(service.requests) == 1
+
+
+def test_arm_rejects_header_override_and_action_confusion_before_io() -> None:
+    opener = FakeOpener([])
+    provision = _arm_transport(opener)
+    target_id = (
+        f"{provision.config.target_group_id}/providers/"
+        "Microsoft.DBforPostgreSQL/flexibleServers/cnr-method"
+    )
+    with pytest.raises(safe_submit.SafeSubmitError, match="arm_request_invalid"):
+        provision.request(
+            "GET",
+            target_id,
+            api_version="2024-08-01",
+            headers={"Authorization": "Bearer ambient"},
+            timeout_seconds=30,
+        )
+    with pytest.raises(safe_submit.SafeSubmitError, match="arm_request_invalid"):
+        provision.request(
+            "DELETE",
+            target_id,
+            api_version="2024-08-01",
+            timeout_seconds=30,
+        )
+    cleanup = _arm_transport(opener, action="cleanup")
+    with pytest.raises(safe_submit.SafeSubmitError, match="arm_request_invalid"):
+        cleanup.request(
+            "PUT",
+            target_id,
+            api_version="2024-08-01",
+            body={},
+            headers={"If-None-Match": "*"},
+            timeout_seconds=30,
+        )
+    assert opener.requests == []
 
 
 def test_canonical_contract_is_pinned_and_dormant() -> None:
