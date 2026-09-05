@@ -377,3 +377,14 @@ Nothing consumes these future ingress sources yet: public path behavior is
 unchanged, dependency assembly and workflow integration remain false, and no
 network, Azure, restore, sanitizer, or cleanup action was added. See the
 [authority-seal flight plan](flight-plans/2026-09-05-staging-launch-authority-seals.md).
+
+Provision evidence ingress now also has a dormant one-shot private reader. It
+revalidates the sealed receipt, canonical provision launch record, ordered
+versioned selectors, execution identity, and launch expiry using a required
+shared trusted UTC clock around one Storage-token request, seven exact Blob
+GETs, one Vault-token request, and one exact-version HMAC GET.
+It returns only sealed in-memory bytes and binding digests; it performs no disk
+materialization or bundle validation. The future dependency assembler must
+recheck that carrier against the same receipt/record before passing its detached
+byte map to `validate_bundle_snapshot_bytes` with the pinned evidence policy and
+shared trusted clock. See the [private evidence-reader flight plan](flight-plans/2026-09-05-staging-private-evidence-reader.md).

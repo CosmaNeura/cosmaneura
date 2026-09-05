@@ -238,6 +238,17 @@ and no reader, workflow, Terraform, cleanup, restore, or activation behavior is
 enabled. See the
 [authority-seal flight plan](flight-plans/2026-09-05-staging-launch-authority-seals.md).
 
+The next dormant slice consumes those provision authorities without accepting
+paths or selector overrides. A burn-on-entry reader uses only the provision
+UAMI for one Storage token, the six ordered evidence versions and one
+attestation version, then one Vault token and the exact HMAC secret version.
+Strict framing, media, size, final-URL, decoded-key, digest, execution, and
+90-second deadline checks plus launch-expiry rechecks against the shared
+trusted UTC produce a sealed in-memory carrier. Dependency
+assembly, evidence validation with the shared UTC, infrastructure binding,
+workflow integration, and every activation flag remain unchanged and false;
+see the [private evidence-reader flight plan](flight-plans/2026-09-05-staging-private-evidence-reader.md).
+
 ## Dormant restore-sanitizer contract
 
 `restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.

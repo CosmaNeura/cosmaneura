@@ -48,9 +48,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "f89bec35f6df02325c9032a688338b29a3fa6acd48b930ca92f7e0e4121440a6"
+POLICY_SHA256 = "50fc9ac6e061e2d00f7552bfdc6e40bd5998521a66cbc097b85920fcd97730c0"
 POLICY_TEMPLATE_SHA256 = (
-    "c5decfa37782c5ab4e280cc56fa2e9ebcd018c6dffaceb752d2b1a9ede439e74"
+    "e2576b942dd8fd236f7820f470c2f0b9763a723f1c78de8fb85524ef68e07904"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")

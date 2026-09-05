@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "266d431c99775d9092452450f9020cd1e981922c4040f2fe048af5d18837c0f4"
+CANONICAL_POLICY_SHA256 = "5d857242b4775e5b89833395fa4561af80a50b800d7b7bcbe562d94aabad9a79"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -493,6 +493,7 @@ def _cross_bind(policy: dict[str, Any]) -> None:
     provision_identity = identities["jobs"]["provision"]
     cleanup_identity = identities["jobs"]["cleanup"]
     runtime_retrieval = runtime_ingress["retrieval"]
+    evidence_retrieval = blob["retrieval"]
     secret_retrieval = secret["retrieval"]
     launch_retrieval = mailbox["launch_record_retrieval"]
     receipt_retrieval = mailbox["execution_receipt_handoff"]["retrieval"]
@@ -565,6 +566,93 @@ def _cross_bind(policy: dict[str, Any]) -> None:
         != [{"name": "api-version", "value": secret_retrieval["api_version"]}]
         or secret_retrieval["maximum_response_bytes"]
         <= root["maximum_bytes"]
+        or blob["reader_status"] != "dormant_implemented_unintegrated"
+        or evidence_retrieval["kind"]
+        != "managed-identity-versioned-provision-material-get-v1"
+        or evidence_retrieval["method"] != "GET"
+        or evidence_retrieval["successful_status"] != 200
+        or evidence_retrieval["exact_version_only"] is not True
+        or any(
+            evidence_retrieval[name] is not False
+            for name in (
+                "listing_permitted",
+                "polling_permitted",
+                "retry_permitted",
+                "redirects_permitted",
+                "ambient_credential_permitted",
+                "ambient_proxy_permitted",
+                "caller_selector_override_permitted",
+                "disk_materialization_permitted",
+                "content_range_permitted",
+                "transfer_encoding_permitted",
+                "non_success_body_exposed",
+            )
+        )
+        or evidence_retrieval["content_length_required"] is not True
+        or evidence_retrieval["one_shot_reader_required"] is not True
+        or evidence_retrieval["authority_and_execution_recheck"]
+        != "before-and-after-each-stage"
+        or evidence_retrieval["trusted_utc_expiry_recheck"]
+        != "before-and-after-each-stage"
+        or evidence_retrieval["maximum_elapsed_seconds"] != 90
+        or evidence_retrieval["maximum_request_timeout_seconds"] != 15
+        or tuple(evidence_retrieval["evidence_file_media_types"])
+        != tuple(blob["objects"]["exact_evidence_file_names"])
+        or evidence_retrieval["evidence_file_media_types"]
+        != {
+            "SHA256SUMS": "text/plain",
+            "candidate.json": "application/json",
+            "evidence-manifest.json": "application/json",
+            "inventory.json": "application/json",
+            "quiescence.json": "application/json",
+            "server-scope.json": "application/json",
+        }
+        or evidence_retrieval["maximum_attempts_per_object"] != 1
+        or evidence_retrieval["maximum_evidence_object_get_requests"]
+        != len(blob["objects"]["exact_evidence_file_names"])
+        or evidence_retrieval["maximum_attestation_object_get_requests"] != 1
+        or evidence_retrieval["maximum_storage_token_requests"] != 1
+        or evidence_retrieval["maximum_vault_token_requests"] != 1
+        or evidence_retrieval["maximum_hmac_secret_get_requests"] != 1
+        or evidence_retrieval["maximum_total_http_exchanges"]
+        != evidence_retrieval["maximum_evidence_object_get_requests"]
+        + evidence_retrieval["maximum_attestation_object_get_requests"]
+        + evidence_retrieval["maximum_storage_token_requests"]
+        + evidence_retrieval["maximum_vault_token_requests"]
+        + evidence_retrieval["maximum_hmac_secret_get_requests"]
+        or evidence_retrieval["maximum_total_evidence_bytes"]
+        != len(blob["objects"]["exact_evidence_file_names"])
+        * blob["objects"]["evidence_file_contract"]["maximum_bytes_each"]
+        or evidence_retrieval["github_attestation_bundle_media_type"]
+        != policy["external_runtime_record"]["signature"]["format"]
+        or evidence_retrieval["request_query_parameters"]
+        or evidence_retrieval["method"] != secret_retrieval["method"]
+        or evidence_retrieval["successful_status"]
+        != secret_retrieval["successful_status"]
+        or any(
+            evidence_retrieval[name] != runtime_retrieval[name]
+            for name in (
+                "service_api_version",
+                "managed_identity_api_version",
+                "managed_identity_endpoint_source",
+                "managed_identity_secret_header_source",
+                "managed_identity_response_maximum_bytes",
+                "managed_identity_response_required_fields",
+                "managed_identity_response_optional_bound_fields",
+                "managed_identity_response_unknown_fields_permitted",
+                "managed_identity_expiry_skew_seconds",
+                "managed_identity_maximum_token_lifetime_seconds",
+                "redirects_permitted",
+                "ambient_credential_permitted",
+                "ambient_proxy_permitted",
+                "minimum_tls_version",
+                "runtime_ca_bundle_path",
+                "request_query_parameters",
+                "content_encoding",
+                "content_length_required",
+                "non_success_body_exposed",
+            )
+        )
         or launch_retrieval["maximum_total_http_requests"]
         != launch_retrieval["maximum_object_get_requests"]
         + launch_retrieval["maximum_managed_identity_token_requests"]

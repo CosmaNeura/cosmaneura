@@ -939,6 +939,9 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
     adapter_symbols = (
         "staging_restore_runtime_adapters",
         "receive_staging_broker_launch_receipt",
+        "read_staging_restore_evidence_material",
+        "build_private_evidence_material_reader",
+        "ManagedIdentityPrivateEvidenceMaterialReader",
         "ManagedIdentityTokenSource",
         "AzureSourceObservationProvider",
         "DigestPinnedGitHubCliVerifier",
@@ -971,6 +974,18 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
                 not in {
                     "staging_restore_runtime_adapters",
                     "DigestPinnedGitHubCliVerifier",
+                }
+            )
+        elif path.name == "read_staging_restore_evidence_material.py":
+            forbidden_symbols = tuple(
+                symbol
+                for symbol in adapter_symbols
+                if symbol
+                not in {
+                    "staging_restore_runtime_adapters",
+                    "read_staging_restore_evidence_material",
+                    "build_private_evidence_material_reader",
+                    "ManagedIdentityPrivateEvidenceMaterialReader",
                 }
             )
         elif path.name == "read_staging_restore_launch_record.py":
