@@ -137,6 +137,7 @@ def test_reader_fills_only_the_launch_material_dependency_seam(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policy = helpers._configured_policy()
+    launch_helpers._configure_trusted_root(policy)
     receipt_transport = mailbox_helpers.FakeTransport(
         launch_helpers._mailbox_objects(policy)
     )
@@ -146,9 +147,12 @@ def test_reader_fills_only_the_launch_material_dependency_seam(
 
     def runtime_reader(**kwargs: Any) -> Any:
         runtime_calls.append(kwargs)
-        return launch_material.AuthenticatedRuntimeRecordMaterial(
-            record_bytes=launch_helpers.RUNTIME_BYTES,
-            signature_verification=launch_helpers._signature_proof(policy),
+        return (
+            launch_material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+                record_bytes=launch_helpers.RUNTIME_BYTES,
+                trusted_root_bytes=launch_helpers.TRUSTED_ROOT_BYTES,
+                signature_verification=launch_helpers._signature_proof(policy),
+            )
         )
 
     timeline = mailbox_helpers.Clock()

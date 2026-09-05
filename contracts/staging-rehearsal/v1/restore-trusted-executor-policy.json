@@ -75,6 +75,24 @@
     ],
     "additional_public_inputs_permitted": false
   },
+  "private_runtime_ingress": {
+    "status": "dormant_unintegrated_contract",
+    "authority_preservation_implemented": true,
+    "in_memory_evidence_validator_available": true,
+    "dependency_assembly_implemented": false,
+    "workflow_integrated": false,
+    "future_evidence_bundle": {
+      "type": "exact_builtin_dict_of_immutable_bytes",
+      "validator": "scripts.validate_staging_evidence_manifest.validate_bundle_snapshot_bytes",
+      "selector_source_after_dependency_assembly": "validated_provision_launch_record.evidence_file_authorities"
+    },
+    "future_github_attestation_bundle_selector_source": "validated_provision_launch_record.attestation_bundle_authority",
+    "future_server_scope_hmac_key_selector_source": "validated_provision_launch_record.server_scope_hmac_key_authority",
+    "future_trusted_root_bytes_source": "authenticated_runtime_record_material.trusted_root_bytes",
+    "future_cleanup_mode_source": "validated_cleanup_launch_record.cleanup_mode",
+    "parent_launch_record_validation_required_before_selector_use": true,
+    "caller_path_or_uri_override_permitted_after_integration": false
+  },
   "inputs": {
     "one_read_required": true,
     "evidence_bundle": {

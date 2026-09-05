@@ -21,7 +21,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "39bc8d831e81e817868f8cb6758a54a5826c53dc9f4bfeea50781c1a4b0b90a6"
+    "f89bec35f6df02325c9032a688338b29a3fa6acd48b930ca92f7e0e4121440a6"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
@@ -66,6 +66,14 @@ LAUNCH_CALLS = [
     "runtime_record",
     "launch_binding",
 ]
+
+
+def _configured_runtime_policy() -> dict[str, Any]:
+    policy = runtime_helpers._configured_policy()
+    policy["evidence_ingress"]["private_versioned_secret_source"]["secrets"][
+        "github_trusted_root"
+    ]["sha256"] = executor.launch_binding._digest(TRUSTED_ROOT_BYTES)
+    return policy
 
 
 def _canonical(value: Any) -> bytes:
@@ -229,7 +237,7 @@ class Harness:
         self.provider = _sealed_provider()
         self.attestation = _sealed_attestation()
         self.final_binding = _sealed_final_binding()
-        self.runtime_policy = runtime_helpers._configured_policy()
+        self.runtime_policy = _configured_runtime_policy()
         envelope, safe_policy = executor.safe_submit.validate_canonical_contracts()
         config = executor.safe_submit.config_from_policies(
             envelope, safe_policy, executable=False
@@ -280,13 +288,6 @@ class Harness:
                 reference=self.references["provision"],
             )
         )
-        self.launch_record_bytes = b'{"launch":true}'
-        launch_record_sha256 = executor.launch_binding._digest(self.launch_record_bytes)
-        launch_record_uri = (
-            "https://restorelaunch.blob.core.windows.net/"
-            "restore-provision-launch-v1/"
-            f"{launch_record_sha256[7:]}.json"
-        )
         evidence_names = self.runtime_policy["launch_binding"]["launch_record"][
             "provision"
         ]["exact_evidence_file_names"]
@@ -294,33 +295,79 @@ class Harness:
             name: executor.launch_binding._digest((self.bundle_dir / name).read_bytes())
             for name in evidence_names
         }
-        self.snapshot = _sealed_snapshot(self.expected_file_sha256s)
-        self.launch_record = object.__new__(
-            executor.launch_binding.ValidatedLaunchRecord
-        )
-        launch_values = {
-            "record_bytes": self.launch_record_bytes,
-            "record_sha256": launch_record_sha256,
-            "record_uri": launch_record_uri,
+        rehearsal_id = self.request.rehearsal_id
+        evidence_ingress = self.runtime_policy["evidence_ingress"]
+        blob_source = evidence_ingress["private_restore_evidence_container"]
+        secret_source = evidence_ingress["private_versioned_secret_source"]
+        evidence_files = {
+            name: {
+                "versioned_https_uri": (
+                    f"https://{blob_source['account_host']}/{blob_source['container_name']}"
+                    f"/{rehearsal_id}/{name}?versionid=evidence-version-{index}"
+                ),
+                "version_id": f"evidence-version-{index}",
+                "sha256": self.expected_file_sha256s[name],
+            }
+            for index, name in enumerate(evidence_names, 1)
+        }
+        root = secret_source["secrets"]["github_trusted_root"]
+        hmac = secret_source["secrets"]["server_scope_hmac_key"]
+        launch_document = {
+            "schema_version": 1,
+            "launch_id": "launch-0123456789abcdef",
+            "policy_id": self.runtime_policy["policy_id"],
+            "policy_binding_sha256": executor.runtime_binding._policy_binding_digest(
+                self.runtime_policy
+            ),
             "action": "provision",
-            "rehearsal_id": self.request.rehearsal_id,
-            "created_at": NOW - timedelta(minutes=1),
-            "expires_at": NOW + timedelta(hours=6),
-            "runtime_record_sha256": runtime_record_sha256,
+            "repository": "CosmaNeura/cosmaneura",
+            "protected_ref": "refs/heads/master",
             "workflow_sha": self.request.workflow_sha,
             "run_id": self.request.run_id,
             "run_attempt": self.request.run_attempt,
-            "evidence_file_sha256s": tuple(self.expected_file_sha256s.items()),
-            "attestation_bundle_sha256": executor.launch_binding._digest(
-                ATTESTATION_BYTES
-            ),
-            "server_scope_hmac_key_sha256": executor.launch_binding._digest(KEY_BYTES),
-            "trusted_root_sha256": executor.launch_binding._digest(TRUSTED_ROOT_BYTES),
-            "ttl_hours": 6,
-            "_seal": executor.launch_binding._LAUNCH_RECORD_SEAL,
+            "runtime_record_sha256": runtime_record_sha256,
+            "github_trusted_root": {
+                "versioned_https_uri": root["versioned_https_uri"],
+                "version": root["version"],
+                "sha256": root["sha256"],
+            },
+            "created_at": "2026-09-04T11:59:00Z",
+            "expires_at": "2026-09-04T17:59:00Z",
+            "payload": {
+                "rehearsal_id": rehearsal_id,
+                "evidence_files": evidence_files,
+                "github_attestation_bundle": {
+                    "versioned_https_uri": (
+                        f"https://{blob_source['account_host']}/{blob_source['container_name']}"
+                        f"/{rehearsal_id}/attestation.json?versionid=attestation-version"
+                    ),
+                    "version_id": "attestation-version",
+                    "sha256": executor.launch_binding._digest(ATTESTATION_BYTES),
+                },
+                "server_scope_hmac_key": {
+                    "versioned_https_uri": hmac["versioned_https_uri"],
+                    "version": hmac["version"],
+                    "encoding": "base64url-no-padding",
+                    "decoded_sha256": executor.launch_binding._digest(KEY_BYTES),
+                },
+                "ttl_hours": 6,
+            },
         }
-        for name, value in launch_values.items():
-            object.__setattr__(self.launch_record, name, value)
+        self.launch_record_bytes = executor.launch_binding._canonical(launch_document)
+        launch_record_sha256 = executor.launch_binding._digest(self.launch_record_bytes)
+        mailbox = self.runtime_policy["launch_binding"]["mailbox"]
+        launch_record_uri = (
+            f"https://{mailbox['account_host']}/"
+            f"{mailbox['container_names']['provision']}/"
+            f"{launch_record_sha256[7:]}.json"
+        )
+        self.snapshot = _sealed_snapshot(self.expected_file_sha256s)
+        self.launch_record = executor.launch_binding.validate_launch_record(
+            self.runtime_policy,
+            self.launch_record_bytes,
+            record_sha256=launch_record_sha256,
+            record_uri=launch_record_uri,
+        )
         self.authenticated_receipt = object.__new__(
             executor.launch_binding.AuthenticatedBrokerLaunchReceipt
         )
@@ -362,11 +409,15 @@ class Harness:
         }
         for name, value in received_values.items():
             object.__setattr__(self.received_receipt, name, value)
+        authenticated_runtime_record = executor.launch_material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+            record_bytes=self.runtime_record_bytes,
+            trusted_root_bytes=TRUSTED_ROOT_BYTES,
+            signature_verification=self.runtime_signature,
+        )
         self.launch_material = executor.ExecutorLaunchMaterial(
             authenticated_receipt=self.authenticated_receipt,
             launch_record_bytes=self.launch_record_bytes,
-            runtime_record_bytes=self.runtime_record_bytes,
-            runtime_signature_verification=self.runtime_signature,
+            authenticated_runtime_record=authenticated_runtime_record,
         )
         submitter = object.__new__(executor.safe_submit.SafeRestoreSubmitter)
         submitter.config = config
@@ -600,7 +651,7 @@ def _execute(
     return executor._execute_trusted_restore_with_dependencies(
         policy_bytes=policy_bytes,
         policy_sha256=policy_sha256,
-        runtime_policy=runtime_policy or runtime_helpers._configured_policy(),
+        runtime_policy=runtime_policy or _configured_runtime_policy(),
         **inputs,
         dependencies=dependencies,
         clock=clock,
@@ -633,6 +684,24 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
         "external_record_source": "authenticated_broker_launch_receipt_runtime_pointer",
         "image_digest_source": "verified_external_runtime_record",
         "caller_override_permitted": False,
+    }
+    assert policy["private_runtime_ingress"] == {
+        "status": "dormant_unintegrated_contract",
+        "authority_preservation_implemented": True,
+        "in_memory_evidence_validator_available": True,
+        "dependency_assembly_implemented": False,
+        "workflow_integrated": False,
+        "future_evidence_bundle": {
+            "type": "exact_builtin_dict_of_immutable_bytes",
+            "validator": "scripts.validate_staging_evidence_manifest.validate_bundle_snapshot_bytes",
+            "selector_source_after_dependency_assembly": "validated_provision_launch_record.evidence_file_authorities",
+        },
+        "future_github_attestation_bundle_selector_source": "validated_provision_launch_record.attestation_bundle_authority",
+        "future_server_scope_hmac_key_selector_source": "validated_provision_launch_record.server_scope_hmac_key_authority",
+        "future_trusted_root_bytes_source": "authenticated_runtime_record_material.trusted_root_bytes",
+        "future_cleanup_mode_source": "validated_cleanup_launch_record.cleanup_mode",
+        "parent_launch_record_validation_required_before_selector_use": True,
+        "caller_path_or_uri_override_permitted_after_integration": False,
     }
     launch_adapter = policy["adapters"]["launch_binding"]
     assert launch_adapter["implemented"] is False
@@ -857,9 +926,39 @@ def test_malformed_sealed_launch_result_is_bounded(
     )
 
     with pytest.raises(
-        executor.TrustedExecutorFailure, match="launch_binding.result_invalid"
+        executor.TrustedExecutorFailure, match="launch_record.result_invalid"
     ):
         _execute(inputs, dependencies, lambda: NOW)
+
+
+def test_carried_root_must_match_validated_launch_root(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+    alternate_root = b'{"certificateAuthorities":[{}],"timestampAuthorities":[]}\n'
+    alternate_signature = executor.runtime_binding.VerifiedExternalRuntimeRecordSignature._mint_from_reviewed_verifier(
+        record_sha256=harness.runtime_signature.record_sha256,
+        bundle_sha256=harness.runtime_signature.bundle_sha256,
+        trusted_root_sha256=executor.launch_binding._digest(alternate_root),
+        certificate_oidc_issuer=harness.runtime_signature.certificate_oidc_issuer,
+        certificate_identity=harness.runtime_signature.certificate_identity,
+    )
+    alternate_runtime_material = executor.launch_material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+        record_bytes=harness.runtime_record_bytes,
+        trusted_root_bytes=alternate_root,
+        signature_verification=alternate_signature,
+    )
+    harness.launch_material = executor.ExecutorLaunchMaterial(
+        authenticated_receipt=harness.authenticated_receipt,
+        launch_record_bytes=harness.launch_record_bytes,
+        authenticated_runtime_record=alternate_runtime_material,
+    )
+
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="launch_record.result_invalid"
+    ):
+        _run(harness, inputs, lambda: NOW)
+    assert harness.calls == LAUNCH_CALLS[:4]
 
 
 def test_generic_snapshot_from_validator_that_ignores_launch_hashes_is_rejected(
@@ -943,19 +1042,20 @@ def test_launch_must_remain_fresh_immediately_before_submit(
 
 
 @pytest.mark.parametrize(
-    "field",
+    ("path_name", "replacement"),
     [
-        "server_scope_hmac_key_sha256",
-        "attestation_bundle_sha256",
-        "trusted_root_sha256",
+        ("hmac_key_path", b"z" * 32),
+        ("attestation_bundle_path", b'{"different":true}'),
+        ("trusted_root_path", b'{"different-root":true}\n'),
     ],
 )
 def test_singleton_input_digest_mismatch_refuses_before_manifest(
-    field: str,
+    path_name: str,
+    replacement: bytes,
     inputs: dict[str, Path],
 ) -> None:
     harness = Harness(inputs)
-    object.__setattr__(harness.launch_record, field, f"sha256:{'0' * 64}")
+    inputs[path_name].write_bytes(replacement)
 
     with pytest.raises(executor.TrustedExecutorFailure, match="input.launch_binding"):
         _run(harness, inputs, lambda: NOW)
@@ -979,9 +1079,11 @@ def test_request_identity_must_match_validated_provision_launch(
     harness = Harness(inputs)
     object.__setattr__(harness.launch_record, field, value)
 
-    with pytest.raises(executor.TrustedExecutorFailure, match="request.result_invalid"):
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="launch_record.result_invalid"
+    ):
         _run(harness, inputs, lambda: NOW)
-    assert harness.calls[-1] == "request"
+    assert harness.calls == LAUNCH_CALLS[:4]
     assert "submit" not in harness.calls
 
 

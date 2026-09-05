@@ -49,3 +49,15 @@
 - Evidence required to call this dormant slice complete: exact raw SHA-256 pins for all nine dependent policies, JSON and diff checks, focused unit tests proving refusal and one-process/read/submit invariants, change-budget compliance, and independent review against the final commit.
 - Follow-up owners: infrastructure must supply the exact private job, image, identity, subnet, network, evidence-delivery, verifier/root, marker-store, RBAC, WORM, and provider-fidelity evidence. Workflow integration and restore activation remain separate Tier-2 changes.
 - Documentation and contract records to update: this flight plan, the server-scope evidence runbook, the synthetic rehearsal runbook, and `restore-trusted-executor-policy.json`.
+
+## Dormant authority-preserving follow-up
+
+The launch validator now retains exact versioned evidence/attestation Blob
+selectors, the exact HMAC and GitHub-root Key Vault selectors, and cleanup mode
+as sealed authority bound back to canonical launch bytes. The private runtime
+reader retains its already-authenticated GitHub-root bytes in a sealed carrier,
+and the manifest validator offers an exact in-memory byte-map entry point.
+These capabilities are recorded as a dormant, unintegrated future ingress
+contract. The existing four-path public entry point remains unchanged;
+dependency assembly, cleanup execution, workflow integration, and every
+activation flag remain separate work.

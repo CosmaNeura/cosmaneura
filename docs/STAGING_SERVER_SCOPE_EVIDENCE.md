@@ -365,3 +365,15 @@ remain test seams. The private-endpoint ID is metadata, not routing proof, so
 private DNS, public-network, RBAC, and egress evidence remain activation holds.
 Default dependency assembly still refuses and all gates remain false; see the
 [launch-record reader flight plan](flight-plans/2026-09-04-staging-launch-record-private-reader.md).
+
+The next dormant slice preserves the validated launch authority instead of
+discarding selector detail: each evidence and attestation Blob URI/version,
+the HMAC and GitHub-root Key Vault URI/version/encoding, and cleanup mode remain
+sealed and bound to the canonical launch bytes. The runtime reader also keeps
+the exact authenticated GitHub-root bytes in a sealed same-process carrier.
+An in-memory evidence validator accepts only an exact built-in mapping of
+immutable bytes and snapshots it before applying the existing full validation.
+Nothing consumes these future ingress sources yet: public path behavior is
+unchanged, dependency assembly and workflow integration remain false, and no
+network, Azure, restore, sanitizer, or cleanup action was added. See the
+[authority-seal flight plan](flight-plans/2026-09-05-staging-launch-authority-seals.md).

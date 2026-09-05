@@ -39,6 +39,8 @@ POINTER_ENV_TO_FIELD = {
     "COSMANEURA_RUNTIME_SIGNATURE_BUNDLE_SHA256": "signature_bundle_sha256",
 }
 JOB_KINDS = ("provision", "cleanup")
+MAXIMUM_AUTHORITY_URI_CHARACTERS = 2_048
+MAXIMUM_AUTHORITY_VERSION_CHARACTERS = 1_024
 JOB_ALLOWED_ROOT = frozenset({"id", "name", "type", "location", "identity", "properties", "systemData"})
 JOB_REQUIRED_ROOT = frozenset({"id", "name", "type", "location", "identity", "properties"})
 PROPERTY_COMPUTED = frozenset({"provisioningState", "eventStreamEndpoint", "outboundIpAddresses"})
@@ -95,7 +97,7 @@ def _exact_time(value: Any, code: str) -> datetime:
         _fail(code)
     return value.astimezone(UTC)
 def _versioned_blob(value: Any, *, host: str, container: str, rehearsal_id: str, code: str) -> tuple[str, str]:
-    if type(value) is not str:
+    if type(value) is not str or not 1 <= len(value) <= MAXIMUM_AUTHORITY_URI_CHARACTERS:
         _fail(code)
     try:
         uri = urllib.parse.urlsplit(value)
@@ -103,7 +105,10 @@ def _versioned_blob(value: Any, *, host: str, container: str, rehearsal_id: str,
     except ValueError:
         _fail(code)
     if (
-        uri.scheme != "https"
+        not value.startswith("https://")
+        or value != uri.geturl()
+        or any(character in value for character in "\r\n\t")
+        or uri.scheme != "https"
         or uri.hostname != host
         or uri.netloc != host
         or not uri.path.startswith(f"/{container}/{rehearsal_id}/")
@@ -113,18 +118,24 @@ def _versioned_blob(value: Any, *, host: str, container: str, rehearsal_id: str,
         or set(query) != {"versionid"}
         or len(query["versionid"]) != 1
         or not query["versionid"][0]
+        or len(query["versionid"][0]) > MAXIMUM_AUTHORITY_VERSION_CHARACTERS
     ):
         _fail(code)
     return value, query["versionid"][0]
 def _versioned_secret(value: Any, *, host: str, version: Any, code: str) -> None:
-    if type(value) is not str or type(version) is not str:
+    if (
+        type(value) is not str
+        or not 1 <= len(value) <= MAXIMUM_AUTHORITY_URI_CHARACTERS
+        or type(version) is not str
+        or not 1 <= len(version) <= MAXIMUM_AUTHORITY_VERSION_CHARACTERS
+    ):
         _fail(code)
     try:
         uri = urllib.parse.urlsplit(value)
     except ValueError:
         _fail(code)
-    parts = tuple(part for part in uri.path.split("/") if part)
-    if uri.scheme != "https" or uri.hostname != host or uri.netloc != host or uri.query or uri.fragment or len(parts) != 3 or parts[0] != "secrets" or parts[2] != version:
+    parts = tuple(uri.path.split("/"))
+    if not value.startswith("https://") or value != uri.geturl() or any(character in value for character in "\r\n\t") or uri.scheme != "https" or uri.hostname != host or uri.netloc != host or uri.query or uri.fragment or len(parts) != 4 or parts[:2] != ("", "secrets") or runtime_binding.KEY_VAULT_SECRET_NAME_RE.fullmatch(parts[2]) is None or runtime_binding.KEY_VAULT_SECRET_VERSION_RE.fullmatch(parts[3]) is None or parts[3] != version:
         _fail(code)
 def validate_launch_binding_policy(policy: Any) -> dict[str, Any]:
     document = runtime_binding.validate_runtime_binding_policy(policy)
@@ -206,6 +217,8 @@ _ARM_GET_SEAL = object()
 _JOB_OBSERVATION_SEAL = object()
 _EXECUTION_OBSERVATION_SEAL = object()
 _LAUNCH_RECORD_SEAL = object()
+_VERSIONED_BLOB_AUTHORITY_SEAL = object()
+_VERSIONED_SECRET_AUTHORITY_SEAL = object()
 _VERIFIED_OIDC_SEAL = object()
 _START_AUTHORIZATION_SEAL = object()
 _START_RESPONSE_SEAL = object()
@@ -400,6 +413,69 @@ def validate_job_configuration_observation(policy: Any, *, job_kind: str, respon
         "runtime_reference": dict(pointer),
     })
 @dataclass(frozen=True, slots=True, init=False)
+class ValidatedVersionedBlobAuthority:
+    logical_name: str
+    versioned_https_uri: str
+    version_id: str
+    sha256: str
+    _authority_sha256: str = dataclass_field(repr=False, compare=False)
+    _seal: object = dataclass_field(repr=False, compare=False)
+    def __init__(self) -> None:
+        _fail("launch_record.authority_unsealed")
+    def _is_validated(self) -> bool:
+        try:
+            snapshot = {"logical_name": self.logical_name, "versioned_https_uri": self.versioned_https_uri, "version_id": self.version_id, "sha256": self.sha256}
+            return (
+                type(self) is ValidatedVersionedBlobAuthority
+                and getattr(self, "_seal", None) is _VERSIONED_BLOB_AUTHORITY_SEAL
+                and type(self.logical_name) is str
+                and 0 < len(self.logical_name) <= 128
+                and type(self.versioned_https_uri) is str
+                and 0 < len(self.versioned_https_uri) <= MAXIMUM_AUTHORITY_URI_CHARACTERS
+                and self.versioned_https_uri.startswith("https://")
+                and type(self.version_id) is str
+                and 0 < len(self.version_id) <= MAXIMUM_AUTHORITY_VERSION_CHARACTERS
+                and _matches(DIGEST_RE, self.sha256)
+                and type(self._authority_sha256) is str
+                and _matches(DIGEST_RE, self._authority_sha256)
+                and self._authority_sha256 == _digest(_canonical(snapshot))
+            )
+        except Exception:
+            return False
+@dataclass(frozen=True, slots=True, init=False)
+class ValidatedVersionedSecretAuthority:
+    logical_name: str
+    versioned_https_uri: str
+    version: str
+    encoding: str
+    material_sha256: str
+    _authority_sha256: str = dataclass_field(repr=False, compare=False)
+    _seal: object = dataclass_field(repr=False, compare=False)
+    def __init__(self) -> None:
+        _fail("launch_record.authority_unsealed")
+    def _is_validated(self) -> bool:
+        try:
+            snapshot = {"logical_name": self.logical_name, "versioned_https_uri": self.versioned_https_uri, "version": self.version, "encoding": self.encoding, "material_sha256": self.material_sha256}
+            return (
+                type(self) is ValidatedVersionedSecretAuthority
+                and getattr(self, "_seal", None) is _VERSIONED_SECRET_AUTHORITY_SEAL
+                and type(self.logical_name) is str
+                and 0 < len(self.logical_name) <= 128
+                and type(self.versioned_https_uri) is str
+                and 0 < len(self.versioned_https_uri) <= MAXIMUM_AUTHORITY_URI_CHARACTERS
+                and self.versioned_https_uri.startswith("https://")
+                and type(self.version) is str
+                and 0 < len(self.version) <= MAXIMUM_AUTHORITY_VERSION_CHARACTERS
+                and type(self.encoding) is str
+                and self.encoding in {"base64url-no-padding", "utf-8"}
+                and _matches(DIGEST_RE, self.material_sha256)
+                and type(self._authority_sha256) is str
+                and _matches(DIGEST_RE, self._authority_sha256)
+                and self._authority_sha256 == _digest(_canonical(snapshot))
+            )
+        except Exception:
+            return False
+@dataclass(frozen=True, slots=True, init=False)
 class ValidatedLaunchRecord:
     record_bytes: bytes
     record_sha256: str
@@ -412,16 +488,127 @@ class ValidatedLaunchRecord:
     workflow_sha: str
     run_id: str
     run_attempt: str
-    evidence_file_sha256s: tuple[tuple[str, str], ...]
-    attestation_bundle_sha256: str | None
-    server_scope_hmac_key_sha256: str | None
-    trusted_root_sha256: str
+    evidence_file_authorities: tuple[ValidatedVersionedBlobAuthority, ...]
+    attestation_bundle_authority: ValidatedVersionedBlobAuthority | None
+    server_scope_hmac_key_authority: ValidatedVersionedSecretAuthority | None
+    trusted_root_authority: ValidatedVersionedSecretAuthority
+    cleanup_mode: str | None
     ttl_hours: int | None
+    _record_uri_sha256: str = dataclass_field(repr=False, compare=False)
     _seal: object = dataclass_field(repr=False, compare=False)
     def __init__(self) -> None:
         _fail("launch_record.unsealed")
+    @property
+    def evidence_file_sha256s(self) -> tuple[tuple[str, str], ...]:
+        return tuple((item.logical_name, item.sha256) for item in self.evidence_file_authorities)
+    @property
+    def attestation_bundle_sha256(self) -> str | None:
+        authority = self.attestation_bundle_authority
+        return None if authority is None else authority.sha256
+    @property
+    def server_scope_hmac_key_sha256(self) -> str | None:
+        authority = self.server_scope_hmac_key_authority
+        return None if authority is None else authority.material_sha256
+    @property
+    def trusted_root_sha256(self) -> str:
+        return self.trusted_root_authority.material_sha256
     def _is_validated(self) -> bool:
-        return type(self) is ValidatedLaunchRecord and getattr(self, "_seal", None) is _LAUNCH_RECORD_SEAL
+        try:
+            record = _parse(self.record_bytes, maximum=65_536, code="launch_record.invalid")
+            payload = record["payload"]
+            record_root = record["github_trusted_root"]
+            root = self.trusted_root_authority
+            base = (
+                type(self) is ValidatedLaunchRecord
+                and getattr(self, "_seal", None) is _LAUNCH_RECORD_SEAL
+                and type(self.record_bytes) is bytes
+                and type(self.record_sha256) is str
+                and _matches(DIGEST_RE, self.record_sha256)
+                and type(self.record_uri) is str
+                and 0 < len(self.record_uri) <= MAXIMUM_AUTHORITY_URI_CHARACTERS
+                and type(self.action) is str
+                and self.action in JOB_KINDS
+                and type(self.created_at) is datetime
+                and type(self.expires_at) is datetime
+                and type(self.runtime_record_sha256) is str
+                and _matches(DIGEST_RE, self.runtime_record_sha256)
+                and type(self.workflow_sha) is str
+                and _matches(SHA_RE, self.workflow_sha)
+                and type(self.run_id) is str
+                and _matches(UNSIGNED_RE, self.run_id)
+                and type(self.run_attempt) is str
+                and _matches(UNSIGNED_RE, self.run_attempt)
+                and self.record_bytes == _canonical(record)
+                and self.record_sha256 == _digest(self.record_bytes)
+                and type(self._record_uri_sha256) is str
+                and _matches(DIGEST_RE, self._record_uri_sha256)
+                and self._record_uri_sha256 == _digest(self.record_uri.encode("utf-8"))
+                and record["action"] == self.action
+                and record["runtime_record_sha256"] == self.runtime_record_sha256
+                and record["workflow_sha"] == self.workflow_sha
+                and record["run_id"] == self.run_id
+                and record["run_attempt"] == self.run_attempt
+                and _time(record["created_at"], "launch_record.time") == self.created_at
+                and _time(record["expires_at"], "launch_record.time") == self.expires_at
+                and type(root) is ValidatedVersionedSecretAuthority
+                and root._is_validated()
+                and root.logical_name == "github_trusted_root"
+                and root.versioned_https_uri == record_root["versioned_https_uri"]
+                and root.version == record_root["version"]
+                and root.encoding == "utf-8"
+                and root.material_sha256 == record_root["sha256"]
+            )
+            if self.action == "provision":
+                authorities = self.evidence_file_authorities
+                attestation = self.attestation_bundle_authority
+                hmac = self.server_scope_hmac_key_authority
+                evidence = payload["evidence_files"]
+                expected_evidence = tuple(
+                    (
+                        name,
+                        item["versioned_https_uri"],
+                        item["version_id"],
+                        item["sha256"],
+                    )
+                    for name, item in evidence.items()
+                )
+                return (
+                    base
+                    and type(self.rehearsal_id) is str
+                    and _matches(REHEARSAL_ID_RE, self.rehearsal_id)
+                    and type(self.ttl_hours) is int
+                    and payload["rehearsal_id"] == self.rehearsal_id
+                    and payload["ttl_hours"] == self.ttl_hours
+                    and type(authorities) is tuple
+                    and all(type(item) is ValidatedVersionedBlobAuthority and item._is_validated() for item in authorities)
+                    and tuple((item.logical_name, item.versioned_https_uri, item.version_id, item.sha256) for item in authorities) == expected_evidence
+                    and type(attestation) is ValidatedVersionedBlobAuthority
+                    and attestation._is_validated()
+                    and attestation.logical_name == "github_attestation_bundle"
+                    and (attestation.versioned_https_uri, attestation.version_id, attestation.sha256) == (payload["github_attestation_bundle"]["versioned_https_uri"], payload["github_attestation_bundle"]["version_id"], payload["github_attestation_bundle"]["sha256"])
+                    and type(hmac) is ValidatedVersionedSecretAuthority
+                    and hmac._is_validated()
+                    and hmac.logical_name == "server_scope_hmac_key"
+                    and (hmac.versioned_https_uri, hmac.version, hmac.encoding, hmac.material_sha256) == (payload["server_scope_hmac_key"]["versioned_https_uri"], payload["server_scope_hmac_key"]["version"], payload["server_scope_hmac_key"]["encoding"], payload["server_scope_hmac_key"]["decoded_sha256"])
+                    and self.cleanup_mode is None
+                )
+            return (
+                base
+                and self.action == "cleanup"
+                and type(self.cleanup_mode) is str
+                and (self.rehearsal_id is None or type(self.rehearsal_id) is str)
+                and payload["mode"] == self.cleanup_mode
+                and payload.get("rehearsal_id") == self.rehearsal_id
+                and self.cleanup_mode in {"selected_rehearsal", "bounded_sweep"}
+                and (self.cleanup_mode == "selected_rehearsal") == (self.rehearsal_id is not None)
+                and type(self.evidence_file_authorities) is tuple
+                and self.evidence_file_authorities == ()
+                and self.attestation_bundle_authority is None
+                and self.server_scope_hmac_key_authority is None
+                and self.ttl_hours is None
+            )
+        except Exception:
+            return False
 def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: str, record_uri: str) -> ValidatedLaunchRecord:
     document_policy = validate_launch_binding_policy(policy)
     contract = document_policy["launch_binding"]["launch_record"]
@@ -457,32 +644,40 @@ def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: s
     if not created < expires <= created + timedelta(hours=24):
         _fail("launch_record.time")
     mailbox = document_policy["launch_binding"]["mailbox"]
-    if type(record_uri) is not str:
+    if type(record_uri) is not str or not 1 <= len(record_uri) <= MAXIMUM_AUTHORITY_URI_CHARACTERS:
         _fail("launch_record.uri")
     try:
         uri = urllib.parse.urlsplit(record_uri)
     except ValueError:
         _fail("launch_record.uri")
     expected_path = f"/{mailbox['container_names'][action]}/{record_sha256[7:]}.json"
-    if uri.scheme != "https" or uri.netloc != mailbox["account_host"] or uri.path != expected_path or uri.query or uri.fragment:
+    if not record_uri.startswith("https://") or record_uri != uri.geturl() or any(character in record_uri for character in "\r\n\t") or uri.scheme != "https" or uri.netloc != mailbox["account_host"] or uri.path != expected_path or uri.query or uri.fragment:
         _fail("launch_record.uri")
     root = _mapping(
         record["github_trusted_root"],
         set(contract["github_trusted_root_fields"]),
         "launch_record.trusted_root",
     )
-    root_policy = document_policy["evidence_ingress"]["private_versioned_secret_source"]["secrets"]["github_trusted_root"]
+    secret_policy = document_policy["evidence_ingress"]["private_versioned_secret_source"]
+    root_policy = secret_policy["secrets"]["github_trusted_root"]
+    _versioned_secret(
+        root["versioned_https_uri"],
+        host=secret_policy["vault_host"],
+        version=root["version"],
+        code="launch_record.trusted_root",
+    )
     if root != {
         "versioned_https_uri": root_policy["versioned_https_uri"],
         "version": root_policy["version"],
         "sha256": root_policy["sha256"],
-    }:
+    } or not _matches(DIGEST_RE, root["sha256"]):
         _fail("launch_record.trusted_root")
     payload = record["payload"]
     rehearsal_id: str | None
-    evidence_file_sha256s: tuple[tuple[str, str], ...] = ()
-    attestation_bundle_sha256: str | None = None
-    server_scope_hmac_key_sha256: str | None = None
+    evidence_file_authorities: tuple[ValidatedVersionedBlobAuthority, ...] = ()
+    attestation_bundle_authority: ValidatedVersionedBlobAuthority | None = None
+    server_scope_hmac_key_authority: ValidatedVersionedSecretAuthority | None = None
+    cleanup_mode: str | None = None
     ttl_hours: int | None = None
     if action == "provision":
         provision = contract["provision"]
@@ -528,12 +723,31 @@ def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: s
             or expires != created + timedelta(hours=payload["ttl_hours"])
         ):
             _fail("launch_record.hmac")
-        evidence_file_sha256s = tuple(
-            (name, evidence[name]["sha256"])
+        evidence_file_authorities = tuple(
+            _sealed(ValidatedVersionedBlobAuthority, _VERSIONED_BLOB_AUTHORITY_SEAL, {
+                "logical_name": name,
+                "versioned_https_uri": evidence[name]["versioned_https_uri"],
+                "version_id": evidence[name]["version_id"],
+                "sha256": evidence[name]["sha256"],
+                "_authority_sha256": _digest(_canonical({"logical_name": name, "versioned_https_uri": evidence[name]["versioned_https_uri"], "version_id": evidence[name]["version_id"], "sha256": evidence[name]["sha256"]})),
+            })
             for name in provision["exact_evidence_file_names"]
         )
-        attestation_bundle_sha256 = attestation["sha256"]
-        server_scope_hmac_key_sha256 = hmac["decoded_sha256"]
+        attestation_bundle_authority = _sealed(ValidatedVersionedBlobAuthority, _VERSIONED_BLOB_AUTHORITY_SEAL, {
+            "logical_name": "github_attestation_bundle",
+            "versioned_https_uri": attestation["versioned_https_uri"],
+            "version_id": attestation["version_id"],
+            "sha256": attestation["sha256"],
+            "_authority_sha256": _digest(_canonical({"logical_name": "github_attestation_bundle", "versioned_https_uri": attestation["versioned_https_uri"], "version_id": attestation["version_id"], "sha256": attestation["sha256"]})),
+        })
+        server_scope_hmac_key_authority = _sealed(ValidatedVersionedSecretAuthority, _VERSIONED_SECRET_AUTHORITY_SEAL, {
+            "logical_name": "server_scope_hmac_key",
+            "versioned_https_uri": hmac["versioned_https_uri"],
+            "version": hmac["version"],
+            "encoding": hmac["encoding"],
+            "material_sha256": hmac["decoded_sha256"],
+            "_authority_sha256": _digest(_canonical({"logical_name": "server_scope_hmac_key", "versioned_https_uri": hmac["versioned_https_uri"], "version": hmac["version"], "encoding": hmac["encoding"], "material_sha256": hmac["decoded_sha256"]})),
+        })
         ttl_hours = payload["ttl_hours"]
     else:
         cleanup = contract["cleanup"]
@@ -547,6 +761,15 @@ def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: s
                 _fail("launch_record.cleanup")
         elif rehearsal_id is not None:
             _fail("launch_record.cleanup")
+        cleanup_mode = payload["mode"]
+    trusted_root_authority = _sealed(ValidatedVersionedSecretAuthority, _VERSIONED_SECRET_AUTHORITY_SEAL, {
+        "logical_name": "github_trusted_root",
+        "versioned_https_uri": root["versioned_https_uri"],
+        "version": root["version"],
+        "encoding": document_policy["evidence_ingress"]["private_versioned_secret_source"]["retrieval"]["secret_value_encoding"],
+        "material_sha256": root["sha256"],
+        "_authority_sha256": _digest(_canonical({"logical_name": "github_trusted_root", "versioned_https_uri": root["versioned_https_uri"], "version": root["version"], "encoding": document_policy["evidence_ingress"]["private_versioned_secret_source"]["retrieval"]["secret_value_encoding"], "material_sha256": root["sha256"]})),
+    })
     return _sealed(ValidatedLaunchRecord, _LAUNCH_RECORD_SEAL, {
         "record_bytes": bytes(record_bytes),
         "record_sha256": record_sha256,
@@ -559,11 +782,13 @@ def validate_launch_record(policy: Any, record_bytes: bytes, *, record_sha256: s
         "workflow_sha": record["workflow_sha"],
         "run_id": record["run_id"],
         "run_attempt": record["run_attempt"],
-        "evidence_file_sha256s": evidence_file_sha256s,
-        "attestation_bundle_sha256": attestation_bundle_sha256,
-        "server_scope_hmac_key_sha256": server_scope_hmac_key_sha256,
-        "trusted_root_sha256": root["sha256"],
+        "evidence_file_authorities": evidence_file_authorities,
+        "attestation_bundle_authority": attestation_bundle_authority,
+        "server_scope_hmac_key_authority": server_scope_hmac_key_authority,
+        "trusted_root_authority": trusted_root_authority,
+        "cleanup_mode": cleanup_mode,
         "ttl_hours": ttl_hours,
+        "_record_uri_sha256": _digest(record_uri.encode("utf-8")),
     })
 @dataclass(frozen=True, slots=True, init=False)
 class BrokerStartAuthorization:

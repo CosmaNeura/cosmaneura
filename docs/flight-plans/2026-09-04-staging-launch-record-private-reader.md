@@ -77,7 +77,8 @@
   no polling, strict object framing, status/media/size/digest failures, token
   parsing compatibility, authority races, response reuse, concurrency, and
   secret-free failures.
-- Follow-ups remain separately reviewed: immutable publisher authority,
-  private evidence and HMAC ingress, verifier runtime containment, default
-  dependency assembly, infrastructure/DNS/RBAC/egress evidence, and an
-  authorized synthetic-only rehearsal.
+- The follow-up authority-seal slice now retains every validated Blob and Key
+  Vault selector plus cleanup mode in opaque record-bound objects. Concrete
+  evidence/HMAC readers, immutable publisher authority, verifier containment,
+  default dependency assembly, infrastructure/DNS/RBAC/egress evidence, and an
+  authorized synthetic-only rehearsal remain separately reviewed.
