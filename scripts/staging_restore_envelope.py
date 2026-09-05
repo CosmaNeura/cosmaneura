@@ -30,6 +30,14 @@ UTC_RE = re.compile(r"^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$
 BASE_RE = re.compile(r"^(cnr-[0-9a-f]{12}-e([0-9]{10}))-(pg|vnet|pep|nic|dnslink)$")
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_")
 ALLOWED_ACTIONS = frozenset({"validate-policy", "provision", "cleanup", "sweep"})
+ARM_ORIGIN = "https://management.azure.com"
+MANAGED_IDENTITY_API_VERSION = "2023-01-31"
+CONTROL_RESOURCE_GROUP_NAME = "cosmaneura-staging-rehearsal-control"
+CONTROL_LOCATION = "eastus"
+MANAGED_IDENTITY_TYPE = "Microsoft.ManagedIdentity/userAssignedIdentities"
+FEDERATED_IDENTITY_TYPE = (
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials"
+)
 
 
 class EnvelopeError(Exception):
@@ -255,6 +263,7 @@ class Azure:
 class Context:
     policy: dict[str, Any]
     subscription: str
+    control_group_id: str
     target_group_id: str
     source_server_id: str
 
@@ -266,6 +275,12 @@ class Context:
         return cls(
             policy=policy,
             subscription=subscription,
+            control_group_id=_id(
+                "subscriptions",
+                subscription,
+                "resourceGroups",
+                CONTROL_RESOURCE_GROUP_NAME,
+            ),
             target_group_id=_id(
                 "subscriptions",
                 subscription,
@@ -284,6 +299,14 @@ class Context:
 
     def resource_id(self, provider_type: str, name: str) -> str:
         return _id(self.target_group_id, "providers", provider_type, name)
+
+    def dispatcher_identity_id(self, environment: str) -> str:
+        return _id(
+            self.control_group_id,
+            "providers",
+            MANAGED_IDENTITY_TYPE,
+            f"cosmaneura-{environment}",
+        )
 
 
 def _assert_repo_context(policy: dict[str, Any], args: argparse.Namespace) -> None:
@@ -323,12 +346,31 @@ def _preflight_identity(az: Azure, ctx: Context, kind: str) -> dict[str, Any]:
         or account.get("user", {}).get("name") != identity["client_id"]
     ):
         _fail("azure_identity_mismatch")
-    service_principal = az.run("ad", "sp", "show", "--id", identity["client_id"])
+    identity_name = f"cosmaneura-{identity['environment']}"
+    identity_id = ctx.dispatcher_identity_id(identity["environment"])
+    managed_identity = az.run(
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        f"{ARM_ORIGIN}{identity_id}?api-version={MANAGED_IDENTITY_API_VERSION}",
+    )
+    properties = (
+        managed_identity.get("properties")
+        if isinstance(managed_identity, dict)
+        else None
+    )
     if (
-        service_principal.get("appId") != identity["client_id"]
-        or service_principal.get("id") != identity["principal_id"]
+        not isinstance(properties, dict)
+        or _lower_id(managed_identity.get("id")) != _lower_id(identity_id)
+        or managed_identity.get("name") != identity_name
+        or managed_identity.get("type") != MANAGED_IDENTITY_TYPE
+        or _location(managed_identity.get("location")) != _location(CONTROL_LOCATION)
+        or properties.get("clientId") != identity["client_id"]
+        or properties.get("principalId") != identity["principal_id"]
+        or properties.get("tenantId") != policy["tenant_id"]
     ):
-        _fail("azure_service_principal_mismatch")
+        _fail("azure_managed_identity_mismatch")
     group = az.run("group", "show", "--name", policy["target"]["resource_group"])
     if _lower_id(group.get("id")) != _lower_id(ctx.target_group_id) or _location(
         group.get("location")
@@ -374,18 +416,35 @@ def _preflight_identity(az: Azure, ctx: Context, kind: str) -> dict[str, Any]:
                 role_ids,
                 identity[f"required_{role_kind}_role_permissions_sha256"],
             )
-    credentials = az.run(
-        "ad", "app", "federated-credential", "list", "--id", identity["client_id"]
+    credential_name = f"github-{identity['environment']}"
+    credential_id = _id(identity_id, "federatedIdentityCredentials", credential_name)
+    credential_collection = az.run(
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        f"{ARM_ORIGIN}{identity_id}/federatedIdentityCredentials"
+        f"?api-version={MANAGED_IDENTITY_API_VERSION}",
     )
-    if not isinstance(credentials, list):
+    if (
+        not isinstance(credential_collection, dict)
+        or credential_collection.get("nextLink") is not None
+        or not isinstance(credential_collection.get("value"), list)
+    ):
         _fail("federated_credential_mismatch")
+    credentials = credential_collection["value"]
     expected_subject = policy["federation"][f"{kind}_subject"]
     matches = [
         item
         for item in credentials
-        if item.get("issuer") == policy["federation"]["issuer"]
-        and item.get("subject") == expected_subject
-        and item.get("audiences") == policy["federation"]["audiences"]
+        if isinstance(item, dict)
+        and isinstance(item.get("properties"), dict)
+        and _lower_id(item.get("id")) == _lower_id(credential_id)
+        and item.get("name") == credential_name
+        and item.get("type") == FEDERATED_IDENTITY_TYPE
+        and item["properties"].get("issuer") == policy["federation"]["issuer"]
+        and item["properties"].get("subject") == expected_subject
+        and item["properties"].get("audiences") == policy["federation"]["audiences"]
     ]
     if len(credentials) != 1 or len(matches) != 1:
         _fail("federated_credential_mismatch")

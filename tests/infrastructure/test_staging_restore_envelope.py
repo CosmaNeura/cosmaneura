@@ -62,6 +62,62 @@ def _configured_policy() -> dict[str, Any]:
 
 
 ROLE_PERMISSIONS = [{"actions": ["Microsoft.Authorization/roleAssignments/read"], "notActions": [], "dataActions": [], "notDataActions": []}]  # fmt: skip
+NO_OVERRIDE = object()
+EXPECTED_ARM_ORIGIN = "https://management.azure.com"
+EXPECTED_MANAGED_IDENTITY_API_VERSION = "2023-01-31"
+EXPECTED_CONTROL_RESOURCE_GROUP = "cosmaneura-staging-rehearsal-control"
+EXPECTED_CONTROL_LOCATION = "eastus"
+EXPECTED_MANAGED_IDENTITY_TYPE = "Microsoft.ManagedIdentity/userAssignedIdentities"
+EXPECTED_FEDERATED_IDENTITY_TYPE = (
+    "Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials"
+)
+EXPECTED_IDENTITY_NAMES = {
+    "provision": "cosmaneura-staging-restore-provision",
+    "cleanup": "cosmaneura-staging-restore-cleanup",
+}
+EXPECTED_FEDERATED_CREDENTIAL_NAMES = {
+    "provision": "github-staging-restore-provision",
+    "cleanup": "github-staging-restore-cleanup",
+}
+EXPECTED_CONTROL_GROUP_ID = (
+    "/subscriptions/22222222-2222-4222-8222-222222222222/"
+    "resourceGroups/cosmaneura-staging-rehearsal-control"
+)
+EXPECTED_IDENTITY_IDS = {
+    kind: (
+        f"{EXPECTED_CONTROL_GROUP_ID}/providers/"
+        f"Microsoft.ManagedIdentity/userAssignedIdentities/{name}"
+    )
+    for kind, name in EXPECTED_IDENTITY_NAMES.items()
+}
+EXPECTED_IDENTITY_URLS = {
+    kind: (
+        f"{EXPECTED_ARM_ORIGIN}{identity_id}"
+        f"?api-version={EXPECTED_MANAGED_IDENTITY_API_VERSION}"
+    )
+    for kind, identity_id in EXPECTED_IDENTITY_IDS.items()
+}
+EXPECTED_FEDERATED_CREDENTIAL_IDS = {
+    kind: (
+        f"{EXPECTED_IDENTITY_IDS[kind]}/federatedIdentityCredentials/"
+        f"{EXPECTED_FEDERATED_CREDENTIAL_NAMES[kind]}"
+    )
+    for kind in EXPECTED_IDENTITY_NAMES
+}
+EXPECTED_FEDERATED_COLLECTION_URLS = {
+    kind: (
+        f"{EXPECTED_ARM_ORIGIN}{identity_id}/federatedIdentityCredentials"
+        f"?api-version={EXPECTED_MANAGED_IDENTITY_API_VERSION}"
+    )
+    for kind, identity_id in EXPECTED_IDENTITY_IDS.items()
+}
+
+
+def _is_azure_mutation(call: tuple[str, ...]) -> bool:
+    return any(
+        argument in {"create", "delete", "restore", "tag", "update"}
+        for argument in call
+    )
 
 
 def _args(**changes: Any) -> SimpleNamespace:
@@ -92,7 +148,14 @@ class FakeAzure:
         self.connection_status = "Approved"
         self.identity_kind = identity_kind
         self.account_subscription_id: str | None = None
-        self.sp_principal_id: str | None = None
+        self.managed_identity_id: str | None = None
+        self.managed_identity_name: str | None = None
+        self.managed_identity_type: str | None = None
+        self.managed_identity_location: str | None = None
+        self.managed_identity_client_id: str | None = None
+        self.managed_identity_principal_id: str | None = None
+        self.managed_identity_tenant_id: str | None = None
+        self.managed_identity_response: Any = NO_OVERRIDE
         self.target_group_id: str | None = None
         self.private_link_service_id: str | None = None
         self.pe_subnet_id: str | None = None
@@ -100,10 +163,19 @@ class FakeAzure:
         self.assignment_overrides: list[object] = []
         self.resource_selectors: list[object] = []
         self.extra_federated_credential = False
+        self.federated_next_link: str | None = None
+        self.federated_credential_id: str | None = None
+        self.federated_credential_name: str | None = None
+        self.federated_credential_type: str | None = None
+        self.federated_issuer: str | None = None
+        self.federated_subject: str | None = None
+        self.federated_audiences: list[str] | None = None
+        self.federated_collection_response: Any = NO_OVERRIDE
         self.definition_mode = "All"
         self.role_permissions = deepcopy(ROLE_PERMISSIONS)
         self.target_firewalls: list[dict[str, Any]] = []
         self.firewall_next_link: str | None = None
+        self.restored_server_id: str | None = None
         self.vnet_dns_servers: list[str] = []
         self.vnet_extra_subnet = False
         self.subnet_overrides: dict[str, Any] = {}
@@ -112,7 +184,6 @@ class FakeAzure:
         del allow_empty
         self.calls.append(args)
         key = args[:3]
-        cleanup = self.policy["identities"]["cleanup"]
         if args[:2] == ("account", "show"):
             kind = self.policy["identities"][self.identity_kind]
             return {
@@ -122,12 +193,6 @@ class FakeAzure:
             }
         if args[:2] == ("group", "show"):
             return {"id": self.target_group_id or self.ctx.target_group_id, "location": "northcentralus"}  # fmt: skip
-        if args[:3] == ("ad", "sp", "show"):
-            identity = self.policy["identities"][self.identity_kind]
-            return {
-                "appId": identity["client_id"],
-                "id": self.sp_principal_id or identity["principal_id"],
-            }
         if args[:3] == ("role", "assignment", "list"):
             identity = self.policy["identities"][self.identity_kind]
             principal = identity["principal_id"]
@@ -145,19 +210,70 @@ class FakeAzure:
         if args[:3] == ("role", "definition", "show"):
             role_id = args[args.index("--id") + 1]
             return {"id": role_id, "permissions": self.role_permissions}
-        if key == ("ad", "app", "federated-credential"):
-            client = args[args.index("--id") + 1]
-            kind = "cleanup" if client == cleanup["client_id"] else "provision"
-            credentials = [
-                {
-                    "issuer": self.policy["federation"]["issuer"],
-                    "subject": self.policy["federation"][f"{kind}_subject"],
-                    "audiences": self.policy["federation"]["audiences"],
+        if args[:1] == ("rest",):
+            identity = self.policy["identities"][self.identity_kind]
+            identity_name = EXPECTED_IDENTITY_NAMES[self.identity_kind]
+            identity_id = EXPECTED_IDENTITY_IDS[self.identity_kind]
+            url = args[args.index("--url") + 1]
+            identity_url = EXPECTED_IDENTITY_URLS[self.identity_kind]
+            credential_url = EXPECTED_FEDERATED_COLLECTION_URLS[self.identity_kind]
+            if url == identity_url:
+                if self.managed_identity_response is not NO_OVERRIDE:
+                    return deepcopy(self.managed_identity_response)
+                return {
+                    "id": self.managed_identity_id or identity_id,
+                    "name": self.managed_identity_name or identity_name,
+                    "type": self.managed_identity_type
+                    or EXPECTED_MANAGED_IDENTITY_TYPE,
+                    "location": self.managed_identity_location
+                    or EXPECTED_CONTROL_LOCATION,
+                    "properties": {
+                        "clientId": self.managed_identity_client_id
+                        or identity["client_id"],
+                        "principalId": self.managed_identity_principal_id
+                        or identity["principal_id"],
+                        "tenantId": self.managed_identity_tenant_id
+                        or self.policy["tenant_id"],
+                    },
                 }
-            ]
-            if self.extra_federated_credential:
-                credentials.append({"issuer": "https://example.invalid"})
-            return credentials
+            if url == credential_url:
+                if self.federated_collection_response is not NO_OVERRIDE:
+                    return deepcopy(self.federated_collection_response)
+                credential_name = EXPECTED_FEDERATED_CREDENTIAL_NAMES[
+                    self.identity_kind
+                ]
+                credential_id = EXPECTED_FEDERATED_CREDENTIAL_IDS[self.identity_kind]
+                expected_subject = self.policy["federation"][
+                    f"{self.identity_kind}_subject"
+                ]
+                credentials = [
+                    {
+                        "id": self.federated_credential_id or credential_id,
+                        "name": self.federated_credential_name or credential_name,
+                        "type": self.federated_credential_type
+                        or EXPECTED_FEDERATED_IDENTITY_TYPE,
+                        "properties": {
+                            "issuer": self.federated_issuer
+                            or self.policy["federation"]["issuer"],
+                            "subject": self.federated_subject or expected_subject,
+                            "audiences": self.federated_audiences
+                            or self.policy["federation"]["audiences"],
+                        },
+                    }
+                ]
+                if self.extra_federated_credential:
+                    credentials.append(
+                        {"properties": {"issuer": "https://example.invalid"}}
+                    )
+                return {"value": credentials, "nextLink": self.federated_next_link}
+            if self.restored_server_id is not None and url == (
+                f"{envelope.ARM_ORIGIN}{self.restored_server_id}/firewallRules"
+                "?api-version=2024-08-01"
+            ):
+                return {
+                    "value": self.target_firewalls,
+                    "nextLink": self.firewall_next_link,
+                }
         if key == ("policy", "assignment", "show"):
             return {
                 "scope": self.ctx.target_group_id,
@@ -201,6 +317,10 @@ class FakeAzure:
                 "network": {"publicNetworkAccess": self.target_public_access},
             }
         if key == ("postgres", "flexible-server", "restore"):
+            self.restored_server_id = self.ctx.resource_id(
+                "Microsoft.DBforPostgreSQL/flexibleServers",
+                args[args.index("--name") + 1],
+            )
             return {}
         if key == ("postgres", "flexible-server", "firewall-rule"):
             group = args[args.index("--resource-group") + 1]
@@ -216,8 +336,6 @@ class FakeAzure:
             return []
         if key == ("postgres", "flexible-server", "update"):
             return {}
-        if args[:1] == ("rest",):
-            return {"value": self.target_firewalls, "nextLink": self.firewall_next_link}
         if key == ("resource", "tag", "--ids"):
             return {}
         if key == ("network", "vnet", "create"):
@@ -358,6 +476,29 @@ def test_policy_is_pinned_closed_world_and_unconfigured() -> None:
     envelope._validate_policy(_configured_policy(), executable=True)
 
 
+def test_uami_arm_contract_is_literal_and_graph_free() -> None:
+    policy = _configured_policy()
+    ctx = envelope.Context.from_policy(policy)
+    assert envelope.ARM_ORIGIN == EXPECTED_ARM_ORIGIN
+    assert (
+        envelope.MANAGED_IDENTITY_API_VERSION == EXPECTED_MANAGED_IDENTITY_API_VERSION
+    )
+    assert envelope.CONTROL_RESOURCE_GROUP_NAME == EXPECTED_CONTROL_RESOURCE_GROUP
+    assert envelope.CONTROL_LOCATION == EXPECTED_CONTROL_LOCATION
+    assert envelope.MANAGED_IDENTITY_TYPE == EXPECTED_MANAGED_IDENTITY_TYPE
+    assert envelope.FEDERATED_IDENTITY_TYPE == EXPECTED_FEDERATED_IDENTITY_TYPE
+    assert ctx.control_group_id == EXPECTED_CONTROL_GROUP_ID
+    for kind, identity in policy["identities"].items():
+        assert (
+            ctx.dispatcher_identity_id(identity["environment"])
+            == EXPECTED_IDENTITY_IDS[kind]
+        )
+
+    source = " ".join(SCRIPT.read_text(encoding="utf-8").split())
+    assert '"ad", "sp"' not in source
+    assert '"ad", "app"' not in source
+
+
 def test_role_preflight_requires_exact_assignment_set() -> None:
     policy = _configured_policy()
     required = policy["identities"]["provision"]["required_target_role_definition_ids"]
@@ -386,7 +527,7 @@ def test_role_preflight_requires_exact_assignment_set() -> None:
         envelope._require_roles(actual, expected, actual[0]["principalId"])
 
 
-def test_deny_policy_and_federation_are_verified_before_mutation() -> None:
+def test_deny_policy_and_uami_federation_are_verified_before_mutation() -> None:
     policy = _configured_policy()
     fake = FakeAzure(policy)
     envelope._preflight_identity(fake, fake.ctx, "provision")
@@ -396,19 +537,84 @@ def test_deny_policy_and_federation_are_verified_before_mutation() -> None:
         for item in calls
         if "role assignment list" in item
     )
-    assert any("federated-credential list" in item for item in calls)
+    identity_call = (
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        EXPECTED_IDENTITY_URLS["provision"],
+    )
+    credential_call = (
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        EXPECTED_FEDERATED_COLLECTION_URLS["provision"],
+    )
+    assert identity_call in fake.calls
+    assert credential_call in fake.calls
+    assert not any(call and call[0] == "ad" for call in fake.calls)
     assert any("policy assignment show" in item for item in calls)
     assert any("policy definition show" in item for item in calls)
-    mismatch = FakeAzure(policy)
-    mismatch.sp_principal_id = "77777777-7777-4777-8777-777777777777"
-    with pytest.raises(
-        envelope.EnvelopeError, match="azure_service_principal_mismatch"
+    role_reads = [
+        index
+        for index, call in enumerate(fake.calls)
+        if call[:3] in {("role", "assignment", "list"), ("role", "definition", "show")}
+    ]
+    policy_reads = [
+        index
+        for index, call in enumerate(fake.calls)
+        if call[:3]
+        in {
+            ("policy", "assignment", "show"),
+            ("policy", "definition", "show"),
+            ("policy", "exemption", "list"),
+        }
+    ]
+    assert role_reads and policy_reads
+    assert fake.calls.index(identity_call) < min(role_reads)
+    assert max(role_reads) < fake.calls.index(credential_call) < min(policy_reads)
+    for attribute in (
+        "managed_identity_id",
+        "managed_identity_name",
+        "managed_identity_type",
+        "managed_identity_location",
+        "managed_identity_client_id",
+        "managed_identity_principal_id",
+        "managed_identity_tenant_id",
     ):
-        envelope._preflight_identity(mismatch, mismatch.ctx, "provision")
+        mismatch = FakeAzure(policy)
+        setattr(mismatch, attribute, "unexpected")
+        with pytest.raises(
+            envelope.EnvelopeError, match="azure_managed_identity_mismatch"
+        ):
+            envelope._preflight_identity(mismatch, mismatch.ctx, "provision")
     mismatch = FakeAzure(policy)
     mismatch.extra_federated_credential = True
     with pytest.raises(envelope.EnvelopeError, match="federated_credential_mismatch"):
         envelope._preflight_identity(mismatch, mismatch.ctx, "provision")
+    mismatch = FakeAzure(policy)
+    mismatch.federated_next_link = "https://management.azure.com/next"
+    with pytest.raises(envelope.EnvelopeError, match="federated_credential_mismatch"):
+        envelope._preflight_identity(mismatch, mismatch.ctx, "provision")
+    for attribute in (
+        "federated_credential_id",
+        "federated_credential_name",
+        "federated_credential_type",
+        "federated_issuer",
+        "federated_subject",
+        "federated_audiences",
+    ):
+        mismatch = FakeAzure(policy)
+        setattr(
+            mismatch,
+            attribute,
+            ["unexpected"] if attribute == "federated_audiences" else "unexpected",
+        )
+        with pytest.raises(
+            envelope.EnvelopeError, match="federated_credential_mismatch"
+        ):
+            envelope._preflight_identity(mismatch, mismatch.ctx, "provision")
     for field in ("assignment_overrides", "resource_selectors"):
         unsafe = FakeAzure(policy)
         setattr(unsafe, field, [{"kind": "unsafe"}])
@@ -433,6 +639,62 @@ def test_deny_policy_and_federation_are_verified_before_mutation() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "response",
+    [None, [], {}, {"properties": None}, {"properties": []}],
+)
+def test_uami_parent_rejects_malformed_arm_shapes(response: Any) -> None:
+    policy = _configured_policy()
+    fake = FakeAzure(policy)
+    fake.managed_identity_response = response
+    with pytest.raises(envelope.EnvelopeError, match="azure_managed_identity_mismatch"):
+        envelope._preflight_identity(fake, fake.ctx, "provision")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        [],
+        {},
+        {"value": None},
+        {"value": []},
+        {"value": [None]},
+        {"value": [{}]},
+        {"value": [{"properties": None}]},
+        {"value": [{"properties": []}]},
+    ],
+)
+def test_uami_federation_rejects_malformed_arm_shapes(response: Any) -> None:
+    policy = _configured_policy()
+    fake = FakeAzure(policy)
+    fake.federated_collection_response = response
+    with pytest.raises(envelope.EnvelopeError, match="federated_credential_mismatch"):
+        envelope._preflight_identity(fake, fake.ctx, "provision")
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value", "code"),
+    [
+        (
+            "managed_identity_principal_id",
+            "77777777-7777-4777-8777-777777777777",
+            "azure_managed_identity_mismatch",
+        ),
+        ("extra_federated_credential", True, "federated_credential_mismatch"),
+    ],
+)
+def test_full_provision_identity_mismatch_precedes_every_azure_mutation(
+    attribute: str, value: Any, code: str
+) -> None:
+    policy = _configured_policy()
+    fake = FakeAzure(policy)
+    setattr(fake, attribute, value)
+    with pytest.raises(envelope.EnvelopeError, match=code):
+        envelope.provision(fake, fake.ctx, _args())
+    assert not any(_is_azure_mutation(call) for call in fake.calls)
+
+
 def test_provision_locks_down_before_private_network_and_emits_aggregate_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -455,12 +717,48 @@ def test_provision_locks_down_before_private_network_and_emits_aggregate_receipt
     monkeypatch.setattr(envelope, "_now", lambda: created)
     receipt = envelope.provision(fake, fake.ctx, _args())
     calls = [item[:3] for item in fake.calls]
+    identity_call = (
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        EXPECTED_IDENTITY_URLS["provision"],
+    )
+    credential_call = (
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        EXPECTED_FEDERATED_COLLECTION_URLS["provision"],
+    )
+    role_reads = [
+        index
+        for index, call in enumerate(fake.calls)
+        if call[:3] in {("role", "assignment", "list"), ("role", "definition", "show")}
+    ]
+    policy_reads = [
+        index
+        for index, call in enumerate(fake.calls)
+        if call[:3]
+        in {
+            ("policy", "assignment", "show"),
+            ("policy", "definition", "show"),
+            ("policy", "exemption", "list"),
+        }
+    ]
+    mutations = [
+        index for index, call in enumerate(fake.calls) if _is_azure_mutation(call)
+    ]
+    assert role_reads and policy_reads and mutations
+    assert fake.calls.index(identity_call) < min(role_reads)
+    assert max(role_reads) < fake.calls.index(credential_call) < min(policy_reads)
+    assert max(policy_reads) < min(mutations)
     first_firewall = calls.index(("postgres", "flexible-server", "firewall-rule"))
     lockdown = calls.index(("postgres", "flexible-server", "update"))
     vnet = calls.index(("network", "vnet", "create"))
     assert first_firewall < lockdown < vnet
     joined = "\n".join(" ".join(item) for item in fake.calls)
-    assert joined.count("rest --method get --url") == 3
+    assert joined.count("rest --method get --url") == 5
     assert "--server-name cosmaneura-staging-postgres" in joined
     assert "user create" not in joined and "database create" not in joined
     assert " storage " not in joined and " redis " not in joined
@@ -578,7 +876,7 @@ def test_cleanup_refuses_unknown_or_malformed_resource_without_delete() -> None:
         envelope.cleanup(bound, bound.ctx, _args(action="sweep", rehearsal_id=None))
 
 
-@pytest.mark.parametrize(("attribute", "code"), [("account_subscription_id", "azure_identity_mismatch"), ("sp_principal_id", "azure_service_principal_mismatch"), ("target_group_id", "target_resource_group_mismatch")])  # fmt: skip
+@pytest.mark.parametrize(("attribute", "code"), [("account_subscription_id", "azure_identity_mismatch"), ("managed_identity_principal_id", "azure_managed_identity_mismatch"), ("target_group_id", "target_resource_group_mismatch")])  # fmt: skip
 def test_cleanup_requires_exact_identity_before_delete(attribute: str, code: str) -> None:  # fmt: skip
     policy = _configured_policy()
     fake = FakeAzure(policy, identity_kind="cleanup")
@@ -586,6 +884,49 @@ def test_cleanup_requires_exact_identity_before_delete(attribute: str, code: str
     with pytest.raises(envelope.EnvelopeError, match=code):
         envelope.cleanup(fake, fake.ctx, _args(action="sweep", rehearsal_id=None))
     assert not any(call[:3] == ("resource", "delete", "--ids") for call in fake.calls)
+
+
+def test_cleanup_uses_uami_parent_but_does_not_gate_safe_deletion_on_later_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = _configured_policy()
+    fake = FakeAzure(policy, identity_kind="cleanup")
+    now = datetime(2026, 9, 3, 12, tzinfo=UTC)
+    monkeypatch.setattr(envelope, "_now", lambda: now)
+    _set_complete_resources(fake, "012345abcdef", now + timedelta(hours=1))
+    fake.extra_federated_credential = True
+    fake.federated_next_link = "https://management.azure.com/next"
+    fake.role_permissions[0]["actions"].append(
+        "Microsoft.Network/publicIPAddresses/write"
+    )
+    fake.definition_mode = "Indexed"
+    receipt = envelope.cleanup(
+        fake,
+        fake.ctx,
+        _args(action="cleanup", force=True),
+    )
+    assert receipt["resource_sets_deleted"] == 1
+    assert fake.resources == []
+    cleanup_call = (
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        EXPECTED_IDENTITY_URLS["cleanup"],
+    )
+    provision_call = (
+        "rest",
+        "--method",
+        "get",
+        "--url",
+        EXPECTED_IDENTITY_URLS["provision"],
+    )
+    assert cleanup_call in fake.calls
+    assert provision_call not in fake.calls
+    calls = [" ".join(item) for item in fake.calls]
+    assert not any("/federatedIdentityCredentials?" in item for item in calls)
+    assert not any("role assignment list" in item for item in calls)
+    assert not any("policy assignment show" in item for item in calls)
 
 
 def test_expired_sweep_deletes_exact_set_and_future_sweep_is_dormant(

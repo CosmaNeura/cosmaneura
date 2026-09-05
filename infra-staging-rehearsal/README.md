@@ -116,12 +116,17 @@ unfederated job UAMIs, bind the aggregate-only evidence sink, add only the
 required DNS, and prove private DNS and data-plane reachability before any
 workflow integration or ReadOnly account lock.
 
-The controller currently validates federation through `az ad app
-federated-credential list`, while this root deliberately creates UAMI-bound
-federated credentials through Azure Resource Manager. Activation must first
-prove that query against these identities or change the controller to verify
-the UAMI ARM resource directly. Do not add Graph permissions merely to disguise
-an identity-model mismatch.
+The controller validates each dispatcher parent through an exact Azure Resource
+Manager GET using managed-identity API `2023-01-31`, binding the expected
+control-RG resource ID, name, type, location, tenant, client, and principal.
+Provision additionally requires one unpaginated federated-credential child
+with the exact ID, name, type, issuer, subject, and audience. Cleanup validates
+only its parent and the target group so later FIC, RBAC, or deny-policy drift
+cannot strand safe deletion. The existing control-reader role contains both
+required ARM read actions; no Microsoft Graph permission is required. Before
+activation, separately prove the provision readback and each dispatcher parent
+from the exact OIDC sessions, then pin the resulting client/principal values in
+the envelope policy.
 
 The OIDC-federated identities are dispatcher/control-plane identities, not
 private-executor or data-plane identities. Only the separate job UAMIs receive
