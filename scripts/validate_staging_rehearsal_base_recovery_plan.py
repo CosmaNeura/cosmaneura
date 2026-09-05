@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Create or revalidate the one-time staging-rehearsal recovery plan.
-
-The incident-specific create mode invokes one fixed, full-refresh OpenTofu
-plan command. Both modes derive JSON from the captured binary plan, bind its
-embedded state to the protected post-untaint snapshot, and emit only a
-digest-based receipt. The script never applies a plan or mutates remote state.
-"""
+"""Create or revalidate the one-time non-mutating staging recovery plan."""
 
 from __future__ import annotations
 
@@ -16,6 +10,7 @@ import json
 import os
 import re
 import selectors
+import shlex
 import shutil
 import signal
 import stat
@@ -42,6 +37,8 @@ EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 EXPECTED_TENANT_ID = "d51754d0-bba5-4810-820e-afac542844d6"
 EXPECTED_ORIGIN_URL = "git@github.com:CosmaNeura/cosmaneura.git"
 SYSTEM_GIT = Path("/usr/bin/git")
+SYSTEM_SSH = Path("/usr/bin/ssh")
+GITHUB_HOST_KEY = "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAXIMUM_PLAN_JSON_BYTES = 128 * 1024 * 1024
 MAXIMUM_PLAN_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -556,32 +553,38 @@ def _generate_saved_plan(*, tofu: Path, output_parent: Path, data_dir: Path) -> 
         )
 
 
-def _trusted_git() -> Path:
+def _trusted_system_executable(expected: Path, *, label: str) -> Path:
     try:
-        path = SYSTEM_GIT.resolve(strict=True)
+        path = expected.resolve(strict=True)
         metadata = path.stat()
     except OSError as exc:
-        raise RecoveryPlanError("the system Git executable is unavailable") from exc
+        raise RecoveryPlanError(
+            f"the system {label} executable is unavailable"
+        ) from exc
     if (
-        path != SYSTEM_GIT
+        path != expected
         or not stat.S_ISREG(metadata.st_mode)
         or metadata.st_uid != 0
         or stat.S_IMODE(metadata.st_mode) & 0o022
         or not os.access(path, os.X_OK)
     ):
-        raise RecoveryPlanError("the system Git executable is not trusted")
+        raise RecoveryPlanError(f"the system {label} executable is not trusted")
     return path
 
 
 def _run_git(arguments: Sequence[str], *, repository: bool = True) -> bytes:
-    command = [str(_trusted_git()), "--no-replace-objects"]
+    command = [str(_trusted_system_executable(SYSTEM_GIT, label="Git")), "--no-replace-objects"]  # fmt: skip
     if repository:
         command.extend(("-C", str(REPOSITORY_ROOT)))
-    result = _run_process(
-        [*command, *arguments],
-        cwd=REPOSITORY_ROOT if repository else Path("/"),
-        timeout_seconds=30,
-    )
+        result = _run_process([*command, *arguments], cwd=REPOSITORY_ROOT, timeout_seconds=30)  # fmt: skip
+    else:
+        ssh = _trusted_system_executable(SYSTEM_SSH, label="SSH")
+        with tempfile.NamedTemporaryFile(mode="w", encoding="ascii") as known_hosts:
+            known_hosts.write(f"{GITHUB_HOST_KEY}\n")
+            known_hosts.flush()
+            os.fchmod(known_hosts.fileno(), 0o400)
+            ssh_command = shlex.join([str(ssh), "-F", os.devnull, "-oBatchMode=yes", "-oCanonicalizeHostname=no", "-oHostName=github.com", "-oPort=22", "-oProxyCommand=none", "-oProxyJump=none", "-oStrictHostKeyChecking=yes", f"-oUserKnownHostsFile={known_hosts.name}", "-oGlobalKnownHostsFile=/dev/null", "-oHostKeyAlgorithms=ssh-ed25519"])  # fmt: skip
+            result = _run_process([*command, "-c", f"core.sshCommand={ssh_command}", *arguments], cwd=Path("/"), timeout_seconds=30)  # fmt: skip
     if result.returncode != 0:
         raise RecoveryPlanError("the source checkout could not be verified")
     return result.stdout

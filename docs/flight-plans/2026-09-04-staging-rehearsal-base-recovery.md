@@ -98,9 +98,7 @@ posture mismatch. No production or PHI promotion is part of this plan.
 - No `-refresh=false`, `-target`, `-replace`, force-unlock, state removal/import,
   unsaved apply, or raw-state/plan publication is permitted.
 - The validator strips ambient OpenTofu, Git, and Azure-provider overrides,
-  pins the reviewed subscription, backend coordinates, Azure public cloud,
-  default workspace, provider tenant, and OpenTofu 1.12.5; it generates the
-  full-refresh plan itself,
+  pins the reviewed subscription, backend coordinates, Azure public cloud, default workspace, provider tenant, and OpenTofu 1.12.5; it generates the full-refresh plan itself,
   decodes JSON from the exact
   captured plan bytes, verifies the archive's Terraform source and provider
   lockfile against the clean expected protected-master commit, and binds its

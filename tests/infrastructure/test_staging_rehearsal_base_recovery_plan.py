@@ -412,17 +412,14 @@ def test_pinned_opentofu_json_may_omit_applyable_and_complete(
     assert _validate(monkeypatch, plan=plan)["validated_nonempty_change_set"] is True
 
 
-def test_git_uses_trusted_absolute_binary(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, Any] = {}
-    monkeypatch.setattr(recovery, "_trusted_git", lambda: Path("/trusted/git"))
-
-    def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:  # fmt: skip
-        seen.update(arguments=arguments, kwargs=kwargs)
-        return subprocess.CompletedProcess(arguments, 0, b"ok", b"")
-
-    monkeypatch.setattr(recovery, "_run_process", run)
-    assert recovery._run_git(["status"]) == b"ok"
-    assert seen["arguments"][:4] == ["/trusted/git", "--no-replace-objects", "-C", str(recovery.REPOSITORY_ROOT)]  # fmt: skip
+def test_remote_git_pins_ssh_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[Any] = []
+    monkeypatch.setattr(recovery, "_trusted_system_executable", lambda path, **_: path)
+    monkeypatch.setattr(recovery, "_run_process", lambda args, **kw: seen.append((args, kw)) or subprocess.CompletedProcess(args, 0, b"ok", b""))  # fmt: skip
+    assert recovery._run_git(["ls-remote"], repository=False) == b"ok"
+    command = seen[0][0]
+    assert command[:2] == ["/usr/bin/git", "--no-replace-objects"] and seen[0][1]["cwd"] == Path("/")  # fmt: skip
+    assert "/usr/bin/ssh" in command[3] and "StrictHostKeyChecking=yes" in command[3]  # fmt: skip
 
 
 def test_archive_source_and_lockfile_are_bound(monkeypatch: pytest.MonkeyPatch) -> None:
