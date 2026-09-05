@@ -593,14 +593,17 @@ class ManagedIdentityPrivateRuntimeMaterialReader:
                 verifier=self._verifier,
                 clock=clock,
             )
+            material = launch_material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+                record_bytes=bytes(record_bytes),
+                trusted_root_bytes=bytes(trusted_root_bytes),
+                signature_verification=proof,
+            )
         except Exception:
             raise PrivateRuntimeMaterialFailure(
                 "runtime_ingress.authentication_failed"
             ) from None
         checkpoint()
-        return launch_material.AuthenticatedRuntimeRecordMaterial(
-            record_bytes=bytes(record_bytes), signature_verification=proof
-        )
+        return material
 
     @staticmethod
     def _authority_snapshot(

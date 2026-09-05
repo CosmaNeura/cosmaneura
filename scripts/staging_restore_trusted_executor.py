@@ -48,9 +48,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "39bc8d831e81e817868f8cb6758a54a5826c53dc9f4bfeea50781c1a4b0b90a6"
+POLICY_SHA256 = "f89bec35f6df02325c9032a688338b29a3fa6acd48b930ca92f7e0e4121440a6"
 POLICY_TEMPLATE_SHA256 = (
-    "4816f03ea417e12800a46d8ed472d5d203f0fa0210e0c42e441020cc7ec78c52"
+    "c5decfa37782c5ab4e280cc56fa2e9ebcd018c6dffaceb752d2b1a9ede439e74"
 )
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -531,16 +531,33 @@ def _validate_provision_launch(
     )
     if type(material) is not launch_material.ProvisionLaunchMaterial:
         _fail("launch_receipt.result_invalid")
-    authenticated_receipt = material.authenticated_receipt
-    signature = material.runtime_signature_verification
+    try:
+        runtime_material = material.authenticated_runtime_record
+        authenticated_receipt = material.authenticated_receipt
+        launch_record_bytes = material.launch_record_bytes
+        signature = material.runtime_signature_verification
+        runtime_record_bytes = material.runtime_record_bytes
+        trusted_root_bytes = material.trusted_root_bytes
+    except (AttributeError, TypeError):
+        _fail("launch_receipt.result_invalid")
     if (
         type(authenticated_receipt)
         is not launch_binding.AuthenticatedBrokerLaunchReceipt
         or not authenticated_receipt._is_authenticated()
+        or type(runtime_material)
+        is not launch_material.AuthenticatedRuntimeRecordMaterial
+        or type(runtime_record_bytes) is not bytes
+        or not 1
+        <= len(runtime_record_bytes)
+        <= launch_material.MAXIMUM_RUNTIME_RECORD_BYTES
+        or type(trusted_root_bytes) is not bytes
+        or not 1
+        <= len(trusted_root_bytes)
+        <= launch_material.MAXIMUM_TRUSTED_ROOT_BYTES
+        or not runtime_material._is_authenticated()
         or type(signature) is not runtime_binding.VerifiedExternalRuntimeRecordSignature
         or not signature._is_verified()
-        or type(material.launch_record_bytes) is not bytes
-        or type(material.runtime_record_bytes) is not bytes
+        or type(launch_record_bytes) is not bytes
     ):
         _fail("launch_receipt.result_invalid")
     references: dict[str, runtime_binding.ExternalRuntimeBindingReference] = {}
@@ -563,22 +580,24 @@ def _validate_provision_launch(
         dependencies.validate_launch_record,
         "launch_record.failed",
         policy=runtime_document,
-        record_bytes=material.launch_record_bytes,
+        record_bytes=launch_record_bytes,
         record_sha256=authenticated_receipt.launch_record_sha256,
         record_uri=authenticated_receipt.launch_record_uri,
     )
     if (
         type(launch_record) is not launch_binding.ValidatedLaunchRecord
         or not launch_record._is_validated()
-        or launch_record.record_bytes != material.launch_record_bytes
+        or launch_record.record_bytes != launch_record_bytes
         or launch_record.action != "provision"
+        or launch_binding._digest(trusted_root_bytes)
+        != launch_record.trusted_root_authority.material_sha256
     ):
         _fail("launch_record.result_invalid")
     runtime_record = _stage(
         dependencies.validate_runtime_binding,
         "runtime_record.failed",
         policy=runtime_document,
-        record_bytes=material.runtime_record_bytes,
+        record_bytes=runtime_record_bytes,
         provision_reference=references["provision"],
         cleanup_reference=references["cleanup"],
         signature_verification=signature,
@@ -586,7 +605,7 @@ def _validate_provision_launch(
     if (
         type(runtime_record) is not runtime_binding.ValidatedExternalRuntimeBinding
         or not runtime_record._is_validated()
-        or runtime_record.record_bytes != material.runtime_record_bytes
+        or runtime_record.record_bytes != runtime_record_bytes
     ):
         _fail("runtime_record.result_invalid")
     validation_now = clock()

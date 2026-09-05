@@ -74,6 +74,10 @@
   pinned vault host, with exact `api-version=7.4`, exact response ID, enabled
   status, UTF-8 bytes, and SHA-256. Authentication receives the same trusted
   clock object as receipt processing and the exact verifier instance.
+- The follow-up authority-seal slice retains those same exact trusted-root
+  bytes in an init-disabled sealed runtime-material carrier after successful
+  authentication. Its digest must still equal both the signature proof and
+  configured root pin; no second root read or serialized handoff is introduced.
 - Recovery is to retain dormancy or revert. No live side effect exists.
 
 ## Completion

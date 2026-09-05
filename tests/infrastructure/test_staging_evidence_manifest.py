@@ -549,6 +549,119 @@ def test_validated_snapshot_returns_the_same_read_manifest_and_server_scope_byte
     assert snapshot.server_scope_receipt == json.loads(original_bytes)
 
 
+def test_in_memory_bundle_seam_detaches_bytes_and_never_reads_bundle_path(
+    module: ModuleType,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle = _bundle(module, tmp_path)
+    policy, digest = module.load_policy(POLICY)
+    files = {path.name: path.read_bytes() for path in bundle.iterdir()}
+    expected = {name: module._digest(raw) for name, raw in files.items()}
+    original_manifest = files["evidence-manifest.json"]
+    path_snapshot = module.validate_bundle_snapshot(
+        policy=policy,
+        policy_sha256=digest,
+        bundle=bundle,
+        now=NOW,
+        expected_file_sha256s=expected,
+    )
+    original_validate = module._validate_bundle_snapshot_files
+
+    def validate_snapshot(**kwargs: Any) -> Any:
+        files["evidence-manifest.json"] = b"mutated after snapshot"
+        assert kwargs["files"] is not files
+        assert kwargs["files"]["evidence-manifest.json"] == original_manifest
+        return original_validate(**kwargs)
+
+    monkeypatch.setattr(module, "_validate_bundle_snapshot_files", validate_snapshot)
+    monkeypatch.setattr(
+        module,
+        "_read_bundle",
+        lambda *_args, **_kwargs: pytest.fail(
+            "in-memory validation read an evidence-bundle path"
+        ),
+    )
+    snapshot = module.validate_bundle_snapshot_bytes(
+        policy=policy,
+        policy_sha256=digest,
+        files=files,
+        now=NOW,
+        expected_file_sha256s=expected,
+    )
+
+    assert snapshot.manifest_bytes == original_manifest
+    assert snapshot._has_launch_digest_binding(tuple(expected.items()))
+    assert snapshot.result_bytes == path_snapshot.result_bytes
+    assert snapshot.manifest_bytes == path_snapshot.manifest_bytes
+    assert snapshot.server_scope_bytes == path_snapshot.server_scope_bytes
+    assert path_snapshot._has_launch_digest_binding(tuple(expected.items()))
+
+
+def test_in_memory_bundle_seam_rejects_non_exact_byte_maps(
+    module: ModuleType,
+    tmp_path: Path,
+) -> None:
+    bundle = _bundle(module, tmp_path)
+    policy, digest = module.load_policy(POLICY)
+    valid = {path.name: path.read_bytes() for path in bundle.iterdir()}
+
+    class DictSubclass(dict[str, bytes]):
+        def items(self) -> Any:
+            pytest.fail("non-exact mapping was iterated")
+
+    invalid: list[Any] = [DictSubclass(valid)]
+    missing = dict(valid)
+    missing.pop("candidate.json")
+    invalid.append(missing)
+    extra = dict(valid)
+    extra["extra.json"] = b"{}"
+    invalid.append(extra)
+    non_string_key: dict[Any, Any] = dict(valid)
+    non_string_key[1] = non_string_key.pop("candidate.json")
+    invalid.append(non_string_key)
+    for value in (
+        bytearray(b"{}"),
+        memoryview(b"{}"),
+        "{}",
+        b"",
+        b"x" * (module.MAXIMUM_FILE_BYTES + 1),
+    ):
+        wrong_value: dict[Any, Any] = dict(valid)
+        wrong_value["candidate.json"] = value
+        invalid.append(wrong_value)
+
+    for files in invalid:
+        with pytest.raises(module.EvidenceFailure, match="^bundle.byte_map$"):
+            module.validate_bundle_snapshot_bytes(
+                policy=policy,
+                policy_sha256=digest,
+                files=files,
+                now=NOW,
+            )
+
+    class DigestDictSubclass(dict[str, str]):
+        pass
+
+    expected = {name: module._digest(raw) for name, raw in valid.items()}
+    invalid_expected: list[Any] = [DigestDictSubclass(expected)]
+    extra_expected = dict(expected)
+    extra_expected["extra.json"] = f"sha256:{'0' * 64}"
+    invalid_expected.append(extra_expected)
+    malformed_expected = dict(expected)
+    malformed_expected["candidate.json"] = "not-a-digest"
+    invalid_expected.append(malformed_expected)
+    for expected_file_sha256s in invalid_expected:
+        with pytest.raises(module.EvidenceFailure, match="^bundle.launch_binding$"):
+            module.validate_bundle_snapshot_bytes(
+                policy=policy,
+                policy_sha256=digest,
+                files=valid,
+                now=NOW,
+                expected_file_sha256s=expected_file_sha256s,
+            )
+
+
 def test_validated_snapshot_binds_every_same_read_file_to_launch_digests(
     module: ModuleType,
     tmp_path: Path,

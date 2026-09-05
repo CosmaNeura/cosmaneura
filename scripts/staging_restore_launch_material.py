@@ -14,6 +14,7 @@ import time
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime
 from typing import Any, NoReturn
 
@@ -28,6 +29,8 @@ except ModuleNotFoundError:  # Direct `python scripts/...` execution.
 
 
 PROVISION_ACTION = "provision"
+MAXIMUM_RUNTIME_RECORD_BYTES = 65_536
+MAXIMUM_TRUSTED_ROOT_BYTES = 25_600
 
 
 class LaunchMaterialFailure(RuntimeError):
@@ -55,12 +58,117 @@ def _stage(call: Callable[..., Any], code: str, **kwargs: Any) -> Any:
         raise LaunchMaterialFailure(code) from None
 
 
-@dataclass(frozen=True, slots=True)
-class AuthenticatedRuntimeRecordMaterial:
-    """Exact runtime-record bytes and their separately authenticated proof."""
+_AUTHENTICATED_RUNTIME_MATERIAL_SEAL = object()
 
-    record_bytes: bytes
+
+def _runtime_signature_proof_is_exact(
+    proof: Any,
+) -> bool:
+    try:
+        return (
+            type(proof) is runtime_binding.VerifiedExternalRuntimeRecordSignature
+            and proof._is_verified()
+            and all(
+                type(value) is str
+                and runtime_binding.DIGEST_RE.fullmatch(value) is not None
+                for value in (
+                    proof.record_sha256,
+                    proof.bundle_sha256,
+                    proof.trusted_root_sha256,
+                )
+            )
+            and type(proof.certificate_oidc_issuer) is str
+            and proof.certificate_oidc_issuer
+            == "https://token.actions.githubusercontent.com"
+            and type(proof.certificate_identity) is str
+            and bool(proof.certificate_identity)
+        )
+    except (AttributeError, TypeError):
+        return False
+
+
+def _runtime_signature_proof_sha256(proof: Any) -> str:
+    return _digest(
+        runtime_binding._canonical(
+            {
+                name: getattr(proof, name)
+                for name in (
+                    "record_sha256",
+                    "bundle_sha256",
+                    "trusted_root_sha256",
+                    "certificate_oidc_issuer",
+                    "certificate_identity",
+                )
+            }
+        )
+    )
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class AuthenticatedRuntimeRecordMaterial:
+    """Opaque exact runtime-record/root bytes and their authenticated proof."""
+
+    record_bytes: bytes = dataclass_field(repr=False)
+    trusted_root_bytes: bytes = dataclass_field(repr=False)
     signature_verification: runtime_binding.VerifiedExternalRuntimeRecordSignature
+    _signature_proof_sha256: str = dataclass_field(repr=False, compare=False)
+    _seal: object = dataclass_field(repr=False, compare=False)
+
+    def __init__(self) -> None:
+        _fail("launch_material.runtime_record_result_invalid")
+
+    @classmethod
+    def _from_authenticated_read(
+        cls,
+        *,
+        record_bytes: bytes,
+        trusted_root_bytes: bytes,
+        signature_verification: runtime_binding.VerifiedExternalRuntimeRecordSignature,
+    ) -> AuthenticatedRuntimeRecordMaterial:
+        if (
+            cls is not AuthenticatedRuntimeRecordMaterial
+            or type(record_bytes) is not bytes
+            or not 1 <= len(record_bytes) <= MAXIMUM_RUNTIME_RECORD_BYTES
+            or type(trusted_root_bytes) is not bytes
+            or not 1 <= len(trusted_root_bytes) <= MAXIMUM_TRUSTED_ROOT_BYTES
+            or not _runtime_signature_proof_is_exact(signature_verification)
+            or _digest(record_bytes) != signature_verification.record_sha256
+            or _digest(trusted_root_bytes) != signature_verification.trusted_root_sha256
+        ):
+            _fail("launch_material.runtime_record_result_invalid")
+        value = object.__new__(cls)
+        object.__setattr__(value, "record_bytes", bytes(record_bytes))
+        object.__setattr__(value, "trusted_root_bytes", bytes(trusted_root_bytes))
+        object.__setattr__(value, "signature_verification", signature_verification)
+        object.__setattr__(
+            value,
+            "_signature_proof_sha256",
+            _runtime_signature_proof_sha256(signature_verification),
+        )
+        object.__setattr__(value, "_seal", _AUTHENTICATED_RUNTIME_MATERIAL_SEAL)
+        return value
+
+    def _is_authenticated(self) -> bool:
+        try:
+            proof = self.signature_verification
+            return (
+                type(self) is AuthenticatedRuntimeRecordMaterial
+                and self._seal is _AUTHENTICATED_RUNTIME_MATERIAL_SEAL
+                and type(self.record_bytes) is bytes
+                and 1 <= len(self.record_bytes) <= MAXIMUM_RUNTIME_RECORD_BYTES
+                and type(self.trusted_root_bytes) is bytes
+                and 1 <= len(self.trusted_root_bytes) <= MAXIMUM_TRUSTED_ROOT_BYTES
+                and _runtime_signature_proof_is_exact(proof)
+                and type(self._signature_proof_sha256) is str
+                and runtime_binding.DIGEST_RE.fullmatch(self._signature_proof_sha256)
+                is not None
+                and self._signature_proof_sha256
+                == _runtime_signature_proof_sha256(proof)
+                and _digest(self.record_bytes) == proof.record_sha256
+                and _digest(self.trusted_root_bytes) == proof.trusted_root_sha256
+            )
+        except (AttributeError, TypeError):
+            return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,10 +177,21 @@ class ProvisionLaunchMaterial:
 
     authenticated_receipt: launch_binding.AuthenticatedBrokerLaunchReceipt
     launch_record_bytes: bytes
-    runtime_record_bytes: bytes
-    runtime_signature_verification: (
-        runtime_binding.VerifiedExternalRuntimeRecordSignature
-    )
+    authenticated_runtime_record: AuthenticatedRuntimeRecordMaterial
+
+    @property
+    def runtime_record_bytes(self) -> bytes:
+        return self.authenticated_runtime_record.record_bytes
+
+    @property
+    def trusted_root_bytes(self) -> bytes:
+        return self.authenticated_runtime_record.trusted_root_bytes
+
+    @property
+    def runtime_signature_verification(
+        self,
+    ) -> runtime_binding.VerifiedExternalRuntimeRecordSignature:
+        return self.authenticated_runtime_record.signature_verification
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,17 +211,30 @@ def _validate_runtime_material(
 ) -> AuthenticatedRuntimeRecordMaterial:
     if type(result) is not AuthenticatedRuntimeRecordMaterial:
         _fail("launch_material.runtime_record_result_invalid")
-    record_bytes = result.record_bytes
-    proof = result.signature_verification
+    try:
+        record_bytes = result.record_bytes
+        trusted_root_bytes = result.trusted_root_bytes
+        proof = result.signature_verification
+    except AttributeError:
+        _fail("launch_material.runtime_record_result_invalid")
     record_policy = document["external_runtime_record"]["record"]
-    signature_policy = document["external_runtime_record"]["signature"]
     root_policy = document["evidence_ingress"]["private_versioned_secret_source"][
         "secrets"
     ]["github_trusted_root"]
     if (
         type(record_bytes) is not bytes
         or not 1 <= len(record_bytes) <= record_policy["maximum_bytes"]
+        or type(trusted_root_bytes) is not bytes
+        or not root_policy["minimum_bytes"]
+        <= len(trusted_root_bytes)
+        <= root_policy["maximum_bytes"]
+    ):
+        _fail("launch_material.runtime_record_result_invalid")
+    signature_policy = document["external_runtime_record"]["signature"]
+    if (
+        not result._is_authenticated()
         or _digest(record_bytes) != reference.record_sha256
+        or _digest(trusted_root_bytes) != root_policy["sha256"]
         or type(proof) is not runtime_binding.VerifiedExternalRuntimeRecordSignature
         or not proof._is_verified()
         or proof.record_sha256 != reference.record_sha256
@@ -266,6 +398,5 @@ def receive_provision_launch_material(
     return ProvisionLaunchMaterial(
         authenticated_receipt=authenticated_receipt,
         launch_record_bytes=bytes(launch_record_bytes),
-        runtime_record_bytes=bytes(runtime_material.record_bytes),
-        runtime_signature_verification=runtime_material.signature_verification,
+        authenticated_runtime_record=runtime_material,
     )

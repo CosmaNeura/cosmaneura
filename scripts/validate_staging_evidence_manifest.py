@@ -689,6 +689,33 @@ def _read_bundle(
     }
 
 
+def _snapshot_bundle_bytes(
+    files: Mapping[str, bytes],
+    policy: Mapping[str, Any],
+) -> dict[str, bytes]:
+    """Detach one exact immutable byte map before validating any contents."""
+
+    try:
+        required_names = tuple(policy["required_files"])
+        if type(files) is not dict or len(files) != len(required_names):
+            raise EvidenceFailure("bundle.byte_map")
+        items = tuple(files.items())
+        if (
+            any(type(name) is not str for name, _value in items)
+            or {name for name, _value in items} != set(required_names)
+            or any(
+                type(value) is not bytes or not 1 <= len(value) <= MAXIMUM_FILE_BYTES
+                for _name, value in items
+            )
+        ):
+            raise EvidenceFailure("bundle.byte_map")
+        return {name: bytes(value) for name, value in sorted(items)}
+    except EvidenceFailure:
+        raise
+    except Exception:
+        raise EvidenceFailure("bundle.byte_map") from None
+
+
 def _verify_checksums(files: Mapping[str, bytes]) -> None:
     expected_names = sorted(set(files) - {"SHA256SUMS"})
     expected = "".join(
@@ -701,16 +728,25 @@ def _verify_checksums(files: Mapping[str, bytes]) -> None:
 def _verify_expected_file_sha256s(
     files: Mapping[str, bytes], expected_file_sha256s: Mapping[str, str]
 ) -> tuple[tuple[str, str], ...]:
+    try:
+        if type(expected_file_sha256s) is not dict or len(expected_file_sha256s) != len(
+            files
+        ):
+            raise EvidenceFailure("bundle.launch_binding")
+        items = tuple(expected_file_sha256s.items())
+        expected = dict(items)
+    except EvidenceFailure:
+        raise
+    except Exception:
+        raise EvidenceFailure("bundle.launch_binding")
     if (
-        type(expected_file_sha256s) is not dict
-        or set(expected_file_sha256s) != set(files)
+        any(type(name) is not str for name, _value in items)
+        or set(expected) != set(files)
         or any(
             type(value) is not str or DIGEST_RE.fullmatch(value) is None
-            for value in expected_file_sha256s.values()
+            for value in expected.values()
         )
-        or any(
-            expected_file_sha256s[name] != _digest(raw) for name, raw in files.items()
-        )
+        or any(expected[name] != _digest(raw) for name, raw in files.items())
     ):
         raise EvidenceFailure("bundle.launch_binding")
     return tuple((name, _digest(files[name])) for name in sorted(files))
@@ -1115,15 +1151,14 @@ def _validate_claim_artifact(
     return _validate_receipt(artifact, f"{kind}.receipt")
 
 
-def validate_bundle_snapshot(
+def _validate_bundle_snapshot_files(
     *,
     policy: Mapping[str, Any],
     policy_sha256: str,
-    bundle: Path,
+    files: dict[str, bytes],
     now: datetime,
     expected_file_sha256s: Mapping[str, str] | None = None,
 ) -> ValidatedEvidenceBundle:
-    files = _read_bundle(bundle, policy)
     launch_file_sha256s = None
     if expected_file_sha256s is not None:
         launch_file_sha256s = _verify_expected_file_sha256s(
@@ -1314,6 +1349,46 @@ def validate_bundle_snapshot(
             launch_digest_validation,
         )
     return snapshot
+
+
+def validate_bundle_snapshot_bytes(
+    *,
+    policy: Mapping[str, Any],
+    policy_sha256: str,
+    files: Mapping[str, bytes],
+    now: datetime,
+    expected_file_sha256s: Mapping[str, str] | None = None,
+) -> ValidatedEvidenceBundle:
+    """Validate one caller-independent snapshot of an exact in-memory bundle."""
+
+    snapshot = _snapshot_bundle_bytes(files, policy)
+    return _validate_bundle_snapshot_files(
+        policy=policy,
+        policy_sha256=policy_sha256,
+        files=snapshot,
+        now=now,
+        expected_file_sha256s=expected_file_sha256s,
+    )
+
+
+def validate_bundle_snapshot(
+    *,
+    policy: Mapping[str, Any],
+    policy_sha256: str,
+    bundle: Path,
+    now: datetime,
+    expected_file_sha256s: Mapping[str, str] | None = None,
+) -> ValidatedEvidenceBundle:
+    """Validate one safely read path bundle through the shared byte seam."""
+
+    files = _read_bundle(bundle, policy)
+    return _validate_bundle_snapshot_files(
+        policy=policy,
+        policy_sha256=policy_sha256,
+        files=files,
+        now=now,
+        expected_file_sha256s=expected_file_sha256s,
+    )
 
 
 def validate_bundle(

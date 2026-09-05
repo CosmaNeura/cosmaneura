@@ -216,6 +216,9 @@ def test_exact_private_reads_feed_same_process_authenticator_once(
 
     result = _read(case, shared_clock)
     assert result.record_bytes == launch_helpers.RUNTIME_BYTES
+    assert type(result.trusted_root_bytes) is bytes
+    assert result.trusted_root_bytes == ROOT_BYTES
+    assert result._is_authenticated()
     assert result.signature_verification is case["proof"]
     assert len(case["identity"].calls) == 2
     assert len(case["blob"].calls) == 2
@@ -475,6 +478,8 @@ def test_wire_response_rejects_unbounded_or_ambiguous_framing(
         "root-status",
         "root-content-type",
         "authenticator",
+        "authenticator-result",
+        "authenticator-wrong-root",
     ),
 )
 def test_material_or_authentication_failure_is_bounded(
@@ -537,6 +542,18 @@ def test_material_or_authentication_failure_is_bounded(
     elif stage == "root-content-type":
         case["vault"].responses[0].headers.replace_header("Content-Type", "text/plain")
         expected = "runtime_ingress.trusted_root_invalid"
+    elif stage == "authenticator-result":
+        monkeypatch.setattr(
+            ingress.authentication,
+            "authenticate_runtime_record_signature",
+            lambda *_args, **_kwargs: None,
+        )
+        expected = "runtime_ingress.authentication_failed"
+    elif stage == "authenticator-wrong-root":
+        object.__setattr__(
+            case["proof"], "trusted_root_sha256", binding._digest(b"wrong-root")
+        )
+        expected = "runtime_ingress.authentication_failed"
     else:
 
         def refuse(_policy: Any, **_kwargs: Any) -> None:

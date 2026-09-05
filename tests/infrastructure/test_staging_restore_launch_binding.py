@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # fmt: off
 from copy import copy, deepcopy
+from dataclasses import fields
 from datetime import UTC, datetime
 from typing import Any
 
@@ -166,16 +167,94 @@ def test_launch_record_materializes_exact_versioned_evidence_and_action_union(mu
         (name, f"sha256:{index:064x}")
         for index, name in enumerate(expected_names, 1)
     )
+    record_payload = runtime._parse_policy(provision.record_bytes)["payload"]
+    assert tuple(
+        (item.logical_name, item.versioned_https_uri, item.version_id, item.sha256)
+        for item in provision.evidence_file_authorities
+    ) == tuple(
+        (
+            name,
+            record_payload["evidence_files"][name]["versioned_https_uri"],
+            record_payload["evidence_files"][name]["version_id"],
+            record_payload["evidence_files"][name]["sha256"],
+        )
+        for name in expected_names
+    )
+    assert all(item._is_validated() for item in provision.evidence_file_authorities)
+    first_evidence = provision.evidence_file_authorities[0]
+    assert first_evidence.versioned_https_uri.endswith(
+        "/0123456789ab/SHA256SUMS?versionid=evidence-version-1"
+    )
+    assert first_evidence.version_id == "evidence-version-1"
     assert provision.attestation_bundle_sha256 == f"sha256:{'e' * 64}"
+    assert provision.attestation_bundle_authority is not None
+    assert (
+        provision.attestation_bundle_authority.logical_name,
+        provision.attestation_bundle_authority.versioned_https_uri,
+        provision.attestation_bundle_authority.version_id,
+        provision.attestation_bundle_authority.sha256,
+    ) == (
+        "github_attestation_bundle",
+        record_payload["github_attestation_bundle"]["versioned_https_uri"],
+        "attestation-version",
+        f"sha256:{'e' * 64}",
+    )
     assert provision.server_scope_hmac_key_sha256 == f"sha256:{'f' * 64}"
+    assert provision.server_scope_hmac_key_authority is not None
+    assert (
+        provision.server_scope_hmac_key_authority.logical_name,
+        provision.server_scope_hmac_key_authority.versioned_https_uri,
+        provision.server_scope_hmac_key_authority.version,
+        provision.server_scope_hmac_key_authority.encoding,
+        provision.server_scope_hmac_key_authority.material_sha256,
+    ) == (
+        "server_scope_hmac_key",
+        record_payload["server_scope_hmac_key"]["versioned_https_uri"],
+        record_payload["server_scope_hmac_key"]["version"],
+        "base64url-no-padding",
+        f"sha256:{'f' * 64}",
+    )
     assert provision.trusted_root_sha256 == policy["evidence_ingress"][
         "private_versioned_secret_source"
     ]["secrets"]["github_trusted_root"]["sha256"]
+    root_policy = policy["evidence_ingress"]["private_versioned_secret_source"][
+        "secrets"
+    ]["github_trusted_root"]
+    assert (
+        provision.trusted_root_authority.logical_name,
+        provision.trusted_root_authority.versioned_https_uri,
+        provision.trusted_root_authority.version,
+        provision.trusted_root_authority.encoding,
+        provision.trusted_root_authority.material_sha256,
+    ) == (
+        "github_trusted_root",
+        root_policy["versioned_https_uri"],
+        root_policy["version"],
+        "utf-8",
+        root_policy["sha256"],
+    )
+    assert cleanup.trusted_root_authority == provision.trusted_root_authority
+    assert provision.cleanup_mode is None
     assert provision.ttl_hours == 1
     assert cleanup.evidence_file_sha256s == ()
     assert cleanup.attestation_bundle_sha256 is None
     assert cleanup.server_scope_hmac_key_sha256 is None
+    assert cleanup.cleanup_mode == "selected_rehearsal"
     assert cleanup.ttl_hours is None
+    field_names = {field.name for field in fields(provision)}
+    assert {
+        "evidence_file_authorities",
+        "attestation_bundle_authority",
+        "server_scope_hmac_key_authority",
+        "trusted_root_authority",
+        "cleanup_mode",
+    } <= field_names
+    assert {
+        "evidence_file_sha256s",
+        "attestation_bundle_sha256",
+        "server_scope_hmac_key_sha256",
+        "trusted_root_sha256",
+    }.isdisjoint(field_names)
     raw, digest, uri = _record(policy, action="provision", runtime_record_sha256=runtime_digest)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_record.uri"):
         launch.validate_launch_record(policy, raw, record_sha256=digest, record_uri=7)  # type: ignore[arg-type]
@@ -185,6 +264,309 @@ def test_launch_record_materializes_exact_versioned_evidence_and_action_union(mu
     changed_digest = runtime._digest(changed_raw)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_record"):
         launch.validate_launch_record(policy, changed_raw, record_sha256=changed_digest, record_uri=uri.replace(digest[7:], changed_digest[7:]))
+
+
+@pytest.mark.parametrize(
+    ("authority_name", "field", "value"),
+    [
+        ("evidence", "versioned_https_uri", "https://attacker.invalid/evidence"),
+        ("evidence", "version_id", "substituted-version"),
+        ("evidence", "logical_name", "other.json"),
+        ("evidence", "sha256", f"sha256:{'0' * 64}"),
+        ("evidence", "_authority_sha256", f"sha256:{'0' * 64}"),
+        ("evidence", "_seal", object()),
+        ("attestation", "version_id", "substituted-version"),
+        ("hmac", "version", "substituted-version"),
+        ("hmac", "encoding", "utf-8"),
+        ("root", "versioned_https_uri", "https://attacker.invalid/root"),
+        ("root", "version", "substituted-version"),
+        ("root", "encoding", "base64url-no-padding"),
+    ],
+)
+def test_launch_authority_seals_reject_selector_tampering(
+    authority_name: str, field: str, value: Any
+) -> None:
+    policy = _policy()
+    record = _validated_record(
+        policy,
+        action="provision",
+        runtime_record_sha256=helpers._pointer_values()["record_sha256"],
+    )
+    authorities = {
+        "evidence": record.evidence_file_authorities[0],
+        "attestation": record.attestation_bundle_authority,
+        "hmac": record.server_scope_hmac_key_authority,
+        "root": record.trusted_root_authority,
+    }
+    authority = authorities[authority_name]
+    assert authority is not None
+    object.__setattr__(authority, field, value)
+    assert authority._is_validated() is False
+    assert record._is_validated() is False
+
+
+def test_launch_authorities_reject_direct_construction_and_cleanup_mode_tampering() -> None:
+    with pytest.raises(launch.LaunchBindingFailure, match="authority_unsealed"):
+        launch.ValidatedVersionedBlobAuthority()
+    with pytest.raises(launch.LaunchBindingFailure, match="authority_unsealed"):
+        launch.ValidatedVersionedSecretAuthority()
+    policy = _policy()
+    cleanup = _validated_record(
+        policy,
+        action="cleanup",
+        runtime_record_sha256=helpers._pointer_values()["record_sha256"],
+    )
+    object.__setattr__(cleanup, "cleanup_mode", "bounded_sweep")
+    assert cleanup._is_validated() is False
+    record = _validated_record(
+        policy,
+        action="provision",
+        runtime_record_sha256=helpers._pointer_values()["record_sha256"],
+    )
+    object.__setattr__(record, "record_uri", "https://attacker.invalid/record.json")
+    assert record._is_validated() is False
+
+
+def test_launch_authority_hidden_digests_and_cleanup_tuple_require_exact_types() -> None:
+    class AlwaysEqual:
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    class StringSubclass(str):
+        pass
+
+    policy = _policy()
+    runtime_digest = helpers._pointer_values()["record_sha256"]
+    for replacement in (AlwaysEqual(), StringSubclass(f"sha256:{'0' * 64}")):
+        provision = _validated_record(
+            policy, action="provision", runtime_record_sha256=runtime_digest
+        )
+        object.__setattr__(
+            provision.evidence_file_authorities[0],
+            "_authority_sha256",
+            replacement,
+        )
+        assert provision.evidence_file_authorities[0]._is_validated() is False
+        assert provision._is_validated() is False
+
+        provision = _validated_record(
+            policy, action="provision", runtime_record_sha256=runtime_digest
+        )
+        hmac = provision.server_scope_hmac_key_authority
+        assert hmac is not None
+        object.__setattr__(hmac, "_authority_sha256", replacement)
+        assert hmac._is_validated() is False
+        assert provision._is_validated() is False
+
+        provision = _validated_record(
+            policy, action="provision", runtime_record_sha256=runtime_digest
+        )
+        object.__setattr__(provision, "_record_uri_sha256", replacement)
+        assert provision._is_validated() is False
+
+    cleanup = _validated_record(
+        policy, action="cleanup", runtime_record_sha256=runtime_digest
+    )
+    object.__setattr__(cleanup, "evidence_file_authorities", AlwaysEqual())
+    assert cleanup._is_validated() is False
+
+
+def test_launch_record_preserves_bounded_sweep_and_rejects_equal_wrong_types() -> None:
+    policy = _policy()
+    runtime_digest = helpers._pointer_values()["record_sha256"]
+    raw, digest, uri = _record(
+        policy, action="cleanup", runtime_record_sha256=runtime_digest
+    )
+    value = runtime._parse_policy(raw)
+    value["payload"] = {"mode": "bounded_sweep"}
+    raw = runtime._canonical(value)
+    sweep_digest = runtime._digest(raw)
+    sweep = launch.validate_launch_record(
+        policy,
+        raw,
+        record_sha256=sweep_digest,
+        record_uri=uri.replace(digest[7:], sweep_digest[7:]),
+    )
+    assert sweep.cleanup_mode == "bounded_sweep"
+    assert sweep.rehearsal_id is None
+    assert sweep.evidence_file_authorities == ()
+    assert sweep._is_validated()
+
+    class StringSubclass(str):
+        pass
+
+    provision = _validated_record(
+        policy, action="provision", runtime_record_sha256=runtime_digest
+    )
+    hmac = provision.server_scope_hmac_key_authority
+    assert hmac is not None
+    object.__setattr__(hmac, "encoding", StringSubclass("base64url-no-padding"))
+    assert hmac._is_validated() is False
+    assert provision._is_validated() is False
+    provision = _validated_record(
+        policy, action="provision", runtime_record_sha256=runtime_digest
+    )
+    object.__setattr__(provision, "ttl_hours", True)
+    assert provision._is_validated() is False
+    provision = _validated_record(
+        policy, action="provision", runtime_record_sha256=runtime_digest
+    )
+    object.__setattr__(provision, "action", StringSubclass("provision"))
+    assert provision._is_validated() is False
+    provision = _validated_record(
+        policy, action="provision", runtime_record_sha256=runtime_digest
+    )
+    object.__setattr__(provision, "record_uri", StringSubclass(provision.record_uri))
+    assert provision._is_validated() is False
+
+
+def test_launch_record_refuses_oversized_authority_selectors_before_minting() -> None:
+    policy = _policy()
+    raw, _digest, _uri = _record(
+        policy,
+        action="provision",
+        runtime_record_sha256=helpers._pointer_values()["record_sha256"],
+    )
+    value = runtime._parse_policy(raw)
+    item = value["payload"]["evidence_files"]["SHA256SUMS"]
+    oversized_version = "v" * (launch.MAXIMUM_AUTHORITY_VERSION_CHARACTERS + 1)
+    item["version_id"] = oversized_version
+    item["versioned_https_uri"] = item["versioned_https_uri"].split("?", 1)[0] + (
+        f"?versionid={oversized_version}"
+    )
+    changed_raw = runtime._canonical(value)
+    changed_digest = runtime._digest(changed_raw)
+    mailbox = policy["launch_binding"]["mailbox"]
+    changed_uri = (
+        f"https://{mailbox['account_host']}/"
+        f"{mailbox['container_names']['provision']}/{changed_digest[7:]}.json"
+    )
+    with pytest.raises(launch.LaunchBindingFailure, match="launch_record.evidence"):
+        launch.validate_launch_record(
+            policy,
+            changed_raw,
+            record_sha256=changed_digest,
+            record_uri=changed_uri,
+        )
+
+
+@pytest.mark.parametrize(
+    ("authority", "code"),
+    [
+        ("evidence", "launch_record.evidence"),
+        ("hmac", "launch_record.hmac"),
+        ("root", "launch_record.trusted_root"),
+    ],
+)
+def test_launch_record_refuses_noncanonical_https_scheme_before_minting(
+    authority: str,
+    code: str,
+) -> None:
+    policy = _policy()
+    secrets = policy["evidence_ingress"]["private_versioned_secret_source"][
+        "secrets"
+    ]
+    if authority in {"hmac", "root"}:
+        secret_name = (
+            "server_scope_hmac_key" if authority == "hmac" else "github_trusted_root"
+        )
+        secrets[secret_name]["versioned_https_uri"] = secrets[secret_name][
+            "versioned_https_uri"
+        ].replace("https://", "HTTPS://", 1)
+    raw, digest, uri = _record(
+        policy,
+        action="provision",
+        runtime_record_sha256=helpers._pointer_values()["record_sha256"],
+    )
+    if authority == "evidence":
+        value = runtime._parse_policy(raw)
+        item = value["payload"]["evidence_files"]["SHA256SUMS"]
+        item["versioned_https_uri"] = item["versioned_https_uri"].replace(
+            "https://", "HTTPS://", 1
+        )
+        raw = runtime._canonical(value)
+        changed_digest = runtime._digest(raw)
+        uri = uri.replace(digest[7:], changed_digest[7:])
+        digest = changed_digest
+    with pytest.raises(launch.LaunchBindingFailure, match=code):
+        launch.validate_launch_record(
+            policy,
+            raw,
+            record_sha256=digest,
+            record_uri=uri,
+        )
+
+
+@pytest.mark.parametrize("variant", ("embedded-control", "empty-fragment"))
+@pytest.mark.parametrize(
+    ("authority", "code"),
+    [
+        ("evidence", "launch_record.evidence"),
+        ("hmac", "launch_record.hmac"),
+        ("record", "launch_record.uri"),
+    ],
+)
+def test_launch_record_refuses_noncanonical_uri_text_before_minting(
+    authority: str,
+    code: str,
+    variant: str,
+) -> None:
+    def mutate(uri: str) -> str:
+        if variant == "embedded-control":
+            return uri.replace(".net/", ".net/\n", 1)
+        return f"{uri}#"
+
+    policy = _policy()
+    if authority == "hmac":
+        secret = policy["evidence_ingress"]["private_versioned_secret_source"][
+            "secrets"
+        ]["server_scope_hmac_key"]
+        secret["versioned_https_uri"] = mutate(secret["versioned_https_uri"])
+    raw, digest, uri = _record(
+        policy,
+        action="provision",
+        runtime_record_sha256=helpers._pointer_values()["record_sha256"],
+    )
+    if authority == "evidence":
+        value = runtime._parse_policy(raw)
+        item = value["payload"]["evidence_files"]["SHA256SUMS"]
+        item["versioned_https_uri"] = mutate(item["versioned_https_uri"])
+        raw = runtime._canonical(value)
+        changed_digest = runtime._digest(raw)
+        uri = uri.replace(digest[7:], changed_digest[7:])
+        digest = changed_digest
+    elif authority == "record":
+        uri = mutate(uri)
+    with pytest.raises(launch.LaunchBindingFailure, match=code):
+        launch.validate_launch_record(
+            policy,
+            raw,
+            record_sha256=digest,
+            record_uri=uri,
+        )
+
+
+def test_launch_record_refuses_placeholder_root_digest_before_minting() -> None:
+    policy = _policy()
+    policy["evidence_ingress"]["private_versioned_secret_source"]["secrets"][
+        "github_trusted_root"
+    ]["sha256"] = "CONFIGURE_EXACT_RESTORE_GITHUB_TRUSTED_ROOT_SHA256"
+    raw, digest, uri = _record(
+        policy,
+        action="cleanup",
+        runtime_record_sha256=helpers._pointer_values()["record_sha256"],
+    )
+    with pytest.raises(
+        launch.LaunchBindingFailure, match="launch_record.trusted_root"
+    ):
+        launch.validate_launch_record(
+            policy,
+            raw,
+            record_sha256=digest,
+            record_uri=uri,
+        )
+
+
 @pytest.mark.parametrize(
     "changes",
     [
@@ -327,7 +709,7 @@ def test_receipt_binds_runtime_both_jobs_and_actual_execution_template(monkeypat
             launch.validate_received_launch_receipt(policy, authenticated_receipt=authenticate(runtime._canonical(changed)), launch_record=job_record, runtime_record=runtime_record, validation_now=VALIDATION_NOW)
     mismatched_record = copy(job_record)
     object.__setattr__(mismatched_record, "runtime_record_sha256", f"sha256:{'0' * 64}")
-    with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.binding"):
+    with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.inputs"):
         launch.validate_received_launch_receipt(policy, authenticated_receipt=authenticated, launch_record=mismatched_record, runtime_record=runtime_record, validation_now=VALIDATION_NOW)
     with pytest.raises(launch.LaunchBindingFailure, match="launch_receipt.expired"):
         launch.validate_received_launch_receipt(

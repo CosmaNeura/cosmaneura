@@ -227,6 +227,17 @@ activation bit changed. Before any future rehearsal, the configured GitHub-only
 root must be proven to fit Key Vault and the 25,600-byte policy cap; see the
 [private-reader flight plan](flight-plans/2026-09-04-staging-runtime-record-private-readers.md).
 
+A further dormant boundary now retains every exact validated evidence and
+attestation Blob selector, both exact-version secret selectors, and cleanup
+mode in record-bound sealed authority objects. The same-process runtime carrier
+keeps the exact GitHub-root bytes that were already authenticated, while the
+manifest validator can consume a detached exact mapping of immutable bytes
+without reading an evidence-bundle path. These are future dependency-assembly inputs only:
+the existing public path seam is unchanged, the default factory still refuses,
+and no reader, workflow, Terraform, cleanup, restore, or activation behavior is
+enabled. See the
+[authority-seal flight plan](flight-plans/2026-09-05-staging-launch-authority-seals.md).
+
 ## Dormant restore-sanitizer contract
 
 `restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.

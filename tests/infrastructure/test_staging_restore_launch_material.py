@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import fields
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ NOW = datetime(2026, 9, 4, 12, 4, tzinfo=UTC)
 LAUNCH_BYTES = b'{"launch":"exact"}'
 RUNTIME_BYTES = b'{"runtime":"exact"}'
 RUNTIME_SIGNATURE_BYTES = b'{"sigstore":"exact"}'
+TRUSTED_ROOT_BYTES = b'{"root":"exact-private-version"}'
 _DEFAULT_RUNTIME_RESULT = object()
 
 
@@ -33,6 +35,7 @@ def _mailbox_objects(
     *,
     runtime_reference_overrides: dict[str, str] | None = None,
 ) -> dict[str, bytes]:
+    _configure_trusted_root(policy)
     receipt = json.loads(mailbox_helpers._receipt(policy, "provision"))
     launch_sha256 = binding._digest(LAUNCH_BYTES)
     runtime_sha256 = binding._digest(RUNTIME_BYTES)
@@ -86,6 +89,39 @@ def _signature_proof(
     )
 
 
+def _configure_trusted_root(policy: dict[str, Any]) -> None:
+    policy["evidence_ingress"]["private_versioned_secret_source"]["secrets"][
+        "github_trusted_root"
+    ]["sha256"] = binding._digest(TRUSTED_ROOT_BYTES)
+
+
+def _forged_runtime_material(
+    policy: dict[str, Any],
+    *,
+    record_bytes: bytes = RUNTIME_BYTES,
+    trusted_root_bytes: bytes = TRUSTED_ROOT_BYTES,
+    proof: Any | None = None,
+) -> material.AuthenticatedRuntimeRecordMaterial:
+    value = object.__new__(material.AuthenticatedRuntimeRecordMaterial)
+    object.__setattr__(value, "record_bytes", record_bytes)
+    object.__setattr__(value, "trusted_root_bytes", trusted_root_bytes)
+    object.__setattr__(
+        value,
+        "signature_verification",
+        _signature_proof(policy) if proof is None else proof,
+    )
+    object.__setattr__(value, "_seal", material._AUTHENTICATED_RUNTIME_MATERIAL_SEAL)
+    return value
+
+
+def _runtime_material_without_proof() -> material.AuthenticatedRuntimeRecordMaterial:
+    value = object.__new__(material.AuthenticatedRuntimeRecordMaterial)
+    object.__setattr__(value, "record_bytes", RUNTIME_BYTES)
+    object.__setattr__(value, "trusted_root_bytes", TRUSTED_ROOT_BYTES)
+    object.__setattr__(value, "_seal", material._AUTHENTICATED_RUNTIME_MATERIAL_SEAL)
+    return value
+
+
 class Sources:
     def __init__(
         self,
@@ -95,11 +131,13 @@ class Sources:
         runtime_result: Any = _DEFAULT_RUNTIME_RESULT,
         launch_effect: Callable[[], None] | None = None,
     ) -> None:
+        _configure_trusted_root(policy)
         self.policy = policy
         self.launch_result = launch_result
         self.runtime_result = (
-            material.AuthenticatedRuntimeRecordMaterial(
+            material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
                 record_bytes=RUNTIME_BYTES,
+                trusted_root_bytes=TRUSTED_ROOT_BYTES,
                 signature_verification=_signature_proof(policy),
             )
             if runtime_result is _DEFAULT_RUNTIME_RESULT
@@ -190,12 +228,83 @@ def test_real_receiver_flows_into_exact_executor_material(
     assert result.authenticated_receipt.action == "provision"
     assert result.launch_record_bytes == LAUNCH_BYTES
     assert result.runtime_record_bytes == RUNTIME_BYTES
+    assert result.trusted_root_bytes == TRUSTED_ROOT_BYTES
+    assert result.authenticated_runtime_record is sources.runtime_result
+    assert result.authenticated_runtime_record._is_authenticated()
     assert result.runtime_signature_verification._is_verified()
+    assert tuple(field.name for field in fields(result)) == (
+        "authenticated_receipt",
+        "launch_record_bytes",
+        "authenticated_runtime_record",
+    )
+    assert not hasattr(result, "__dict__")
+    assert repr(RUNTIME_BYTES) not in repr(result)
+    assert repr(TRUSTED_ROOT_BYTES) not in repr(result)
     assert sources.calls == ["launch_record", "runtime_record"]
     assert [request.object_kind for request in transport.requests] == [
         "receipt",
         "signature_envelope",
     ]
+
+
+def test_runtime_material_rejects_public_construction_and_detects_byte_tampering() -> (
+    None
+):
+    with pytest.raises(
+        material.LaunchMaterialFailure,
+        match="^launch_material.runtime_record_result_invalid$",
+    ):
+        material.AuthenticatedRuntimeRecordMaterial()
+    policy = helpers._configured_policy()
+    _configure_trusted_root(policy)
+    authenticated = (
+        material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+            record_bytes=RUNTIME_BYTES,
+            trusted_root_bytes=TRUSTED_ROOT_BYTES,
+            signature_verification=_signature_proof(policy),
+        )
+    )
+    assert authenticated._is_authenticated()
+    object.__setattr__(authenticated, "trusted_root_bytes", b"substituted")
+    assert authenticated._is_authenticated() is False
+
+
+@pytest.mark.parametrize(
+    ("record_bytes", "trusted_root_bytes"),
+    [
+        (b"x" * (material.MAXIMUM_RUNTIME_RECORD_BYTES + 1), TRUSTED_ROOT_BYTES),
+        (RUNTIME_BYTES, b"x" * (material.MAXIMUM_TRUSTED_ROOT_BYTES + 1)),
+    ],
+)
+def test_runtime_material_rejects_oversize_before_hashing(
+    monkeypatch: pytest.MonkeyPatch,
+    record_bytes: bytes,
+    trusted_root_bytes: bytes,
+) -> None:
+    policy = helpers._configured_policy()
+    _configure_trusted_root(policy)
+    proof = _signature_proof(policy)
+    forged = _forged_runtime_material(
+        policy,
+        record_bytes=record_bytes,
+        trusted_root_bytes=trusted_root_bytes,
+        proof=proof,
+    )
+    monkeypatch.setattr(
+        material,
+        "_digest",
+        lambda _raw: pytest.fail("oversize material was hashed"),
+    )
+    assert forged._is_authenticated() is False
+    with pytest.raises(
+        material.LaunchMaterialFailure,
+        match="^launch_material.runtime_record_result_invalid$",
+    ):
+        material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+            record_bytes=record_bytes,
+            trusted_root_bytes=trusted_root_bytes,
+            signature_verification=proof,
+        )
 
 
 def test_checked_in_policy_refuses_before_environment_or_sources(
@@ -245,25 +354,25 @@ def test_launch_record_bytes_are_exact_and_bounded_before_runtime_authentication
 
 
 @pytest.mark.parametrize(
-    "runtime_result",
+    "runtime_result_factory",
     (
-        None,
-        (RUNTIME_BYTES, object()),
-        material.AuthenticatedRuntimeRecordMaterial(
-            record_bytes=b"wrong",
-            signature_verification=object(),  # type: ignore[arg-type]
+        lambda _policy: None,
+        lambda _policy: (RUNTIME_BYTES, object()),
+        lambda policy: _forged_runtime_material(policy, record_bytes=b"wrong"),
+        lambda policy: _forged_runtime_material(policy, record_bytes=b"x" * 65_537),
+        lambda policy: _forged_runtime_material(
+            policy, trusted_root_bytes=b"wrong-root"
         ),
-        material.AuthenticatedRuntimeRecordMaterial(
-            record_bytes=b"x" * 65_537,
-            signature_verification=object(),  # type: ignore[arg-type]
-        ),
+        lambda _policy: _runtime_material_without_proof(),
     ),
 )
 def test_runtime_record_result_requires_exact_carrier_bytes_and_proof(
-    monkeypatch: pytest.MonkeyPatch, runtime_result: Any
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_result_factory: Callable[[dict[str, Any]], Any],
 ) -> None:
     policy = helpers._configured_policy()
-    sources = Sources(policy, runtime_result=runtime_result)
+    _configure_trusted_root(policy)
+    sources = Sources(policy, runtime_result=runtime_result_factory(policy))
     with pytest.raises(
         material.LaunchMaterialFailure,
         match="^launch_material.runtime_record_result_invalid$",
@@ -286,15 +395,62 @@ def test_runtime_signature_proof_is_exactly_cross_bound(
     monkeypatch: pytest.MonkeyPatch, field: str, value: str
 ) -> None:
     policy = helpers._configured_policy()
+    _configure_trusted_root(policy)
     proof = _signature_proof(policy)
     object.__setattr__(proof, field, value)
     sources = Sources(
         policy,
-        runtime_result=material.AuthenticatedRuntimeRecordMaterial(
-            record_bytes=RUNTIME_BYTES,
-            signature_verification=proof,
-        ),
+        runtime_result=_forged_runtime_material(policy, proof=proof),
     )
+    with pytest.raises(
+        material.LaunchMaterialFailure,
+        match="^launch_material.runtime_record_result_invalid$",
+    ):
+        _receive(monkeypatch, policy=policy, sources=sources)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "record_sha256",
+        "bundle_sha256",
+        "trusted_root_sha256",
+        "certificate_oidc_issuer",
+        "certificate_identity",
+    ),
+)
+def test_runtime_material_rejects_custom_equal_proof_fields(
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    class AlwaysEqual:
+        def __eq__(self, _other: object) -> bool:
+            return True
+
+    policy = helpers._configured_policy()
+    _configure_trusted_root(policy)
+    proof = _signature_proof(policy)
+    authenticated = (
+        material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+            record_bytes=RUNTIME_BYTES,
+            trusted_root_bytes=TRUSTED_ROOT_BYTES,
+            signature_verification=proof,
+        )
+    )
+    object.__setattr__(proof, field, AlwaysEqual())
+    assert authenticated._is_authenticated() is False
+    with pytest.raises(
+        material.LaunchMaterialFailure,
+        match="^launch_material.runtime_record_result_invalid$",
+    ):
+        material.AuthenticatedRuntimeRecordMaterial._from_authenticated_read(
+            record_bytes=RUNTIME_BYTES,
+            trusted_root_bytes=TRUSTED_ROOT_BYTES,
+            signature_verification=proof,
+        )
+    forged = _forged_runtime_material(policy, proof=proof)
+    assert forged._is_authenticated() is False
+    sources = Sources(policy, runtime_result=forged)
     with pytest.raises(
         material.LaunchMaterialFailure,
         match="^launch_material.runtime_record_result_invalid$",
@@ -392,13 +548,11 @@ def test_unsealed_signature_and_cleanup_receipt_are_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policy = helpers._configured_policy()
+    _configure_trusted_root(policy)
     unsealed = object.__new__(binding.VerifiedExternalRuntimeRecordSignature)
     sources = Sources(
         policy,
-        runtime_result=material.AuthenticatedRuntimeRecordMaterial(
-            record_bytes=RUNTIME_BYTES,
-            signature_verification=unsealed,
-        ),
+        runtime_result=_forged_runtime_material(policy, proof=unsealed),
     )
     with pytest.raises(
         material.LaunchMaterialFailure,
