@@ -1,0 +1,90 @@
+name: Bootstrap Staging Recovery Image
+# Dormant Tier-2 control: manual capture, then receipt-bound founder pin.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Read-only evidence capture, or pin from an exact reviewed capture receipt"
+        required: true
+        default: capture
+        type: choice
+        options: [capture, pin]
+      capture_run_id:
+        description: "Pin only: workflow run ID that produced the reviewed capture receipt"
+        required: false
+        type: string
+      capture_receipt_sha256:
+        description: "Pin only: exact reviewed capture receipt digest (sha256:<64 lowercase hex>)"
+        required: false
+        type: string
+      typed_confirmation:
+        description: "Pin only: exact digest-bound acceptance phrase from the flight plan"
+        required: false
+        type: string
+permissions: {}
+concurrency:
+  group: cosmaneura-staging-container-apps
+  cancel-in-progress: false
+jobs:
+  bootstrap:
+    name: Capture or pin historical staging recovery image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    permissions:
+      actions: read
+      contents: read
+      deployments: read
+      id-token: write
+    steps:
+      - name: Authorize founder dispatch from exact current master
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "CosmaNeura/cosmaneura"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          test "$GITHUB_REF" = "refs/heads/master"
+          test "$GITHUB_REF_PROTECTED" = "true"
+          test "$GITHUB_ACTOR" = "JohnClem"
+          test "$GITHUB_TRIGGERING_ACTOR" = "JohnClem"
+          test "$REQUESTED_MODE" = "capture" -o "$REQUESTED_MODE" = "pin"
+          test "$GITHUB_SHA" = "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/master" --jq .object.sha)"
+      - name: Check out exact protected-master controls
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify exact control checkout
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Authenticate exact staging identity
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Execute bounded bootstrap mode
+        id: execute
+        continue-on-error: true
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+          BOOTSTRAP_MODE: ${{ inputs.mode }}
+          CAPTURE_RUN_ID: ${{ inputs.capture_run_id }}
+          CAPTURE_RECEIPT_SHA256: ${{ inputs.capture_receipt_sha256 }}
+          GH_TOKEN: ${{ github.token }}
+          TYPED_CONFIRMATION: ${{ inputs.typed_confirmation }}
+        run: bash infra-staging/bootstrap_recovery_image.sh
+      - name: Preserve non-secret terminal receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-recovery-image-bootstrap-receipt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/staging-recovery-image-bootstrap-receipt.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Enforce bootstrap result
+        if: always() && steps.execute.outcome != 'success'
+        run: exit 1
