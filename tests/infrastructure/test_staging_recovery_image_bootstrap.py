@@ -282,7 +282,11 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     assert 'Authorization: Bearer $access_token' not in source
     assert "--data-urlencode 'refresh_token@-'" in source
     assert "az account list --refresh --all" in source
-    assert "--include-groups --include-inherited --all" in source
+    assert "--include-inherited --all" not in source
+    assert '--scope "$scope" --include-groups --include-inherited --subscription' in source
+    assert 'for scope in "$RESOURCE_GROUP_ID" "$REGISTRY_RESOURCE_ID" "$MANAGED_ENVIRONMENT_ID"' in source
+    assert source.count('$RESOURCE_GROUP_ID/providers/Microsoft.App/containerApps/cosmaneura-staging-') == 3
+    assert "unique_by([(.principalId|ascii_downcase),(.roleDefinitionId|ascii_downcase),(.scope|ascii_downcase)])" in source
     assert "/environments/Staging/deployment-branch-policies?per_page=100" in source
     assert 'revalidate_progress "$((next_progress - 1))"' in source
     assert source.count("validate_capture_authorization") == 6

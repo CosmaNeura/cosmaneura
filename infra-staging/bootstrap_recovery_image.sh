@@ -70,6 +70,7 @@ policy_value() {
 REGISTRY_NAME=$(policy_value '.registry.name')
 REGISTRY_SERVER=$(policy_value '.registry.login_server')
 REGISTRY_REPOSITORY=$(policy_value '.registry.repository')
+REGISTRY_RESOURCE_ID=$(policy_value '.registry.resource_id')
 SOURCE_TAG=$(policy_value '.registry.source_tag')
 MANIFEST_DIGEST=$(policy_value '.registry.manifest_digest')
 CONFIG_DIGEST=$(policy_value '.registry.config_digest')
@@ -79,12 +80,19 @@ EXPECTED_CLIENT_ID=$(policy_value '.azure.client_id')
 EXPECTED_PRINCIPAL_ID=$(policy_value '.azure.principal_id')
 EXPECTED_TENANT_ID=$(policy_value '.azure.tenant_id')
 EXPECTED_SUBSCRIPTION_ID=$(policy_value '.azure.subscription_id')
+RESOURCE_GROUP_ID="/subscriptions/$EXPECTED_SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP"
+MANAGED_ENVIRONMENT_ID="$RESOURCE_GROUP_ID/providers/Microsoft.App/managedEnvironments/cosmaneura-staging-app-environment"
 PINNED_SUFFIX=$(policy_value '.pinned_revision_suffix')
 EXPECTED_CONFIRMATION=$(policy_value '.confirmation')
 HISTORICAL_RUN_ID=$(policy_value '.historical_publication.run.id')
 HISTORICAL_JOB_ID=$(policy_value '.historical_publication.job.id')
 collect_effective_assignments() {
-	az role assignment list --assignee-object-id "$EXPECTED_PRINCIPAL_ID"  --include-groups --include-inherited --all  --subscription "$EXPECTED_SUBSCRIPTION_ID" --fill-principal-name false  --fill-role-definition-name false  --query '[].{principalId:principalId,principalType:principalType,roleDefinitionId:roleDefinitionId,scope:scope}' -o json
+	local scope current combined='[]'
+	for scope in "$RESOURCE_GROUP_ID" "$REGISTRY_RESOURCE_ID" "$MANAGED_ENVIRONMENT_ID" "$RESOURCE_GROUP_ID/providers/Microsoft.App/containerApps/cosmaneura-staging-worker" "$RESOURCE_GROUP_ID/providers/Microsoft.App/containerApps/cosmaneura-staging-scheduler" "$RESOURCE_GROUP_ID/providers/Microsoft.App/containerApps/cosmaneura-staging-app"; do
+		current=$(az role assignment list --assignee-object-id "$EXPECTED_PRINCIPAL_ID" --scope "$scope" --include-groups --include-inherited --subscription "$EXPECTED_SUBSCRIPTION_ID" --fill-principal-name false --fill-role-definition-name false --query '[].{principalId:principalId,principalType:principalType,roleDefinitionId:roleDefinitionId,scope:scope}' -o json)
+		combined=$(jq -cn --argjson left "$combined" --argjson right "$current" '$left + $right | unique_by([(.principalId|ascii_downcase),(.roleDefinitionId|ascii_downcase),(.scope|ascii_downcase)])')
+	done
+	printf '%s\n' "$combined"
 }
 collect_environment_policy() {
 	local environment branches
