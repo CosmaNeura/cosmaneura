@@ -92,7 +92,10 @@ The later isolated synthetic-only rehearsal remains mandatory.
    that 120-second action window begin. The same deadline covers all five
    entries, another complete GET-only ARM snapshot, final remote-state,
    source/master, provider, plan-age, terminal, and expiry checks, and the
-   one-use claim.
+   one-use claim. Immediately after the entries, the reader clears the earlier
+   ARM response-date and byte counters for the final snapshot while retaining
+   the exact already-running action deadline; it cannot create a fresh or
+   longer window.
 8. The consumer atomically creates the owner-only one-use claim and directly
    opens and revalidates the plan descriptor-relatively, keeps that exact
    owner-only descriptor across `execve`, and replaces itself with OpenTofu

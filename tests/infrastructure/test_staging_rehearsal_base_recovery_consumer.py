@@ -386,9 +386,19 @@ class _Reader:
             'user': {'type': 'user', 'name': 'operator@example.invalid'},
         }
         self.dates = [NOW]
+        self._deadline = -1.0
+        self._bytes_read = consumer.handoff.MAX_TOTAL_ARM_BYTES + 1
+        self.action_deadlines: list[float] = []
+        self.action_deadline_offset = 0.0
         self.runtime_checked = False
     def refresh_account(self) -> None:
         pass
+    def begin_action_readback(self, *, deadline: float) -> float:
+        self.action_deadlines.append(deadline)
+        self.dates = []
+        self._bytes_read = 0
+        self._deadline = deadline
+        return deadline + self.action_deadline_offset
     def revalidate_runtime(self) -> None:
         self.runtime_checked = True
 
@@ -445,7 +455,7 @@ def test_live_revalidation_accepts_two_identical_snapshots_and_state_pulls(tmp_p
     assert pulls == ['pull', 'pull'] and reader.runtime_checked
 
 
-@pytest.mark.parametrize('failure', ['runtime', 'account', 'live_drift', 'remote_state', 'source', 'provider', 'deadline', 'stale', 'expired'])
+@pytest.mark.parametrize('failure', ['runtime', 'account', 'window', 'live_drift', 'remote_state', 'source', 'provider', 'deadline', 'stale', 'expired'])
 def test_runtime_state_and_arm_freshness_are_rechecked_immediately_before_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     _, _, execution, _ = _artifacts(tmp_path)
     receipt = _receipt()
@@ -464,6 +474,8 @@ def test_runtime_state_and_arm_freshness_are_rechecked_immediately_before_claim(
         now = NOW + timedelta(minutes=6)
     elif failure == 'expired':
         expires = NOW
+    if failure == 'window':
+        reader.action_deadline_offset = 1.0
     binding = consumer.LocalBinding(binding.receipt, binding.receipt_bytes, binding.base, binding.tofu, binding.state, binding.nonce, binding.observed, expires, binding.identities)
     source = consumer.recovery.SourceSnapshot(SOURCE, {}, b'lock', 'f' * 64 if failure == 'source' else '4' * 64)
     monkeypatch.setattr(consumer, '_source_binding', lambda *_: (source, 'c' * 64))
@@ -493,8 +505,29 @@ def test_post_confirmation_snapshot_uses_only_fresh_response_dates(tmp_path: Pat
     monkeypatch.setattr(consumer.handoff, '_capture_snapshot', lambda *_: reader.dates.append(NOW) or projection)
     monkeypatch.setattr(consumer.handoff, '_pull_remote_state', lambda **_: receipt['remote_state_sha256'])
     monkeypatch.setattr(consumer.recovery, '_provider_tree_sha256', lambda _: 'a' * 64)
-    newest = consumer._revalidate_preclaim(binding, execution_dir=execution, reader=reader, expected_source_commit=SOURCE, expected_principal_sha256=PRINCIPAL_DIGEST, expected_live_snapshot=consumer._canonical(projection), deadline=consumer.time.monotonic() + 10, clock=lambda: NOW)
+    deadline = consumer.time.monotonic() + 10
+    newest = consumer._revalidate_preclaim(binding, execution_dir=execution, reader=reader, expected_source_commit=SOURCE, expected_principal_sha256=PRINCIPAL_DIGEST, expected_live_snapshot=consumer._canonical(projection), deadline=deadline, clock=lambda: NOW)
     assert newest == NOW and reader.runtime_checked
+    assert reader.action_deadlines == [deadline] and reader._deadline == deadline
+    assert reader.dates == [NOW] and reader._bytes_read == 0
+
+
+def test_post_confirmation_snapshot_overrun_refuses_before_following_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, execution, _ = _artifacts(tmp_path)
+    receipt = _receipt()
+    projection = {'account': {'principal_sha256': PRINCIPAL_DIGEST}, 'exact': True}
+    receipt['live_snapshot_sha256'] = consumer._digest(consumer._canonical(projection))
+    binding = _binding(execution, receipt)
+    reader = _Reader()
+    ticks = iter((0.0, 121.0))
+    pulls: list[str] = []
+    monkeypatch.setattr(consumer.time, 'monotonic', lambda: next(ticks))
+    monkeypatch.setattr(consumer.handoff, '_state_attributes', lambda _: {})
+    monkeypatch.setattr(consumer.handoff, '_capture_snapshot', lambda *_: reader.dates.append(NOW) or projection)
+    monkeypatch.setattr(consumer.handoff, '_pull_remote_state', lambda **_: pulls.append('pull') or receipt['remote_state_sha256'])
+    with pytest.raises(consumer.ConsumerError, match='confirmation_timeout'):
+        consumer._revalidate_preclaim(binding, execution_dir=execution, reader=reader, expected_source_commit=SOURCE, expected_principal_sha256=PRINCIPAL_DIGEST, expected_live_snapshot=consumer._canonical(projection), deadline=120.0, clock=lambda: NOW)
+    assert reader.action_deadlines == [120.0] and pulls == []
 
 
 def test_action_time_rejects_plan_that_ages_past_four_hours_after_confirmation(tmp_path: Path) -> None:

@@ -43,7 +43,7 @@ except Exception:
 
 MAX_RECEIPT_BYTES = 16 * 1024
 MAX_PROMPT_BYTES = 256
-CONFIRMATION_SECONDS = 120.0
+CONFIRMATION_SECONDS = handoff.MAX_ACTION_READBACK_SECONDS
 CLAIM_NAME = '.base-recovery-apply-claimed-v1'
 NONCE_NAME = '.base-recovery-handoff-nonce'
 POLICY_ID = 'cosmaneura-staging-rehearsal-base-recovery-handoff-v1'
@@ -489,6 +489,8 @@ def _validate_action_time(binding: LocalBinding, *, newest_arm_date: datetime, c
 def _revalidate_preclaim(binding: LocalBinding, *, execution_dir: Path, reader: Any, expected_source_commit: str, expected_principal_sha256: str, expected_live_snapshot: bytes, deadline: float, clock: Callable[[], datetime]) -> datetime:
     receipt = binding.receipt
     _require_deadline(deadline)
+    if reader.begin_action_readback(deadline=deadline) != deadline:
+        _fail('live_snapshot.window_invalid')
     reader.refresh_account()
     account = reader.account
     if account.get('id') != handoff.SUBSCRIPTION or account.get('tenantId') != handoff.TENANT or account.get('environmentName') != 'AzureCloud' or account.get('state') != 'Enabled' or not isinstance(account.get('user'), Mapping) or account['user'].get('type') != 'user' or _digest(str(account['user'].get('name', '')).encode()) != expected_principal_sha256:
@@ -618,8 +620,8 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
             _fail('binding.changed')
         deadline = time.monotonic() + CONFIRMATION_SECONDS
         _confirm_operator(final, expected_source_commit, expected_saved_plan_sha256, expected_receipt_sha256, deadline, challenge_source)
-        environment = _execution_environment(azure_cli=azure_cli, home=home, azure_config=azure_config, execution_dir=execution_dir)
         newest_arm_date = _revalidate_preclaim(final, execution_dir=execution_dir, reader=reader, expected_source_commit=expected_source_commit, expected_principal_sha256=expected_azure_principal_sha256, expected_live_snapshot=live_snapshot, deadline=deadline, clock=clock)
+        environment = _execution_environment(azure_cli=azure_cli, home=home, azure_config=azure_config, execution_dir=execution_dir)
         plan_descriptor: int | None = None
         try:
             plan_descriptor = _open_pinned_plan(saved_plan, expected_sha256=expected_saved_plan_sha256, expected_identity=final.identities[0])

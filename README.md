@@ -25,10 +25,12 @@ current protected `master` commit. The consumer accepts only the four external
 digests/identities documented by its `--help`, requires five exact entries on a
 foreground controlling terminal—including the exact 28-no-op/11-create
 statement—then repeats remote-state and complete ARM readback. It pins the
-reviewed plan to an inherited descriptor, claims the handoff once, and passes
-only `/dev/fd/<n>` to OpenTofu. Never invoke it from CI, an agent, a wrapper, or
-a noninteractive shell. A failed run after the claim file exists requires a new
-plan, execution directory, and handoff.
+reviewed plan to an inherited descriptor. The post-confirmation ARM pass resets
+its isolated response-date and byte accounting but inherits the ceremony's
+already-running 120-second absolute deadline. The consumer then claims the
+handoff once and passes only `/dev/fd/<n>` to OpenTofu. Never invoke it from CI,
+an agent, a wrapper, or a noninteractive shell. A failed run after the claim
+file exists requires a new plan, execution directory, and handoff.
 
 ---
 
