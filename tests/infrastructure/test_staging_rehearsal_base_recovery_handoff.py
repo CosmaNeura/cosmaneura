@@ -9,6 +9,7 @@ import os
 import ssl
 import subprocess
 import sys
+import tempfile
 import urllib.parse
 import urllib.error
 import urllib.request
@@ -462,23 +463,28 @@ def test_tls_rejects_ambient_trust_or_key_logging(monkeypatch: pytest.MonkeyPatc
             handoff._hardened_tls_context()
         monkeypatch.delenv(name)
 
-def test_cli_and_operator_home_ignore_ambient_path_and_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pinned = tmp_path / 'pinned'
-    pinned.mkdir(mode=448)
-    az = pinned / 'az'
-    az.write_text('#!/bin/sh\n')
-    az.chmod(448)
-    entrypoint = tmp_path / 'az'
-    entrypoint.symlink_to(az)
-    home = tmp_path / 'home'
-    home.mkdir(mode=448)
-    (home / '.azure').mkdir(mode=448)
-    monkeypatch.setattr(handoff, 'AZURE_CLI_ENTRYPOINTS', (entrypoint,))
-    monkeypatch.setattr(handoff.pwd, 'getpwuid', lambda _: type('Passwd', (), {'pw_dir': str(home)})())
-    monkeypatch.setenv('PATH', str(tmp_path / 'evil'))
-    monkeypatch.setenv('HOME', str(tmp_path / 'evil-home'))
-    assert handoff._resolve_azure_cli() == az
-    assert handoff._operator_paths()[:2] == (home, home / '.azure')
+def test_cli_and_operator_home_ignore_ambient_path_and_home(monkeypatch: pytest.MonkeyPatch) -> None:
+    # pytest's Linux tmp_path lives below root-owned mode-01777 /tmp, which the
+    # production ancestry check must reject. Build this positive fixture below
+    # the trusted checkout instead; TemporaryDirectory still guarantees cleanup.
+    with tempfile.TemporaryDirectory(prefix='.handoff-path-', dir=Path(__file__).resolve().parents[2]) as value:
+        tmp_path = Path(value)
+        pinned = tmp_path / 'pinned'
+        pinned.mkdir(mode=448)
+        az = pinned / 'az'
+        az.write_text('#!/bin/sh\n')
+        az.chmod(448)
+        entrypoint = tmp_path / 'az'
+        entrypoint.symlink_to(az)
+        home = tmp_path / 'home'
+        home.mkdir(mode=448)
+        (home / '.azure').mkdir(mode=448)
+        monkeypatch.setattr(handoff, 'AZURE_CLI_ENTRYPOINTS', (entrypoint,))
+        monkeypatch.setattr(handoff.pwd, 'getpwuid', lambda _: type('Passwd', (), {'pw_dir': str(home)})())
+        monkeypatch.setenv('PATH', str(tmp_path / 'evil'))
+        monkeypatch.setenv('HOME', str(tmp_path / 'evil-home'))
+        assert handoff._resolve_azure_cli() == az
+        assert handoff._operator_paths()[:2] == (home, home / '.azure')
 
 def test_python_import_and_transport_environment_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert handoff.recovery.__file__ is not None
