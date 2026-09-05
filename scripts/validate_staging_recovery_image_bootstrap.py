@@ -33,7 +33,6 @@ EXPECTED_EPHEMERAL_STORAGE = {
     "cosmaneura-staging-app-web": "2Gi",
 }
 _MISSING = object()
-_AZURE_PROJECTION_DEFAULT = object()
 
 
 class BootstrapEvidenceError(ValueError):
@@ -672,54 +671,74 @@ def _template_comparison_views(
     """Normalize only documented app/revision response-projection differences."""
     app_view = copy.deepcopy(app_template)
     revision_view = copy.deepcopy(revision_template)
-    containers: list[dict[str, Any]] = []
+    # These are directional: the app-resource endpoint materializes the field
+    # and the active-revision endpoint omits it. Mirror-image shapes remain drift.
+    if (
+        app_view.get("customMetricsSettings", _MISSING) is None
+        and "customMetricsSettings" not in revision_view
+    ):
+        app_view.pop("customMetricsSettings")
 
-    for view in (app_view, revision_view):
-        # The app endpoint serializes this unset field as null while the revision
-        # endpoint omits it. A configured value remains strict.
-        if view.get("customMetricsSettings", _MISSING) is None:
-            view.pop("customMetricsSettings")
+    app_container = _object(
+        _array(app_view.get("containers"), "workload containers")[0],
+        "workload container",
+    )
+    revision_container = _object(
+        _array(revision_view.get("containers"), "workload containers")[0],
+        "workload container",
+    )
+    if (
+        app_container.get("imageType", _MISSING) == "ContainerImage"
+        and "imageType" not in revision_container
+    ):
+        app_container.pop("imageType")
 
-        container = _object(
-            _array(view.get("containers"), "workload containers")[0],
-            "workload container",
-        )
-        containers.append(container)
-        image_type = container.get("imageType", _MISSING)
-        if image_type is _MISSING or image_type == "ContainerImage":
-            container["imageType"] = _AZURE_PROJECTION_DEFAULT
-
-        scale = view.get("scale")
-        if isinstance(scale, dict):
-            for field, default in (
-                ("cooldownPeriod", 300),
-                ("pollingInterval", 30),
-            ):
-                value = scale.get(field, _MISSING)
-                if value is _MISSING or value is None or value == default:
-                    scale[field] = _AZURE_PROJECTION_DEFAULT
-            rules = scale.get("rules")
-            if isinstance(rules, list):
-                for rule in rules:
-                    if not isinstance(rule, dict):
-                        continue
-                    custom = rule.get("custom")
-                    if not isinstance(custom, dict):
-                        continue
-                    auth = custom.get("auth", _MISSING)
-                    if auth is _MISSING or auth == []:
-                        custom["auth"] = _AZURE_PROJECTION_DEFAULT
-
-    app_resources = containers[0].get("resources")
-    revision_resources = containers[1].get("resources")
+    app_resources = app_container.get("resources")
+    revision_resources = revision_container.get("resources")
     if isinstance(app_resources, dict) and isinstance(revision_resources, dict):
         app_ephemeral = app_resources.get("ephemeralStorage", _MISSING)
-        revision_ephemeral = revision_resources.get("ephemeralStorage", _MISSING)
-        if (app_ephemeral is _MISSING) != (revision_ephemeral is _MISSING):
-            present = revision_ephemeral if app_ephemeral is _MISSING else app_ephemeral
-            if present == EXPECTED_EPHEMERAL_STORAGE.get(expected_container):
-                app_resources["ephemeralStorage"] = _AZURE_PROJECTION_DEFAULT
-                revision_resources["ephemeralStorage"] = _AZURE_PROJECTION_DEFAULT
+        if (
+            app_ephemeral == EXPECTED_EPHEMERAL_STORAGE.get(expected_container)
+            and "ephemeralStorage" not in revision_resources
+        ):
+            app_resources.pop("ephemeralStorage")
+
+    app_scale = app_view.get("scale")
+    revision_scale = revision_view.get("scale")
+    if isinstance(app_scale, dict) and isinstance(revision_scale, dict):
+        for field, default in (
+            ("cooldownPeriod", 300),
+            ("pollingInterval", 30),
+        ):
+            if (
+                app_scale.get(field, _MISSING) == default
+                and field in revision_scale
+                and revision_scale[field] is None
+            ):
+                app_scale[field] = None
+
+        app_rules = app_scale.get("rules")
+        revision_rules = revision_scale.get("rules")
+        if (
+            isinstance(app_rules, list)
+            and isinstance(revision_rules, list)
+            and len(app_rules) == len(revision_rules)
+        ):
+            for app_rule, revision_rule in zip(app_rules, revision_rules, strict=True):
+                if not isinstance(app_rule, dict) or not isinstance(
+                    revision_rule, dict
+                ):
+                    continue
+                app_custom = app_rule.get("custom")
+                revision_custom = revision_rule.get("custom")
+                if not isinstance(app_custom, dict) or not isinstance(
+                    revision_custom, dict
+                ):
+                    continue
+                if app_custom.get("auth", _MISSING) == [] and (
+                    "auth" not in revision_custom
+                ):
+                    app_custom.pop("auth")
 
     return app_view, revision_view
 

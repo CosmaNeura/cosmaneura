@@ -189,6 +189,79 @@ def test_live_azure_app_and_revision_projection_is_equivalent(state: str) -> Non
     )
 
 
+def test_reverse_image_type_projection_is_rejected() -> None:
+    fixture = _fixture()
+    _, revision_template = _templates(fixture[1]["workloads"][0])
+    revision_template["containers"][0]["imageType"] = "ContainerImage"
+
+    with pytest.raises(ValueError):
+        _validate(fixture)
+
+
+@pytest.mark.parametrize("workload_name", _LIVE_EPHEMERAL_STORAGE)
+def test_reverse_ephemeral_storage_projection_is_rejected(
+    workload_name: str,
+) -> None:
+    fixture = _fixture()
+    workload = next(
+        item for item in fixture[1]["workloads"] if item["name"] == workload_name
+    )
+    app_template, revision_template = _templates(workload)
+    common_resources = {"cpu": 0.5, "memory": "1Gi"}
+    app_template["containers"][0]["resources"] = copy.deepcopy(common_resources)
+    revision_template["containers"][0]["resources"] = {
+        **common_resources,
+        "ephemeralStorage": _LIVE_EPHEMERAL_STORAGE[workload_name],
+    }
+
+    with pytest.raises(ValueError):
+        _validate(fixture)
+
+
+def test_reverse_custom_metrics_projection_is_rejected() -> None:
+    fixture = _fixture()
+    _, revision_template = _templates(fixture[1]["workloads"][0])
+    revision_template["customMetricsSettings"] = None
+
+    with pytest.raises(ValueError):
+        _validate(fixture)
+
+
+@pytest.mark.parametrize(
+    ("field", "default"),
+    [("cooldownPeriod", 300), ("pollingInterval", 30)],
+)
+def test_reverse_scale_default_projection_is_rejected(field: str, default: int) -> None:
+    fixture = _fixture()
+    app_template, revision_template = _templates(fixture[1]["workloads"][0])
+    app_template["scale"][field] = None
+    revision_template["scale"][field] = default
+
+    with pytest.raises(ValueError):
+        _validate(fixture)
+
+
+def test_reverse_custom_scale_auth_projection_is_rejected() -> None:
+    fixture = _fixture()
+    scheduler = next(
+        workload
+        for workload in fixture[1]["workloads"]
+        if workload["name"] == "cosmaneura-staging-scheduler"
+    )
+    app_template, revision_template = _templates(scheduler)
+    common_rule = {
+        "name": "scheduler-trigger",
+        "custom": {"type": "cron", "metadata": {"timezone": "UTC"}},
+    }
+    app_template["scale"]["rules"] = [copy.deepcopy(common_rule)]
+    revision_rule = copy.deepcopy(common_rule)
+    revision_rule["custom"]["auth"] = []
+    revision_template["scale"]["rules"] = [revision_rule]
+
+    with pytest.raises(ValueError):
+        _validate(fixture)
+
+
 @pytest.mark.parametrize("image_type", ["DockerImage", "containerimage", ""])
 def test_non_container_image_projection_is_rejected(image_type: str) -> None:
     fixture = _fixture()
