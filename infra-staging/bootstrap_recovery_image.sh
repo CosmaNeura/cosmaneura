@@ -172,7 +172,7 @@ collect_bundle() {
 	python3 "$VALIDATOR" validate-capture --policy "$POLICY"  --observation "$bundle/observation.json" --job-log "$bundle/historical-job.log"  --manifest "$bundle/manifest.json" --config "$bundle/config.json"  --output "$bundle/validated.json"
 }
 revalidate_progress() {
-	local expected=$1 label=$2 bundle="$WORK_DIR/pre-$2"
+	local expected=$1 bundle="$WORK_DIR/pre-$2"
 	collect_bundle "$bundle"
 	python3 "$VALIDATOR" validate-transition --policy "$POLICY" --before "$CURRENT_BASELINE" --after "$bundle/validated.json" --expected-progress "$expected"
 	FINAL_EVIDENCE="$bundle/validated.json"
