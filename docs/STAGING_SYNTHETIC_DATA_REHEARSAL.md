@@ -202,6 +202,15 @@ unimplemented or false; see the
 [signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
 [publisher invocation binding flight plan](flight-plans/2026-09-04-staging-runtime-publisher-record-binding.md).
 
+A pure dormant builder now consumes sealed configured-policy, authenticated
+publisher-invocation, and authenticated image-publication authorities. It
+refuses source-SHA or timestamp-order divergence and derives the canonical
+record, full content-derived ID, digest, exact private Blob URI, and image
+reference without I/O. The receiver recomputes the same ID from every other
+record field. No signer, publisher transport, registry reader, workflow, or
+activation was added; see the
+[runtime-record builder flight plan](flight-plans/2026-09-04-staging-runtime-record-builder.md).
+
 The next dormant boundary now supplies that handoff with exact private readers.
 It uses the selected job UAMI for separate storage and vault audiences, performs
 only content-addressed record/bundle GETs plus one exact-version Key Vault root

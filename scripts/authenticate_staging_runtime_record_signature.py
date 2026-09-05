@@ -300,27 +300,13 @@ def _validate_inputs(
         or _digest(root_bytes) != root_policy["sha256"]
     ):
         _fail("runtime_signature.input_invalid")
-    record = _exact_keys(
-        _load_json(record_bytes, "runtime_signature.input_invalid"),
-        runtime_binding.RUNTIME_RECORD_FIELDS,
-        "runtime_signature.input_invalid",
-    )
-    if (
-        _canonical(record) != record_bytes
-        or type(record.get("publisher_source_sha")) is not str
-        or SHA_RE.fullmatch(record["publisher_source_sha"]) is None
-        or type(record.get("publisher_run_invocation_uri")) is not str
-        or runtime_binding.GITHUB_RUN_INVOCATION_RE.fullmatch(
-            record["publisher_run_invocation_uri"]
+    try:
+        record = runtime_binding._validate_external_runtime_record_contents(
+            dict(document), record_bytes
         )
-        is None
-    ):
-        _fail("runtime_signature.input_invalid")
-    created_at = _utc(record.get("created_at"), "runtime_signature.input_invalid")
-    if created_at <= _utc(
-        record.get("image_published_at"), "runtime_signature.input_invalid"
-    ):
-        _fail("runtime_signature.input_invalid")
+        created_at = _utc(record.get("created_at"), "runtime_signature.input_invalid")
+    except Exception:
+        raise RuntimeRecordSignatureFailure("runtime_signature.input_invalid") from None
     return record, created_at
 
 
