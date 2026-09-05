@@ -282,6 +282,8 @@ def test_workflow_and_shell_are_manual_bounded_and_do_not_weaken_deploy() -> Non
     assert 'Authorization: Bearer $access_token' not in source
     assert "--data-urlencode 'refresh_token@-'" in source
     assert "az account list --refresh --all" in source
+    assert 'az monitor diagnostic-settings list --resource "$registry_id" -o json' in source
+    assert 'az monitor diagnostic-settings list --resource "$registry_id" --query value' not in source
     assert "--include-inherited --all" not in source
     assert '--scope "$scope" --include-groups --include-inherited --subscription' in source
     assert 'for scope in "$RESOURCE_GROUP_ID" "$REGISTRY_RESOURCE_ID" "$MANAGED_ENVIRONMENT_ID"' in source

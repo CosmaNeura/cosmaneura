@@ -157,7 +157,7 @@ collect_bundle() {
 	gh api --allow-escape-sequences  "repos/$GITHUB_REPOSITORY/actions/jobs/$HISTORICAL_JOB_ID/logs"  >"$bundle/historical-job.log"
 	az acr show --name "$REGISTRY_NAME"  --query '{id:id,name:name,loginServer:loginServer,adminUserEnabled:adminUserEnabled,policies:policies}'  -o json >"$bundle/registry.json"
 	registry_id=$(jq -er .id "$bundle/registry.json")
-	az monitor diagnostic-settings list --resource "$registry_id" --query value -o json  >"$bundle/registry-diagnostics.json"
+	az monitor diagnostic-settings list --resource "$registry_id" -o json  >"$bundle/registry-diagnostics.json"
 	az acr repository show-tags --name "$REGISTRY_NAME" --repository "$REGISTRY_REPOSITORY"  --detail --query "[?name=='$SOURCE_TAG']" -o json >"$bundle/tag.json"
 	az acr manifest show-metadata --registry "$REGISTRY_NAME"  --name "$REGISTRY_REPOSITORY@$MANIFEST_DIGEST" -o json  >"$bundle/manifest-metadata.json"
 	local refresh_token access_token token_header
