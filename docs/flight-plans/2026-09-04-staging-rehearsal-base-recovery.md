@@ -86,12 +86,17 @@ The later isolated synthetic-only rehearsal remains mandatory.
    the independently recorded source, plan, handoff-receipt, and Azure-user
    principal digests. It requires a non-root human at one foreground controlling
    terminal to enter the full commit, both artifact digests, the exact
-   28-no-op/11-create statement, and a fresh random challenge within one shared
-   120-second window. It then repeats the plan/source/runtime checks, pulls the
-   protected serial-8 remote state before and after two identical GET-only ARM
-   snapshots, and rechecks every local binding and the ten-minute expiry.
+   statement `APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0,
+   DELETE 0, REPLACE 0`, and a fresh random challenge. Only after the two initial
+   identical GET-only ARM snapshots and second complete local validation does
+   that 120-second action window begin. The same deadline covers all five
+   entries, another complete GET-only ARM snapshot, final remote-state,
+   source/master, provider, plan-age, terminal, and expiry checks, and the
+   one-use claim.
 8. The consumer atomically creates the owner-only one-use claim and directly
-   replaces itself with the exact OpenTofu 1.12.5 saved-plan apply. It offers no
+   opens and revalidates the plan descriptor-relatively, keeps that exact
+   owner-only descriptor across `execve`, and replaces itself with OpenTofu
+   1.12.5 using `/dev/fd/<n>` rather than the mutable plan pathname. It offers no
    yes flag, alternate binary, extra Terraform argument, environment override,
    or automation interface. Never run it from CI or an agent. If anything fails
    after the claim is created—including `execve` or OpenTofu itself—do not delete

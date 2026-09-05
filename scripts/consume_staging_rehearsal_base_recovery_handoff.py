@@ -89,6 +89,11 @@ def _digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _require_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        _fail('operator.confirmation_timeout')
+
+
 def _exact_int(value: Any, expected: int) -> bool:
     return type(value) is int and value == expected
 
@@ -162,7 +167,11 @@ def _read_receipt(path: Path, expected_sha256: str) -> tuple[Mapping[str, Any], 
     return value, raw
 
 
-def _identity(path: Path, *, directory: bool=False) -> tuple[int, int, int, int, int, int]:
+def _metadata_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int, int, int]:
+    return (metadata.st_dev, metadata.st_ino, metadata.st_uid, stat.S_IMODE(metadata.st_mode), metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns)
+
+
+def _identity(path: Path, *, directory: bool=False) -> tuple[int, int, int, int, int, int, int]:
     try:
         metadata = os.stat(path, follow_symlinks=False)
     except OSError:
@@ -170,7 +179,7 @@ def _identity(path: Path, *, directory: bool=False) -> tuple[int, int, int, int,
     expected_kind = stat.S_ISDIR if directory else stat.S_ISREG
     if not expected_kind(metadata.st_mode) or metadata.st_uid != os.geteuid() or (not directory and metadata.st_nlink != 1):
         _fail('artifact.unsafe')
-    return (metadata.st_dev, metadata.st_ino, metadata.st_uid, stat.S_IMODE(metadata.st_mode), metadata.st_size, metadata.st_mtime_ns)
+    return _metadata_identity(metadata)
 
 
 def _validate_paths(saved_plan: Path, state_json: Path, execution_dir: Path, receipt_path: Path) -> None:
@@ -314,7 +323,7 @@ class LocalBinding:
     nonce: bytes
     observed: datetime
     expires: datetime
-    identities: tuple[tuple[int, int, int, int, int, int], ...]
+    identities: tuple[tuple[int, int, int, int, int, int, int], ...]
 
 
 def _validate_local(*, saved_plan: Path, state_json: Path, execution_dir: Path, receipt_path: Path, expected_source_commit: str, expected_saved_plan_sha256: str, expected_receipt_sha256: str, python_binding: Mapping[str, str], clock: Callable[[], datetime], boot_session: Callable[[], bytes]) -> LocalBinding:
@@ -399,18 +408,17 @@ def _read_prompt(descriptor: int, prompt: str, deadline: float) -> str:
         _fail('operator.confirmation_invalid')
 
 
-def _confirm_operator(binding: LocalBinding, expected_source_commit: str, expected_saved_plan_sha256: str, expected_receipt_sha256: str, challenge_source: Callable[[int], bytes]=secrets.token_bytes) -> None:
+def _confirm_operator(binding: LocalBinding, expected_source_commit: str, expected_saved_plan_sha256: str, expected_receipt_sha256: str, deadline: float, challenge_source: Callable[[int], bytes]=secrets.token_bytes) -> None:
     challenge_bytes = challenge_source(8)
     if type(challenge_bytes) is not bytes or len(challenge_bytes) != 8:
         _fail('operator.challenge_invalid')
     challenge = challenge_bytes.hex().upper()
     tty = _validate_operator_tty()
-    deadline = time.monotonic() + CONFIRMATION_SECONDS
     expected = (
         expected_source_commit,
         expected_saved_plan_sha256,
         expected_receipt_sha256,
-        'APPLY STAGING-REHEARSAL SERIAL 8: CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
+        'APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
         f'APPLY {challenge}',
     )
     prompts = (
@@ -424,6 +432,7 @@ def _confirm_operator(binding: LocalBinding, expected_source_commit: str, expect
         for prompt, exact in zip(prompts, expected, strict=True):
             if _read_prompt(tty, prompt, deadline) != exact:
                 _fail('operator.confirmation_mismatch')
+        _require_deadline(deadline)
     finally:
         os.close(tty)
 
@@ -433,7 +442,7 @@ def _revalidate_operator_tty() -> None:
     os.close(tty)
 
 
-def _validate_live(binding: LocalBinding, *, execution_dir: Path, expected_principal_sha256: str, reader_factory: Callable[[], Any], clock: Callable[[], datetime]) -> tuple[Any, datetime]:
+def _validate_live(binding: LocalBinding, *, execution_dir: Path, expected_principal_sha256: str, reader_factory: Callable[[], Any], clock: Callable[[], datetime]) -> tuple[Any, datetime, bytes]:
     receipt = binding.receipt
     expected_state = binding.state
     first_state = handoff._pull_remote_state(tofu=binding.tofu, data_dir=execution_dir, expected_state=expected_state, expected_backend_sha256=str(receipt['backend_metadata_sha256']), expected_tofu_sha256=str(receipt['open_tofu_sha256']))
@@ -461,29 +470,90 @@ def _validate_live(binding: LocalBinding, *, execution_dir: Path, expected_princ
     oldest, newest = min(reader.dates), max(reader.dates)
     if newest - oldest > handoff.MAX_OBSERVATION_SPAN or newest > now + handoff.MAX_CLOCK_SKEW or now - newest > handoff.MAX_CLOCK_SKEW or newest < binding.observed or now >= binding.expires or newest >= binding.expires:
         _fail('live_snapshot.stale')
-    return reader, newest
+    return reader, newest, _canonical(first)
 
 
-def _revalidate_preclaim(binding: LocalBinding, *, execution_dir: Path, reader: Any, expected_principal_sha256: str, newest_arm_date: datetime, clock: Callable[[], datetime]) -> datetime:
+def _validate_action_time(binding: LocalBinding, *, newest_arm_date: datetime, clock: Callable[[], datetime]) -> datetime:
+    now = _utc_now(clock)
+    try:
+        normalized_plan_time = recovery._validate_plan_timestamp({'timestamp': binding.base.get('plan_timestamp')}, now=now)
+    except Exception:
+        _fail('plan.timestamp_invalid')
+    if normalized_plan_time != binding.base.get('plan_timestamp'):
+        _fail('plan.timestamp_invalid')
+    if newest_arm_date < binding.observed or newest_arm_date > now + handoff.MAX_CLOCK_SKEW or now - newest_arm_date > handoff.MAX_CLOCK_SKEW or now >= binding.expires or newest_arm_date >= binding.expires:
+        _fail('live_snapshot.stale')
+    return now
+
+
+def _revalidate_preclaim(binding: LocalBinding, *, execution_dir: Path, reader: Any, expected_source_commit: str, expected_principal_sha256: str, expected_live_snapshot: bytes, deadline: float, clock: Callable[[], datetime]) -> datetime:
     receipt = binding.receipt
+    _require_deadline(deadline)
     reader.refresh_account()
     account = reader.account
     if account.get('id') != handoff.SUBSCRIPTION or account.get('tenantId') != handoff.TENANT or account.get('environmentName') != 'AzureCloud' or account.get('state') != 'Enabled' or not isinstance(account.get('user'), Mapping) or account['user'].get('type') != 'user' or _digest(str(account['user'].get('name', '')).encode()) != expected_principal_sha256:
         _fail('azure_account.mismatch')
     if any(getattr(reader, name) != receipt.get(name) for name in ('azure_cli_sha256', 'azure_cli_version_sha256', 'azure_tls_ca_bundle_sha256', 'azure_config_binding_sha256')):
         _fail('azure_runtime.changed')
+    date_start = len(reader.dates)
+    final_snapshot = _canonical(handoff._capture_snapshot(reader, handoff._state_attributes(_canonical(binding.state))))
+    if final_snapshot != expected_live_snapshot or _digest(final_snapshot) != receipt.get('live_snapshot_sha256'):
+        _fail('live_snapshot.changed')
+    final_dates = reader.dates[date_start:]
+    if not final_dates or any(not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() != timedelta(0) for value in final_dates) or max(final_dates) - min(final_dates) > handoff.MAX_OBSERVATION_SPAN:
+        _fail('live_snapshot.time_missing')
+    newest_arm_date = max(final_dates)
     reader.revalidate_runtime()
+    _require_deadline(deadline)
     final_state = handoff._pull_remote_state(tofu=binding.tofu, data_dir=execution_dir, expected_state=binding.state, expected_backend_sha256=str(receipt['backend_metadata_sha256']), expected_tofu_sha256=str(receipt['open_tofu_sha256']))
     if final_state != receipt.get('remote_state_sha256'):
         _fail('remote_state.changed')
-    now = _utc_now(clock)
-    if newest_arm_date > now + handoff.MAX_CLOCK_SKEW or now - newest_arm_date > handoff.MAX_CLOCK_SKEW or now >= binding.expires or newest_arm_date >= binding.expires:
-        _fail('live_snapshot.stale')
-    return now
+    _require_deadline(deadline)
+    if recovery._provider_tree_sha256(execution_dir) != receipt.get('execution_provider_tree_sha256'):
+        _fail('runtime.changed')
+    _require_deadline(deadline)
+    source, preparer_digest = _source_binding(expected_source_commit, str(binding.base.get('source_tree_sha256', '')))
+    if source.tree_sha256 != binding.base.get('source_tree_sha256') or source.tree_sha256 != receipt.get('source_tree_sha256') or preparer_digest != receipt.get('handoff_source_sha256'):
+        _fail('source.changed')
+    _validate_action_time(binding, newest_arm_date=newest_arm_date, clock=clock)
+    _require_deadline(deadline)
+    return newest_arm_date
 
 
-def _execution_arguments(tofu: Path, saved_plan: Path) -> list[str]:
-    return [str(tofu), f'-chdir={recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', str(saved_plan)]
+def _open_pinned_plan(saved_plan: Path, *, expected_sha256: str, expected_identity: tuple[int, int, int, int, int, int, int]) -> int:
+    parent = recovery._open_protected_directory(saved_plan.parent, label='saved plan directory')
+    descriptor: int | None = None
+    try:
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        descriptor = os.open(saved_plan.name, flags, dir_fd=parent)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o400 or not 0 < before.st_size <= recovery.MAXIMUM_ARTIFACT_BYTES or _metadata_identity(before) != expected_identity:
+            _fail('saved_plan.changed')
+        digest = hashlib.sha256()
+        remaining = before.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if remaining or _metadata_identity(after) != expected_identity or digest.hexdigest() != expected_sha256 or os.lseek(descriptor, 0, os.SEEK_SET) != 0:
+            _fail('saved_plan.changed')
+        os.set_inheritable(descriptor, True)
+        if not os.get_inheritable(descriptor):
+            _fail('saved_plan.unavailable')
+        return descriptor
+    except Exception:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    finally:
+        os.close(parent)
+
+
+def _execution_arguments(tofu: Path, plan_descriptor: int) -> list[str]:
+    return [str(tofu), f'-chdir={recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
 
 
 def _execution_environment(*, azure_cli: Path, home: Path, azure_config: Path, execution_dir: Path) -> dict[str, str]:
@@ -542,28 +612,43 @@ def consume_handoff(*, saved_plan: Path, state_json: Path, execution_dir: Path, 
     home, azure_config, _ = handoff._operator_paths()
     with handoff._pinned_process_environment(azure_cli, home):
         initial = _validate_local(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, receipt_path=receipt_path, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256, expected_receipt_sha256=expected_receipt_sha256, python_binding=python_binding, clock=clock, boot_session=boot_session)
-        _confirm_operator(initial, expected_source_commit, expected_saved_plan_sha256, expected_receipt_sha256, challenge_source)
-        reader, newest_arm_date = _validate_live(initial, execution_dir=execution_dir, expected_principal_sha256=expected_azure_principal_sha256, reader_factory=reader_factory, clock=clock)
+        reader, _, live_snapshot = _validate_live(initial, execution_dir=execution_dir, expected_principal_sha256=expected_azure_principal_sha256, reader_factory=reader_factory, clock=clock)
         final = _validate_local(saved_plan=saved_plan, state_json=state_json, execution_dir=execution_dir, receipt_path=receipt_path, expected_source_commit=expected_source_commit, expected_saved_plan_sha256=expected_saved_plan_sha256, expected_receipt_sha256=expected_receipt_sha256, python_binding=python_binding, clock=clock, boot_session=boot_session)
         if initial != final:
             _fail('binding.changed')
-        argv = _execution_arguments(final.tofu, saved_plan)
+        deadline = time.monotonic() + CONFIRMATION_SECONDS
+        _confirm_operator(final, expected_source_commit, expected_saved_plan_sha256, expected_receipt_sha256, deadline, challenge_source)
         environment = _execution_environment(azure_cli=azure_cli, home=home, azure_config=azure_config, execution_dir=execution_dir)
-        claim_time = _revalidate_preclaim(final, execution_dir=execution_dir, reader=reader, expected_principal_sha256=expected_azure_principal_sha256, newest_arm_date=newest_arm_date, clock=clock)
-        _revalidate_operator_tty()
-        claim = {
-            'schema_version': 1, 'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-apply-claim-v1',
-            'source_commit': expected_source_commit, 'saved_plan_sha256': expected_saved_plan_sha256,
-            'handoff_receipt_sha256': expected_receipt_sha256,
-            'nonce_sha256': final.receipt['nonce_sha256'],
-            'machine_binding_sha256': final.receipt['machine_binding_sha256'],
-            'argv_sha256': _digest(_canonical(argv)), 'environment_sha256': _digest(_canonical(environment)),
-            'claimed_at': claim_time.isoformat().replace('+00:00', 'Z'),
-            'apply_outcome': 'unknown',
-        }
-        _claim(execution_dir, claim)
-        os.execve(str(final.tofu), argv, environment)
-    _fail('execve.returned')
+        newest_arm_date = _revalidate_preclaim(final, execution_dir=execution_dir, reader=reader, expected_source_commit=expected_source_commit, expected_principal_sha256=expected_azure_principal_sha256, expected_live_snapshot=live_snapshot, deadline=deadline, clock=clock)
+        plan_descriptor: int | None = None
+        try:
+            plan_descriptor = _open_pinned_plan(saved_plan, expected_sha256=expected_saved_plan_sha256, expected_identity=final.identities[0])
+            _require_deadline(deadline)
+            _revalidate_operator_tty()
+            claim_time = _validate_action_time(final, newest_arm_date=newest_arm_date, clock=clock)
+            argv = _execution_arguments(final.tofu, plan_descriptor)
+            claim = {
+                'schema_version': 1, 'policy_id': 'cosmaneura-staging-rehearsal-base-recovery-apply-claim-v1',
+                'source_commit': expected_source_commit, 'saved_plan_sha256': expected_saved_plan_sha256,
+                'handoff_receipt_sha256': expected_receipt_sha256,
+                'nonce_sha256': final.receipt['nonce_sha256'],
+                'machine_binding_sha256': final.receipt['machine_binding_sha256'],
+                'argv_sha256': _digest(_canonical(argv)), 'environment_sha256': _digest(_canonical(environment)),
+                'claimed_at': claim_time.isoformat().replace('+00:00', 'Z'),
+                'apply_outcome': 'unknown',
+            }
+            _require_deadline(deadline)
+            _claim(execution_dir, claim)
+            _require_deadline(deadline)
+            os.execve(str(final.tofu), argv, environment)
+            _fail('execve.returned')
+        except BaseException:
+            if plan_descriptor is not None:
+                try:
+                    os.close(plan_descriptor)
+                except OSError:
+                    pass
+            raise
 
 
 class _RefusingParser(argparse.ArgumentParser):

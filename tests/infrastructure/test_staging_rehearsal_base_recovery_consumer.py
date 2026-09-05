@@ -6,7 +6,9 @@ import ast
 import hashlib
 import json
 import os
+import shutil
 import stat
+import subprocess
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -119,12 +121,13 @@ def _artifacts(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     return plan, state, execution, receipt
 
 
-def _binding(execution: Path, receipt: Mapping[str, Any] | None=None) -> consumer.LocalBinding:
+def _binding(execution: Path, receipt: Mapping[str, Any] | None=None, *, plan: Path | None=None) -> consumer.LocalBinding:
     value = dict(receipt or _receipt())
+    plan_identity = consumer._identity(plan) if plan is not None else (1, 1, os.geteuid(), 0o400, 1, 1, 1)
     return consumer.LocalBinding(
         value, consumer._canonical(value) + b'\n', _base(), Path('/trusted/tofu'),
         {'serial': 8}, b'n' * 32, OBSERVED, OBSERVED + timedelta(minutes=10),
-        ((1, 1, os.geteuid(), 0o400, 1, 1),),
+        (plan_identity,),
     )
 
 
@@ -358,6 +361,10 @@ def test_source_binding_requires_head_tree_and_committed_validator_preparer_cons
     monkeypatch.setattr(consumer.recovery, '_run_git', git)
     _, preparer = consumer._source_binding(SOURCE, '4' * 64)
     assert preparer == consumer._digest(consumer._HANDOFF_FILE.read_bytes())
+    dirty = True
+    with pytest.raises(consumer.ConsumerError, match='source.changed'):
+        consumer._source_binding(SOURCE, '4' * 64)
+    dirty = False
     with pytest.raises(consumer.ConsumerError):
         consumer._source_binding(SOURCE, '0' * 64)
     expected[str(consumer.SOURCE_PATHS[-1].relative_to(consumer.recovery.REPOSITORY_ROOT))] = b'changed'
@@ -432,15 +439,18 @@ def test_live_revalidation_accepts_two_identical_snapshots_and_state_pulls(tmp_p
     monkeypatch.setattr(consumer.handoff, '_state_attributes', lambda _: {})
     monkeypatch.setattr(consumer.handoff, '_capture_snapshot', lambda *_: dict(projection))
     monkeypatch.setattr(consumer.recovery, '_provider_tree_sha256', lambda _: 'a' * 64)
-    returned_reader, newest = consumer._validate_live(_binding(execution, receipt), execution_dir=execution, expected_principal_sha256=PRINCIPAL_DIGEST, reader_factory=lambda: reader, clock=lambda: NOW)
+    returned_reader, newest, snapshot = consumer._validate_live(_binding(execution, receipt), execution_dir=execution, expected_principal_sha256=PRINCIPAL_DIGEST, reader_factory=lambda: reader, clock=lambda: NOW)
     assert returned_reader is reader and newest == NOW
+    assert snapshot == consumer._canonical(projection)
     assert pulls == ['pull', 'pull'] and reader.runtime_checked
 
 
-@pytest.mark.parametrize('failure', ['runtime', 'account', 'remote_state', 'stale', 'expired'])
+@pytest.mark.parametrize('failure', ['runtime', 'account', 'live_drift', 'remote_state', 'source', 'provider', 'deadline', 'stale', 'expired'])
 def test_runtime_state_and_arm_freshness_are_rechecked_immediately_before_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     _, _, execution, _ = _artifacts(tmp_path)
     receipt = _receipt()
+    projection = {'account': {'principal_sha256': PRINCIPAL_DIGEST}, 'exact': True}
+    receipt['live_snapshot_sha256'] = consumer._digest(consumer._canonical(projection))
     binding = _binding(execution, receipt)
     reader = _Reader()
     now = NOW
@@ -455,9 +465,47 @@ def test_runtime_state_and_arm_freshness_are_rechecked_immediately_before_claim(
     elif failure == 'expired':
         expires = NOW
     binding = consumer.LocalBinding(binding.receipt, binding.receipt_bytes, binding.base, binding.tofu, binding.state, binding.nonce, binding.observed, expires, binding.identities)
+    source = consumer.recovery.SourceSnapshot(SOURCE, {}, b'lock', 'f' * 64 if failure == 'source' else '4' * 64)
+    monkeypatch.setattr(consumer, '_source_binding', lambda *_: (source, 'c' * 64))
+    monkeypatch.setattr(consumer.handoff, '_state_attributes', lambda _: {})
+    def capture(*_: Any) -> Mapping[str, Any]:
+        reader.dates.append(newest)
+        return {'changed': True} if failure == 'live_drift' else projection
+    monkeypatch.setattr(consumer.handoff, '_capture_snapshot', capture)
     monkeypatch.setattr(consumer.handoff, '_pull_remote_state', lambda **_: 'f' * 64 if failure == 'remote_state' else receipt['remote_state_sha256'])
+    monkeypatch.setattr(consumer.recovery, '_provider_tree_sha256', lambda _: 'f' * 64 if failure == 'provider' else 'a' * 64)
+    deadline = consumer.time.monotonic() if failure == 'deadline' else consumer.time.monotonic() + 10
     with pytest.raises(consumer.ConsumerError):
-        consumer._revalidate_preclaim(binding, execution_dir=execution, reader=reader, expected_principal_sha256=PRINCIPAL_DIGEST, newest_arm_date=newest, clock=lambda: now)
+        consumer._revalidate_preclaim(binding, execution_dir=execution, reader=reader, expected_source_commit=SOURCE, expected_principal_sha256=PRINCIPAL_DIGEST, expected_live_snapshot=consumer._canonical(projection), deadline=deadline, clock=lambda: now)
+
+
+def test_post_confirmation_snapshot_uses_only_fresh_response_dates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, execution, _ = _artifacts(tmp_path)
+    receipt = _receipt()
+    projection = {'account': {'principal_sha256': PRINCIPAL_DIGEST}, 'exact': True}
+    receipt['live_snapshot_sha256'] = consumer._digest(consumer._canonical(projection))
+    binding = _binding(execution, receipt)
+    reader = _Reader()
+    reader.dates = [NOW - timedelta(hours=1)]
+    snapshot = consumer.recovery.SourceSnapshot(SOURCE, {}, b'lock', '4' * 64)
+    monkeypatch.setattr(consumer, '_source_binding', lambda *_: (snapshot, 'c' * 64))
+    monkeypatch.setattr(consumer.handoff, '_state_attributes', lambda _: {})
+    monkeypatch.setattr(consumer.handoff, '_capture_snapshot', lambda *_: reader.dates.append(NOW) or projection)
+    monkeypatch.setattr(consumer.handoff, '_pull_remote_state', lambda **_: receipt['remote_state_sha256'])
+    monkeypatch.setattr(consumer.recovery, '_provider_tree_sha256', lambda _: 'a' * 64)
+    newest = consumer._revalidate_preclaim(binding, execution_dir=execution, reader=reader, expected_source_commit=SOURCE, expected_principal_sha256=PRINCIPAL_DIGEST, expected_live_snapshot=consumer._canonical(projection), deadline=consumer.time.monotonic() + 10, clock=lambda: NOW)
+    assert newest == NOW and reader.runtime_checked
+
+
+def test_action_time_rejects_plan_that_ages_past_four_hours_after_confirmation(tmp_path: Path) -> None:
+    _, _, execution, _ = _artifacts(tmp_path)
+    binding = _binding(execution)
+    base = dict(binding.base)
+    base['plan_timestamp'] = (NOW - consumer.recovery.MAXIMUM_PLAN_AGE).isoformat().replace('+00:00', 'Z')
+    binding = consumer.LocalBinding(binding.receipt, binding.receipt_bytes, base, binding.tofu, binding.state, binding.nonce, binding.observed, NOW + timedelta(minutes=1), binding.identities)
+    assert consumer._validate_action_time(binding, newest_arm_date=NOW, clock=lambda: NOW) == NOW
+    with pytest.raises(consumer.ConsumerError, match='plan.timestamp_invalid'):
+        consumer._validate_action_time(binding, newest_arm_date=NOW + timedelta(microseconds=1), clock=lambda: NOW + timedelta(microseconds=1))
 
 
 def test_prompt_reader_rejects_whitespace_eof_timeout_and_oversize(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -505,11 +553,23 @@ def test_confirm_requires_all_five_exact_values_under_one_deadline(tmp_path: Pat
     monkeypatch.setattr(consumer.os, 'close', lambda fd: None)
     monkeypatch.setattr(consumer, '_read_prompt', lambda _fd, prompt, _deadline: answers.append(prompt) or ({
         0: SOURCE, 1: PLAN_DIGEST, 2: RECEIPT_DIGEST,
-        3: 'APPLY STAGING-REHEARSAL SERIAL 8: CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
+        3: 'APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0',
         4: 'APPLY 0001020304050607',
     }[len(answers) - 1]))
-    consumer._confirm_operator(_binding(execution), SOURCE, PLAN_DIGEST, RECEIPT_DIGEST, lambda size: bytes(range(size)))
+    deadline = consumer.time.monotonic() + 10
+    consumer._confirm_operator(_binding(execution), SOURCE, PLAN_DIGEST, RECEIPT_DIGEST, deadline, lambda size: bytes(range(size)))
     assert len(answers) == 5 and all('exact' in value.lower() or 'APPLY' in value for value in answers)
+
+
+def test_confirmation_refuses_if_shared_action_deadline_elapsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, execution, _ = _artifacts(tmp_path)
+    answers = iter((SOURCE, PLAN_DIGEST, RECEIPT_DIGEST, 'APPLY STAGING-REHEARSAL SERIAL 8: NO-OP 28, CREATE 11, UPDATE 0, DELETE 0, REPLACE 0', 'APPLY 0001020304050607'))
+    monkeypatch.setattr(consumer, '_validate_operator_tty', lambda: 7)
+    monkeypatch.setattr(consumer.os, 'close', lambda _fd: None)
+    monkeypatch.setattr(consumer, '_read_prompt', lambda *_: next(answers))
+    monkeypatch.setattr(consumer.time, 'monotonic', lambda: 121.0)
+    with pytest.raises(consumer.ConsumerError, match='confirmation_timeout'):
+        consumer._confirm_operator(_binding(execution), SOURCE, PLAN_DIGEST, RECEIPT_DIGEST, 120.0, lambda size: bytes(range(size)))
 
 
 def test_preclaim_tty_recheck_refuses_a_changed_foreground_session(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -518,33 +578,109 @@ def test_preclaim_tty_recheck_refuses_a_changed_foreground_session(monkeypatch: 
         consumer._revalidate_operator_tty()
 
 
+def test_final_plan_is_identity_digest_pinned_to_inherited_descriptor(tmp_path: Path) -> None:
+    plan, _, _, _ = _artifacts(tmp_path)
+    digest = consumer._digest(plan.read_bytes())
+    identity = consumer._identity(plan)
+    descriptor = consumer._open_pinned_plan(plan, expected_sha256=digest, expected_identity=identity)
+    archived = tmp_path / 'archived-plan'
+    plan.rename(archived)
+    plan.write_bytes(b'replacement')
+    plan.chmod(0o400)
+    try:
+        assert os.get_inheritable(descriptor)
+        assert os.read(descriptor, len(b'plan')) == b'plan'
+        assert consumer._execution_arguments(Path('/trusted/tofu'), descriptor)[-1] == f'/dev/fd/{descriptor}'
+        with pytest.raises(consumer.ConsumerError, match='saved_plan.changed'):
+            consumer._open_pinned_plan(plan, expected_sha256=digest, expected_identity=identity)
+    finally:
+        os.close(descriptor)
+
+
+def test_real_opentofu_reads_the_inherited_plan_descriptor(tmp_path: Path) -> None:
+    executable = shutil.which('tofu')
+    if executable is None:
+        pytest.skip('OpenTofu is not installed')
+    version = json.loads(subprocess.check_output([executable, 'version', '-json']))
+    if version['terraform_version'] != consumer.recovery.EXPECTED_TOFU_VERSION:
+        pytest.skip('test requires the repository-pinned OpenTofu')
+    module = tmp_path / 'module'
+    module.mkdir(mode=0o700)
+    (module / 'main.tf').write_text(
+        'terraform { required_version = "= 1.12.5" }\n'
+        'resource "terraform_data" "probe" { input = "bound" }\n',
+        encoding='utf-8',
+    )
+    subprocess.run([executable, f'-chdir={module}', 'init', '-backend=false', '-input=false'], check=True, capture_output=True)
+    plan = tmp_path / 'recovery.tfplan'
+    subprocess.run([executable, f'-chdir={module}', 'plan', '-input=false', f'-out={plan}'], check=True, capture_output=True)
+    plan.chmod(0o400)
+    descriptor = consumer._open_pinned_plan(
+        plan,
+        expected_sha256=consumer._digest(plan.read_bytes()),
+        expected_identity=consumer._identity(plan),
+    )
+    try:
+        result = subprocess.run(
+            [executable, f'-chdir={module}', 'show', '-json', f'/dev/fd/{descriptor}'],
+            check=True,
+            capture_output=True,
+            pass_fds=(descriptor,),
+        )
+        decoded = json.loads(result.stdout)
+        assert decoded['terraform_version'] == consumer.recovery.EXPECTED_TOFU_VERSION
+        assert decoded['resource_changes'][0]['address'] == 'terraform_data.probe'
+    finally:
+        os.close(descriptor)
+
+
+def test_final_plan_refuses_in_place_mutation_after_validation(tmp_path: Path) -> None:
+    plan, _, _, _ = _artifacts(tmp_path)
+    digest = consumer._digest(plan.read_bytes())
+    identity = consumer._identity(plan)
+    plan.chmod(0o600)
+    plan.write_bytes(b'evil')
+    plan.chmod(0o400)
+    with pytest.raises(consumer.ConsumerError, match='saved_plan.changed'):
+        consumer._open_pinned_plan(plan, expected_sha256=digest, expected_identity=identity)
+
+
 def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _, _, execution, _ = _artifacts(tmp_path)
-    binding = _binding(execution)
+    plan, state, execution, receipt = _artifacts(tmp_path)
+    binding = _binding(execution, plan=plan)
     calls: list[tuple[str, list[str], dict[str, str]]] = []
+    order: list[str] = []
     monkeypatch.setattr(consumer, '_reject_ambient_environment', lambda: None)
     monkeypatch.setattr(consumer.handoff, '_python_runtime_binding', _python_binding)
     monkeypatch.setattr(consumer.handoff, '_resolve_azure_cli', lambda: Path('/trusted/bin/az'))
     monkeypatch.setattr(consumer.handoff, '_operator_paths', lambda: (Path('/operator'), Path('/operator/.azure'), 'x' * 64))
     monkeypatch.setattr(consumer.handoff, '_pinned_process_environment', lambda *_: nullcontext())
-    local_calls: list[str] = []
-    monkeypatch.setattr(consumer, '_validate_local', lambda **_: local_calls.append('local') or binding)
-    monkeypatch.setattr(consumer, '_confirm_operator', lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(consumer, '_revalidate_operator_tty', lambda: None)
+    monkeypatch.setattr(consumer, '_validate_local', lambda **_: order.append('local') or binding)
+    monkeypatch.setattr(consumer, '_confirm_operator', lambda *_args, **_kwargs: order.append('confirm'))
+    monkeypatch.setattr(consumer, '_revalidate_operator_tty', lambda: order.append('tty'))
     reader = _Reader()
-    monkeypatch.setattr(consumer, '_validate_live', lambda *_args, **_kwargs: (reader, NOW))
-    monkeypatch.setattr(consumer.handoff, '_pull_remote_state', lambda **_: binding.receipt['remote_state_sha256'])
+    monkeypatch.setattr(consumer, '_validate_live', lambda *_args, **_kwargs: order.append('live') or (reader, NOW, b'live-snapshot'))
+    monkeypatch.setattr(consumer, '_revalidate_preclaim', lambda *_args, **_kwargs: order.append('preclaim') or NOW)
+    monkeypatch.setattr(consumer, '_validate_action_time', lambda *_args, **_kwargs: order.append('action-time') or NOW)
+    plan_descriptor = os.open(plan, os.O_RDONLY)
+    os.set_inheritable(plan_descriptor, True)
+    monkeypatch.setattr(consumer, '_open_pinned_plan', lambda *_args, **_kwargs: order.append('pin-plan') or plan_descriptor)
+    original_claim = consumer._claim
+    monkeypatch.setattr(consumer, '_claim', lambda *args: order.append('claim') or original_claim(*args))
     def execve(path: str, argv: list[str], environment: dict[str, str]) -> None:
+        order.append('execve')
         calls.append((path, argv, environment))
         raise OSError('simulated exec failure')
     monkeypatch.setattr(consumer.os, 'execve', execve)
     with pytest.raises(OSError, match='simulated'):
-        consumer.consume_handoff(saved_plan=tmp_path / 'plan', state_json=tmp_path / 'state', execution_dir=execution, receipt_path=tmp_path / 'receipt', expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=RECEIPT_DIGEST, expected_azure_principal_sha256=PRINCIPAL_DIGEST, clock=lambda: NOW)
-    assert local_calls == ['local', 'local']
+        consumer.consume_handoff(saved_plan=plan, state_json=state, execution_dir=execution, receipt_path=receipt, expected_source_commit=SOURCE, expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=RECEIPT_DIGEST, expected_azure_principal_sha256=PRINCIPAL_DIGEST, clock=lambda: NOW)
+    assert order == ['local', 'live', 'local', 'confirm', 'preclaim', 'pin-plan', 'tty', 'action-time', 'claim', 'execve']
     path, argv, environment = calls[0]
     assert path == '/trusted/tofu'
-    assert argv == ['/trusted/tofu', f'-chdir={consumer.recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', str(tmp_path / 'plan')]
+    assert argv == ['/trusted/tofu', f'-chdir={consumer.recovery.REHEARSAL_ROOT}', 'apply', '-input=false', '-lock=true', '-lock-timeout=0s', '-no-color', f'/dev/fd/{plan_descriptor}']
     assert environment == consumer._execution_environment(azure_cli=Path('/trusted/bin/az'), home=Path('/operator'), azure_config=Path('/operator/.azure'), execution_dir=execution)
+    with pytest.raises(OSError):
+        os.fstat(plan_descriptor)
     marker = execution / consumer.CLAIM_NAME
     claim = json.loads(marker.read_bytes())
     assert marker.stat().st_mode & 0o777 == 0o400 and claim['apply_outcome'] == 'unknown'
@@ -555,11 +691,20 @@ def test_exact_execve_environment_and_one_use_claim_survive_exec_failure(tmp_pat
 
 
 def test_ambient_override_families_and_bad_expected_bindings_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport_names = {'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'ssl_cert_file', 'ssl_cert_dir', 'curl_ca_bundle', 'requests_ca_bundle'}
+    exact_names = {'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH'}
+    prefixes = ('PYTHON', 'TF_', 'TOFU_', 'OPENTOFU_', 'GIT_', 'ARM_', 'AZURE_')
+    for name in tuple(os.environ):
+        if name.lower() in transport_names or name in exact_names or name.startswith(prefixes):
+            monkeypatch.delenv(name)
+    consumer._reject_ambient_environment()
     for name in ('PYTHONPATH', 'LD_PRELOAD', 'HTTPS_PROXY', 'TF_VAR_x', 'TOFU_CONFIG', 'OPENTOFU_X', 'GIT_CONFIG', 'ARM_CLIENT_ID', 'AZURE_CONFIG_DIR'):
         monkeypatch.setenv(name, 'unsafe')
-        with pytest.raises(Exception):
+        expected = 'transport_environment.unsafe' if name == 'HTTPS_PROXY' else 'environment.unsafe'
+        with pytest.raises(Exception, match=expected):
             consumer._reject_ambient_environment()
         monkeypatch.delenv(name)
+        consumer._reject_ambient_environment()
     with pytest.raises(consumer.ConsumerError, match='expected_binding'):
         consumer.consume_handoff(saved_plan=Path('/p/plan'), state_json=Path('/p/state'), execution_dir=Path('/p/execution'), receipt_path=Path('/p/receipt'), expected_source_commit='short', expected_saved_plan_sha256=PLAN_DIGEST, expected_receipt_sha256=RECEIPT_DIGEST, expected_azure_principal_sha256=PRINCIPAL_DIGEST)
 

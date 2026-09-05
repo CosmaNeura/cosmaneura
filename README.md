@@ -23,10 +23,12 @@ have been independently reviewed, the operator may use
 `scripts/consume_staging_rehearsal_base_recovery_handoff.py` from the exact
 current protected `master` commit. The consumer accepts only the four external
 digests/identities documented by its `--help`, requires five exact entries on a
-foreground controlling terminal, repeats remote-state and ARM readback, and
-then claims the handoff once before executing the exact saved plan. Never invoke
-it from CI, an agent, a wrapper, or a noninteractive shell. A failed run after
-the claim file exists requires a new plan, execution directory, and handoff.
+foreground controlling terminal—including the exact 28-no-op/11-create
+statement—then repeats remote-state and complete ARM readback. It pins the
+reviewed plan to an inherited descriptor, claims the handoff once, and passes
+only `/dev/fd/<n>` to OpenTofu. Never invoke it from CI, an agent, a wrapper, or
+a noninteractive shell. A failed run after the claim file exists requires a new
+plan, execution directory, and handoff.
 
 ---
 
