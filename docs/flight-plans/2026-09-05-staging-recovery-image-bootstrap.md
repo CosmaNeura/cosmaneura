@@ -1,6 +1,6 @@
 # Staging recovery-image bootstrap
 
-Status: dormant after merge; no workflow dispatched. Risk: Tier 2. Sole dispatcher: `JohnClem`.
+Status: first read-only capture failed closed; no mutation occurred. Risk: Tier 2. Sole dispatcher: `JohnClem`.
 
 ## Outcome and hard boundary
 
@@ -17,6 +17,8 @@ This is retrospective provider evidence, not a publication attestation: the imag
 ```text
 ACCEPT RETROSPECTIVE PROVIDER EVIDENCE AND PIN sha256:475908dbb4c6820f91ca6ccd626312ef4f7591c8555923f02949520fcd4208d7 TO 3 STAGING WORKLOADS
 ```
+
+Read-only capture run `33968924079` on protected source `5cd49afc5cc5e500d310730e890777fd37c91f14` authenticated the exact environment-scoped OIDC identity, then failed during initial observation because the installed Azure CLI already returned the diagnostic-settings array and the additional `--query value` transformed it into a non-array. Terminal receipt `sha256:9f5b23d02e3598dac041915f08d5086434d7b43beaf672770cccbd2e998fa973` records `status=failed`, `phase=initial_observation`, no evidence, and all five mutation-journal entries as `not_attempted`. The corrective change consumes the command's native array and adds a regression assertion; any retry still requires fresh action-time confirmation.
 
 ## Prerequisites and procedure
 
