@@ -27,6 +27,13 @@ MAX_CLOCK_SKEW = timedelta(minutes=5)
 PROGRESS_STATES = tuple(
     "original tag_locked registry_locked worker_pinned scheduler_pinned pinned".split()
 )
+EXPECTED_EPHEMERAL_STORAGE = {
+    "cosmaneura-staging-app-worker": "4Gi",
+    "cosmaneura-staging-app-scheduler": "1Gi",
+    "cosmaneura-staging-app-web": "2Gi",
+}
+_MISSING = object()
+_AZURE_PROJECTION_DEFAULT = object()
 
 
 class BootstrapEvidenceError(ValueError):
@@ -657,6 +664,66 @@ def _normalized_template(
     return normalized
 
 
+def _template_comparison_views(
+    app_template: dict[str, Any],
+    revision_template: dict[str, Any],
+    expected_container: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Normalize only documented app/revision response-projection differences."""
+    app_view = copy.deepcopy(app_template)
+    revision_view = copy.deepcopy(revision_template)
+    containers: list[dict[str, Any]] = []
+
+    for view in (app_view, revision_view):
+        # The app endpoint serializes this unset field as null while the revision
+        # endpoint omits it. A configured value remains strict.
+        if view.get("customMetricsSettings", _MISSING) is None:
+            view.pop("customMetricsSettings")
+
+        container = _object(
+            _array(view.get("containers"), "workload containers")[0],
+            "workload container",
+        )
+        containers.append(container)
+        image_type = container.get("imageType", _MISSING)
+        if image_type is _MISSING or image_type == "ContainerImage":
+            container["imageType"] = _AZURE_PROJECTION_DEFAULT
+
+        scale = view.get("scale")
+        if isinstance(scale, dict):
+            for field, default in (
+                ("cooldownPeriod", 300),
+                ("pollingInterval", 30),
+            ):
+                value = scale.get(field, _MISSING)
+                if value is _MISSING or value is None or value == default:
+                    scale[field] = _AZURE_PROJECTION_DEFAULT
+            rules = scale.get("rules")
+            if isinstance(rules, list):
+                for rule in rules:
+                    if not isinstance(rule, dict):
+                        continue
+                    custom = rule.get("custom")
+                    if not isinstance(custom, dict):
+                        continue
+                    auth = custom.get("auth", _MISSING)
+                    if auth is _MISSING or auth == []:
+                        custom["auth"] = _AZURE_PROJECTION_DEFAULT
+
+    app_resources = containers[0].get("resources")
+    revision_resources = containers[1].get("resources")
+    if isinstance(app_resources, dict) and isinstance(revision_resources, dict):
+        app_ephemeral = app_resources.get("ephemeralStorage", _MISSING)
+        revision_ephemeral = revision_resources.get("ephemeralStorage", _MISSING)
+        if (app_ephemeral is _MISSING) != (revision_ephemeral is _MISSING):
+            present = revision_ephemeral if app_ephemeral is _MISSING else app_ephemeral
+            if present == EXPECTED_EPHEMERAL_STORAGE.get(expected_container):
+                app_resources["ephemeralStorage"] = _AZURE_PROJECTION_DEFAULT
+                revision_resources["ephemeralStorage"] = _AZURE_PROJECTION_DEFAULT
+
+    return app_view, revision_view
+
+
 def _validate_workload(
     policy: dict[str, Any], workload_observation: Any, state: str
 ) -> dict[str, Any]:
@@ -744,7 +811,10 @@ def _validate_workload(
         image,
         None,
     )
-    if app_template != revision_template:
+    app_comparison, revision_comparison = _template_comparison_views(
+        app_template, revision_template, expected["container_name"]
+    )
+    if app_comparison != revision_comparison:
         _fail("app and active-revision templates disagree after normalization")
     ingress = configuration.get("ingress")
     if expected["traffic_weight"] == 100:
