@@ -15,6 +15,19 @@ This is the primary repo for cosmaneura.com.
 - Deployments use a founder-started `Build & Publish (manual)` run on the exact target branch. A staging run still executes both checks and verifies that its SHA remains the current `staging` head before checkout or credential use, image publication, and Azure mutation. Because production and staging currently share this dispatcher, GitHub requests the production-only inputs on a staging run; enter `staging` for the Terraform run ID and leave the callback attestation false. The staging job ignores both values.
 - A manual run is a real deployment, not a dry run. Before starting one, compare the target environment's deployed SHA, configuration, and schema with the branch and resolve any drift deliberately. This source gate does not prove that staging is synthetic-only or non-PHI.
 
+### Staging-rehearsal base recovery
+
+The base-recovery apply is a separate founder-operated incident procedure, not
+a deployment workflow. After a fresh serial-8 plan and GET-only handoff receipt
+have been independently reviewed, the operator may use
+`scripts/consume_staging_rehearsal_base_recovery_handoff.py` from the exact
+current protected `master` commit. The consumer accepts only the four external
+digests/identities documented by its `--help`, requires five exact entries on a
+foreground controlling terminal, repeats remote-state and ARM readback, and
+then claims the handoff once before executing the exact saved plan. Never invoke
+it from CI, an agent, a wrapper, or a noninteractive shell. A failed run after
+the claim file exists requires a new plan, execution directory, and handoff.
+
 ---
 
 ## Suggested Consent Script

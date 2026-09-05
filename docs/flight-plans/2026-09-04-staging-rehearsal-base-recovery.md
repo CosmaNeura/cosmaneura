@@ -8,9 +8,9 @@
   apply to an exact additive remainder plan.
 - In scope: the AzureRM provider feature, marker-account lifecycle guard,
   incident evidence, recovery runbook, recovery-plan validator, and tests.
-- Delivery is a three-PR stack: the provider/lifecycle correction and incident
-  record; the non-mutating validator and core tests; then the protected
-  apply-runtime handoff, final runbook, and security regressions.
+- Delivery is a four-PR stack: the provider/lifecycle correction and incident
+  record; the non-mutating validator and core tests; the protected GET-only
+  apply-runtime handoff; then its human-only one-use consumer and regressions.
 - Explicit non-goals: untainting or otherwise editing state; Azure apply or
   mutation; creating the remaining resources; enabling a runtime, workflow,
   restore, sanitizer, retention control, cutover, Auth, Zoom, or production.
@@ -80,12 +80,45 @@ The later isolated synthetic-only rehearsal remains mandatory.
    ten-minute receipt binds the source, plan, state, runtime, Azure CLI and
    configuration, TLS trust, machine boot session, and one-use nonce. It always
    reports `apply_authorized=false`.
-7. Stop until a separate independently reviewed human-only consumer can
-   revalidate and consume that exact receipt immediately before replacing its
-   process with the receipt-bound OpenTofu invocation. A human operator then
-   applies only the exact reviewed plan and records post-apply readback.
-   OpenTofu must also accept its native saved-plan/state binding. Stop before
-   any later rung.
+7. After the consumer is independently reviewed and merged, discard every
+   receipt made before its merge and prepare a new plan, execution directory,
+   and handoff from the exact current protected `master`. Supply the consumer
+   the independently recorded source, plan, handoff-receipt, and Azure-user
+   principal digests. It requires a non-root human at one foreground controlling
+   terminal to enter the full commit, both artifact digests, the exact
+   28-no-op/11-create statement, and a fresh random challenge within one shared
+   120-second window. It then repeats the plan/source/runtime checks, pulls the
+   protected serial-8 remote state before and after two identical GET-only ARM
+   snapshots, and rechecks every local binding and the ten-minute expiry.
+8. The consumer atomically creates the owner-only one-use claim and directly
+   replaces itself with the exact OpenTofu 1.12.5 saved-plan apply. It offers no
+   yes flag, alternate binary, extra Terraform argument, environment override,
+   or automation interface. Never run it from CI or an agent. If anything fails
+   after the claim is created—including `execve` or OpenTofu itself—do not delete
+   or overwrite the claim; create and review a new plan, directory, and handoff.
+   After a successful human apply, record post-apply state and ARM readback, then
+   stop before any later rung.
+
+The approved human runs the consumer directly from the exact protected-master
+checkout with an empty ambient environment. Replace the placeholders below with
+absolute owner-only artifact paths and independently recorded lowercase
+digests. `AZURE_PRINCIPAL_SHA256` is the SHA-256 of the approved AzureCloud user
+principal name; never put the principal name or any secret in this command,
+receipt, logs, or review:
+
+```sh
+/usr/bin/env -i PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+  /opt/homebrew/bin/python3 -IS \
+  /ABSOLUTE/PROTECTED_MASTER/scripts/consume_staging_rehearsal_base_recovery_handoff.py \
+  --saved-plan /ABSOLUTE/OWNER_ONLY/recovery.tfplan \
+  --state-json /ABSOLUTE/OWNER_ONLY/serial-8.tfstate \
+  --execution-dir /ABSOLUTE/OWNER_ONLY/execution \
+  --receipt /ABSOLUTE/OWNER_ONLY/handoff.json \
+  --expected-source-commit SOURCE_COMMIT_40_LOWERCASE_HEX \
+  --expected-saved-plan-sha256 SAVED_PLAN_SHA256 \
+  --expected-receipt-sha256 HANDOFF_RECEIPT_FILE_SHA256 \
+  --expected-azure-principal-sha256 AZURE_PRINCIPAL_SHA256
+```
 
 Abort on a changed lineage, pre-untaint serial, tainted/deposed instance, failed
 check, drift, update, delete, replacement, extra/missing resource, changed
@@ -120,13 +153,19 @@ posture mismatch. No production or PHI promotion is part of this plan.
   never emits the Azure token or raw response bodies. It refuses an ambient
   Python/import/transport environment and revalidates the exact runtime after
   the live reads.
+- The human-only consumer also refuses ambient Python, dynamic-loader, proxy,
+  OpenTofu, Azure, and Git overrides. Its final `execve` environment is a closed
+  allowlist, and its immutable claim remains after an execution failure so the
+  same handoff cannot be retried ambiguously. Terminal presence is a strong
+  local ceremony, not cryptographic proof of a particular person; the external
+  principal digest and independent review remain required.
 - Observation window: read back all 39 expected state instances and exact live
   controls before any private-executor or irreversible-retention plan.
 
 ## Completion
 
-- This PR is complete after focused tests, OpenTofu format/validation/mocked
-  tests, change-budget check, independent exact-head review, and protected CI.
+- The consumer PR is complete after focused tests, static checks, change-budget
+  verification, independent exact-head review, and protected CI.
 - Incident recovery is complete only after the later operator evidence proves
   the exact additive apply and readback. This PR alone does not claim it.
 - Update the evidence record and README status after operator recovery.
