@@ -258,7 +258,7 @@ No workflow or live environment was changed.
 
 `restore-runtime-binding-policy.json` and its offline validator now specify the
 missing boundary without implementing it; see the [runtime-binding flight
-plan](flight-plans/2026-09-04-staging-restore-runtime-binding.md). All nineteen
+plan](flight-plans/2026-09-04-staging-restore-runtime-binding.md). All 25
 assertions remain false, executable validation refuses, and no workflow consumes it.
 
 The checked-in policy excludes resulting image/record/signature digests. A

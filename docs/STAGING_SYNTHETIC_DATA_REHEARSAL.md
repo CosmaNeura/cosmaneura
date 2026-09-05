@@ -211,6 +211,13 @@ record field. No signer, publisher transport, registry reader, workflow, or
 activation was added; see the
 [runtime-record builder flight plan](flight-plans/2026-09-04-staging-runtime-record-builder.md).
 
+A dormant runtime-image receiver now authenticates exact ACR manifest/config
+bytes, closed-world layer descriptors, GitHub Sigstore provenance, platform,
+source, and run labels before minting a sealed receipt. Transport, containment,
+independent build proof, workflow integration, and activation remain absent or
+false; executor containment and Key Vault access do not authorize this path. See
+[image-publication authentication flight plan](flight-plans/2026-09-04-staging-runtime-image-publication-authentication.md).
+
 The next dormant boundary now supplies that handoff with exact private readers.
 It uses the selected job UAMI for separate storage and vault audiences, performs
 only content-addressed record/bundle GETs plus one exact-version Key Vault root

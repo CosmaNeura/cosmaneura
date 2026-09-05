@@ -41,6 +41,9 @@ def _activated(policy: dict[str, Any]) -> dict[str, Any]:
     handoff = launch["mailbox"]["execution_receipt_handoff"]
     handoff["execution_name_source_adapter_implemented"] = True
     handoff["platform_source_validation"]["adapter_implemented"] = True
+    image_auth = policy["private_registry"]["image_publication_authentication"]
+    image_auth["verifier_profile"]["publisher_containment_proven"] = True
+    image_auth["publication"]["image_build_provenance_proven"] = True
     return policy
 
 
@@ -65,6 +68,11 @@ def _configured_policy() -> dict[str, Any]:
         elif placeholder.endswith("_IMAGE_REPOSITORY"):
             replacements[placeholder] = (
                 "restoreexecutor.azurecr.io/cosmaneura/restore-executor"
+            )
+        elif placeholder == "CONFIGURE_EXACT_RUNTIME_IMAGE_ATTESTOR_SIGNER_IDENTITY":
+            replacements[placeholder] = (
+                "https://github.com/CosmaNeura/cosmaneura/.github/workflows/"
+                "staging_runtime_image_publish.yml@refs/heads/master"
             )
         elif placeholder.endswith("_SIGNER_IDENTITY"):
             replacements[placeholder] = (
