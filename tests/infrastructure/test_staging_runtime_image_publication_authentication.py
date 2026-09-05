@@ -6,7 +6,7 @@ import inspect
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import pytest
 
@@ -563,7 +563,7 @@ def test_errors_are_bounded_and_module_has_no_default_io(
         (authentication.OneShotOfflineAttestationVerifier, "verifier_invalid"),
     ):
         with pytest.raises(authentication.RuntimeImagePublicationFailure, match=error):
-            constructor(ExplodingAdapter())
+            constructor(cast(Any, ExplodingAdapter()))
 
 
 def test_current_receiver_refuses_future_proof_claims() -> None:
