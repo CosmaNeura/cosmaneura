@@ -58,6 +58,7 @@ MAX_CA_BUNDLE_BYTES = 4 * 1024 * 1024
 ARM_RETRY_BACKOFF_SECONDS = (0.05, 0.1)
 MAX_ARM_PAGES = 16
 MAX_READBACK_SECONDS = 180
+MAX_ACTION_READBACK_SECONDS = 120.0
 MAX_OBSERVATION_SPAN = timedelta(minutes=2)
 MAX_CLOCK_SKEW = timedelta(minutes=5)
 RECEIPT_LIFETIME = timedelta(minutes=10)
@@ -153,6 +154,9 @@ class ReadOnlyArm(Protocol):
         ...
 
     def refresh_account(self) -> None:
+        ...
+
+    def begin_action_readback(self, *, deadline: float) -> float:
         ...
 
     def revalidate_runtime(self) -> None:
@@ -305,6 +309,7 @@ class AzureManagementReader:
     """Azure CLI login plus an HTTPS transport that can issue only ARM GETs."""
 
     def __init__(self) -> None:
+        self._action_window_started = False
         self._az = _resolve_azure_cli()
         self._home, self._azure_config, self.azure_config_binding_sha256 = _operator_paths()
         self.azure_cli_sha256 = recovery._executable_sha256(self._az, label='Azure CLI')
@@ -330,7 +335,13 @@ class AzureManagementReader:
             _fail('azure_cli.operation_invalid')
         path = ':'.join(dict.fromkeys((str(self._az.parent), '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin')))
         command = ['/usr/bin/env', '-i', f'HOME={self._home}', f'PATH={path}', 'LC_ALL=C', f'AZURE_CONFIG_DIR={self._azure_config}', 'AZURE_CORE_ONLY_SHOW_ERRORS=true', str(self._az), *arguments, '--only-show-errors', '--output', 'json']
-        result = recovery._run_process(command, cwd=recovery.REPOSITORY_ROOT, timeout_seconds=60, max_output_bytes=256 * 1024)
+        timeout = 60.0
+        if self._action_window_started:
+            remaining = self._deadline - time.monotonic()
+            if remaining <= 0:
+                _fail('arm_request.timeout')
+            timeout = min(timeout, remaining)
+        result = recovery._run_process(command, cwd=recovery.REPOSITORY_ROOT, timeout_seconds=timeout, max_output_bytes=256 * 1024)
         if result.returncode != 0:
             _fail('azure_cli.failed')
         value = recovery._load_json_bytes(result.stdout, label='Azure CLI response')
@@ -338,6 +349,16 @@ class AzureManagementReader:
 
     def refresh_account(self) -> None:
         self.account = self._az_json('account')
+
+    def begin_action_readback(self, *, deadline: float) -> float:
+        now = time.monotonic()
+        if self._action_window_started or type(deadline) is not float or not now < deadline <= now + MAX_ACTION_READBACK_SECONDS:
+            _fail('arm_request.window_invalid')
+        self.dates = []
+        self._bytes_read = 0
+        self._deadline = deadline
+        self._action_window_started = True
+        return self._deadline
 
     def revalidate_runtime(self) -> None:
         if recovery._executable_sha256(self._az, label='Azure CLI') != self.azure_cli_sha256 or _digest(_canonical(self._az_json('version'))) != self.azure_cli_version_sha256 or _hardened_tls_context()[1] != self.azure_tls_ca_bundle_sha256 or _operator_paths()[2] != self.azure_config_binding_sha256:
