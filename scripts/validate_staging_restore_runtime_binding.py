@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "9138f192d15f23eb99134f8e5e7143cfebee617232b51ff1041a17576f8ba01a"
+CANONICAL_POLICY_SHA256 = "20a9ab6f9b7c10b9cb934eb6f18d7c104718b6a8f53e277cd42538806fc27b15"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -66,6 +66,7 @@ ACTIVATION = (
     ("private_runtime_record_ingress_bound", "private_runtime_record_ingress_unbound"),
     ("runtime_record_publication_authority_bound", "runtime_record_publication_authority_unbound"),
     ("private_registry_binding_implemented", "private_registry_binding_unimplemented"),
+    ("runtime_image_publication_authenticated", "runtime_image_publication_unauthenticated"),
     ("broker_oidc_authentication_bound", "broker_oidc_authentication_unbound"),
     ("broker_exact_job_observation_bound", "broker_exact_job_observation_unbound"),
     ("broker_job_control_bound", "broker_job_control_unbound"),
@@ -92,6 +93,8 @@ IMPLEMENTATION_PATHS = {
     ("launch_binding", "receipt_signing", "implemented"),
     ("launch_binding", "mailbox", "execution_receipt_handoff", "execution_name_source_adapter_implemented"),
     ("launch_binding", "mailbox", "execution_receipt_handoff", "platform_source_validation", "adapter_implemented"),
+    ("private_registry", "image_publication_authentication", "verifier_profile", "publisher_containment_proven"),
+    ("private_registry", "image_publication_authentication", "publication", "image_build_provenance_proven"),
 }
 RUNTIME_RECORD_FIELDS = (
     "schema_version",
@@ -411,6 +414,11 @@ def _activation(policy: dict[str, Any], *, executable: bool) -> None:
     launch = policy["launch_binding"]
     handoff = launch["mailbox"]["execution_receipt_handoff"]
     implementations = {
+        "runtime_image_publication_authenticated": (
+            policy["private_registry"]["image_publication_authentication"]["receiver_implemented"],
+            policy["private_registry"]["image_publication_authentication"]["verifier_profile"]["publisher_containment_proven"],
+            policy["private_registry"]["image_publication_authentication"]["publication"]["image_build_provenance_proven"],
+        ),
         "broker_oidc_authentication_bound": (launch["broker_request_authentication"]["replay_store"]["implemented"],),
         "immutable_launch_record_mailbox_bound": (launch["mailbox"]["implemented"],),
         "launch_receipt_binding_implemented": (launch["receipt_signing"]["implemented"], handoff["execution_name_source_adapter_implemented"], handoff["platform_source_validation"]["adapter_implemented"]),
@@ -678,6 +686,85 @@ def _runtime_record_derivations(policy: dict[str, Any]) -> None:
         _fail("external_runtime_record.derivation")
 
 
+def _runtime_image_publication_authentication(policy: dict[str, Any]) -> None:
+    """Cross-bind the dormant image-attestation receiver contract."""
+
+    registry = policy["private_registry"]
+    authentication = registry["image_publication_authentication"]
+    binding = policy["external_runtime_record"]["binding"]
+    signature = policy["external_runtime_record"]["signature"]
+    certificate = authentication["certificate"]
+    profile = authentication["verifier_profile"]
+    containment = profile["publisher_containment"]
+    containment_evidence = containment["evidence"]
+    readback = authentication["registry_readback"]
+    publication = authentication["publication"]
+    verifier = policy["offline_github_verifier"]
+    expected_identity_prefix = (
+        f"https://github.com/{binding['repository']}/.github/workflows/"
+    )
+    expected_identity_suffix = f"@{binding['protected_ref']}"
+    identity = certificate["identity"]
+    if (
+        authentication["trusted_root_source"]
+        != "evidence_ingress.private_versioned_secret_source.secrets.github_trusted_root"
+        or authentication["verifier_source"] != "offline_github_verifier"
+        or profile["version"] != verifier["version"]
+        or profile["subject_filename"]
+        != authentication["statement"]["subject_name"]
+        or profile["timeout_seconds"] != verifier["maximum_runtime_seconds"]
+        or profile["maximum_output_bytes"] != verifier["maximum_output_bytes"]
+        or profile["network_access_permitted"] is not False
+        or profile["executor_invocation_plan_applies"] is not False
+        or containment["scope"]
+        != "runtime-image-publication-authenticator-only"
+        or containment["required_before_gate_true"] is not True
+        or containment["network_namespace"] != "dedicated-no-network-namespace"
+        or containment["network_access_permitted"] is not False
+        or containment["loopback_enabled"] is not False
+        or containment["registry_transport_outside_namespace"] is not True
+        or containment["run_as_non_root"] is not True
+        or containment["no_new_privileges"] is not True
+        or containment["linux_capabilities"] != []
+        or containment["read_only_root_filesystem"] is not True
+        or len(set(containment_evidence.values())) != 4
+        or set(containment_evidence.values())
+        & set(verifier["containment_evidence"].values())
+        or publication["build_provenance_evidence_sha256"]
+        in {
+            *containment_evidence.values(),
+            *verifier["containment_evidence"].values(),
+        }
+        or authentication["bundle"]["media_type"] != signature["format"]
+        or certificate["oidc_issuer"] != signature["certificate_oidc_issuer"]
+        or identity == signature["certificate_identity"]
+        or authentication["image"]["source_repository_uri"]
+        != f"https://github.com/{binding['repository']}"
+        or registry["image_reference_mode"]
+        != "digest-only-from-verified-external-runtime-record"
+        or registry["tag_reference_permitted"] is not False
+        or readback["reference_mode"] != "digest-only-from-attestation-subject"
+        or readback["tag_or_listing_permitted"] is not False
+        or readback["maximum_manifest_reads"] != 1
+        or readback["maximum_config_reads"] != 1
+        or publication["published_at_source"] != "trusted-post-verification-clock"
+        or publication["caller_timestamp_permitted"] is not False
+        or publication["image_build_source_sha_source"]
+        != "authenticated-config-revision-label"
+        or publication["image_digest_source"] != "raw-manifest-sha256"
+        or publication["same_build_and_attestation_run_attempt_required"] is not True
+        or type(profile["publisher_containment_proven"]) is not bool
+        or type(publication["image_build_provenance_proven"]) is not bool
+        or verifier["network_access_permitted"] is not False
+    ):
+        _fail("private_registry.image_publication_authentication")
+    if PLACEHOLDER_RE.fullmatch(identity) is None and (
+        not identity.startswith(expected_identity_prefix)
+        or not identity.endswith(expected_identity_suffix)
+    ):
+        _fail("private_registry.image_publication_authentication")
+
+
 def validate_runtime_binding_policy(policy: Any, *, executable: bool = False) -> dict[str, Any]:
     """Validate one policy object against the digest-pinned closed-world template."""
 
@@ -685,6 +772,7 @@ def validate_runtime_binding_policy(policy: Any, *, executable: bool = False) ->
     _shape(policy, template)
     document = _object(policy, set(template), "policy.closed_world")
     _runtime_record_derivations(document)
+    _runtime_image_publication_authentication(document)
     _activation(document, executable=executable)
     _cross_bind(document)
     if executable:

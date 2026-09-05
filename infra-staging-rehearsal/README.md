@@ -69,7 +69,7 @@ HCL shape only; live provider validation must still prove that Azure accepts a
 `validate_staging_restore_runtime_binding.py` define and validate the future
 private-runtime boundary; see the [runtime-binding flight
 plan](../docs/flight-plans/2026-09-04-staging-restore-runtime-binding.md).
-All nineteen activation assertions remain false and executable validation refuses.
+All 25 activation assertions remain false and executable validation refuses.
 
 - Federated dispatchers may later read/start only their exact jobs through an
   enforced no-override request; `jobs/start/action` RBAC alone is insufficient.
