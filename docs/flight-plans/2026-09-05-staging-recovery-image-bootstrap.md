@@ -1,6 +1,6 @@
 # Staging recovery-image bootstrap
 
-Status: first read-only capture failed closed; no mutation occurred. Risk: Tier 2. Sole dispatcher: `JohnClem`.
+Status: first read-only capture failed closed; no registry or workload mutation occurred. Risk: Tier 2. Sole dispatcher: `JohnClem`.
 
 ## Outcome and hard boundary
 
