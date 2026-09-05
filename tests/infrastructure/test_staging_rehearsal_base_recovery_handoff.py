@@ -141,6 +141,10 @@ class FakeReader:
     def refresh_account(self) -> None:
         pass
 
+    def begin_action_readback(self, *, deadline: float) -> float:
+        self.dates = []
+        return deadline
+
     def revalidate_runtime(self) -> None:
         pass
 
@@ -455,6 +459,48 @@ def test_get_retries_only_transient_transport_failures(monkeypatch: pytest.Monke
     with pytest.raises(handoff.HandoffError, match='arm_request.failed'):
         reader.get(handoff.STORAGE_ID, handoff.API['storage'])
     assert url and len(opener.requests) == 1 and sleeps == []
+
+def test_action_readback_window_resets_once_and_caps_every_following_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = 100.0
+    monkeypatch.setattr(handoff.time, 'monotonic', lambda: now)
+    reader = handoff.AzureManagementReader.__new__(handoff.AzureManagementReader)
+    reader._action_window_started = False
+    reader._deadline = 1.0
+    reader._bytes_read = handoff.MAX_TOTAL_ARM_BYTES + 1
+    reader.dates = [NOW - timedelta(hours=1)]
+    reader._token = 'token'
+    opener = _Opener()
+    setattr(reader, '_opener', opener)
+    deadline = now + 80.0
+    assert reader.begin_action_readback(deadline=deadline) == deadline
+    assert reader._deadline == deadline and reader._bytes_read == 0 and reader.dates == []
+    with pytest.raises(handoff.HandoffError, match='window_invalid'):
+        reader.begin_action_readback(deadline=deadline)
+
+    expired = deadline + 1.0
+    monkeypatch.setattr(handoff.time, 'monotonic', lambda: expired)
+    with pytest.raises(handoff.HandoffError, match='arm_request.timeout'):
+        reader.get(handoff.STORAGE_ID, handoff.API['storage'])
+    assert opener.requests == []
+
+    invalid = handoff.AzureManagementReader.__new__(handoff.AzureManagementReader)
+    invalid._action_window_started = False
+    with pytest.raises(handoff.HandoffError, match='window_invalid'):
+        invalid.begin_action_readback(deadline=expired + handoff.MAX_ACTION_READBACK_SECONDS + 1.0)
+
+def test_action_window_caps_account_cli_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = 100.0
+    reader = handoff.AzureManagementReader.__new__(handoff.AzureManagementReader)
+    reader._action_window_started = True
+    reader._deadline = now + 7.5
+    reader._az = Path('/trusted/az')
+    reader._home = Path('/trusted/home')
+    reader._azure_config = Path('/trusted/home/.azure')
+    observed: list[float] = []
+    monkeypatch.setattr(handoff.time, 'monotonic', lambda: now)
+    monkeypatch.setattr(handoff.recovery, '_run_process', lambda *_args, **kwargs: observed.append(kwargs['timeout_seconds']) or subprocess.CompletedProcess([], 0, b'{}', b''))
+    reader.refresh_account()
+    assert observed == [7.5] and reader.account == {}
 
 def test_tls_rejects_ambient_trust_or_key_logging(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ('SSLKEYLOGFILE', 'SSL_CERT_FILE', 'SSL_CERT_DIR'):
