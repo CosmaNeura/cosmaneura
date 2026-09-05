@@ -30,7 +30,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-runtime-binding-policy.json"
-CANONICAL_POLICY_SHA256 = "a36930bd88d4ed30cf46a4c8184c959fa373a88cc2ad03269db06b9bf3bacc77"
+CANONICAL_POLICY_SHA256 = "c98993739434a0b573697b1a887bc39b7e95a30129a995df3766509e71c9c8f6"
 MAXIMUM_POLICY_BYTES = 262_144
 
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
@@ -682,7 +682,7 @@ def _cross_bind(policy: dict[str, Any]) -> None:
     receipt_fields = ["target_fqdn", "approved_database_role", *TARGET_CLEANUP_FIELDS, *EXECUTOR_CLEANUP_FIELDS]
     if (
         policy["authenticated_controller_receipt"]["content_contract_policy_id"] != "cosmaneura-staging-controller-receipt-v2"
-        or policy["authenticated_controller_receipt"]["content_contract_policy_sha256"] != "sha256:ba57d516cbc9e44b7256c9f30409a1316567ad7822056bddc0ab668660cfbb73"
+        or policy["authenticated_controller_receipt"]["content_contract_policy_sha256"] != "sha256:4e83405da756448117a8bc0a4f4ff7a60a918a780df4bbaabc99a9d140a766b1"
         or policy["authenticated_controller_receipt"]["required_runtime_fields"] != receipt_fields
         or policy["per_rehearsal_postgres"]["executor_side_required_fields"] != list(EXECUTOR_CLEANUP_FIELDS)
         or policy["cleanup"]["bound_resource_fields"]["target"] != list(TARGET_CLEANUP_FIELDS)
