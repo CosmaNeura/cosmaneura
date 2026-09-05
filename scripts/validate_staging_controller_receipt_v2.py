@@ -23,7 +23,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/controller-receipt-v2-policy.json"
-POLICY_SHA256 = "ba57d516cbc9e44b7256c9f30409a1316567ad7822056bddc0ab668660cfbb73"
+POLICY_SHA256 = "4e83405da756448117a8bc0a4f4ff7a60a918a780df4bbaabc99a9d140a766b1"
 MAXIMUM_POLICY_BYTES = 128 * 1024
 
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -211,6 +211,7 @@ DYNAMIC_SOURCE_FIELDS = (
     "private_endpoint_resource_id",
     "writer_identity_resource_id",
     "reader_identity_resource_ids",
+    "reader_identity_client_ids",
     "writer_role_assignment_id",
     "reader_role_assignment_ids",
     "create_role_definition_id",
@@ -477,6 +478,7 @@ def _validate_policy_against_template(
         "immutability_configuration_evidence_sha256",
     )
     readers = source.get("reader_identity_resource_ids")
+    reader_clients = source.get("reader_identity_client_ids")
     reader_roles = source.get("reader_role_assignment_ids")
     containers = source.get("container_resource_ids")
     if (
@@ -496,6 +498,14 @@ def _validate_policy_against_template(
         or set(readers) != {"provision", "cleanup"}
         or any(not _configured_or(item, _azure_id) for item in readers.values())
         or readers["provision"] != source.get("writer_identity_resource_id")
+        or type(reader_clients) is not dict
+        or set(reader_clients) != {"provision", "cleanup"}
+        or any(
+            not _configured_or(
+                item, lambda candidate: UUID_RE.fullmatch(candidate) is not None
+            )
+            for item in reader_clients.values()
+        )
         or type(reader_roles) is not dict
         or set(reader_roles) != {"provision", "cleanup"}
         or any(not _configured_or(item, _azure_id) for item in reader_roles.values())
