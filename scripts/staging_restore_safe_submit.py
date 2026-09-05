@@ -11,12 +11,18 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
+import os
 import re
-import subprocess
+import ssl
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
@@ -24,6 +30,13 @@ from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
 from time import sleep
 from typing import Any, Callable, Mapping, NoReturn, Protocol
+
+try:
+    from scripts import staging_restore_runtime_adapters as runtime_adapters
+    from scripts import validate_staging_restore_runtime_binding as runtime_binding
+except ModuleNotFoundError:  # pragma: no cover - direct script import fallback
+    import staging_restore_runtime_adapters as runtime_adapters
+    import validate_staging_restore_runtime_binding as runtime_binding
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_ROOT = ROOT / "contracts/staging-rehearsal/v1"
@@ -67,12 +80,22 @@ EXPECTED_PLACEHOLDERS = (
     "CONFIGURE_EXACT_PROVISION_TARGET_ROLE_PERMISSIONS_SHA256",
 )
 MANAGEMENT_ROOT = "https://management.azure.com"
+ARM_OAUTH_RESOURCE = f"{MANAGEMENT_ROOT}/"
 BLOB_OAUTH_RESOURCE = "https://storage.azure.com/"
 BLOB_SERVICE_VERSION = "2021-12-02"
+MAXIMUM_ARM_RESPONSE_BYTES = 1_048_576
+RUNTIME_CA_BUNDLE_PATH = runtime_adapters.RUNTIME_CA_BUNDLE_PATH
+IDENTITY_API_VERSION = runtime_adapters.IDENTITY_API_VERSION
+MAXIMUM_TOKEN_BYTES = runtime_adapters.MAXIMUM_TOKEN_BYTES
+UUID_RE = runtime_adapters.UUID_RE
+SAFE_TOKEN_RE = runtime_adapters.SAFE_TOKEN_RE
+UNSIGNED_DECIMAL_RE = runtime_adapters.UNSIGNED_DECIMAL_RE
 BLOB_HOST_RE = re.compile(r"^[a-z0-9]{3,24}\.blob\.core\.windows\.net$")
 CONTAINER_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$")
 ETAG_RE = re.compile(r'^"[^"\r\n]+"$')
+ARM_ETAG_RE = re.compile(r'^(?:W/)?"[^"\r\n]+"$')
 MARKER_KINDS = frozenset({"intent", "submission", "cleanup"})
+RUNTIME_ACTIONS = frozenset({"provision", "cleanup"})
 POSTGRES_TYPE = "microsoft.dbforpostgresql/flexibleservers"
 UNKNOWN = object()
 CLEANUP_PRESENT_UNPROVEN = object()
@@ -215,105 +238,392 @@ class MarkerStore(Protocol):
     def list_intent_ids(self) -> tuple[str, ...]: ...
 
 
-class AzureArmTransport:
-    """Small ARM HTTP adapter with per-request deadlines and bounded errors."""
+class _HttpOpener(Protocol):
+    def open(self, request: Any, *, timeout: int) -> Any: ...
 
-    def _access_token(self, timeout_seconds: int) -> str:
-        command = [
-            "az",
-            "account",
-            "get-access-token",
-            "--resource",
-            MANAGEMENT_ROOT,
-            "--query",
-            "accessToken",
-            "--output",
-            "tsv",
-            "--only-show-errors",
-        ]
-        try:
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=timeout_seconds,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise ArmOutcomeUnknown from exc
-        token = result.stdout.strip()
-        if result.returncode != 0 or not token or any(char.isspace() for char in token):
-            _fail("arm_authentication_failed")
-        return token
 
-    def request(
-        self,
-        method: str,
-        resource_id: str,
-        *,
-        api_version: str,
-        body: dict[str, Any] | None = None,
-        headers: Mapping[str, str] | None = None,
-        timeout_seconds: int,
-    ) -> ArmResponse:
-        if not resource_id.startswith("/") or not re.fullmatch(
-            r"[0-9]{4}-[0-9]{2}-[0-9]{2}", api_version
-        ):
-            _fail("arm_request_target_invalid")
-        mutating = method.upper() in {"DELETE", "PATCH", "POST", "PUT"}
-        query = urllib.parse.urlencode({"api-version": api_version})
-        url = f"{MANAGEMENT_ROOT}{resource_id}?{query}"
-        payload = _canonical(body) if body is not None else None
-        request_headers = {
-            "Accept": "application/json",
-            "Authorization": f"Bearer {self._access_token(timeout_seconds)}",
-            "Content-Type": "application/json",
-        }
-        request_headers.update(headers or {})
-        request = urllib.request.Request(
-            url, data=payload, headers=request_headers, method=method
+class _DeadlineFactory(Protocol):
+    def __call__(self, timeout_seconds: int) -> AbstractContextManager[None]: ...
+
+
+@dataclass(frozen=True)
+class _WireResponse:
+    status: int
+    body: bytes
+    headers: Mapping[str, str]
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def _runtime_tls_context(
+    ca_bundle_path: Path = RUNTIME_CA_BUNDLE_PATH,
+) -> ssl.SSLContext:
+    try:
+        return runtime_adapters._runtime_tls_context(ca_bundle_path)
+    except runtime_adapters.RuntimeAdapterFailure:
+        raise SafeSubmitError("transport_tls_configuration_invalid") from None
+
+
+def _hardened_opener(*, tls_context: ssl.SSLContext | None = None) -> Any:
+    """Use only the immutable-image CA roots and no ambient proxy route."""
+
+    context = tls_context if tls_context is not None else _runtime_tls_context()
+    if not isinstance(context, ssl.SSLContext):
+        _fail("transport_tls_configuration_invalid")
+    return urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        _RefuseRedirects(),
+        urllib.request.HTTPSHandler(context=context),
+    )
+
+
+@contextmanager
+def _wall_clock_deadline(timeout_seconds: int) -> Iterator[None]:
+    """Bound one complete synchronous identity-plus-service exchange."""
+
+    try:
+        with runtime_adapters._wall_clock_deadline(timeout_seconds):
+            yield
+    except runtime_adapters.RuntimeAdapterFailure as error:
+        code = (
+            "transport_deadline"
+            if str(error) == "http_request.timeout"
+            else "transport_deadline_unavailable"
         )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                raw = response.read(1_048_577)
-                if len(raw) > 1_048_576:
-                    if mutating:
-                        raise ArmOutcomeUnknown
-                    _fail("arm_response_too_large")
-                try:
-                    parsed = json.loads(raw) if raw.strip() else None
-                except (UnicodeError, json.JSONDecodeError) as exc:
-                    if mutating:
-                        raise ArmOutcomeUnknown from exc
-                    _fail("arm_response_invalid")
-                try:
-                    status = int(response.status)
-                    response_headers = {
-                        key.lower(): value for key, value in response.headers.items()
-                    }
-                except (AttributeError, TypeError, ValueError) as exc:
-                    if mutating:
-                        raise ArmOutcomeUnknown from exc
-                    _fail("arm_response_invalid")
-                return ArmResponse(status=status, body=parsed, headers=response_headers)
-        except urllib.error.HTTPError as exc:
+        raise SafeSubmitError(code) from None
+
+
+def _validate_identity_endpoint(endpoint: str) -> str:
+    try:
+        validated = runtime_adapters._validate_identity_endpoint(endpoint)
+    except runtime_adapters.RuntimeAdapterFailure:
+        raise SafeSubmitError("managed_identity_configuration_invalid") from None
+    if urllib.parse.urlsplit(validated).path != "/msi/token":
+        _fail("managed_identity_configuration_invalid")
+    return validated
+
+
+def _clock_value(clock: Callable[[], float], code: str) -> float:
+    try:
+        value = clock()
+    except Exception:
+        raise SafeSubmitError(code) from None
+    if (
+        type(value) not in {int, float}
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+    ):
+        _fail(code)
+    return float(value)
+
+
+def _header_values(headers: Any, name: str) -> tuple[str, ...]:
+    try:
+        if hasattr(headers, "get_all"):
+            raw = headers.get_all(name) or []
+        else:
+            value = headers.get(name)
+            raw = [] if value is None else [value]
+        values = tuple(raw)
+    except Exception:
+        _fail("http_response_invalid")
+    if any(
+        type(value) is not str
+        or not value
+        or len(value) > 4_096
+        or "\r" in value
+        or "\n" in value
+        for value in values
+    ):
+        _fail("http_response_invalid")
+    return values
+
+
+def _read_wire_response(
+    response: Any, *, expected_url: str, maximum_bytes: int
+) -> _WireResponse:
+    try:
+        status = getattr(response, "status", getattr(response, "code", None))
+        final_url = response.geturl()
+        content_lengths = _header_values(response.headers, "Content-Length")
+        content_encodings = _header_values(response.headers, "Content-Encoding")
+        content_ranges = _header_values(response.headers, "Content-Range")
+        transfer_encodings = _header_values(response.headers, "Transfer-Encoding")
+        normalized: dict[str, str] = {}
+        for key, value in response.headers.items():
+            lowered = str(key).lower()
+            rendered = str(value)
+            if (
+                not lowered
+                or lowered in normalized
+                or len(lowered) > 256
+                or len(rendered) > 4_096
+                or "\r" in lowered
+                or "\n" in lowered
+                or "\r" in rendered
+                or "\n" in rendered
+            ):
+                _fail("http_response_invalid")
+            normalized[lowered] = rendered
+    except SafeSubmitError:
+        raise
+    except Exception:
+        raise SafeSubmitError("http_response_invalid") from None
+    if (
+        type(status) is not int
+        or not 100 <= status <= 599
+        or type(final_url) is not str
+        or final_url != expected_url
+        or len(content_lengths) != 1
+        or len(content_encodings) > 1
+        or content_ranges
+        or transfer_encodings
+        or content_encodings
+        and content_encodings[0].strip().lower() != "identity"
+    ):
+        _fail("http_response_invalid")
+    raw_length = content_lengths[0]
+    if (
+        not raw_length.isascii()
+        or not raw_length.isdigit()
+        or raw_length != str(int(raw_length))
+    ):
+        _fail("http_response_invalid")
+    declared_length = int(raw_length)
+    if declared_length > maximum_bytes:
+        _fail("http_response_too_large")
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        while True:
+            chunk = response.read(maximum_bytes + 1 - total)
+            if type(chunk) is not bytes:
+                _fail("http_response_invalid")
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > maximum_bytes:
+                _fail("http_response_too_large")
+    except SafeSubmitError:
+        raise
+    except Exception:
+        raise SafeSubmitError("http_response_unavailable") from None
+    raw = b"".join(chunks)
+    if declared_length != len(raw):
+        _fail("http_response_invalid")
+    return _WireResponse(status=status, body=raw, headers=normalized)
+
+
+def _json_mapping(raw: bytes, code: str) -> Mapping[str, Any]:
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                _fail(code)
+            value[key] = item
+        return value
+
+    def reject_nonfinite(_value: str) -> NoReturn:
+        _fail(code)
+
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonfinite,
+        )
+    except SafeSubmitError:
+        raise
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise SafeSubmitError(code) from None
+    if not isinstance(value, Mapping):
+        _fail(code)
+    return value
+
+
+class ContainerAppsManagedIdentityTokenSource:
+    """Explicit tokens for one selected job UAMI and two fixed audiences."""
+
+    __slots__ = (
+        "_client_id",
+        "_clock",
+        "_endpoint",
+        "_expiry_skew_seconds",
+        "_header",
+        "_last_now",
+        "_lock",
+        "_maximum_lifetime_seconds",
+        "_maximum_response_bytes",
+        "_maximum_timeout_seconds",
+        "_opener",
+        "_service_api_version",
+        "_tokens",
+    )
+
+    def __init__(
+        self,
+        *,
+        client_id: str,
+        identity_endpoint: str,
+        identity_header: str,
+        service_api_version: str,
+        maximum_response_bytes: int,
+        expiry_skew_seconds: int,
+        maximum_lifetime_seconds: int,
+        maximum_timeout_seconds: int,
+        opener: _HttpOpener | None = None,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        endpoint = _validate_identity_endpoint(identity_endpoint)
+        if (
+            type(client_id) is not str
+            or UUID_RE.fullmatch(client_id) is None
+            or type(identity_header) is not str
+            or SAFE_TOKEN_RE.fullmatch(identity_header) is None
+            or service_api_version != IDENTITY_API_VERSION
+            or type(maximum_response_bytes) is not int
+            or not 1 <= maximum_response_bytes <= MAXIMUM_TOKEN_BYTES
+            or type(expiry_skew_seconds) is not int
+            or not 1 <= expiry_skew_seconds <= 300
+            or type(maximum_lifetime_seconds) is not int
+            or not expiry_skew_seconds < maximum_lifetime_seconds <= 86_400
+            or type(maximum_timeout_seconds) is not int
+            or not 1 <= maximum_timeout_seconds <= 60
+            or (opener is not None and not callable(getattr(opener, "open", None)))
+            or not callable(clock)
+        ):
+            _fail("managed_identity_configuration_invalid")
+        self._client_id = client_id
+        self._endpoint = endpoint
+        self._header = identity_header
+        self._service_api_version = service_api_version
+        self._maximum_response_bytes = maximum_response_bytes
+        self._expiry_skew_seconds = expiry_skew_seconds
+        self._maximum_lifetime_seconds = maximum_lifetime_seconds
+        self._maximum_timeout_seconds = maximum_timeout_seconds
+        self._opener = opener or _hardened_opener()
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._tokens: dict[str, tuple[str, int]] = {}
+        self._last_now: float | None = None
+
+    def _is_bound(self, *, client_id: str, resource: str) -> bool:
+        return (
+            type(self) is ContainerAppsManagedIdentityTokenSource
+            and client_id == self._client_id
+            and resource in {ARM_OAUTH_RESOURCE, BLOB_OAUTH_RESOURCE}
+        )
+
+    def _bounded_timeout(self, timeout_seconds: int) -> int:
+        if type(timeout_seconds) is not int or timeout_seconds < 1:
+            _fail("managed_identity_request_invalid")
+        return min(timeout_seconds, self._maximum_timeout_seconds)
+
+    def get_token(self, *, client_id: str, resource: str, timeout_seconds: int) -> str:
+        if (
+            not self._is_bound(client_id=client_id, resource=resource)
+            or type(timeout_seconds) is not int
+            or not 1 <= timeout_seconds <= self._maximum_timeout_seconds
+        ):
+            _fail("managed_identity_request_invalid")
+        with self._lock:
+            now = _clock_value(self._clock, "managed_identity_clock_invalid")
+            if self._last_now is not None and now < self._last_now:
+                _fail("managed_identity_clock_invalid")
+            self._last_now = now
+            cached = self._tokens.get(resource)
+            if cached is not None and cached[1] > now + self._expiry_skew_seconds:
+                return cached[0]
+            query = urllib.parse.urlencode(
+                {
+                    "api-version": self._service_api_version,
+                    "resource": resource,
+                    "client_id": client_id,
+                }
+            )
+            url = f"{self._endpoint}?{query}"
+            request = urllib.request.Request(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "Accept-Encoding": "identity",
+                    "Metadata": "true",
+                    "X-IDENTITY-HEADER": self._header,
+                },
+                method="GET",
+            )
             try:
-                return ArmResponse(
-                    status=int(exc.code),
-                    headers={key.lower(): value for key, value in exc.headers.items()},
-                )
-            except Exception as response_error:
-                if mutating:
-                    raise ArmOutcomeUnknown from response_error
-                _fail("arm_response_invalid")
-        except (ArmOutcomeUnknown, SafeSubmitError):
-            raise
-        except (OSError, TimeoutError, urllib.error.URLError) as exc:
-            raise ArmOutcomeUnknown from exc
-        except Exception as exc:
-            if mutating:
-                raise ArmOutcomeUnknown from exc
-            raise SafeSubmitError("arm_response_invalid") from exc
+                try:
+                    response = self._opener.open(request, timeout=timeout_seconds)
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    try:
+                        identity_status = getattr(
+                            response, "status", getattr(response, "code", None)
+                        )
+                        identity_final_url = response.geturl()
+                    except Exception:
+                        _fail("managed_identity_response_invalid")
+                    if (
+                        identity_final_url != url
+                        or type(identity_status) is int
+                        and 300 <= identity_status < 400
+                    ):
+                        _fail("managed_identity_redirect_refused")
+                    wire = _read_wire_response(
+                        response,
+                        expected_url=url,
+                        maximum_bytes=self._maximum_response_bytes,
+                    )
+            except SafeSubmitError:
+                raise
+            except Exception:
+                raise SafeSubmitError("managed_identity_unavailable") from None
+            if 300 <= wire.status < 400:
+                _fail("managed_identity_redirect_refused")
+            if wire.status != 200:
+                _fail("managed_identity_refused")
+            content_type = wire.headers.get("content-type", "")
+            if tuple(part.strip().lower() for part in content_type.split(";")) not in {
+                ("application/json",),
+                ("application/json", "charset=utf-8"),
+            }:
+                _fail("managed_identity_response_invalid")
+            document = _json_mapping(wire.body, "managed_identity_response_invalid")
+            token = document.get("access_token")
+            expires_on = document.get("expires_on")
+            if (
+                not {"access_token", "expires_on"} <= set(document)
+                or type(token) is not str
+                or SAFE_TOKEN_RE.fullmatch(token) is None
+                or document.get("token_type", "Bearer") != "Bearer"
+                or document.get("resource", resource) != resource
+                or document.get("client_id", client_id) != client_id
+            ):
+                _fail("managed_identity_response_invalid")
+            if type(expires_on) is int:
+                expiration = expires_on
+            elif (
+                type(expires_on) is str
+                and UNSIGNED_DECIMAL_RE.fullmatch(expires_on) is not None
+                and expires_on == str(int(expires_on))
+            ):
+                expiration = int(expires_on)
+            else:
+                _fail("managed_identity_response_invalid")
+            if (
+                expiration <= now + self._expiry_skew_seconds
+                or expiration > now + self._maximum_lifetime_seconds
+            ):
+                _fail("managed_identity_response_invalid")
+            self._tokens[resource] = (token, expiration)
+            return token
 
 
 @dataclass(frozen=True)
@@ -373,6 +683,263 @@ class SafeSubmitConfig:
     trusted_evidence_binding_implemented: bool
 
 
+def _remaining_timeout(
+    clock: Callable[[], float], *, started: float, limit: int, code: str
+) -> int:
+    current = _clock_value(clock, code)
+    if current < started:
+        _fail(code)
+    remaining = math.floor(limit - (current - started))
+    if remaining < 1:
+        _fail("transport_deadline")
+    return remaining
+
+
+class AzureArmTransport:
+    """Exact-target ARM adapter using one selected Container Apps job UAMI."""
+
+    __slots__ = (
+        "_action",
+        "_client_id",
+        "_clock",
+        "_deadline",
+        "_lock",
+        "_opener",
+        "_token_source",
+        "config",
+    )
+
+    def __init__(
+        self,
+        config: SafeSubmitConfig,
+        token_source: ContainerAppsManagedIdentityTokenSource,
+        *,
+        action: str,
+        client_id: str,
+        opener: _HttpOpener | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        deadline: _DeadlineFactory = _wall_clock_deadline,
+    ) -> None:
+        if (
+            type(config) is not SafeSubmitConfig
+            or not config.execution_authorized
+            or action not in RUNTIME_ACTIONS
+            or type(token_source) is not ContainerAppsManagedIdentityTokenSource
+            or not token_source._is_bound(
+                client_id=client_id, resource=ARM_OAUTH_RESOURCE
+            )
+            or (opener is not None and not callable(getattr(opener, "open", None)))
+            or not callable(monotonic)
+            or not callable(deadline)
+        ):
+            _fail("arm_transport_configuration_invalid")
+        self.config = config
+        self._action = action
+        self._client_id = client_id
+        self._token_source = token_source
+        self._opener = opener or _hardened_opener()
+        self._clock = monotonic
+        self._deadline = deadline
+        self._lock = threading.Lock()
+
+    def _validate_request(
+        self,
+        method: str,
+        resource_id: str,
+        *,
+        api_version: str,
+        body: dict[str, Any] | None,
+        headers: Mapping[str, str] | None,
+        timeout_seconds: int,
+    ) -> tuple[bytes | None, dict[str, str]]:
+        allowed_methods = (
+            {"GET", "PATCH", "PUT"}
+            if self._action == "provision"
+            else {"DELETE", "GET", "PATCH"}
+        )
+        if type(resource_id) is not str:
+            _fail("arm_request_invalid")
+        target_prefix = (
+            f"{self.config.target_group_id}/providers/"
+            "Microsoft.DBforPostgreSQL/flexibleServers/"
+        )
+        target_name = resource_id.removeprefix(target_prefix)
+        if (
+            type(method) is not str
+            or method not in allowed_methods
+            or not resource_id.startswith(target_prefix)
+            or not target_name
+            or not target_name.startswith(f"{self.config.name_prefix}-")
+            or "/" in target_name
+            or len(target_name) > 63
+            or re.fullmatch(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?", target_name) is None
+            or any(char in resource_id for char in "%?#")
+            or "//" in resource_id
+            or api_version != self.config.postgres_api_version
+            or type(timeout_seconds) is not int
+            or timeout_seconds != self.config.request_timeout_seconds
+            or body is not None
+            and type(body) is not dict
+            or headers is not None
+            and not isinstance(headers, Mapping)
+        ):
+            _fail("arm_request_invalid")
+        try:
+            supplied = dict(headers or {})
+        except Exception:
+            raise SafeSubmitError("arm_request_invalid") from None
+        if any(
+            type(key) is not str or type(value) is not str
+            for key, value in supplied.items()
+        ):
+            _fail("arm_request_invalid")
+        if method == "GET":
+            valid = body is None and not supplied
+        elif method == "PUT":
+            valid = body is not None and supplied == {"If-None-Match": "*"}
+        elif method == "PATCH":
+            valid = body is not None and (
+                not supplied
+                or set(supplied) == {"If-Match"}
+                and ARM_ETAG_RE.fullmatch(supplied["If-Match"]) is not None
+            )
+        else:
+            valid = body is None and (
+                not supplied
+                or set(supplied) == {"If-Match"}
+                and ARM_ETAG_RE.fullmatch(supplied["If-Match"]) is not None
+            )
+        if not valid:
+            _fail("arm_request_invalid")
+        try:
+            payload = (
+                json.dumps(
+                    body, sort_keys=True, separators=(",", ":"), allow_nan=False
+                ).encode()
+                if body is not None
+                else None
+            )
+        except (TypeError, ValueError, RecursionError):
+            raise SafeSubmitError("arm_request_invalid") from None
+        if payload is not None and len(payload) > MAXIMUM_ARM_RESPONSE_BYTES:
+            _fail("arm_request_invalid")
+        return payload, supplied
+
+    def request(
+        self,
+        method: str,
+        resource_id: str,
+        *,
+        api_version: str,
+        body: dict[str, Any] | None = None,
+        headers: Mapping[str, str] | None = None,
+        timeout_seconds: int,
+    ) -> ArmResponse:
+        payload, supplied = self._validate_request(
+            method,
+            resource_id,
+            api_version=api_version,
+            body=body,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+        )
+        mutating = method in {"DELETE", "PATCH", "PUT"}
+        query = urllib.parse.urlencode({"api-version": api_version})
+        url = f"{MANAGEMENT_ROOT}{resource_id}?{query}"
+        dispatched = False
+        try:
+            with self._deadline(timeout_seconds), self._lock:
+                started = _clock_value(self._clock, "arm_transport_clock_invalid")
+                token_timeout = self._token_source._bounded_timeout(
+                    _remaining_timeout(
+                        self._clock,
+                        started=started,
+                        limit=timeout_seconds,
+                        code="arm_transport_clock_invalid",
+                    )
+                )
+                token = self._token_source.get_token(
+                    client_id=self._client_id,
+                    resource=ARM_OAUTH_RESOURCE,
+                    timeout_seconds=token_timeout,
+                )
+                remaining = _remaining_timeout(
+                    self._clock,
+                    started=started,
+                    limit=timeout_seconds,
+                    code="arm_transport_clock_invalid",
+                )
+                request_headers = {
+                    "Accept": "application/json",
+                    "Accept-Encoding": "identity",
+                    "Authorization": f"Bearer {token}",
+                }
+                if payload is not None:
+                    request_headers.update(
+                        {
+                            "Content-Length": str(len(payload)),
+                            "Content-Type": "application/json",
+                        }
+                    )
+                request_headers.update(supplied)
+                request = urllib.request.Request(
+                    url, data=payload, headers=request_headers, method=method
+                )
+                dispatched = True
+                try:
+                    response = self._opener.open(request, timeout=remaining)
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    try:
+                        arm_status = getattr(
+                            response, "status", getattr(response, "code", None)
+                        )
+                        arm_final_url = response.geturl()
+                    except Exception:
+                        _fail("arm_response_invalid")
+                    if (
+                        arm_final_url != url
+                        or type(arm_status) is int
+                        and 300 <= arm_status < 400
+                    ):
+                        _fail("arm_redirect_refused")
+                    wire = _read_wire_response(
+                        response,
+                        expected_url=url,
+                        maximum_bytes=MAXIMUM_ARM_RESPONSE_BYTES,
+                    )
+                if 300 <= wire.status < 400:
+                    _fail("arm_redirect_refused")
+                if not 200 <= wire.status < 300:
+                    return ArmResponse(status=wire.status, headers=wire.headers)
+                if not wire.body:
+                    parsed: Any = None
+                else:
+                    content_type = wire.headers.get("content-type", "")
+                    if (
+                        content_type.split(";", 1)[0].strip().lower()
+                        != "application/json"
+                    ):
+                        _fail("arm_response_invalid")
+                    parsed = dict(_json_mapping(wire.body, "arm_response_invalid"))
+                return ArmResponse(
+                    status=wire.status, body=parsed, headers=wire.headers
+                )
+        except ArmOutcomeUnknown:
+            raise
+        except SafeSubmitError as exc:
+            if mutating and dispatched:
+                raise ArmOutcomeUnknown from exc
+            if exc.code == "http_response_too_large":
+                _fail("arm_response_too_large")
+            if exc.code.startswith("http_response_"):
+                _fail("arm_response_invalid")
+            raise
+        except Exception as exc:
+            raise ArmOutcomeUnknown from exc
+
+
 @dataclass(frozen=True)
 class BlobResponse:
     status: int
@@ -380,32 +947,40 @@ class BlobResponse:
     headers: Mapping[str, str]
 
 
-class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
-        return None
-
-
 class AzureBlobMarkerStore:
-    """Raw-byte, create-only marker store pinned to one Blob endpoint."""
+    """Exact-endpoint marker store using one selected Container Apps job UAMI."""
 
     def __init__(
         self,
         config: SafeSubmitConfig,
+        token_source: ContainerAppsManagedIdentityTokenSource,
         *,
+        action: str,
+        client_id: str,
         sleeper: Callable[[float], None] = sleep,
         clock: Callable[[], datetime] = _now,
-        opener: Any | None = None,
+        opener: _HttpOpener | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        deadline: _DeadlineFactory = _wall_clock_deadline,
+        container_listing_permitted: bool = True,
     ) -> None:
-        self.config = config
-        self.sleeper = sleeper
-        self.clock = clock
-        self.opener = opener or urllib.request.build_opener(_RefuseRedirects())
+        if type(config) is not SafeSubmitConfig:
+            _fail("blob_store_configuration_invalid")
         account_parts = config.marker_account_resource_id.strip("/").split("/")
         if (
             not config.execution_authorized
             or not config.blob_marker_store_implemented
             or not config.blob_marker_provider_fidelity_proven
             or not config.private_runner_binding_implemented
+            or action not in RUNTIME_ACTIONS
+            or type(token_source) is not ContainerAppsManagedIdentityTokenSource
+            or not token_source._is_bound(
+                client_id=client_id, resource=BLOB_OAUTH_RESOURCE
+            )
+            or (opener is not None and not callable(getattr(opener, "open", None)))
+            or not callable(monotonic)
+            or not callable(deadline)
+            or type(container_listing_permitted) is not bool
             or len(account_parts) != 8
             or any(not part for part in account_parts)
             or [part.lower() for part in account_parts[::2]]
@@ -435,6 +1010,17 @@ class AzureBlobMarkerStore:
             or config.marker_minimum_retention_days < 90
         ):
             _fail("blob_store_configuration_invalid")
+        self.config = config
+        self.action = action
+        self.client_id = client_id
+        self.token_source = token_source
+        self.sleeper = sleeper
+        self.clock = clock
+        self.monotonic = monotonic
+        self.deadline = deadline
+        self.lock = threading.Lock()
+        self.opener = opener or _hardened_opener()
+        self.container_listing_permitted = container_listing_permitted
 
     def _trusted_now(self) -> datetime:
         try:
@@ -445,33 +1031,12 @@ class AzureBlobMarkerStore:
             _fail("trusted_clock_invalid")
         return value.astimezone(UTC).replace(microsecond=0)
 
-    def _access_token(self) -> str:
-        command = [
-            "az",
-            "account",
-            "get-access-token",
-            "--resource",
-            BLOB_OAUTH_RESOURCE,
-            "--query",
-            "accessToken",
-            "--output",
-            "tsv",
-            "--only-show-errors",
-        ]
-        try:
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self.config.marker_request_timeout_seconds,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise MarkerOutcomeUnknown from exc
-        token = result.stdout.strip()
-        if result.returncode != 0 or not token or any(char.isspace() for char in token):
-            _fail("blob_authentication_failed")
-        return token
+    def _access_token(self, timeout_seconds: int) -> str:
+        return self.token_source.get_token(
+            client_id=self.client_id,
+            resource=BLOB_OAUTH_RESOURCE,
+            timeout_seconds=self.token_source._bounded_timeout(timeout_seconds),
+        )
 
     def _url(self, kind: str, rehearsal_id: str) -> str:
         if kind not in MARKER_KINDS or not REHEARSAL_RE.fullmatch(rehearsal_id):
@@ -515,15 +1080,6 @@ class AzureBlobMarkerStore:
             [digest[:8], digest[8:12], digest[12:16], digest[16:20], digest[20:32]]
         )
 
-    def _response_headers(self, response: Any) -> dict[str, str]:
-        normalized: dict[str, str] = {}
-        for key, value in response.headers.items():
-            lowered = str(key).lower()
-            if lowered in normalized or "\r" in str(value) or "\n" in str(value):
-                raise ValueError("invalid response headers")
-            normalized[lowered] = str(value)
-        return normalized
-
     def _request(
         self,
         method: str,
@@ -536,52 +1092,103 @@ class AzureBlobMarkerStore:
         method = method.upper()
         mutating = method == "PUT"
         self._validate_url(url)
-        headers = {
-            "Accept": "application/json" if exact_marker_get else "application/xml",
-            "Authorization": f"Bearer {self._access_token()}",
-            "x-ms-client-request-id": self._client_request_id(method, url, body),
-            "x-ms-date": format_datetime(self._trusted_now(), usegmt=True),
-            "x-ms-version": self.config.marker_service_version,
-        }
-        if mutating:
-            assert body is not None
-            content_md5 = base64.b64encode(
-                hashlib.md5(body, usedforsecurity=False).digest()
-            ).decode()
-            headers.update(
-                {
-                    "Accept": "application/json",
-                    "Content-Length": str(len(body)),
-                    "Content-MD5": content_md5,
-                    "Content-Type": "application/json",
-                    "If-None-Match": "*",
-                    "x-ms-blob-content-md5": content_md5,
-                    "x-ms-blob-type": "BlockBlob",
-                }
-            )
-        request = urllib.request.Request(url, data=body, headers=headers, method=method)
         status: int | None = None
+        dispatched = False
         try:
-            with self.opener.open(
-                request, timeout=self.config.marker_request_timeout_seconds
-            ) as response:
-                status = int(response.status)
-                if 300 <= status < 400 or response.geturl() != url:
+            with self.deadline(self.config.marker_request_timeout_seconds), self.lock:
+                started = _clock_value(self.monotonic, "blob_transport_clock_invalid")
+                token = self._access_token(
+                    _remaining_timeout(
+                        self.monotonic,
+                        started=started,
+                        limit=self.config.marker_request_timeout_seconds,
+                        code="blob_transport_clock_invalid",
+                    )
+                )
+                remaining = _remaining_timeout(
+                    self.monotonic,
+                    started=started,
+                    limit=self.config.marker_request_timeout_seconds,
+                    code="blob_transport_clock_invalid",
+                )
+                headers = {
+                    "Accept": (
+                        "application/json" if exact_marker_get else "application/xml"
+                    ),
+                    "Accept-Encoding": "identity",
+                    "Authorization": f"Bearer {token}",
+                    "x-ms-client-request-id": self._client_request_id(
+                        method, url, body
+                    ),
+                    "x-ms-date": format_datetime(self._trusted_now(), usegmt=True),
+                    "x-ms-version": self.config.marker_service_version,
+                }
+                if mutating:
+                    assert body is not None
+                    content_md5 = base64.b64encode(
+                        hashlib.md5(body, usedforsecurity=False).digest()
+                    ).decode()
+                    headers.update(
+                        {
+                            "Accept": "application/json",
+                            "Content-Length": str(len(body)),
+                            "Content-MD5": content_md5,
+                            "Content-Type": "application/json",
+                            "If-None-Match": "*",
+                            "x-ms-blob-content-md5": content_md5,
+                            "x-ms-blob-type": "BlockBlob",
+                        }
+                    )
+                request = urllib.request.Request(
+                    url, data=body, headers=headers, method=method
+                )
+                dispatched = True
+                try:
+                    response = self.opener.open(request, timeout=remaining)
+                except urllib.error.HTTPError as error:
+                    response = error
+                with response:
+                    try:
+                        observed_status = getattr(
+                            response, "status", getattr(response, "code", None)
+                        )
+                        status = (
+                            observed_status if type(observed_status) is int else None
+                        )
+                    except Exception:
+                        status = None
+                    try:
+                        final_url = response.geturl()
+                    except Exception:
+                        final_url = None
+                    if final_url != url or status is not None and 300 <= status < 400:
+                        _fail("blob_redirect_refused")
+                    wire = _read_wire_response(
+                        response,
+                        expected_url=url,
+                        maximum_bytes=max_response_bytes,
+                    )
+                status = wire.status
+                if 300 <= status < 400:
                     _fail("blob_redirect_refused")
-                response_headers = self._response_headers(response)
-                raw = response.read(max_response_bytes + 1)
-                if len(raw) > max_response_bytes:
-                    if mutating:
-                        raise MarkerOutcomeUnknown
-                    if exact_marker_get and status == 200:
-                        raise MarkerPresentInvalid("marker_body_too_large")
-                    _fail("blob_response_too_large")
-                return BlobResponse(status, raw, response_headers)
-        except urllib.error.HTTPError as exc:
-            if 300 <= int(exc.code) < 400:
-                _fail("blob_redirect_refused")
-            return BlobResponse(int(exc.code), b"", {})
-        except (MarkerOutcomeUnknown, MarkerPresentInvalid, SafeSubmitError):
+                exposed_body = wire.body if 200 <= status < 300 else b""
+                return BlobResponse(status, exposed_body, wire.headers)
+        except (MarkerOutcomeUnknown, MarkerPresentInvalid):
+            raise
+        except SafeSubmitError as error:
+            if mutating and dispatched:
+                raise MarkerOutcomeUnknown from error
+            if exact_marker_get and status == 200:
+                code = (
+                    "marker_body_too_large"
+                    if error.code == "http_response_too_large"
+                    else "marker_response_invalid"
+                )
+                raise MarkerPresentInvalid(code) from error
+            if error.code == "http_response_too_large":
+                _fail("blob_response_too_large")
+            if error.code.startswith("http_response_"):
+                raise MarkerOutcomeUnknown from error
             raise
         except Exception as exc:
             if mutating:
@@ -665,6 +1272,8 @@ class AzureBlobMarkerStore:
             raise MarkerOutcomeUnknown
 
     def create_if_absent(self, kind: str, rehearsal_id: str, raw: bytes) -> bytes:
+        if self.action == "cleanup" and kind != "cleanup":
+            _fail("marker_write_refused")
         if not raw or len(raw) > self.config.marker_max_record_bytes:
             _fail("marker_record_size_invalid")
         try:
@@ -707,6 +1316,8 @@ class AzureBlobMarkerStore:
         raise MarkerOutcomeUnknown
 
     def list_intent_ids(self) -> tuple[str, ...]:
+        if not self.container_listing_permitted:
+            _fail("marker_list_refused")
         found: list[str] = []
         seen: set[str] = set()
         marker: str | None = None
@@ -1171,6 +1782,180 @@ def config_from_policies(
         trusted_evidence_binding_implemented=activation[
             "trusted_evidence_binding_implemented"
         ],
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyBoundSafeSubmitRuntime:
+    """Dormant construction result for one exact provision or cleanup job."""
+
+    action: str
+    config: SafeSubmitConfig
+    arm_transport: AzureArmTransport
+    marker_store: AzureBlobMarkerStore
+
+
+def build_policy_bound_runtime(
+    *,
+    config: SafeSubmitConfig,
+    runtime_policy: Any,
+    action: str,
+    environment: Mapping[str, str] | None = None,
+    identity_opener: _HttpOpener | None = None,
+    arm_opener: _HttpOpener | None = None,
+    blob_opener: _HttpOpener | None = None,
+    epoch_clock: Callable[[], float] = time.time,
+    monotonic: Callable[[], float] = time.monotonic,
+    deadline: _DeadlineFactory = _wall_clock_deadline,
+    sleeper: Callable[[float], None] = sleep,
+    trusted_clock: Callable[[], datetime] = _now,
+) -> PolicyBoundSafeSubmitRuntime:
+    """Bind both transports to the runtime policy's selected job UAMI."""
+
+    if (
+        type(config) is not SafeSubmitConfig
+        or type(action) is not str
+        or action not in RUNTIME_ACTIONS
+        or not config.execution_authorized
+        or not config.blob_marker_store_implemented
+        or not config.blob_marker_provider_fidelity_proven
+        or not config.private_runner_binding_implemented
+        or not config.trusted_evidence_binding_implemented
+        or environment is not None
+        and not isinstance(environment, Mapping)
+    ):
+        _fail("safe_submit_runtime_configuration_invalid")
+    try:
+        document = runtime_binding.validate_runtime_binding_policy(
+            runtime_policy, executable=True
+        )
+        jobs = document["identities"]["jobs"]
+        selected_identity = jobs[action]
+        provision_identity = jobs["provision"]
+        marker = document["private_control_marker_store"]
+        egress = document["egress"]
+        allowed = egress["allowed_destinations"]
+        arm_egress = allowed["azure_resource_manager"]
+        identity_egress = allowed["managed_identity"]
+        marker_egress = allowed["private_control_marker_blob"]
+        retrieval = document["runtime_record_ingress"]["retrieval"]
+    except (KeyError, TypeError, runtime_binding.RuntimeBindingFailure):
+        raise SafeSubmitError("safe_submit_runtime_policy_invalid") from None
+    if (
+        config.provision_client_id != provision_identity["client_id"]
+        or config.provision_principal_id != provision_identity["principal_id"]
+        or config.policy_id != marker["policy_id"]
+        or config.marker_account_resource_id != marker["account_resource_id"]
+        or config.marker_account_host != marker["account_host"]
+        or config.marker_oauth_resource != marker["oauth_resource"]
+        or config.marker_containers != marker["container_names"]
+        or config.marker_service_version != retrieval["service_api_version"]
+        or marker["allowed_job_identity_resource_ids"]
+        != [jobs[name]["resource_id"] for name in ("provision", "cleanup")]
+        or marker["container_listing_permitted"] is not False
+        or marker["caller_path_or_uri_override_permitted"] is not False
+        or egress["default_action"] != "deny"
+        or egress["implicit_destinations_permitted"] is not False
+        or egress["default_credential_chain_permitted"] is not False
+        or egress["ambient_proxy_configuration_permitted"] is not False
+        or arm_egress
+        != {
+            "scheme": "https",
+            "host": "management.azure.com",
+            "port": 443,
+            "oauth_resource": ARM_OAUTH_RESOURCE,
+            "redirects_permitted": False,
+        }
+        or identity_egress
+        != {
+            "scheme": "http",
+            "endpoint_source": "IDENTITY_ENDPOINT",
+            "secret_header_source": "IDENTITY_HEADER",
+            "path": "/msi/token",
+            "address_classes": ["loopback", "link-local"],
+            "dns_names_permitted": ["localhost"],
+            "redirects_permitted": False,
+        }
+        or marker_egress
+        != {
+            "scheme": "https",
+            "host_source": "private_control_marker_store.account_host",
+            "port": 443,
+            "private_endpoint_required": True,
+        }
+        or retrieval["managed_identity_endpoint_source"]
+        != "system-environment.IDENTITY_ENDPOINT"
+        or retrieval["managed_identity_secret_header_source"]
+        != "system-environment.IDENTITY_HEADER"
+        or retrieval["redirects_permitted"] is not False
+        or retrieval["ambient_credential_permitted"] is not False
+        or retrieval["ambient_proxy_permitted"] is not False
+        or retrieval["minimum_tls_version"] != "1.2"
+        or retrieval["runtime_ca_bundle_path"] != str(RUNTIME_CA_BUNDLE_PATH)
+        or retrieval["content_encoding"] != "identity"
+        or retrieval["content_length_required"] is not True
+        or type(selected_identity["client_id"]) is not str
+        or UUID_RE.fullmatch(selected_identity["client_id"]) is None
+        or type(selected_identity["resource_id"]) is not str
+        or not selected_identity["resource_id"].startswith("/subscriptions/")
+        or action == "provision"
+        and selected_identity["delete_actions"] != []
+        or action == "cleanup"
+        and "Microsoft.DBforPostgreSQL/flexibleServers/delete"
+        not in selected_identity["delete_actions"]
+    ):
+        _fail("safe_submit_runtime_policy_mismatch")
+    source_environment = os.environ if environment is None else environment
+    try:
+        identity_endpoint = source_environment.get("IDENTITY_ENDPOINT", "")
+        identity_header = source_environment.get("IDENTITY_HEADER", "")
+    except Exception:
+        raise SafeSubmitError("safe_submit_runtime_environment_invalid") from None
+    if type(identity_endpoint) is not str or type(identity_header) is not str:
+        _fail("safe_submit_runtime_environment_invalid")
+    tls_context: ssl.SSLContext | None = None
+    if identity_opener is None or arm_opener is None or blob_opener is None:
+        tls_context = _runtime_tls_context(Path(retrieval["runtime_ca_bundle_path"]))
+    source = ContainerAppsManagedIdentityTokenSource(
+        client_id=selected_identity["client_id"],
+        identity_endpoint=identity_endpoint,
+        identity_header=identity_header,
+        service_api_version=retrieval["managed_identity_api_version"],
+        maximum_response_bytes=retrieval["managed_identity_response_maximum_bytes"],
+        expiry_skew_seconds=retrieval["managed_identity_expiry_skew_seconds"],
+        maximum_lifetime_seconds=retrieval[
+            "managed_identity_maximum_token_lifetime_seconds"
+        ],
+        maximum_timeout_seconds=retrieval["maximum_request_timeout_seconds"],
+        opener=identity_opener or _hardened_opener(tls_context=tls_context),
+        clock=epoch_clock,
+    )
+    arm = AzureArmTransport(
+        config,
+        source,
+        action=action,
+        client_id=selected_identity["client_id"],
+        opener=arm_opener or _hardened_opener(tls_context=tls_context),
+        monotonic=monotonic,
+        deadline=deadline,
+    )
+    store = AzureBlobMarkerStore(
+        config,
+        source,
+        action=action,
+        client_id=selected_identity["client_id"],
+        opener=blob_opener or _hardened_opener(tls_context=tls_context),
+        sleeper=sleeper,
+        clock=trusted_clock,
+        monotonic=monotonic,
+        deadline=deadline,
+        container_listing_permitted=marker["container_listing_permitted"],
+    )
+    return PolicyBoundSafeSubmitRuntime(
+        action=action,
+        config=config,
+        arm_transport=arm,
+        marker_store=store,
     )
 
 
