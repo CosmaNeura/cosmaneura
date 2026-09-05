@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from dataclasses import fields as dataclass_fields
@@ -24,7 +22,12 @@ try:
     from scripts import authenticate_staging_github_attestation as github_attestation
     from scripts import authenticate_staging_server_scope_receipt as server_auth
     from scripts import compose_staging_restore_evidence_binding as composition
+    from scripts import read_staging_restore_evidence_material as evidence_ingress
+    from scripts import read_staging_restore_launch_record as launch_record_ingress
+    from scripts import read_staging_runtime_record_material as runtime_ingress
+    from scripts import receive_staging_broker_launch_receipt as receipt_receiver
     from scripts import staging_restore_launch_material as launch_material
+    from scripts import staging_restore_runtime_adapters as runtime_adapters
     from scripts import staging_restore_safe_submit as safe_submit
     from scripts import validate_staging_evidence_manifest as evidence_manifest
     from scripts import validate_staging_restore_launch_binding as launch_binding
@@ -36,7 +39,12 @@ except ModuleNotFoundError:  # Direct `python scripts/...` execution.
     import authenticate_staging_github_attestation as github_attestation
     import authenticate_staging_server_scope_receipt as server_auth
     import compose_staging_restore_evidence_binding as composition
+    import read_staging_restore_evidence_material as evidence_ingress
+    import read_staging_restore_launch_record as launch_record_ingress
+    import read_staging_runtime_record_material as runtime_ingress
+    import receive_staging_broker_launch_receipt as receipt_receiver
     import staging_restore_launch_material as launch_material
+    import staging_restore_runtime_adapters as runtime_adapters
     import staging_restore_safe_submit as safe_submit
     import validate_staging_evidence_manifest as evidence_manifest
     import validate_staging_restore_launch_binding as launch_binding
@@ -48,10 +56,13 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "50fc9ac6e061e2d00f7552bfdc6e40bd5998521a66cbc097b85920fcd97730c0"
+POLICY_SHA256 = "b153084a079542d08ff86a34a150ac01cdfa0c1fd1e61fa1dfdf6c487159f5a8"
 POLICY_TEMPLATE_SHA256 = (
-    "e2576b942dd8fd236f7820f470c2f0b9763a723f1c78de8fb85524ef68e07904"
+    "5dcd55a96071378c5b3e8354f5028d11723e68edb230bfe85bd6ca6250850601"
 )
+# The factory is complete but deliberately unreachable from the public entry
+# point until the separately reviewed workflow/private-runner activation slice.
+PUBLIC_ENTRYPOINT_INTEGRATED = False
 MAXIMUM_POLICY_BYTES = 256 * 1024
 HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -87,6 +98,7 @@ DEPENDENCY_NAMES = (
     "validate_launch_record",
     "validate_runtime_binding",
     "validate_launch_receipt",
+    "read_private_inputs",
     "validate_snapshot",
     "authenticate_server",
     "observe_provider",
@@ -368,11 +380,13 @@ ExecutorLaunchMaterial = launch_material.ProvisionLaunchMaterial
 
 @dataclass(frozen=True, slots=True)
 class ExecutorDependencies:
+    safe_submit_config: safe_submit.SafeSubmitConfig
     receive_launch: Callable[..., Any]
     runtime_reference_from_receipt: Callable[..., Any]
     validate_launch_record: Callable[..., Any]
     validate_runtime_binding: Callable[..., Any]
     validate_launch_receipt: Callable[..., Any]
+    read_private_inputs: Callable[..., Any]
     validate_snapshot: Callable[..., Any]
     authenticate_server: Callable[..., Any]
     observe_provider: Callable[..., Any]
@@ -380,6 +394,47 @@ class ExecutorDependencies:
     compose_binding: Callable[..., Any]
     request_from_binding: Callable[..., Any]
     submit: Callable[..., Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _PinnedRuntimeDocuments:
+    runtime_policy: Mapping[str, Any]
+    manifest_policy: Mapping[str, Any]
+    manifest_policy_sha256: str
+    server_scope_policy_bytes: bytes
+    server_scope_policy_sha256: str
+    authentication_policy_bytes: bytes
+    authentication_policy_sha256: str
+    provider_policy: Mapping[str, Any]
+    provider_policy_bytes: bytes
+    provider_policy_sha256: str
+    attestation_policy: Mapping[str, Any]
+    attestation_policy_bytes: bytes
+    attestation_policy_sha256: str
+    composition_policy_bytes: bytes
+    composition_policy_sha256: str
+    safe_submit_config: safe_submit.SafeSubmitConfig
+
+
+@dataclass(frozen=True, slots=True)
+class _ProvisionAuthoritySnapshot:
+    receipt_sha256: str
+    launch_record_uri: str
+    launch_record_sha256: str
+    execution_binding: str
+    evidence_file_sha256s: tuple[tuple[str, str], ...]
+    attestation_bundle_sha256: str
+    server_scope_hmac_key_sha256: str
+    trusted_root_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedProvisionLaunch:
+    runtime_policy: Mapping[str, Any]
+    authenticated_receipt: launch_binding.AuthenticatedBrokerLaunchReceipt
+    launch_record: launch_binding.ValidatedLaunchRecord
+    authenticated_runtime_record: launch_material.AuthenticatedRuntimeRecordMaterial
+    authority: _ProvisionAuthoritySnapshot
 
 
 class _NonRegressingClock:
@@ -411,94 +466,6 @@ def _utc_now() -> datetime:
     return datetime.now(UTC).replace(microsecond=0)
 
 
-def _validate_directory(path: Path) -> Path:
-    if not isinstance(path, Path) or not path.is_absolute():
-        _fail("input.untrusted_path")
-    try:
-        if path.resolve(strict=True) != path:
-            _fail("input.untrusted_path")
-        before = os.lstat(path)
-        flags = (
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-        )
-        descriptor = os.open(path, flags)
-        try:
-            after = os.fstat(descriptor)
-        finally:
-            os.close(descriptor)
-    except OSError:
-        raise TrustedExecutorFailure("input.untrusted_path") from None
-    if (
-        stat.S_ISLNK(before.st_mode)
-        or not stat.S_ISDIR(before.st_mode)
-        or not stat.S_ISDIR(after.st_mode)
-        or (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
-        or after.st_uid not in {0, os.geteuid()}
-        or stat.S_IMODE(after.st_mode) & 0o022
-    ):
-        _fail("input.untrusted_path")
-    return path
-
-
-def _read_input_file(
-    path: Path,
-    *,
-    minimum: int,
-    maximum: int,
-    exact_mode: int | None,
-    owner_only: bool,
-) -> bytes:
-    if not isinstance(path, Path) or not path.is_absolute():
-        _fail("input.untrusted_path")
-    descriptor = -1
-    try:
-        if path.resolve(strict=True) != path:
-            _fail("input.untrusted_path")
-        before = os.lstat(path)
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(path, flags)
-        opened = os.fstat(descriptor)
-        mode = stat.S_IMODE(opened.st_mode)
-        if (
-            stat.S_ISLNK(before.st_mode)
-            or not stat.S_ISREG(before.st_mode)
-            or not stat.S_ISREG(opened.st_mode)
-            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
-            or opened.st_uid
-            not in ({os.geteuid()} if owner_only else {0, os.geteuid()})
-            or (exact_mode is not None and mode != exact_mode)
-            or (exact_mode is None and mode & 0o022)
-        ):
-            _fail("input.untrusted_path")
-        if opened.st_size < minimum or opened.st_size > maximum:
-            _fail("input.invalid")
-        chunks: list[bytes] = []
-        remaining = maximum + 1
-        while remaining:
-            chunk = os.read(descriptor, min(65_536, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        raw = b"".join(chunks)
-        final = os.fstat(descriptor)
-        if (
-            not minimum <= len(raw) <= maximum
-            or len(raw) != opened.st_size
-            or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
-            != (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns)
-        ):
-            _fail("input.invalid")
-        return raw
-    except TrustedExecutorFailure:
-        raise
-    except OSError:
-        raise TrustedExecutorFailure("input.untrusted_path") from None
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-
-
 def _stage(call: Callable[..., Any], code: str, **kwargs: Any) -> Any:
     try:
         return call(**kwargs)
@@ -510,13 +477,93 @@ def _stage(call: Callable[..., Any], code: str, **kwargs: Any) -> Any:
         raise TrustedExecutorFailure(code) from None
 
 
+def _provision_authority_snapshot(
+    *,
+    runtime_policy: Mapping[str, Any],
+    authenticated_receipt: Any,
+    launch_record: Any,
+    authenticated_runtime_record: Any,
+) -> _ProvisionAuthoritySnapshot:
+    try:
+        evidence_file_sha256s = launch_record.evidence_file_sha256s
+        attestation_bundle_sha256 = launch_record.attestation_bundle_sha256
+        server_scope_hmac_key_sha256 = launch_record.server_scope_hmac_key_sha256
+        execution_binding = (
+            f"{runtime_policy['runtime']['jobs']['provision']['resource_id']}"
+            f"/executions/{authenticated_receipt.execution_name}"
+        )
+        trusted_root_bytes = authenticated_runtime_record.trusted_root_bytes
+        trusted_root_sha256 = launch_binding._digest(trusted_root_bytes)
+        valid = (
+            type(authenticated_receipt)
+            is launch_binding.AuthenticatedBrokerLaunchReceipt
+            and authenticated_receipt._is_authenticated()
+            and type(authenticated_receipt.receipt_bytes) is bytes
+            and authenticated_receipt.receipt_sha256
+            == launch_binding._digest(authenticated_receipt.receipt_bytes)
+            and authenticated_receipt.action == "provision"
+            and type(launch_record) is launch_binding.ValidatedLaunchRecord
+            and launch_record._is_validated()
+            and launch_record.action == "provision"
+            and type(launch_record.record_bytes) is bytes
+            and launch_record.record_sha256
+            == launch_binding._digest(launch_record.record_bytes)
+            and authenticated_receipt.launch_record_uri == launch_record.record_uri
+            and authenticated_receipt.launch_record_sha256
+            == launch_record.record_sha256
+            and type(authenticated_runtime_record)
+            is launch_material.AuthenticatedRuntimeRecordMaterial
+            and authenticated_runtime_record._is_authenticated()
+            and launch_record.runtime_record_sha256
+            == launch_binding._digest(authenticated_runtime_record.record_bytes)
+            and type(evidence_file_sha256s) is tuple
+            and len(evidence_file_sha256s) == 6
+            and all(
+                type(item) is tuple
+                and len(item) == 2
+                and type(item[0]) is str
+                and type(item[1]) is str
+                and DIGEST_RE.fullmatch(item[1]) is not None
+                for item in evidence_file_sha256s
+            )
+            and tuple(name for name, _digest_value in evidence_file_sha256s)
+            == tuple(
+                runtime_policy["launch_binding"]["launch_record"]["provision"][
+                    "exact_evidence_file_names"
+                ]
+            )
+            and type(attestation_bundle_sha256) is str
+            and DIGEST_RE.fullmatch(attestation_bundle_sha256) is not None
+            and type(server_scope_hmac_key_sha256) is str
+            and DIGEST_RE.fullmatch(server_scope_hmac_key_sha256) is not None
+            and type(launch_record.trusted_root_sha256) is str
+            and launch_record.trusted_root_sha256 == trusted_root_sha256
+            and authenticated_runtime_record.signature_verification.trusted_root_sha256
+            == trusted_root_sha256
+        )
+    except Exception:
+        _fail("launch_authority.invalid")
+    if not valid:
+        _fail("launch_authority.invalid")
+    return _ProvisionAuthoritySnapshot(
+        receipt_sha256=authenticated_receipt.receipt_sha256,
+        launch_record_uri=authenticated_receipt.launch_record_uri,
+        launch_record_sha256=launch_record.record_sha256,
+        execution_binding=execution_binding,
+        evidence_file_sha256s=evidence_file_sha256s,
+        attestation_bundle_sha256=attestation_bundle_sha256,
+        server_scope_hmac_key_sha256=server_scope_hmac_key_sha256,
+        trusted_root_sha256=trusted_root_sha256,
+    )
+
+
 def _validate_provision_launch(
     *,
     executor_policy: Mapping[str, Any],
     runtime_policy: Any,
     dependencies: ExecutorDependencies,
     clock: Callable[[], datetime],
-) -> launch_binding.ValidatedLaunchRecord:
+) -> _ValidatedProvisionLaunch:
     try:
         runtime_document = runtime_binding.validate_runtime_binding_policy(
             runtime_policy, executable=True
@@ -667,19 +714,70 @@ def _validate_provision_launch(
         or ttl > ttl_policy["maximum"]
     ):
         _fail("launch_binding.result_invalid")
-    return launch_record
+    authority = _provision_authority_snapshot(
+        runtime_policy=runtime_document,
+        authenticated_receipt=authenticated_receipt,
+        launch_record=launch_record,
+        authenticated_runtime_record=runtime_material,
+    )
+    return _ValidatedProvisionLaunch(
+        runtime_policy=runtime_document,
+        authenticated_receipt=authenticated_receipt,
+        launch_record=launch_record,
+        authenticated_runtime_record=runtime_material,
+        authority=authority,
+    )
 
 
-def _canonical_safe_submit_config(
-    executor_policy: Mapping[str, Any],
-) -> safe_submit.SafeSubmitConfig:
+def _validate_private_inputs(
+    result: Any,
+    *,
+    launch: _ValidatedProvisionLaunch,
+) -> evidence_ingress.PrivateProvisionInputs:
     try:
-        envelope, safe_policy = safe_submit.validate_canonical_contracts()
-        config = safe_submit.config_from_policies(
-            envelope, safe_policy, executable=False
+        authority = _provision_authority_snapshot(
+            runtime_policy=launch.runtime_policy,
+            authenticated_receipt=launch.authenticated_receipt,
+            launch_record=launch.launch_record,
+            authenticated_runtime_record=launch.authenticated_runtime_record,
+        )
+        valid = (
+            authority == launch.authority
+            and type(result) is evidence_ingress.PrivateProvisionInputs
+            and result._is_bound_to(
+                launch.runtime_policy,
+                launch.authenticated_receipt,
+                launch.launch_record,
+            )
+            and result.receipt_sha256 == authority.receipt_sha256
+            and result.launch_record_sha256 == authority.launch_record_sha256
+            and result.execution_binding == authority.execution_binding
+            and tuple(name for name, _raw in result.evidence_entries)
+            == tuple(name for name, _digest_value in authority.evidence_file_sha256s)
+            and tuple(
+                launch_binding._digest(raw) for _name, raw in result.evidence_entries
+            )
+            == tuple(digest for _name, digest in authority.evidence_file_sha256s)
+            and launch_binding._digest(result.attestation_bundle_bytes)
+            == authority.attestation_bundle_sha256
+            and launch_binding._digest(result.server_scope_hmac_key_bytes)
+            == authority.server_scope_hmac_key_sha256
+            and launch_binding._digest(
+                launch.authenticated_runtime_record.trusted_root_bytes
+            )
+            == authority.trusted_root_sha256
         )
     except Exception:
-        _fail("safe_submit_config.invalid")
+        _fail("private_inputs.result_invalid")
+    if not valid:
+        _fail("private_inputs.result_invalid")
+    return result
+
+
+def _validate_safe_submit_config(
+    config: Any,
+    executor_policy: Mapping[str, Any],
+) -> safe_submit.SafeSubmitConfig:
     if (
         type(config) is not safe_submit.SafeSubmitConfig
         or config.policy_id
@@ -804,27 +902,322 @@ def _validate_outcome(
     )
 
 
+def _require_policy_pin(
+    executor_policy: Mapping[str, Any],
+    name: str,
+    policy: Mapping[str, Any],
+    digest: str,
+) -> None:
+    try:
+        pin = executor_policy["policy_pins"][name]
+        valid = (
+            type(digest) is str
+            and HEX_RE.fullmatch(digest) is not None
+            and policy.get("policy_id") == pin["policy_id"]
+            and f"sha256:{digest}" == pin["sha256"]
+        )
+    except Exception:
+        _fail("dependencies.policy_invalid")
+    if not valid:
+        _fail("dependencies.policy_invalid")
+
+
+def _load_pinned_runtime_documents(
+    *,
+    executor_policy: Mapping[str, Any],
+    runtime_policy: Any,
+) -> _PinnedRuntimeDocuments:
+    """Load every child policy and validate every pin before adapter creation."""
+
+    try:
+        runtime_document = runtime_binding.validate_runtime_binding_policy(
+            runtime_policy, executable=False
+        )
+        manifest_policy, manifest_sha256 = evidence_manifest.load_policy(
+            evidence_manifest.POLICY_PATH
+        )
+        server_scope_policy, server_scope_sha256, server_scope_bytes = (
+            server_auth.server_scope.read_policy_document()
+        )
+        authentication_policy, authentication_sha256, authentication_bytes = (
+            server_auth.load_authentication_policy_document()
+        )
+        provider_policy, provider_sha256, provider_bytes = (
+            provider_observation.load_provider_observation_policy_document()
+        )
+        attestation_policy, attestation_sha256, attestation_bytes = (
+            github_attestation.load_attestation_policy_document()
+        )
+        composition_policy, composition_sha256, composition_bytes = (
+            composition.load_composition_policy_document()
+        )
+        envelope_policy, safe_submit_policy = safe_submit.validate_canonical_contracts()
+    except Exception:
+        raise TrustedExecutorFailure("dependencies.policy_invalid") from None
+
+    _require_policy_pin(
+        executor_policy,
+        "restore_runtime_binding",
+        runtime_document,
+        runtime_binding.CANONICAL_POLICY_SHA256,
+    )
+    for name, policy, digest in (
+        ("evidence_manifest", manifest_policy, manifest_sha256),
+        ("server_scope_evidence", server_scope_policy, server_scope_sha256),
+        (
+            "server_scope_authentication",
+            authentication_policy,
+            authentication_sha256,
+        ),
+        ("source_provider_observation", provider_policy, provider_sha256),
+        (
+            "github_attestation_authentication",
+            attestation_policy,
+            attestation_sha256,
+        ),
+        ("restore_evidence_composition", composition_policy, composition_sha256),
+        (
+            "restore_envelope",
+            envelope_policy,
+            safe_submit.ENVELOPE_POLICY_SHA256,
+        ),
+        (
+            "restore_safe_submit",
+            safe_submit_policy,
+            safe_submit.SAFE_SUBMIT_POLICY_SHA256,
+        ),
+    ):
+        _require_policy_pin(executor_policy, name, policy, digest)
+
+    try:
+        runtime_document = runtime_binding.validate_runtime_binding_policy(
+            runtime_document, executable=True
+        )
+        server_auth.validate_authentication_policy(
+            authentication_policy,
+            executable=True,
+            server_scope_policy_sha256=server_scope_sha256,
+        )
+        provider_observation.validate_provider_observation_policy(
+            provider_policy, executable=True
+        )
+        github_attestation.validate_attestation_policy(
+            attestation_policy, executable=True
+        )
+        composition.validate_composition_policy(composition_policy, executable=True)
+        safe_submit_config = safe_submit.config_from_policies(
+            envelope_policy, safe_submit_policy, executable=True
+        )
+    except TrustedExecutorFailure:
+        raise
+    except Exception:
+        raise TrustedExecutorFailure("dependencies.policy_invalid") from None
+
+    return _PinnedRuntimeDocuments(
+        runtime_policy=runtime_document,
+        manifest_policy=manifest_policy,
+        manifest_policy_sha256=manifest_sha256,
+        server_scope_policy_bytes=server_scope_bytes,
+        server_scope_policy_sha256=server_scope_sha256,
+        authentication_policy_bytes=authentication_bytes,
+        authentication_policy_sha256=authentication_sha256,
+        provider_policy=provider_policy,
+        provider_policy_bytes=provider_bytes,
+        provider_policy_sha256=provider_sha256,
+        attestation_policy=attestation_policy,
+        attestation_policy_bytes=attestation_bytes,
+        attestation_policy_sha256=attestation_sha256,
+        composition_policy_bytes=composition_bytes,
+        composition_policy_sha256=composition_sha256,
+        safe_submit_config=safe_submit_config,
+    )
+
+
+def _assemble_provision_dependencies(
+    *,
+    documents: _PinnedRuntimeDocuments,
+    clock: Callable[[], datetime],
+) -> ExecutorDependencies:
+    """Construct one instance of every provision dependency after validation."""
+
+    if (
+        type(documents) is not _PinnedRuntimeDocuments
+        or type(clock) is not _NonRegressingClock
+    ):
+        _fail("dependencies.invalid")
+    try:
+        runtime_policy = documents.runtime_policy
+        receipt_transport = (
+            receipt_receiver.ManagedIdentityPrivateBlobTransport.from_environment(
+                runtime_policy, action="provision"
+            )
+        )
+        launch_record_reader = launch_record_ingress.build_private_launch_record_reader(
+            runtime_policy
+        )
+        runtime_material_reader = runtime_ingress.build_private_runtime_material_reader(
+            runtime_policy
+        )
+        private_evidence_reader = (
+            evidence_ingress.build_private_evidence_material_reader(
+                runtime_policy, clock=clock
+            )
+        )
+        provision_identity = runtime_policy["identities"]["jobs"]["provision"]
+        token_source = runtime_adapters.ManagedIdentityTokenSource.from_environment(
+            client_id=provision_identity["client_id"]
+        )
+        provider = runtime_adapters.AzureSourceObservationProvider(token_source)
+        verifier_policy = documents.attestation_policy["verifier"]
+        runtime_verifier_policy = runtime_policy["offline_github_verifier"]
+        if (
+            verifier_policy["version"] != runtime_verifier_policy["version"]
+            or verifier_policy["executable_sha256"]
+            != runtime_verifier_policy["executable_sha256"]
+        ):
+            _fail("dependencies.policy_invalid")
+        evidence_verifier = runtime_adapters.DigestPinnedGitHubCliVerifier(
+            executable_path=Path(runtime_verifier_policy["executable_path"]),
+            expected_sha256=verifier_policy["executable_sha256"],
+            expected_version=verifier_policy["version"],
+            profile=runtime_adapters.EVIDENCE_ATTESTATION_PROFILE,
+        )
+        submit_runtime = safe_submit.build_policy_bound_runtime(
+            config=documents.safe_submit_config,
+            runtime_policy=runtime_policy,
+            action="provision",
+            trusted_clock=clock,
+        )
+        submitter = safe_submit.SafeRestoreSubmitter(
+            submit_runtime.arm_transport,
+            submit_runtime.marker_store,
+            documents.safe_submit_config,
+            clock=clock,
+        )
+        launch_dependencies = launch_material.LaunchMaterialDependencies(
+            receipt_transport=receipt_transport,
+            read_launch_record=launch_record_reader.read_launch_record,
+            read_and_authenticate_runtime_record=(
+                runtime_material_reader.read_and_authenticate_runtime_record
+            ),
+        )
+    except TrustedExecutorFailure:
+        raise
+    except Exception:
+        raise TrustedExecutorFailure("dependencies.construction_failed") from None
+
+    def receive_launch(*, runtime_policy: Any, clock: Callable[[], datetime]) -> Any:
+        return launch_material.receive_provision_launch_material(
+            runtime_policy,
+            dependencies=launch_dependencies,
+            clock=clock,
+        )
+
+    def validate_snapshot(
+        *,
+        files: Mapping[str, bytes],
+        validation_now: datetime,
+        expected_file_sha256s: Mapping[str, str],
+    ) -> Any:
+        return evidence_manifest.validate_bundle_snapshot_bytes(
+            policy=documents.manifest_policy,
+            policy_sha256=documents.manifest_policy_sha256,
+            files=files,
+            now=validation_now,
+            expected_file_sha256s=expected_file_sha256s,
+        )
+
+    def authenticate_server(**kwargs: Any) -> Any:
+        return server_auth._authenticate_validated_bundle_with_binding_and_receipt(
+            authentication_policy_bytes=documents.authentication_policy_bytes,
+            authentication_policy_sha256=documents.authentication_policy_sha256,
+            server_scope_policy_bytes=documents.server_scope_policy_bytes,
+            server_scope_policy_sha256=documents.server_scope_policy_sha256,
+            **kwargs,
+        )
+
+    def observe_provider(**kwargs: Any) -> Any:
+        return provider_observation._verify_provider_observation_with_document(
+            policy_bytes=documents.provider_policy_bytes,
+            policy_sha256=documents.provider_policy_sha256,
+            provider=provider,
+            **kwargs,
+        )
+
+    def authenticate_attestation(**kwargs: Any) -> Any:
+        return github_attestation._authenticate_github_attestation_with_document(
+            policy_bytes=documents.attestation_policy_bytes,
+            policy_sha256=documents.attestation_policy_sha256,
+            verifier=evidence_verifier,
+            **kwargs,
+        )
+
+    def compose_binding(**kwargs: Any) -> Any:
+        return composition._compose_restore_evidence_binding_with_document(
+            policy_bytes=documents.composition_policy_bytes,
+            policy_sha256=documents.composition_policy_sha256,
+            **kwargs,
+        )
+
+    def request_from_binding(**kwargs: Any) -> Any:
+        return safe_submit.request_from_binding(
+            config=documents.safe_submit_config, **kwargs
+        )
+
+    return ExecutorDependencies(
+        safe_submit_config=documents.safe_submit_config,
+        receive_launch=receive_launch,
+        runtime_reference_from_receipt=(
+            runtime_binding.ExternalRuntimeBindingReference._from_authenticated_broker_launch_receipt
+        ),
+        validate_launch_record=launch_binding.validate_launch_record,
+        validate_runtime_binding=runtime_binding.validate_external_runtime_binding,
+        validate_launch_receipt=launch_binding.validate_received_launch_receipt,
+        read_private_inputs=private_evidence_reader.read_provision_inputs,
+        validate_snapshot=validate_snapshot,
+        authenticate_server=authenticate_server,
+        observe_provider=observe_provider,
+        authenticate_attestation=authenticate_attestation,
+        compose_binding=compose_binding,
+        request_from_binding=request_from_binding,
+        submit=submitter.submit,
+    )
+
+
+def _runtime_dependencies(
+    *,
+    executor_policy: Mapping[str, Any],
+    runtime_policy: Any,
+    clock: Callable[[], datetime],
+) -> ExecutorDependencies:
+    documents = _load_pinned_runtime_documents(
+        executor_policy=executor_policy,
+        runtime_policy=runtime_policy,
+    )
+    return _assemble_provision_dependencies(documents=documents, clock=clock)
+
+
 def _execute_trusted_restore_with_dependencies(
     *,
     policy_bytes: bytes,
     policy_sha256: str,
     runtime_policy: Any,
-    bundle_dir: Path,
-    hmac_key_path: Path,
-    attestation_bundle_path: Path,
-    trusted_root_path: Path,
     dependencies: ExecutorDependencies,
     clock: Callable[[], datetime] = _utc_now,
 ) -> safe_submit.SubmitOutcome:
     policy = _parse_policy_document(policy_bytes, policy_sha256, executable=True)
-    safe_submit_config = _canonical_safe_submit_config(policy)
     if type(dependencies) is not ExecutorDependencies:
         _fail("dependencies.invalid")
     if any(not callable(getattr(dependencies, name)) for name in DEPENDENCY_NAMES):
         _fail("dependencies.invalid")
-    trusted_clock = _NonRegressingClock(clock)
+    safe_submit_config = _validate_safe_submit_config(
+        dependencies.safe_submit_config, policy
+    )
+    trusted_clock = (
+        clock if type(clock) is _NonRegressingClock else _NonRegressingClock(clock)
+    )
     try:
-        launch_record = _validate_provision_launch(
+        launch = _validate_provision_launch(
             executor_policy=policy,
             runtime_policy=runtime_policy,
             dependencies=dependencies,
@@ -834,56 +1227,57 @@ def _execute_trusted_restore_with_dependencies(
         raise
     except Exception:
         _fail("launch_binding.result_invalid")
-    inputs = policy["inputs"]
+    launch_record = launch.launch_record
     ttl_hours = launch_record.ttl_hours
     if type(ttl_hours) is not int:
         _fail("launch_binding.result_invalid")
-    bundle = _validate_directory(bundle_dir)
-    hmac_policy = inputs["hmac_key"]
-    key = _read_input_file(
-        hmac_key_path,
-        minimum=hmac_policy["minimum_bytes"],
-        maximum=hmac_policy["maximum_bytes"],
-        exact_mode=0o600,
-        owner_only=True,
+    private_inputs = _stage(
+        dependencies.read_private_inputs,
+        "private_inputs.failed",
+        policy=launch.runtime_policy,
+        authenticated_receipt=launch.authenticated_receipt,
+        launch_record=launch_record,
     )
-    attestation_policy = inputs["attestation_bundle"]
-    attestation_bytes = _read_input_file(
-        attestation_bundle_path,
-        minimum=attestation_policy["minimum_bytes"],
-        maximum=attestation_policy["maximum_bytes"],
-        exact_mode=None,
-        owner_only=False,
-    )
-    root_policy = inputs["trusted_root"]
-    trusted_root_bytes = _read_input_file(
-        trusted_root_path,
-        minimum=root_policy["minimum_bytes"],
-        maximum=root_policy["maximum_bytes"],
-        exact_mode=None,
-        owner_only=False,
-    )
+    private_inputs = _validate_private_inputs(private_inputs, launch=launch)
+    evidence_files = private_inputs.evidence_files()
+    evidence_entries = private_inputs.evidence_entries
     if (
-        f"sha256:{hashlib.sha256(key).hexdigest()}"
-        != launch_record.server_scope_hmac_key_sha256
-        or f"sha256:{hashlib.sha256(attestation_bytes).hexdigest()}"
-        != launch_record.attestation_bundle_sha256
-        or f"sha256:{hashlib.sha256(trusted_root_bytes).hexdigest()}"
-        != launch_record.trusted_root_sha256
+        type(evidence_files) is not dict
+        or tuple(evidence_files.items()) != evidence_entries
     ):
-        _fail("input.launch_binding")
+        _fail("private_inputs.result_invalid")
+    key = private_inputs.server_scope_hmac_key_bytes
+    attestation_bytes = private_inputs.attestation_bundle_bytes
+    trusted_root_bytes = launch.authenticated_runtime_record.trusted_root_bytes
+    if (
+        launch_binding._digest(key) != launch.authority.server_scope_hmac_key_sha256
+        or launch_binding._digest(attestation_bytes)
+        != launch.authority.attestation_bundle_sha256
+        or launch_binding._digest(trusted_root_bytes)
+        != launch.authority.trusted_root_sha256
+    ):
+        _fail("private_inputs.result_invalid")
     validation_now = trusted_clock()
-    expected_file_sha256s = dict(launch_record.evidence_file_sha256s)
+    expected_file_sha256s = dict(launch.authority.evidence_file_sha256s)
     snapshot = _stage(
         dependencies.validate_snapshot,
         "manifest.failed",
-        bundle_dir=bundle,
+        files=evidence_files,
         validation_now=validation_now,
         expected_file_sha256s=expected_file_sha256s,
     )
+    if tuple(
+        evidence_files.items()
+    ) != evidence_entries or expected_file_sha256s != dict(
+        launch.authority.evidence_file_sha256s
+    ):
+        _fail("manifest.result_invalid")
+    _validate_private_inputs(private_inputs, launch=launch)
     if (
         type(snapshot) is not evidence_manifest.ValidatedEvidenceBundle
-        or not snapshot._has_launch_digest_binding(launch_record.evidence_file_sha256s)
+        or not snapshot._has_launch_digest_binding(
+            launch.authority.evidence_file_sha256s
+        )
     ):
         _fail("manifest.result_invalid")
     authentication = _stage(
@@ -967,6 +1361,7 @@ def _execute_trusted_restore_with_dependencies(
     expected_target_resource_id, expected_intent_sha256 = _expected_outcome_identity(
         config=safe_submit_config, request=request
     )
+    _validate_private_inputs(private_inputs, launch=launch)
     submit_now = trusted_clock()
     if not launch_record.created_at <= submit_now < launch_record.expires_at:
         _fail("launch_binding.expired")
@@ -983,6 +1378,7 @@ def _execute_trusted_restore_with_dependencies(
         config=safe_submit_config,
         launch_record=launch_record,
     )
+    _validate_private_inputs(private_inputs, launch=launch)
     return _validate_outcome(
         outcome,
         expected_target_resource_id=expected_target_resource_id,
@@ -1002,30 +1398,24 @@ def _execute_trusted_restore_with_dependencies(
     )
 
 
-def _runtime_dependencies() -> ExecutorDependencies:
-    _fail("runtime_adapter.unimplemented")
-
-
-def execute_trusted_restore(
-    *,
-    bundle_dir: Path,
-    hmac_key_path: Path,
-    attestation_bundle_path: Path,
-    trusted_root_path: Path,
-) -> safe_submit.SubmitOutcome:
+def execute_trusted_restore() -> safe_submit.SubmitOutcome:
     """Execute only after every exact policy and runtime adapter is activated."""
 
+    if not PUBLIC_ENTRYPOINT_INTEGRATED:
+        _fail("executor_policy.disabled")
     policy, policy_sha256, policy_bytes = load_executor_policy_document()
     validate_executor_policy(policy, executable=True)
     runtime_policy = runtime_binding.load_policy(executable=True)
-    dependencies = _runtime_dependencies()
+    trusted_clock = _NonRegressingClock(_utc_now)
+    dependencies = _runtime_dependencies(
+        executor_policy=policy,
+        runtime_policy=runtime_policy,
+        clock=trusted_clock,
+    )
     return _execute_trusted_restore_with_dependencies(
         policy_bytes=policy_bytes,
         policy_sha256=policy_sha256,
         runtime_policy=runtime_policy,
-        bundle_dir=bundle_dir,
-        hmac_key_path=hmac_key_path,
-        attestation_bundle_path=attestation_bundle_path,
-        trusted_root_path=trusted_root_path,
         dependencies=dependencies,
+        clock=trusted_clock,
     )

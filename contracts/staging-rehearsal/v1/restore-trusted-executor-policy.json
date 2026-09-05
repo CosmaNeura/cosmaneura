@@ -67,36 +67,39 @@
   "entrypoints": {
     "public": "scripts.staging_restore_trusted_executor.execute_trusted_restore",
     "private": "scripts.staging_restore_trusted_executor._execute_trusted_restore_with_dependencies",
-    "public_arguments": [
-      "bundle_dir",
-      "hmac_key_path",
-      "attestation_bundle_path",
-      "trusted_root_path"
-    ],
+    "public_arguments": [],
     "additional_public_inputs_permitted": false
   },
   "private_runtime_ingress": {
-    "status": "dormant_unintegrated_contract",
+    "status": "dormant_dependency_assembly_implemented_unintegrated",
     "authority_preservation_implemented": true,
     "in_memory_evidence_validator_available": true,
-    "dependency_assembly_implemented": false,
+    "dependency_assembly_implemented": true,
     "workflow_integrated": false,
-    "future_evidence_bundle": {
+    "evidence_bundle": {
       "type": "exact_builtin_dict_of_immutable_bytes",
       "validator": "scripts.validate_staging_evidence_manifest.validate_bundle_snapshot_bytes",
-      "selector_source_after_dependency_assembly": "validated_provision_launch_record.evidence_file_authorities"
+      "selector_source": "validated_provision_launch_record.evidence_file_authorities"
     },
-    "future_github_attestation_bundle_selector_source": "validated_provision_launch_record.attestation_bundle_authority",
-    "future_server_scope_hmac_key_selector_source": "validated_provision_launch_record.server_scope_hmac_key_authority",
-    "future_trusted_root_bytes_source": "authenticated_runtime_record_material.trusted_root_bytes",
+    "github_attestation_bundle_selector_source": "validated_provision_launch_record.attestation_bundle_authority",
+    "server_scope_hmac_key_selector_source": "validated_provision_launch_record.server_scope_hmac_key_authority",
+    "trusted_root_bytes_source": "authenticated_runtime_record_material.trusted_root_bytes",
     "future_cleanup_mode_source": "validated_cleanup_launch_record.cleanup_mode",
     "parent_launch_record_validation_required_before_selector_use": true,
-    "caller_path_or_uri_override_permitted_after_integration": false
+    "caller_path_or_uri_override_permitted": false
   },
   "inputs": {
     "one_read_required": true,
+    "private_provision_inputs": {
+      "exact_type": "scripts.read_staging_restore_evidence_material.PrivateProvisionInputs",
+      "builder": "scripts.read_staging_restore_evidence_material.build_private_evidence_material_reader",
+      "reader": "ManagedIdentityPrivateEvidenceMaterialReader.read_provision_inputs",
+      "maximum_invocations": 1,
+      "exact_seal_required": true,
+      "receipt_launch_and_execution_binding_revalidated": true
+    },
     "evidence_bundle": {
-      "type": "absolute_directory_path",
+      "type": "exact_builtin_dict_of_immutable_bytes",
       "required_files": [
         "SHA256SUMS",
         "candidate.json",
@@ -106,45 +109,31 @@
         "server-scope.json"
       ],
       "exact_file_set_required": true,
-      "directory_enumerations": 1,
-      "reads_per_file": 1,
+      "detached_mapping_copies": 1,
       "maximum_bytes_per_file": 8388608,
       "maximum_total_bytes": 50331648,
-      "owner_or_root_owned_files_required": true,
-      "group_or_world_writable_files_permitted": false,
-      "symlinks_permitted": false,
       "expected_sha256_source": "validated_provision_launch_record.payload.evidence_files"
     },
     "hmac_key": {
-      "type": "absolute_file_path",
-      "reads": 1,
+      "type": "sealed_immutable_bytes",
+      "source": "private_provision_inputs.server_scope_hmac_key_bytes",
       "minimum_bytes": 32,
       "maximum_bytes": 4096,
-      "exact_mode": "0600",
-      "owner_owned_required": true,
-      "symlinks_permitted": false,
-      "all_file_bytes_are_key_material": true,
       "expected_sha256_source": "validated_provision_launch_record.payload.server_scope_hmac_key.decoded_sha256"
     },
     "attestation_bundle": {
-      "type": "absolute_file_path",
-      "reads": 1,
+      "type": "sealed_immutable_bytes",
+      "source": "private_provision_inputs.attestation_bundle_bytes",
       "minimum_bytes": 1,
       "maximum_bytes": 2097152,
-      "owner_or_root_owned_required": true,
-      "group_or_world_writable_permitted": false,
-      "symlinks_permitted": false,
       "expected_sha256_source": "validated_provision_launch_record.payload.github_attestation_bundle.sha256"
     },
     "trusted_root": {
-      "type": "absolute_file_path",
-      "reads": 1,
+      "type": "authenticated_runtime_record_material_bytes",
+      "source": "provision_launch_material.authenticated_runtime_record.trusted_root_bytes",
+      "additional_remote_reads": 0,
       "minimum_bytes": 1,
-      "maximum_bytes": 1048576,
-      "owner_or_root_owned_required": true,
-      "group_or_world_writable_permitted": false,
-      "symlinks_permitted": false,
-      "delivery": "independent_of_attestation_bundle_and_subject",
+      "maximum_bytes": 25600,
       "expected_sha256_source": "validated_provision_launch_record.github_trusted_root.sha256"
     },
     "ttl_hours": {
@@ -158,13 +147,10 @@
     "environment_authority_inputs_permitted": false
   },
   "snapshot_rules": {
-    "file_open_sequence": [
-      "lstat",
-      "open_read_only_no_follow",
-      "fstat_identity_match",
-      "bounded_read",
-      "close"
-    ],
+    "path_inputs_permitted": false,
+    "in_memory_mapping_snapshotted_before_validation": true,
+    "detached_mapping_rechecked_after_validation": true,
+    "sealed_input_authority_rechecked_before_and_after_submit": true,
     "retain_exact_bytes_until_submit_returns": [
       "validated_result",
       "evidence_manifest",
@@ -173,15 +159,8 @@
       "github_attestation_bundle",
       "github_only_trusted_root"
     ],
-    "validated_claim_file_bytes_discarded_after_digest_binding": [
-      "candidate.json",
-      "inventory.json",
-      "quiescence.json",
-      "SHA256SUMS"
-    ],
     "launch_digest_binding_proof_required": true,
     "launch_digest_binding_proof_exact_map_match_required": true,
-    "path_reopen_permitted": false,
     "serialized_reconstruction_permitted": false
   },
   "execution": {
@@ -202,7 +181,8 @@
       "validate_staging_restore_launch_binding.validate_launch_record",
       "validate_staging_restore_runtime_binding.validate_external_runtime_binding",
       "validate_staging_restore_launch_binding.validate_received_launch_receipt",
-      "validate_staging_evidence_manifest.validate_bundle_snapshot",
+      "read_staging_restore_evidence_material.ManagedIdentityPrivateEvidenceMaterialReader.read_provision_inputs",
+      "validate_staging_evidence_manifest.validate_bundle_snapshot_bytes",
       "authenticate_staging_server_scope_receipt._authenticate_validated_bundle_with_binding_and_receipt",
       "verify_staging_source_provider_observation._verify_provider_observation_with_document",
       "authenticate_staging_github_attestation._authenticate_github_attestation_with_document",

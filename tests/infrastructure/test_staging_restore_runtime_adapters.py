@@ -928,14 +928,15 @@ def test_linux_runner_kills_background_descendants_after_leader_exit(
         pytest.fail("background verifier descendant remained live")
 
 
-def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
+def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
     executor_source = (
         Path(adapters.attestation.ROOT)
         .joinpath("scripts/staging_restore_trusted_executor.py")
         .read_text()
     )
-    assert "staging_restore_runtime_adapters" not in executor_source
-    assert "receive_staging_broker_launch_receipt" not in executor_source
+    assert "staging_restore_runtime_adapters" in executor_source
+    assert "receive_staging_broker_launch_receipt" in executor_source
+    assert "PUBLIC_ENTRYPOINT_INTEGRATED = False" in executor_source
     adapter_symbols = (
         "staging_restore_runtime_adapters",
         "receive_staging_broker_launch_receipt",
@@ -1004,6 +1005,8 @@ def test_adapters_remain_unwired_and_all_activation_bits_stay_false() -> None:
                     "ManagedIdentityTokenSource",
                 }
             )
+        elif path.name == "staging_restore_trusted_executor.py":
+            forbidden_symbols = ()
         assert all(symbol not in text for symbol in forbidden_symbols), path
     for policy_path in (
         adapters.observation.POLICY_PATH,

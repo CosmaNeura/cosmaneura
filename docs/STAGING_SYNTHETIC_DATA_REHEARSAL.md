@@ -106,27 +106,31 @@ The dormant `restore-trusted-executor-policy.json` makes that coordinator
 boundary closed-world. It pins the raw SHA-256 and identity of the manifest,
 server-evidence, server-authentication, provider-observation, attestation,
 composition, envelope, and safe-submit policies. Its only external inputs are
-the exact six-file bundle, one server-scope HMAC key, one offline attestation
-bundle, and one independently delivered GitHub-only root. The private seam
-first validates a sealed authenticated provision receipt, both receipt-derived
-runtime references, the exact launch and external runtime records, and the
-received-receipt cross-binding. That launch record supplies the one-to-24-hour
-TTL, every expected input digest, and the workflow/run identity; callers cannot
-override them. Each path input is captured once with a bounded no-follow read;
-opaque objects and exact receipt bytes never cross a process, step, artifact,
-or JSON handoff. The sealed snapshot retains the validated result, manifest,
-and server-scope bytes. Its separate launch-digest proof is minted only after
-full validation of those same-read files and carries the exact digest tuple the
-executor rechecks; generic validated snapshots are insufficient.
+accepted through authenticated private readers: the broker receipt, exact
+launch/runtime records, six evidence objects, one attestation object, one HMAC
+secret version, and one independently authenticated GitHub-only root. The
+public entry point has no arguments. The private seam validates and retains the
+sealed receipt, launch record, and runtime carrier before invoking the
+burn-on-entry evidence reader once. That carrier is re-bound to the receipt
+SHA, launch URI/SHA, execution, six ordered names/digests, attestation digest,
+HMAC digest, and root digest. Callers cannot provide paths, URIs, TTL, restore
+identity, or byte substitutes. Opaque objects and exact bytes never cross a
+process, step, artifact, or JSON handoff. The detached byte mapping is passed
+to `validate_bundle_snapshot_bytes`; its separate launch-digest proof is minted
+only after full validation and generic validated snapshots are insufficient.
 
-The fixed order is provision-launch validation, manifest validation, server
-authentication, one provider observation, one offline attestation verification,
-composition, `request_from_binding`, and one direct safe-submit call using the
-same non-regressing clock source. The runtime, provider, verifier, safe-submit,
-private-runner, workflow, and restore flags are all false, and exact runtime
-resource pins remain `CONFIGURE_EXACT_...`; the external image record is
-unconfigured. Mailbox/broker/receipt, Azure, and workflow adapters remain
-unimplemented, so this contract cannot restore anything.
+The fixed order is provision-launch validation, one private evidence read,
+in-memory manifest validation, server authentication, one provider observation,
+one offline attestation verification, composition, `request_from_binding`, and
+one direct safe-submit call using the same non-regressing clock source. The
+dormant factory loads and verifies all nine policy pins before constructing
+each reader/provider/verifier/safe-submit dependency once, with distinct
+runtime-record and evidence-attestation verifier instances. The runtime,
+provider, verifier, safe-submit, private-runner, workflow, and restore flags are
+all false, and exact runtime resource pins remain `CONFIGURE_EXACT_...`; the
+external image record is unconfigured. The public entry point refuses before
+policy, environment, filesystem, or network access, so this contract cannot
+restore anything.
 The received-launch proof binds its validation instant, and launch authorization
 must still be fresh at the executor's final read immediately before submit.
 
@@ -197,8 +201,8 @@ authenticates the workflow's assertion that the same source SHA built the
 referenced image but is not independent image-build proof. A future sender must
 refuse build/OCI revision mismatches. This does not implement the publisher or
 equate the publisher run with the later launch run.
-The public dependency factory, sender, and every activation gate remain
-unimplemented or false; see the
+The dependency factory is now implemented but dormant; the sender remains
+unimplemented and every activation gate remains false; see the
 [signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
 [publisher invocation binding flight plan](flight-plans/2026-09-04-staging-runtime-publisher-record-binding.md).
 
@@ -222,32 +226,33 @@ The next dormant boundary now supplies that handoff with exact private readers.
 It uses the selected job UAMI for separate storage and vault audiences, performs
 only content-addressed record/bundle GETs plus one exact-version Key Vault root
 GET, and hands the exact bytes and shared trusted clock to the offline
-authenticator. The public dependency factory still refuses and no workflow or
-activation bit changed. Before any future rehearsal, the configured GitHub-only
+authenticator. The public executor still refuses before factory construction,
+and no workflow or activation bit changed. Before any future rehearsal, the configured GitHub-only
 root must be proven to fit Key Vault and the 25,600-byte policy cap; see the
 [private-reader flight plan](flight-plans/2026-09-04-staging-runtime-record-private-readers.md).
 
-A further dormant boundary now retains every exact validated evidence and
+A further dormant boundary retains every exact validated evidence and
 attestation Blob selector, both exact-version secret selectors, and cleanup
 mode in record-bound sealed authority objects. The same-process runtime carrier
 keeps the exact GitHub-root bytes that were already authenticated, while the
 manifest validator can consume a detached exact mapping of immutable bytes
-without reading an evidence-bundle path. These are future dependency-assembly inputs only:
-the existing public path seam is unchanged, the default factory still refuses,
-and no reader, workflow, Terraform, cleanup, restore, or activation behavior is
-enabled. See the
+without reading an evidence-bundle path. The executor now consumes these
+authorities through its dormant dependency factory; no workflow, Terraform,
+cleanup, restore, or activation behavior is enabled. See the
 [authority-seal flight plan](flight-plans/2026-09-05-staging-launch-authority-seals.md).
 
-The next dormant slice consumes those provision authorities without accepting
+The one-shot private evidence reader consumes those provision authorities without accepting
 paths or selector overrides. A burn-on-entry reader uses only the provision
 UAMI for one Storage token, the six ordered evidence versions and one
 attestation version, then one Vault token and the exact HMAC secret version.
 Strict framing, media, size, final-URL, decoded-key, digest, execution, and
 90-second deadline checks plus launch-expiry rechecks against the shared
-trusted UTC produce a sealed in-memory carrier. Dependency
-assembly, evidence validation with the shared UTC, infrastructure binding,
-workflow integration, and every activation flag remain unchanged and false;
-see the [private evidence-reader flight plan](flight-plans/2026-09-05-staging-private-evidence-reader.md).
+trusted UTC produce a sealed in-memory carrier. The dormant executor dependency
+factory now invokes it once, rechecks its seal and authority, and validates its
+detached byte map with that same clock. Infrastructure binding, workflow
+integration, and every activation flag remain unchanged and false; see the
+[private evidence-reader flight plan](flight-plans/2026-09-05-staging-private-evidence-reader.md)
+and [dependency-factory flight plan](flight-plans/2026-09-05-staging-provision-dependency-factory.md).
 
 ## Dormant restore-sanitizer contract
 
