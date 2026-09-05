@@ -1,8 +1,13 @@
 # Staging restore rehearsal control plane
 
-Status: **dormant source only**. No Azure or GitHub resource has been created by
-this root. `deploy_staging_restore_control_plane` defaults to `false`, and the
-restore workflow does not consume these outputs.
+Status: **partially instantiated reversible base; restore remains disabled**. A
+stopped 2026-09-04 base apply created 28 of the planned 39 instances. The target
+resource group remains empty, and no container, private endpoint, marker write,
+executor, restore, retention control, cutover, or production action occurred.
+See [the partial-apply evidence record](../docs/evidence/STAGING_REHEARSAL_BASE_PARTIAL_APPLY_2026-09-04.md)
+before planning against this state. `deploy_staging_restore_control_plane`
+still defaults to `false`, and the restore workflow does not consume these
+outputs.
 
 This root owns a state boundary separate from both `infra/` and
 `infra-staging/`: `staging-rehearsal-control-plane.tfstate`. It models the
@@ -188,6 +193,119 @@ for independent review. No automation in this change applies it. The plan must
 be additive, use the exact subscription and names, preserve an otherwise empty
 target resource inventory, and contain no production resource or assignment.
 
+## Serial-7 partial-apply recovery
+
+The isolated backend lineage is
+`76b6712e-5781-adbd-9fb1-cf66db4f4e28`. Its post-interruption serial 7 records
+28 instances, and only `azurerm_storage_account.marker[0]` is tainted. The live
+account passed management-plane readback, but taint would still request its
+replacement. Never apply either the original base plan or any plan made with
+`-refresh=false`; the rejected no-refresh plan contains eleven creates plus an
+account delete/create.
+
+AzureRM 4.73.0 is configured with
+`features.storage.data_plane_available=false`. This root has no Queue or static
+website configuration: the account and Blob-service properties use Azure
+Resource Manager, and containers use AzAPI. A planning host therefore does not
+need network reachability or data-plane authority to the public-disabled marker
+account. Do not substitute `storage_use_azuread=true`: authentication cannot
+provide private-network reachability, and this root must not grant the operator
+Blob data authority merely to refresh infrastructure state. Reassess this
+provider feature explicitly before any AzureRM major-version upgrade.
+
+Recovery is a human-operator state transition. Agents must not run `untaint`,
+apply, import, state removal, or Azure mutation commands.
+The validator and protected-runtime follow-ups described below must both be
+merged before step 3 begins; this source correction alone authorizes nothing.
+
+1. Capture the current raw state in an access-controlled, untracked location,
+   record its SHA-256, and verify the expected lineage, serial 7, exact 28
+   addresses, unlocked backend, and sole taint above. Raw state and binary plans
+   must never enter Git or an artifact with broader access.
+2. Repeat the exact ARM readback in the evidence record. Stop if the live
+   account, both resource groups, target emptiness, roles, identities, policy,
+   network, or DNS differs.
+3. With a separately recorded approval, the human operator may run exactly
+   `tofu -chdir=infra-staging-rehearsal untaint
+   'azurerm_storage_account.marker[0]'`. Do not use `state rm`, import,
+   `-replace`, `-target`, `-refresh=false`, force-unlock, or a destroy plan.
+4. In a new owner-only directory (`0700`), capture the post-untaint state as a
+   single-link regular file with mode `0600`. It must retain the lineage, be
+   exactly serial 8, contain the same 28 addresses, and contain no tainted or
+   deposed instance. Any other serial stops this one-time recovery and requires
+   a new evidence review.
+5. Fetch `origin/master`, check out its exact current protected-master commit
+   containing the reviewed recovery merge, and leave both
+   `infra-staging-rehearsal/` and the validator clean. Run create mode with that
+   full 40-character protected-master SHA:
+
+   ```sh
+   uv run python scripts/validate_staging_rehearsal_base_recovery_plan.py \
+     --mode create \
+     --saved-plan /protected/path/recovery.tfplan \
+     --state-json /protected/path/post-untaint.tfstate \
+     --expected-source-commit <CURRENT_PROTECTED_MASTER_SHA>
+   ```
+
+   Create mode itself invokes the fixed `tofu plan` command with
+   `-refresh=true`, the three exact reversible inputs, no ambient OpenTofu,
+   Git, or Azure-provider overrides, and pinned OpenTofu 1.12.5. It fixes the
+   backend to the reviewed subscription, tenant, storage coordinates, and
+   default workspace. It writes a read-only
+   (`0400`) saved plan only after validating JSON derived from those exact
+   binary bytes. The plan archive must contain the exact reviewed Terraform
+   source and provider lockfile, embed lineage and serial 8, be no more than
+   four hours old, and contain exactly 28 no-ops plus eleven creates. Drift,
+   updates, deletes, replacements, irreversible flags, extra resources,
+   non-passing checks, provider changes, or detached/insecure artifacts fail
+   closed. Retain the digest-only JSON receipt in the protected operator
+   packet; do not persist a raw plan-JSON export.
+6. A different reviewer must independently inspect the saved plan, receipt,
+   current state metadata, and current live readback. Immediately before apply,
+   fetch `origin/master` again, pull a new protected state snapshot, and run
+   verify mode with the reviewed digest:
+
+   ```sh
+   uv run python scripts/validate_staging_rehearsal_base_recovery_plan.py \
+     --mode verify \
+     --saved-plan /protected/path/recovery.tfplan \
+     --state-json /protected/path/immediate-pre-apply.tfstate \
+     --execution-dir /protected/path/recovery-execution \
+     --expected-source-commit <CURRENT_PROTECTED_MASTER_SHA> \
+     --expected-saved-plan-sha256 <REVIEWED_PLAN_SHA256>
+   ```
+
+   The execution directory must not exist beforehand. Verify mode creates it
+   as owner-only, installs providers from the read-only lockfile, binds its
+   provider-tree and backend digests into the receipt, and preserves it for the
+   immediate human apply. The receipt deliberately reports
+   `live_readback_bound=false` and `apply_authorized=false`: validator success
+   never replaces the independent live readback and human approval.
+
+   After that acceptance, only the human operator may run the exact reviewed
+   plan with the preserved runtime (substitute the receipt values and absolute
+   repository path):
+
+   ```sh
+   env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+     CHECKPOINT_DISABLE=1 TF_CLI_CONFIG_FILE=/dev/null TF_IN_AUTOMATION=1 \
+     TF_DATA_DIR=/protected/path/recovery-execution \
+     ARM_SUBSCRIPTION_ID=bab2a709-1fcb-4c87-a9fc-802f7477ec13 \
+     ARM_ENVIRONMENT=public ARM_USE_CLI=true ARM_USE_AZUREAD=true \
+     <OPEN_TOFU_PATH_FROM_RECEIPT> \
+     -chdir=<ABSOLUTE_REPOSITORY_ROOT>/infra-staging-rehearsal apply \
+     -input=false -lock=true -lock-timeout=5m \
+     /protected/path/recovery.tfplan
+   ```
+
+   Stop if the execution directory or either digest has changed. OpenTofu's
+   own saved-plan/state binding must also refuse if remote state changed after
+   verification.
+7. After apply, read back the seven containers, private endpoint and DNS
+   binding, and three container-scoped reader assignments. The result must be
+   39 state instances, zero target resources, and no irreversible or activation
+   control. Record evidence before proceeding to any later rung.
+
 ## Irreversible retention phase
 
 Do not enable retention controls during the reversible base apply. After the
@@ -213,14 +331,16 @@ ordered and independently default off:
    unimplemented. Once a later reviewed rung implements both, the lock still
    requires the prior legal hold, WORM, and marker-assignment gates.
 
-All retention controls require `irreversible_marker_controls_approved=true`. Locked-policy,
-legal-hold, and management-lock resources also use `prevent_destroy`. Recovery
-for the reversible phase is a reviewed destroy of this isolated state before
-retention is enabled. After retention is enabled, recovery is roll-forward;
-clearing legal holds or removing the management lock requires its own explicit
-operator procedure, and locked WORM remains irreversible. Do not edit the
-AzAPI legal-hold resource after ReadOnly is installed: AzAPI updates perform the
-action, and the account lock intentionally blocks such management-plane writes.
+All retention controls require `irreversible_marker_controls_approved=true`.
+The marker account, locked-policy, legal-hold, and management-lock resources
+use `prevent_destroy`. Decommissioning the reversible phase therefore requires
+a separate reviewed source change that removes the account guard before a
+reviewed destroy of this isolated state. After retention is enabled, recovery
+is roll-forward; clearing legal holds or removing the management lock requires
+its own explicit operator procedure, and locked WORM remains irreversible. Do
+not edit the AzAPI legal-hold resource after ReadOnly is installed: AzAPI
+updates perform the action, and the account lock intentionally blocks such
+management-plane writes.
 
 `marker_store_binding` exposes the six exact logical marker role-assignment IDs and the
 three marker immutability-policy IDs needed for later contract reconciliation;

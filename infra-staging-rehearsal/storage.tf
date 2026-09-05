@@ -36,6 +36,13 @@ resource "azurerm_storage_account" "marker" {
   }
 
   tags = var.tags
+
+  # A provider interruption may mark a successfully created account tainted.
+  # Replacement must require a separately reviewed source change rather than
+  # becoming an incidental recovery action in a later apply.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "azapi_resource" "marker_container" {

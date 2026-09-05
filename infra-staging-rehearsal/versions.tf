@@ -32,7 +32,14 @@ provider "azurerm" {
   # applying this root must not silently broaden the subscription surface.
   resource_provider_registrations = "none"
 
-  features {}
+  features {
+    storage {
+      # This root manages the account through ARM and its containers through
+      # AzAPI. The marker account rejects Shared Key and public traffic, so a
+      # planner must never probe its Blob or Queue data-plane endpoints.
+      data_plane_available = false
+    }
+  }
 }
 
 provider "azapi" {
