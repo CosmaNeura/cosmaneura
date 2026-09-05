@@ -139,8 +139,8 @@ variable "python_public_vars" {
     "AZURE_OPENAI_ENDPOINT",
     # upload container names
     "AZURE_UPLOADS_CONTAINER_NAME", "AZURE_UPLOADS_EXAMPLE_NOTES_CONTAINER_NAME",
-    # zoom oauth redirects
-    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT",
+    # zoom oauth redirects and the source-controlled watchdog rollout gate
+    "ZOOM_REDIRECT_URI", "ZOOM_SUCCESS_REDIRECT", "ZOOM_WATCHDOG_ENABLED",
     # public origin of this backend, used to build the zak_url that Recall
     # bots fetch on join
     "API_BASE_URL", "RECALL_API_BASE",
