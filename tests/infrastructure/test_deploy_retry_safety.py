@@ -525,6 +525,7 @@ def _staging_config(sslmode: str = "verify-full") -> dict[str, str]:
         "ALLOWED_HOST_LIST": "staging-app.cosmaneura.com,staging-chat.cosmaneura.com",
         "INTAKE_CHAT_DOMAIN": "staging-chat.cosmaneura.com",
         "AUTHORITY_CLERK_ISSUER": "https://resolved-emu-53.clerk.accounts.dev",
+        "SENTRY_STAGING_ENABLED": "false",
         "CLERK_DEPLOYMENT_PUBLISHABLE_KEY": "pk_test_clerk",
         "CLERK_PRIVATE_KEY": "sk_test_clerk",
         "ZOOM_CLIENT_ID": "zoom-client",

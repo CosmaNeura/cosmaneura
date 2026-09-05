@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from app.configuration import sentry
 
 SENTINEL = "patient-secret-sentinel"
@@ -122,6 +124,55 @@ def test_transaction_callback_filters_health_before_scrubbing(monkeypatch) -> No
         )
         is None
     )
+
+
+def _configure_for_environment(
+    monkeypatch, environment: str, staging_enabled: str | None
+) -> dict:
+    captured = {}
+    monkeypatch.setenv("PYTHON_ENV", environment)
+    monkeypatch.setenv("SENTRY_DSN", "https://public@example.invalid/1")
+    monkeypatch.setenv("BUILD_COMMIT", "test-release")
+    monkeypatch.delenv("CONTAINER_APP_NAME", raising=False)
+    if staging_enabled is None:
+        monkeypatch.delenv("SENTRY_STAGING_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("SENTRY_STAGING_ENABLED", staging_enabled)
+    monkeypatch.setattr(sentry, "PostHogIntegration", lambda: object())
+    monkeypatch.setattr(
+        sentry.sentry_sdk, "init", lambda **kwargs: captured.update(kwargs)
+    )
+
+    sentry.configure_sentry()
+    return captured
+
+
+def test_production_sentry_behavior_is_unchanged_by_staging_flag(monkeypatch) -> None:
+    captured = _configure_for_environment(monkeypatch, "production", "false")
+
+    assert captured["environment"] == "production"
+    assert captured["dsn"] == "https://public@example.invalid/1"
+
+
+def test_staging_sentry_requires_exact_true_opt_in(monkeypatch) -> None:
+    captured = _configure_for_environment(monkeypatch, "staging", "true")
+
+    assert captured["environment"] == "staging"
+    assert captured["dsn"] == "https://public@example.invalid/1"
+
+
+@pytest.mark.parametrize("staging_enabled", [None, "false", "True", "1", " true"])
+def test_staging_sentry_is_disabled_without_exact_opt_in(
+    monkeypatch, staging_enabled: str | None
+) -> None:
+    assert _configure_for_environment(monkeypatch, "staging", staging_enabled) == {}
+
+
+@pytest.mark.parametrize("environment", ["development", "test"])
+def test_non_deployed_environments_never_enable_sentry(
+    monkeypatch, environment: str
+) -> None:
+    assert _configure_for_environment(monkeypatch, environment, "true") == {}
 
 
 def test_scrub_handles_minimal_events() -> None:
