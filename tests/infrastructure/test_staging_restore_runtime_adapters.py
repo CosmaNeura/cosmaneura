@@ -989,6 +989,12 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
                     "ManagedIdentityPrivateEvidenceMaterialReader",
                 }
             )
+        elif path.name == "read_staging_controller_receipt_v2.py":
+            forbidden_symbols = tuple(
+                symbol
+                for symbol in adapter_symbols
+                if symbol != "staging_restore_runtime_adapters"
+            )
         elif path.name == "read_staging_restore_launch_record.py":
             forbidden_symbols = tuple(
                 symbol
