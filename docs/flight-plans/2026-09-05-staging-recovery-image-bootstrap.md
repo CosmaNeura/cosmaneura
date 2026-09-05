@@ -1,6 +1,6 @@
 # Staging recovery-image bootstrap
 
-Status: first read-only capture failed closed; no registry or workload mutation occurred. Risk: Tier 2. Sole dispatcher: `JohnClem`.
+Status: two read-only captures failed closed; no registry or workload mutation occurred. Risk: Tier 2. Sole dispatcher: `JohnClem`.
 
 ## Outcome and hard boundary
 
@@ -20,9 +20,13 @@ ACCEPT RETROSPECTIVE PROVIDER EVIDENCE AND PIN sha256:475908dbb4c6820f91ca6ccd62
 
 Read-only capture run `33968924079` on protected source `5cd49afc5cc5e500d310730e890777fd37c91f14` authenticated the exact environment-scoped OIDC identity, then failed during initial observation because the installed Azure CLI already returned the diagnostic-settings array and the additional `--query value` transformed it into a non-array. Terminal receipt `sha256:9f5b23d02e3598dac041915f08d5086434d7b43beaf672770cccbd2e998fa973` records `status=failed`, `phase=initial_observation`, no evidence, and all five mutation-journal entries as `not_attempted`. The corrective change consumes the command's native array and adds a regression assertion; any retry still requires fresh action-time confirmation.
 
+Read-only capture run `33971188011` (job `101319883597`) on protected source `b8e8ee06850c7215f002443c8dd97e33e6679918` passed source, environment, OIDC, role, historical-publication, registry, and workload-health reads, then failed during initial validation because Azure's app-resource and active-revision endpoints project the same template differently. The app endpoint supplies `imageType=ContainerImage`, server-computed `ephemeralStorage`, default scale values `300`/`30`, and selected empty fields that the revision endpoint omits or returns as null. A value-redacted path comparison proved those were the complete differences across worker, scheduler, and API. Terminal receipt `sha256:4bd41b727c58acd10adcf5fea4eb30e8ceeb6e7259fd00517e6c17272bc224ca` from artifact `9970972665` records `status=failed`, `phase=initial_observation`, no evidence, and every mutation-journal entry as `not_attempted`. Post-failure readback retained the three exact original healthy revisions and left both registry locks writable/deletable.
+
+The bounded correction compares semantic copies that normalize only those enumerated Azure projection equivalents. It retains the distinct raw normalized app/revision template digests as transition evidence and continues to reject non-default, non-empty, malformed, or conflicting values. No new capture is authorized by this change: another attempt requires a freshly stated action-time confirmation after merge and safety readback.
+
 ## Prerequisites and procedure
 
-Before dispatch, merge after exact-head review; change the GitHub `Staging` environment to its sole custom branch policy `master`, with protected-branch mode off, custom policies on, admin bypass off, and only the branch-policy protection rule; and leave exactly one staging OIDC credential with issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, and subject `repo:CosmaNeura/cosmaneura:environment:staging`. Remove the legacy branch credential in that separately approved window.
+Before dispatch, merge after exact-head review and reverify the completed trust cutover: the GitHub `Staging` environment has sole custom branch policy `master`, protected-branch mode off, custom policies on, admin bypass off, and only the branch-policy protection rule. The staging identity has exactly one OIDC credential with issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, and subject `repo:CosmaNeura/cosmaneura:environment:staging`; the legacy branch credential remains absent.
 
 Reconfirm client `45b940bf-2f4f-4b10-bcc3-4679d8855a6f`, principal `a94600b7-c854-4121-bbcb-a0fa7baae14a`, tenant `d51754d0-bba5-4810-820e-afac542844d6`, subscription `bab2a709-1fcb-4c87-a9fc-802f7477ec13`, and a quiet staging window. At execution time the OIDC session must expose that as its sole enabled subscription; scoped inherited queries across the exact staging resource group, ACR, managed environment, and three Container App targets must union to exactly three effective assignments: ACR `AcrPush`, managed-environment `Contributor`, and staging-resource-group `Contributor`. This is a fresh six-surface gate, not retrospective evidence. Broader absence of unrelated subscription assignments was separately administrator-audited and is not claimed as OIDC-capture proof.
 

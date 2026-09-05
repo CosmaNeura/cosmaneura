@@ -27,6 +27,12 @@ MAX_CLOCK_SKEW = timedelta(minutes=5)
 PROGRESS_STATES = tuple(
     "original tag_locked registry_locked worker_pinned scheduler_pinned pinned".split()
 )
+EXPECTED_EPHEMERAL_STORAGE = {
+    "cosmaneura-staging-app-worker": "4Gi",
+    "cosmaneura-staging-app-scheduler": "1Gi",
+    "cosmaneura-staging-app-web": "2Gi",
+}
+_MISSING = object()
 
 
 class BootstrapEvidenceError(ValueError):
@@ -657,6 +663,86 @@ def _normalized_template(
     return normalized
 
 
+def _template_comparison_views(
+    app_template: dict[str, Any],
+    revision_template: dict[str, Any],
+    expected_container: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Normalize only documented app/revision response-projection differences."""
+    app_view = copy.deepcopy(app_template)
+    revision_view = copy.deepcopy(revision_template)
+    # These are directional: the app-resource endpoint materializes the field
+    # and the active-revision endpoint omits it. Mirror-image shapes remain drift.
+    if (
+        app_view.get("customMetricsSettings", _MISSING) is None
+        and "customMetricsSettings" not in revision_view
+    ):
+        app_view.pop("customMetricsSettings")
+
+    app_container = _object(
+        _array(app_view.get("containers"), "workload containers")[0],
+        "workload container",
+    )
+    revision_container = _object(
+        _array(revision_view.get("containers"), "workload containers")[0],
+        "workload container",
+    )
+    if (
+        app_container.get("imageType", _MISSING) == "ContainerImage"
+        and "imageType" not in revision_container
+    ):
+        app_container.pop("imageType")
+
+    app_resources = app_container.get("resources")
+    revision_resources = revision_container.get("resources")
+    if isinstance(app_resources, dict) and isinstance(revision_resources, dict):
+        app_ephemeral = app_resources.get("ephemeralStorage", _MISSING)
+        if (
+            app_ephemeral == EXPECTED_EPHEMERAL_STORAGE.get(expected_container)
+            and "ephemeralStorage" not in revision_resources
+        ):
+            app_resources.pop("ephemeralStorage")
+
+    app_scale = app_view.get("scale")
+    revision_scale = revision_view.get("scale")
+    if isinstance(app_scale, dict) and isinstance(revision_scale, dict):
+        for field, default in (
+            ("cooldownPeriod", 300),
+            ("pollingInterval", 30),
+        ):
+            if (
+                app_scale.get(field, _MISSING) == default
+                and field in revision_scale
+                and revision_scale[field] is None
+            ):
+                app_scale[field] = None
+
+        app_rules = app_scale.get("rules")
+        revision_rules = revision_scale.get("rules")
+        if (
+            isinstance(app_rules, list)
+            and isinstance(revision_rules, list)
+            and len(app_rules) == len(revision_rules)
+        ):
+            for app_rule, revision_rule in zip(app_rules, revision_rules, strict=True):
+                if not isinstance(app_rule, dict) or not isinstance(
+                    revision_rule, dict
+                ):
+                    continue
+                app_custom = app_rule.get("custom")
+                revision_custom = revision_rule.get("custom")
+                if not isinstance(app_custom, dict) or not isinstance(
+                    revision_custom, dict
+                ):
+                    continue
+                if app_custom.get("auth", _MISSING) == [] and (
+                    "auth" not in revision_custom
+                ):
+                    app_custom.pop("auth")
+
+    return app_view, revision_view
+
+
 def _validate_workload(
     policy: dict[str, Any], workload_observation: Any, state: str
 ) -> dict[str, Any]:
@@ -744,7 +830,10 @@ def _validate_workload(
         image,
         None,
     )
-    if app_template != revision_template:
+    app_comparison, revision_comparison = _template_comparison_views(
+        app_template, revision_template, expected["container_name"]
+    )
+    if app_comparison != revision_comparison:
         _fail("app and active-revision templates disagree after normalization")
     ingress = configuration.get("ingress")
     if expected["traffic_weight"] == 100:

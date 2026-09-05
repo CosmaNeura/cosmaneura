@@ -127,14 +127,12 @@
   Azure identity and configuration checks may occur before that stop. The live
   Alembic revision also has not yet been independently evidenced. Do not infer
   it from source or the successful run.
-- The GitHub `Staging` environment still has custom branch-policy ID `45380333`
-  naming only `staging`. Its configured `ENABLE_STAGING_PILOT_ZOOM_SKIP=true`
-  conflicts with this flight and must become `false` in the separately approved
-  policy-change window. The canonical environment response digest was
-  `7a1afdfa1ec47f1c2b6260eeaad46c40694e7e8a680d18e0c251cac021059436`;
-  the canonical custom-policy response digest was
-  `418e0bf072f5abc54d2825884ac901511f4e00c3a0d1671b0267bca45bcbaecc`.
-  No environment setting has been changed.
+- The authorized GitHub trust cutover is complete. The `Staging` environment
+  now permits only custom branch `master`, with protected-branch mode off,
+  custom policies on, admin bypass off, and only the branch-policy protection
+  rule. `ENABLE_STAGING_PILOT_ZOOM_SKIP=false`. The durable cutover record is
+  PR #305 comment `5552118792`; both recovery capture attempts revalidated the
+  exact environment policy before protected credentials.
 - The staging GitHub Azure identity is client
   `45b940bf-2f4f-4b10-bcc3-4679d8855a6f`, principal
   `a94600b7-c854-4121-bbcb-a0fa7baae14a`, tenant
@@ -143,12 +141,13 @@
   read-only query were staging-only, but that scoped result is not a global
   negative proof of every tenant, subscription, management-group, and inherited
   role. An independently authorized auditor may be required to complete that
-  proof. The exact control-plane query set must also be rehearsed from a real
-  GitHub `Staging` environment OIDC session. The identity has both desired
-  credential `github-actions`, scoped to the staging environment, and legacy
-  credential `github-actions-staging`, scoped to unprotected
-  `refs/heads/staging`. This is a blocking bypass until the latter is removed
-  and the identity is read back.
+  proof. The identity now has exactly one federated credential,
+  `github-actions`, scoped to the staging environment; the legacy branch
+  credential was removed and read back absent. Recovery capture runs
+  `33968924079` and `33971188011` exercised the real environment OIDC session.
+  The latter revalidated the sole enabled subscription and the union of the
+  exact six scoped role queries as the three expected staging-only assignments
+  before its later read-only validation stop.
 - Observed staging runtime values include the test Clerk issuer
   `https://resolved-emu-53.clerk.accounts.dev`, staging-only Zoom callbacks,
   Recall region `us-west-2`, `STRIPE_INTEGRATION_ENABLED=false`,
@@ -183,6 +182,13 @@
   historical tag is insufficient. Stop if the original live bytes cannot be
   proven, the immutable image cannot be retained and verified, or the workloads
   disagree unexpectedly.
+- Recovery capture runs `33968924079` and `33971188011` both failed closed in
+  initial observation and made no registry or workload mutation. The second
+  run's terminal receipt is
+  `sha256:4bd41b727c58acd10adcf5fea4eb30e8ceeb6e7259fd00517e6c17272bc224ca`
+  (artifact `9970972665`). It isolated benign, complete Azure API projection
+  differences between app-resource and active-revision templates; a bounded
+  verifier correction is required before a freshly authorized capture retry.
 - No isolated restore rehearsal or canonical staging-candidate deployment has
   occurred. The historical baseline run and the read-only observations above do
   not satisfy either gate.
