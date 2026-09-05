@@ -689,9 +689,13 @@ def test_policy_and_runtime_entrypoints_remain_dormant() -> None:
     assert executor_policy["activation_ready"] is False
     assert set(executor_policy["activation"].values()) == {False}
     with pytest.raises(
-        executor.TrustedExecutorFailure, match="^runtime_adapter.unimplemented$"
+        executor.TrustedExecutorFailure, match="^dependencies.policy_invalid$"
     ):
-        executor._runtime_dependencies()
+        executor._runtime_dependencies(
+            executor_policy=executor_policy,
+            runtime_policy=policy,
+            clock=executor._NonRegressingClock(lambda: NOW),
+        )
 
 
 def test_receipt_input_cannot_be_mutated_into_an_unsealed_substitute(

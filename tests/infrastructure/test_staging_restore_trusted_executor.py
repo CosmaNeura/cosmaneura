@@ -7,6 +7,7 @@ import json
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable
 
 import pytest
@@ -21,7 +22,7 @@ ATTESTATION_BYTES = b'{"mediaType":"application/vnd.dev.sigstore.bundle.v0.3+jso
 TRUSTED_ROOT_BYTES = b'{"certificateAuthorities":[],"timestampAuthorities":[]}\n'
 RAW_STAGE_SENTINEL = "must-not-escape-stage-projections"
 EXPECTED_POLICY_SHA256 = (
-    "50fc9ac6e061e2d00f7552bfdc6e40bd5998521a66cbc097b85920fcd97730c0"
+    "b153084a079542d08ff86a34a150ac01cdfa0c1fd1e61fa1dfdf6c487159f5a8"
 )
 EXPECTED_ACTIVATION = {
     "trusted_executor_implemented": False,
@@ -242,6 +243,7 @@ class Harness:
         config = executor.safe_submit.config_from_policies(
             envelope, safe_policy, executable=False
         )
+        self.safe_submit_config = config
         self.request = executor.safe_submit.request_from_binding(
             binding=self.final_binding, config=config, ttl_hours=6
         )
@@ -371,7 +373,54 @@ class Harness:
         self.authenticated_receipt = object.__new__(
             executor.launch_binding.AuthenticatedBrokerLaunchReceipt
         )
-        receipt_bytes = b'{"receipt":true}'
+        receipt_document = {
+            "schema_version": 1,
+            "launch_record_uri": launch_record_uri,
+            "launch_record_sha256": launch_record_sha256,
+            "action": "provision",
+            "selected_job_resource_id": self.runtime_policy["runtime"]["jobs"][
+                "provision"
+            ]["resource_id"],
+            "runtime_record_uri": pointer["record_uri"],
+            "runtime_record_sha256": pointer["record_sha256"],
+            "runtime_signature_bundle_uri": pointer["signature_bundle_uri"],
+            "runtime_signature_bundle_sha256": pointer["signature_bundle_sha256"],
+            "broker_oidc_jti_sha256": f"sha256:{'5' * 64}",
+            "broker_oidc_replay_receipt_sha256": f"sha256:{'6' * 64}",
+            "provision_job_body_sha256": f"sha256:{'7' * 64}",
+            "provision_job_projection_sha256": f"sha256:{'8' * 64}",
+            "provision_job_execution_template_sha256": f"sha256:{'9' * 64}",
+            "provision_job_image_reference": (
+                "restoreexecutor.azurecr.io/cosmaneura/restore-executor@sha256:"
+                + "a" * 64
+            ),
+            "cleanup_job_body_sha256": f"sha256:{'b' * 64}",
+            "cleanup_job_projection_sha256": f"sha256:{'c' * 64}",
+            "cleanup_job_execution_template_sha256": f"sha256:{'d' * 64}",
+            "cleanup_job_image_reference": (
+                "restoreexecutor.azurecr.io/cosmaneura/restore-executor@sha256:"
+                + "e" * 64
+            ),
+            "start_response_body_sha256": f"sha256:{'f' * 64}",
+            "start_client_request_id": "12345678-1234-4234-8234-123456789abc",
+            "start_provider_request_id": "87654321-4321-4321-8321-cba987654321",
+            "execution_resource_id": (
+                f"{self.runtime_policy['runtime']['jobs']['provision']['resource_id']}"
+                "/executions/execution-1"
+            ),
+            "execution_body_sha256": f"sha256:{'0' * 64}",
+            "execution_template_sha256": f"sha256:{'1' * 64}",
+            "observed_at": "2026-09-04T12:00:00Z",
+        }
+        assert set(receipt_document) == set(
+            self.runtime_policy["launch_binding"]["launch_receipt"]["required_fields"]
+        )
+        receipt_bytes = executor.launch_binding._canonical(receipt_document)
+        receipt_uri, signature_envelope_uri = (
+            executor.launch_binding._execution_receipt_uris(
+                self.runtime_policy, "provision", "execution-1"
+            )
+        )
         receipt_values = {
             "receipt_bytes": receipt_bytes,
             "receipt_sha256": executor.launch_binding._digest(receipt_bytes),
@@ -380,10 +429,8 @@ class Harness:
             "launch_record_uri": launch_record_uri,
             "launch_record_sha256": launch_record_sha256,
             "runtime_reference": pointer,
-            "receipt_uri": "https://restorelaunch.blob.core.windows.net/receipt.json",
-            "signature_envelope_uri": (
-                "https://restorelaunch.blob.core.windows.net/receipt.signature.json"
-            ),
+            "receipt_uri": receipt_uri,
+            "signature_envelope_uri": signature_envelope_uri,
             "signature_envelope_sha256": f"sha256:{'3' * 64}",
             "observed_at": NOW,
             "_seal": executor.launch_binding._AUTHENTICATED_RECEIPT_SEAL,
@@ -418,6 +465,19 @@ class Harness:
             authenticated_receipt=self.authenticated_receipt,
             launch_record_bytes=self.launch_record_bytes,
             authenticated_runtime_record=authenticated_runtime_record,
+        )
+        self.private_inputs = executor.evidence_ingress.PrivateProvisionInputs._from_exact_reads(
+            evidence_entries=tuple(
+                (name, (self.bundle_dir / name).read_bytes()) for name in evidence_names
+            ),
+            attestation_bundle_bytes=ATTESTATION_BYTES,
+            server_scope_hmac_key_bytes=KEY_BYTES,
+            receipt_sha256=self.authenticated_receipt.receipt_sha256,
+            launch_record_sha256=self.launch_record.record_sha256,
+            execution_binding=(
+                f"{self.runtime_policy['runtime']['jobs']['provision']['resource_id']}"
+                "/executions/execution-1"
+            ),
         )
         submitter = object.__new__(executor.safe_submit.SafeRestoreSubmitter)
         submitter.config = config
@@ -511,20 +571,30 @@ class Harness:
         )
         return self.received_receipt
 
+    def read_private_inputs(self, **kwargs: Any) -> Any:
+        self.calls.append("private_inputs")
+        assert set(kwargs) == {
+            "policy",
+            "authenticated_receipt",
+            "launch_record",
+        }
+        assert kwargs["policy"] == self.runtime_policy
+        assert kwargs["authenticated_receipt"] is self.authenticated_receipt
+        assert kwargs["launch_record"] is self.launch_record
+        return self.private_inputs
+
     def validate_snapshot(self, **kwargs: Any) -> Any:
         self.calls.append("manifest")
         assert set(kwargs) == {
-            "bundle_dir",
+            "files",
             "validation_now",
             "expected_file_sha256s",
         }
-        assert kwargs["bundle_dir"] == self.bundle_dir
+        assert kwargs["files"] == self.private_inputs.evidence_files()
         self.manifest_validation_now = kwargs["validation_now"]
         assert kwargs["expected_file_sha256s"] == self.expected_file_sha256s
         if self.mutate_inputs:
-            self.hmac_key_path.write_bytes(b"changed-key")
-            self.attestation_bundle_path.write_bytes(b"changed-attestation")
-            self.trusted_root_path.write_bytes(b"changed-root")
+            kwargs["files"]["candidate.json"] = b"changed-candidate"
         return self.snapshot
 
     def authenticate_server(self, **kwargs: Any) -> tuple[dict[str, Any], Any, bytes]:
@@ -595,11 +665,13 @@ class Harness:
 
     def dependencies(self) -> Any:
         return executor.ExecutorDependencies(
+            safe_submit_config=self.safe_submit_config,
             receive_launch=self.receive_launch,
             runtime_reference_from_receipt=self.runtime_reference_from_receipt,
             validate_launch_record=self.validate_launch_record,
             validate_runtime_binding=self.validate_runtime_binding,
             validate_launch_receipt=self.validate_launch_receipt,
+            read_private_inputs=self.read_private_inputs,
             validate_snapshot=self.validate_snapshot,
             authenticate_server=self.authenticate_server,
             observe_provider=self.observe_provider,
@@ -640,6 +712,11 @@ def inputs(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+@pytest.fixture(autouse=True)
+def provision_execution_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(executor.launch_binding.EXECUTION_NAME_ENV, "execution-1")
+
+
 def _execute(
     inputs: dict[str, Path],
     dependencies: Any,
@@ -652,7 +729,6 @@ def _execute(
         policy_bytes=policy_bytes,
         policy_sha256=policy_sha256,
         runtime_policy=runtime_policy or _configured_runtime_policy(),
-        **inputs,
         dependencies=dependencies,
         clock=clock,
     )
@@ -662,7 +738,9 @@ def _run(harness: Harness, inputs: dict[str, Path], clock: Any) -> Any:
     return _execute(inputs, harness.dependencies(), clock)
 
 
-def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -> None:
+def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     raw = executor.POLICY_PATH.read_bytes()
     policy = json.loads(raw)
     assert hashlib.sha256(raw).hexdigest() == EXPECTED_POLICY_SHA256
@@ -686,22 +764,22 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
         "caller_override_permitted": False,
     }
     assert policy["private_runtime_ingress"] == {
-        "status": "dormant_unintegrated_contract",
+        "status": "dormant_dependency_assembly_implemented_unintegrated",
         "authority_preservation_implemented": True,
         "in_memory_evidence_validator_available": True,
-        "dependency_assembly_implemented": False,
+        "dependency_assembly_implemented": True,
         "workflow_integrated": False,
-        "future_evidence_bundle": {
+        "evidence_bundle": {
             "type": "exact_builtin_dict_of_immutable_bytes",
             "validator": "scripts.validate_staging_evidence_manifest.validate_bundle_snapshot_bytes",
-            "selector_source_after_dependency_assembly": "validated_provision_launch_record.evidence_file_authorities",
+            "selector_source": "validated_provision_launch_record.evidence_file_authorities",
         },
-        "future_github_attestation_bundle_selector_source": "validated_provision_launch_record.attestation_bundle_authority",
-        "future_server_scope_hmac_key_selector_source": "validated_provision_launch_record.server_scope_hmac_key_authority",
-        "future_trusted_root_bytes_source": "authenticated_runtime_record_material.trusted_root_bytes",
+        "github_attestation_bundle_selector_source": "validated_provision_launch_record.attestation_bundle_authority",
+        "server_scope_hmac_key_selector_source": "validated_provision_launch_record.server_scope_hmac_key_authority",
+        "trusted_root_bytes_source": "authenticated_runtime_record_material.trusted_root_bytes",
         "future_cleanup_mode_source": "validated_cleanup_launch_record.cleanup_mode",
         "parent_launch_record_validation_required_before_selector_use": True,
-        "caller_path_or_uri_override_permitted_after_integration": False,
+        "caller_path_or_uri_override_permitted": False,
     }
     launch_adapter = policy["adapters"]["launch_binding"]
     assert launch_adapter["implemented"] is False
@@ -738,26 +816,48 @@ def test_checked_in_policy_is_exact_dormant_and_public_refuses_before_inputs() -
     )
 
     signature = inspect.signature(executor.execute_trusted_restore)
-    assert list(signature.parameters) == [
-        "bundle_dir",
-        "hmac_key_path",
-        "attestation_bundle_path",
-        "trusted_root_path",
-    ]
-    assert all(
-        parameter.kind is inspect.Parameter.KEYWORD_ONLY
-        for parameter in signature.parameters.values()
+    assert list(signature.parameters) == []
+    construction_calls: list[str] = []
+
+    def unexpected(*_args: Any, **_kwargs: Any) -> None:
+        construction_calls.append("unexpected")
+
+    monkeypatch.setattr(executor, "load_executor_policy_document", unexpected)
+    monkeypatch.setattr(executor, "_runtime_dependencies", unexpected)
+    monkeypatch.setattr(executor.runtime_binding, "load_policy", unexpected)
+    monkeypatch.setattr(
+        executor.receipt_receiver.ManagedIdentityPrivateBlobTransport,
+        "from_environment",
+        unexpected,
     )
-    missing = Path("/definitely/not/a/trusted-restore-input")
+    monkeypatch.setattr(
+        executor.launch_record_ingress,
+        "build_private_launch_record_reader",
+        unexpected,
+    )
+    monkeypatch.setattr(
+        executor.runtime_ingress,
+        "build_private_runtime_material_reader",
+        unexpected,
+    )
+    monkeypatch.setattr(
+        executor.evidence_ingress,
+        "build_private_evidence_material_reader",
+        unexpected,
+    )
+    monkeypatch.setattr(
+        executor.runtime_adapters.ManagedIdentityTokenSource,
+        "from_environment",
+        unexpected,
+    )
+    monkeypatch.setattr(executor.safe_submit, "build_policy_bound_runtime", unexpected)
     with pytest.raises(
         executor.TrustedExecutorFailure, match="executor_policy.disabled"
     ):
-        executor.execute_trusted_restore(
-            bundle_dir=missing,
-            hmac_key_path=missing,
-            attestation_bundle_path=missing,
-            trusted_root_path=missing,
-        )
+        executor.execute_trusted_restore()
+    assert construction_calls == []
+    with pytest.raises(TypeError):
+        executor.execute_trusted_restore(bundle_dir=Path("/tmp"))  # type: ignore[call-arg]
 
 
 def test_closed_world_policy_and_every_activation_flag_fail_before_stages(
@@ -769,11 +869,15 @@ def test_closed_world_policy_and_every_activation_flag_fail_before_stages(
         calls.append("unexpected")
 
     dependencies = executor.ExecutorDependencies(
+        safe_submit_config=executor.safe_submit.config_from_policies(
+            *executor.safe_submit.validate_canonical_contracts(), executable=False
+        ),
         receive_launch=unexpected,
         runtime_reference_from_receipt=unexpected,
         validate_launch_record=unexpected,
         validate_runtime_binding=unexpected,
         validate_launch_receipt=unexpected,
+        read_private_inputs=unexpected,
         validate_snapshot=unexpected,
         authenticate_server=unexpected,
         observe_provider=unexpected,
@@ -812,27 +916,213 @@ def test_closed_world_policy_and_every_activation_flag_fail_before_stages(
     assert calls == []
 
 
-def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
+def test_dependency_factory_constructs_once_with_distinct_verifiers_and_shared_clock(
     inputs: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    harness = Harness(inputs, mutate_inputs_during_validation=True)
+    harness = Harness(inputs)
+    runtime_policy = harness.runtime_policy
+    verifier_policy = runtime_policy["offline_github_verifier"]
+    documents = executor._PinnedRuntimeDocuments(
+        runtime_policy=runtime_policy,
+        manifest_policy={},
+        manifest_policy_sha256="0" * 64,
+        server_scope_policy_bytes=b"{}",
+        server_scope_policy_sha256="0" * 64,
+        authentication_policy_bytes=b"{}",
+        authentication_policy_sha256="0" * 64,
+        provider_policy={},
+        provider_policy_bytes=b"{}",
+        provider_policy_sha256="0" * 64,
+        attestation_policy={
+            "verifier": {
+                "version": verifier_policy["version"],
+                "executable_sha256": verifier_policy["executable_sha256"],
+            }
+        },
+        attestation_policy_bytes=b"{}",
+        attestation_policy_sha256="0" * 64,
+        composition_policy_bytes=b"{}",
+        composition_policy_sha256="0" * 64,
+        safe_submit_config=harness.safe_submit_config,
+    )
+    calls: list[str] = []
+    verifiers: list[Any] = []
+    receipt_transport = SimpleNamespace(get_exact_private_blob=lambda _request: None)
+    launch_reader = SimpleNamespace(read_launch_record=lambda **_kwargs: b"{}")
+
+    def receipt_from_environment(_cls: Any, _policy: Any, *, action: str) -> Any:
+        calls.append("receipt_transport")
+        assert action == "provision"
+        return receipt_transport
+
+    def build_launch_reader(_policy: Any) -> Any:
+        calls.append("launch_reader")
+        return launch_reader
+
+    original_runtime_builder = (
+        executor.runtime_ingress.build_private_runtime_material_reader
+    )
+
+    def build_runtime_reader(policy: Any) -> Any:
+        calls.append("runtime_reader")
+        return original_runtime_builder(policy)
+
+    original_evidence_builder = (
+        executor.evidence_ingress.build_private_evidence_material_reader
+    )
+
+    def build_evidence_reader(policy: Any, *, clock: Any) -> Any:
+        calls.append("evidence_reader")
+        assert clock is shared_clock
+        return original_evidence_builder(policy, clock=clock)
+
+    class FakeVerifier:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(f"verifier.{kwargs['profile']}")
+            self.profile = kwargs["profile"]
+            verifiers.append(self)
+
+        def verify(self, **_kwargs: Any) -> None:
+            return None
+
+    def token_from_environment(_cls: Any, *, client_id: str) -> Any:
+        calls.append("provider_token")
+        assert (
+            client_id == runtime_policy["identities"]["jobs"]["provision"]["client_id"]
+        )
+        return object()
+
+    def provider_from_token(_token: Any) -> Any:
+        calls.append("provider")
+        return SimpleNamespace(get_flexible_server=lambda **_kwargs: None)
+
+    def build_safe_runtime(**kwargs: Any) -> Any:
+        calls.append("safe_runtime")
+        assert kwargs["trusted_clock"] is shared_clock
+        return SimpleNamespace(arm_transport=object(), marker_store=object())
+
+    class FakeSubmitter:
+        def __init__(self, *_args: Any, clock: Any, **_kwargs: Any) -> None:
+            calls.append("submitter")
+            self.clock = clock
+
+        def submit(self, **_kwargs: Any) -> None:
+            return None
+
+    monkeypatch.setattr(
+        executor.receipt_receiver.ManagedIdentityPrivateBlobTransport,
+        "from_environment",
+        classmethod(receipt_from_environment),
+    )
+    monkeypatch.setattr(
+        executor.launch_record_ingress,
+        "build_private_launch_record_reader",
+        build_launch_reader,
+    )
+    monkeypatch.setattr(
+        executor.runtime_ingress,
+        "build_private_runtime_material_reader",
+        build_runtime_reader,
+    )
+    monkeypatch.setattr(
+        executor.evidence_ingress,
+        "build_private_evidence_material_reader",
+        build_evidence_reader,
+    )
+    monkeypatch.setattr(
+        executor.runtime_adapters,
+        "DigestPinnedGitHubCliVerifier",
+        FakeVerifier,
+    )
+    monkeypatch.setattr(
+        executor.runtime_adapters.ManagedIdentityTokenSource,
+        "from_environment",
+        classmethod(token_from_environment),
+    )
+    monkeypatch.setattr(
+        executor.runtime_adapters,
+        "AzureSourceObservationProvider",
+        provider_from_token,
+    )
+    monkeypatch.setattr(
+        executor.safe_submit, "build_policy_bound_runtime", build_safe_runtime
+    )
+    monkeypatch.setattr(executor.safe_submit, "SafeRestoreSubmitter", FakeSubmitter)
+
+    shared_clock = executor._NonRegressingClock(lambda: NOW)
+    dependencies = executor._assemble_provision_dependencies(
+        documents=documents,
+        clock=shared_clock,
+    )
+
+    assert calls == [
+        "receipt_transport",
+        "launch_reader",
+        "runtime_reader",
+        f"verifier.{executor.runtime_adapters.RUNTIME_RECORD_SIGNATURE_PROFILE}",
+        "evidence_reader",
+        "provider_token",
+        "provider",
+        f"verifier.{executor.runtime_adapters.EVIDENCE_ATTESTATION_PROFILE}",
+        "safe_runtime",
+        "submitter",
+    ]
+    assert len(verifiers) == 2
+    assert verifiers[0] is not verifiers[1]
+    assert dependencies.read_private_inputs.__self__._clock is shared_clock
+    assert dependencies.submit.__self__.clock is shared_clock
+
+
+@pytest.mark.parametrize(
+    "pin_name",
+    [
+        "evidence_manifest",
+        "server_scope_evidence",
+        "server_scope_authentication",
+        "source_provider_observation",
+        "github_attestation_authentication",
+        "restore_evidence_composition",
+        "restore_envelope",
+        "restore_safe_submit",
+        "restore_runtime_binding",
+    ],
+)
+def test_dependency_factory_refuses_each_bad_pin_before_adapter_construction(
+    pin_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policy = json.loads(executor.POLICY_PATH.read_text())
+    policy["policy_pins"][pin_name]["sha256"] = f"sha256:{'0' * 64}"
+    construction_calls: list[str] = []
+
+    def unexpected(**_kwargs: Any) -> None:
+        construction_calls.append("unexpected")
+
+    monkeypatch.setattr(executor, "_assemble_provision_dependencies", unexpected)
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="^dependencies.policy_invalid$"
+    ):
+        executor._runtime_dependencies(
+            executor_policy=policy,
+            runtime_policy=_configured_runtime_policy(),
+            clock=executor._NonRegressingClock(lambda: NOW),
+        )
+    assert construction_calls == []
+
+
+def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
     values = [NOW + timedelta(seconds=index) for index in range(9)]
     clock = SequenceClock(values)
-    reads: list[Path] = []
-    original_read = executor._read_input_file
-
-    def counted_read(path: Path, **kwargs: Any) -> bytes:
-        reads.append(path)
-        return original_read(path, **kwargs)
-
-    monkeypatch.setattr(executor, "_read_input_file", counted_read)
-
     outcome = _run(harness, inputs, clock)
 
     assert outcome == harness.outcome
     assert outcome is not harness.outcome
     assert harness.calls == [
         *LAUNCH_CALLS,
+        "private_inputs",
         "manifest",
         "server",
         "provider",
@@ -841,16 +1131,12 @@ def test_one_process_preserves_identity_order_clock_and_bounded_outcome(
         "request",
         "submit",
     ]
+    assert harness.calls.count("private_inputs") == 1
     assert len({id(value) for value in harness.clocks}) == 1
     assert harness.clock_values == [values[0], *values[3:7], values[8]]
     assert harness.launch_validation_now == values[1]
     assert harness.manifest_validation_now == values[2]
     assert clock.calls == len(values)
-    assert reads == [
-        inputs["hmac_key_path"],
-        inputs["attestation_bundle_path"],
-        inputs["trusted_root_path"],
-    ]
     assert {field.name for field in fields(outcome)} == {
         "status",
         "target_resource_id",
@@ -881,15 +1167,8 @@ def test_regressing_shared_clock_refuses_before_provider(
 def test_launch_validation_refuses_before_any_restore_input_read(
     failure: str,
     inputs: dict[str, Path],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     harness = Harness(inputs)
-    reads: list[Path] = []
-    monkeypatch.setattr(
-        executor,
-        "_read_input_file",
-        lambda path, **_kwargs: reads.append(path),
-    )
     if failure == "cleanup":
         object.__setattr__(harness.launch_record, "action", "cleanup")
         expected_calls = LAUNCH_CALLS[:4]
@@ -907,7 +1186,7 @@ def test_launch_validation_refuses_before_any_restore_input_read(
     with pytest.raises(executor.TrustedExecutorFailure, match="result_invalid"):
         _run(harness, inputs, lambda: NOW)
     assert harness.calls == expected_calls
-    assert reads == []
+    assert "private_inputs" not in harness.calls
 
 
 def test_malformed_sealed_launch_result_is_bounded(
@@ -979,7 +1258,7 @@ def test_generic_snapshot_from_validator_that_ignores_launch_hashes_is_rejected(
         executor.TrustedExecutorFailure, match="manifest.result_invalid"
     ):
         _execute(inputs, dependencies, lambda: NOW)
-    assert harness.calls == [*LAUNCH_CALLS, "manifest"]
+    assert harness.calls == [*LAUNCH_CALLS, "private_inputs", "manifest"]
     assert "server" not in harness.calls
 
 
@@ -1002,7 +1281,7 @@ def test_validator_cannot_replace_the_mutable_expected_hash_map(
         executor.TrustedExecutorFailure, match="manifest.result_invalid"
     ):
         _execute(inputs, dependencies, lambda: NOW)
-    assert harness.calls == [*LAUNCH_CALLS, "manifest"]
+    assert harness.calls == [*LAUNCH_CALLS, "private_inputs", "manifest"]
     assert "server" not in harness.calls
 
 
@@ -1042,24 +1321,25 @@ def test_launch_must_remain_fresh_immediately_before_submit(
 
 
 @pytest.mark.parametrize(
-    ("path_name", "replacement"),
+    ("field", "replacement"),
     [
-        ("hmac_key_path", b"z" * 32),
-        ("attestation_bundle_path", b'{"different":true}'),
-        ("trusted_root_path", b'{"different-root":true}\n'),
+        ("server_scope_hmac_key_bytes", b"z" * 32),
+        ("attestation_bundle_bytes", b'{"different":true}'),
     ],
 )
-def test_singleton_input_digest_mismatch_refuses_before_manifest(
-    path_name: str,
+def test_sealed_private_input_tamper_refuses_before_manifest(
+    field: str,
     replacement: bytes,
     inputs: dict[str, Path],
 ) -> None:
     harness = Harness(inputs)
-    inputs[path_name].write_bytes(replacement)
+    object.__setattr__(harness.private_inputs, field, replacement)
 
-    with pytest.raises(executor.TrustedExecutorFailure, match="input.launch_binding"):
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="private_inputs.result_invalid"
+    ):
         _run(harness, inputs, lambda: NOW)
-    assert harness.calls == LAUNCH_CALLS
+    assert harness.calls == [*LAUNCH_CALLS, "private_inputs"]
 
 
 @pytest.mark.parametrize(
@@ -1087,59 +1367,164 @@ def test_request_identity_must_match_validated_provision_launch(
     assert "submit" not in harness.calls
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["bundle_dir", "hmac_key_path", "attestation_bundle_path", "trusted_root_path"],
-)
-def test_symlink_inputs_refuse_after_launch_binding_before_manifest(
-    name: str, inputs: dict[str, Path], tmp_path: Path
+def test_legacy_path_authority_is_absent_from_public_and_private_seams() -> None:
+    legacy = {
+        "bundle_dir",
+        "hmac_key_path",
+        "attestation_bundle_path",
+        "trusted_root_path",
+    }
+    assert not legacy & set(
+        inspect.signature(executor.execute_trusted_restore).parameters
+    )
+    assert not legacy & set(
+        inspect.signature(
+            executor._execute_trusted_restore_with_dependencies
+        ).parameters
+    )
+    source = inspect.getsource(executor)
+    assert "def _read_input_file" not in source
+    assert "def _validate_directory" not in source
+    assert "import stat" not in source
+
+
+def test_private_input_result_must_be_exact_sealed_type(
+    inputs: dict[str, Path],
 ) -> None:
-    link = tmp_path / f"linked-{name}"
-    link.symlink_to(inputs[name], target_is_directory=name == "bundle_dir")
-    changed = {**inputs, name: link}
-    harness = Harness(changed)
-    with pytest.raises(executor.TrustedExecutorFailure, match="input.untrusted_path"):
-        _execute(changed, harness.dependencies(), lambda: NOW)
-    assert harness.calls == LAUNCH_CALLS
+    harness = Harness(inputs)
+    for result in (
+        object(),
+        {"evidence_entries": harness.private_inputs.evidence_entries},
+    ):
+        dependencies = replace(
+            harness.dependencies(),
+            read_private_inputs=lambda **_kwargs: result,
+        )
+        with pytest.raises(
+            executor.TrustedExecutorFailure, match="private_inputs.result_invalid"
+        ):
+            _execute(inputs, dependencies, lambda: NOW)
 
 
 @pytest.mark.parametrize(
-    ("name", "mode"),
+    "case",
     [
-        ("hmac_key_path", 0o640),
-        ("attestation_bundle_path", 0o620),
-        ("trusted_root_path", 0o602),
+        "receipt_sha256",
+        "launch_record_sha256",
+        "execution_binding",
+        "evidence_order",
+        "evidence_digest",
+        "attestation_digest",
+        "hmac_digest",
     ],
 )
-def test_unsafe_input_modes_refuse_after_launch_binding_before_manifest(
-    name: str, mode: int, inputs: dict[str, Path]
+def test_resealed_private_input_authority_mismatch_is_rejected(
+    case: str, inputs: dict[str, Path]
 ) -> None:
-    inputs[name].chmod(mode)
     harness = Harness(inputs)
-    with pytest.raises(executor.TrustedExecutorFailure, match="input.untrusted_path"):
-        _execute(inputs, harness.dependencies(), lambda: NOW)
-    assert harness.calls == LAUNCH_CALLS
+    source = harness.private_inputs
+    entries = list(source.evidence_entries)
+    values = {
+        "evidence_entries": source.evidence_entries,
+        "attestation_bundle_bytes": source.attestation_bundle_bytes,
+        "server_scope_hmac_key_bytes": source.server_scope_hmac_key_bytes,
+        "receipt_sha256": source.receipt_sha256,
+        "launch_record_sha256": source.launch_record_sha256,
+        "execution_binding": source.execution_binding,
+    }
+    if case == "evidence_order":
+        values["evidence_entries"] = tuple(reversed(entries))
+    elif case == "evidence_digest":
+        entries[1] = (entries[1][0], b'{"changed":true}')
+        values["evidence_entries"] = tuple(entries)
+    elif case == "attestation_digest":
+        values["attestation_bundle_bytes"] = b'{"changed":true}'
+    elif case == "hmac_digest":
+        values["server_scope_hmac_key_bytes"] = b"z" * 32
+    elif case == "execution_binding":
+        values[case] = f"{source.execution_binding}-other"
+    else:
+        values[case] = f"sha256:{'0' * 64}"
+    harness.private_inputs = (
+        executor.evidence_ingress.PrivateProvisionInputs._from_exact_reads(**values)
+    )
+
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="private_inputs.result_invalid"
+    ):
+        _run(harness, inputs, lambda: NOW)
+    assert harness.calls == [*LAUNCH_CALLS, "private_inputs"]
 
 
-@pytest.mark.parametrize(
-    ("name", "policy_key"),
-    [
-        ("hmac_key_path", "hmac_key"),
-        ("attestation_bundle_path", "attestation_bundle"),
-        ("trusted_root_path", "trusted_root"),
-    ],
-)
-def test_external_inputs_are_nonempty_and_policy_bounded(
-    name: str, policy_key: str, inputs: dict[str, Path]
+def test_manifest_cannot_mutate_detached_evidence_mapping(
+    inputs: dict[str, Path],
 ) -> None:
-    policy = json.loads(executor.POLICY_PATH.read_text())
-    maximum = policy["inputs"][policy_key]["maximum_bytes"]
+    harness = Harness(inputs, mutate_inputs_during_validation=True)
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="manifest.result_invalid"
+    ):
+        _run(harness, inputs, lambda: NOW)
+    assert harness.private_inputs.evidence_files()["candidate.json"] == b"{}"
+    assert harness.calls == [*LAUNCH_CALLS, "private_inputs", "manifest"]
+
+
+def test_receipt_launch_uri_toctou_is_rejected_after_private_read(
+    inputs: dict[str, Path],
+) -> None:
     harness = Harness(inputs)
-    for raw_value in (b"", b"x" * (maximum + 1)):
-        inputs[name].write_bytes(raw_value)
-        with pytest.raises(executor.TrustedExecutorFailure, match="input.invalid"):
-            _execute(inputs, harness.dependencies(), lambda: NOW)
-    assert harness.calls == LAUNCH_CALLS * 2
+
+    def mutate_receipt_authority(**kwargs: Any) -> Any:
+        result = harness.read_private_inputs(**kwargs)
+        object.__setattr__(
+            harness.authenticated_receipt,
+            "launch_record_uri",
+            f"{harness.authenticated_receipt.launch_record_uri}?detached=true",
+        )
+        return result
+
+    dependencies = replace(
+        harness.dependencies(), read_private_inputs=mutate_receipt_authority
+    )
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="private_inputs.result_invalid"
+    ):
+        _execute(inputs, dependencies, lambda: NOW)
+    assert harness.calls == [*LAUNCH_CALLS, "private_inputs"]
+
+
+def test_authenticated_root_toctou_is_rejected_before_submit(
+    inputs: dict[str, Path],
+) -> None:
+    harness = Harness(inputs)
+    runtime_material = harness.launch_material.authenticated_runtime_record
+
+    def mutate_authenticated_root(**kwargs: Any) -> Any:
+        request = harness.request_from_binding(**kwargs)
+        object.__setattr__(
+            runtime_material,
+            "trusted_root_bytes",
+            b'{"mutated":true}',
+        )
+        return request
+
+    dependencies = replace(
+        harness.dependencies(), request_from_binding=mutate_authenticated_root
+    )
+    with pytest.raises(
+        executor.TrustedExecutorFailure, match="private_inputs.result_invalid"
+    ):
+        _execute(inputs, dependencies, lambda: NOW)
+    assert harness.calls == [
+        *LAUNCH_CALLS,
+        "private_inputs",
+        "manifest",
+        "server",
+        "provider",
+        "attestation",
+        "compose",
+        "request",
+    ]
+    assert "submit" not in harness.calls
 
 
 @pytest.mark.parametrize(

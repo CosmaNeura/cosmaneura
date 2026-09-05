@@ -220,36 +220,38 @@ one process. Its review must keep original bytes available for revalidation and
 must not add a deserialization minter.
 
 `restore-trusted-executor-policy.json` now closes that future boundary without
-activating it. Its only public shape is
-`execute_trusted_restore(bundle_dir, hmac_key_path, attestation_bundle_path,
-trusted_root_path)`. Before any of those paths are read, the private seam now
-requires a sealed authenticated provision receipt, derives both job-scoped
-runtime references, validates the exact launch and external runtime records,
-and validates their receipt binding against the shared trusted clock. The
-validated launch record is the sole authority for TTL, evidence-file digests,
-singleton-input digests, and workflow/run identity; no caller TTL remains. The
-exact six-file directory, HMAC key,
-attestation bundle, and independently delivered GitHub-only root must each be
-opened once with bounded no-follow reads. The sealed snapshot retains the exact
-validated result, evidence manifest, and server-scope receipt bytes. A distinct
-opaque proof is minted only after full validation of the same-read files and
-carries the exact launch digest tuple the executor rechecks. Accepted digests
-therefore bind the candidate, inventory, quiescence, and checksum inputs without
-reopening them. The key, attestation bundle, root, snapshot, and opaque seals
-remain in the same process until the direct safe-submit call returns.
+activating it. Its public shape is the zero-argument
+`execute_trusted_restore()`. The private seam requires a sealed authenticated
+provision receipt, derives both job-scoped runtime references, validates and
+retains the exact launch record and authenticated runtime carrier, and invokes
+the one-shot private evidence reader once. It re-binds the receipt bytes/SHA,
+launch URI/bytes/SHA, execution, six ordered evidence names/digests,
+attestation digest, HMAC digest, and authenticated-root digest before evidence
+use and again across later trust boundaries. The validated launch record is the
+sole authority for TTL and workflow/run identity. Callers cannot provide paths,
+URIs, restore fields, or substitute bytes. The trusted root comes only from the
+already-authenticated runtime carrier and is never reread. The detached
+in-memory evidence mapping is validated by `validate_bundle_snapshot_bytes`;
+its opaque launch-digest proof binds the candidate, inventory, quiescence, and
+checksum inputs without reopening them. All bytes and seals remain in one
+process until direct safe-submit returns.
 Caller-supplied restore, workflow, receipt-digest, or identity fields are not
 accepted.
 
 The policy pins all nine evidence, envelope, safe-submit, and runtime-binding
-policy files and
-requires one shared non-regressing clock. The validated snapshot and sealed
+policy files. The dormant factory validates their exact IDs and SHA-256 pins
+before it constructs any reader, verifier, provider, transport, or safe-submit
+runtime. It creates each dependency once, uses distinct runtime-record and
+evidence-attestation verifier instances, and requires one shared non-regressing
+clock. The validated snapshot and sealed
 server binding flow unchanged through one provider GET, one offline verifier
 invocation, composition's final freshness read, deterministic request
 derivation, and at most one `SafeRestoreSubmitter.submit` invocation. Runtime,
 launch, mailbox, broker, receipt-integration, provider, verifier, submitter,
 private-runner, workflow, and restore activation remain false; runtime resource
-pins are placeholders and the external image record is unconfigured. No
-transport, Azure, or workflow behavior is added.
+pins are placeholders and the external image record is unconfigured. No Azure
+or workflow behavior is activated. The zero-argument public entry point refuses
+before policy, environment, filesystem, or network access.
 The receipt proof binds its exact validation instant, and the executor performs
 one final launch-expiry check immediately before entering safe-submit.
 No workflow or live environment was changed.
@@ -307,16 +309,17 @@ name between authority stages. External-runtime Sigstore authentication now
 has a separate dormant offline implementation that binds the exact record,
 bundle, root, SLSA subject, workflow certificate claims, and verified timestamp
 before minting the sealed proof. Exact private record/root ingress and the
-public executor dependency factory remain injected and unimplemented; all
-activation bits remain false. See the
+dormant public executor dependency factory are implemented but remain
+unreachable behind false activation gates. See the
 [signature-authentication flight plan](flight-plans/2026-09-04-staging-runtime-record-signature-authentication.md) and
 the [executor handoff flight plan](flight-plans/2026-09-04-staging-launch-receipt-executor-handoff.md).
 
 A dormant one-shot reader now fills the runtime-material seam with exact
 receipt-bound private Blob record/bundle bytes and an exact-version Key Vault
 GitHub root, using distinct selected-job UAMI audiences and the same trusted
-clock passed to the offline authenticator. Default executor dependency assembly
-still refuses, every activation bit remains false, and no Azure call was made.
+clock passed to the offline authenticator. Public execution still refuses
+before dependency assembly, every activation bit remains false, and no Azure
+call was made.
 Activation also remains blocked on proof that the real root fits Key Vault and
 the 25,600-byte policy cap; see the
 [private-reader flight plan](flight-plans/2026-09-04-staging-runtime-record-private-readers.md).
@@ -363,7 +366,8 @@ length/media/size/digest framing for the Blob object response. Only the default
 concrete transport claims no-proxy/no-redirect/TLS behavior; injected transports
 remain test seams. The private-endpoint ID is metadata, not routing proof, so
 private DNS, public-network, RBAC, and egress evidence remain activation holds.
-Default dependency assembly still refuses and all gates remain false; see the
+The dormant factory consumes this reader, but public execution refuses before
+factory construction and all gates remain false; see the
 [launch-record reader flight plan](flight-plans/2026-09-04-staging-launch-record-private-reader.md).
 
 The next dormant slice preserves the validated launch authority instead of
@@ -373,9 +377,9 @@ sealed and bound to the canonical launch bytes. The runtime reader also keeps
 the exact authenticated GitHub-root bytes in a sealed same-process carrier.
 An in-memory evidence validator accepts only an exact built-in mapping of
 immutable bytes and snapshots it before applying the existing full validation.
-Nothing consumes these future ingress sources yet: public path behavior is
-unchanged, dependency assembly and workflow integration remain false, and no
-network, Azure, restore, sanitizer, or cleanup action was added. See the
+The dormant executor now consumes these ingress authorities without a public
+path seam, while workflow integration and every activation flag remain false;
+no network, Azure, restore, sanitizer, or cleanup action was performed. See the
 [authority-seal flight plan](flight-plans/2026-09-05-staging-launch-authority-seals.md).
 
 Provision evidence ingress now also has a dormant one-shot private reader. It
@@ -384,7 +388,8 @@ versioned selectors, execution identity, and launch expiry using a required
 shared trusted UTC clock around one Storage-token request, seven exact Blob
 GETs, one Vault-token request, and one exact-version HMAC GET.
 It returns only sealed in-memory bytes and binding digests; it performs no disk
-materialization or bundle validation. The future dependency assembler must
-recheck that carrier against the same receipt/record before passing its detached
-byte map to `validate_bundle_snapshot_bytes` with the pinned evidence policy and
-shared trusted clock. See the [private evidence-reader flight plan](flight-plans/2026-09-05-staging-private-evidence-reader.md).
+materialization. The dormant dependency assembler now rechecks that carrier
+against the same receipt/record and passes its detached byte map to
+`validate_bundle_snapshot_bytes` with the pinned evidence policy and shared
+trusted clock. See the [private evidence-reader flight plan](flight-plans/2026-09-05-staging-private-evidence-reader.md)
+and [dependency-factory flight plan](flight-plans/2026-09-05-staging-provision-dependency-factory.md).
