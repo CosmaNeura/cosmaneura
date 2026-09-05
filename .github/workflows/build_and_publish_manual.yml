@@ -466,6 +466,7 @@ jobs:
       DURABLE_WEBHOOK_INBOX_ENABLED: "false"
       JAVASCRIPT_SECRETS_FILE: .env.staging.frontend
       PYTHON_ENV: staging
+      SENTRY_STAGING_ENABLED: "false"
     permissions:
       contents: read
       id-token: write

@@ -520,6 +520,7 @@ jobs:
           ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
           ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
           ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
           ZOOM_WATCHDOG_ENABLED: "false"
         run: |
           set -euo pipefail
@@ -530,7 +531,7 @@ jobs:
             echo "::error::The staging workflow may use only the staging registry."
             exit 1
           fi
-          for flag in "$ENABLE_PROVIDER_V7" "$ENABLE_SOVEREIGN_RECORD_GRANTS" "$ENABLE_STAGING_PILOT_ZOOM_SKIP"; do
+          for flag in "$ENABLE_PROVIDER_V7" "$ENABLE_SOVEREIGN_RECORD_GRANTS" "$ENABLE_STAGING_PILOT_ZOOM_SKIP" "$SENTRY_STAGING_ENABLED" "$ZOOM_WATCHDOG_ENABLED"; do
             if [[ "$flag" != "true" && "$flag" != "false" ]]; then
               echo "::error::Staging release flags must be explicit booleans."
               exit 1
@@ -538,6 +539,10 @@ jobs:
           done
           if [[ "$DURABLE_WEBHOOK_INBOX_ENABLED" != "false" ]]; then
             echo "::error::DURABLE_WEBHOOK_INBOX_ENABLED is source-locked false."
+            exit 1
+          fi
+          if [[ "$SENTRY_STAGING_ENABLED" != "false" ]]; then
+            echo "::error::SENTRY_STAGING_ENABLED is source-locked false."
             exit 1
           fi
           if [[ "$ZOOM_WATCHDOG_ENABLED" != "false" ]]; then
@@ -824,6 +829,7 @@ jobs:
           ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
           ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
           ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
           ZOOM_WATCHDOG_ENABLED: "false"
         run: |
           set -euo pipefail
@@ -840,13 +846,14 @@ jobs:
             echo "::error::The workflow may use only the staging registry."
             exit 1
           fi
-          for flag in "$ENABLE_PROVIDER_V7" "$ENABLE_SOVEREIGN_RECORD_GRANTS" "$ENABLE_STAGING_PILOT_ZOOM_SKIP"; do
+          for flag in "$ENABLE_PROVIDER_V7" "$ENABLE_SOVEREIGN_RECORD_GRANTS" "$ENABLE_STAGING_PILOT_ZOOM_SKIP" "$SENTRY_STAGING_ENABLED" "$ZOOM_WATCHDOG_ENABLED"; do
             if [[ "$flag" != "true" && "$flag" != "false" ]]; then
               echo "::error::Staging release flags must be explicit booleans."
               exit 1
             fi
           done
           if [[ "$DURABLE_WEBHOOK_INBOX_ENABLED" != "false" || \
+                "$SENTRY_STAGING_ENABLED" != "false" || \
                 "$ZOOM_WATCHDOG_ENABLED" != "false" || \
                 "$ENABLE_STAGING_PILOT_ZOOM_SKIP" != "false" ]]; then
             echo "::error::Excluded staging capabilities must remain disabled."
@@ -991,6 +998,7 @@ jobs:
           ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
           ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
           ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
           EXPECTED_RECOVERY_DIGEST: ${{ needs.authorize.outputs.recovery_digest }}
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
@@ -1053,6 +1061,7 @@ jobs:
           ENABLE_PROVIDER_V7: ${{ vars.ENABLE_PROVIDER_V7 || 'false' }}
           ENABLE_SOVEREIGN_RECORD_GRANTS: ${{ vars.ENABLE_SOVEREIGN_RECORD_GRANTS || 'false' }}
           ENABLE_STAGING_PILOT_ZOOM_SKIP: ${{ vars.ENABLE_STAGING_PILOT_ZOOM_SKIP || 'false' }}
+          SENTRY_STAGING_ENABLED: "false"
           EXPECTED_RECOVERY_DIGEST: ${{ needs.authorize.outputs.recovery_digest }}
           EXPECTED_SCHEMA_AFTER: ${{ needs.authorize.outputs.expected_schema_after }}
           EXPECTED_SCHEMA_BEFORE: ${{ needs.authorize.outputs.expected_schema_before }}
@@ -1106,6 +1115,7 @@ jobs:
             'if type == "object" then . else error("invalid configuration evidence") end')
           configuration_blockers=-1
           observed_identity_fingerprints_sha256=""
+          observed_sentry_staging_enabled=""
           observed_zoom_watchdog_enabled=""
           if [[ "$configuration_evidence" != "null" ]]; then
             if ! configuration_blockers=$(printf '%s' "$configuration_evidence" |
@@ -1114,6 +1124,8 @@ jobs:
             fi
             observed_identity_fingerprints_sha256=$(printf '%s' "$configuration_evidence" |
               jq -er '.identity_fingerprint_set_sha256 // empty' || true)
+            observed_sentry_staging_enabled=$(printf '%s' "$configuration_evidence" |
+              jq -er '.flags.SENTRY_STAGING_ENABLED // empty' || true)
             observed_zoom_watchdog_enabled=$(printf '%s' "$configuration_evidence" |
               jq -er '.flags.ZOOM_WATCHDOG_ENABLED // empty' || true)
           fi
@@ -1141,6 +1153,7 @@ jobs:
                 "$OBSERVED_SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER" && \
                 "$OBSERVED_RECOVERY_DIGEST" == "$EXPECTED_RECOVERY_DIGEST" && \
                 "$observed_identity_fingerprints_sha256" == "$EXPECTED_STAGING_IDENTITY_FINGERPRINTS_SHA256" && \
+                "$observed_sentry_staging_enabled" == "false" && \
                 "$observed_zoom_watchdog_enabled" == "false" && \
                 "$workloads_before" != "null" && \
                 "$workloads_after" != "null" && \
@@ -1175,6 +1188,7 @@ jobs:
             --arg enable_provider_v7 "$ENABLE_PROVIDER_V7" \
             --arg enable_sovereign_record_grants "$ENABLE_SOVEREIGN_RECORD_GRANTS" \
             --arg enable_staging_pilot_zoom_skip "$ENABLE_STAGING_PILOT_ZOOM_SKIP" \
+            --arg sentry_staging_enabled "$SENTRY_STAGING_ENABLED" \
             --arg zoom_watchdog_enabled "$ZOOM_WATCHDOG_ENABLED" \
             --arg healthcheck_url "$HEALTHCHECK_URL" \
             --arg healthcheck_http_status "$HEALTHCHECK_HTTP_STATUS" \
@@ -1229,6 +1243,7 @@ jobs:
                 ENABLE_PROVIDER_V7: $enable_provider_v7,
                 ENABLE_SOVEREIGN_RECORD_GRANTS: $enable_sovereign_record_grants,
                 ENABLE_STAGING_PILOT_ZOOM_SKIP: $enable_staging_pilot_zoom_skip,
+                SENTRY_STAGING_ENABLED: $sentry_staging_enabled,
                 DURABLE_WEBHOOK_INBOX_ENABLED: "false",
                 SCRIBE_WORKFLOW_ENABLED: "false",
                 SESSION_PREP_SYNTHETIC_ENABLED: "false",
@@ -1509,11 +1524,15 @@ jobs:
           [[ "$SCHEMA_BEFORE" == "$EXPECTED_SCHEMA_BEFORE_INPUT" ]]
           [[ "$SCHEMA_AFTER" =~ ^[0-9a-f]{12}$ ]]
           [[ "$SCHEMA_AFTER" == "$EXPECTED_SCHEMA_AFTER_INPUT" ]]
-          jq -e 'type == "object" and .flags.ZOOM_WATCHDOG_ENABLED == "false"' \
+          jq -e 'type == "object" and
+            .flags.SENTRY_STAGING_ENABLED == "false" and
+            .flags.ZOOM_WATCHDOG_ENABLED == "false"' \
             <<< "$OBSERVED_CONFIGURATION" >/dev/null
           jq -e 'type == "array" and length == 3' <<< "$WORKLOADS_BEFORE" >/dev/null
           jq -e 'type == "array" and length == 3 and
-            all(.[]; .publicConfig.ZOOM_WATCHDOG_ENABLED == "false")' \
+            all(.[];
+              .publicConfig.SENTRY_STAGING_ENABLED == "false" and
+              .publicConfig.ZOOM_WATCHDOG_ENABLED == "false")' \
             <<< "$WORKLOADS_AFTER" >/dev/null
           [[ "$HEALTHCHECK_HTTP_STATUS" == "200" ]]
           [[ "$SMOKE_RESULT" == "passed" ]]
