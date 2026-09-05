@@ -875,7 +875,7 @@ def test_linux_loader_executes_the_same_digest_pinned_bytes() -> None:
     ("command", "timeout", "maximum", "error"),
     [
         ("sleep 2", 1, 64, "timeout"),
-        ("yes x | head -c 10000", 2, 64, "output_too_large"),
+        ("printf '%0100d' 0", 2, 64, "output_too_large"),
     ],
 )
 def test_linux_runner_kills_timeout_and_output_overflow(
