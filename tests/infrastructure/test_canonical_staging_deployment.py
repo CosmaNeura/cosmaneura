@@ -349,6 +349,7 @@ def test_evidence_is_allowlisted_non_secret_and_always_uploaded() -> None:
         "ENABLE_PROVIDER_V7",
         "ENABLE_SOVEREIGN_RECORD_GRANTS",
         "ENABLE_STAGING_PILOT_ZOOM_SKIP",
+        "ZOOM_WATCHDOG_ENABLED",
         "healthcheck_http_status",
         "smoke_result",
     ):
