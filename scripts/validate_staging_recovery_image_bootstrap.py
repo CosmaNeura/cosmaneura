@@ -8,6 +8,7 @@ import copy
 import hashlib
 import io
 import json
+import math
 import re
 import stat
 import sys
@@ -71,6 +72,37 @@ def _sha256(value: bytes) -> str:
 
 def _digest(value: Any) -> str:
     return _sha256(_json_bytes(value))
+
+
+def _semantic_json_view(value: Any) -> list[Any]:
+    """Return a type-tagged JSON tree with exact finite numeric equivalence."""
+    if value is None:
+        return ["null"]
+    if type(value) is bool:
+        return ["boolean", value]
+    if type(value) is int:
+        return ["number", str(value), "1"]
+    if type(value) is float:
+        if not math.isfinite(value):
+            _fail("semantic JSON contains a non-finite number")
+        numerator, denominator = value.as_integer_ratio()
+        return ["number", str(numerator), str(denominator)]
+    if type(value) is str:
+        return ["string", value]
+    if type(value) is list:
+        return ["array", [_semantic_json_view(item) for item in value]]
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            _fail("semantic JSON object contains a non-string key")
+        return [
+            "object",
+            [[key, _semantic_json_view(value[key])] for key in sorted(value)],
+        ]
+    _fail("semantic JSON contains an unsupported value")
+
+
+def _semantic_json_equal(left: Any, right: Any) -> bool:
+    return _semantic_json_view(left) == _semantic_json_view(right)
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -693,6 +725,38 @@ def _template_comparison_views(
     ):
         app_container.pop("imageType")
 
+    app_env = app_container.get("env")
+    revision_env = revision_container.get("env")
+    if (
+        isinstance(app_env, list)
+        and isinstance(revision_env, list)
+        and len(app_env) == len(revision_env)
+        and all(isinstance(item, dict) for item in (*app_env, *revision_env))
+    ):
+        app_names = [item.get("name", _MISSING) for item in app_env]
+        revision_names = [item.get("name", _MISSING) for item in revision_env]
+        names_are_unique_strings = (
+            all(isinstance(name, str) and name for name in app_names)
+            and all(isinstance(name, str) and name for name in revision_names)
+            and len(set(app_names)) == len(app_names)
+            and len(set(revision_names)) == len(revision_names)
+        )
+        # Azure's app-resource projection materializes value="" for secretRef
+        # entries while the active-revision projection omits value. Require the
+        # same unique, ordered names before normalizing individual exact
+        # name+secretRef pairs; ambiguous or reordered lists remain drift.
+        if names_are_unique_strings and app_names == revision_names:
+            for app_entry, revision_entry in zip(app_env, revision_env, strict=True):
+                secret_ref = app_entry.get("secretRef", _MISSING)
+                if (
+                    isinstance(secret_ref, str)
+                    and secret_ref
+                    and revision_entry.get("secretRef", _MISSING) == secret_ref
+                    and app_entry.get("value", _MISSING) == ""
+                    and "value" not in revision_entry
+                ):
+                    app_entry.pop("value")
+
     app_resources = app_container.get("resources")
     revision_resources = revision_container.get("resources")
     if isinstance(app_resources, dict) and isinstance(revision_resources, dict):
@@ -833,7 +897,7 @@ def _validate_workload(
     app_comparison, revision_comparison = _template_comparison_views(
         app_template, revision_template, expected["container_name"]
     )
-    if app_comparison != revision_comparison:
+    if not _semantic_json_equal(app_comparison, revision_comparison):
         _fail("app and active-revision templates disagree after normalization")
     ingress = configuration.get("ingress")
     if expected["traffic_weight"] == 100:
@@ -856,6 +920,7 @@ def _validate_workload(
         "image": image,
         "template_sha256": _digest(app_template),
         "revision_template_sha256": _digest(revision_template),
+        "template_comparison_sha256": _digest(_semantic_json_view(app_comparison)),
         "configuration_sha256": _digest(configuration),
         "control_sha256": _digest(control),
         "active_revision_count": 1,
@@ -982,8 +1047,7 @@ def validate_transition(
         if left.get("name") != right.get("name"):
             _fail("transition workload order changed")
         for key in (
-            "template_sha256",
-            "revision_template_sha256",
+            "template_comparison_sha256",
             "configuration_sha256",
             "control_sha256",
             "traffic_weight",
@@ -1008,8 +1072,7 @@ def validate_workload_transition(
         _fail("baseline workload is missing or ambiguous")
     earlier = candidates[0]
     for key in (
-        "template_sha256",
-        "revision_template_sha256",
+        "template_comparison_sha256",
         "configuration_sha256",
         "control_sha256",
         "traffic_weight",

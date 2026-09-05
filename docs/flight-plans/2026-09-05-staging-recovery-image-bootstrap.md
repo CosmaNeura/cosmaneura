@@ -1,6 +1,8 @@
 # Staging recovery-image bootstrap
 
-Status: two read-only captures failed closed; no registry or workload mutation occurred. Risk: Tier 2. Sole dispatcher: `JohnClem`.
+Status: a founder-authorized pin stopped after registry locking and the worker
+revision-copy attempt; scheduler and API copy were not attempted. Recovery use
+remains ineligible. Risk: Tier 2. Sole dispatcher: `JohnClem`.
 
 ## Outcome and hard boundary
 
@@ -23,6 +25,33 @@ Read-only capture run `33968924079` on protected source `5cd49afc5cc5e500d310730
 Read-only capture run `33971188011` (job `101319883597`) on protected source `b8e8ee06850c7215f002443c8dd97e33e6679918` passed source, environment, OIDC, role, historical-publication, registry, and workload-health reads, then failed during initial validation because Azure's app-resource and active-revision endpoints project the same template differently. The app endpoint supplies `imageType=ContainerImage`, server-computed `ephemeralStorage`, default scale values `300`/`30`, and selected empty fields that the revision endpoint omits or returns as null. A value-redacted path comparison proved those were the complete differences across worker, scheduler, and API. Terminal receipt `sha256:4bd41b727c58acd10adcf5fea4eb30e8ceeb6e7259fd00517e6c17272bc224ca` from artifact `9970972665` records `status=failed`, `phase=initial_observation`, no evidence, and every mutation-journal entry as `not_attempted`. Post-failure readback retained the three exact original healthy revisions and left both registry locks writable/deletable.
 
 The bounded correction compares semantic copies that normalize only those enumerated Azure projection equivalents. It retains the distinct raw normalized app/revision template digests as transition evidence and continues to reject non-default, non-empty, malformed, or conflicting values. No new capture is authorized by this change: another attempt requires a freshly stated action-time confirmation after merge and safety readback.
+
+Founder-authorized pin run `33974824553` (attempt 1/job `101329566501`) on
+protected source `9c21bb803985c7de13800cc771cd02b4e3808cf2` then locked the exact tag and
+manifest and attempted the worker revision copy. Azure materialized `value: ""`
+on every secret-backed environment entry in the Container App resource while
+the corresponding active-revision entries retained the same ordered
+`name`/`secretRef` pairs and omitted `value`. The fail-closed comparison did not
+yet recognize that directional response projection, so the run stopped before
+the scheduler or API attempt. Terminal receipt
+`sha256:825d97a73df51550935b36782f1f8174405099d2689ccf3e4a9e00835d7afc20`
+from artifact `9972135148` records `status=failed`,
+`phase=revision_copy_cosmaneura-staging-worker`, both registry locks verified,
+the worker attempted, and the scheduler and API not attempted.
+
+The narrow correction removes only an app-side empty `value` when the
+corresponding unique, ordered entry has the exact same non-empty `name` and
+`secretRef` and the revision side omits `value`. Reverse projection, non-empty
+values, name or secret-reference mismatch, reordering, duplicate names, and
+literal environment entries remain drift. Evidence retains the distinct raw
+app and revision template digests for forensics; transition validation uses an
+additional digest of their equal semantic comparison view so an enumerated
+projection that first appears after revision copy cannot look like runtime
+configuration drift. That semantic comparison is recursively type-aware: only
+equal finite integer/float representations share an identity, while booleans
+never compare or hash as numbers. This code change authorizes no retry; the
+partial live state and a current capture must be independently reviewed, and
+another pin attempt still requires fresh action-time confirmation.
 
 ## Prerequisites and procedure
 

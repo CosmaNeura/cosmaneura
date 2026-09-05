@@ -161,6 +161,26 @@ def _apply_live_azure_template_projection(
     revision_template["scale"]["rules"] = [copy.deepcopy(common_rule)]
 
 
+def _apply_secret_ref_env_value_projection(
+    fixture: tuple[dict, dict, bytes, bytes, bytes],
+    projected_workloads: set[str] | None = None,
+) -> None:
+    """Model the secretRef projection observed in pin run 33974824553."""
+    for workload in fixture[1]["workloads"]:
+        app_template, revision_template = _templates(workload)
+        revision_env = [
+            {"name": "DATABASE_URL", "secretRef": "database-url"},
+            {"name": "LOG_LEVEL", "value": "info"},
+            {"name": "SERVICE_TOKEN", "secretRef": "service-token"},
+        ]
+        app_env = copy.deepcopy(revision_env)
+        if projected_workloads is None or workload["name"] in projected_workloads:
+            app_env[0]["value"] = ""
+            app_env[2]["value"] = ""
+        app_template["containers"][0]["env"] = app_env
+        revision_template["containers"][0]["env"] = revision_env
+
+
 @pytest.mark.parametrize(
     "state",
     [
@@ -186,6 +206,183 @@ def test_live_azure_app_and_revision_projection_is_equivalent(state: str) -> Non
     assert all(
         workload["template_sha256"] != workload["revision_template_sha256"]
         for workload in evidence["workloads"]
+    )
+
+
+@pytest.mark.parametrize("state", ["original", "pinned"])
+def test_secret_ref_empty_value_app_projection_is_equivalent(state: str) -> None:
+    fixture = _fixture(state)
+    _apply_secret_ref_env_value_projection(fixture)
+
+    evidence = _validate(fixture)
+    assert evidence["observed_state"] == state
+    assert all(
+        workload["template_sha256"] != workload["revision_template_sha256"]
+        for workload in evidence["workloads"]
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "reverse",
+        "nonempty",
+        "null",
+        "name_mismatch",
+        "secret_ref_mismatch",
+        "reordered",
+        "duplicate",
+        "length_mismatch",
+        "missing_revision_env",
+        "literal",
+    ],
+)
+def test_secret_ref_value_projection_drift_is_rejected(mutation: str) -> None:
+    fixture = _fixture()
+    _apply_secret_ref_env_value_projection(fixture)
+    app_template, revision_template = _templates(fixture[1]["workloads"][0])
+    app_env = app_template["containers"][0]["env"]
+    revision_env = revision_template["containers"][0]["env"]
+
+    if mutation == "reverse":
+        app_env[0].pop("value")
+        revision_env[0]["value"] = ""
+    elif mutation == "nonempty":
+        app_env[0]["value"] = "redacted-but-not-empty"
+    elif mutation == "null":
+        app_env[0]["value"] = None
+    elif mutation == "name_mismatch":
+        revision_env[0]["name"] = "OTHER_DATABASE_URL"
+    elif mutation == "secret_ref_mismatch":
+        revision_env[0]["secretRef"] = "other-database-url"
+    elif mutation == "reordered":
+        revision_env[0], revision_env[2] = revision_env[2], revision_env[0]
+    elif mutation == "duplicate":
+        app_env.append(copy.deepcopy(app_env[0]))
+        revision_env.append(copy.deepcopy(revision_env[0]))
+    elif mutation == "length_mismatch":
+        revision_env.pop()
+    elif mutation == "missing_revision_env":
+        revision_template["containers"][0].pop("env")
+    else:
+        app_env[0] = {"name": "EMPTY_LITERAL", "value": ""}
+        revision_env[0] = {"name": "EMPTY_LITERAL"}
+
+    with pytest.raises(ValueError):
+        _validate(fixture)
+
+
+def test_copy_sequence_accepts_only_semantically_stable_template_projection() -> None:
+    module = _module()
+    stages = (
+        ("registry_locked", set()),
+        ("worker_pinned", {"cosmaneura-staging-worker"}),
+        (
+            "scheduler_pinned",
+            {"cosmaneura-staging-worker", "cosmaneura-staging-scheduler"},
+        ),
+        (
+            "pinned",
+            {
+                "cosmaneura-staging-worker",
+                "cosmaneura-staging-scheduler",
+                "cosmaneura-staging-app",
+            },
+        ),
+    )
+    fixtures = []
+    evidence = []
+    for state, projected_workloads in stages:
+        fixture = _fixture(state)
+        _apply_live_azure_template_projection(fixture)
+        _apply_secret_ref_env_value_projection(fixture, projected_workloads)
+        fixtures.append(fixture)
+        evidence.append(_validate(fixture))
+
+    baseline = evidence[0]
+    for progress, (before, after, fixture) in enumerate(
+        zip(evidence[:-1], evidence[1:], fixtures[1:], strict=True), start=3
+    ):
+        module.validate_transition(fixtures[0][0], before, after, progress)
+        target_index = progress - 3
+        current = module.validate_workload_transition(
+            fixtures[0][0],
+            baseline,
+            fixture[1]["workloads"][target_index],
+        )
+        original = baseline["workloads"][target_index]
+        assert current["template_sha256"] != original["template_sha256"]
+        assert (
+            current["template_comparison_sha256"]
+            == original["template_comparison_sha256"]
+        )
+
+    drift_fixture = _fixture("worker_pinned")
+    _apply_live_azure_template_projection(drift_fixture)
+    _apply_secret_ref_env_value_projection(drift_fixture, {"cosmaneura-staging-worker"})
+    worker_templates = _templates(drift_fixture[1]["workloads"][0])
+    for template in worker_templates:
+        template["containers"][0]["args"] = ["unexpected"]
+    drift = _validate(drift_fixture)
+    with pytest.raises(ValueError):
+        module.validate_transition(fixtures[0][0], baseline, drift, 3)
+    with pytest.raises(ValueError):
+        module.validate_workload_transition(
+            fixtures[0][0], baseline, drift_fixture[1]["workloads"][0]
+        )
+
+
+@pytest.mark.parametrize(
+    ("number", "boolean"),
+    [(0, False), (1, True), (0.0, False), (1.0, True)],
+)
+def test_boolean_cannot_impersonate_number_in_template_comparison(
+    number: int | float, boolean: bool
+) -> None:
+    fixture = _fixture("worker_pinned")
+    app_template, revision_template = _templates(fixture[1]["workloads"][0])
+    app_template["scale"]["minReplicas"] = number
+    revision_template["scale"]["minReplicas"] = boolean
+
+    with pytest.raises(ValueError):
+        _validate(fixture)
+
+
+def test_boolean_numeric_transition_drift_is_rejected() -> None:
+    module = _module()
+    before_fixture = _fixture("registry_locked")
+    after_fixture = _fixture("worker_pinned")
+    for fixture, value in ((before_fixture, 0), (after_fixture, False)):
+        for template in _templates(fixture[1]["workloads"][0]):
+            template["scale"]["minReplicas"] = value
+
+    before = _validate(before_fixture)
+    after = _validate(after_fixture)
+    with pytest.raises(ValueError):
+        module.validate_transition(before_fixture[0], before, after, 3)
+
+
+def test_integer_float_cpu_equivalence_has_stable_semantic_digest() -> None:
+    module = _module()
+    before_fixture = _fixture("registry_locked")
+    after_fixture = _fixture("worker_pinned")
+    before_templates = _templates(before_fixture[1]["workloads"][0])
+    after_templates = _templates(after_fixture[1]["workloads"][0])
+    before_templates[0]["containers"][0]["resources"] = {"cpu": 1}
+    before_templates[1]["containers"][0]["resources"] = {"cpu": 1.0}
+    after_templates[0]["containers"][0]["resources"] = {"cpu": 1.0}
+    after_templates[1]["containers"][0]["resources"] = {"cpu": 1}
+
+    before = _validate(before_fixture)
+    after = _validate(after_fixture)
+    module.validate_transition(before_fixture[0], before, after, 3)
+    assert (
+        before["workloads"][0]["template_sha256"]
+        != after["workloads"][0]["template_sha256"]
+    )
+    assert (
+        before["workloads"][0]["template_comparison_sha256"]
+        == after["workloads"][0]["template_comparison_sha256"]
     )
 
 
