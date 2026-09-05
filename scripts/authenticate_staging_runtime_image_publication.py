@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Authenticate one immutable runtime image from offline, exact-byte evidence.
-
-The module has no registry, credential, subprocess, network, workflow, or Azure
-implementation.  Callers must inject one-shot registry and verifier adapters.
-"""
+"""Authenticate one immutable runtime image from injected exact-byte evidence."""
 
 from __future__ import annotations
 
@@ -239,10 +235,15 @@ class OneShotExactRegistryImageReader:
     )
 
     def __init__(self, transport: ExactRegistryImageTransport) -> None:
-        if not callable(getattr(transport, "get_manifest", None)) or not callable(
-            getattr(transport, "get_config", None)
-        ):
-            _fail("runtime_image.reader_invalid")
+        try:
+            if not callable(getattr(transport, "get_manifest", None)) or not callable(
+                getattr(transport, "get_config", None)
+            ):
+                _fail("runtime_image.reader_invalid")
+        except Exception:
+            raise RuntimeImagePublicationFailure(
+                "runtime_image.reader_invalid"
+            ) from None
         self._transport = transport
         self._lock = threading.Lock()
         self._stage = 0
@@ -259,8 +260,6 @@ class OneShotExactRegistryImageReader:
             self._manifest_request = request
         try:
             return self._transport.get_manifest(request)
-        except RuntimeImagePublicationFailure:
-            raise
         except Exception:
             raise RuntimeImagePublicationFailure(
                 "runtime_image.registry_unavailable"
@@ -282,8 +281,6 @@ class OneShotExactRegistryImageReader:
             self._config_request = request
         try:
             return self._transport.get_config(request)
-        except RuntimeImagePublicationFailure:
-            raise
         except Exception:
             raise RuntimeImagePublicationFailure(
                 "runtime_image.registry_unavailable"
@@ -309,8 +306,13 @@ class OneShotOfflineAttestationVerifier:
     __slots__ = ("_delegate", "_lock", "_used")
 
     def __init__(self, delegate: attestation.OfflineAttestationVerifier) -> None:
-        if not callable(getattr(delegate, "verify", None)):
-            _fail("runtime_image.verifier_invalid")
+        try:
+            if not callable(getattr(delegate, "verify", None)):
+                _fail("runtime_image.verifier_invalid")
+        except Exception:
+            raise RuntimeImagePublicationFailure(
+                "runtime_image.verifier_invalid"
+            ) from None
         self._delegate = delegate
         self._lock = threading.Lock()
         self._used = False
@@ -327,12 +329,17 @@ class OneShotOfflineAttestationVerifier:
             if self._used:
                 _fail("runtime_image.verifier_already_used")
             self._used = True
-        return self._delegate.verify(
-            arguments=arguments,
-            files=files,
-            timeout_seconds=timeout_seconds,
-            maximum_output_bytes=maximum_output_bytes,
-        )
+        try:
+            return self._delegate.verify(
+                arguments=arguments,
+                files=files,
+                timeout_seconds=timeout_seconds,
+                maximum_output_bytes=maximum_output_bytes,
+            )
+        except Exception:
+            raise RuntimeImagePublicationFailure(
+                "runtime_image.verifier_unavailable"
+            ) from None
 
     def _used_once(self) -> bool:
         with self._lock:
@@ -767,11 +774,14 @@ def _validate_manifest_response(
     readback = document["private_registry"]["image_publication_authentication"][
         "registry_readback"
     ]
+    layers = manifest["layers"]
     if (
         type(manifest["schemaVersion"]) is not int
         or manifest["schemaVersion"] != 2
         or manifest["mediaType"] != readback["manifest_media_type"]
-        or not isinstance(manifest["layers"], list)
+        or not isinstance(layers, list)
+        or not readback["minimum_layers"] <= len(layers) <= readback["maximum_layers"]
+        or readback["layer_descriptor_urls_permitted"] is not False
         or config.get("mediaType") != readback["config_media_type"]
         or type(config.get("digest")) is not str
         or DIGEST_RE.fullmatch(config["digest"]) is None
@@ -780,6 +790,18 @@ def _validate_manifest_response(
         or not 0 < config["size"] <= readback["maximum_config_bytes"]
     ):
         _fail("runtime_image.manifest_invalid")
+    for value in layers:
+        layer = _exact_keys(
+            value, {"mediaType", "digest", "size"}, "runtime_image.manifest_invalid"
+        )
+        if (
+            layer["mediaType"] not in readback["allowed_layer_media_types"]
+            or type(layer["digest"]) is not str
+            or DIGEST_RE.fullmatch(layer["digest"]) is None
+            or type(layer["size"]) is not int
+            or not 0 < layer["size"] <= readback["maximum_layer_bytes"]
+        ):
+            _fail("runtime_image.manifest_invalid")
     return bytes(body), config["digest"], config["size"]
 
 

@@ -2,38 +2,14 @@
 
 ## Outcome and trust chain
 
-- Tier **2** adds a receiver-first, dormant authenticator for one immutable
-  runtime image. It derives the repository from sealed configured policy and
-  accepts only injected one-shot registry and offline-verifier adapters.
-- A raw Sigstore v0.3 bundle and pinned GitHub-only root bind one SLSA subject
-  SHA to the SHA-256 of the exact ACR manifest bytes. The exact digest request,
-  `Docker-Content-Digest`, subject SHA, and raw manifest SHA must agree; no tag,
-  listing, `oci://`, or JSON reserialization is accepted.
-- The manifest must describe one OCI linux/amd64 image. Its config descriptor
-  digest and size bind the exact config bytes, whose source, revision, run ID,
-  and run-attempt labels must match the policy-pinned GitHub workflow
-  certificate and canonical run URI.
-- One certificate, DSSE signature, and RFC3161 timestamp are required; tlog
-  material, self-hosted runners, wrong repository/ref/event/workflow, and
-  unpinned verifier/root inputs refuse. Only after offline verification does a
-  trusted UTC clock supply `published_at` and the existing image-publication
-  authority is minted. A separate sealed receipt retains the evidence chain.
+- Tier **2** adds a dormant receiver for one immutable runtime image using only sealed policy and injected one-shot registry/verifier adapters.
+- A pinned GitHub-only root and Sigstore v0.3 bundle bind one SLSA subject to the exact digest-requested ACR manifest bytes; tags, listings, `oci://`, and JSON reserialization refuse.
+- Only bounded distributable OCI layer descriptors are allowed; external URLs refuse. Exact config bytes bind linux/amd64, source/revision, and GitHub run ID/attempt.
+- One certificate, DSSE signature, and RFC3161 timestamp are required. Only after offline verification may the trusted clock mint `published_at`, the image authority, and its sealed 27-field receipt.
 
 ## Containment and remaining gates
 
-- The registry transport is outside the publisher verifier's required
-  no-network namespace. The shared verifier binary/root metadata is reused,
-  but the executor invocation plan and containment evidence do not cover this
-  publisher path. Current Key Vault root ingress likewise authorizes job
-  identities, not a future publisher.
-- Canonical publisher-containment and independent image-build-provenance proof
-  flags remain false. This receiver rejects policies claiming either proof;
-  labels and provenance remain assertions, and the new
-  `runtime_image_publication_authenticated` gate stays false. All 25 activation
-  gates remain dormant.
-- No registry client, sender, upload/signing path, workflow, infrastructure,
-  credential, or live action is added. A future sender must separately prove
-  byte-preserving OCI publication/readback and same-run build provenance.
-- Hold after offline tests, lint/type/compile checks, policy hash validation,
-  budget audit, independent review, and protected PR checks. Recovery is a
-  code-only revert; this slice mutates no artifact or external state.
+- Registry transport remains outside the required no-network verifier namespace; executor containment and current Key Vault root ingress do not authorize the future publisher.
+- Publisher-containment and independent build-provenance proofs remain false, the receiver rejects either claim, and all 25 activation gates remain dormant.
+- No concrete registry client, credential, sender, workflow, infrastructure, artifact, or live mutation is included; future work must prove byte-preserving publication/readback and same-run build provenance.
+- Hold after offline tests, lint/type/compile/hash checks, budget audit, independent review, and protected CI. Recovery is a code-only revert.

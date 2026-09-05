@@ -30,6 +30,11 @@ IDENTITY = (
     "https://github.com/CosmaNeura/cosmaneura/.github/workflows/"
     "staging_runtime_image_publish.yml@refs/heads/master"
 )
+LAYER = {
+    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
+    "digest": f"sha256:{'a' * 64}",
+    "size": 123,
+}
 
 
 class FakeTransport:
@@ -155,7 +160,7 @@ def _case(
             "digest": config_digest,
             "size": len(config_bytes),
         },
-        "layers": [],
+        "layers": [dict(LAYER)],
     }
     if manifest_changes:
         for path, value in manifest_changes.items():
@@ -382,6 +387,11 @@ def test_raw_registry_readback_mismatches_refuse_before_verifier(
         (None, {"config.mediaType": "application/octet-stream"}),
         (None, {"config.size": 1}),
         (None, {"config.digest": f"sha256:{'e' * 64}"}),
+        (None, {"layers": []}),
+        (None, {"layers": [{**LAYER, "urls": ["https://public.invalid/layer"]}]}),
+        (None, {"layers": [{**LAYER, "mediaType": "invalid"}]}),
+        (None, {"layers": [{**LAYER, "digest": "sha256:bad"}]}),
+        (None, {"layers": [{**LAYER, "size": 0}]}),
     ],
 )
 def test_platform_labels_media_type_and_descriptor_chain_are_exact(
@@ -512,15 +522,23 @@ def test_output_seal_rejects_fake_subclass_and_tampered_receipt(
     assert not fake._is_authenticated()
 
 
-def test_errors_are_bounded_and_module_has_no_default_io() -> None:
+@pytest.mark.parametrize(
+    ("delegate", "code"),
+    [("transport", "registry"), ("verifier_delegate", "verifier")],
+)
+def test_errors_are_bounded_and_module_has_no_default_io(
+    delegate: str, code: str
+) -> None:
     case = _case()
-    case["transport"].error = RuntimeError("secret-registry-response")
+    case[delegate].error = authentication.RuntimeImagePublicationFailure(
+        "secret-provider-detail"
+    )
     with pytest.raises(
         authentication.RuntimeImagePublicationFailure,
-        match="^runtime_image.registry_unavailable$",
+        match=rf"^runtime_image\.{code}_unavailable$",
     ) as caught:
         _authenticate(case)
-    assert "secret-registry-response" not in str(caught.value)
+    assert "secret-provider-detail" not in str(caught.value)
     tree = ast.parse(inspect.getsource(authentication))
     imported = {
         alias.name.split(".")[0]
@@ -535,6 +553,17 @@ def test_errors_are_bounded_and_module_has_no_default_io() -> None:
     assert signature.parameters["registry_reader"].default is inspect.Parameter.empty
     assert signature.parameters["verifier"].default is inspect.Parameter.empty
     assert signature.parameters["clock"].default is inspect.Parameter.empty
+
+    class ExplodingAdapter:
+        def __getattribute__(self, _name: str) -> Any:
+            raise authentication.RuntimeImagePublicationFailure("secret-adapter-detail")
+
+    for constructor, error in (
+        (authentication.OneShotExactRegistryImageReader, "reader_invalid"),
+        (authentication.OneShotOfflineAttestationVerifier, "verifier_invalid"),
+    ):
+        with pytest.raises(authentication.RuntimeImagePublicationFailure, match=error):
+            constructor(ExplodingAdapter())
 
 
 def test_current_receiver_refuses_future_proof_claims() -> None:
