@@ -73,12 +73,19 @@ The later isolated synthetic-only rehearsal remains mandatory.
    lineage and serial 8, 28-instance inventory, and a plan age no greater than
    four hours. It performs a fresh read-only-lockfile initialization and binds
    the preserved provider runtime and exact backend into its receipt.
-6. After separate live-readback acceptance, a human operator applies the exact
-   read-only reviewed plan with the receipt-bound OpenTofu executable and
-   protected execution directory, then records post-apply readback. The
-   validator itself always reports that it does not authorize apply. OpenTofu
-   must also accept its native saved-plan/state binding. Stop before any later
-   rung.
+6. From that same protected execution context, the operator runs the isolated
+   GET-only handoff preparer. It proves two identical ARM snapshots, the exact
+   26-object/eleven-absence live contract, target emptiness, effective policy
+   and role inventories, and unchanged serial-8 remote state. Its owner-only,
+   ten-minute receipt binds the source, plan, state, runtime, Azure CLI and
+   configuration, TLS trust, machine boot session, and one-use nonce. It always
+   reports `apply_authorized=false`.
+7. Stop until a separate independently reviewed human-only consumer can
+   revalidate and consume that exact receipt immediately before replacing its
+   process with the receipt-bound OpenTofu invocation. A human operator then
+   applies only the exact reviewed plan and records post-apply readback.
+   OpenTofu must also accept its native saved-plan/state binding. Stop before
+   any later rung.
 
 Abort on a changed lineage, pre-untaint serial, tainted/deposed instance, failed
 check, drift, update, delete, replacement, extra/missing resource, changed
@@ -109,6 +116,10 @@ posture mismatch. No production or PHI promotion is part of this plan.
   28-no-op/11-create closed world, zero drift/deferred/action invocation, and
   passing checks is the executable completeness proof. If a later OpenTofu
   version emits either field, the validator requires it to be true.
+- The handoff preparer uses only bounded, no-proxy, no-redirect HTTPS GETs and
+  never emits the Azure token or raw response bodies. It refuses an ambient
+  Python/import/transport environment and revalidates the exact runtime after
+  the live reads.
 - Observation window: read back all 39 expected state instances and exact live
   controls before any private-executor or irreversible-retention plan.
 
