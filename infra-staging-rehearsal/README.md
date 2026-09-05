@@ -277,29 +277,41 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    The execution directory must not exist beforehand. Verify mode creates it
    as owner-only, installs providers from the read-only lockfile, binds its
    provider-tree and backend digests into the receipt, and preserves it for the
-   immediate human apply. The receipt deliberately reports
+   immediate human handoff. The receipt deliberately reports
    `live_readback_bound=false` and `apply_authorized=false`: validator success
    never replaces the independent live readback and human approval.
 
-   After that acceptance, only the human operator may run the exact reviewed
-   plan with the preserved runtime (substitute the receipt values and absolute
-   repository path):
+   From the same clean protected-master checkout, use the isolated system
+   interpreter to perform the bounded GET-only ARM readback twice and bind it
+   to the exact plan, serial-8 remote state, source, provider runtime, Azure CLI,
+   TLS trust, operator configuration, boot session, and protected execution
+   directory. The handoff receipt must be created beside the saved plan and
+   must not already exist:
 
    ```sh
-   env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
-     CHECKPOINT_DISABLE=1 TF_CLI_CONFIG_FILE=/dev/null TF_IN_AUTOMATION=1 \
-     TF_DATA_DIR=/protected/path/recovery-execution \
-     ARM_SUBSCRIPTION_ID=bab2a709-1fcb-4c87-a9fc-802f7477ec13 \
-     ARM_ENVIRONMENT=public ARM_USE_CLI=true ARM_USE_AZUREAD=true \
-     <OPEN_TOFU_PATH_FROM_RECEIPT> \
-     -chdir=<ABSOLUTE_REPOSITORY_ROOT>/infra-staging-rehearsal apply \
-     -input=false -lock=true -lock-timeout=5m \
-     /protected/path/recovery.tfplan
+   env -i PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \
+     /opt/homebrew/bin/python3 -IS \
+     scripts/prepare_staging_rehearsal_base_recovery_handoff.py \
+     --saved-plan /protected/path/recovery.tfplan \
+     --state-json /protected/path/immediate-pre-apply.tfstate \
+     --execution-dir /protected/path/recovery-execution \
+     --receipt /protected/path/recovery-handoff.json \
+     --expected-source-commit <CURRENT_PROTECTED_MASTER_SHA> \
+     --expected-saved-plan-sha256 <REVIEWED_PLAN_SHA256>
    ```
 
-   Stop if the execution directory or either digest has changed. OpenTofu's
-   own saved-plan/state binding must also refuse if remote state changed after
-   verification.
+   It must report `live_readback_bound=true`, `apply_authorized=false`, 26
+   existing Azure objects, eleven planned absences, and zero target resources.
+   It also requires the full inherited-policy and effective-role inventories,
+   an empty deleted-inclusive container inventory, two identical live
+   snapshots, and a ten-minute receipt lifetime. Stop if any source, runtime,
+   state, plan, identity, network, policy, DNS, storage, or absence fact differs.
+
+   **Stop after creating and independently reviewing this receipt.** It does
+   not authorize apply. The exact-plan apply command remains withheld until a
+   separate reviewed human-only consumer revalidates this receipt and its
+   one-use machine binding immediately before replacing its process with the
+   receipt-bound OpenTofu invocation.
 7. After apply, read back the seven containers, private endpoint and DNS
    binding, and three container-scoped reader assignments. The result must be
    39 state instances, zero target resources, and no irreversible or activation
