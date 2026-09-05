@@ -274,3 +274,10 @@ seams. The pinned private-endpoint ID does not prove routing, so private DNS,
 public-network, RBAC, and egress evidence remain mandatory before activation.
 The public dependency factory and all activation gates still refuse; see the
 [launch-record reader flight plan](flight-plans/2026-09-04-staging-launch-record-private-reader.md).
+
+The controller receipt v2 content contract now closes the canonical schema and
+cross-record validation boundary, including exact runtime resource projection,
+isolation, timestamps, and provision freshness. Its result is explicitly not
+source authentication or provider truth; the private-WORM reader, producer,
+runtime consumer, and every activation gate remain absent or false. See the
+[controller receipt v2 flight plan](flight-plans/2026-09-05-staging-controller-receipt-v2-contract.md).

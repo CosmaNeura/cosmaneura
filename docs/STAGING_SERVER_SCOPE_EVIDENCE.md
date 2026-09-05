@@ -393,3 +393,10 @@ against the same receipt/record and passes its detached byte map to
 `validate_bundle_snapshot_bytes` with the pinned evidence policy and shared
 trusted clock. See the [private evidence-reader flight plan](flight-plans/2026-09-05-staging-private-evidence-reader.md)
 and [dependency-factory flight plan](flight-plans/2026-09-05-staging-provision-dependency-factory.md).
+
+The dormant controller receipt v2 contract now validates exact canonical
+intent, submission, and receipt bytes against the pinned evidence, identity,
+runtime-resource, isolation, and time relationships. The returned type remains
+content-only (`provenance_authenticated=false`); it neither authenticates the
+future private-WORM source nor converts embedded provider claims into observed
+facts. See the [controller receipt v2 flight plan](flight-plans/2026-09-05-staging-controller-receipt-v2-contract.md).
