@@ -40,6 +40,8 @@ EXPECTED_FORMAT_VERSION = "1.2"
 EXPECTED_TOFU_VERSION = "1.12.5"
 EXPECTED_SUBSCRIPTION_ID = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
 EXPECTED_TENANT_ID = "d51754d0-bba5-4810-820e-afac542844d6"
+EXPECTED_ORIGIN_URL = "git@github.com:CosmaNeura/cosmaneura.git"
+SYSTEM_GIT = Path("/usr/bin/git")
 MAXIMUM_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAXIMUM_PLAN_JSON_BYTES = 128 * 1024 * 1024
 MAXIMUM_PLAN_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -379,6 +381,10 @@ def _normalized_environment(*, data_dir: Path | None = None) -> dict[str, str]:
         if not name.startswith(("TF_", "TOFU_", "OPENTOFU_", "GIT_", "ARM_", "AZURE_"))
     }
     environment["CHECKPOINT_DISABLE"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    environment["GIT_TERMINAL_PROMPT"] = "0"
     environment["TF_CLI_CONFIG_FILE"] = os.devnull
     if data_dir is not None:
         environment["TF_DATA_DIR"] = str(data_dir)
@@ -550,10 +556,30 @@ def _generate_saved_plan(*, tofu: Path, output_parent: Path, data_dir: Path) -> 
         )
 
 
-def _run_git(arguments: Sequence[str]) -> bytes:
+def _trusted_git() -> Path:
+    try:
+        path = SYSTEM_GIT.resolve(strict=True)
+        metadata = path.stat()
+    except OSError as exc:
+        raise RecoveryPlanError("the system Git executable is unavailable") from exc
+    if (
+        path != SYSTEM_GIT
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or not os.access(path, os.X_OK)
+    ):
+        raise RecoveryPlanError("the system Git executable is not trusted")
+    return path
+
+
+def _run_git(arguments: Sequence[str], *, repository: bool = True) -> bytes:
+    command = [str(_trusted_git()), "--no-replace-objects"]
+    if repository:
+        command.extend(("-C", str(REPOSITORY_ROOT)))
     result = _run_process(
-        ["git", "-C", str(REPOSITORY_ROOT), *arguments],
-        cwd=REPOSITORY_ROOT,
+        [*command, *arguments],
+        cwd=REPOSITORY_ROOT if repository else Path("/"),
         timeout_seconds=30,
     )
     if result.returncode != 0:
@@ -568,10 +594,14 @@ def _source_snapshot(expected_commit: str) -> SourceSnapshot:
     remote_head = (
         _run_git(["rev-parse", "refs/remotes/origin/master"]).decode("ascii").strip()
     )
-    live_remote = _run_git(["ls-remote", "origin", "refs/heads/master"]).decode("ascii")
+    origin = _run_git(["remote", "get-url", "--all", "origin"]).decode("ascii")
+    live_remote = _run_git(
+        ["ls-remote", EXPECTED_ORIGIN_URL, "refs/heads/master"], repository=False
+    ).decode("ascii")
     if (
         head != expected_commit
         or remote_head != expected_commit
+        or origin != f"{EXPECTED_ORIGIN_URL}\n"
         or live_remote != f"{expected_commit}\trefs/heads/master\n"
     ):
         raise RecoveryPlanError(

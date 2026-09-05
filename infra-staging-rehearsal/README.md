@@ -250,8 +250,9 @@ merged before step 3 begins; this source correction alone authorizes nothing.
    Create mode itself invokes the fixed `tofu plan` command with
    `-refresh=true`, the three exact reversible inputs, no ambient OpenTofu,
    Git, or Azure-provider overrides, and pinned OpenTofu 1.12.5. It fixes the
-   backend to the reviewed subscription, tenant, storage coordinates, and
-   default workspace. It writes a read-only
+   backend to the reviewed subscription, storage coordinates, Azure public
+   cloud, and default workspace; the provider configuration pins the tenant.
+   It writes a read-only
    (`0400`) saved plan only after validating JSON derived from those exact
    binary bytes. The plan archive must contain the exact reviewed Terraform
    source and provider lockfile, embed lineage and serial 8, be no more than

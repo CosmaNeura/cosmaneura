@@ -412,6 +412,19 @@ def test_pinned_opentofu_json_may_omit_applyable_and_complete(
     assert _validate(monkeypatch, plan=plan)["validated_nonempty_change_set"] is True
 
 
+def test_git_uses_trusted_absolute_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(recovery, "_trusted_git", lambda: Path("/trusted/git"))
+
+    def run(arguments: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:  # fmt: skip
+        seen.update(arguments=arguments, kwargs=kwargs)
+        return subprocess.CompletedProcess(arguments, 0, b"ok", b"")
+
+    monkeypatch.setattr(recovery, "_run_process", run)
+    assert recovery._run_git(["status"]) == b"ok"
+    assert seen["arguments"][:4] == ["/trusted/git", "--no-replace-objects", "-C", str(recovery.REPOSITORY_ROOT)]  # fmt: skip
+
+
 def test_archive_source_and_lockfile_are_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     for component in ("source", "lockfile"):
         source = _source_snapshot()
@@ -440,9 +453,14 @@ def test_source_snapshot_rejects_clean_worktree_bytes_not_at_head(
     globals_ = (("REPOSITORY_ROOT", root), ("REHEARSAL_ROOT", rehearsal), ("VALIDATOR_PATH", validator))  # fmt: skip
     for name, value in globals_:
         monkeypatch.setattr(recovery, name, value)
-    responses = {"rev-parse": f"{commit}\n".encode(), "ls-remote": f"{commit}\trefs/heads/master\n".encode(), "status": b"", "ls-tree": b"infra/main.tf\ninfra/.terraform.lock.hcl\n", "show": b"reviewed"}  # fmt: skip
-    monkeypatch.setattr(recovery, "_run_git", lambda arguments: responses[arguments[0]])
+    responses = {"rev-parse": f"{commit}\n".encode(), "remote": f"{recovery.EXPECTED_ORIGIN_URL}\n".encode(), "ls-remote": f"{commit}\trefs/heads/master\n".encode(), "status": b"", "ls-tree": b"infra/main.tf\ninfra/.terraform.lock.hcl\n", "show": b"reviewed"}  # fmt: skip
+    monkeypatch.setattr(
+        recovery, "_run_git", lambda arguments, **_: responses[arguments[0]]
+    )
     with pytest.raises(recovery.RecoveryPlanError, match="source bytes differ"):
+        recovery._source_snapshot(commit)
+    responses["remote"] = b"git@github.com:attacker/fork.git\n"
+    with pytest.raises(recovery.RecoveryPlanError, match="protected-master"):
         recovery._source_snapshot(commit)
 
 
@@ -569,7 +587,7 @@ def test_tofu_version_is_pinned(
 
 def test_cli_cloud_environment_is_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
     scrubbed = "TF_CLI_ARGS TOFU_CLI_ARGS_plan OPENTOFU_CLI_ARGS TF_VAR_enable_marker_legal_holds TF_LOG_PATH GIT_DIR AZURE_CONFIG_DIR ARM_TENANT_ID".split()
-    fixed = {"TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_ENVIRONMENT": "public", "ARM_USE_CLI": "true", "ARM_USE_AZUREAD": "true"}  # fmt: skip
+    fixed = {"TF_CLI_CONFIG_FILE": os.devnull, "TF_DATA_DIR": str(DATA_DIR), "TF_IN_AUTOMATION": "1", "ARM_SUBSCRIPTION_ID": recovery.EXPECTED_SUBSCRIPTION_ID, "ARM_ENVIRONMENT": "public", "ARM_USE_CLI": "true", "ARM_USE_AZUREAD": "true", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_NO_REPLACE_OBJECTS": "1", "GIT_TERMINAL_PROMPT": "0"}  # fmt: skip
     for name in (*scrubbed, *fixed):
         monkeypatch.setenv(name, "hostile")
     environment = recovery._normalized_environment(data_dir=DATA_DIR)
