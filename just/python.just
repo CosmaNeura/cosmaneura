@@ -164,12 +164,12 @@ py_test-ci-infrastructure-general:
 [script]
 py_test-ci-infrastructure-controller:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-controller is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_controller_receipt_v2*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_controller_receipt_v2.py tests/infrastructure/test_staging_controller_receipt_v2_[ad]*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-restore:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-restore is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_*.py tests/infrastructure/test_staging_controller_receipt_v2_[bipw]*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-integration:

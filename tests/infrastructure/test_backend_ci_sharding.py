@@ -24,12 +24,20 @@ SHARDS = (
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
+CONTROLLER_SELECTOR = f"{CONTROLLER_GLOB[:-4]}.py {CONTROLLER_GLOB[:-4]}_[ad]*.py"
+RESTORE_SELECTOR = f"{RESTORE_GLOB} {CONTROLLER_GLOB[:-4]}_[bipw]*.py"
 
 
 def _infrastructure_shard(path: Path) -> str:
     if path.parent == Path("tests/infrastructure"):
-        if path.name.startswith("test_staging_controller_receipt_v2"):
+        if path.match("test_staging_controller_receipt_v2_[bipw]*.py"):
+            return "infrastructure-restore"
+        if path.name == "test_staging_controller_receipt_v2.py" or path.match(
+            "test_staging_controller_receipt_v2_[ad]*.py"
+        ):
             return "infrastructure-controller"
+        if path.name.startswith("test_staging_controller_receipt_v2"):
+            return "unassigned"
         if path.name.startswith("test_staging_restore_"):
             return "infrastructure-restore"
     return "infrastructure-general"
@@ -72,8 +80,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"\t\t--ignore-glob='{CONTROLLER_GLOB}' \\\n"
             f"\t\t--ignore-glob='{RESTORE_GLOB}' \\\n"
         ),
-        "infrastructure-controller": (f"uv run pytest {CONTROLLER_GLOB} --verbosity=2"),
-        "infrastructure-restore": f"uv run pytest {RESTORE_GLOB} --verbosity=2",
+        "infrastructure-controller": (
+            f"uv run pytest {CONTROLLER_SELECTOR} --verbosity=2"
+        ),
+        "infrastructure-restore": f"uv run pytest {RESTORE_SELECTOR} --verbosity=2",
         "integration": "uv run pytest tests/integration --verbosity=2",
     }
     for shard, command in expected_commands.items():
@@ -149,15 +159,19 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     [
         (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_builder.py"),
-            "infrastructure-controller",
+            "infrastructure-restore",
         ),
         (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_writer.py"),
-            "infrastructure-controller",
+            "infrastructure-restore",
         ),
         (
             Path("tests/infrastructure/test_staging_restore_sanitizer.py"),
             "infrastructure-restore",
+        ),
+        (
+            Path("tests/infrastructure/test_staging_controller_receipt_v2_consumer.py"),
+            "unassigned",
         ),
         (
             Path("tests/infrastructure/test_future_platform_contract.py"),
