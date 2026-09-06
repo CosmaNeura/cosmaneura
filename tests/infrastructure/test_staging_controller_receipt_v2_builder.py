@@ -12,9 +12,14 @@ import pytest
 
 from scripts import build_staging_controller_receipt_v2 as builder
 from scripts import (
+    observe_staging_controller_receipt_v2_arm as arm,
+)
+from scripts import (
     observe_staging_controller_receipt_v2_isolation_inventory as isolation,
 )
 from scripts import validate_staging_controller_receipt_v2 as content
+from scripts import validate_staging_controller_receipt_v2_production as production
+from scripts import validate_staging_restore_runtime_binding as runtime_binding
 
 from tests.infrastructure import (
     test_staging_controller_receipt_v2_arm_observation as arm_helpers,
@@ -47,11 +52,58 @@ def _documents(authority: Any) -> tuple[Any, Any, Any, Any]:
     arm_observation = database_authority._arm_observation
     production_authority = database_authority._production_authority
     return (
-        production_authority.authority,
-        arm_observation.authority,
-        database_authority.authority,
-        authority.authority,
+        content._parse_canonical(
+            production_authority.authority_bytes, content.MAXIMUM_POLICY_BYTES
+        ),
+        content._parse_canonical(
+            arm_observation.authority_bytes, content.MAXIMUM_POLICY_BYTES
+        ),
+        content._parse_canonical(
+            database_authority.authority_bytes, content.MAXIMUM_POLICY_BYTES
+        ),
+        content._parse_canonical(
+            authority.authority_bytes, content.MAXIMUM_POLICY_BYTES
+        ),
     )
+
+
+def _remint_production_and_arm(authority: Any) -> tuple[Any, Any]:
+    database_authority = authority._database_observation
+    first_production = database_authority._production_authority
+    first_arm = database_authority._arm_observation
+    runtime, controller, production_policy = production._validate_context(
+        runtime_binding._parse_policy(first_production._runtime_policy),
+        content._parse_canonical(
+            first_production._controller_policy, content.MAXIMUM_POLICY_BYTES
+        ),
+        content._parse_canonical(
+            first_production._production_policy, content.MAXIMUM_POLICY_BYTES
+        ),
+    )
+    second_production = production._bind_production_authority(
+        runtime=runtime,
+        controller=controller,
+        production=production_policy,
+        prefix=first_production._prefix,
+        material=first_production._launch_material,
+    )
+    arm_policy = arm.validate_controller_receipt_v2_arm_observation_policy(
+        content._parse_canonical(first_arm._policy_bytes, content.MAXIMUM_POLICY_BYTES)
+    )
+    plan, _context = arm._derive_plan(
+        second_production,
+        now=first_arm.observed_at,
+        policy=arm_policy,
+    )
+    second_arm = arm._mint_observation(
+        production_authority=second_production,
+        policy=arm_policy,
+        plan=plan,
+        responses=first_arm._responses,
+        started_at=first_arm._started_at,
+        observed_at=first_arm.observed_at,
+    )
+    return second_production, second_arm
 
 
 @pytest.fixture(scope="module")
@@ -298,18 +350,22 @@ def test_tamper_at_every_ancestor_refuses(built_chain: Any, level: str) -> None:
         object.__setattr__(target, field, original)
 
 
-def test_mixed_object_chain_refuses(
-    monkeypatch: pytest.MonkeyPatch, built_chain: Any
-) -> None:
+def test_mixed_object_chain_refuses(built_chain: Any) -> None:
     first, _result = built_chain
-    second = _authority(monkeypatch)
     database_authority = first._database_observation
+    first_production = database_authority._production_authority
     original = database_authority._arm_observation
+    second_production, second_arm = _remint_production_and_arm(first)
+    assert second_production._is_authenticated()
+    assert second_arm._is_authenticated()
+    assert second_production is not first_production
+    assert second_arm is not original
+    assert second_arm._production_authority is second_production
     try:
         object.__setattr__(
             database_authority,
             "_arm_observation",
-            second._database_observation._arm_observation,
+            second_arm,
         )
         instance = builder.ControllerReceiptV2Builder._from_reviewed_configuration(
             clock=lambda: NOW
