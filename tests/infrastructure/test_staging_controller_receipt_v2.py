@@ -495,6 +495,15 @@ def test_record_chain_missing_and_unknown_fields_fail_closed(
         b"\xff",
         b"{}" * 32_769,
     ],
+    ids=[
+        "leading-whitespace",
+        "trailing-newline",
+        "duplicate-key",
+        "nonfinite-number",
+        "non-object",
+        "invalid-utf8",
+        "oversized",
+    ],
 )
 @pytest.mark.parametrize(
     "record", ["intent_bytes", "submission_bytes", "receipt_bytes"]

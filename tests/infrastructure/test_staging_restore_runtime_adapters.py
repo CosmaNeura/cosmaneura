@@ -949,6 +949,9 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
     )
     arm_path = "observe_staging_controller_receipt_v2_arm.py"
     database_path = "observe_staging_controller_receipt_v2_database.py"
+    isolation_inventory_path = (
+        "observe_staging_controller_receipt_v2_isolation_inventory.py"
+    )
     executable_paths = [
         *Path(adapters.attestation.ROOT).joinpath("scripts").glob("*.py"),
         *Path(adapters.attestation.ROOT).joinpath("scripts").glob("*.sh"),
@@ -1008,6 +1011,16 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
                 if symbol != "receive_staging_broker_launch_receipt"
             )
         elif path.name in {"staging_restore_safe_submit.py", arm_path}:
+            forbidden_symbols = tuple(
+                symbol
+                for symbol in adapter_symbols
+                if symbol
+                not in {
+                    "staging_restore_runtime_adapters",
+                    "ManagedIdentityTokenSource",
+                }
+            )
+        elif path.name == isolation_inventory_path:
             forbidden_symbols = tuple(
                 symbol
                 for symbol in adapter_symbols
