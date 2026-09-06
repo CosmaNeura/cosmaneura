@@ -169,8 +169,8 @@ jobs:
 
   # NOTE there is no global timeout minutes, so we need to set it on each job :/
 
-  app:
-    name: Backend
+  backend-quality:
+    name: Backend quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -182,18 +182,11 @@ jobs:
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
         with:
-          # Backend recipes require zsh, and the localias step below calls
-          # certutil from libnss3-tools to trust its test-only HTTPS CA.
-          # Media binaries are runtime/live-test dependencies, not default CI
-          # prerequisites; omitting them avoids ffmpeg's large apt dependency
-          # tree and the Azure mirror stalls it has triggered.
-          apt-packages: zsh libnss3-tools
-      - name: Install SHA-verified Localias
-        run: bash scripts/install_pinned_localias.sh
+          # Quality recipes require only zsh. The test matrix adds
+          # libnss3-tools only for the Localias-backed integration shard.
+          apt-packages: zsh
       - run: just up --fast
       - run: just py_setup
-      - name: Start SHA-verified Localias
-        run: bash scripts/start_pinned_localias_ci.sh
       - run: just py_lint
 
       - run: just db_migrate
@@ -207,29 +200,77 @@ jobs:
           echo "Storage Account: ${AZURE_UPLOADS_ACCOUNT_NAME}"
           # Log hostnames/resource names
 
-      - id: py_test
-        run: just py_test
-
       # NOTE one important problem with `detached` is if something fails, the github environment does seem to get wiped
       # for instance GITHUB_ENV, seems to be cleared out.
       - uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113 # v3
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_enabled }}
         with: { detached: true }
 
-      - name: Upload test artifacts
-        # `failure()` here catches the Backend job's overall failure (now
-        # that py_test no longer has continue-on-error). Artifacts upload
-        # whenever any earlier step fails, including py_lint or py_test.
+  backend-tests:
+    name: Backend tests (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: application
+            apt-packages: zsh
+          - shard: infrastructure
+            apt-packages: zsh
+          - shard: integration
+            apt-packages: zsh libnss3-tools
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: ${{ matrix.apt-packages }}
+      - name: Install SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/install_pinned_localias.sh
+      - run: just up --fast
+      - run: just py_setup
+      - name: Install integration Chromium headless shell
+        if: ${{ matrix.shard == 'integration' }}
+        run: uv run playwright install chromium --only-shell
+      - name: Start SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/start_pinned_localias_ci.sh
+      - run: just db_migrate
+      - id: py_test
+        run: just py_test-ci-${{ matrix.shard }}
+      - name: Upload shard test artifacts
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           # playwright traces, screenshots, logs, etc
           # traces and pngs allow us to debug e2e test failures
-          name: test-results
+          name: backend-${{ matrix.shard }}-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           # NOTE if direnv sourcing fails, this var will not be set and it will fail
           path: |
             ${{ env.TEST_RESULTS_DIRECTORY }}
             ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
+
+  app:
+    name: Backend
+    needs: [backend-quality, backend-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every backend prerequisite to succeed
+        env:
+          BACKEND_QUALITY_RESULT: ${{ needs.backend-quality.result }}
+          BACKEND_TESTS_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" ]]; then
+            echo "::error::Backend prerequisites did not all succeed (quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."
+            exit 1
+          fi
 
   web:
     name: Frontend

@@ -284,7 +284,10 @@ def test_pull_request_build_jobs_have_no_secret_or_cloud_capabilities() -> None:
     workflow = _read(".github/workflows/pull_request_checks.yml")
     publish_workflow = _read(".github/workflows/build_and_publish_manual.yml")
     workflow_scope = workflow[: workflow.index("jobs:\n")]
-    pull_request_jobs = {name: _workflow_job(workflow, name) for name in ("app", "web")}
+    pull_request_jobs = {
+        name: _workflow_job(workflow, name)
+        for name in ("backend-quality", "backend-tests", "app", "web")
+    }
     protected_jobs = {
         "deploy": _workflow_job(publish_workflow, "deploy"),
         "deploy-staging": _workflow_job(publish_workflow, "deploy-staging"),

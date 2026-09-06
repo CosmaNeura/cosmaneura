@@ -141,8 +141,8 @@ jobs:
             echo "recovery_digest=$RECOVERY_DIGEST"
           } >> "$GITHUB_OUTPUT"
 
-  app:
-    name: Candidate Backend
+  backend-quality:
+    name: Candidate backend quality
     needs: authorize
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -152,7 +152,66 @@ jobs:
       - name: Install protected-master backend test prerequisites
         env:
           APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
-          APT_PACKAGES: "zsh libnss3-tools"
+          APT_PACKAGES: "zsh"
+        run: |
+          sudo apt-get $APT_OPTS update -qq
+          sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
+      - name: Check out exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.authorize.outputs.verified_revision }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact candidate checkout
+        env:
+          CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Install exact candidate toolchain without shared caches
+        uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
+        with:
+          version: 2025.3.6
+          cache: "false"
+      - name: Load exact candidate test environment
+        uses: iloveitaly/github-action-direnv-load-and-mask@9f4661e90b5d5fefb96463379587f82b4ca0520a # master 2026-08-21
+        with:
+          environment_allowlist: >
+            PYTHON_TEST_SERVER_HOST,
+            JAVASCRIPT_SERVER_HOST,
+            VITE_PYTHON_URL,
+            OPENAPI_JSON_PATH,
+            TMP_DIRECTORY,
+            TEST_RESULTS_DIRECTORY,
+            PLAYWRIGHT_RESULT_DIRECTORY,
+            VIRTUAL_ENV,
+            PATH
+      - run: just up --fast
+      - run: just py_setup
+      - run: just py_lint
+      - run: just db_migrate
+      - run: just db_lint
+
+  backend-tests:
+    name: Candidate backend tests (${{ matrix.shard }})
+    needs: authorize
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: application
+            apt-packages: zsh
+          - shard: infrastructure
+            apt-packages: zsh
+          - shard: integration
+            apt-packages: zsh libnss3-tools
+    steps:
+      - name: Install protected-master backend test prerequisites
+        env:
+          APT_OPTS: "-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          APT_PACKAGES: ${{ matrix.apt-packages }}
         run: |
           sudo apt-get $APT_OPTS update -qq
           sudo apt-get $APT_OPTS install -y --no-install-recommends $APT_PACKAGES
@@ -167,6 +226,7 @@ jobs:
           CANDIDATE_SHA: ${{ needs.authorize.outputs.verified_revision }}
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
       - name: Install SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/install_pinned_localias.sh
       - name: Install exact candidate toolchain without shared caches
         uses: jdx/mise-action@3c2e0cf82a5b2e5249f0d3635a4d83d0ae861518 # v4
@@ -188,21 +248,41 @@ jobs:
             PATH
       - run: just up --fast
       - run: just py_setup
+      - name: Install integration Chromium headless shell
+        if: ${{ matrix.shard == 'integration' }}
+        run: uv run playwright install chromium --only-shell
       - name: Start exact candidate SHA-verified local test routing
+        if: ${{ matrix.shard == 'integration' }}
         run: bash scripts/start_pinned_localias_ci.sh
-      - run: just py_lint
       - run: just db_migrate
-      - run: just db_lint
       - id: py_test
-        run: just py_test
-      - name: Upload candidate backend test artifacts
+        run: just py_test-ci-${{ matrix.shard }}
+      - name: Upload candidate backend shard test artifacts
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: canonical-staging-backend-test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          name: canonical-staging-backend-${{ matrix.shard }}-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.TEST_RESULTS_DIRECTORY }}
             ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
+
+  app:
+    name: Candidate Backend
+    needs: [backend-quality, backend-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every backend prerequisite to succeed
+        env:
+          BACKEND_QUALITY_RESULT: ${{ needs.backend-quality.result }}
+          BACKEND_TESTS_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" ]]; then
+            echo "::error::Backend prerequisites did not all succeed (quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."
+            exit 1
+          fi
 
   web:
     name: Candidate Frontend

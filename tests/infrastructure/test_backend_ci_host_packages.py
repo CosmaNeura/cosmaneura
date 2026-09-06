@@ -52,25 +52,28 @@ def test_localias_install_is_version_and_digest_pinned() -> None:
     assert "releases/latest" not in cursor_setup
 
 
-def test_backend_ci_installs_only_default_suite_host_dependencies() -> None:
+def test_backend_ci_installs_only_each_shards_required_host_dependencies() -> None:
     workflow = (ROOT / ".github/workflows/build_and_publish_manual.yml").read_text(
         encoding="utf-8"
     )
-    backend = workflow[workflow.index("  app:\n") : workflow.index("  web:\n")]
-    setup = backend[
-        backend.index("      - uses: ./.github/actions/common-setup") : backend.index(
-            "      - name: Install SHA-verified Localias"
+    quality = workflow[
+        workflow.index("  backend-quality:\n") : workflow.index("  backend-tests:\n")
+    ]
+    tests = workflow[workflow.index("  backend-tests:\n") : workflow.index("  app:\n")]
+    quality_setup = quality[
+        quality.index("      - uses: ./.github/actions/common-setup") : quality.index(
+            "      - run: just up --fast"
         )
     ]
-    assert "iloveitaly/github-action-localias@" not in backend
-    apt_package_lines = [
+    assert "iloveitaly/github-action-localias@" not in quality + tests
+    quality_apt_package_lines = [
         line.strip()
-        for line in setup.splitlines()
+        for line in quality_setup.splitlines()
         if line.strip().startswith("apt-packages:")
     ]
 
-    # `just` explicitly uses zsh, while localias invokes `certutil`, supplied
-    # by libnss3-tools, to populate Chromium's NSS trust database.
-    # Poppler and ffmpeg remain application runtime/opt-in live-test deps; an
-    # exact assertion keeps them out of the default Backend host setup.
-    assert apt_package_lines == ["apt-packages: zsh libnss3-tools"]
+    # Every shard needs zsh for `just`; only integration needs certutil from
+    # libnss3-tools for Localias. Poppler and ffmpeg remain runtime/opt-in deps.
+    assert quality_apt_package_lines == ["apt-packages: zsh"]
+    assert tests.count("apt-packages: zsh\n") == 2
+    assert tests.count("apt-packages: zsh libnss3-tools") == 1
