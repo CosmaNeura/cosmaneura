@@ -20,6 +20,7 @@ SHARDS = (
     "infrastructure-general",
     "infrastructure-controller",
     "infrastructure-receipt-io",
+    "infrastructure-sanitizer-foundation",
     "infrastructure-restore",
     "integration",
 )
@@ -27,11 +28,14 @@ CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
 CONTROLLER_SELECTOR = f"{CONTROLLER_GLOB[:-4]}.py {CONTROLLER_GLOB[:-4]}_[ad]*.py"
 RECEIPT_IO_SELECTOR = f"{CONTROLLER_GLOB[:-4]}_[bw]*.py"
-RESTORE_SELECTOR = f"{RESTORE_GLOB} {CONTROLLER_GLOB[:-4]}_[ip]*.py"
+SANITIZER_FOUNDATION_SELECTOR = "tests/infrastructure/test_staging_restore_sanitizer.py"
+RESTORE_RECEIPT_SELECTOR = f"{CONTROLLER_GLOB[:-4]}_[ip]*.py"
 
 
 def _infrastructure_shard(path: Path) -> str:
     if path.parent == Path("tests/infrastructure"):
+        if path == Path(SANITIZER_FOUNDATION_SELECTOR):
+            return "infrastructure-sanitizer-foundation"
         if path.match("test_staging_controller_receipt_v2_[bw]*.py"):
             return "infrastructure-receipt-io"
         if path.match("test_staging_controller_receipt_v2_[ip]*.py"):
@@ -90,7 +94,17 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "infrastructure-receipt-io": (
             f"uv run pytest {RECEIPT_IO_SELECTOR} --verbosity=2"
         ),
-        "infrastructure-restore": f"uv run pytest {RESTORE_SELECTOR} --verbosity=2",
+        "infrastructure-sanitizer-foundation": (
+            f"uv run pytest {SANITIZER_FOUNDATION_SELECTOR} --verbosity=2"
+        ),
+        "infrastructure-restore": (
+            f"restore_tests=({RESTORE_GLOB})\n"
+            '\trestore_tests=("${(@)restore_tests:'
+            f"#{SANITIZER_FOUNDATION_SELECTOR}"
+            '}")\n'
+            '\tuv run pytest "${restore_tests[@]}" '
+            f"{RESTORE_RECEIPT_SELECTOR} --verbosity=2"
+        ),
         "integration": "uv run pytest tests/integration --verbosity=2",
     }
     for shard, command in expected_commands.items():
@@ -106,6 +120,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_receipt_io_start = source.index(
         "py_test-ci-infrastructure-receipt-io:"
     )
+    infrastructure_sanitizer_foundation_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-foundation:"
+    )
     infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
     application_recipe = source[application_start:infrastructure_general_start]
     integration_start = source.index("py_test-ci-integration:")
@@ -118,7 +135,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_controller_start:infrastructure_receipt_io_start
     ]
     infrastructure_receipt_io_recipe = source[
-        infrastructure_receipt_io_start:infrastructure_restore_start
+        infrastructure_receipt_io_start:infrastructure_sanitizer_foundation_start
+    ]
+    infrastructure_sanitizer_foundation_recipe = source[
+        infrastructure_sanitizer_foundation_start:infrastructure_restore_start
     ]
     infrastructure_restore_recipe = source[
         infrastructure_restore_start:integration_start
@@ -131,6 +151,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert infrastructure_general_recipe.count("--ignore-glob=") == 2
     assert "--ignore-glob=" not in infrastructure_controller_recipe
     assert "--ignore-glob=" not in infrastructure_receipt_io_recipe
+    assert "--ignore-glob=" not in infrastructure_sanitizer_foundation_recipe
     assert "--ignore-glob=" not in infrastructure_restore_recipe
     assert "playwright install chromium --only-shell" not in application_recipe
     assert "localias" not in application_recipe.lower()
@@ -181,7 +202,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         (
             Path("tests/infrastructure/test_staging_restore_sanitizer.py"),
-            "infrastructure-restore",
+            "infrastructure-sanitizer-foundation",
         ),
         (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_consumer.py"),
@@ -213,6 +234,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
         "zsh",
         "zsh",
         "zsh",

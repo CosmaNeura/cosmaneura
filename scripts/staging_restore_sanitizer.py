@@ -19,11 +19,21 @@ import urllib.parse
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import field as dataclass_field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, NoReturn
 
-import staging_synthetic_inventory as inventory
+try:
+    from scripts import build_staging_controller_receipt_v2 as receipt_builder
+    from scripts import staging_synthetic_inventory as inventory
+    from scripts import validate_staging_controller_receipt_v2 as receipt_content
+    from scripts import write_staging_controller_receipt_v2 as receipt_writer
+except ModuleNotFoundError:  # Direct `python scripts/...` execution compatibility.
+    import build_staging_controller_receipt_v2 as receipt_builder
+    import staging_synthetic_inventory as inventory
+    import validate_staging_controller_receipt_v2 as receipt_content
+    import write_staging_controller_receipt_v2 as receipt_writer
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-policy.json"
@@ -34,7 +44,7 @@ INVENTORY_POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
 CANONICAL_POLICY_SHA256 = (
-    "4c20b0118ee5e93b9ee4138418bdd93b2f411fbe69af4c834a4ae39651e74291"
+    "1c8a9e60c99b65e1ba3087cf80f86348ae6925ad7f9a93cd5c904cd1e57ae525"
 )
 CANONICAL_DATA_CONTRACT_SHA256 = (
     "f1c0c7dce56cd2aa42647578940f807186d8e888b70c66da9aa64aa7402b1360"
@@ -46,22 +56,21 @@ UUID7_EPOCH_START_MS = 1_577_836_800_000  # 2020-01-01T00:00:00Z
 UUID7_EPOCH_SPAN_MS = 315_576_000_000  # ten Julian years
 ACCESS_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
-SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-REHEARSAL_RE = re.compile(r"^[0-9a-f]{12}$")
-TARGET_NAME_PATTERN = r"cnr-[0-9a-f]{12}-e[0-9]{10}-pg"
-TARGET_NAME_RE = re.compile(
-    r"^cnr-(?P<rehearsal>[0-9a-f]{12})-e(?P<expiry>[0-9]{10})-pg$"
-)
 DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,127}$")
 ROLE_RE = re.compile(r"^[a-z][a-z0-9_]{2,62}$")
-UUID_TEXT = r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
-TARGET_RESOURCE_RE = re.compile(
-    rf"^/subscriptions/({UUID_TEXT})/resourceGroups/"
-    rf"cosmaneura-staging-rehearsal/providers/"
-    rf"Microsoft\.DBforPostgreSQL/flexibleServers/({TARGET_NAME_PATTERN})$",
-    re.IGNORECASE,
+MAXIMUM_POLICY_BYTES = 64 * 1024
+_TARGET_BINDING_SEAL = object()
+_BINDING_FAILURE_CODES = frozenset(
+    {
+        "sanitizer_binding.authority_invalid",
+        "sanitizer_binding.clock_invalid",
+        "sanitizer_binding.clock_regressed",
+        "sanitizer_binding.configuration_invalid",
+        "sanitizer_binding.expired",
+        "sanitizer_binding.output_invalid",
+        "sanitizer_binding.policy_invalid",
+    }
 )
 
 TOP_LEVEL_KEYS = {
@@ -71,50 +80,12 @@ TOP_LEVEL_KEYS = {
     "status",
     "inventory",
     "target",
-    "controller_receipt",
+    "controller_receipt_v2_binding",
     "transform_contract",
     "execution_contract",
     "migration_contract",
     "evidence_contract",
     "limitations",
-}
-RECEIPT_TOP_LEVEL = {
-    "schema_version",
-    "policy_id",
-    "policy_sha256",
-    "repository",
-    "workflow_sha",
-    "run_id",
-    "run_attempt",
-    "rehearsal_id",
-    "source_inventory",
-    "source_postgres",
-    "target",
-    "provisioner",
-    "created_at",
-    "expires_at",
-    "cleanup_not_after",
-    "isolation",
-    "pass",
-}
-RECEIPT_SOURCE_INVENTORY = {
-    "artifact_sha256",
-    "quiescence_sha256",
-    "profile",
-    "revision",
-    "source_sha",
-    "candidate_sha",
-}
-RECEIPT_TARGET = {
-    "postgres_resource_id",
-    "database_name",
-    "vnet_id",
-    "subnet_id",
-    "private_endpoint_id",
-    "network_interface_id",
-    "private_dns_zone_id",
-    "private_dns_link_id",
-    "private_dns_zone_group_id",
 }
 FIXED_CATALOG_TABLES = {
     "baa_version",
@@ -164,17 +135,53 @@ DATA_CONTRACT_KEYS = {
 }
 TABLE_CONTRACT_KEYS = {"disposition", "row_action", "columns"}
 ACTIVATION_BLOCKERS = {
-    "authenticated_controller_receipt_verification",
-    "controller_receipt_target_fqdn",
-    "controller_receipt_authoritative_restore_point",
     "authenticated_server_scope_evidence_binding",
-    "approved_database_role",
     "data_contract_executor_implementation",
     "fixed_catalog_source_state_and_post_projection_verification",
     "derived_value_execution_proof",
     "atomic_transaction_and_postcommit_verification",
     "guarded_table_truncate_permission_and_rollback_proof",
 }
+BINDING_CLAIMS = {
+    "arm_network_facts_authenticated": True,
+    "content_built_and_validated": True,
+    "controller_receipt_exists": True,
+    "controller_receipt_v2_target_binding_authenticated": True,
+    "database_role_authenticated": True,
+    "full_three_record_source_authenticated": True,
+    "intent_submission_source_authenticated": True,
+    "point_in_time_isolation_inventory_authenticated": True,
+    "private_route_reachability_authenticated": True,
+    "tls_transport_authenticated": True,
+    "blob_or_redis_copy_absence_proven": False,
+    "create_only_behavior_proven": False,
+    "database_mutation_authority": False,
+    "executable": False,
+    "execution_history_authenticated": False,
+    "live_provider_calls_enabled": False,
+    "provider_facts_authenticated": False,
+    "runtime_authority": False,
+    "sanitizer_authority": False,
+    "workflow_integrated": False,
+    "writer_identity_use_authenticated": False,
+    "writer_private_route_use_authenticated": False,
+}
+BINDING_FIELDS = (
+    "rehearsal_id",
+    "target_fqdn",
+    "database_name",
+    "approved_database_role",
+    "target_postgres_server_id",
+    "approved_restore_time",
+    "source_sha",
+    "candidate_sha",
+    "workflow_sha",
+    "run_id",
+    "run_attempt",
+    "receipt_sha256",
+    "expires_at",
+    "bound_at",
+)
 SIMPLE_COLUMN_ACTIONS = {
     "discard_row",
     "preserve_approved",
@@ -376,23 +383,124 @@ def _fail(code: str) -> NoReturn:
     raise SanitizerFailure(code)
 
 
-@dataclass(frozen=True, slots=True)
-class TargetBinding:
-    """Shape-validated controller claims; not authenticated evidence."""
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class SanitizerTargetBinding:
+    """Sealed in-process receipt-v2 authority for a future sanitizer adapter."""
 
-    resource_id: str
-    server_name: str
-    derived_fqdn: str
-    database_name: str
     rehearsal_id: str
-    created_at: datetime
-    expires_at: datetime
+    target_fqdn: str
+    database_name: str
+    approved_database_role: str
+    target_postgres_server_id: str
+    approved_restore_time: datetime
     source_sha: str
     candidate_sha: str
-    quiescence_digest: str
     workflow_sha: str
     run_id: str
     run_attempt: str
+    receipt_sha256: str
+    expires_at: datetime
+    bound_at: datetime
+    arm_network_facts_authenticated: bool
+    content_built_and_validated: bool
+    controller_receipt_exists: bool
+    controller_receipt_v2_target_binding_authenticated: bool
+    database_role_authenticated: bool
+    full_three_record_source_authenticated: bool
+    intent_submission_source_authenticated: bool
+    point_in_time_isolation_inventory_authenticated: bool
+    private_route_reachability_authenticated: bool
+    tls_transport_authenticated: bool
+    blob_or_redis_copy_absence_proven: bool
+    create_only_behavior_proven: bool
+    database_mutation_authority: bool
+    executable: bool
+    execution_history_authenticated: bool
+    live_provider_calls_enabled: bool
+    provider_facts_authenticated: bool
+    runtime_authority: bool
+    sanitizer_authority: bool
+    workflow_integrated: bool
+    writer_identity_use_authenticated: bool
+    writer_private_route_use_authenticated: bool
+    _written_receipt: receipt_writer.WrittenControllerReceiptV2 = dataclass_field(
+        repr=False, compare=False
+    )
+    _policy_bytes: bytes = dataclass_field(repr=False, compare=False)
+    _proof_sha256: str = dataclass_field(repr=False, compare=False)
+    _seal: object = dataclass_field(repr=False, compare=False)
+
+    def __init__(self) -> None:
+        _fail("sanitizer_binding.output_invalid")
+
+    def __reduce__(self) -> NoReturn:
+        _fail("sanitizer_binding.output_invalid")
+
+    def __reduce_ex__(self, protocol: object) -> NoReturn:
+        del protocol
+        _fail("sanitizer_binding.output_invalid")
+
+    def _is_bound(self) -> bool:
+        try:
+            policy = json.loads(self._policy_bytes)
+            inventory_policy = _load_json(
+                INVENTORY_POLICY_PATH, "inventory_policy.invalid"
+            )
+            validate_policy(policy, inventory_policy)
+            if self._policy_bytes != _canonical_json(policy):
+                return False
+            written = self._written_receipt
+            built = written._built_receipt
+            receipt = receipt_content._parse_canonical(
+                built.receipt_bytes, receipt_content.MAXIMUM_POLICY_BYTES
+            )
+            projection = {name: getattr(self, name) for name in BINDING_FIELDS}
+            return (
+                type(self) is SanitizerTargetBinding
+                and self._seal is _TARGET_BINDING_SEAL
+                and type(written) is receipt_writer.WrittenControllerReceiptV2
+                and written._seal is receipt_writer._RESULT_SEAL
+                and written._is_authenticated()
+                and type(built) is receipt_builder.BuiltControllerReceiptV2
+                and built._seal is receipt_builder._BUILT_SEAL
+                and receipt_content._canonical(receipt) == built.receipt_bytes
+                and receipt_content._digest(built.receipt_bytes)
+                == self.receipt_sha256
+                == written.receipt_sha256
+                == built.receipt_sha256
+                and receipt["authorization"]["rehearsal_id"] == self.rehearsal_id
+                and receipt["target"]["target_fqdn"] == self.target_fqdn
+                and receipt["target"]["approved_database_role"]
+                == self.approved_database_role
+                and receipt["target"]["target_postgres_server_id"]
+                == self.target_postgres_server_id
+                and receipt["source"]["source_database_name"] == self.database_name
+                and all(
+                    receipt["source"][name] == getattr(self, name)
+                    for name in (
+                        "source_sha",
+                        "candidate_sha",
+                        "workflow_sha",
+                        "run_id",
+                        "run_attempt",
+                    )
+                )
+                and receipt_content._utc(receipt["source"]["approved_restore_time"])
+                == self.approved_restore_time
+                and receipt_content._utc(receipt["expires_at"]) == self.expires_at
+                and type(self.bound_at) is datetime
+                and self.bound_at.tzinfo is not None
+                and self.bound_at.utcoffset() == timedelta(0)
+                and self.bound_at.microsecond == 0
+                and written.validated_at <= self.bound_at < self.expires_at
+                and all(
+                    getattr(self, name) is value
+                    for name, value in BINDING_CLAIMS.items()
+                )
+                and self._proof_sha256 == _binding_proof_sha256(projection)
+            )
+        except Exception:
+            return False
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -879,17 +987,23 @@ def _validate_policy(
     status = _exact_keys(
         policy["status"],
         {
+            "controller_receipt_v2_target_binding_implemented",
             "executable",
+            "live_provider_calls_enabled",
             "trusted_evidence_binding_implemented",
             "database_mutation_implemented",
+            "workflow_integrated",
             "activation_blockers",
         },
         "policy.status",
     )
     if (
-        status["executable"] is not False
+        status["controller_receipt_v2_target_binding_implemented"] is not True
+        or status["executable"] is not False
+        or status["live_provider_calls_enabled"] is not False
         or status["trusted_evidence_binding_implemented"] is not False
         or status["database_mutation_implemented"] is not False
+        or status["workflow_integrated"] is not False
         or set(status["activation_blockers"]) != ACTIVATION_BLOCKERS
         or len(status["activation_blockers"]) != len(ACTIVATION_BLOCKERS)
     ):
@@ -952,14 +1066,14 @@ def _validate_policy(
             "postgresql_major",
             "sslmode",
             "application_name",
-            "approved_role",
+            "approved_role_source",
             "require_no_competing_sessions",
             "rejected_hosts",
         },
         "policy.target",
     )
     if (
-        target["server_name_pattern"] != TARGET_NAME_PATTERN
+        target["server_name_pattern"] != r"cnr-[0-9a-f]{12}-e[0-9]{10}-pg"
         or target["resource_group"] != "cosmaneura-staging-rehearsal"
         or target["postgres_fqdn_suffix"] != ".postgres.database.azure.com"
         or target["database_name"] != "staging"
@@ -967,7 +1081,8 @@ def _validate_policy(
         or target["postgresql_major"] != 16
         or target["sslmode"] != "verify-full"
         or target["application_name"] != APP_NAME
-        or target["approved_role"] != "CONFIGURE_EXACT_SANITIZER_ROLE"
+        or target["approved_role_source"]
+        != "controller_receipt_v2.target.approved_database_role"
         or target["require_no_competing_sessions"] is not True
         or set(target["rejected_hosts"])
         != {
@@ -978,70 +1093,80 @@ def _validate_policy(
         _fail("policy.target")
 
     receipt = _exact_keys(
-        policy["controller_receipt"],
+        policy["controller_receipt_v2_binding"],
         {
-            "policy_id",
-            "policy_sha256",
-            "nested_fields_are_exact_and_unknowns_are_rejected",
-            "required_top_level_fields",
-            "required_source_inventory_fields",
-            "required_target_fields",
-            "bound_current_fields",
-            "pinned_source_postgres",
-            "pinned_isolation",
-            "missing_required_bindings",
-            "derived_target_fqdn_is_not_authenticated_binding",
+            "bound_fields",
+            "claims",
+            "implemented",
+            "input",
+            "kind",
+            "output",
+            "reauthentication",
+            "upstream_policies",
         },
-        "policy.controller_receipt",
+        "policy.controller_receipt_v2_binding",
     )
+    expected_upstream = {
+        "controller_receipt_v2": {
+            "policy_id": "cosmaneura-staging-controller-receipt-v2",
+            "sha256": f"sha256:{receipt_content.POLICY_SHA256}",
+        },
+        "controller_receipt_v2_builder": {
+            "policy_id": "cosmaneura-staging-controller-receipt-v2-builder-v1",
+            "sha256": f"sha256:{receipt_builder.POLICY_SHA256}",
+        },
+        "controller_receipt_v2_writer": {
+            "policy_id": "cosmaneura-staging-controller-receipt-v2-writer-v1",
+            "sha256": f"sha256:{receipt_writer.POLICY_SHA256}",
+        },
+    }
     if (
-        receipt["policy_id"] != "cosmaneura-staging-restore-envelope-v1"
-        or receipt["policy_sha256"]
-        != "sha256:6a80a9681bf2527b7c69f48c896baa01a7b5face3ddb415c1300632dab020d92"
-        or receipt["nested_fields_are_exact_and_unknowns_are_rejected"] is not True
-        or set(receipt["required_top_level_fields"]) != RECEIPT_TOP_LEVEL
-        or set(receipt["required_source_inventory_fields"]) != RECEIPT_SOURCE_INVENTORY
-        or set(receipt["required_target_fields"]) != RECEIPT_TARGET
-        or set(receipt["missing_required_bindings"])
+        receipt["kind"] != "sealed-sanitizer-target-binding-v1"
+        or receipt["implemented"] is not True
+        or receipt["upstream_policies"] != expected_upstream
+        or receipt["input"]
         != {
-            "authenticated_receipt_verification",
-            "target_fqdn_emitted_by_controller",
-            "authoritative_restore_point_emitted_by_controller",
+            "caller_bytes_maps_paths_urls_dsns_hostnames_roles_digests_policies_statuses_or_times_permitted": False,
+            "exact_type_and_in_process_seal_required": True,
+            "kind": "sealed-controller-receipt-v2-write-result-v1",
+            "only_public_data_input": "written_receipt",
         }
-        or receipt["derived_target_fqdn_is_not_authenticated_binding"] is not True
-        or receipt["bound_current_fields"]
+        or receipt["reauthentication"]
         != {
-            "source_sha": "source_inventory.source_sha",
-            "candidate_sha": "source_inventory.candidate_sha",
-            "inventory_digest": "source_inventory.artifact_sha256",
-            "quiescence_digest": "source_inventory.quiescence_sha256",
-            "target_resource_id": "target.postgres_resource_id",
-            "created_at": "created_at",
-            "expires_at": "expires_at",
-            "workflow_sha": "workflow_sha",
-            "run_id": "run_id",
-            "run_attempt": "run_attempt",
-            "isolation": "isolation",
+            "canonical_record_chain_required": True,
+            "clock_regression_rejected": True,
+            "fresh_at_bind_time_required": True,
+            "same_rehearsal_required": True,
+            "trusted_clock_source": "reviewed-private-configuration-only",
+            "whole_second_utc_required": True,
+            "writer_and_full_retained_ancestry_required": True,
         }
-        or receipt["pinned_source_postgres"]
+        or receipt["bound_fields"]
         != {
-            "resource_group": "cosmaneura-staging",
-            "server_name": "cosmaneura-staging-postgres",
-            "fqdn": "cosmaneura-staging-postgres.postgres.database.azure.com",
-            "database_name": "staging",
+            "approved_database_role": "receipt.target.approved_database_role",
+            "approved_restore_time": "receipt.source.approved_restore_time",
+            "candidate_sha": "receipt.source.candidate_sha",
+            "database_name": "receipt.source.source_database_name",
+            "expires_at": "receipt.expires_at",
+            "receipt_sha256": "written_receipt.receipt_sha256",
+            "rehearsal_id": "receipt.authorization.rehearsal_id",
+            "run_attempt": "receipt.source.run_attempt",
+            "run_id": "receipt.source.run_id",
+            "source_sha": "receipt.source.source_sha",
+            "target_fqdn": "receipt.target.target_fqdn",
+            "target_postgres_server_id": "receipt.target.target_postgres_server_id",
+            "workflow_sha": "receipt.source.workflow_sha",
         }
-        or receipt["pinned_isolation"]
+        or receipt["output"]
         != {
-            "public_access": "Disabled",
-            "firewall_rule_count": 0,
-            "vnet_peering_count": 0,
-            "public_ip_count": 0,
-            "unknown_resource_count": 0,
-            "blob_copied": False,
-            "redis_copied": False,
+            "kind": "sealed-sanitizer-target-binding-v1",
+            "non_serializable": True,
+            "private_written_authority_retained": True,
+            "unknown_fields_permitted": False,
         }
+        or receipt["claims"] != BINDING_CLAIMS
     ):
-        _fail("policy.controller_receipt")
+        _fail("policy.controller_receipt_v2_binding")
 
     transform = _exact_keys(
         policy["transform_contract"],
@@ -1243,186 +1368,315 @@ def validate_migration_files(policy: Mapping[str, Any], root: Path = ROOT) -> No
             _fail("migration.file_digest")
 
 
-def require_activation(policy: Mapping[str, Any]) -> NoReturn:
+def _trusted_utc(clock: Callable[[], datetime]) -> datetime:
+    try:
+        value = clock()
+    except Exception:
+        _fail("sanitizer_binding.clock_invalid")
+    if (
+        type(value) is not datetime
+        or value.tzinfo is None
+        or value.utcoffset() != timedelta(0)
+        or value.microsecond != 0
+    ):
+        _fail("sanitizer_binding.clock_invalid")
+    return value.astimezone(UTC)
+
+
+def _binding_projection(
+    *,
+    written_receipt: receipt_writer.WrittenControllerReceiptV2,
+    policy: Mapping[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    try:
+        if (
+            type(written_receipt) is not receipt_writer.WrittenControllerReceiptV2
+            or not written_receipt._is_authenticated()
+        ):
+            _fail("sanitizer_binding.authority_invalid")
+        binding_policy = policy["controller_receipt_v2_binding"]
+        pins = binding_policy["upstream_policies"]
+        writer_policy = receipt_writer.validate_controller_receipt_v2_writer_policy(
+            receipt_content._parse_canonical(
+                written_receipt._writer_policy_bytes, MAXIMUM_POLICY_BYTES
+            )
+        )
+        built = written_receipt._built_receipt
+        if (
+            type(built) is not receipt_builder.BuiltControllerReceiptV2
+            or pins["controller_receipt_v2_writer"]["sha256"]
+            != f"sha256:{receipt_writer.POLICY_SHA256}"
+            or pins["controller_receipt_v2_builder"]["sha256"]
+            != f"sha256:{receipt_builder.POLICY_SHA256}"
+            or pins["controller_receipt_v2"]["sha256"]
+            != f"sha256:{receipt_content.POLICY_SHA256}"
+        ):
+            _fail("sanitizer_binding.authority_invalid")
+        builder_policy = receipt_builder.validate_controller_receipt_v2_builder_policy(
+            receipt_content._parse_canonical(
+                built._builder_policy_bytes, MAXIMUM_POLICY_BYTES
+            )
+        )
+        receipt = receipt_content._parse_canonical(
+            built.receipt_bytes, receipt_content.MAXIMUM_POLICY_BYTES
+        )
+        expires_at = receipt_content._utc(receipt["expires_at"])
+        cleanup_not_after = receipt_content._utc(receipt["cleanup_not_after"])
+        if now >= min(expires_at, cleanup_not_after):
+            _fail("sanitizer_binding.expired")
+        current = receipt_builder._build_projection(
+            built._isolation_inventory,
+            policy=builder_policy,
+            now=now,
+        )
+        production = (
+            built._isolation_inventory._database_observation._production_authority
+        )
+        controller_policy = receipt_content.validate_controller_receipt_v2_policy(
+            receipt_content._parse_canonical(
+                production._controller_policy, receipt_content.MAXIMUM_POLICY_BYTES
+            )
+        )
+        validated = receipt_content.validate_controller_receipt_v2_content(
+            controller_policy,
+            intent_bytes=built.intent_bytes,
+            submission_bytes=built.submission_bytes,
+            receipt_bytes=built.receipt_bytes,
+            clock=lambda: now,
+        )
+        current_receipt = receipt_content._parse_canonical(
+            current["receipt_bytes"], receipt_content.MAXIMUM_POLICY_BYTES
+        )
+        stable_fields = set(receipt_content.TOP_LEVEL_FIELDS).difference(
+            ("created_at", "expires_at")
+        )
+        stable_projection = {name: receipt[name] for name in sorted(stable_fields)}
+        current_stable_projection = {
+            name: current_receipt[name] for name in sorted(stable_fields)
+        }
+        stable_build_fields = (
+            "arm_observation_sha256",
+            "authority_chain_sha256",
+            "database_observation_sha256",
+            "execution_resource_id",
+            "intent_sha256",
+            "isolation_inventory_authority_sha256",
+            "known_resource_inventory_sha256",
+            "policy_binding_sha256",
+            "production_authority_sha256",
+            "rehearsal_id",
+            "resource_set_sha256",
+            "restore_observed_at",
+            "runtime_policy_binding_sha256",
+            "submission_sha256",
+        )
+        modified = receipt_content._utc(written_receipt.last_modified)
+        retained = receipt_content._utc(written_receipt.retained_until)
+        skew = timedelta(
+            seconds=controller_policy["freshness"]["maximum_clock_skew_seconds"]
+        )
+        approved_restore_time = receipt_content._utc(
+            receipt["source"]["approved_restore_time"]
+        )
+        if (
+            writer_policy["policy_id"]
+            != pins["controller_receipt_v2_writer"]["policy_id"]
+            or builder_policy["policy_id"]
+            != pins["controller_receipt_v2_builder"]["policy_id"]
+            or controller_policy["policy_id"]
+            != pins["controller_receipt_v2"]["policy_id"]
+            or built.intent_bytes != current["intent_bytes"]
+            or built.submission_bytes != current["submission_bytes"]
+            or stable_projection != current_stable_projection
+            or any(
+                getattr(built, name) != current[name] for name in stable_build_fields
+            )
+            or validated.receipt_bytes != built.receipt_bytes
+            or validated.receipt_sha256 != written_receipt.receipt_sha256
+            or built.receipt_sha256 != written_receipt.receipt_sha256
+            or written_receipt.rehearsal_id != receipt["authorization"]["rehearsal_id"]
+            or built.rehearsal_id != receipt["authorization"]["rehearsal_id"]
+            or receipt["source"]["source_database_name"]
+            != policy["target"]["database_name"]
+            or ROLE_RE.fullmatch(receipt["target"]["approved_database_role"]) is None
+            or built.created_at > written_receipt.validated_at
+            or written_receipt.validated_at > now
+            or modified < built.created_at - skew
+            or modified > now + skew
+            or retained <= now
+            or retained - modified
+            < timedelta(days=writer_policy["readback"]["minimum_retention_days"])
+        ):
+            _fail("sanitizer_binding.authority_invalid")
+        source = receipt["source"]
+        target = receipt["target"]
+        return {
+            "rehearsal_id": receipt["authorization"]["rehearsal_id"],
+            "target_fqdn": target["target_fqdn"],
+            "database_name": source["source_database_name"],
+            "approved_database_role": target["approved_database_role"],
+            "target_postgres_server_id": target["target_postgres_server_id"],
+            "approved_restore_time": approved_restore_time,
+            "source_sha": source["source_sha"],
+            "candidate_sha": source["candidate_sha"],
+            "workflow_sha": source["workflow_sha"],
+            "run_id": source["run_id"],
+            "run_attempt": source["run_attempt"],
+            "receipt_sha256": written_receipt.receipt_sha256,
+            "expires_at": expires_at,
+            "bound_at": now,
+        }
+    except SanitizerFailure:
+        raise
+    except Exception:
+        _fail("sanitizer_binding.authority_invalid")
+
+
+def _binding_proof_sha256(projection: Mapping[str, Any]) -> str:
+    serializable = dict(projection)
+    for name in ("approved_restore_time", "expires_at", "bound_at"):
+        value = serializable[name]
+        if type(value) is not datetime:
+            _fail("sanitizer_binding.output_invalid")
+        serializable[name] = value.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return hashlib.sha256(_canonical_json(serializable)).hexdigest()
+
+
+def _mint_target_binding(
+    *,
+    written_receipt: receipt_writer.WrittenControllerReceiptV2,
+    policy: Mapping[str, Any],
+    projection: Mapping[str, Any],
+) -> SanitizerTargetBinding:
+    result = object.__new__(SanitizerTargetBinding)
+    for name, value in {**projection, **BINDING_CLAIMS}.items():
+        object.__setattr__(result, name, value)
+    object.__setattr__(result, "_written_receipt", written_receipt)
+    object.__setattr__(result, "_policy_bytes", _canonical_json(policy))
+    object.__setattr__(result, "_proof_sha256", _binding_proof_sha256(projection))
+    object.__setattr__(result, "_seal", _TARGET_BINDING_SEAL)
+    if (
+        type(result) is not SanitizerTargetBinding
+        or result._seal is not _TARGET_BINDING_SEAL
+        or any(getattr(result, name) != value for name, value in projection.items())
+        or any(
+            getattr(result, name) is not value for name, value in BINDING_CLAIMS.items()
+        )
+        or result._proof_sha256 != _binding_proof_sha256(projection)
+    ):
+        _fail("sanitizer_binding.output_invalid")
+    return result
+
+
+class SanitizerTargetBinder:
+    """Pure binder configured only with a reviewed trusted UTC clock."""
+
+    __slots__ = ("_clock", "_last")
+
+    def __init__(self) -> None:
+        _fail("sanitizer_binding.configuration_invalid")
+
+    @classmethod
+    def _from_reviewed_configuration(
+        cls, *, clock: Callable[[], datetime]
+    ) -> SanitizerTargetBinder:
+        if cls is not SanitizerTargetBinder or not callable(clock):
+            _fail("sanitizer_binding.configuration_invalid")
+        value = object.__new__(cls)
+        value._clock = clock
+        value._last = None
+        return value
+
+    def _read_clock(self) -> datetime:
+        now = _trusted_utc(self._clock)
+        if self._last is not None and now < self._last:
+            _fail("sanitizer_binding.clock_regressed")
+        self._last = now
+        return now
+
+    def bind(
+        self, *, written_receipt: receipt_writer.WrittenControllerReceiptV2
+    ) -> SanitizerTargetBinding:
+        code: str | None = None
+        try:
+            if type(self) is not SanitizerTargetBinder:
+                _fail("sanitizer_binding.configuration_invalid")
+            policy = load_canonical_policy()
+            inventory_policy = _load_json(
+                INVENTORY_POLICY_PATH, "inventory_policy.invalid"
+            )
+            validate_policy(policy, inventory_policy)
+            started_at = self._read_clock()
+            projection = _binding_projection(
+                written_receipt=written_receipt,
+                policy=policy,
+                now=started_at,
+            )
+            completed_at = self._read_clock()
+            if completed_at != started_at:
+                projection = _binding_projection(
+                    written_receipt=written_receipt,
+                    policy=policy,
+                    now=completed_at,
+                )
+            return _mint_target_binding(
+                written_receipt=written_receipt,
+                policy=policy,
+                projection=projection,
+            )
+        except Exception as error:
+            code = (
+                error.args[0]
+                if type(error) is SanitizerFailure
+                and len(error.args) == 1
+                and type(error.args[0]) is str
+                and error.args[0] in _BINDING_FAILURE_CODES
+                else "sanitizer_binding.authority_invalid"
+            )
+        raise SanitizerFailure(code) from None
+
+
+def build_sanitizer_target_binder() -> NoReturn:
+    """Refuse public construction while sanitizer activation remains blocked."""
+
+    load_canonical_policy()
+    _fail("activation.trusted_binding_unimplemented")
+
+
+def require_activation() -> NoReturn:
     """Refuse before a caller may import a driver or invoke a connector."""
 
-    del policy
     _fail("activation.trusted_binding_unimplemented")
 
 
 def preflight(
-    policy: Mapping[str, Any],
-    inventory_policy: Mapping[str, Any],
+    binding: SanitizerTargetBinding,
     connector: Callable[[], Any],
 ) -> NoReturn:
-    """Validate the contract, then unconditionally stop before ``connector``."""
+    """Authenticate the sealed binding, then stop before ``connector``."""
 
     del connector
-    validate_policy(policy, inventory_policy)
-    require_activation(policy)
-
-
-def _utc(value: object, code: str) -> datetime:
-    if not isinstance(value, str) or not re.fullmatch(
-        r"20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value
-    ):
-        _fail(code)
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
-    except ValueError:
-        _fail(code)
-
-
-def _same_id(actual: object, expected: str, code: str) -> None:
-    if str(actual).rstrip("/").lower() != expected.rstrip("/").lower():
-        _fail(code)
-
-
-def validate_controller_receipt_shape(
-    receipt: Mapping[str, Any], policy: Mapping[str, Any]
-) -> TargetBinding:
-    """Validate only the current controller receipt shape and internal binding.
-
-    This cannot authenticate the receipt and deliberately does not synthesize
-    either the omitted target-FQDN attestation or authoritative restore point.
-    """
-
-    _exact_keys(receipt, RECEIPT_TOP_LEVEL, "receipt.closed_world")
-    source = _exact_keys(
-        receipt["source_inventory"],
-        RECEIPT_SOURCE_INVENTORY,
-        "receipt.source_inventory",
-    )
-    source_postgres = _exact_keys(
-        receipt["source_postgres"],
-        {"resource_id", "fqdn", "database_name"},
-        "receipt.source_postgres",
-    )
-    target = _exact_keys(receipt["target"], RECEIPT_TARGET, "receipt.target")
-    _exact_keys(
-        receipt["provisioner"], {"client_id", "principal_id"}, "receipt.provisioner"
-    )
-    isolation = _exact_keys(
-        receipt["isolation"],
-        {
-            "public_access",
-            "firewall_rule_count",
-            "vnet_peering_count",
-            "public_ip_count",
-            "unknown_resource_count",
-            "blob_copied",
-            "redis_copied",
-        },
-        "receipt.isolation",
-    )
-    if (
-        receipt["schema_version"] != 1
-        or receipt["policy_id"] != policy["controller_receipt"]["policy_id"]
-        or receipt["policy_sha256"] != policy["controller_receipt"]["policy_sha256"]
-        or receipt["repository"] != "CosmaNeura/cosmaneura"
-        or receipt["pass"] is not True
-        or not DIGEST_RE.fullmatch(str(receipt["policy_sha256"]))
-        or not SHA40_RE.fullmatch(str(receipt["workflow_sha"]))
-        or not str(receipt["run_id"]).isdigit()
-        or not str(receipt["run_attempt"]).isdigit()
-        or not REHEARSAL_RE.fullmatch(str(receipt["rehearsal_id"]))
-        or not DIGEST_RE.fullmatch(str(source["artifact_sha256"]))
-        or not DIGEST_RE.fullmatch(str(source["quiescence_sha256"]))
-        or not SHA40_RE.fullmatch(str(source["source_sha"]))
-        or not SHA40_RE.fullmatch(str(source["candidate_sha"]))
-        or source["profile"] != policy["inventory"]["source_profile"]
-        or source["revision"] != policy["inventory"]["source_revision"]
-        or source_postgres["fqdn"]
-        != "cosmaneura-staging-postgres.postgres.database.azure.com"
-        or source_postgres["database_name"] != "staging"
-        or isolation != policy["controller_receipt"]["pinned_isolation"]
-    ):
-        _fail("receipt.invalid")
-
-    resource_id = str(target["postgres_resource_id"])
-    resource_match = TARGET_RESOURCE_RE.fullmatch(resource_id)
-    if resource_match is None:
-        _fail("receipt.target_resource")
-    subscription, server_name = resource_match.groups()
-    name_match = TARGET_NAME_RE.fullmatch(server_name.lower())
-    if name_match is None or name_match.group("rehearsal") != receipt["rehearsal_id"]:
-        _fail("receipt.target_name")
-    created_at = _utc(receipt["created_at"], "receipt.created_at")
-    expires_at = _utc(receipt["expires_at"], "receipt.expires_at")
-    cleanup_at = _utc(receipt["cleanup_not_after"], "receipt.cleanup_not_after")
-    if (
-        created_at >= expires_at
-        or cleanup_at != expires_at
-        or int(expires_at.timestamp()) != int(name_match.group("expiry"))
-        or target["database_name"] != policy["target"]["database_name"]
-    ):
-        _fail("receipt.lifecycle")
-
-    group_root = (
-        f"/subscriptions/{subscription}/resourceGroups/cosmaneura-staging-rehearsal"
-    )
-    base = server_name.removesuffix("-pg")
-    vnet = f"{group_root}/providers/Microsoft.Network/virtualNetworks/{base}-vnet"
-    pe = f"{group_root}/providers/Microsoft.Network/privateEndpoints/{base}-pep"
-    nic = f"{group_root}/providers/Microsoft.Network/networkInterfaces/{base}-nic"
-    zone = (
-        f"{group_root}/providers/Microsoft.Network/privateDnsZones/"
-        "privatelink.postgres.database.azure.com"
-    )
-    _same_id(target["vnet_id"], vnet, "receipt.network")
-    _same_id(
-        target["subnet_id"], f"{vnet}/subnets/private-endpoints", "receipt.network"
-    )
-    _same_id(target["private_endpoint_id"], pe, "receipt.network")
-    _same_id(target["network_interface_id"], nic, "receipt.network")
-    _same_id(target["private_dns_zone_id"], zone, "receipt.network")
-    _same_id(
-        target["private_dns_link_id"],
-        f"{zone}/virtualNetworkLinks/{base}-dnslink",
-        "receipt.network",
-    )
-    _same_id(
-        target["private_dns_zone_group_id"],
-        f"{pe}/privateDnsZoneGroups/default",
-        "receipt.network",
-    )
-    source_id = (
-        f"/subscriptions/{subscription}/resourceGroups/cosmaneura-staging/providers/"
-        "Microsoft.DBforPostgreSQL/flexibleServers/cosmaneura-staging-postgres"
-    )
-    _same_id(source_postgres["resource_id"], source_id, "receipt.source_postgres")
-    return TargetBinding(
-        resource_id=resource_id,
-        server_name=server_name.lower(),
-        derived_fqdn=server_name.lower() + policy["target"]["postgres_fqdn_suffix"],
-        database_name=str(target["database_name"]),
-        rehearsal_id=str(receipt["rehearsal_id"]),
-        created_at=created_at,
-        expires_at=expires_at,
-        source_sha=str(source["source_sha"]),
-        candidate_sha=str(source["candidate_sha"]),
-        quiescence_digest=str(source["quiescence_sha256"]),
-        workflow_sha=str(receipt["workflow_sha"]),
-        run_id=str(receipt["run_id"]),
-        run_attempt=str(receipt["run_attempt"]),
-    )
+    if type(binding) is not SanitizerTargetBinding or not binding._is_bound():
+        _fail("sanitizer_binding.output_invalid")
+    require_activation()
 
 
 def validate_target_url(
     database_url: str,
-    binding: TargetBinding,
-    policy: Mapping[str, Any],
-    *,
-    expected_role: str,
+    binding: SanitizerTargetBinding,
 ) -> None:
-    """Validate an isolated target URL without opening a socket."""
+    """Validate a future target URL against only a sealed target binding."""
 
-    if not ROLE_RE.fullmatch(expected_role):
-        _fail("target.role")
+    if type(binding) is not SanitizerTargetBinding or not binding._is_bound():
+        _fail("sanitizer_binding.output_invalid")
+    policy = load_canonical_policy()
     try:
         parsed = urllib.parse.urlsplit(database_url)
         port = parsed.port
-        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+        query = urllib.parse.parse_qs(
+            parsed.query, keep_blank_values=True, strict_parsing=True
+        )
     except (TypeError, ValueError):
         _fail("target.invalid")
     expected_query = {
@@ -1435,10 +1689,10 @@ def validate_target_url(
     root = Path(root_values[0]) if root_values and len(root_values) == 1 else None
     if (
         parsed.scheme != "postgresql"
-        or parsed.hostname != binding.derived_fqdn
+        or parsed.hostname != binding.target_fqdn
         or parsed.hostname in set(policy["target"]["rejected_hosts"])
         or port != policy["target"]["port"]
-        or urllib.parse.unquote(parsed.username or "") != expected_role
+        or urllib.parse.unquote(parsed.username or "") != binding.approved_database_role
         or parsed.path != f"/{binding.database_name}"
         or parsed.fragment
         or query != expected_query
@@ -1650,7 +1904,7 @@ def main(argv: list[str] | None = None) -> int:
         validate_policy(policy, inventory_policy, data_contract)
         validate_migration_files(policy)
         if args.operation == "preflight":
-            preflight(policy, inventory_policy, lambda: None)
+            require_activation()
         print(
             json.dumps(
                 {
