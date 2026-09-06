@@ -3,16 +3,31 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import inspect
 import json
+import pickle
 import sys
 import urllib.parse
 import uuid
+from collections.abc import Iterator
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import pytest
 from typeid import TypeID
+
+from scripts import read_staging_controller_receipt_v2 as private_reader
+from scripts import validate_staging_controller_receipt_v2 as receipt_content
+from scripts import write_staging_controller_receipt_v2 as receipt_writer
+
+from tests.infrastructure import (
+    test_staging_controller_receipt_v2_builder as builder_helpers,
+)
+from tests.infrastructure import (
+    test_staging_controller_receipt_v2_writer as writer_helpers,
+)
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/staging_restore_sanitizer.py"
@@ -45,9 +60,34 @@ def _load_module() -> ModuleType:
     return module
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def module() -> ModuleType:
     return _load_module()
+
+
+@pytest.fixture(scope="module")
+def written_chain() -> Iterator[
+    tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2]
+]:
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        authority, built = builder_helpers._build(monkeypatch)
+        instance, _identity, _blob = writer_helpers._instance(monkeypatch, built)
+        yield authority, built, instance.write(built_receipt=built)
+    finally:
+        monkeypatch.undo()
+
+
+@pytest.fixture(scope="module")
+def target_binding(
+    module: ModuleType,
+    written_chain: tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2],
+) -> Any:
+    _authority, _built, written = written_chain
+    binder = module.SanitizerTargetBinder._from_reviewed_configuration(
+        clock=lambda: builder_helpers.NOW
+    )
+    return binder.bind(written_receipt=written)
 
 
 def _policies() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -143,9 +183,22 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
     module.validate_policy(policy, inventory_policy, data_contract)
     assert data_contract["retained_table_count"] == 29
     assert data_contract["retained_column_count"] == 343
+    assert policy["status"]["controller_receipt_v2_target_binding_implemented"] is True
     assert policy["status"]["executable"] is False
+    assert policy["status"]["trusted_evidence_binding_implemented"] is False
+    assert policy["status"]["live_provider_calls_enabled"] is False
+    assert policy["status"]["workflow_integrated"] is False
     assert policy["execution_contract"]["database_connections_permitted"] is False
     assert policy["execution_contract"]["sql_mutation_permitted"] is False
+    receipt_binding = policy["controller_receipt_v2_binding"]
+    assert receipt_binding["input"]["only_public_data_input"] == "written_receipt"
+    assert (
+        receipt_binding["input"][
+            "caller_bytes_maps_paths_urls_dsns_hostnames_roles_digests_policies_statuses_or_times_permitted"
+        ]
+        is False
+    )
+    assert receipt_binding["output"]["non_serializable"] is True
     transform = policy["transform_contract"]
     assert transform["retained_column_policy_status"] == (
         "complete_sha256_pinned_343_columns"
@@ -179,6 +232,7 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
     source = SCRIPT.read_text()
     assert "import psycopg" not in source
     assert "def rewrite_database" not in source
+    assert not hasattr(module, "validate_controller_receipt_shape")
 
 
 @pytest.mark.parametrize("change", ["missing", "extra"])
@@ -293,10 +347,28 @@ def test_policy_rejects_unknown_fields_and_activation(module: ModuleType) -> Non
     changed["target"]["unexpected"] = True
     with pytest.raises(module.SanitizerFailure, match="policy.target"):
         module.validate_policy(changed, inventory_policy)
+    for path, value in (
+        (("input", "only_public_data_input"), "receipt_bytes"),
+        (
+            ("upstream_policies", "controller_receipt_v2_writer", "sha256"),
+            "sha256:" + "0" * 64,
+        ),
+        (("claims", "database_mutation_authority"), True),
+    ):
+        changed = copy.deepcopy(policy)
+        target: dict[str, Any] = changed["controller_receipt_v2_binding"]
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+        with pytest.raises(
+            module.SanitizerFailure, match="policy.controller_receipt_v2_binding"
+        ):
+            module.validate_policy(changed, inventory_policy)
 
 
-def test_preflight_refuses_before_connector(module: ModuleType) -> None:
-    policy, inventory_policy = _policies()
+def test_preflight_refuses_before_connector(
+    module: ModuleType, target_binding: Any
+) -> None:
     called = False
 
     def connector() -> None:
@@ -306,7 +378,7 @@ def test_preflight_refuses_before_connector(module: ModuleType) -> None:
     with pytest.raises(
         module.SanitizerFailure, match="activation.trusted_binding_unimplemented"
     ):
-        module.preflight(policy, inventory_policy, connector)
+        module.preflight(target_binding, connector)
     assert called is False
 
 
@@ -322,80 +394,266 @@ def test_four_migration_files_are_exactly_pinned(module: ModuleType) -> None:
         module.validate_migration_files(changed, ROOT)
 
 
-def test_actual_controller_receipt_shape_cross_binds_target(module: ModuleType) -> None:
-    policy, _ = _policies()
-    binding = module.validate_controller_receipt_shape(_receipt(), policy)
-    assert binding.server_name == SERVER
-    assert binding.rehearsal_id == REHEARSAL
-    assert binding.derived_fqdn == f"{SERVER}.postgres.database.azure.com"
-    assert binding.source_sha == "d" * 40
-    assert binding.candidate_sha == "e" * 40
-    assert policy["controller_receipt"]["missing_required_bindings"] == [
-        "authenticated_receipt_verification",
-        "target_fqdn_emitted_by_controller",
-        "authoritative_restore_point_emitted_by_controller",
-    ]
+def test_real_builder_writer_chain_mints_narrow_nonserializable_binding(
+    module: ModuleType,
+    written_chain: tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2],
+    target_binding: Any,
+) -> None:
+    _authority, built, written = written_chain
+    receipt = json.loads(built.receipt_bytes)
+    binding = target_binding
+    assert binding._is_bound()
+    assert binding.rehearsal_id == receipt["authorization"]["rehearsal_id"]
+    assert binding.target_fqdn == receipt["target"]["target_fqdn"]
+    assert binding.database_name == receipt["source"]["source_database_name"]
+    assert binding.approved_database_role == receipt["target"]["approved_database_role"]
+    assert (
+        binding.target_postgres_server_id
+        == receipt["target"]["target_postgres_server_id"]
+    )
+    assert binding.approved_restore_time == receipt_content._utc(
+        receipt["source"]["approved_restore_time"]
+    )
+    for name in (
+        "source_sha",
+        "candidate_sha",
+        "workflow_sha",
+        "run_id",
+        "run_attempt",
+    ):
+        assert getattr(binding, name) == receipt["source"][name]
+    assert binding.receipt_sha256 == written.receipt_sha256 == built.receipt_sha256
+    assert binding.expires_at == built.expires_at
+    assert binding.bound_at == builder_helpers.NOW
+    assert repr(binding).startswith("<")
+    with pytest.raises(TypeError):
+        json.dumps(binding)
+    with pytest.raises(module.SanitizerFailure, match="output_invalid"):
+        pickle.dumps(binding)
+    for name, expected in module.BINDING_CLAIMS.items():
+        assert getattr(binding, name) is expected
+
+
+def test_binding_api_accepts_only_written_receipt_and_no_overrides(
+    module: ModuleType,
+    written_chain: tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2],
+) -> None:
+    _authority, built, _written = written_chain
+    parameters = inspect.signature(module.SanitizerTargetBinder.bind).parameters
+    assert tuple(parameters) == ("self", "written_receipt")
+    assert parameters["written_receipt"].kind is inspect.Parameter.KEYWORD_ONLY
+    binder = module.SanitizerTargetBinder._from_reviewed_configuration(
+        clock=lambda: builder_helpers.NOW
+    )
+    controller = receipt_content._parse_canonical(
+        built._isolation_inventory._database_observation._production_authority._controller_policy,
+        receipt_content.MAXIMUM_POLICY_BYTES,
+    )
+    content_only = receipt_content.validate_controller_receipt_v2_content(
+        controller,
+        intent_bytes=built.intent_bytes,
+        submission_bytes=built.submission_bytes,
+        receipt_bytes=built.receipt_bytes,
+        clock=lambda: builder_helpers.NOW,
+    )
+
+    class Lookalike:
+        def _is_authenticated(self) -> bool:
+            return True
+
+    class WrittenSubclass(receipt_writer.WrittenControllerReceiptV2):
+        pass
+
+    rejected = (
+        _receipt(),
+        built.receipt_bytes,
+        json.loads(built.receipt_bytes),
+        content_only,
+        object.__new__(
+            private_reader.AuthenticatedControllerReceiptV2RecordChainSource
+        ),
+        built,
+        Lookalike(),
+        object.__new__(WrittenSubclass),
+        object.__new__(receipt_writer.WrittenControllerReceiptV2),
+    )
+    for value in rejected:
+        with pytest.raises(
+            module.SanitizerFailure, match="^sanitizer_binding.authority_invalid$"
+        ) as error:
+            binder.bind(written_receipt=value)
+        assert error.value.__cause__ is None
+        assert error.value.__context__ is None
+    with pytest.raises(
+        module.SanitizerFailure, match="sanitizer_binding.configuration_invalid"
+    ):
+        module.SanitizerTargetBinder()
+    with pytest.raises(
+        module.SanitizerFailure, match="sanitizer_binding.output_invalid"
+    ):
+        module.SanitizerTargetBinding()
+    with pytest.raises(
+        module.SanitizerFailure, match="activation.trusted_binding_unimplemented"
+    ):
+        module.build_sanitizer_target_binder()
+
+
+def test_tampered_writer_builder_ancestor_and_binding_refuse(
+    module: ModuleType,
+    written_chain: tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2],
+    target_binding: Any,
+) -> None:
+    authority, built, written = written_chain
+    binder = module.SanitizerTargetBinder._from_reviewed_configuration(
+        clock=lambda: builder_helpers.NOW
+    )
+    original_writer_digest = written.receipt_sha256
+    try:
+        object.__setattr__(written, "receipt_sha256", "sha256:" + "0" * 64)
+        with pytest.raises(module.SanitizerFailure, match="authority_invalid"):
+            binder.bind(written_receipt=written)
+        assert target_binding._is_bound() is False
+    finally:
+        object.__setattr__(written, "receipt_sha256", original_writer_digest)
+
+    original_digest = built.receipt_sha256
+    try:
+        object.__setattr__(built, "receipt_sha256", "sha256:" + "0" * 64)
+        with pytest.raises(module.SanitizerFailure, match="authority_invalid"):
+            binder.bind(written_receipt=written)
+    finally:
+        object.__setattr__(built, "receipt_sha256", original_digest)
+
+    original_rehearsal = authority.rehearsal_id
+    try:
+        object.__setattr__(authority, "rehearsal_id", "fedcba987654")
+        with pytest.raises(module.SanitizerFailure, match="authority_invalid"):
+            binder.bind(written_receipt=written)
+        assert target_binding._is_bound() is False
+    finally:
+        object.__setattr__(authority, "rehearsal_id", original_rehearsal)
+
+    original_fqdn = target_binding.target_fqdn
+    try:
+        object.__setattr__(target_binding, "target_fqdn", "staging.invalid")
+        assert target_binding._is_bound() is False
+    finally:
+        object.__setattr__(target_binding, "target_fqdn", original_fqdn)
+    assert target_binding._is_bound()
 
 
 @pytest.mark.parametrize(
-    "change",
-    [
-        "extra_top_level",
-        "extra_target",
-        "wrong_rehearsal",
-        "wrong_expiry",
-        "wrong_network",
-        "weak_isolation",
-        "wrong_controller_policy",
-    ],
+    "clock",
+    (
+        lambda: datetime(2026, 9, 6, 0, 0),
+        lambda: builder_helpers.NOW + timedelta(microseconds=1),
+    ),
+    ids=("naive", "subsecond"),
 )
-def test_controller_receipt_rejects_unbound_or_unknown_fields(
-    module: ModuleType, change: str
-) -> None:
-    policy, _ = _policies()
-    receipt = _receipt()
-    if change == "extra_top_level":
-        receipt["unknown"] = True
-    elif change == "extra_target":
-        receipt["target"]["fqdn"] = f"{SERVER}.postgres.database.azure.com"
-    elif change == "wrong_rehearsal":
-        receipt["rehearsal_id"] = "fedcba987654"
-    elif change == "wrong_expiry":
-        receipt["expires_at"] = "2026-09-03T18:00:01Z"
-    elif change == "wrong_network":
-        receipt["target"]["vnet_id"] += "-other"
-    elif change == "weak_isolation":
-        receipt["isolation"]["firewall_rule_count"] = 1
-    else:
-        receipt["policy_sha256"] = "sha256:" + "0" * 64
-    with pytest.raises(module.SanitizerFailure):
-        module.validate_controller_receipt_shape(receipt, policy)
-
-
-def test_target_url_requires_exact_derived_target_and_verify_full(
+def test_binding_requires_whole_second_utc(
     module: ModuleType,
+    written_chain: tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2],
+    clock: Any,
+) -> None:
+    _authority, _built, written = written_chain
+    binder = module.SanitizerTargetBinder._from_reviewed_configuration(clock=clock)
+    with pytest.raises(module.SanitizerFailure, match="clock_invalid"):
+        binder.bind(written_receipt=written)
+
+
+def test_binding_rejects_expiry_staleness_and_clock_regression(
+    module: ModuleType,
+    written_chain: tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2],
+) -> None:
+    _authority, built, written = written_chain
+    expired = module.SanitizerTargetBinder._from_reviewed_configuration(
+        clock=lambda: built.expires_at
+    )
+    with pytest.raises(module.SanitizerFailure, match="expired"):
+        expired.bind(written_receipt=written)
+
+    stale = module.SanitizerTargetBinder._from_reviewed_configuration(
+        clock=lambda: builder_helpers.NOW + timedelta(seconds=61)
+    )
+    with pytest.raises(module.SanitizerFailure, match="expired"):
+        stale.bind(written_receipt=written)
+
+    values = iter((builder_helpers.NOW, builder_helpers.NOW - timedelta(seconds=1)))
+    regressed = module.SanitizerTargetBinder._from_reviewed_configuration(
+        clock=lambda: next(values)
+    )
+    with pytest.raises(module.SanitizerFailure, match="clock_regressed"):
+        regressed.bind(written_receipt=written)
+
+
+def test_binding_failures_are_bounded_and_hide_exception_content(
+    module: ModuleType,
+    written_chain: tuple[Any, Any, receipt_writer.WrittenControllerReceiptV2],
+) -> None:
+    _authority, _built, written = written_chain
+    secret = "postgresql://role:secret@host/database"
+    binder = module.SanitizerTargetBinder._from_reviewed_configuration(
+        clock=lambda: (_ for _ in ()).throw(RuntimeError(secret))
+    )
+    with pytest.raises(module.SanitizerFailure, match="clock_invalid") as error:
+        binder.bind(written_receipt=written)
+    assert secret not in repr(error.value)
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
+def test_target_url_requires_exact_sealed_binding_and_verify_full(
+    module: ModuleType, target_binding: Any
 ) -> None:
     policy, _ = _policies()
-    binding = module.validate_controller_receipt_shape(_receipt(), policy)
     root = urllib.parse.quote("/tmp/test-root.pem", safe="")
     valid = (
-        f"postgresql://sanitizer_role:secret@{binding.derived_fqdn}:5432/staging"
+        f"postgresql://{target_binding.approved_database_role}:secret@"
+        f"{target_binding.target_fqdn}:5432/staging"
         f"?sslmode=verify-full&sslrootcert={root}"
         f"&application_name={module.APP_NAME}&connect_timeout=10"
     )
-    module.validate_target_url(valid, binding, policy, expected_role="sanitizer_role")
+    module.validate_target_url(valid, target_binding)
     for invalid in (
-        valid.replace(binding.derived_fqdn, policy["target"]["rejected_hosts"][1]),
+        valid.replace(
+            target_binding.target_fqdn, policy["target"]["rejected_hosts"][1]
+        ),
         valid.replace("verify-full", "require"),
         valid.replace("/staging", "/production"),
+        valid.replace(target_binding.approved_database_role, "another_role"),
         valid + "&options=-csearch_path%3Dpublic",
+        valid + "&hostaddr=",
+        valid + "&options=",
+        valid + "&sslmode=",
+        valid + "&sslrootcert=",
     ):
         with pytest.raises(module.SanitizerFailure, match="target.invalid"):
-            module.validate_target_url(
-                invalid, binding, policy, expected_role="sanitizer_role"
-            )
-    with pytest.raises(module.SanitizerFailure, match="target.invalid"):
-        module.validate_target_url(valid, binding, policy, expected_role="another_role")
+            module.validate_target_url(invalid, target_binding)
+    unsealed = object.__new__(module.SanitizerTargetBinding)
+    with pytest.raises(module.SanitizerFailure, match="output_invalid"):
+        module.validate_target_url(valid, unsealed)
+
+
+def test_binding_and_preflight_have_no_io_or_execution_surface(
+    module: ModuleType, target_binding: Any
+) -> None:
+    source = SCRIPT.read_text()
+    for forbidden in (
+        "import psycopg",
+        "import socket",
+        "import subprocess",
+        "urllib.request",
+        "def rewrite_database",
+    ):
+        assert forbidden not in source
+    assert module.BINDING_CLAIMS["provider_facts_authenticated"] is False
+    assert module.BINDING_CLAIMS["database_mutation_authority"] is False
+    assert module.BINDING_CLAIMS["sanitizer_authority"] is False
+    assert module.BINDING_CLAIMS["runtime_authority"] is False
+    assert module.BINDING_CLAIMS["live_provider_calls_enabled"] is False
+    assert module.BINDING_CLAIMS["workflow_integrated"] is False
+    assert module.BINDING_CLAIMS["executable"] is False
+    assert target_binding._is_bound()
 
 
 def test_uuid_transform_is_deterministic_v7_and_typeid_round_trips(

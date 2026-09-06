@@ -209,6 +209,8 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-receipt-io
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-foundation
+            apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh
           - shard: integration

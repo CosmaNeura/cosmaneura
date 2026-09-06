@@ -256,9 +256,30 @@ and [dependency-factory flight plan](flight-plans/2026-09-05-staging-provision-d
 
 ## Dormant restore-sanitizer contract
 
-`restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a non-executable foundation. The canonical policy pins `trusted_evidence_binding_implemented=false`, permits no database connection or SQL mutation, and refuses preflight before a PostgreSQL driver or connector can run. The pure receipt/target checks understand the controller's current `cnr-<12hex>-e<10digit>-pg` resource IDs, but derivation of a hostname is not authenticated evidence.
+`restore-sanitizer-policy.json` and `staging_restore_sanitizer.py` are a
+non-executable foundation. The sanitizer no longer accepts the legacy raw-v1
+receipt mapping. Its sole authority input is now an exact sealed
+`WrittenControllerReceiptV2`; a reviewed-clock binder reauthenticates the writer
+and retained builder/observation ancestry, revalidates the canonical three-record
+chain, and seals the target FQDN, database and role, approved restore point,
+source/candidate/workflow/run identity, receipt digest, and expiry. Raw v1 or v2
+bytes/maps, content-only validators, private-reader results, unwritten builder
+results, lookalikes, subclasses, and caller-selected fields or time all fail
+closed. `validate_target_url` requires that sealed binding and derives host,
+database, and role from it.
 
-Activation remains blocked until the controller authenticates and binds the source and candidate SHAs, quiescence evidence, authoritative restore point, target resource ID and FQDN, creation/expiry, workflow/run identity, isolation result, and approved database role. The five fixed-catalog payloads require their exact authenticated source table state HMACs; their PK/FK identifiers cannot use generic transforms. Clerk values, email/domain joins, dependent digests, TypeID text references, and rotated access-code verifiers likewise require one proven semantic mapping.
+This is an in-process input binding, not activation. The canonical policy still
+pins `trusted_evidence_binding_implemented=false`, permits no database connection
+or SQL mutation, and leaves executable, workflow, and live-provider flags false.
+Preflight validates the seal and refuses before a PostgreSQL driver or connector
+can run. See the [receipt-v2 sanitizer-binding flight plan](flight-plans/2026-09-06-staging-controller-receipt-v2-sanitizer-binding.md).
+
+Activation remains blocked on authenticated server-scope evidence and execution,
+not on reconstructing target identity from a legacy receipt. The five
+fixed-catalog payloads still require their exact authenticated source table state
+HMACs; their PK/FK identifiers cannot use generic transforms. Clerk values,
+email/domain joins, dependent digests, TypeID text references, and rotated
+access-code verifiers likewise require one proven semantic mapping.
 
 A future executor must keep guarded append-only tables empty, reject unexpected `ON TRUNCATE` triggers, and prove its isolated-copy `TRUNCATE`/reinsert permissions and rollback behavior; this does not preserve append-only semantics. It must use serializable transactions, `synchronous_commit=on`, bounded timeouts, an `alembic_version` lock, a pre-commit session recheck, and fresh-connection post-commit verification. Any ambiguous outcome is isolated and cleanup-only.
 
