@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -23,6 +23,8 @@ TOKEN = "database-observation-token"
 LOCAL_ADDRESS = "10.76.0.40"
 Failure = database.ControllerReceiptV2DatabaseObservationFailure
 SECRET_MARKERS = (TOKEN, "postgresql://", "detail must not escape")
+_AUTHORITY_PAIR_TEMPLATE: tuple[Any, Any] | None = None
+_REAL_DERIVE_PLAN = database._derive_plan
 
 
 @contextmanager
@@ -142,8 +144,29 @@ def _clear_libpq_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _authority_pair(monkeypatch: pytest.MonkeyPatch) -> tuple[Any, Any]:
-    observer, authority, _identity, _case = arm_helpers._run(monkeypatch)
-    return authority, observer.observe(production_authority=authority)
+    global _AUTHORITY_PAIR_TEMPLATE
+    if _AUTHORITY_PAIR_TEMPLATE is None:
+        observer, authority, _identity, _case = arm_helpers._run(monkeypatch)
+        _AUTHORITY_PAIR_TEMPLATE = (
+            authority,
+            observer.observe(production_authority=authority),
+        )
+    # These are the only cached-chain objects this module mutates.
+    authority = copy(_AUTHORITY_PAIR_TEMPLATE[0])
+    arm_observation = copy(_AUTHORITY_PAIR_TEMPLATE[1])
+    object.__setattr__(arm_observation, "_production_authority", authority)
+    object.__setattr__(
+        arm_observation,
+        "_responses",
+        tuple(copy(item) for item in _AUTHORITY_PAIR_TEMPLATE[1]._responses),
+    )
+    monkeypatch.setenv("IDENTITY_ENDPOINT", wire.IDENTITY_ENDPOINT)
+    monkeypatch.setenv("IDENTITY_HEADER", wire.IDENTITY_HEADER)
+    monkeypatch.setenv(
+        arm_helpers.launch.EXECUTION_NAME_ENV,
+        arm_helpers.production_helpers.mailbox_helpers.EXECUTION_NAME,
+    )
+    return authority, arm_observation
 
 
 def _rows(plan: database._DatabasePlan) -> dict[str, list[tuple[Any, ...]]]:
@@ -175,11 +198,12 @@ def _case(
     connector_failure: Exception | None = None,
     on_connect: Any = None,
     deadline_factory: Any = _no_deadline,
+    cache_identical_plan_derivations: bool = True,
 ) -> dict[str, Any]:
     _clear_libpq_environment(monkeypatch)
     authority, arm_observation = _authority_pair(monkeypatch)
     policy = database.load_controller_receipt_v2_database_observation_policy()
-    plan = database._derive_plan(
+    plan = _REAL_DERIVE_PLAN(
         authority, arm_observation, policy=policy, now=arm_helpers.NOW
     )
     rows = _rows(plan)
@@ -202,6 +226,30 @@ def _case(
         monotonic=lambda: 10.0,
         deadline_factory=deadline_factory,
     )
+    if cache_identical_plan_derivations:
+        # The real derivation above authenticates each clone once. Dedicated
+        # stale, mixed-chain, and checkpoint-tamper tests opt out below.
+        expected_policy = deepcopy(policy)
+
+        def derive_plan(
+            production_authority: Any,
+            observation: Any,
+            *,
+            policy: Any,
+            now: Any,
+        ) -> Any:
+            if (
+                production_authority is authority
+                and observation is arm_observation
+                and policy == expected_policy
+                and now == arm_helpers.NOW
+            ):
+                return plan
+            return _REAL_DERIVE_PLAN(
+                production_authority, observation, policy=policy, now=now
+            )
+
+        monkeypatch.setattr(database, "_derive_plan", derive_plan)
     return locals() | {"arm": arm_observation}
 
 
@@ -542,8 +590,8 @@ def test_ambient_libpq_environment_refuses_before_credentials(
 def test_stale_or_mismatched_authorities_refuse_before_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    case = _case(monkeypatch)
-    other = _case(monkeypatch)
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
+    other = _case(monkeypatch, cache_identical_plan_derivations=False)
     with pytest.raises(Failure, match="authority_invalid"):
         case["observer"].observe(
             production_authority=other["authority"], arm_observation=case["arm"]
@@ -551,7 +599,7 @@ def test_stale_or_mismatched_authorities_refuse_before_credentials(
     assert case["identity"].calls == []
     assert case["connector"].calls == []
 
-    case = _case(monkeypatch)
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
     case["observer"]._clock = lambda: arm_helpers.NOW.replace(
         second=0
     ) + arm_helpers.timedelta(seconds=61)
@@ -563,14 +611,14 @@ def test_stale_or_mismatched_authorities_refuse_before_credentials(
 def test_authorities_are_rechecked_after_connection_and_result_is_tamper_evident(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    case = _case(monkeypatch)
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
     result = _observe(case)
     object.__setattr__(result, "database_role_authenticated", False)
     assert not result._is_authenticated()
     with pytest.raises(Failure, match="authority_invalid"):
         _ = result.authority
 
-    case = _case(monkeypatch)
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
     case["connector"].on_connect = lambda: object.__setattr__(
         case["arm"], "rehearsal_id", "tampered"
     )
