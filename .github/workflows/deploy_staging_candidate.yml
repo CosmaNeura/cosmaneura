@@ -207,6 +207,8 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-controller
             apt-packages: zsh
+          - shard: infrastructure-receipt-io
+            apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh
           - shard: integration

@@ -19,18 +19,22 @@ SHARDS = (
     "application",
     "infrastructure-general",
     "infrastructure-controller",
+    "infrastructure-receipt-io",
     "infrastructure-restore",
     "integration",
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
 CONTROLLER_SELECTOR = f"{CONTROLLER_GLOB[:-4]}.py {CONTROLLER_GLOB[:-4]}_[ad]*.py"
-RESTORE_SELECTOR = f"{RESTORE_GLOB} {CONTROLLER_GLOB[:-4]}_[bipw]*.py"
+RECEIPT_IO_SELECTOR = f"{CONTROLLER_GLOB[:-4]}_[bw]*.py"
+RESTORE_SELECTOR = f"{RESTORE_GLOB} {CONTROLLER_GLOB[:-4]}_[ip]*.py"
 
 
 def _infrastructure_shard(path: Path) -> str:
     if path.parent == Path("tests/infrastructure"):
-        if path.match("test_staging_controller_receipt_v2_[bipw]*.py"):
+        if path.match("test_staging_controller_receipt_v2_[bw]*.py"):
+            return "infrastructure-receipt-io"
+        if path.match("test_staging_controller_receipt_v2_[ip]*.py"):
             return "infrastructure-restore"
         if path.name == "test_staging_controller_receipt_v2.py" or path.match(
             "test_staging_controller_receipt_v2_[ad]*.py"
@@ -83,6 +87,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "infrastructure-controller": (
             f"uv run pytest {CONTROLLER_SELECTOR} --verbosity=2"
         ),
+        "infrastructure-receipt-io": (
+            f"uv run pytest {RECEIPT_IO_SELECTOR} --verbosity=2"
+        ),
         "infrastructure-restore": f"uv run pytest {RESTORE_SELECTOR} --verbosity=2",
         "integration": "uv run pytest tests/integration --verbosity=2",
     }
@@ -96,6 +103,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_controller_start = source.index(
         "py_test-ci-infrastructure-controller:"
     )
+    infrastructure_receipt_io_start = source.index(
+        "py_test-ci-infrastructure-receipt-io:"
+    )
     infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
     application_recipe = source[application_start:infrastructure_general_start]
     integration_start = source.index("py_test-ci-integration:")
@@ -105,7 +115,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_general_start:infrastructure_controller_start
     ]
     infrastructure_controller_recipe = source[
-        infrastructure_controller_start:infrastructure_restore_start
+        infrastructure_controller_start:infrastructure_receipt_io_start
+    ]
+    infrastructure_receipt_io_recipe = source[
+        infrastructure_receipt_io_start:infrastructure_restore_start
     ]
     infrastructure_restore_recipe = source[
         infrastructure_restore_start:integration_start
@@ -117,6 +130,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert "just py_js-build" not in infrastructure_recipes
     assert infrastructure_general_recipe.count("--ignore-glob=") == 2
     assert "--ignore-glob=" not in infrastructure_controller_recipe
+    assert "--ignore-glob=" not in infrastructure_receipt_io_recipe
     assert "--ignore-glob=" not in infrastructure_restore_recipe
     assert "playwright install chromium --only-shell" not in application_recipe
     assert "localias" not in application_recipe.lower()
@@ -159,11 +173,11 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     [
         (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_builder.py"),
-            "infrastructure-restore",
+            "infrastructure-receipt-io",
         ),
         (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_writer.py"),
-            "infrastructure-restore",
+            "infrastructure-receipt-io",
         ),
         (
             Path("tests/infrastructure/test_staging_restore_sanitizer.py"),
@@ -199,6 +213,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
         "zsh",
         "zsh",
         "zsh",

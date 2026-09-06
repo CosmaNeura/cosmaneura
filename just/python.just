@@ -139,7 +139,7 @@ py_js-build:
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
 
-# CI runs these five selectors on isolated runners. Keep the selectors explicit
+# CI runs these six selectors on isolated runners. Keep the selectors explicit
 # so every Python test belongs to exactly one shard and `py_test` remains the
 # single combined local/CI-compatible entry point. Application and integration
 # tests both require built web assets; only integration requires browser routing.
@@ -167,9 +167,14 @@ py_test-ci-infrastructure-controller:
 	uv run pytest tests/infrastructure/test_staging_controller_receipt_v2.py tests/infrastructure/test_staging_controller_receipt_v2_[ad]*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
+py_test-ci-infrastructure-receipt-io:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-receipt-io is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_controller_receipt_v2_[bw]*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
 py_test-ci-infrastructure-restore:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-restore is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_*.py tests/infrastructure/test_staging_controller_receipt_v2_[bipw]*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_*.py tests/infrastructure/test_staging_controller_receipt_v2_[ip]*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-integration:
