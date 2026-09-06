@@ -27,3 +27,4 @@
 - Later reviewed slices must add authenticated provider observation before a
   builder/writer, then narrowly scoped consumers, workflow wiring, an approved
   staging rehearsal, and a separate intentional activation decision.
+- The stacked ARM-observation slice remains dormant and point-GET-only; it authenticates both PE NIC IPv4s and observed executor control/PE-subnet topology, carries sealed-but-configured (not ARM-observed) executor infrastructure-subnet context for a later database socket observer, cannot activate until exact configuration and separately reviewed provision-UAMI target/control read grants exist, and does not prove database state, private-route use, create-only behavior, resource absence, receipt existence, or runtime authority.
