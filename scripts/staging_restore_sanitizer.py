@@ -26,11 +26,15 @@ from typing import Any, NoReturn
 
 try:
     from scripts import build_staging_controller_receipt_v2 as receipt_builder
+    from scripts import (
+        staging_restore_sanitizer_evidence_authority as evidence_authority,
+    )
     from scripts import staging_synthetic_inventory as inventory
     from scripts import validate_staging_controller_receipt_v2 as receipt_content
     from scripts import write_staging_controller_receipt_v2 as receipt_writer
 except ModuleNotFoundError:  # Direct `python scripts/...` execution compatibility.
     import build_staging_controller_receipt_v2 as receipt_builder
+    import staging_restore_sanitizer_evidence_authority as evidence_authority
     import staging_synthetic_inventory as inventory
     import validate_staging_controller_receipt_v2 as receipt_content
     import write_staging_controller_receipt_v2 as receipt_writer
@@ -44,13 +48,13 @@ INVENTORY_POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
 CANONICAL_POLICY_SHA256 = (
-    "e14dc30e4eca2c1fb97b4901db7c2557f2f5bc1775305d49a2e733dd7fd2558d"
+    "233476e83f8f45419735052a334ea06aa0153d9b463e599c849c1f212e34dad3"
 )
 CANONICAL_DATA_CONTRACT_SHA256 = (
     "f1c0c7dce56cd2aa42647578940f807186d8e888b70c66da9aa64aa7402b1360"
 )
 RESTORE_EVIDENCE_COMPOSITION_POLICY_SHA256 = (
-    "ba97547aa95686af448c169949379bb8ed1c20d4683adc3b1c6a70114ca6c1c3"
+    evidence_authority.COMPOSITION_POLICY_SHA256
 )
 APP_NAME = "cosmaneura-staging-restore-sanitizer-v1"
 HMAC_DOMAIN = "cosmaneura:staging-restore-sanitizer:v1"
@@ -164,21 +168,7 @@ FIXED_CATALOG_SOURCE_STATE_CLAIMS = {
     "server_scope_authenticated": False,
     "workflow_integrated": False,
 }
-FIXED_CATALOG_CONTEXT_FIELDS = (
-    "source_sha",
-    "candidate_sha",
-    "source_server_resource_id",
-    "source_database_name",
-    "approved_restore_time",
-    "workflow_sha",
-    "run_id",
-    "run_attempt",
-    "repository",
-    "protected_ref",
-    "workflow_path",
-    "signer_issuer",
-    "signer_subject",
-)
+FIXED_CATALOG_CONTEXT_FIELDS = evidence_authority.CONTEXT_FIELDS
 FIXED_CATALOG_PUBLIC_FIELDS = (
     "inventory_receipt_sha256",
     "inventory_policy_sha256",
@@ -192,47 +182,16 @@ FIXED_CATALOG_PUBLIC_FIELDS = (
     "target_binding_expires_at",
     "authenticated_at",
 )
-TRUSTED_EVIDENCE_DIGEST_FIELDS = (
-    "evidence_manifest_policy_sha256",
-    "manifest_file_sha256",
-    "bundle_index_sha256",
-    "evidence_set_sha256",
-    "candidate_receipt_sha256",
-    "inventory_receipt_sha256",
-    "quiescence_receipt_sha256",
-    "server_scope_receipt_sha256",
-    "attestation_receipt_sha256",
-    "provider_receipt_sha256",
-    "server_scope_authentication_receipt_sha256",
-)
-TRUSTED_EVIDENCE_PUBLIC_FIELDS = (
-    "rehearsal_id",
-    "controller_receipt_sha256",
-    "evidence_binding_sha256",
-    "evidence_set_sha256",
-    "inventory_receipt_sha256",
-    "server_scope_receipt_sha256",
-    "server_scope_authentication_receipt_sha256",
-    "provider_receipt_sha256",
-    "attestation_receipt_sha256",
-    "evidence_observed_at",
-    "evidence_expires_at",
-    "target_binding_expires_at",
-    "authenticated_at",
-)
-TRUSTED_EVIDENCE_CLAIMS = {
-    "controller_receipt_v2_target_binding_authenticated": True,
-    "fixed_catalog_source_state_authenticated": True,
-    "inventory_receipt_digest_authenticated": True,
-    "restore_evidence_binding_authenticated": True,
-    "server_scope_authenticated": True,
+TRUSTED_EVIDENCE_DIGEST_FIELDS = evidence_authority.DIGEST_FIELDS
+TRUSTED_EVIDENCE_PUBLIC_FIELDS = evidence_authority.PUBLIC_FIELDS
+TRUSTED_EVIDENCE_CLAIMS = evidence_authority.CLAIMS
+TRUSTED_EVIDENCE_PREFLIGHT_AUTHORITY = {
     "database_connection_authority": False,
     "database_mutation_authority": False,
     "executable": False,
     "live_provider_calls_enabled": False,
     "post_projection_authenticated": False,
     "provider_calls_permitted": False,
-    "provider_facts_authenticated": False,
     "runtime_authority": False,
     "sanitizer_authority": False,
     "workflow_integrated": False,
@@ -1442,8 +1401,21 @@ def _validate_policy(
             "implemented",
             "database_connections_permitted",
             "sql_mutation_permitted",
+            "trusted_evidence_preflight",
             "guarded_tables_must_be_empty",
             "future_transaction_requirements",
+        },
+        "policy.execution",
+    )
+    trusted_preflight = _exact_keys(
+        execution["trusted_evidence_preflight"],
+        {
+            "authority",
+            "closed_world",
+            "implemented",
+            "input",
+            "outcome",
+            "reauthentication",
         },
         "policy.execution",
     )
@@ -1474,6 +1446,31 @@ def _validate_policy(
         execution["implemented"] is not False
         or execution["database_connections_permitted"] is not False
         or execution["sql_mutation_permitted"] is not False
+        or trusted_preflight
+        != {
+            "authority": TRUSTED_EVIDENCE_PREFLIGHT_AUTHORITY,
+            "closed_world": True,
+            "implemented": True,
+            "input": {
+                "caller_bytes_maps_paths_uris_dsns_connectors_callbacks_keys_roles_policies_times_or_runtime_overrides_permitted": False,
+                "exact_type_and_in_process_seal_required": True,
+                "kind": "sealed-authenticated-sanitizer-evidence-v1",
+                "only_public_data_input": "authenticated_sanitizer_evidence",
+            },
+            "outcome": {
+                "always_refuses_before_io": True,
+                "failure_code": "activation.data_contract_executor_unimplemented",
+                "output_minted": False,
+            },
+            "reauthentication": {
+                "authenticated_at_not_after_current_time_required": True,
+                "clock_regression_rejected": True,
+                "complete_retained_ancestry_at_current_time_required": True,
+                "target_binding_fresh_at_final_clock_read_required": True,
+                "trusted_clock_source": "reviewed-private-configuration-only",
+                "whole_second_utc_required": True,
+            },
+        }
         or set(execution["guarded_tables_must_be_empty"]) != GUARDED_TABLES
         or future
         != {

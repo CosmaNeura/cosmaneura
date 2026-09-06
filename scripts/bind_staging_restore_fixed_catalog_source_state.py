@@ -608,31 +608,54 @@ class AuthenticatedFixedCatalogSourceState:
 
     def _is_authenticated(self) -> bool:
         try:
-            sanitizer_policy = sanitizer.load_canonical_policy()
-            inventory_policy, inventory_policy_bytes = _load_inventory_policy()
-            sanitizer.validate_policy(sanitizer_policy, inventory_policy)
-            ordered, public = _authenticate(
-                target_binding=self._target_binding,
-                inventory_receipt_bytes=self._inventory_receipt_bytes,
-                sanitizer_policy=sanitizer_policy,
-                inventory_policy=inventory_policy,
-                now=self.authenticated_at,
-            )
-            return (
-                type(self) is AuthenticatedFixedCatalogSourceState
-                and self._seal is _SOURCE_STATE_SEAL
-                and self._sanitizer_policy_bytes
-                == sanitizer._canonical_json(  # noqa: SLF001
-                    sanitizer_policy
-                )
-                and self._inventory_policy_bytes == inventory_policy_bytes
-                and self._ordered_projection == ordered
-                and all(getattr(self, name) == value for name, value in public.items())
-                and all(getattr(self, name) is value for name, value in CLAIMS.items())
-                and self._proof_sha256 == _proof(ordered, public)
-            )
+            self._reauthenticate_at_current_time(now=self.authenticated_at)
+            return True
         except Exception:
             return False
+
+    def _reauthenticate_at_current_time(self, *, now: datetime) -> None:
+        if (
+            type(self) is not AuthenticatedFixedCatalogSourceState
+            or getattr(self, "_seal", None) is not _SOURCE_STATE_SEAL
+            or type(now) is not datetime
+            or now.tzinfo is None
+            or now.utcoffset() != timedelta(0)
+            or now.microsecond != 0
+            or type(self.authenticated_at) is not datetime
+            or self.authenticated_at.tzinfo is None
+            or self.authenticated_at.utcoffset() != timedelta(0)
+            or self.authenticated_at.microsecond != 0
+        ):
+            _fail("fixed_catalog_binding.authority_invalid")
+        now = now.astimezone(UTC)
+        if now < self.authenticated_at:
+            _fail("fixed_catalog_binding.clock_regressed")
+        sanitizer_policy = sanitizer.load_canonical_policy()
+        inventory_policy, inventory_policy_bytes = _load_inventory_policy()
+        sanitizer.validate_policy(sanitizer_policy, inventory_policy)
+        ordered, current_public = _authenticate(
+            target_binding=self._target_binding,
+            inventory_receipt_bytes=self._inventory_receipt_bytes,
+            sanitizer_policy=sanitizer_policy,
+            inventory_policy=inventory_policy,
+            now=now,
+        )
+        original_public = dict(current_public)
+        original_public["authenticated_at"] = self.authenticated_at
+        if (
+            self._sanitizer_policy_bytes != sanitizer._canonical_json(sanitizer_policy)  # noqa: SLF001
+            or self._inventory_policy_bytes != inventory_policy_bytes
+            or self._ordered_projection != ordered
+            or not hmac.compare_digest(
+                _canonical(self._ordered_projection), _canonical(ordered)
+            )
+            or any(
+                getattr(self, name) != value for name, value in original_public.items()
+            )
+            or any(getattr(self, name) is not value for name, value in CLAIMS.items())
+            or self._proof_sha256 != _proof(ordered, original_public)
+        ):
+            _fail("fixed_catalog_binding.authority_invalid")
 
 
 def _mint(

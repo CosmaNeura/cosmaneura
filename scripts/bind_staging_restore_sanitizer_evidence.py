@@ -12,8 +12,6 @@ import hashlib
 import hmac
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn
 
@@ -22,19 +20,27 @@ try:
     from scripts import compose_staging_restore_evidence_binding as composition
     from scripts import staging_restore_safe_submit as safe_submit
     from scripts import staging_restore_sanitizer as sanitizer
+    from scripts import staging_restore_sanitizer_evidence_authority as authority
 except ModuleNotFoundError:  # Direct `python scripts/...` execution compatibility.
     import bind_staging_restore_fixed_catalog_source_state as source_state
     import compose_staging_restore_evidence_binding as composition
     import staging_restore_safe_submit as safe_submit
     import staging_restore_sanitizer as sanitizer
+    import staging_restore_sanitizer_evidence_authority as authority
 
 
-PUBLIC_FIELDS = sanitizer.TRUSTED_EVIDENCE_PUBLIC_FIELDS
-CLAIMS = sanitizer.TRUSTED_EVIDENCE_CLAIMS
-CONTEXT_FIELDS = sanitizer.FIXED_CATALOG_CONTEXT_FIELDS
-DIGEST_FIELDS = sanitizer.TRUSTED_EVIDENCE_DIGEST_FIELDS
+PUBLIC_FIELDS = authority.PUBLIC_FIELDS
+CLAIMS = authority.CLAIMS
+CONTEXT_FIELDS = authority.CONTEXT_FIELDS
+DIGEST_FIELDS = authority.DIGEST_FIELDS
+# Preserve the binder's established API while the executor imports only the
+# adapter-free authority leaf.
+AuthenticatedSanitizerEvidence = authority.AuthenticatedSanitizerEvidence
+SanitizerEvidenceFailure = authority.SanitizerEvidenceFailure
+_reauthenticate_at_current_time = authority._reauthenticate_at_current_time  # noqa: SLF001
+_proof = authority._proof  # noqa: SLF001
 
-_EVIDENCE_SEAL = object()
+_EVIDENCE_SEAL = authority._EVIDENCE_SEAL  # noqa: SLF001
 _FAILURE_CODES = frozenset(
     {
         "sanitizer_evidence.authority_invalid",
@@ -48,10 +54,6 @@ _FAILURE_CODES = frozenset(
         "sanitizer_evidence.target_expired",
     }
 )
-
-
-class SanitizerEvidenceFailure(RuntimeError):
-    """A bounded refusal that never includes authority or receipt contents."""
 
 
 def _fail(code: str) -> NoReturn:
@@ -136,6 +138,8 @@ def _validate_source_state(
         or type(ordered) is not tuple
     ):
         _fail("sanitizer_evidence.authority_invalid")
+    if not value._is_authenticated():
+        _fail("sanitizer_evidence.authority_invalid")
     return target, ordered
 
 
@@ -207,9 +211,6 @@ def _validate_join(
         )
     ):
         _fail("sanitizer_evidence.context_invalid")
-    if not fixed_catalog_source_state._is_authenticated():
-        _fail("sanitizer_evidence.authority_invalid")
-
     public = {
         "rehearsal_id": target.rehearsal_id,
         "controller_receipt_sha256": target.receipt_sha256,
@@ -232,105 +233,6 @@ def _validate_join(
     return record_bytes, public
 
 
-def _proof(record_bytes: bytes, public: Mapping[str, Any]) -> str:
-    serializable = dict(public)
-    for name in (
-        "evidence_observed_at",
-        "evidence_expires_at",
-        "target_binding_expires_at",
-        "authenticated_at",
-    ):
-        value = serializable[name]
-        if type(value) is not datetime:
-            _fail("sanitizer_evidence.output_invalid")
-        serializable[name] = value.strftime("%Y-%m-%dT%H:%M:%SZ")
-    return hashlib.sha256(
-        _canonical(
-            {
-                "evidence_record_sha256": _digest(record_bytes),
-                "public": serializable,
-            }
-        )
-    ).hexdigest()
-
-
-@dataclass(frozen=True, slots=True, init=False, repr=False)
-class AuthenticatedSanitizerEvidence:
-    """Sealed evidence authority with no connection or mutation capability."""
-
-    rehearsal_id: str
-    controller_receipt_sha256: str
-    evidence_binding_sha256: str
-    evidence_set_sha256: str
-    inventory_receipt_sha256: str
-    server_scope_receipt_sha256: str
-    server_scope_authentication_receipt_sha256: str
-    provider_receipt_sha256: str
-    attestation_receipt_sha256: str
-    evidence_observed_at: datetime
-    evidence_expires_at: datetime
-    target_binding_expires_at: datetime
-    authenticated_at: datetime
-    controller_receipt_v2_target_binding_authenticated: bool
-    fixed_catalog_source_state_authenticated: bool
-    inventory_receipt_digest_authenticated: bool
-    restore_evidence_binding_authenticated: bool
-    server_scope_authenticated: bool
-    database_connection_authority: bool
-    database_mutation_authority: bool
-    executable: bool
-    live_provider_calls_enabled: bool
-    post_projection_authenticated: bool
-    provider_calls_permitted: bool
-    provider_facts_authenticated: bool
-    runtime_authority: bool
-    sanitizer_authority: bool
-    workflow_integrated: bool
-    _fixed_catalog_source_state: source_state.AuthenticatedFixedCatalogSourceState = (
-        dataclass_field(repr=False)
-    )
-    _restore_evidence_binding: safe_submit.RestoreEvidenceBinding = dataclass_field(
-        repr=False
-    )
-    _evidence_record_bytes: bytes = dataclass_field(repr=False)
-    _sanitizer_policy_bytes: bytes = dataclass_field(repr=False)
-    _composition_policy_bytes: bytes = dataclass_field(repr=False)
-    _proof_sha256: str = dataclass_field(repr=False)
-    _seal: object = dataclass_field(repr=False)
-
-    def __init__(self) -> None:
-        _fail("sanitizer_evidence.output_invalid")
-
-    def __reduce__(self) -> NoReturn:
-        _fail("sanitizer_evidence.output_invalid")
-
-    def __reduce_ex__(self, protocol: object) -> NoReturn:
-        del protocol
-        _fail("sanitizer_evidence.output_invalid")
-
-    def _is_authenticated(self) -> bool:
-        try:
-            sanitizer_policy, _inventory_policy, composition_bytes = _load_policies()
-            record_bytes, public = _validate_join(
-                fixed_catalog_source_state=self._fixed_catalog_source_state,
-                restore_evidence_binding=self._restore_evidence_binding,
-                now=self.authenticated_at,
-            )
-            return (
-                type(self) is AuthenticatedSanitizerEvidence
-                and self._seal is _EVIDENCE_SEAL
-                and self._sanitizer_policy_bytes
-                == sanitizer._canonical_json(sanitizer_policy)  # noqa: SLF001
-                and self._composition_policy_bytes == composition_bytes
-                and self._evidence_record_bytes == record_bytes
-                and all(getattr(self, name) == item for name, item in public.items())
-                and all(getattr(self, name) is item for name, item in CLAIMS.items())
-                and self._proof_sha256 == _proof(record_bytes, public)
-            )
-        except Exception:
-            return False
-
-
 def _mint(
     *,
     fixed_catalog_source_state: source_state.AuthenticatedFixedCatalogSourceState,
@@ -340,32 +242,14 @@ def _mint(
     sanitizer_policy: Mapping[str, Any],
     composition_policy_bytes: bytes,
 ) -> AuthenticatedSanitizerEvidence:
-    value = object.__new__(AuthenticatedSanitizerEvidence)
-    for name, item in {**public, **CLAIMS}.items():
-        object.__setattr__(value, name, item)
-    object.__setattr__(value, "_fixed_catalog_source_state", fixed_catalog_source_state)
-    object.__setattr__(value, "_restore_evidence_binding", restore_evidence_binding)
-    object.__setattr__(value, "_evidence_record_bytes", record_bytes)
-    object.__setattr__(
-        value,
-        "_sanitizer_policy_bytes",
-        sanitizer._canonical_json(sanitizer_policy),  # noqa: SLF001
+    return authority._mint(  # noqa: SLF001
+        fixed_catalog_source_state=fixed_catalog_source_state,
+        restore_evidence_binding=restore_evidence_binding,
+        record_bytes=record_bytes,
+        public=public,
+        sanitizer_policy_bytes=sanitizer._canonical_json(sanitizer_policy),  # noqa: SLF001
+        composition_policy_bytes=composition_policy_bytes,
     )
-    object.__setattr__(value, "_composition_policy_bytes", composition_policy_bytes)
-    object.__setattr__(value, "_proof_sha256", _proof(record_bytes, public))
-    object.__setattr__(value, "_seal", _EVIDENCE_SEAL)
-    if (
-        type(value) is not AuthenticatedSanitizerEvidence
-        or value._seal is not _EVIDENCE_SEAL
-        or value._fixed_catalog_source_state is not fixed_catalog_source_state
-        or value._restore_evidence_binding is not restore_evidence_binding
-        or value._evidence_record_bytes != record_bytes
-        or any(getattr(value, name) != item for name, item in public.items())
-        or any(getattr(value, name) is not item for name, item in CLAIMS.items())
-        or value._proof_sha256 != _proof(record_bytes, public)
-    ):
-        _fail("sanitizer_evidence.output_invalid")
-    return value
 
 
 class SanitizerEvidenceBinder:

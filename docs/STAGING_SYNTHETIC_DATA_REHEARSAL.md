@@ -299,6 +299,20 @@ and server scope but grants no connection, provider, runtime, sanitizer,
 mutation, executable, or workflow authority. See the
 [trusted-evidence flight plan](flight-plans/2026-09-06-staging-sanitizer-trusted-evidence.md).
 
+The dark executor preflight now consumes only that exact sealed authority and
+reauthenticates the complete retained ancestry at a private non-regressing
+whole-second UTC clock. It requires the evidence authentication time not to be
+in the future and the controller target binding to remain fresh at its final
+clock read. Mint-retained exact source-type and seal witnesses reject a
+duck-typed or substituted source before its verifier can run. Its adapter-free
+authority leaf prevents importing the safe-submit,
+runtime, provider, attestation, process, or database-client modules merely by
+importing the executor. Even a valid chain terminates with
+`activation.data_contract_executor_unimplemented` before any database,
+provider, process, transform, or output surface. All execution and authority
+flags remain false; see the
+[executor-preflight flight plan](flight-plans/2026-09-06-staging-sanitizer-executor-preflight.md).
+
 A future executor must keep guarded append-only tables empty, reject unexpected `ON TRUNCATE` triggers, and prove its isolated-copy `TRUNCATE`/reinsert permissions and rollback behavior; this does not preserve append-only semantics. It must use serializable transactions, `synchronous_commit=on`, bounded timeouts, an `alembic_version` lock, a pre-commit session recheck, and fresh-connection post-commit verification. Any ambiguous outcome is isolated and cleanup-only.
 
 Evidence remains aggregate counts/HMACs and bounded pass/fail codes; small groups and per-table counts are omitted. The contract does not prove erasure from server-wide PITR, global roles, backups, replicas, or logs.
