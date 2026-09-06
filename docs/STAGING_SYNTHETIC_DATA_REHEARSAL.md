@@ -277,7 +277,10 @@ The public dependency factory and all activation gates still refuse; see the
 
 The controller receipt v2 content contract now closes the canonical schema and
 cross-record validation boundary, including exact runtime resource projection,
-isolation, timestamps, and provision freshness. Its result is explicitly not
-source authentication or provider truth; the private-WORM reader, producer,
-runtime consumer, and every activation gate remain absent or false. See the
-[controller receipt v2 flight plan](flight-plans/2026-09-05-staging-controller-receipt-v2-contract.md).
+point-in-time target-resource-group Storage-account and Redis counts,
+timestamps, and provision freshness. Those counts do not assert whole-execution
+data-copy history. Its result is explicitly not source authentication or
+provider truth; the private-WORM reader, producer, runtime consumer, and every
+activation gate remain absent or false. See the [controller receipt v2 flight
+plan](flight-plans/2026-09-05-staging-controller-receipt-v2-contract.md) and
+[isolation-semantics correction](flight-plans/2026-09-05-staging-controller-receipt-v2-isolation-semantics.md).

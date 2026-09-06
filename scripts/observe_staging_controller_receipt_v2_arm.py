@@ -46,7 +46,7 @@ POLICY_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/controller-receipt-v2-arm-observation-policy.json"
 )
-POLICY_SHA256 = "f65951511a5404182e432eebdfbc453ad72ea49ffeae7272ce3783a6d15be9fd"
+POLICY_SHA256 = "1e343aca763397868a57a95ab91b33e51d0ab577b1b8a45447994d058f4b3061"
 MAXIMUM_POLICY_BYTES = 64 * 1024
 PLACEHOLDER_RE = re.compile(r"^CONFIGURE_EXACT_[A-Z0-9_]+$")
 TARGET_RE = re.compile(r"^(cnr-[0-9a-f]{12}-e[0-9]{10})-pg$")
