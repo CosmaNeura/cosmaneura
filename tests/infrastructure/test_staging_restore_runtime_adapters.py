@@ -989,7 +989,10 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
                     "ManagedIdentityPrivateEvidenceMaterialReader",
                 }
             )
-        elif path.name == "read_staging_controller_receipt_v2.py":
+        elif path.name in {
+            "read_staging_controller_receipt_v2.py",
+            "read_staging_controller_receipt_v2_prefix.py",
+        }:
             forbidden_symbols = tuple(
                 symbol
                 for symbol in adapter_symbols
