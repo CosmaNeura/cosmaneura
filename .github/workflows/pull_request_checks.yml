@@ -24,8 +24,8 @@ env:
   COLUMNS: 120
 
 jobs:
-  app:
-    name: Backend
+  backend-quality:
+    name: Backend quality
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -35,25 +35,76 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/common-setup
         timeout-minutes: 10
-      - name: Install SHA-verified Localias
-        run: bash scripts/install_pinned_localias.sh
+        with:
+          apt-packages: zsh
       - run: just up --fast
       - run: just py_setup
-      - name: Start SHA-verified Localias
-        run: bash scripts/start_pinned_localias_ci.sh
       - run: just py_lint
       - run: just db_migrate
       - run: just db_lint
+
+  backend-tests:
+    name: Backend tests (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: application
+            apt-packages: zsh
+          - shard: infrastructure
+            apt-packages: zsh
+          - shard: integration
+            apt-packages: zsh libnss3-tools
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/common-setup
+        timeout-minutes: 10
+        with:
+          apt-packages: ${{ matrix.apt-packages }}
+      - name: Install SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/install_pinned_localias.sh
+      - run: just up --fast
+      - run: just py_setup
+      - name: Install integration Chromium headless shell
+        if: ${{ matrix.shard == 'integration' }}
+        run: uv run playwright install chromium --only-shell
+      - name: Start SHA-verified Localias
+        if: ${{ matrix.shard == 'integration' }}
+        run: bash scripts/start_pinned_localias_ci.sh
+      - run: just db_migrate
       - id: py_test
-        run: just py_test
-      - name: Upload test artifacts
+        run: just py_test-ci-${{ matrix.shard }}
+      - name: Upload shard test artifacts
         if: ${{ failure() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: test-results
+          name: backend-${{ matrix.shard }}-test-results-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ env.TEST_RESULTS_DIRECTORY }}
             ${{ env.PLAYWRIGHT_VISUAL_SNAPSHOT_DIRECTORY }}
+
+  app:
+    name: Backend
+    needs: [backend-quality, backend-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every backend prerequisite to succeed
+        env:
+          BACKEND_QUALITY_RESULT: ${{ needs.backend-quality.result }}
+          BACKEND_TESTS_RESULT: ${{ needs.backend-tests.result }}
+        run: |
+          if [[ "$BACKEND_QUALITY_RESULT" != "success" || "$BACKEND_TESTS_RESULT" != "success" ]]; then
+            echo "::error::Backend prerequisites did not all succeed (quality=$BACKEND_QUALITY_RESULT, tests=$BACKEND_TESTS_RESULT)."
+            exit 1
+          fi
 
   web:
     name: Frontend

@@ -89,14 +89,14 @@ def test_authorization_is_founder_only_protected_master_and_secretless() -> None
 
 def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
     source = _source()
-    for name in ("app", "web"):
+    for name in ("backend-quality", "backend-tests", "web"):
         job = _job(source, name)
         assert "needs: authorize" in job
         prerequisites = _step(
             job,
             (
                 "Install protected-master backend test prerequisites"
-                if name == "app"
+                if name != "web"
                 else "Install protected-master frontend test prerequisites"
             ),
         )
@@ -119,7 +119,7 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
         assert "uses: ./.github/actions/common-setup" not in job
         assert job.count("persist-credentials: false") == 1
         assert 'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"' in job
-        if name == "app":
+        if name == "backend-tests":
             localias_install = _step(job, "Install SHA-verified Localias")
             assert (
                 job.index(verification)
@@ -131,21 +131,36 @@ def test_candidate_jobs_checkout_and_test_the_exact_authorized_sha() -> None:
             )
             assert "bash scripts/install_pinned_localias.sh" in localias_install
             assert "bash scripts/start_pinned_localias_ci.sh" in candidate_routing
+            assert "matrix.shard == 'integration'" in localias_install
+            assert "matrix.shard == 'integration'" in candidate_routing
             assert (
                 job.index("just py_setup")
                 < job.index(candidate_routing)
-                < job.index("just py_lint")
+                < job.index("just db_migrate")
             )
-            candidate_commands = ("just up --fast", "just py_setup", "just py_test")
+            candidate_commands = (
+                "just up --fast",
+                "just py_setup",
+                "just py_test-ci-${{ matrix.shard }}",
+            )
+        elif name == "backend-quality":
+            candidate_commands = (
+                "just up --fast",
+                "just py_setup",
+                "just py_lint",
+                "just db_lint",
+            )
         else:
             candidate_commands = ("just js_setup", "pnpm run openapi", "just js_test")
         for command in candidate_commands:
             assert job.index(command) > job.index(verification)
     assert "needs.authorize.outputs.candidate_sha" not in source
-    assert "just py_lint" in _job(source, "app")
-    assert "just db_migrate" in _job(source, "app")
-    assert "just db_lint" in _job(source, "app")
-    assert "just py_test" in _job(source, "app")
+    assert "just py_lint" in _job(source, "backend-quality")
+    assert "just db_migrate" in _job(source, "backend-quality")
+    assert "just db_lint" in _job(source, "backend-quality")
+    assert "just py_test-ci-${{ matrix.shard }}" in _job(source, "backend-tests")
+    assert "name: Candidate Backend" in _job(source, "app")
+    assert "needs: [backend-quality, backend-tests]" in _job(source, "app")
     assert "pnpm run openapi" in _job(source, "web")
     assert "just js_lint" in _job(source, "web")
     assert "just js_test" in _job(source, "web")
@@ -236,7 +251,7 @@ def test_candidate_revision_is_verified_before_checkout_and_caches_are_disabled(
     assert "cache: ${{ inputs.enable_cache }}" in common_setup
     assert "if: inputs.enable_cache == 'true'" in common_setup
 
-    for name in ("app", "web", "build"):
+    for name in ("backend-quality", "backend-tests", "web", "build"):
         job = _job(source, name)
         candidate_marker = (
             "      - name: Check out exact candidate for image build\n"
