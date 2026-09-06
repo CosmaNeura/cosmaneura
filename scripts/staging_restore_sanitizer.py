@@ -44,10 +44,13 @@ INVENTORY_POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
 CANONICAL_POLICY_SHA256 = (
-    "94da2806468324a5307e1b2f34080fdf23c5733b0b395cc21cafb5ddc6d6c03d"
+    "e14dc30e4eca2c1fb97b4901db7c2557f2f5bc1775305d49a2e733dd7fd2558d"
 )
 CANONICAL_DATA_CONTRACT_SHA256 = (
     "f1c0c7dce56cd2aa42647578940f807186d8e888b70c66da9aa64aa7402b1360"
+)
+RESTORE_EVIDENCE_COMPOSITION_POLICY_SHA256 = (
+    "ba97547aa95686af448c169949379bb8ed1c20d4683adc3b1c6a70114ca6c1c3"
 )
 APP_NAME = "cosmaneura-staging-restore-sanitizer-v1"
 HMAC_DOMAIN = "cosmaneura:staging-restore-sanitizer:v1"
@@ -83,6 +86,7 @@ TOP_LEVEL_KEYS = {
     "target",
     "controller_receipt_v2_binding",
     "fixed_catalog_source_state_binding",
+    "trusted_evidence_binding",
     "transform_contract",
     "execution_contract",
     "migration_contract",
@@ -138,7 +142,6 @@ DATA_CONTRACT_KEYS = {
 }
 TABLE_CONTRACT_KEYS = {"disposition", "row_action", "columns"}
 ACTIVATION_BLOCKERS = {
-    "authenticated_server_scope_evidence_binding",
     "data_contract_executor_implementation",
     "fixed_catalog_post_projection_verification",
     "derived_value_execution_proof",
@@ -189,6 +192,51 @@ FIXED_CATALOG_PUBLIC_FIELDS = (
     "target_binding_expires_at",
     "authenticated_at",
 )
+TRUSTED_EVIDENCE_DIGEST_FIELDS = (
+    "evidence_manifest_policy_sha256",
+    "manifest_file_sha256",
+    "bundle_index_sha256",
+    "evidence_set_sha256",
+    "candidate_receipt_sha256",
+    "inventory_receipt_sha256",
+    "quiescence_receipt_sha256",
+    "server_scope_receipt_sha256",
+    "attestation_receipt_sha256",
+    "provider_receipt_sha256",
+    "server_scope_authentication_receipt_sha256",
+)
+TRUSTED_EVIDENCE_PUBLIC_FIELDS = (
+    "rehearsal_id",
+    "controller_receipt_sha256",
+    "evidence_binding_sha256",
+    "evidence_set_sha256",
+    "inventory_receipt_sha256",
+    "server_scope_receipt_sha256",
+    "server_scope_authentication_receipt_sha256",
+    "provider_receipt_sha256",
+    "attestation_receipt_sha256",
+    "evidence_observed_at",
+    "evidence_expires_at",
+    "target_binding_expires_at",
+    "authenticated_at",
+)
+TRUSTED_EVIDENCE_CLAIMS = {
+    "controller_receipt_v2_target_binding_authenticated": True,
+    "fixed_catalog_source_state_authenticated": True,
+    "inventory_receipt_digest_authenticated": True,
+    "restore_evidence_binding_authenticated": True,
+    "server_scope_authenticated": True,
+    "database_connection_authority": False,
+    "database_mutation_authority": False,
+    "executable": False,
+    "live_provider_calls_enabled": False,
+    "post_projection_authenticated": False,
+    "provider_calls_permitted": False,
+    "provider_facts_authenticated": False,
+    "runtime_authority": False,
+    "sanitizer_authority": False,
+    "workflow_integrated": False,
+}
 BINDING_CLAIMS = {
     "arm_network_facts_authenticated": True,
     "content_built_and_validated": True,
@@ -1088,6 +1136,71 @@ def _validate_fixed_catalog_source_state_policy(
         _fail("policy.fixed_catalog_source_state")
 
 
+def _validate_trusted_evidence_binding_policy(contract: object) -> None:
+    value = _exact_keys(
+        contract,
+        {
+            "binding",
+            "claims",
+            "implemented",
+            "input",
+            "kind",
+            "output",
+            "upstream_policies",
+        },
+        "policy.trusted_evidence_binding",
+    )
+    if (
+        value["kind"] != "sealed-authenticated-sanitizer-evidence-v1"
+        or value["implemented"] is not True
+        or value["input"]
+        != {
+            "caller_bytes_maps_paths_urls_dsns_hostnames_roles_digests_policies_statuses_times_keys_or_runtime_overrides_permitted": False,
+            "exact_types_and_in_process_seals_required": True,
+            "fixed_catalog_source_state_kind": (
+                "sealed-authenticated-fixed-catalog-source-state-v1"
+            ),
+            "only_public_data_inputs": [
+                "fixed_catalog_source_state",
+                "restore_evidence_binding",
+            ],
+            "restore_evidence_binding_type": (
+                "staging_restore_safe_submit.RestoreEvidenceBinding"
+            ),
+        }
+        or value["upstream_policies"]
+        != {
+            "restore_evidence_composition": {
+                "policy_id": "cosmaneura-staging-restore-evidence-binding-v1",
+                "sha256": (f"sha256:{RESTORE_EVIDENCE_COMPOSITION_POLICY_SHA256}"),
+            }
+        }
+        or value["binding"]
+        != {
+            "clock_regression_rejected": True,
+            "cross_bound_context_fields": list(FIXED_CATALOG_CONTEXT_FIELDS),
+            "cross_bound_digest_fields": list(TRUSTED_EVIDENCE_DIGEST_FIELDS),
+            "current_target_binding_fresh_at_bind_time_required": True,
+            "full_canonical_intent_evidence_record_equality_required": True,
+            "historical_restore_evidence_expiry_is_current_activation_deadline": False,
+            "trusted_clock_source": "reviewed-private-configuration-only",
+            "whole_second_utc_required": True,
+        }
+        or value["output"]
+        != {
+            "kind": "sealed-authenticated-sanitizer-evidence-v1",
+            "non_serializable": True,
+            "private_canonical_evidence_record_retained": True,
+            "private_fixed_catalog_source_state_retained": True,
+            "private_restore_evidence_binding_retained": True,
+            "public_fields": list(TRUSTED_EVIDENCE_PUBLIC_FIELDS),
+            "unknown_fields_permitted": False,
+        }
+        or value["claims"] != TRUSTED_EVIDENCE_CLAIMS
+    ):
+        _fail("policy.trusted_evidence_binding")
+
+
 def _validate_policy(
     policy: Mapping[str, Any], inventory_policy: Mapping[str, Any]
 ) -> None:
@@ -1117,7 +1230,7 @@ def _validate_policy(
         or status["executable"] is not False
         or status["fixed_catalog_source_state_binding_implemented"] is not True
         or status["live_provider_calls_enabled"] is not False
-        or status["trusted_evidence_binding_implemented"] is not False
+        or status["trusted_evidence_binding_implemented"] is not True
         or status["database_mutation_implemented"] is not False
         or status["workflow_integrated"] is not False
         or set(status["activation_blockers"]) != ACTIVATION_BLOCKERS
@@ -1287,6 +1400,7 @@ def _validate_policy(
     _validate_fixed_catalog_source_state_policy(
         policy["fixed_catalog_source_state_binding"], inventory_policy
     )
+    _validate_trusted_evidence_binding_policy(policy["trusted_evidence_binding"])
 
     transform = _exact_keys(
         policy["transform_contract"],
@@ -1761,13 +1875,13 @@ def build_sanitizer_target_binder() -> NoReturn:
     """Refuse public construction while sanitizer activation remains blocked."""
 
     load_canonical_policy()
-    _fail("activation.trusted_binding_unimplemented")
+    _fail("activation.sanitizer_executor_unimplemented")
 
 
 def require_activation() -> NoReturn:
     """Refuse before a caller may import a driver or invoke a connector."""
 
-    _fail("activation.trusted_binding_unimplemented")
+    _fail("activation.sanitizer_executor_unimplemented")
 
 
 def preflight(

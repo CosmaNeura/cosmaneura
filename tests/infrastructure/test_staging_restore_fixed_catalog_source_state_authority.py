@@ -47,8 +47,8 @@ def test_policy_is_pinned_closed_world_narrow_and_dark() -> None:
     assert contract["output"]["public_fields"] == list(binding.PUBLIC_FIELDS)
     assert contract["claims"] == binding.CLAIMS
     assert policy["status"]["fixed_catalog_source_state_binding_implemented"] is True
+    assert policy["status"]["trusted_evidence_binding_implemented"] is True
     for name in (
-        "trusted_evidence_binding_implemented",
         "database_mutation_implemented",
         "executable",
         "workflow_integrated",
@@ -145,7 +145,7 @@ def test_exact_api_rejects_other_types_construction_and_overrides(
         binding.AuthenticatedFixedCatalogSourceState()
     with pytest.raises(
         binding.FixedCatalogSourceStateFailure,
-        match="activation.trusted_binding_unimplemented",
+        match="activation.sanitizer_executor_unimplemented",
     ):
         binding.build_fixed_catalog_source_state_binder()
 

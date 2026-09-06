@@ -749,4 +749,4 @@ def build_fixed_catalog_source_state_binder() -> NoReturn:
     """Refuse public construction while sanitizer activation remains blocked."""
 
     sanitizer.load_canonical_policy()
-    _fail("activation.trusted_binding_unimplemented")
+    _fail("activation.sanitizer_executor_unimplemented")

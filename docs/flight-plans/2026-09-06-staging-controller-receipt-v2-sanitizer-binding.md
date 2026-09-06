@@ -38,9 +38,13 @@ workflow.
 
 ## Activation boundaries
 
-The policy continues to set `trusted_evidence_binding_implemented=false`,
-`database_mutation_implemented=false`, `executable=false`,
-`workflow_integrated=false`, and `live_provider_calls_enabled=false`.
+At completion of this receipt-binding slice, the policy still set
+`trusted_evidence_binding_implemented=false`. The later
+[trusted-evidence join](2026-09-06-staging-sanitizer-trusted-evidence.md) turns
+that one sanitizer-contract status true after authenticating the final sealed
+evidence authority. `database_mutation_implemented=false`, `executable=false`,
+`workflow_integrated=false`, and `live_provider_calls_enabled=false` remain
+unchanged.
 `validate_target_url` accepts only the sealed binding and derives its expected
 host, database, and role from that binding. `preflight` authenticates the seal
 and then stops before the supplied connector can run. The public binder factory

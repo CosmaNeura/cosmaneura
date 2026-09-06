@@ -1078,7 +1078,7 @@ def test_policy_is_hash_pinned_and_cli_refuses_before_reading_key(
     )
     sanitizer = json.loads(SANITIZER_POLICY.read_text())
     assert sanitizer["status"]["executable"] is False
-    assert sanitizer["status"]["trusted_evidence_binding_implemented"] is False
+    assert sanitizer["status"]["trusted_evidence_binding_implemented"] is True
     assert sanitizer["status"]["database_mutation_implemented"] is False
     assert sanitizer["execution_contract"]["implemented"] is False
     assert sanitizer["execution_contract"]["database_connections_permitted"] is False
