@@ -15,7 +15,7 @@
 - The result asserts only `record_source_authenticated=true`. It explicitly
   keeps controller-receipt existence, provider facts, runtime authority,
   writer identity/private route, and executability false.
-- ARM/network/database observation, controller builder/writer, downstream
+- Live ARM/network/database execution, controller builder/writer, downstream
   consumers, delete authority, sanitizer mutation, workflow integration,
   infrastructure, deployment, and all live-provider calls are out of scope.
 - Current deployed state, feature-flag rollout, schema/data sequencing, canary,
@@ -28,3 +28,4 @@
   builder/writer, then narrowly scoped consumers, workflow wiring, an approved
   staging rehearsal, and a separate intentional activation decision.
 - The stacked ARM-observation slice remains dormant and point-GET-only; it authenticates both PE NIC IPv4s and observed executor control/PE-subnet topology, carries sealed-but-configured (not ARM-observed) executor infrastructure-subnet context for a later database socket observer, cannot activate until exact configuration and separately reviewed provision-UAMI target/control read grants exist, and does not prove database state, private-route use, create-only behavior, resource absence, receipt existence, or runtime authority.
+- The stacked database observer remains dormant and accepts only sealed production and ARM authorities. One provision-UAMI token and one FQDN/PE-pinned `verify-full` connection authenticate its peer/subnet plus PostgreSQL 16 session, TLS, exact role/privilege, and closed-world membership facts through three catalog queries; mutation, sanitizer, create-only, copy-absence, receipt, runtime, live-call, workflow, and activation authority remain false or gated.
