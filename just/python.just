@@ -18,14 +18,10 @@ py_setup:
 		uv sync; \
 	fi
 
-	# important for CI to install browsers for playwright
-	# the installation process is fast enough (<10s) to eliminate the need for attempting to cache via GHA
-	# if this turns out not to be true, we should implement: https://github.com/hirasso/thumbhash-custom-element/blob/main/.github/workflows/tests.yml
-
+	# Local setup retains the full browser. CI workflows install the headless
+	# shell explicitly and only in the integration worker that uses it.
 	if [ -z "${CI:-}" ]; then \
 		uv run playwright install chromium; \
-	else \
-		uv run playwright install chromium --only-shell; \
 	fi
 
 # clean entire py project without rebuilding
@@ -142,6 +138,33 @@ py_js-build:
 		just js_build
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
+
+# CI runs these three selectors on isolated runners. Keep the selectors explicit
+# so every Python test belongs to exactly one shard and `py_test` remains the
+# single combined local/CI-compatible entry point. Application and integration
+# tests both require built web assets; only integration requires browser routing.
+[script]
+py_test-ci-application:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-application is CI-only" >&2; exit 1; }
+	just _banner_echo "Building Javascript for Application Tests"
+	just py_js-build
+	uv run pytest tests --verbosity=2 \
+		--ignore=tests/infrastructure \
+		--ignore=tests/integration \
+		{{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-integration:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-integration is CI-only" >&2; exit 1; }
+	just _banner_echo "Building Javascript for Integration Tests"
+	just py_js-build
+	just _banner_echo "Running Integration"
+	uv run pytest tests/integration --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 # run tests with the exact same environment that will be used on CI
 [script]
