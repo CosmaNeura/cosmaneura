@@ -275,9 +275,13 @@ Preflight validates the seal and refuses before a PostgreSQL driver or connector
 can run. See the [receipt-v2 sanitizer-binding flight plan](flight-plans/2026-09-06-staging-controller-receipt-v2-sanitizer-binding.md).
 
 Activation remains blocked on authenticated server-scope evidence and execution,
-not on reconstructing target identity from a legacy receipt. The five
-fixed-catalog payloads still require their exact authenticated source table state
-HMACs; their PK/FK identifiers cannot use generic transforms. Clerk values,
+not on reconstructing target identity from a legacy receipt. The
+[fixed-catalog source-state binder](flight-plans/2026-09-06-staging-restore-fixed-catalog-source-state.md)
+now authenticates the exact `pre` inventory receipt and privately binds built-in
+counts and source-state HMACs for the five fixed-catalog tables. It exposes no
+rows or HMAC key material and grants no execution authority. Fixed-catalog
+activation is now blocked on proving the post-sanitization payload projection;
+its PK/FK identifiers still cannot use generic transforms. Clerk values,
 email/domain joins, dependent digests, TypeID text references, and rotated
 access-code verifiers likewise require one proven semantic mapping.
 
