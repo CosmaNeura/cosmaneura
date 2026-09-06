@@ -315,6 +315,8 @@ flags remain false; see the
 
 A dormant adapter-free engine now implements the complete pinned in-memory transform and emits only a sealed non-authoritative candidate; see its [data-contract flight plan](flight-plans/2026-09-06-staging-sanitizer-data-contract-executor.md). A future live executor must keep guarded append-only tables empty, reject unexpected `ON TRUNCATE` triggers, and prove its isolated-copy `TRUNCATE`/reinsert permissions and rollback behavior; this does not preserve append-only semantics. It must use serializable transactions, `synchronous_commit=on`, bounded timeouts, an `alembic_version` lock, a pre-commit session recheck, and fresh-connection post-commit verification. Any ambiguous outcome is isolated and cleanup-only.
 
+A dormant [source-snapshot authenticator](flight-plans/2026-09-06-staging-sanitizer-source-snapshot.md) now verifies exact ordered row bytes against every pre-inventory state/identity HMAC before strict decoding, proves required-empty tables from the inventory domain, and retains only sealed typed rows plus keyed fragment proofs. It has no row reader or executor binding, and its public preflight still refuses before I/O.
+
 Evidence remains aggregate counts/HMACs and bounded pass/fail codes; small groups and per-table counts are omitted. The contract does not prove erasure from server-wide PITR, global roles, backups, replicas, or logs.
 
 The provision launch-material seam now has a dormant one-shot reader for the
