@@ -313,6 +313,15 @@ provider, process, transform, or output surface. All execution and authority
 flags remain false; see the
 [executor-preflight flight plan](flight-plans/2026-09-06-staging-sanitizer-executor-preflight.md).
 
+The next dormant Tier 2 slice implements the complete pinned data contract as
+an adapter-free in-memory transform. It validates and dispatches every retained
+column, preserves verified fixed-catalog payload values while remapping their
+identifiers, checks source and candidate FK integrity, and emits only a sealed
+nonserializable candidate. It does not authenticate the post-projection,
+connect or mutate, publish evidence, or change the public executor refusal;
+all runtime and execution authority remains false. See the
+[in-memory data-contract executor flight plan](flight-plans/2026-09-06-staging-sanitizer-data-contract-executor.md).
+
 A future executor must keep guarded append-only tables empty, reject unexpected `ON TRUNCATE` triggers, and prove its isolated-copy `TRUNCATE`/reinsert permissions and rollback behavior; this does not preserve append-only semantics. It must use serializable transactions, `synchronous_commit=on`, bounded timeouts, an `alembic_version` lock, a pre-commit session recheck, and fresh-connection post-commit verification. Any ambiguous outcome is isolated and cleanup-only.
 
 Evidence remains aggregate counts/HMACs and bounded pass/fail codes; small groups and per-table counts are omitted. The contract does not prove erasure from server-wide PITR, global roles, backups, replicas, or logs.

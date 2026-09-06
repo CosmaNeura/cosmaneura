@@ -320,12 +320,13 @@ class AuthenticatedSanitizerEvidence:
             return False
 
 
-def _reauthenticate_at_current_time(
+def _validate_at_current_time(
     value: AuthenticatedSanitizerEvidence,
     *,
     now: datetime,
+    reauthenticate_source: bool,
 ) -> None:
-    """Reauthenticate an exact evidence authority and all ancestry at ``now``."""
+    """Validate an exact evidence envelope, optionally reauthenticating ancestry."""
 
     if (
         type(now) is not datetime
@@ -356,17 +357,18 @@ def _reauthenticate_at_current_time(
         or getattr(source, "_seal", None) is not source_seal
     ):
         _fail("sanitizer_evidence.authority_invalid")
-    try:
-        reauthenticate = source_type.__dict__["_reauthenticate_at_current_time"]
-        if not callable(reauthenticate):
+    if reauthenticate_source:
+        try:
+            reauthenticate = source_type.__dict__["_reauthenticate_at_current_time"]
+            if not callable(reauthenticate):
+                _fail("sanitizer_evidence.authority_invalid")
+            reauthenticate(source, now=now)
+        except Exception as error:
+            if error.args == ("fixed_catalog_binding.target_expired",):
+                _fail("sanitizer_evidence.target_expired")
+            if error.args == ("fixed_catalog_binding.clock_regressed",):
+                _fail("sanitizer_evidence.clock_regressed")
             _fail("sanitizer_evidence.authority_invalid")
-        reauthenticate(source, now=now)
-    except Exception as error:
-        if error.args == ("fixed_catalog_binding.target_expired",):
-            _fail("sanitizer_evidence.target_expired")
-        if error.args == ("fixed_catalog_binding.clock_regressed",):
-            _fail("sanitizer_evidence.clock_regressed")
-        _fail("sanitizer_evidence.authority_invalid")
 
     try:
         target = source._target_binding
@@ -433,6 +435,26 @@ def _reauthenticate_at_current_time(
         or value._proof_sha256 != _proof(value._evidence_record_bytes, public)
     ):
         _fail("sanitizer_evidence.authority_invalid")
+
+
+def _reauthenticate_at_current_time(
+    value: AuthenticatedSanitizerEvidence,
+    *,
+    now: datetime,
+) -> None:
+    """Reauthenticate an exact evidence authority and all ancestry at ``now``."""
+
+    _validate_at_current_time(value, now=now, reauthenticate_source=True)
+
+
+def _validate_retained_envelope_at_current_time(
+    value: AuthenticatedSanitizerEvidence,
+    *,
+    now: datetime,
+) -> None:
+    """Validate this sealed envelope without dispatching into retained ancestry."""
+
+    _validate_at_current_time(value, now=now, reauthenticate_source=False)
 
 
 def _mint(
