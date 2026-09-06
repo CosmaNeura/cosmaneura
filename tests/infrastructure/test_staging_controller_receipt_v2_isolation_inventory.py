@@ -4,7 +4,7 @@ import inspect
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
 from datetime import timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -29,6 +29,8 @@ from tests.infrastructure import test_staging_runtime_record_private_readers as 
 TOKEN = "isolation-inventory-token"
 Failure = isolation.ControllerReceiptV2IsolationInventoryFailure
 SECRET_MARKERS = (TOKEN, "secret provider body", "Bearer")
+_DATABASE_AUTHORITY_TEMPLATE: Any = None
+_REAL_DERIVE_PLAN = isolation._derive_plan
 
 
 @contextmanager
@@ -57,8 +59,31 @@ def _assert_sanitized(error: BaseException) -> None:
 
 
 def _database_observation(monkeypatch: pytest.MonkeyPatch) -> Any:
-    case = database_helpers._case(monkeypatch)
-    return database_helpers._observe(case)
+    global _DATABASE_AUTHORITY_TEMPLATE
+    if _DATABASE_AUTHORITY_TEMPLATE is None:
+        case = database_helpers._case(monkeypatch)
+        _DATABASE_AUTHORITY_TEMPLATE = database_helpers._observe(case)
+    template = _DATABASE_AUTHORITY_TEMPLATE
+    production_authority = copy(template._production_authority)
+    arm_observation = copy(template._arm_observation)
+    object.__setattr__(arm_observation, "_production_authority", production_authority)
+    object.__setattr__(
+        arm_observation,
+        "_responses",
+        tuple(copy(item) for item in template._arm_observation._responses),
+    )
+    database_observation = copy(template)
+    object.__setattr__(
+        database_observation, "_production_authority", production_authority
+    )
+    object.__setattr__(database_observation, "_arm_observation", arm_observation)
+    monkeypatch.setenv("IDENTITY_ENDPOINT", wire.IDENTITY_ENDPOINT)
+    monkeypatch.setenv("IDENTITY_HEADER", wire.IDENTITY_HEADER)
+    monkeypatch.setenv(
+        arm_helpers.launch.EXECUTION_NAME_ENV,
+        arm_helpers.production_helpers.mailbox_helpers.EXECUTION_NAME,
+    )
+    return database_observation
 
 
 def _resource(item: isolation._KnownResource) -> dict[str, Any]:
@@ -93,12 +118,11 @@ def _case(
     clock: Any = None,
     monotonic: Any = None,
     deadline_factory: Any = _no_deadline,
+    cache_identical_plan_derivations: bool = True,
 ) -> dict[str, Any]:
     database_observation = _database_observation(monkeypatch)
     policy = isolation.load_controller_receipt_v2_isolation_inventory_policy()
-    plan = isolation._derive_plan(
-        database_observation, policy=policy, now=arm_helpers.NOW
-    )
+    plan = _REAL_DERIVE_PLAN(database_observation, policy=policy, now=arm_helpers.NOW)
     collections = {
         "firewall_rules": {"value": []},
         "vnet_peerings": {"value": []},
@@ -133,6 +157,19 @@ def _case(
         monotonic=monotonic or (lambda: 10.0),
         deadline_factory=deadline_factory,
     )
+    if cache_identical_plan_derivations:
+        expected_policy = deepcopy(policy)
+
+        def derive_plan(authority: Any, *, policy: Any, now: Any) -> Any:
+            if (
+                authority is database_observation
+                and policy == expected_policy
+                and now == arm_helpers.NOW
+            ):
+                return plan
+            return _REAL_DERIVE_PLAN(authority, policy=policy, now=now)
+
+        monkeypatch.setattr(isolation, "_derive_plan", derive_plan)
     return locals()
 
 
@@ -369,12 +406,20 @@ def test_http_status_framing_media_and_final_url_refuse(
 def test_provider_order_is_normalized_before_inventory_digest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    first = _observe(_case(monkeypatch)).authority["facts"]
+    first = _observe(
+        _case(monkeypatch, cache_identical_plan_derivations=False)
+    ).authority["facts"]
 
     def reverse(collections: dict[str, Any], _plan: isolation._Plan) -> None:
         collections["resource_group_inventory"]["value"].reverse()
 
-    second = _observe(_case(monkeypatch, mutate=reverse)).authority["facts"]
+    second = _observe(
+        _case(
+            monkeypatch,
+            mutate=reverse,
+            cache_identical_plan_derivations=False,
+        )
+    ).authority["facts"]
     assert (
         first["known_resource_inventory_sha256"]
         == second["known_resource_inventory_sha256"]
@@ -408,16 +453,41 @@ def test_stale_or_tampered_sealed_input_refuses_before_credentials(
     case = _case(
         monkeypatch,
         clock=lambda: arm_helpers.NOW + timedelta(seconds=61),
+        cache_identical_plan_derivations=False,
     )
     with pytest.raises(Failure, match="authority_invalid"):
         _observe(case)
     assert case["identity"].calls == []
 
-    case = _case(monkeypatch)
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
     object.__setattr__(case["database_observation"], "rehearsal_id", "tampered")
     with pytest.raises(Failure, match="authority_invalid"):
         _observe(case)
     assert case["identity"].calls == []
+
+
+def test_mixed_chain_and_post_provider_tamper_revalidate_real_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
+    other = _case(monkeypatch, cache_identical_plan_derivations=False)
+    object.__setattr__(
+        case["database_observation"],
+        "_arm_observation",
+        other["database_observation"]._arm_observation,
+    )
+    with pytest.raises(Failure, match="authority_invalid"):
+        _observe(case)
+
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
+    case["provider"].effects.append(
+        lambda: object.__setattr__(
+            case["database_observation"], "rehearsal_id", "tampered"
+        )
+    )
+    with pytest.raises(Failure, match="authority_invalid"):
+        _observe(case)
+    assert len(case["provider"].calls) == 1
 
 
 def test_one_shot_is_concurrency_safe(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -496,7 +566,7 @@ def test_failure_and_authority_seals_hide_provider_content_and_tampering(
         _observe(case)
     _assert_sanitized(error.value)
 
-    case = _case(monkeypatch)
+    case = _case(monkeypatch, cache_identical_plan_derivations=False)
     result = _observe(case)
     object.__setattr__(result, "public_access_authenticated", False)
     assert not result._is_authenticated()
