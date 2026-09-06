@@ -948,6 +948,7 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
         "DigestPinnedGitHubCliVerifier",
     )
     arm_path = "observe_staging_controller_receipt_v2_arm.py"
+    database_path = "observe_staging_controller_receipt_v2_database.py"
     executable_paths = [
         *Path(adapters.attestation.ROOT).joinpath("scripts").glob("*.py"),
         *Path(adapters.attestation.ROOT).joinpath("scripts").glob("*.sh"),
@@ -993,6 +994,7 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
         elif path.name in {
             "read_staging_controller_receipt_v2.py",
             "read_staging_controller_receipt_v2_prefix.py",
+            database_path,
         }:
             forbidden_symbols = tuple(
                 symbol
