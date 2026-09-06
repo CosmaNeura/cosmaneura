@@ -56,9 +56,9 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/restore-trusted-executor-policy.json"
 )
-POLICY_SHA256 = "8c6b3f00e0cae1d357dc2e0f6140f902560e8c35fc6c8d12e02db8a923eed549"
+POLICY_SHA256 = "bb562333753973ce4521e166937aa9f24c3ad2c217ae95cc9c357b2a04e8eda1"
 POLICY_TEMPLATE_SHA256 = (
-    "c37b0006aba0ea5945d951b79d35fb1b3b93b4342156d44718baf3f8dc346cda"
+    "85ca733a94d5f801a1836783176c47d5a6cb84d0e9e6528f65ee50874c267fb5"
 )
 # The factory is complete but deliberately unreachable from the public entry
 # point until the separately reviewed workflow/private-runner activation slice.

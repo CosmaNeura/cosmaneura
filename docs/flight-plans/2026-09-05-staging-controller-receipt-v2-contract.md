@@ -21,6 +21,11 @@ and runtime references, workflow/source/candidate identity, source and target
 servers, restore time, job/UAMI identity, the fifteen runtime fields, resource
 set digest, cleanup deadline, isolation result, and pass result.
 
+Before activation, the isolation contract was corrected to replace ambiguous
+`blob_copied` and `redis_copied` history claims with exact integer counts for
+Storage-account and Redis resources in the pinned target resource group. See
+the [isolation-semantics flight plan](2026-09-05-staging-controller-receipt-v2-isolation-semantics.md).
+
 ## Trust boundary
 
 `ValidatedControllerReceiptV2Content` means only that this module accepted the
@@ -45,6 +50,8 @@ do not invalidate a receipt produced after a legitimately long restore.
 - PR-B: reviewed private-WORM reader and sealed source-authentication carrier.
 - PR-C: producer plus authenticated ARM/network/database observations and
   runtime/sanitizer/cleanup consumption.
+- A sealed target-resource-group inventory observation must authenticate the
+  point-in-time isolation counts before the producer is implemented.
 - Later activation: configured identities/resources, RBAC and WORM evidence,
   private-network proof, workflow integration, rehearsal, and explicit gates.
 

@@ -23,7 +23,7 @@ from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = ROOT / "contracts/staging-rehearsal/v1/controller-receipt-v2-policy.json"
-POLICY_SHA256 = "4e83405da756448117a8bc0a4f4ff7a60a918a780df4bbaabc99a9d140a766b1"
+POLICY_SHA256 = "522d69df772712a111644c471127da95d698cf2b1c4e994465f5e98860b13436"
 MAXIMUM_POLICY_BYTES = 128 * 1024
 
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -133,8 +133,8 @@ ISOLATION_FIELDS = (
     "vnet_peering_count",
     "public_ip_count",
     "unknown_resource_count",
-    "blob_copied",
-    "redis_copied",
+    "target_resource_group_storage_account_count",
+    "target_resource_group_redis_resource_count",
 )
 INTENT_FIELDS = (
     "schema_version",

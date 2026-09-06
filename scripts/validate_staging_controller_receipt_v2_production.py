@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/controller-receipt-v2-production-policy.json"
 )
-POLICY_SHA256 = "c0bdc1d49f4d1c1e0103e19b04d3b88a58db52d46a3948db6f4f439ca8c87799"
+POLICY_SHA256 = "6c5fd6d89c807df0925d68e20265616cf11da872f4269cb6cde1a1eb0a30831b"
 MAXIMUM_POLICY_BYTES = 64 * 1024
 PREFIX_RECORD_KINDS = ("intent", "submission")
 PRODUCTION_ACTION = "provision"

@@ -44,7 +44,7 @@ POLICY_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/controller-receipt-v2-database-observation-policy.json"
 )
-POLICY_SHA256 = "a635883b381fa249d123f281522135d7044262c98f056a0c45af0ac13cdda26f"
+POLICY_SHA256 = "66dd80c22dd9f21021ec0c4cf604af5ec6afc5fb5d53bd8e946b72abcf8f43bb"
 MAXIMUM_POLICY_BYTES = 64 * 1024
 POSTGRES_OAUTH_RESOURCE = "https://ossrdbms-aad.database.windows.net"
 AZURE_POSTGRES_HOST_RE = re.compile(

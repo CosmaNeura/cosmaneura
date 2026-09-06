@@ -351,6 +351,28 @@ def test_policy_is_pinned_dormant_non_authenticating_and_runtime_compatible() ->
     assert contract["required_runtime_fields"] == list(receipt_v2.RUNTIME_FIELDS)
     assert contract["existing_v1_receipt_satisfies_contract"] is False
     assert runtime["activation"]["authenticated_controller_receipt_bound"] is False
+    isolation = policy["fixed_bindings"]["isolation"]
+    assert set(isolation) == set(receipt_v2.ISOLATION_FIELDS)
+    assert isolation["target_resource_group_storage_account_count"] == 0
+    assert type(isolation["target_resource_group_storage_account_count"]) is int
+    assert isolation["target_resource_group_redis_resource_count"] == 0
+    assert type(isolation["target_resource_group_redis_resource_count"]) is int
+    assert "blob_copied" not in isolation
+    assert "redis_copied" not in isolation
+    assert policy["observation_authority"]["isolation_count_semantics"] == {
+        "fact_semantics": "point-in-time-count-not-execution-history",
+        "inventory_scope": "fixed_bindings.target_resource_group_id",
+        "resource_type_comparison": "ascii-case-insensitive",
+        "resource_type_coverage": {
+            "target_resource_group_redis_resource_count": [
+                "Microsoft.Cache/Redis",
+                "Microsoft.Cache/redisEnterprise",
+            ],
+            "target_resource_group_storage_account_count": [
+                "Microsoft.Storage/storageAccounts"
+            ],
+        },
+    }
     with pytest.raises(receipt_v2.ControllerReceiptV2Failure, match="policy_disabled"):
         receipt_v2.validate_controller_receipt_v2_policy(policy, executable=True)
 
@@ -537,7 +559,9 @@ def test_repository_policy_file_digest_drift_fails_closed(monkeypatch: Any) -> N
         ),
         ("target.resource_set_sha256", f"sha256:{'9' * 64}"),
         ("isolation.firewall_rule_count", 1),
-        ("isolation.blob_copied", 0),
+        ("isolation.target_resource_group_storage_account_count", 1),
+        ("isolation.target_resource_group_redis_resource_count", 1),
+        ("isolation.target_resource_group_storage_account_count", False),
         ("pass", False),
     ],
 )
@@ -692,7 +716,7 @@ def test_freshness_returns_rederived_content_not_hostile_caller_fields() -> None
             "source_server",
             f"{SOURCE_GROUP}/providers/Microsoft.Storage/storageAccounts/notpostgres",
         ),
-        ("isolation_type", 0),
+        ("isolation_type", False),
         ("target_group", "not-an-id"),
         ("role", "Owner"),
     ],
@@ -716,7 +740,9 @@ def test_policy_unknown_fields_and_invalid_configured_pins_fail(
     elif mutation == "source_server":
         policy["fixed_bindings"]["source_server_resource_id"] = value
     elif mutation == "isolation_type":
-        policy["fixed_bindings"]["isolation"]["blob_copied"] = value
+        policy["fixed_bindings"]["isolation"][
+            "target_resource_group_storage_account_count"
+        ] = value
     elif mutation == "target_group":
         policy["fixed_bindings"]["target_resource_group_id"] = value
     else:
