@@ -44,7 +44,7 @@ INVENTORY_POLICY_PATH = (
     ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
 )
 CANONICAL_POLICY_SHA256 = (
-    "1c8a9e60c99b65e1ba3087cf80f86348ae6925ad7f9a93cd5c904cd1e57ae525"
+    "94da2806468324a5307e1b2f34080fdf23c5733b0b395cc21cafb5ddc6d6c03d"
 )
 CANONICAL_DATA_CONTRACT_SHA256 = (
     "f1c0c7dce56cd2aa42647578940f807186d8e888b70c66da9aa64aa7402b1360"
@@ -60,6 +60,7 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,127}$")
 ROLE_RE = re.compile(r"^[a-z][a-z0-9_]{2,62}$")
 MAXIMUM_POLICY_BYTES = 64 * 1024
+MAXIMUM_INVENTORY_RECEIPT_BYTES = 256 * 1024
 _TARGET_BINDING_SEAL = object()
 _BINDING_FAILURE_CODES = frozenset(
     {
@@ -81,19 +82,21 @@ TOP_LEVEL_KEYS = {
     "inventory",
     "target",
     "controller_receipt_v2_binding",
+    "fixed_catalog_source_state_binding",
     "transform_contract",
     "execution_contract",
     "migration_contract",
     "evidence_contract",
     "limitations",
 }
-FIXED_CATALOG_TABLES = {
+FIXED_CATALOG_TABLE_ORDER = (
     "baa_version",
     "doctor_note_schema",
     "drug_reference",
     "lab_range_set",
     "note_type_customization",
-}
+)
+FIXED_CATALOG_TABLES = set(FIXED_CATALOG_TABLE_ORDER)
 GUARDED_TABLES = {
     "authority_person_origin",
     "baa_acceptance",
@@ -137,11 +140,55 @@ TABLE_CONTRACT_KEYS = {"disposition", "row_action", "columns"}
 ACTIVATION_BLOCKERS = {
     "authenticated_server_scope_evidence_binding",
     "data_contract_executor_implementation",
-    "fixed_catalog_source_state_and_post_projection_verification",
+    "fixed_catalog_post_projection_verification",
     "derived_value_execution_proof",
     "atomic_transaction_and_postcommit_verification",
     "guarded_table_truncate_permission_and_rollback_proof",
 }
+FIXED_CATALOG_SOURCE_STATE_CLAIMS = {
+    "controller_receipt_v2_target_binding_authenticated": True,
+    "fixed_catalog_source_state_authenticated": True,
+    "inventory_receipt_digest_authenticated": True,
+    "database_connection_authority": False,
+    "database_mutation_authority": False,
+    "executable": False,
+    "live_provider_calls_enabled": False,
+    "post_projection_authenticated": False,
+    "provider_calls_permitted": False,
+    "provider_facts_authenticated": False,
+    "runtime_authority": False,
+    "sanitizer_authority": False,
+    "server_scope_authenticated": False,
+    "workflow_integrated": False,
+}
+FIXED_CATALOG_CONTEXT_FIELDS = (
+    "source_sha",
+    "candidate_sha",
+    "source_server_resource_id",
+    "source_database_name",
+    "approved_restore_time",
+    "workflow_sha",
+    "run_id",
+    "run_attempt",
+    "repository",
+    "protected_ref",
+    "workflow_path",
+    "signer_issuer",
+    "signer_subject",
+)
+FIXED_CATALOG_PUBLIC_FIELDS = (
+    "inventory_receipt_sha256",
+    "inventory_policy_sha256",
+    "approved_state_sha256",
+    "fixed_catalog_projection_sha256",
+    "hmac_key_version",
+    "source_profile",
+    "source_revision",
+    "inventory_observed_at",
+    "inventory_expires_at",
+    "target_binding_expires_at",
+    "authenticated_at",
+)
 BINDING_CLAIMS = {
     "arm_network_facts_authenticated": True,
     "content_built_and_validated": True,
@@ -974,6 +1021,73 @@ def validate_policy(
         _fail("policy.invalid")
 
 
+def _validate_fixed_catalog_source_state_policy(
+    contract: object, inventory_policy: Mapping[str, Any]
+) -> None:
+    value = _exact_keys(
+        contract,
+        {"binding", "claims", "implemented", "input", "inventory", "kind", "output"},
+        "policy.fixed_catalog_source_state",
+    )
+    input_contract = value["input"]
+    inventory_contract = value["inventory"]
+    binding = value["binding"]
+    output = value["output"]
+    pre = inventory_policy["profiles"]["pre"]
+    if (
+        value["kind"] != "sealed-authenticated-fixed-catalog-source-state-v1"
+        or value["implemented"] is not True
+        or input_contract
+        != {
+            "caller_digest_policy_profile_revision_time_path_uri_key_or_runtime_override_permitted": False,
+            "inventory_receipt_exact_bytes_required": True,
+            "maximum_inventory_receipt_bytes": MAXIMUM_INVENTORY_RECEIPT_BYTES,
+            "only_public_data_inputs": [
+                "target_binding",
+                "inventory_receipt_bytes",
+            ],
+            "target_binding_kind": "sealed-sanitizer-target-binding-v1",
+        }
+        or inventory_contract
+        != {
+            "canonical_json_required": True,
+            "duplicate_keys_rejected": True,
+            "historical_receipt_expiry_is_activation_deadline": False,
+            "hmac_key_version": inventory.SUPPORTED_HMAC_KEY_VERSION,
+            "policy_id": inventory_policy["policy_id"],
+            "policy_sha256": f"sha256:{inventory.CANONICAL_POLICY_SHA256}",
+            "profile": "pre",
+            "receipt_schema_version": 2,
+            "revision": pre["revision"],
+            "schema_descriptor_sha256": pre["schema_descriptor"]["sha256"],
+        }
+        or binding
+        != {
+            "constant_time_digest_compare": True,
+            "count_nonnegative_exact_int_required": True,
+            "cross_bound_fields": list(FIXED_CATALOG_CONTEXT_FIELDS),
+            "fixed_catalog_tables": list(FIXED_CATALOG_TABLE_ORDER),
+            "intent_digest_source": (
+                "target_binding._written_receipt._built_receipt.intent_bytes."
+                "evidence_binding.inventory_receipt_sha256"
+            ),
+            "state_hmac_lowercase_sha256_required": True,
+            "target_binding_fresh_at_bind_time_required": True,
+        }
+        or output
+        != {
+            "non_serializable": True,
+            "private_inventory_receipt_bytes_retained": True,
+            "private_ordered_projection_retained": True,
+            "private_target_binding_retained": True,
+            "public_fields": list(FIXED_CATALOG_PUBLIC_FIELDS),
+            "unknown_fields_permitted": False,
+        }
+        or value["claims"] != FIXED_CATALOG_SOURCE_STATE_CLAIMS
+    ):
+        _fail("policy.fixed_catalog_source_state")
+
+
 def _validate_policy(
     policy: Mapping[str, Any], inventory_policy: Mapping[str, Any]
 ) -> None:
@@ -989,6 +1103,7 @@ def _validate_policy(
         {
             "controller_receipt_v2_target_binding_implemented",
             "executable",
+            "fixed_catalog_source_state_binding_implemented",
             "live_provider_calls_enabled",
             "trusted_evidence_binding_implemented",
             "database_mutation_implemented",
@@ -1000,6 +1115,7 @@ def _validate_policy(
     if (
         status["controller_receipt_v2_target_binding_implemented"] is not True
         or status["executable"] is not False
+        or status["fixed_catalog_source_state_binding_implemented"] is not True
         or status["live_provider_calls_enabled"] is not False
         or status["trusted_evidence_binding_implemented"] is not False
         or status["database_mutation_implemented"] is not False
@@ -1167,6 +1283,10 @@ def _validate_policy(
         or receipt["claims"] != BINDING_CLAIMS
     ):
         _fail("policy.controller_receipt_v2_binding")
+
+    _validate_fixed_catalog_source_state_policy(
+        policy["fixed_catalog_source_state_binding"], inventory_policy
+    )
 
     transform = _exact_keys(
         policy["transform_contract"],

@@ -224,6 +224,12 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-foundation
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-authority
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-context
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-source-state-integrity
+            apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh
           - shard: integration

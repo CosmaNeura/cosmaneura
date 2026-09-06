@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -21,28 +22,83 @@ SHARDS = (
     "infrastructure-controller",
     "infrastructure-receipt-io",
     "infrastructure-sanitizer-foundation",
+    "infrastructure-sanitizer-source-state-authority",
+    "infrastructure-sanitizer-source-state-context",
+    "infrastructure-sanitizer-source-state-integrity",
     "infrastructure-restore",
     "integration",
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
-CONTROLLER_SELECTOR = f"{CONTROLLER_GLOB[:-4]}.py {CONTROLLER_GLOB[:-4]}_[ad]*.py"
-RECEIPT_IO_SELECTOR = f"{CONTROLLER_GLOB[:-4]}_[bw]*.py"
+CONTROLLER_BASE = CONTROLLER_GLOB[:-4]
+CONTROLLER_SELECTOR = (
+    f"{CONTROLLER_BASE}.py "
+    f"{CONTROLLER_BASE}_{{arm_observation,database_observation}}.py"
+)
+RECEIPT_IO_SELECTOR = f"{CONTROLLER_BASE}_{{builder,writer}}.py"
 SANITIZER_FOUNDATION_SELECTOR = "tests/infrastructure/test_staging_restore_sanitizer.py"
-RESTORE_RECEIPT_SELECTOR = f"{CONTROLLER_GLOB[:-4]}_[ip]*.py"
+SANITIZER_SOURCE_STATE_GLOB = (
+    "tests/infrastructure/test_staging_restore_fixed_catalog_source_state*.py"
+)
+SANITIZER_SOURCE_STATE_AUTHORITY_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_fixed_catalog_source_state_authority.py"
+)
+SANITIZER_SOURCE_STATE_CONTEXT_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_fixed_catalog_source_state_context.py"
+)
+SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_fixed_catalog_source_state_integrity.py"
+)
+SANITIZER_SOURCE_STATE_SELECTORS = (
+    SANITIZER_SOURCE_STATE_AUTHORITY_SELECTOR,
+    SANITIZER_SOURCE_STATE_CONTEXT_SELECTOR,
+    SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR,
+)
+RESTORE_RECEIPT_SELECTOR = (
+    f"{CONTROLLER_BASE}_{{isolation_inventory,private_reader,production_authority}}.py"
+)
+CONTROLLER_PATHS = frozenset(
+    Path(path)
+    for path in (
+        f"{CONTROLLER_BASE}.py",
+        f"{CONTROLLER_BASE}_arm_observation.py",
+        f"{CONTROLLER_BASE}_database_observation.py",
+    )
+)
+RECEIPT_IO_PATHS = frozenset(
+    Path(path)
+    for path in (
+        f"{CONTROLLER_BASE}_builder.py",
+        f"{CONTROLLER_BASE}_writer.py",
+    )
+)
+RESTORE_RECEIPT_PATHS = frozenset(
+    Path(path)
+    for path in (
+        f"{CONTROLLER_BASE}_isolation_inventory.py",
+        f"{CONTROLLER_BASE}_private_reader.py",
+        f"{CONTROLLER_BASE}_production_authority.py",
+    )
+)
 
 
 def _infrastructure_shard(path: Path) -> str:
     if path.parent == Path("tests/infrastructure"):
+        if path == Path(SANITIZER_SOURCE_STATE_AUTHORITY_SELECTOR):
+            return "infrastructure-sanitizer-source-state-authority"
+        if path == Path(SANITIZER_SOURCE_STATE_CONTEXT_SELECTOR):
+            return "infrastructure-sanitizer-source-state-context"
+        if path == Path(SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR):
+            return "infrastructure-sanitizer-source-state-integrity"
+        if path.name.startswith("test_staging_restore_fixed_catalog_source_state"):
+            return "unassigned"
         if path == Path(SANITIZER_FOUNDATION_SELECTOR):
             return "infrastructure-sanitizer-foundation"
-        if path.match("test_staging_controller_receipt_v2_[bw]*.py"):
+        if path in RECEIPT_IO_PATHS:
             return "infrastructure-receipt-io"
-        if path.match("test_staging_controller_receipt_v2_[ip]*.py"):
+        if path in RESTORE_RECEIPT_PATHS:
             return "infrastructure-restore"
-        if path.name == "test_staging_controller_receipt_v2.py" or path.match(
-            "test_staging_controller_receipt_v2_[ad]*.py"
-        ):
+        if path in CONTROLLER_PATHS:
             return "infrastructure-controller"
         if path.name.startswith("test_staging_controller_receipt_v2"):
             return "unassigned"
@@ -67,6 +123,36 @@ def _run_commands(job: dict[str, Any]) -> tuple[str, ...]:
 
 def _named_step(job: dict[str, Any], name: str) -> dict[str, Any]:
     return next(step for step in job["steps"] if step.get("name") == name)
+
+
+def _collect_nodeids(*selectors: str) -> tuple[str, ...]:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-q",
+            "--confcutdir=tests/infrastructure",
+            *selectors,
+        ],
+        check=False,
+        capture_output=True,
+        cwd=ROOT,
+        env=os.environ
+        | {
+            "PYTHONPATH": str(ROOT),
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+            "PYTHON_ENV": "test",
+        },
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    return tuple(
+        line
+        for line in completed.stdout.splitlines()
+        if line.startswith("tests/") and "::" in line
+    )
 
 
 def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
@@ -97,11 +183,20 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "infrastructure-sanitizer-foundation": (
             f"uv run pytest {SANITIZER_FOUNDATION_SELECTOR} --verbosity=2"
         ),
+        "infrastructure-sanitizer-source-state-authority": (
+            f"uv run pytest {SANITIZER_SOURCE_STATE_AUTHORITY_SELECTOR} --verbosity=2"
+        ),
+        "infrastructure-sanitizer-source-state-context": (
+            f"uv run pytest {SANITIZER_SOURCE_STATE_CONTEXT_SELECTOR} --verbosity=2"
+        ),
+        "infrastructure-sanitizer-source-state-integrity": (
+            f"uv run pytest {SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR} --verbosity=2"
+        ),
         "infrastructure-restore": (
             f"restore_tests=({RESTORE_GLOB})\n"
-            '\trestore_tests=("${(@)restore_tests:'
-            f"#{SANITIZER_FOUNDATION_SELECTOR}"
-            '}")\n'
+            "\tdedicated_restore_tests=("
+            f"{SANITIZER_FOUNDATION_SELECTOR} {SANITIZER_SOURCE_STATE_GLOB})\n"
+            '\trestore_tests=("${(@)restore_tests:|dedicated_restore_tests}")\n'
             '\tuv run pytest "${restore_tests[@]}" '
             f"{RESTORE_RECEIPT_SELECTOR} --verbosity=2"
         ),
@@ -123,6 +218,15 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_foundation_start = source.index(
         "py_test-ci-infrastructure-sanitizer-foundation:"
     )
+    infrastructure_sanitizer_source_state_authority_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-source-state-authority:"
+    )
+    infrastructure_sanitizer_source_state_context_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-source-state-context:"
+    )
+    infrastructure_sanitizer_source_state_integrity_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-source-state-integrity:"
+    )
     infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
     application_recipe = source[application_start:infrastructure_general_start]
     integration_start = source.index("py_test-ci-integration:")
@@ -138,7 +242,16 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_receipt_io_start:infrastructure_sanitizer_foundation_start
     ]
     infrastructure_sanitizer_foundation_recipe = source[
-        infrastructure_sanitizer_foundation_start:infrastructure_restore_start
+        infrastructure_sanitizer_foundation_start:infrastructure_sanitizer_source_state_authority_start
+    ]
+    infrastructure_sanitizer_source_state_authority_recipe = source[
+        infrastructure_sanitizer_source_state_authority_start:infrastructure_sanitizer_source_state_context_start
+    ]
+    infrastructure_sanitizer_source_state_context_recipe = source[
+        infrastructure_sanitizer_source_state_context_start:infrastructure_sanitizer_source_state_integrity_start
+    ]
+    infrastructure_sanitizer_source_state_integrity_recipe = source[
+        infrastructure_sanitizer_source_state_integrity_start:infrastructure_restore_start
     ]
     infrastructure_restore_recipe = source[
         infrastructure_restore_start:integration_start
@@ -152,7 +265,16 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert "--ignore-glob=" not in infrastructure_controller_recipe
     assert "--ignore-glob=" not in infrastructure_receipt_io_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_foundation_recipe
+    assert (
+        "--ignore-glob=" not in infrastructure_sanitizer_source_state_authority_recipe
+    )
+    assert "--ignore-glob=" not in infrastructure_sanitizer_source_state_context_recipe
+    assert (
+        "--ignore-glob=" not in infrastructure_sanitizer_source_state_integrity_recipe
+    )
     assert "--ignore-glob=" not in infrastructure_restore_recipe
+    assert ":|dedicated_restore_tests" in infrastructure_restore_recipe
+    assert ":#" not in infrastructure_restore_recipe
     assert "playwright install chromium --only-shell" not in application_recipe
     assert "localias" not in application_recipe.lower()
     assert "playwright install chromium --only-shell" not in integration_recipe
@@ -165,6 +287,14 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     }
     infrastructure_files = {
         path for path in test_files if path.parts[1] == "infrastructure"
+    }
+    source_state_files = {
+        path
+        for path in infrastructure_files
+        if path.name.startswith("test_staging_restore_fixed_catalog_source_state")
+    }
+    assert source_state_files == {
+        Path(selector) for selector in SANITIZER_SOURCE_STATE_SELECTORS
     }
     selected = {
         shard: {
@@ -205,7 +335,69 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-foundation",
         ),
         (
+            Path(
+                "tests/infrastructure/"
+                "test_staging_restore_fixed_catalog_source_state_authority.py"
+            ),
+            "infrastructure-sanitizer-source-state-authority",
+        ),
+        (
+            Path(
+                "tests/infrastructure/"
+                "test_staging_restore_fixed_catalog_source_state_context.py"
+            ),
+            "infrastructure-sanitizer-source-state-context",
+        ),
+        (
+            Path(
+                "tests/infrastructure/"
+                "test_staging_restore_fixed_catalog_source_state_integrity.py"
+            ),
+            "infrastructure-sanitizer-source-state-integrity",
+        ),
+        (
+            Path(
+                "tests/infrastructure/"
+                "test_staging_restore_fixed_catalog_source_state_future.py"
+            ),
+            "unassigned",
+        ),
+        (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_consumer.py"),
+            "unassigned",
+        ),
+        (
+            Path("tests/infrastructure/test_staging_controller_receipt_v2_bogus.py"),
+            "unassigned",
+        ),
+        (
+            Path(
+                "tests/infrastructure/test_staging_controller_receipt_v2_adversarial.py"
+            ),
+            "unassigned",
+        ),
+        (
+            Path(
+                "tests/infrastructure/test_staging_controller_receipt_v2_databaseish.py"
+            ),
+            "unassigned",
+        ),
+        (
+            Path(
+                "tests/infrastructure/test_staging_controller_receipt_v2_impossible.py"
+            ),
+            "unassigned",
+        ),
+        (
+            Path(
+                "tests/infrastructure/test_staging_controller_receipt_v2_providerish.py"
+            ),
+            "unassigned",
+        ),
+        (
+            Path(
+                "tests/infrastructure/test_staging_controller_receipt_v2_writerlike.py"
+            ),
             "unassigned",
         ),
         (
@@ -218,6 +410,29 @@ def test_future_semantic_test_families_route_without_file_allowlists(
     path: Path, expected_shard: str
 ) -> None:
     assert _infrastructure_shard(path) == expected_shard
+
+
+def test_source_state_shards_partition_all_36_collected_cases_once() -> None:
+    authority = _collect_nodeids(SANITIZER_SOURCE_STATE_AUTHORITY_SELECTOR)
+    context = _collect_nodeids(SANITIZER_SOURCE_STATE_CONTEXT_SELECTOR)
+    integrity = _collect_nodeids(SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR)
+    family = _collect_nodeids(*SANITIZER_SOURCE_STATE_SELECTORS)
+
+    assert authority
+    assert context
+    assert integrity
+    assert len(authority) == 7
+    assert len(context) == 18
+    assert len(integrity) == 11
+    assert len(family) == 36
+    assert len(authority) == len(set(authority))
+    assert len(context) == len(set(context))
+    assert len(integrity) == len(set(integrity))
+    assert len(family) == len(set(family))
+    assert set(authority).isdisjoint(context)
+    assert set(authority).isdisjoint(integrity)
+    assert set(context).isdisjoint(integrity)
+    assert set(authority) | set(context) | set(integrity) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
@@ -234,6 +449,9 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
+        "zsh",
+        "zsh",
         "zsh",
         "zsh",
         "zsh",

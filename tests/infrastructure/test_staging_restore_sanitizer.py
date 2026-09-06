@@ -184,6 +184,7 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
     assert data_contract["retained_table_count"] == 29
     assert data_contract["retained_column_count"] == 343
     assert policy["status"]["controller_receipt_v2_target_binding_implemented"] is True
+    assert policy["status"]["fixed_catalog_source_state_binding_implemented"] is True
     assert policy["status"]["executable"] is False
     assert policy["status"]["trusted_evidence_binding_implemented"] is False
     assert policy["status"]["live_provider_calls_enabled"] is False
@@ -199,6 +200,12 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
         is False
     )
     assert receipt_binding["output"]["non_serializable"] is True
+    source_state = policy["fixed_catalog_source_state_binding"]
+    assert source_state["implemented"] is True
+    assert source_state["binding"]["fixed_catalog_tables"] == list(
+        module.FIXED_CATALOG_TABLE_ORDER
+    )
+    assert source_state["claims"] == module.FIXED_CATALOG_SOURCE_STATE_CLAIMS
     transform = policy["transform_contract"]
     assert transform["retained_column_policy_status"] == (
         "complete_sha256_pinned_343_columns"
