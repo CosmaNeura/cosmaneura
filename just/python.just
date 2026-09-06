@@ -221,7 +221,7 @@ py_test-ci-infrastructure-sanitizer-executor:
 [script]
 py_test-ci-infrastructure-sanitizer-data-contract-executor:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-data-contract-executor is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_data_contract_executor.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{data_contract_executor,source_snapshot}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-restore:

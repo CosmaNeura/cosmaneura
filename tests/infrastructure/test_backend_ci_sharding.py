@@ -111,10 +111,14 @@ SANITIZER_EXECUTOR_SELECTOR = (
 SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_data_contract_executor.py"
 )
+SANITIZER_SOURCE_SNAPSHOT_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_sanitizer_source_snapshot.py"
+)
 SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_EVIDENCE_SELECTOR,
     SANITIZER_EXECUTOR_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
+    SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
 )
 
 
@@ -134,7 +138,13 @@ def _infrastructure_shard(path: Path) -> str:
             return "infrastructure-sanitizer-evidence"
         if path == Path(SANITIZER_EXECUTOR_SELECTOR):
             return "infrastructure-sanitizer-executor"
-        if path == Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR):
+        if path in map(
+            Path,
+            (
+                SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
+                SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
+            ),
+        ):
             return "infrastructure-sanitizer-data-contract-executor"
         if path.name.startswith("test_staging_restore_sanitizer_"):
             return "unassigned"
@@ -256,7 +266,8 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"uv run pytest {SANITIZER_EXECUTOR_SELECTOR} --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
-            f"uv run pytest {SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR} --verbosity=2"
+            "uv run pytest tests/infrastructure/"
+            "test_staging_restore_sanitizer_{data_contract_executor,source_snapshot}.py --verbosity=2"
         ),
         "infrastructure-restore": (
             f"restore_tests=({RESTORE_GLOB})\n"
@@ -472,6 +483,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-data-contract-executor",
         ),
         (
+            Path(SANITIZER_SOURCE_SNAPSHOT_SELECTOR),
+            "infrastructure-sanitizer-data-contract-executor",
+        ),
+        (
             Path("tests/infrastructure/test_staging_restore_sanitizer_future.py"),
             "unassigned",
         ),
@@ -569,6 +584,7 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     evidence = _collect_nodeids(SANITIZER_EVIDENCE_SELECTOR)
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
+    source_snapshot = _collect_nodeids(SANITIZER_SOURCE_SNAPSHOT_SELECTOR)
     family = _collect_nodeids(*SANITIZER_RUNTIME_SELECTORS)
 
     assert evidence
@@ -577,15 +593,22 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(evidence) == 29
     assert len(executor) == 21
     assert len(data_contract_executor) == 28
-    assert len(family) == 78
+    assert len(source_snapshot) == 34
+    assert len(family) == 112
     assert len(evidence) == len(set(evidence))
     assert len(executor) == len(set(executor))
     assert len(data_contract_executor) == len(set(data_contract_executor))
+    assert len(source_snapshot) == len(set(source_snapshot))
     assert len(family) == len(set(family))
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
     assert set(executor).isdisjoint(data_contract_executor)
-    assert set(evidence) | set(executor) | set(data_contract_executor) == set(family)
+    assert set(source_snapshot).isdisjoint(
+        set(evidence) | set(executor) | set(data_contract_executor)
+    )
+    assert set(evidence) | set(executor) | set(data_contract_executor) | set(
+        source_snapshot
+    ) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
