@@ -176,9 +176,54 @@ def _iso(value: object) -> str:
         or value.tzinfo is None
         or value.utcoffset() != timedelta(0)
         or value.microsecond != 0
+        or value.tzinfo is not UTC
+        or value.fold != 0
     ):
         _fail("sanitizer_evidence.authority_invalid")
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _retained_snapshot(value: Any, seen: dict[int, int]) -> Any:
+    if value is None or type(value) in {bool, int, str}:
+        return [type(value).__name__, value]
+    if type(value) is bytes:
+        return ["bytes", len(value), _digest(value)]
+    if type(value) is datetime:
+        zone = value.tzinfo
+        return ["datetime", value.isoformat(), value.fold, id(type(zone)), id(zone)]
+    marker = id(value)
+    if marker in seen:
+        return ["ref", seen[marker]]
+    seen[marker] = len(seen)
+    if type(value) is dict:
+        if not all(type(name) is str for name in value):
+            _fail("sanitizer_evidence.authority_invalid")
+        return [
+            "mapping",
+            {name: _retained_snapshot(value[name], seen) for name in sorted(value)},
+        ]
+    if type(value) in {tuple, list}:
+        return [
+            type(value).__name__,
+            [_retained_snapshot(item, seen) for item in value],
+        ]
+    fields = getattr(type(value), "__dataclass_fields__", None)
+    if type(fields) is not dict:
+        _fail("sanitizer_evidence.authority_invalid")
+    items = {}
+    for name in fields:
+        item = getattr(value, name)
+        items[name] = (
+            ["seal", id(item)]
+            if name.endswith("_seal")
+            else _retained_snapshot(item, seen)
+        )
+    kind = type(value)
+    return ["dataclass", id(kind), kind.__module__, kind.__qualname__, items]
+
+
+def _retained_source_witness(source: Any) -> str:
+    return _digest(_canonical(_retained_snapshot(source, {})))
 
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
@@ -241,7 +286,9 @@ def _restore_record(value: RestoreEvidenceBinding) -> dict[str, Any]:
     return result
 
 
-def _proof(record_bytes: bytes, public: Mapping[str, Any]) -> str:
+def _proof(
+    record_bytes: bytes, public: Mapping[str, Any], retained_source_witness: str
+) -> str:
     serializable = dict(public)
     for name in (
         "evidence_observed_at",
@@ -255,6 +302,7 @@ def _proof(record_bytes: bytes, public: Mapping[str, Any]) -> str:
             {
                 "evidence_record_sha256": _digest(record_bytes),
                 "public": serializable,
+                "retained_source_witness_sha256": retained_source_witness,
             }
         )
     ).hexdigest()
@@ -299,6 +347,7 @@ class AuthenticatedSanitizerEvidence:
     _evidence_record_bytes: bytes = dataclass_field(repr=False)
     _sanitizer_policy_bytes: bytes = dataclass_field(repr=False)
     _composition_policy_bytes: bytes = dataclass_field(repr=False)
+    _retained_source_witness_sha256: str = dataclass_field(repr=False)
     _proof_sha256: str = dataclass_field(repr=False)
     _seal: object = dataclass_field(repr=False)
 
@@ -326,8 +375,6 @@ def _validate_at_current_time(
     now: datetime,
     reauthenticate_source: bool,
 ) -> None:
-    """Validate an exact evidence envelope, optionally reauthenticating ancestry."""
-
     if (
         type(now) is not datetime
         or now.tzinfo is None
@@ -356,6 +403,9 @@ def _validate_at_current_time(
         or type(source) is not source_type
         or getattr(source, "_seal", None) is not source_seal
     ):
+        _fail("sanitizer_evidence.authority_invalid")
+    witness = _retained_source_witness(source)
+    if not hmac.compare_digest(witness, value._retained_source_witness_sha256):
         _fail("sanitizer_evidence.authority_invalid")
     if reauthenticate_source:
         try:
@@ -432,18 +482,19 @@ def _validate_at_current_time(
         != COMPOSITION_POLICY_SHA256
         or any(getattr(value, name) != item for name, item in public.items())
         or any(getattr(value, name) is not item for name, item in CLAIMS.items())
-        or value._proof_sha256 != _proof(value._evidence_record_bytes, public)
+        or value._proof_sha256
+        != _proof(
+            value._evidence_record_bytes,
+            public,
+            value._retained_source_witness_sha256,
+        )
     ):
         _fail("sanitizer_evidence.authority_invalid")
 
 
 def _reauthenticate_at_current_time(
-    value: AuthenticatedSanitizerEvidence,
-    *,
-    now: datetime,
+    value: AuthenticatedSanitizerEvidence, *, now: datetime
 ) -> None:
-    """Reauthenticate an exact evidence authority and all ancestry at ``now``."""
-
     _validate_at_current_time(value, now=now, reauthenticate_source=True)
 
 
@@ -452,8 +503,6 @@ def _validate_retained_envelope_at_current_time(
     *,
     now: datetime,
 ) -> None:
-    """Validate this sealed envelope without dispatching into retained ancestry."""
-
     _validate_at_current_time(value, now=now, reauthenticate_source=False)
 
 
@@ -466,6 +515,7 @@ def _mint(
     sanitizer_policy_bytes: bytes,
     composition_policy_bytes: bytes,
 ) -> AuthenticatedSanitizerEvidence:
+    witness = _retained_source_witness(fixed_catalog_source_state)
     value = object.__new__(AuthenticatedSanitizerEvidence)
     for name, item in {**public, **CLAIMS}.items():
         object.__setattr__(value, name, item)
@@ -482,7 +532,8 @@ def _mint(
     object.__setattr__(value, "_evidence_record_bytes", record_bytes)
     object.__setattr__(value, "_sanitizer_policy_bytes", sanitizer_policy_bytes)
     object.__setattr__(value, "_composition_policy_bytes", composition_policy_bytes)
-    object.__setattr__(value, "_proof_sha256", _proof(record_bytes, public))
+    object.__setattr__(value, "_retained_source_witness_sha256", witness)
+    object.__setattr__(value, "_proof_sha256", _proof(record_bytes, public, witness))
     object.__setattr__(value, "_seal", _EVIDENCE_SEAL)
     if (
         type(value) is not AuthenticatedSanitizerEvidence
@@ -496,7 +547,8 @@ def _mint(
         or value._evidence_record_bytes != record_bytes
         or any(getattr(value, name) != item for name, item in public.items())
         or any(getattr(value, name) is not item for name, item in CLAIMS.items())
-        or value._proof_sha256 != _proof(record_bytes, public)
+        or not hmac.compare_digest(value._retained_source_witness_sha256, witness)
+        or value._proof_sha256 != _proof(record_bytes, public, witness)
     ):
         _fail("sanitizer_evidence.output_invalid")
     return value

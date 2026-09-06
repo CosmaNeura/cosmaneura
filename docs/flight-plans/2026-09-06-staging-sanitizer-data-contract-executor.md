@@ -1,35 +1,3 @@
 # Staging sanitizer in-memory data-contract executor
 
-Tier 2 dormant slice based on executor-preflight commit `8ec2e6cd29c9c4e3ab37691593e80cce4621bf78`; it implements the complete pinned row contract without connecting, mutating, publishing, or joining a workflow.
-
-## Boundary and dispatch
-
-Reviewed private construction accepts a whole-second UTC clock, an in-memory transform key/version, and exact bytes for
-the three pinned documents; there is no public constructor or key loader. Each transform accepts an exact sealed
-`AuthenticatedSanitizerEvidence` and closed-world materialized row tuples. It validates retained seals/proofs, freshness,
-policy bytes, types/nullability, identities, fixed-catalog counts, and source/output FKs entirely in memory.
-
-All 343 retained columns are covered:
-
-- 19 rewrite tables/204 columns dispatch preservation, nulling, domain-separated transforms, and four derived recipes;
-- 10 guarded tables/139 columns validate as input and become empty candidates;
-- all 46 FKs are checked on source; surviving output FKs are rechecked with SQL `MATCH SIMPLE` null behavior; and
-- appointment TypeIDs derive from transformed UUIDs, while join/access values follow their pinned HMAC/scrypt recipes.
-
-Configuration and nested JSON are frozen. The key never enters rows, results, representations, errors, or logs. A private HMAC binds the contract, evidence, key version, time, source count, and full candidate; mixed keys fail closed.
-
-## Non-authority and prohibitions
-
-`SanitizerCandidateDataset` is sealed, immutable, nonserializable, and in-process only. All connection, mutation, execution, provider, runtime, sanitizer, workflow, evidence-publication, and post-projection authority is false.
-Fixed-catalog counts are authenticated and verified payloads are preserved, but the output projection is not authenticated.
-
-This adds no database/PostgreSQL/SQL, connector, adapter, transaction, commit/rollback, filesystem/environment/key reader,
-credential, Azure/Key Vault/network, subprocess, workflow, activation, evidence-publication, or live surface. Public
-preflight still terminates with `activation.data_contract_executor_unimplemented` before I/O.
-
-## Remaining gates and verification
-
-Activation still requires a reviewed read/write adapter, fixed-catalog source/output HMAC authentication, guarded-table permission/rollback proofs, atomic serializable execution, exclusion/timeouts, cleanup, and post-commit verification.
-
-Tests cover dispatch/FKs/recipes; golden/metamorphic transforms; refusal, secrecy, no-I/O isolation, and public refusal. Run upstream suites, Ruff, Pyright, compileall, hash, shard, and budget checks.
-Recovery is a code-only revert; this dormant leaf has no deployment or data-recovery action.
+This Tier 2 dormant slice is based on executor-preflight `549f3a69b4250e64333ee8789aa1bb4368d058e5`. Private construction accepts a UTC clock, in-memory key/version, and three pinned documents; sealed evidence and closed-world rows are validated entirely in memory. All 19 rewrite tables/204 columns, 10 discard tables/139 columns, 46 `MATCH SIMPLE` FKs, and four recipes are covered. Configuration and nested JSON are frozen. A private process-local/nonportable HMAC binds the contract, exact evidence envelope and ancestry witness, key version, time, source count, and full sealed, immutable, nonserializable, non-authoritative candidate. Fixed catalogs are preserved; post-projection authentication remains false. No database/SQL, connector, adapter, transaction, filesystem/environment/key reader, cloud/network, subprocess, credential, workflow, activation, publication, or live surface exists. Public preflight still returns `activation.data_contract_executor_unimplemented`; every authority flag remains false. Activation still requires reviewed read/write adapters, source/output authentication, guarded-table permission/rollback proofs, atomic serializable execution, exclusion/timeouts, cleanup, and post-commit verification. Tests cover dispatch/FKs/recipes, golden/metamorphic behavior, refusal, secrecy, isolation, upstream compatibility, quality, hashes, sharding, and budget. Recovery is code-only revert.

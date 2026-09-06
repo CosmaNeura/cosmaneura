@@ -9,11 +9,13 @@ import subprocess
 import sys
 import uuid
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import pytest
+import typeid
 from typeid import TypeID
 
 from scripts import staging_restore_sanitizer as sanitizer
@@ -22,29 +24,28 @@ from scripts import staging_restore_sanitizer_executor as public_executor
 from scripts import staging_synthetic_inventory as inventory
 
 from tests.infrastructure.test_staging_restore_sanitizer_executor import (
-    real_case as executor_real_case,
+    real_case as case,
 )
 
-real_case = executor_real_case
+real_case = case
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/staging_restore_sanitizer_data_contract_executor.py"
-POLICY = ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-policy.json"
-INVENTORY_POLICY = ROOT / "contracts/staging-rehearsal/v1/synthetic-data-policy.json"
-DATA_CONTRACT = (
-    ROOT / "contracts/staging-rehearsal/v1/restore-sanitizer-data-contract.json"
-)
+CONTRACTS = ROOT / "contracts/staging-rehearsal/v1"
+POLICY = CONTRACTS / "restore-sanitizer-policy.json"
+INVENTORY_POLICY = CONTRACTS / "synthetic-data-policy.json"
+DATA_CONTRACT = CONTRACTS / "restore-sanitizer-data-contract.json"
+SITE_PACKAGES = Path(typeid.__file__ or "").parents[1]
 KEY = bytes(range(32))
 OTHER_KEY = bytes(reversed(range(32)))
 KEY_VERSION = "staging-sanitizer-transform-v1"
 PREFLIGHT_AT = datetime(2026, 9, 5, 12, 10, 50, tzinfo=UTC)
 SOURCE_ID = uuid.UUID("01890f4c-7b00-7000-8000-000000000001")
 OTHER_ID = uuid.UUID("01890f4c-7b00-7000-8000-000000000002")
+FAILURE = executor.SanitizerDataContractExecutorFailure
 
 
-def _engine(
-    key: bytes = KEY, clock: Callable[[], datetime] | None = None
-) -> executor.SanitizerDataContractExecutor:
+def _engine(key: bytes = KEY, clock: Callable[[], datetime] | None = None) -> Any:
     return executor.SanitizerDataContractExecutor._from_reviewed_configuration(
         clock=clock or (lambda: PREFLIGHT_AT),
         transform_key=key,
@@ -56,114 +57,94 @@ def _engine(
 
 
 def _value(data_type: str) -> Any:
-    if data_type == "uuid":
-        return SOURCE_ID
-    if data_type in {"integer", "bigint"}:
-        return 1
-    if data_type == "boolean":
-        return False
-    if data_type == "double precision":
-        return 1.5
-    if data_type == "date":
-        return date(2026, 1, 2)
-    if data_type == "timestamp with time zone":
-        return datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
-    if data_type == "timestamp without time zone":
-        return datetime(2026, 1, 2, 3, 4, 5)
-    if data_type in {"json", "jsonb"}:
-        return {"nested": ["approved", 1, True, None]}
-    enum_values = {
+    values = {
+        "uuid": SOURCE_ID,
+        "integer": 1,
+        "bigint": 1,
+        "boolean": False,
+        "double precision": 1.5,
+        "date": date(2026, 1, 2),
+        "timestamp with time zone": datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
+        "timestamp without time zone": datetime(2026, 1, 2, 3, 4, 5),
+        "json": {"nested": ["approved", 1, True, None], "second": "kept"},
+        "jsonb": {"nested": ["approved", 1, True, None], "second": "kept"},
         "doctorrole": "normal",
         "planordering": "patient_then_doctor",
         "pronounstyle": "infer_from_transcript",
         "subjectivesource": "patient_only",
         "terminology": "doctor_patient",
     }
-    if data_type in enum_values:
-        return enum_values[data_type]
-    return "value"
+    return values.get(data_type, "value")
 
 
 def _source_rows() -> dict[str, tuple[dict[str, Any], ...]]:
     policy = json.loads(INVENTORY_POLICY.read_bytes())
     schemas = inventory._expected_tables(policy, "pre")  # noqa: SLF001
-    retained = {
-        name: spec
-        for name, spec in schemas.items()
-        if spec["disposition"] != "required_empty"
-    }
     rows = {
         table_name: (
             {name: _value(data_type) for name, data_type, _required in spec["columns"]},
         )
-        for table_name, spec in retained.items()
+        for table_name, spec in schemas.items()
+        if spec["disposition"] != "required_empty"
     }
-    overrides = {
-        ("authority_actor_external_identity", "issuer"): (
-            "https://clerk.example.invalid"
-        ),
-        ("authority_actor_external_identity", "subject"): "user_same-identity",
-        ("authority_person_binding", "binding_kind"): "provider_record",
-        ("authority_person_binding", "binding_ref"): (
-            "appointment_01h47mryr0e008000000000001"
-        ),
-        ("doctor", "api_key"): None,
-        ("doctor", "clerk_id"): "user_same-identity",
-        ("doctor", "email"): "person@example.com",
-        ("ehr_sandbox_patient_designation", "adapter"): "athena",
-        ("ehr_sandbox_patient_designation", "environment"): "preview",
-        ("ehr_sandbox_patient_designation", "practice_ref"): "195900",
-        ("ehr_sandbox_patient_designation", "synthetic_only"): True,
-        ("ehr_sandbox_record_mapping", "adapter"): "athena",
-        ("ehr_sandbox_record_mapping", "environment"): "preview",
-        ("ehr_sandbox_record_mapping", "practice_ref"): "195900",
-        ("ehr_sandbox_record_mapping", "synthetic_only"): True,
-        ("practice", "email_domain"): "example.com",
-        ("practice", "join_code"): "OLDCODE12345",
-        ("provider_organization", "access_code_salt"): "a" * 32,
-        ("provider_organization", "access_code_digest"): "b" * 64,
-        ("provider_organization", "email_domain"): "example.com",
-        ("synthetic_preview_appointment_fixture", "fixture_version"): (
-            "synthetic_preview_labs_v1"
-        ),
-        ("synthetic_preview_appointment_fixture", "synthetic_only"): True,
-    }
-    required_null = {
-        "practice": {
-            "stripe_customer_id",
-            "stripe_subscription_id",
-            "subscription_status",
-            "stripe_last_event_created_at",
-            "stripe_last_event_id",
-            "stripe_checkout_session_id",
-            "stripe_checkout_session_url",
-            "stripe_checkout_session_expires_at",
-            "stripe_quantity_sync_target",
-            "stripe_quantity_sync_error",
-            "stripe_quantity_synced_at",
-        }
-    }
-    for (table_name, column_name), value in overrides.items():
-        rows[table_name][0][column_name] = value
-    for table_name, columns in required_null.items():
-        for column_name in columns:
-            rows[table_name][0][column_name] = None
+    rows["authority_actor_external_identity"][0].update(
+        issuer="https://clerk.example.invalid", subject="user_same-identity"
+    )
+    rows["authority_person_binding"][0].update(
+        binding_kind="provider_record",
+        binding_ref="appointment_01h47mryr0e008000000000001",
+    )
+    rows["doctor"][0].update(
+        api_key=None, clerk_id="user_same-identity", email="person@example.com"
+    )
+    sandbox = dict(adapter="athena", environment="preview", synthetic_only=True)
+    sandbox["practice_ref"] = "195900"
+    for name in ("ehr_sandbox_patient_designation", "ehr_sandbox_record_mapping"):
+        rows[name][0].update(sandbox)
+    rows["practice"][0].update(email_domain="example.com", join_code="OLDCODE12345")
+    rows["provider_organization"][0].update(
+        access_code_salt="a" * 32,
+        access_code_digest="b" * 64,
+        email_domain="example.com",
+    )
+    rows["synthetic_preview_appointment_fixture"][0].update(
+        fixture_version="synthetic_preview_labs_v1", synthetic_only=True
+    )
+    rows["practice"][0].update(
+        dict.fromkeys(
+            "stripe_customer_id stripe_subscription_id subscription_status stripe_last_event_created_at stripe_last_event_id stripe_checkout_session_id stripe_checkout_session_url stripe_checkout_session_expires_at stripe_quantity_sync_target stripe_quantity_sync_error stripe_quantity_synced_at".split()
+        )
+    )
     return rows
 
 
-def _tables(
-    candidate: executor.SanitizerCandidateDataset,
-) -> dict[str, tuple[Any, ...]]:
+def _tables(candidate: Any) -> dict[str, tuple[Any, ...]]:
     return {name: candidate._rows_for_table(name) for name, _rows in candidate._tables}
 
 
 def _transformed(
-    real_case: Any, key: bytes = KEY
+    real_case: Any,
+    key: bytes = KEY,
+    rows: dict[str, tuple[dict[str, Any], ...]] | None = None,
 ) -> executor.SanitizerCandidateDataset:
     return _engine(key).transform(
         authenticated_sanitizer_evidence=real_case.authenticated,
-        source_rows=_source_rows(),
+        source_rows=rows or _source_rows(),
     )
+
+
+def _clone(value: Any, **changes: Any) -> Any:
+    result = object.__new__(type(value))
+    for field in value.__dataclass_fields__:
+        object.__setattr__(result, field, getattr(value, field))
+    for field, item in changes.items():
+        object.__setattr__(result, field, item)
+    return result
+
+
+def _candidate_refuses(candidate: Any, engine: Any = None) -> None:
+    with pytest.raises(FAILURE, match="data_contract_executor.candidate_invalid"):
+        (engine or _engine()).validate_candidate(candidate)
 
 
 @pytest.fixture
@@ -179,22 +160,16 @@ def fast_case(real_case: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
 def test_exact_contract_coverage_and_every_action_dispatch(fast_case: Any) -> None:
     contract = json.loads(DATA_CONTRACT.read_bytes())
     source = _source_rows()
-    candidate = _engine().transform(
-        authenticated_sanitizer_evidence=fast_case.authenticated,
-        source_rows=source,
-    )
+    candidate = _transformed(fast_case, rows=source)
     tables = _tables(candidate)
     rewrite = set(contract["row_actions"]["rewrite_rows"])
     discard = set(contract["row_actions"]["discard_rows"])
-
     assert (len(rewrite), sum(len(source[name][0]) for name in rewrite)) == (19, 204)
     assert (len(discard), sum(len(source[name][0]) for name in discard)) == (10, 139)
-    assert len(contract["foreign_keys"]) == 46
-    assert len(contract["derived_values"]) == 4
+    assert (len(contract["foreign_keys"]), len(contract["derived_values"])) == (46, 4)
     assert set(tables) == set(source) == rewrite | discard
     assert all(tables[name] == () for name in discard)
-    assert candidate.source_row_count == 29
-    assert candidate.candidate_row_count == 19
+    assert (candidate.source_row_count, candidate.candidate_row_count) == (29, 19)
 
     for table_name in rewrite:
         output = tables[table_name][0]
@@ -206,12 +181,7 @@ def test_exact_contract_coverage_and_every_action_dispatch(fast_case: Any) -> No
                 assert after == before
             elif action == "set_null":
                 assert after is None
-            elif action.startswith(("hmac_uuid7:", "hmac_text:")) or action in {
-                "hmac_email",
-                "hmac_domain",
-                "hmac_issuer",
-                "hmac_subject",
-            }:
+            elif action.startswith("hmac_"):
                 assert after is None if before is None else after != before
 
 
@@ -220,7 +190,7 @@ def test_foreign_keys_and_all_derived_recipes_are_coherent(fast_case: Any) -> No
     candidate = _transformed(fast_case)
     tables = _tables(candidate)
     discarded = set(contract["row_actions"]["discard_rows"])
-    checked = 0
+    assert len(contract["foreign_keys"]) == 46
     for binding in contract["foreign_keys"]:
         source = [item.split(".", 1) for item in binding["source"]]
         target = [item.split(".", 1) for item in binding["target"]]
@@ -232,9 +202,6 @@ def test_foreign_keys_and_all_derived_recipes_are_coherent(fast_case: Any) -> No
             for row in tables[source[0][0]]:
                 key = tuple(row[column] for _table, column in source)
                 assert any(item is None for item in key) or key in targets
-        checked += 1
-    assert checked == 46
-
     appointment_id = tables["appointment"][0]["id"]
     binding_ref = TypeID.from_string(
         tables["authority_person_binding"][0]["binding_ref"]
@@ -247,14 +214,9 @@ def test_foreign_keys_and_all_derived_recipes_are_coherent(fast_case: Any) -> No
     credentials = sanitizer.pseudonymize_provider_access_credentials(
         tables["provider_organization"][0]["id"], key=KEY
     )
-    assert (
-        tables["provider_organization"][0]["access_code_salt"]
-        == credentials["access_code_salt"]
-    )
-    assert (
-        tables["provider_organization"][0]["access_code_digest"]
-        == credentials["access_code_digest"]
-    )
+    assert {
+        name: tables["provider_organization"][0][name] for name in credentials
+    } == credentials
 
 
 def test_all_discarded_source_foreign_keys_are_validated(fast_case: Any) -> None:
@@ -279,36 +241,31 @@ def test_all_discarded_source_foreign_keys_are_validated(fast_case: Any) -> None
                 else "unmatched"
             )
         with pytest.raises(
-            executor.SanitizerDataContractExecutorFailure,
-            match="data_contract_executor.source_integrity_invalid",
+            FAILURE, match="data_contract_executor.source_integrity_invalid"
         ):
-            _engine().transform(
-                authenticated_sanitizer_evidence=fast_case.authenticated,
-                source_rows=rows,
-            )
+            _transformed(fast_case, rows=rows)
 
 
 def test_golden_identity_email_domain_join_and_access_outputs(fast_case: Any) -> None:
     tables = _tables(_transformed(fast_case))
-    assert str(tables["doctor"][0]["id"]) == ("01b0c4ce-eb9b-7750-8a13-0ead0350e55d")
-    assert tables["doctor"][0]["email"] == (
-        "u_ahuv4znf2zjboiv3rbjnjnbe5apx7yogxoasnvlilzvpe75k@example.invalid"
-    )
-    assert tables["practice"][0]["email_domain"] == (
-        "org-s2qcgdtkv6x7bwwqlc4yhvfsxy4vlygw.example.invalid"
-    )
-    assert tables["authority_actor_external_identity"][0]["issuer"] == (
-        "https://id-2w6ejf2mtm4l753q5dg22sgmasz74u3q.identity.invalid"
-    )
-    assert tables["authority_person_binding"][0]["binding_ref"] == (
-        "appointment_01mcxsxadgf7brq3sv5aygms7r"
-    )
-    assert tables["practice"][0]["join_code"] == "698X6AC2N95P"
-    assert tables["provider_organization"][0]["access_code_salt"] == (
-        "15c6a970036fd107a1c70b2256624cd5"
-    )
-    assert tables["provider_organization"][0]["access_code_digest"] == (
-        "dd1321f94a4984e7a3aa1d92eac51256d62805519a72d7425d03f4546bf915a5"
+    assert (
+        str(tables["doctor"][0]["id"]),
+        tables["doctor"][0]["email"],
+        tables["practice"][0]["email_domain"],
+        tables["authority_actor_external_identity"][0]["issuer"],
+        tables["authority_person_binding"][0]["binding_ref"],
+        tables["practice"][0]["join_code"],
+        tables["provider_organization"][0]["access_code_salt"],
+        tables["provider_organization"][0]["access_code_digest"],
+    ) == (
+        "01b0c4ce-eb9b-7750-8a13-0ead0350e55d",
+        "u_ahuv4znf2zjboiv3rbjnjnbe5apx7yogxoasnvlilzvpe75k@example.invalid",
+        "org-s2qcgdtkv6x7bwwqlc4yhvfsxy4vlygw.example.invalid",
+        "https://id-2w6ejf2mtm4l753q5dg22sgmasz74u3q.identity.invalid",
+        "appointment_01mcxsxadgf7brq3sv5aygms7r",
+        "698X6AC2N95P",
+        "15c6a970036fd107a1c70b2256624cd5",
+        "dd1321f94a4984e7a3aa1d92eac51256d62805519a72d7425d03f4546bf915a5",
     )
 
 
@@ -345,11 +302,19 @@ def test_determinism_domain_separation_and_fixed_payload_preservation(
     second = _transformed(fast_case)
     other = _transformed(fast_case, OTHER_KEY)
     first_tables = _tables(first)
-    second_tables = _tables(second)
     other_tables = _tables(other)
-    assert first_tables == second_tables
+    assert first_tables == _tables(second)
     assert first._proof_sha256 == second._proof_sha256
-
+    ordered_rows = _source_rows()
+    added = ordered_rows["appointment"][0].copy()
+    added["id"] = OTHER_ID
+    ordered_rows["appointment"] = (ordered_rows["appointment"][0], added)
+    reversed_rows = copy.deepcopy(ordered_rows)
+    reversed_rows["appointment"] = tuple(reversed(reversed_rows["appointment"]))
+    ordered_candidate = _transformed(fast_case, rows=ordered_rows)
+    reversed_candidate = _transformed(fast_case, rows=reversed_rows)
+    assert ordered_candidate._tables == reversed_candidate._tables
+    assert ordered_candidate._proof_sha256 == reversed_candidate._proof_sha256
     mapped_ids = {
         first_tables[table][0]["id"]
         for table in json.loads(DATA_CONTRACT.read_bytes())["row_actions"][
@@ -372,19 +337,13 @@ def test_determinism_domain_separation_and_fixed_payload_preservation(
     assert first_tables["authority_actor_external_identity"][0]["issuer"].startswith(
         "https://id-"
     )
-
     contract = json.loads(DATA_CONTRACT.read_bytes())
     for table_name in sanitizer.FIXED_CATALOG_TABLES:
         for column_name, action in contract["tables"][table_name]["columns"].items():
             if action == "preserve_verified_catalog":
-                assert (
-                    first_tables[table_name][0][column_name]
-                    == source[table_name][0][column_name]
-                )
-                assert (
-                    other_tables[table_name][0][column_name]
-                    == source[table_name][0][column_name]
-                )
+                expected = source[table_name][0][column_name]
+                assert first_tables[table_name][0][column_name] == expected
+                assert other_tables[table_name][0][column_name] == expected
     assert first_tables["doctor"][0]["id"] != other_tables["doctor"][0]["id"]
     assert (
         first_tables["practice"][0]["join_code"]
@@ -394,14 +353,35 @@ def test_determinism_domain_separation_and_fixed_payload_preservation(
 
 def test_nullability_json_immutability_and_false_authority(fast_case: Any) -> None:
     source = _source_rows()
-    source["appointment"][0]["external_id"] = None
-    candidate = _engine().transform(
-        authenticated_sanitizer_evidence=fast_case.authenticated,
-        source_rows=source,
+    offset_time = datetime(
+        2026, 1, 1, 22, 4, 5, tzinfo=timezone(timedelta(hours=-5)), fold=1
     )
+    naive_time = datetime(2026, 1, 2, 3, 4, 5, fold=1)
+    source["appointment"][0]["external_id"] = None
+    source["appointment"][0].update(created_at=offset_time, appointment_date=naive_time)
+    ordered_candidate = _transformed(fast_case, rows=source)
+    fields = source["doctor_note_schema"][0]["fields"]
+    source["doctor_note_schema"][0]["fields"] = dict(reversed(fields.items()))
+    candidate = _transformed(fast_case, rows=source)
     tables = _tables(candidate)
     assert tables["appointment"][0]["external_id"] is None
+    normalized = tables["appointment"][0]["created_at"]
+    assert normalized == datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    normalized_naive = tables["appointment"][0]["appointment_date"]
+    assert (
+        normalized.tzinfo is UTC
+        and normalized.fold == 0
+        and normalized is not offset_time
+    )
+    assert normalized_naive == naive_time and normalized_naive.fold == 0
+    assert normalized_naive.tzinfo is None and normalized_naive is not naive_time
+    clock_time = PREFLIGHT_AT.replace(tzinfo=timezone(timedelta(0), "custom"), fold=1)
+    trusted = executor._trusted_utc(lambda: clock_time)  # noqa: SLF001
+    assert trusted == PREFLIGHT_AT and trusted.tzinfo is UTC and trusted.fold == 0
+    assert trusted is not clock_time
     nested = tables["doctor_note_schema"][0]["fields"]
+    assert list(nested) == ["second", "nested"]
+    assert candidate._proof_sha256 != ordered_candidate._proof_sha256
     assert nested["nested"] == ["approved", 1, True, None]
     nested["new"] = "copy-only"
     assert "new" not in candidate._rows_for_table("doctor_note_schema")[0]["fields"]
@@ -421,11 +401,9 @@ def test_nullability_json_immutability_and_false_authority(fast_case: Any) -> No
         lambda rows: rows["appointment"][0].update({"id": str(SOURCE_ID)}),
         lambda rows: rows["appointment"][0].update({"created_at": None}),
         lambda rows: rows["doctor"][0].update({"role": "not_a_doctor_role"}),
-        lambda rows: rows["provider_organization"][0].update(
-            {"access_code_version": 2**31}
-        ),
+        lambda rows: rows["provider_organization"][0].update(access_code_version=2**31),
         lambda rows: rows.update(
-            {"appointment": (rows["appointment"][0], rows["appointment"][0].copy())}
+            appointment=(rows["appointment"][0], rows["appointment"][0].copy())
         ),
         lambda rows: rows["appointment"][0].update({"doctor_id": OTHER_ID}),
         lambda rows: rows["authority_person_binding"][0].update(
@@ -439,14 +417,8 @@ def test_malformed_missing_extra_wrong_duplicate_and_unbound_inputs_refuse(
 ) -> None:
     rows = _source_rows()
     mutate(rows)
-    with pytest.raises(
-        executor.SanitizerDataContractExecutorFailure,
-        match=r"^data_contract_executor\.[a-z_]+$",
-    ):
-        _engine().transform(
-            authenticated_sanitizer_evidence=fast_case.authenticated,
-            source_rows=rows,
-        )
+    with pytest.raises(FAILURE, match=r"^data_contract_executor\.[a-z_]+$"):
+        _transformed(fast_case, rows=rows)
 
 
 def test_failure_is_atomic_and_never_mints_a_partial_result(
@@ -464,36 +436,60 @@ def test_failure_is_atomic_and_never_mints_a_partial_result(
         return original_mint(**kwargs)
 
     monkeypatch.setattr(executor, "_mint_candidate", observe)
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure):
-        _engine().transform(
-            authenticated_sanitizer_evidence=fast_case.authenticated,
-            source_rows=rows,
-        )
+    with pytest.raises(FAILURE):
+        _transformed(fast_case, rows=rows)
     assert minted == 0
     assert rows == original
 
 
 def test_mixed_key_and_forged_candidates_refuse(fast_case: Any) -> None:
     candidate = _transformed(fast_case)
-    _engine().validate_candidate(candidate)
-    with pytest.raises(
-        executor.SanitizerDataContractExecutorFailure,
-        match="data_contract_executor.candidate_invalid",
-    ):
-        _engine(OTHER_KEY).validate_candidate(candidate)
-    forged = object.__new__(executor.SanitizerCandidateDataset)
-    for field in candidate.__dataclass_fields__:
-        object.__setattr__(forged, field, getattr(candidate, field))
-    object.__setattr__(forged, "_proof_sha256", "0" * 64)
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure):
-        _engine().validate_candidate(forged)
-    with pytest.raises(
-        executor.SanitizerDataContractExecutorFailure,
-        match="data_contract_executor.candidate_invalid",
-    ):
-        _engine(clock=lambda: PREFLIGHT_AT - timedelta(seconds=1)).validate_candidate(
-            candidate
+    engine = _engine()
+    engine.validate_candidate(candidate)
+    _candidate_refuses(candidate, _engine(OTHER_KEY))
+    _candidate_refuses(_clone(candidate, _proof_sha256="0" * 64))
+    _candidate_refuses(
+        candidate, _engine(clock=lambda: PREFLIGHT_AT - timedelta(seconds=1))
+    )
+    for name in "table_count rewrite_table_count discard_table_count source_row_count candidate_row_count".split():
+        _candidate_refuses(_clone(candidate, **{name: float(getattr(candidate, name))}))
+    for table_name, nested in (("appointment", None), ("doctor_note_schema", "fields")):
+        forged = _clone(candidate)
+        tables = dict(forged._tables)
+        row = dict(tables[table_name][0])
+        backing = dict(row[nested]) if nested else {}
+        if nested:
+            row[nested] = MappingProxyType(backing)
+            row = executor._FrozenMap(tuple(row.items()))  # noqa: SLF001
+        tables[table_name] = (row, *tables[table_name][1:])
+        object.__setattr__(
+            forged, "_tables", tuple((name, tables[name]) for name, _ in forged._tables)
         )
+        _candidate_refuses(forged)
+        if nested:
+            backing["after_refusal"] = True
+            assert "after_refusal" in dict(forged._tables)[table_name][0][nested]
+    noncanonical = PREFLIGHT_AT.replace(tzinfo=timezone(timedelta(0), "custom"), fold=1)
+    assert noncanonical == PREFLIGHT_AT
+    assert executor._canonical(noncanonical) != executor._canonical(PREFLIGHT_AT)  # noqa: SLF001
+    _candidate_refuses(_clone(candidate, transformed_at=noncanonical))
+    later = _clone(
+        fast_case.authenticated,
+        authenticated_at=fast_case.authenticated.authenticated_at
+        + timedelta(seconds=1),
+    )
+    public = {
+        name: getattr(later, name) for name in executor.evidence_authority.PUBLIC_FIELDS
+    }
+    proof = executor.evidence_authority._proof(  # noqa: SLF001
+        later._evidence_record_bytes, public, later._retained_source_witness_sha256
+    )
+    object.__setattr__(later, "_proof_sha256", proof)
+    executor.evidence_authority._validate_retained_envelope_at_current_time(  # noqa: SLF001
+        later, now=PREFLIGHT_AT
+    )
+    object.__setattr__(candidate, "_authenticated_evidence", later)
+    _candidate_refuses(candidate, engine)
 
 
 def test_repr_pickle_errors_and_logs_never_disclose_rows_or_keys(
@@ -502,37 +498,31 @@ def test_repr_pickle_errors_and_logs_never_disclose_rows_or_keys(
     secret = "SECRET-ROW-DATA-DO-NOT-LEAK"
     rows = _source_rows()
     rows["appointment"][0]["id"] = secret
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure) as caught:
-        _engine().transform(
-            authenticated_sanitizer_evidence=fast_case.authenticated,
-            source_rows=rows,
-        )
+    with pytest.raises(FAILURE) as caught:
+        _transformed(fast_case, rows=rows)
     assert secret not in str(caught.value)
     assert KEY.hex() not in str(caught.value)
     assert not caplog.records
-
     engine = _engine()
     candidate = _transformed(fast_case)
     assert secret not in repr(engine)
     assert KEY.hex() not in repr(engine)
     assert "person@example.com" not in repr(candidate)
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure):
-        pickle.dumps(candidate)
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure):
-        pickle.dumps(engine)
+    for value in (candidate, engine):
+        with pytest.raises(FAILURE):
+            pickle.dumps(value)
 
 
 def test_configuration_is_exact_and_public_constructors_refuse() -> None:
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure):
-        executor.SanitizerDataContractExecutor()
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure):
-        executor.SanitizerCandidateDataset()
+    for constructor in (
+        executor.SanitizerDataContractExecutor,
+        executor.SanitizerCandidateDataset,
+    ):
+        with pytest.raises(FAILURE):
+            constructor()
     changed = bytearray(DATA_CONTRACT.read_bytes())
     changed[-2] = ord(" ") if changed[-2] != ord(" ") else ord("\n")
-    with pytest.raises(
-        executor.SanitizerDataContractExecutorFailure,
-        match="data_contract_executor.policy_invalid",
-    ):
+    with pytest.raises(FAILURE, match="data_contract_executor.policy_invalid"):
         executor.SanitizerDataContractExecutor._from_reviewed_configuration(
             clock=lambda: PREFLIGHT_AT,
             transform_key=KEY,
@@ -547,8 +537,10 @@ def test_configuration_is_deeply_immutable(fast_case: Any) -> None:
     engine = _engine()
     with pytest.raises(TypeError):
         engine._contract["tables"]["doctor"]["columns"]["email"] = "preserve_approved"
-    with pytest.raises(executor.SanitizerDataContractExecutorFailure):
+    with pytest.raises(FAILURE):
         engine._contract = {}
+    with pytest.raises(FAILURE):
+        del engine._contract
     assert _transformed(fast_case)._rows_for_table("doctor")[0]["email"] != (
         "person@example.com"
     )
@@ -568,11 +560,47 @@ def test_transform_has_no_filesystem_reauthentication(
     monkeypatch.setattr(
         executor.evidence_authority, "_reauthenticate_at_current_time", refuse
     )
-    candidate = engine.transform(
-        authenticated_sanitizer_evidence=real_case.authenticated,
-        source_rows=rows,
-    )
+    authenticated = real_case.authenticated
+    kwargs = dict(authenticated_sanitizer_evidence=authenticated, source_rows=rows)
+    source = authenticated._fixed_catalog_source_state
+    built = real_case.target._written_receipt._built_receipt
+    receipt = built._isolation_inventory._database_observation._production_authority._launch_material.authenticated_receipt
+    mapping_subtype = type("MappingSubtype", (dict,), {})
+    armed = False
+
+    def mutate(_zone: Any, _value: Any) -> timedelta:
+        if armed:
+            monkeypatch.setitem(receipt.runtime_reference, "unexpected", True)
+        return timedelta(0)
+
+    zone = type("Z", (tzinfo,), dict(utcoffset=mutate, dst=lambda *_: timedelta(0)))()
+    rows["appointment"][0]["created_at"] = PREFLIGHT_AT.replace(tzinfo=zone)
+    candidate = engine.transform(**kwargs)
     engine.validate_candidate(candidate)
+    assert dict(candidate._tables)["appointment"][0]["created_at"].tzinfo is UTC
+    with pytest.raises(FAILURE, match="data_contract_executor.target_expired"):
+        engine._reauthenticate(authenticated, real_case.target.expires_at)
+    source_noncanonical = source.authenticated_at.replace(tzinfo=zone, fold=1)
+    noncanonical = authenticated.authenticated_at.replace(tzinfo=zone, fold=1)
+    assert noncanonical == authenticated.authenticated_at
+    for owner, name, tampered in (
+        (built, "submission_bytes", b"{}"),
+        (built, "_isolation_inventory", object()),
+        (receipt, "runtime_reference", mapping_subtype(receipt.runtime_reference)),
+        (source, "authenticated_at", source_noncanonical),
+        (authenticated, "authenticated_at", noncanonical),
+    ):
+        original = getattr(owner, name)
+        object.__setattr__(owner, name, tampered)
+        try:
+            with pytest.raises(FAILURE):
+                engine.transform(**kwargs)
+        finally:
+            object.__setattr__(owner, name, original)
+
+    armed = True
+    with pytest.raises(FAILURE):
+        engine.transform(**kwargs)
 
 
 def test_public_preflight_remains_terminally_unimplemented(real_case: Any) -> None:
@@ -594,76 +622,44 @@ def test_import_is_adapter_free_and_source_has_no_live_surfaces() -> None:
         if isinstance(node, (ast.Import, ast.ImportFrom))
         for alias in node.names
     }
-    assert not imports & {
-        "azure",
-        "asyncpg",
-        "boto3",
-        "httpx",
-        "os",
-        "pathlib",
-        "psycopg",
-        "requests",
-        "sqlalchemy",
-        "subprocess",
-    }
+    assert not imports & set(
+        "azure asyncpg boto3 httpx os pathlib psycopg requests sqlalchemy subprocess".split()
+    )
     calls = {
         node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, (ast.Attribute, ast.Name))
     }
-    assert not calls & {
-        "Popen",
-        "commit",
-        "connect",
-        "execute",
-        "getenv",
-        "open",
-        "rollback",
-        "run",
-    }
-    code = f"""
-import json, sys
-sys.path.insert(0, {str(ROOT)!r})
+    assert not calls & set(
+        "Popen commit connect execute getenv open rollback run".split()
+    )
+    code = f"""import json, sys
+sys.path[:0] = [{str(ROOT)!r}, {str(SITE_PACKAGES)!r}]
 from scripts import staging_restore_sanitizer_data_contract_executor
-forbidden_roots = (
-    '_posixsubprocess', 'asyncpg', 'azure', 'boto3', 'httpx', 'psycopg',
-    'requests', 'sqlalchemy', 'subprocess',
-)
-forbidden_scripts = {{
-    'scripts.authenticate_staging_github_attestation',
-    'scripts.bind_staging_restore_sanitizer_evidence',
-    'scripts.compose_staging_restore_evidence_binding',
-    'scripts.staging_restore_runtime_adapters',
-    'scripts.staging_restore_safe_submit',
-    'scripts.verify_staging_source_provider_observation',
-}}
-loaded = sorted(
-    name for name in sys.modules
-    if name in forbidden_scripts
-    or any(name == root or name.startswith(root + '.') for root in forbidden_roots)
-)
-print(json.dumps(loaded))
+roots = '_posixsubprocess asyncpg azure boto3 httpx psycopg requests sqlalchemy subprocess'.split()
+scripts = '''scripts.authenticate_staging_github_attestation scripts.bind_staging_restore_sanitizer_evidence scripts.compose_staging_restore_evidence_binding scripts.staging_restore_runtime_adapters scripts.staging_restore_safe_submit scripts.verify_staging_source_provider_observation'''.split()
+print(json.dumps(sorted(name for name in sys.modules if name in scripts or any(name == root or name.startswith(root + '.') for root in roots))))
 """
     completed = subprocess.run(
-        [sys.executable, "-I", "-c", code],
+        [sys.executable, "-I", "-S", "-c", code],
         cwd=ROOT,
-        check=False,
         capture_output=True,
-        text=True,
     )
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == []
-    assert hashlib.sha256(POLICY.read_bytes()).hexdigest() == (
-        sanitizer.CANONICAL_POLICY_SHA256
-    )
-    assert executor.SANITIZER_POLICY_SHA256 == sanitizer.CANONICAL_POLICY_SHA256
-    assert hashlib.sha256(INVENTORY_POLICY.read_bytes()).hexdigest() == (
-        inventory.CANONICAL_POLICY_SHA256
-    )
-    assert executor.INVENTORY_POLICY_SHA256 == inventory.CANONICAL_POLICY_SHA256
-    assert hashlib.sha256(DATA_CONTRACT.read_bytes()).hexdigest() == (
-        sanitizer.CANONICAL_DATA_CONTRACT_SHA256
-    )
-    assert executor.DATA_CONTRACT_SHA256 == sanitizer.CANONICAL_DATA_CONTRACT_SHA256
+    for path, expected, pinned in (
+        (POLICY, sanitizer.CANONICAL_POLICY_SHA256, executor.SANITIZER_POLICY_SHA256),
+        (
+            INVENTORY_POLICY,
+            inventory.CANONICAL_POLICY_SHA256,
+            executor.INVENTORY_POLICY_SHA256,
+        ),
+        (
+            DATA_CONTRACT,
+            sanitizer.CANONICAL_DATA_CONTRACT_SHA256,
+            executor.DATA_CONTRACT_SHA256,
+        ),
+    ):
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == expected == pinned
     assert executor.HMAC_DOMAIN == sanitizer.HMAC_DOMAIN

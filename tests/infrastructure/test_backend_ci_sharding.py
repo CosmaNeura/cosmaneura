@@ -28,6 +28,7 @@ SHARDS = (
     "infrastructure-sanitizer-evidence",
     "infrastructure-sanitizer-evidence-integrity",
     "infrastructure-sanitizer-executor",
+    "infrastructure-sanitizer-data-contract-executor",
     "infrastructure-restore",
     "integration",
 )
@@ -107,9 +108,13 @@ SANITIZER_EVIDENCE_INTEGRITY_SELECTORS = (
 SANITIZER_EXECUTOR_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_executor.py"
 )
+SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_sanitizer_data_contract_executor.py"
+)
 SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_EVIDENCE_SELECTOR,
     SANITIZER_EXECUTOR_SELECTOR,
+    SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
 )
 
 
@@ -129,6 +134,8 @@ def _infrastructure_shard(path: Path) -> str:
             return "infrastructure-sanitizer-evidence"
         if path == Path(SANITIZER_EXECUTOR_SELECTOR):
             return "infrastructure-sanitizer-executor"
+        if path == Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR):
+            return "infrastructure-sanitizer-data-contract-executor"
         if path.name.startswith("test_staging_restore_sanitizer_"):
             return "unassigned"
         if path in RECEIPT_IO_PATHS:
@@ -248,6 +255,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "infrastructure-sanitizer-executor": (
             f"uv run pytest {SANITIZER_EXECUTOR_SELECTOR} --verbosity=2"
         ),
+        "infrastructure-sanitizer-data-contract-executor": (
+            f"uv run pytest {SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR} --verbosity=2"
+        ),
         "infrastructure-restore": (
             f"restore_tests=({RESTORE_GLOB})\n"
             "\tdedicated_restore_tests=("
@@ -293,6 +303,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_executor_start = source.index(
         "py_test-ci-infrastructure-sanitizer-executor:"
     )
+    infrastructure_sanitizer_data_contract_executor_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-data-contract-executor:"
+    )
     infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
     application_recipe = source[application_start:infrastructure_general_start]
     integration_start = source.index("py_test-ci-integration:")
@@ -326,7 +339,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_evidence_integrity_start:infrastructure_sanitizer_executor_start
     ]
     infrastructure_sanitizer_executor_recipe = source[
-        infrastructure_sanitizer_executor_start:infrastructure_restore_start
+        infrastructure_sanitizer_executor_start:infrastructure_sanitizer_data_contract_executor_start
+    ]
+    infrastructure_sanitizer_data_contract_executor_recipe = source[
+        infrastructure_sanitizer_data_contract_executor_start:infrastructure_restore_start
     ]
     infrastructure_restore_recipe = source[
         infrastructure_restore_start:integration_start
@@ -350,6 +366,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert "--ignore-glob=" not in infrastructure_sanitizer_evidence_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_evidence_integrity_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_executor_recipe
+    assert (
+        "--ignore-glob=" not in infrastructure_sanitizer_data_contract_executor_recipe
+    )
     assert "--ignore-glob=" not in infrastructure_restore_recipe
     assert ":|dedicated_restore_tests" in infrastructure_restore_recipe
     assert ":#" not in infrastructure_restore_recipe
@@ -449,6 +468,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-executor",
         ),
         (
+            Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
+            "infrastructure-sanitizer-data-contract-executor",
+        ),
+        (
             Path("tests/infrastructure/test_staging_restore_sanitizer_future.py"),
             "unassigned",
         ),
@@ -545,18 +568,24 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     evidence = _collect_nodeids(SANITIZER_EVIDENCE_SELECTOR)
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
+    data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
     family = _collect_nodeids(*SANITIZER_RUNTIME_SELECTORS)
 
     assert evidence
     assert executor
+    assert data_contract_executor
     assert len(evidence) == 29
     assert len(executor) == 21
-    assert len(family) == 50
+    assert len(data_contract_executor) == 28
+    assert len(family) == 78
     assert len(evidence) == len(set(evidence))
     assert len(executor) == len(set(executor))
+    assert len(data_contract_executor) == len(set(data_contract_executor))
     assert len(family) == len(set(family))
     assert set(evidence).isdisjoint(executor)
-    assert set(evidence) | set(executor) == set(family)
+    assert set(evidence).isdisjoint(data_contract_executor)
+    assert set(executor).isdisjoint(data_contract_executor)
+    assert set(evidence) | set(executor) | set(data_contract_executor) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
@@ -573,6 +602,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
         "zsh",
         "zsh",
         "zsh",

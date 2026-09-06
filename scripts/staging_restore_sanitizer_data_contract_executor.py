@@ -1,12 +1,3 @@
-#!/usr/bin/env python3
-"""Dormant, adapter-free executor for the pinned sanitizer data contract.
-
-This module transforms already-materialized rows in memory.  It has no path,
-environment, credential, connector, transaction, provider, or publication
-surface.  Its sealed result is only a non-authoritative candidate for a later
-database-execution and post-projection-authentication slice.
-"""
-
 from __future__ import annotations
 
 import base64
@@ -48,68 +39,65 @@ MINIMUM_KEY_BYTES = 32
 UUID7_EPOCH_START_MS = 1_577_836_800_000
 UUID7_EPOCH_SPAN_MS = 315_576_000_000
 ACCESS_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-REWRITE_TABLE_COUNT = 19
-REWRITE_COLUMN_COUNT = 204
-DISCARD_TABLE_COUNT = 10
-DISCARD_COLUMN_COUNT = 139
-FOREIGN_KEY_COUNT = 46
-DERIVED_RECIPE_COUNT = 4
+REWRITE_TABLE_COUNT, REWRITE_COLUMN_COUNT = 19, 204
+DISCARD_TABLE_COUNT, DISCARD_COLUMN_COUNT = 10, 139
+FOREIGN_KEY_COUNT, DERIVED_RECIPE_COUNT = 46, 4
 FIXED_CATALOG_TABLES = frozenset(
-    {
-        "baa_version",
-        "doctor_note_schema",
-        "drug_reference",
-        "lab_range_set",
-        "note_type_customization",
-    }
+    "baa_version doctor_note_schema drug_reference lab_range_set note_type_customization".split()
 )
 _DOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,127}$")
 _KEY_VERSION_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _VARCHAR_RE = re.compile(r"^character varying(?:\(([1-9][0-9]*)\))?$")
-_ENUM_VALUES = {
-    "doctorrole": frozenset({"normal", "admin"}),
-    "planordering": frozenset({"patient_then_doctor", "as_discussed"}),
-    "pronounstyle": frozenset({"infer_from_transcript", "neutral"}),
-    "subjectivesource": frozenset({"patient_only", "patient_and_doctor"}),
-    "terminology": frozenset(
-        "doctor_patient therapist_client counselor_client nutritionist_client".split()
-    ),
-}
+_ZERO = timedelta(0)
+_ENUM_VALUES = MappingProxyType(
+    {
+        "doctorrole": frozenset({"normal", "admin"}),
+        "planordering": frozenset({"patient_then_doctor", "as_discussed"}),
+        "pronounstyle": frozenset({"infer_from_transcript", "neutral"}),
+        "subjectivesource": frozenset({"patient_only", "patient_and_doctor"}),
+        "terminology": frozenset(
+            "doctor_patient therapist_client counselor_client nutritionist_client".split()
+        ),
+    }
+)
 _CANDIDATE_SEAL = object()
-_AUTHORITY_CLAIMS = {
-    "database_connection_authority": False,
-    "database_mutation_authority": False,
-    "evidence_publication_authority": False,
-    "executable": False,
-    "live_provider_calls_enabled": False,
-    "post_projection_authenticated": False,
-    "provider_calls_permitted": False,
-    "provider_facts_authenticated": False,
-    "runtime_authority": False,
-    "sanitizer_authority": False,
-    "workflow_integrated": False,
-}
-_TARGET_BINDING_FIELDS = (
-    "rehearsal_id target_fqdn database_name approved_database_role "
-    "target_postgres_server_id approved_restore_time source_sha candidate_sha "
-    "workflow_sha run_id run_attempt receipt_sha256 expires_at bound_at"
-).split()
-_WRITTEN_RESULT_FIELDS = (
-    "outcome receipt_sha256 record_chain_sha256 authority_chain_sha256 rehearsal_id "
-    "content_md5 etag last_modified retained_until validated_at"
-).split()
-_SOURCE_TIME_FIELDS = (
-    "inventory_observed_at inventory_expires_at target_binding_expires_at authenticated_at"
-).split()
-_EVIDENCE_FAILURE_MAP = {
-    "sanitizer_evidence.clock_invalid": "data_contract_executor.clock_invalid",
-    "sanitizer_evidence.clock_regressed": "data_contract_executor.clock_regressed",
-    "sanitizer_evidence.target_expired": "data_contract_executor.target_expired",
-}
+_AUTHORITY_CLAIMS = MappingProxyType(
+    dict.fromkeys(
+        "database_connection_authority database_mutation_authority evidence_publication_authority executable live_provider_calls_enabled post_projection_authenticated provider_calls_permitted provider_facts_authenticated runtime_authority sanitizer_authority workflow_integrated".split(),
+        False,
+    )
+)
+_TARGET_BINDING_FIELDS = tuple(
+    "rehearsal_id target_fqdn database_name approved_database_role target_postgres_server_id approved_restore_time source_sha candidate_sha workflow_sha run_id run_attempt receipt_sha256 expires_at bound_at".split()
+)
+_SOURCE_TIME_FIELDS = tuple(
+    "inventory_observed_at inventory_expires_at target_binding_expires_at authenticated_at".split()
+)
+_EVIDENCE_FAILURE_MAP = MappingProxyType(
+    {
+        "sanitizer_evidence.clock_invalid": "data_contract_executor.clock_invalid",
+        "sanitizer_evidence.clock_regressed": "data_contract_executor.clock_regressed",
+        "sanitizer_evidence.target_expired": "data_contract_executor.target_expired",
+    }
+)
 
 
 class SanitizerDataContractExecutorFailure(RuntimeError):
-    """Bounded refusal that never includes row, key, or authority contents."""
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _FrozenMap(Mapping[str, Any]):
+    _items: tuple[tuple[str, Any], ...]
+
+    def __getitem__(self, key: str) -> Any:
+        return dict(self._items)[key]
+
+    def __iter__(self) -> Any:
+        return (name for name, _item in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
 
 
 def _fail(code: str) -> NoReturn:
@@ -121,14 +109,31 @@ def _trusted_utc(clock: Callable[[], datetime]) -> datetime:
         value = clock()
     except Exception:
         _fail("data_contract_executor.clock_invalid")
-    if (
-        type(value) is not datetime
-        or value.tzinfo is None
-        or value.utcoffset() != timedelta(0)
-        or value.microsecond != 0
-    ):
+    if type(value) is not datetime or value.utcoffset() != _ZERO or value.microsecond:
         _fail("data_contract_executor.clock_invalid")
-    return value.astimezone(UTC)
+    return value.astimezone(UTC).replace(fold=0)
+
+
+def _parse_json(raw: bytes, code: str) -> Any:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for name, value in pairs:
+            if name in result:
+                _fail(code)
+            result[name] = value
+        return result
+
+    try:
+        value = json.loads(
+            raw,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=lambda _value: _fail(code),
+        )
+    except SanitizerDataContractExecutorFailure:
+        raise
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        _fail(code)
+    return value
 
 
 def _parse_pinned(raw: bytes, digest: str) -> dict[str, Any]:
@@ -136,88 +141,38 @@ def _parse_pinned(raw: bytes, digest: str) -> dict[str, Any]:
         hashlib.sha256(raw).hexdigest(), digest
     ):
         _fail("data_contract_executor.policy_invalid")
-
-    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for name, value in pairs:
-            if name in result:
-                _fail("data_contract_executor.policy_invalid")
-            result[name] = value
-        return result
-
-    try:
-        value = json.loads(
-            raw,
-            object_pairs_hook=reject_duplicates,
-            parse_constant=lambda _value: _fail(
-                "data_contract_executor.policy_invalid"
-            ),
-        )
-    except SanitizerDataContractExecutorFailure:
-        raise
-    except (UnicodeDecodeError, ValueError, RecursionError):
-        _fail("data_contract_executor.policy_invalid")
+    value = _parse_json(raw, "data_contract_executor.policy_invalid")
     if type(value) is not dict:
         _fail("data_contract_executor.policy_invalid")
     return value
 
 
-def _canonical_document(value: Any) -> bytes:
+def _canonical_document(
+    value: Any, code: str = "data_contract_executor.policy_invalid"
+) -> bytes:
     try:
-        return json.dumps(
-            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        ).encode()
+        return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
-        _fail("data_contract_executor.policy_invalid")
+        _fail(code)
 
 
 def _canonical_authority(value: Any) -> bytes:
-    try:
-        return json.dumps(
-            value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-        ).encode()
-    except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
-        _fail("data_contract_executor.authority_invalid")
+    return _canonical_document(value, "data_contract_executor.authority_invalid")
 
 
 def _parse_authority_document(raw: object) -> dict[str, Any]:
     if type(raw) is not bytes or not 0 < len(raw) <= 256 * 1024:
         _fail("data_contract_executor.authority_invalid")
-
-    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        result: dict[str, Any] = {}
-        for name, value in pairs:
-            if name in result:
-                _fail("data_contract_executor.authority_invalid")
-            result[name] = value
-        return result
-
-    try:
-        value = json.loads(
-            raw,
-            object_pairs_hook=reject_duplicates,
-            parse_constant=lambda _value: _fail(
-                "data_contract_executor.authority_invalid"
-            ),
-        )
-    except SanitizerDataContractExecutorFailure:
-        raise
-    except (UnicodeDecodeError, ValueError, RecursionError):
-        _fail("data_contract_executor.authority_invalid")
+    value = _parse_json(raw, "data_contract_executor.authority_invalid")
     if type(value) is not dict or not hmac.compare_digest(
-        raw, _canonical_authority(value)
+        raw, _canonical_document(value, "data_contract_executor.authority_invalid")
     ):
         _fail("data_contract_executor.authority_invalid")
     return value
 
 
 def _utc_string(value: object) -> str:
-    if (
-        type(value) is not datetime
-        or value.tzinfo is None
-        or value.utcoffset() != timedelta(0)
-        or value.microsecond != 0
-    ):
+    if type(value) is not datetime or value.utcoffset() != _ZERO or value.microsecond:
         _fail("data_contract_executor.authority_invalid")
     return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -371,24 +326,21 @@ def _provider_access_credentials(
 
 
 def _pack(value: Any) -> Any:
-    """Return an unambiguous JSON value used only for the private result proof."""
-
     if value is None or type(value) in {bool, int, str}:
         return value
-    if type(value) is float:
-        if not math.isfinite(value):
-            _fail("data_contract_executor.output_invalid")
+    if type(value) is float and math.isfinite(value):
         return {"$float": value.hex()}
     if type(value) is uuid.UUID:
         return {"$uuid": str(value)}
     if type(value) is datetime:
-        return {"$datetime": value.isoformat()}
+        zone = value.tzinfo
+        return {"$datetime": [value.isoformat(), value.fold, id(type(zone)), id(zone)]}
     if type(value) is date:
         return {"$date": value.isoformat()}
     if isinstance(value, Mapping):
         if not all(type(name) is str for name in value):
             _fail("data_contract_executor.output_invalid")
-        return {"$map": [[name, _pack(value[name])] for name in sorted(value)]}
+        return {"$map": [[name, _pack(value[name])] for name in value]}
     if type(value) is tuple:
         return {"$tuple": [_pack(item) for item in value]}
     _fail("data_contract_executor.output_invalid")
@@ -396,13 +348,7 @@ def _pack(value: Any) -> Any:
 
 def _canonical(value: Any) -> bytes:
     try:
-        return json.dumps(
-            _pack(value),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("ascii")
+        return json.dumps(_pack(value), sort_keys=True, separators=(",", ":")).encode()
     except (TypeError, ValueError, UnicodeEncodeError, RecursionError):
         _fail("data_contract_executor.output_invalid")
 
@@ -415,10 +361,21 @@ def _freeze_json(value: Any) -> Any:
     if type(value) is list:
         return tuple(_freeze_json(item) for item in value)
     if type(value) is dict and all(type(name) is str for name in value):
-        return MappingProxyType(
-            {name: _freeze_json(value[name]) for name in sorted(value)}
-        )
+        return _FrozenMap(tuple((name, _freeze_json(value[name])) for name in value))
     _fail("data_contract_executor.source_invalid")
+
+
+def _is_frozen(value: Any) -> bool:
+    kind = type(value)
+    if value is None or kind in {bool, int, float, str, uuid.UUID, date}:
+        return kind is not float or math.isfinite(value)
+    if kind is datetime:
+        return value.fold == 0 and (value.tzinfo is None or value.tzinfo is UTC)
+    if kind is _FrozenMap:
+        return type(value._items) is tuple and all(
+            type(name) is str and _is_frozen(item) for name, item in value._items
+        )
+    return kind is tuple and all(_is_frozen(item) for item in value)
 
 
 def _thaw(value: Any) -> Any:
@@ -431,9 +388,7 @@ def _thaw(value: Any) -> Any:
 
 def _maximum_length(data_type: str) -> int | None:
     match = _VARCHAR_RE.fullmatch(data_type)
-    if match is None:
-        return None
-    return int(match.group(1)) if match.group(1) is not None else None
+    return int(match.group(1)) if match is not None and match.group(1) else None
 
 
 def _validate_and_freeze(value: Any, data_type: str, required: bool) -> Any:
@@ -453,12 +408,9 @@ def _validate_and_freeze(value: Any, data_type: str, required: bool) -> Any:
         _fail("data_contract_executor.source_invalid")
     if data_type == "boolean" and type(value) is bool:
         return value
-    if (
-        data_type == "double precision"
-        and type(value) is float
-        and math.isfinite(value)
-    ):
-        return value
+    if data_type == "double precision" and type(value) is float:
+        if math.isfinite(value):
+            return value
     if data_type == "date" and type(value) is date:
         return value
     if data_type == "timestamp with time zone" and (
@@ -466,11 +418,11 @@ def _validate_and_freeze(value: Any, data_type: str, required: bool) -> Any:
         and value.tzinfo is not None
         and value.utcoffset() is not None
     ):
-        return value
+        return value.astimezone(UTC).replace(fold=0)
     if data_type == "timestamp without time zone" and (
         type(value) is datetime and value.tzinfo is None
     ):
-        return value
+        return value.replace(fold=0)
     if data_type in {"json", "jsonb"}:
         return _freeze_json(value)
     if (
@@ -488,10 +440,9 @@ def _validate_and_freeze(value: Any, data_type: str, required: bool) -> Any:
 
 def _identity_columns(spec: Mapping[str, Any]) -> tuple[str, ...]:
     configured = spec.get("identity_columns")
-    if isinstance(configured, list) and configured:
+    if isinstance(configured, (list, tuple)) and configured:
         return tuple(configured)
-    names = {column[0] for column in spec["columns"]}
-    return ("id",) if "id" in names else tuple()
+    return ("id",) if any(column[0] == "id" for column in spec["columns"]) else ()
 
 
 def _validate_unique(
@@ -550,8 +501,6 @@ def _join_code(transformed_id: uuid.UUID, key: bytes) -> str:
 
 @dataclass(frozen=True, slots=True, init=False, repr=False)
 class SanitizerCandidateDataset:
-    """Sealed immutable candidate with no execution or publication authority."""
-
     table_count: int
     rewrite_table_count: int
     discard_table_count: int
@@ -608,6 +557,7 @@ def _candidate_proof(
     key: bytes,
     tables: tuple[tuple[str, tuple[Mapping[str, Any], ...]], ...],
     evidence_binding_sha256: str,
+    evidence_envelope_proof_sha256: str,
     source_row_count: int,
     transformed_at: datetime,
     transform_key_version: str,
@@ -616,6 +566,7 @@ def _candidate_proof(
         {
             "contract_sha256": DATA_CONTRACT_SHA256,
             "evidence_binding_sha256": evidence_binding_sha256,
+            "evidence_envelope_proof_sha256": evidence_envelope_proof_sha256,
             "source_row_count": source_row_count,
             "tables": tables,
             "transform_key_version": transform_key_version,
@@ -657,6 +608,7 @@ def _mint_candidate(
             key=key,
             tables=tables,
             evidence_binding_sha256=evidence.evidence_binding_sha256,
+            evidence_envelope_proof_sha256=evidence._proof_sha256,  # noqa: SLF001
             source_row_count=source_row_count,
             transformed_at=transformed_at,
             transform_key_version=key_version,
@@ -667,8 +619,6 @@ def _mint_candidate(
 
 
 class SanitizerDataContractExecutor:
-    """Pure transform engine configured only through a reviewed private seam."""
-
     __slots__ = (
         "_clock",
         "_contract",
@@ -690,6 +640,10 @@ class SanitizerDataContractExecutor:
 
     def __setattr__(self, name: str, value: object) -> NoReturn:
         del name, value
+        _fail("data_contract_executor.configuration_invalid")
+
+    def __delattr__(self, name: str) -> NoReturn:
+        del name
         _fail("data_contract_executor.configuration_invalid")
 
     def __repr__(self) -> str:
@@ -821,47 +775,23 @@ class SanitizerDataContractExecutor:
             target = source._target_binding  # noqa: SLF001
             written = target._written_receipt  # noqa: SLF001
             built = written._built_receipt  # noqa: SLF001
-            writer_policy = _parse_authority_document(
-                written._writer_policy_bytes  # noqa: SLF001
-            )
-            written_projection = {
-                name: getattr(written, name) for name in _WRITTEN_RESULT_FIELDS
-            }
-            written_serializable = dict(written_projection)
-            written_serializable["validated_at"] = _utc_string(
-                written_serializable["validated_at"]
-            )
             retained_until = datetime.strptime(
                 written.retained_until, "%Y-%m-%dT%H:%M:%SZ"
             ).replace(tzinfo=UTC)
             if (
                 not _has_module_seal(target, "_is_bound", "_TARGET_BINDING_SEAL")
                 or target._policy_bytes != self._sanitizer_policy_bytes  # noqa: SLF001
-                or not _has_module_seal(written, "_is_authenticated", "_RESULT_SEAL")
-                or not _has_module_seal(built, "_is_built", "_BUILT_SEAL")
-                or any(
-                    getattr(written, name) is not value
-                    for name, value in writer_policy["claims"].items()
-                )
-                or not hmac.compare_digest(
-                    written._proof_sha256,  # noqa: SLF001
-                    "sha256:"
-                    + hashlib.sha256(
-                        _canonical_authority(written_serializable)
-                    ).hexdigest(),
-                )
                 or not (
                     written.receipt_sha256
                     == target.receipt_sha256
                     == built.receipt_sha256
                 )
-                or built.receipt_sha256
-                != "sha256:" + hashlib.sha256(built.receipt_bytes).hexdigest()
                 or _utc_string(target.bound_at) > _utc_string(source.authenticated_at)
                 or retained_until <= now
-                or now >= min(target.expires_at, built.cleanup_not_after)
             ):
                 _fail("data_contract_executor.authority_invalid")
+            if now >= min(target.expires_at, built.cleanup_not_after):
+                _fail("data_contract_executor.target_expired")
             target_projection = {
                 name: getattr(target, name) for name in _TARGET_BINDING_FIELDS
             }
@@ -999,14 +929,22 @@ class SanitizerDataContractExecutor:
                 if type(row) is not dict or set(row) != set(expected):
                     _fail("data_contract_executor.source_invalid")
                 frozen_rows.append(
-                    MappingProxyType(
-                        {
-                            name: _validate_and_freeze(row[name], data_type, required)
+                    _FrozenMap(
+                        tuple(
+                            (name, _validate_and_freeze(row[name], data_type, required))
                             for name, data_type, required in spec["columns"]
-                        }
+                        )
                     )
                 )
-            result[table_name] = tuple(frozen_rows)
+            identity = _identity_columns(spec)
+            result[table_name] = tuple(
+                sorted(
+                    frozen_rows,
+                    key=lambda row: _canonical(tuple(row[name] for name in identity)),
+                )
+                if identity
+                else frozen_rows
+            )
         return result
 
     def _validate_fixed_catalog_counts(
@@ -1063,12 +1001,10 @@ class SanitizerDataContractExecutor:
                 prefix="user_",
                 maximum_length=maximum,
             )
-        if action in {
-            "derive_typeid_text:appointment",
-            "rotate_join_code",
-            "derive_access_code_salt",
-            "derive_access_code_digest",
-        }:
+        if (
+            action
+            in "derive_typeid_text:appointment rotate_join_code derive_access_code_salt derive_access_code_digest".split()
+        ):
             return None
         _fail("data_contract_executor.policy_invalid")
 
@@ -1102,7 +1038,7 @@ class SanitizerDataContractExecutor:
         elif table_name == "provider_organization":
             credentials = _provider_access_credentials(output["id"], key=self._key)
             output.update(credentials)
-        return MappingProxyType(output)
+        return _FrozenMap(tuple(output.items()))
 
     def transform(
         self,
@@ -1112,13 +1048,10 @@ class SanitizerDataContractExecutor:
         ),
         source_rows: dict[str, tuple[dict[str, Any], ...]],
     ) -> SanitizerCandidateDataset:
-        """Transform one closed-world snapshot without any external interaction."""
-
         try:
             if type(self) is not SanitizerDataContractExecutor:
                 _fail("data_contract_executor.configuration_invalid")
-            started_at = self._read_clock()
-            self._reauthenticate(authenticated_sanitizer_evidence, started_at)
+            self._reauthenticate(authenticated_sanitizer_evidence, self._read_clock())
             source = self._source_tables(source_rows)
             self._validate_fixed_catalog_counts(
                 authenticated_sanitizer_evidence, source
@@ -1144,8 +1077,7 @@ class SanitizerDataContractExecutor:
             if len(join_codes) != len(set(join_codes)):
                 _fail("data_contract_executor.output_invalid")
             completed_at = self._read_clock()
-            if completed_at != started_at:
-                self._reauthenticate(authenticated_sanitizer_evidence, completed_at)
+            self._reauthenticate(authenticated_sanitizer_evidence, completed_at)
             ordered = tuple((name, transformed[name]) for name in sorted(transformed))
             candidate = _mint_candidate(
                 key=self._key,
@@ -1170,7 +1102,7 @@ class SanitizerDataContractExecutor:
             names = tuple(name for name, _rows in candidate._tables)
             structurally_valid = (
                 names == tuple(sorted(self._schemas))
-                and all(type(rows) is tuple for rows in tables.values())
+                and _is_frozen(candidate._tables)
                 and all(not tables[name] for name in self._discarded)
                 and all(
                     set(row) == {column[0] for column in self._schemas[name]["columns"]}
@@ -1186,14 +1118,21 @@ class SanitizerDataContractExecutor:
             or type(candidate) is not SanitizerCandidateDataset
             or getattr(candidate, "_seal", None) is not _CANDIDATE_SEAL
             or not structurally_valid
-            or type(candidate.source_row_count) is not int
+            or any(
+                type(getattr(candidate, name)) is not int
+                for name in "table_count rewrite_table_count discard_table_count source_row_count candidate_row_count".split()
+            )
             or candidate.source_row_count < candidate_rows
             or candidate.candidate_row_count != candidate_rows
             or candidate.table_count != len(self._schemas)
             or candidate.rewrite_table_count != REWRITE_TABLE_COUNT
             or candidate.discard_table_count != DISCARD_TABLE_COUNT
             or candidate._contract_sha256 != DATA_CONTRACT_SHA256
+            or type(candidate.transform_key_version) is not str
             or candidate.transform_key_version != self._key_version
+            or not _is_frozen(candidate.transformed_at)
+            or candidate.transformed_at.tzinfo is not UTC
+            or candidate.transformed_at.microsecond != 0
             or any(getattr(candidate, name) is not False for name in _AUTHORITY_CLAIMS)
             or not hmac.compare_digest(
                 candidate._proof_sha256,
@@ -1202,6 +1141,9 @@ class SanitizerDataContractExecutor:
                     tables=candidate._tables,
                     evidence_binding_sha256=(
                         candidate._authenticated_evidence.evidence_binding_sha256
+                    ),
+                    evidence_envelope_proof_sha256=(
+                        candidate._authenticated_evidence._proof_sha256  # noqa: SLF001
                     ),
                     source_row_count=candidate.source_row_count,
                     transformed_at=candidate.transformed_at,
@@ -1212,8 +1154,6 @@ class SanitizerDataContractExecutor:
             _fail("data_contract_executor.candidate_invalid")
 
     def validate_candidate(self, candidate: SanitizerCandidateDataset) -> None:
-        """Reauthenticate a candidate for this exact contract and transform key."""
-
         try:
             self._verify_candidate(candidate)
             now = self._read_clock()
