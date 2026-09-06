@@ -139,7 +139,7 @@ py_js-build:
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
 
-# CI runs these twelve selectors on isolated runners. Keep the selectors explicit
+# CI runs these thirteen selectors on isolated runners. Keep the selectors explicit
 # so every Python test belongs to exactly one shard and `py_test` remains the
 # single combined local/CI-compatible entry point. Application and integration
 # tests both require built web assets; only integration requires browser routing.
@@ -194,7 +194,24 @@ py_test-ci-infrastructure-sanitizer-source-state-integrity:
 [script]
 py_test-ci-infrastructure-sanitizer-evidence:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-evidence is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_evidence.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_policy_is_hash_pinned_closed_world_and_dark \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_trusted_evidence_policy_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_every_evidence_digest_is_bound_to_the_controller_intent \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_exact_api_rejects_mappings_partials_subclasses_and_forged_seals \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_module_has_no_runtime_or_mutation_surface \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-evidence-integrity:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-evidence-integrity is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_real_chain_joins_final_evidence_after_historical_expiry \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_source_restore_and_run_context_cannot_be_substituted \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_mixed_real_chains_and_tampered_outputs_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_clock_shape_regression_and_target_expiry_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_evidence.py::test_output_cannot_be_constructed_or_serialized \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-executor:

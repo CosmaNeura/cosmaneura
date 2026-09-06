@@ -26,9 +26,13 @@ SHARDS = (
     "infrastructure-sanitizer-source-state-context",
     "infrastructure-sanitizer-source-state-integrity",
     "infrastructure-sanitizer-evidence",
+    "infrastructure-sanitizer-evidence-integrity",
     "infrastructure-sanitizer-executor",
     "infrastructure-restore",
     "integration",
+)
+FILE_SHARDS = tuple(
+    shard for shard in SHARDS if shard != "infrastructure-sanitizer-evidence-integrity"
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
@@ -85,6 +89,20 @@ RESTORE_RECEIPT_PATHS = frozenset(
 SANITIZER_RUNTIME_GLOB = "tests/infrastructure/test_staging_restore_sanitizer_*.py"
 SANITIZER_EVIDENCE_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_evidence.py"
+)
+SANITIZER_EVIDENCE_PRIMARY_SELECTORS = (
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_policy_is_hash_pinned_closed_world_and_dark",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_trusted_evidence_policy_mutations_fail_closed",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_every_evidence_digest_is_bound_to_the_controller_intent",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_exact_api_rejects_mappings_partials_subclasses_and_forged_seals",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_module_has_no_runtime_or_mutation_surface",
+)
+SANITIZER_EVIDENCE_INTEGRITY_SELECTORS = (
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_real_chain_joins_final_evidence_after_historical_expiry",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_source_restore_and_run_context_cannot_be_substituted",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_mixed_real_chains_and_tampered_outputs_refuse",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_clock_shape_regression_and_target_expiry_refuse",
+    f"{SANITIZER_EVIDENCE_SELECTOR}::test_output_cannot_be_constructed_or_serialized",
 )
 SANITIZER_EXECUTOR_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_executor.py"
@@ -212,7 +230,20 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"uv run pytest {SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR} --verbosity=2"
         ),
         "infrastructure-sanitizer-evidence": (
-            f"uv run pytest {SANITIZER_EVIDENCE_SELECTOR} --verbosity=2"
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_EVIDENCE_PRIMARY_SELECTORS
+            )
+            + "\t\t--verbosity=2"
+        ),
+        "infrastructure-sanitizer-evidence-integrity": (
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_EVIDENCE_INTEGRITY_SELECTORS
+            )
+            + "\t\t--verbosity=2"
         ),
         "infrastructure-sanitizer-executor": (
             f"uv run pytest {SANITIZER_EXECUTOR_SELECTOR} --verbosity=2"
@@ -256,6 +287,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_evidence_start = source.index(
         "py_test-ci-infrastructure-sanitizer-evidence:"
     )
+    infrastructure_sanitizer_evidence_integrity_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-evidence-integrity:"
+    )
     infrastructure_sanitizer_executor_start = source.index(
         "py_test-ci-infrastructure-sanitizer-executor:"
     )
@@ -286,7 +320,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_source_state_integrity_start:infrastructure_sanitizer_evidence_start
     ]
     infrastructure_sanitizer_evidence_recipe = source[
-        infrastructure_sanitizer_evidence_start:infrastructure_sanitizer_executor_start
+        infrastructure_sanitizer_evidence_start:infrastructure_sanitizer_evidence_integrity_start
+    ]
+    infrastructure_sanitizer_evidence_integrity_recipe = source[
+        infrastructure_sanitizer_evidence_integrity_start:infrastructure_sanitizer_executor_start
     ]
     infrastructure_sanitizer_executor_recipe = source[
         infrastructure_sanitizer_executor_start:infrastructure_restore_start
@@ -311,6 +348,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "--ignore-glob=" not in infrastructure_sanitizer_source_state_integrity_recipe
     )
     assert "--ignore-glob=" not in infrastructure_sanitizer_evidence_recipe
+    assert "--ignore-glob=" not in infrastructure_sanitizer_evidence_integrity_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_executor_recipe
     assert "--ignore-glob=" not in infrastructure_restore_recipe
     assert ":|dedicated_restore_tests" in infrastructure_restore_recipe
@@ -342,7 +380,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             for path in infrastructure_files
             if _infrastructure_shard(path) == shard
         }
-        for shard in SHARDS
+        for shard in FILE_SHARDS
         if shard.startswith("infrastructure-")
     }
     selected["integration"] = {
@@ -354,8 +392,8 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
 
     assert all(selected.values())
     assert set().union(*selected.values()) == test_files
-    for left_index, left in enumerate(SHARDS):
-        for right in SHARDS[left_index + 1 :]:
+    for left_index, left in enumerate(FILE_SHARDS):
+        for right in FILE_SHARDS[left_index + 1 :]:
             assert selected[left].isdisjoint(selected[right])
 
 
@@ -487,6 +525,23 @@ def test_source_state_shards_partition_all_36_collected_cases_once() -> None:
     assert set(authority) | set(context) | set(integrity) == set(family)
 
 
+def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> None:
+    primary = _collect_nodeids(*SANITIZER_EVIDENCE_PRIMARY_SELECTORS)
+    integrity = _collect_nodeids(*SANITIZER_EVIDENCE_INTEGRITY_SELECTORS)
+    family = _collect_nodeids(SANITIZER_EVIDENCE_SELECTOR)
+
+    assert primary
+    assert integrity
+    assert len(primary) == 19
+    assert len(integrity) == 10
+    assert len(family) == 29
+    assert len(primary) == len(set(primary))
+    assert len(integrity) == len(set(integrity))
+    assert len(family) == len(set(family))
+    assert set(primary).isdisjoint(integrity)
+    assert set(primary) | set(integrity) == set(family)
+
+
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     evidence = _collect_nodeids(SANITIZER_EVIDENCE_SELECTOR)
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
@@ -518,6 +573,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
         "zsh",
         "zsh",
         "zsh",
