@@ -191,6 +191,7 @@ def test_real_chain_joins_final_evidence_after_historical_expiry(
         "_evidence_record_bytes",
         "_sanitizer_policy_bytes",
         "_composition_policy_bytes",
+        "_retained_source_witness_sha256",
         "_proof_sha256",
         "_seal",
     }

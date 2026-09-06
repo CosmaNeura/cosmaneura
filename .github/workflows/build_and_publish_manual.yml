@@ -236,6 +236,8 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-executor
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-data-contract-executor
+            apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh
           - shard: integration
