@@ -219,6 +219,17 @@ composition, the last freshness check, and direct safe-submit invocation in
 one process. Its review must keep original bytes available for revalidation and
 must not add a deserialization minter.
 
+The dormant sanitizer trusted-evidence join now consumes that same exact final
+sealed `RestoreEvidenceBinding` together with the exact sealed fixed-catalog
+source state. It requires full canonical equality with the controller intent
+and transitively rechecks every server-scope, authentication, provider,
+attestation, inventory, and manifest digest. Historical evidence expiry remains
+the prior safe-submit deadline; current freshness comes from the controller
+target binding and a private non-regressing UTC clock. The nonserializable
+result claims authenticated server scope only as evidence: database, provider,
+runtime, sanitizer, mutation, executable, and workflow authority all remain
+false. See the [sanitizer trusted-evidence flight plan](flight-plans/2026-09-06-staging-sanitizer-trusted-evidence.md).
+
 `restore-trusted-executor-policy.json` now closes that future boundary without
 activating it. Its public shape is the zero-argument
 `execute_trusted_restore()`. The private seam requires a sealed authenticated

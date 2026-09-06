@@ -67,6 +67,8 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-source-state-integrity
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-runtime
+            apt-packages: zsh
           - shard: infrastructure-restore
             apt-packages: zsh
           - shard: integration

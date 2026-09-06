@@ -186,7 +186,7 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
     assert policy["status"]["controller_receipt_v2_target_binding_implemented"] is True
     assert policy["status"]["fixed_catalog_source_state_binding_implemented"] is True
     assert policy["status"]["executable"] is False
-    assert policy["status"]["trusted_evidence_binding_implemented"] is False
+    assert policy["status"]["trusted_evidence_binding_implemented"] is True
     assert policy["status"]["live_provider_calls_enabled"] is False
     assert policy["status"]["workflow_integrated"] is False
     assert policy["execution_contract"]["database_connections_permitted"] is False
@@ -206,6 +206,12 @@ def test_canonical_policy_is_pinned_closed_world_and_dormant(
         module.FIXED_CATALOG_TABLE_ORDER
     )
     assert source_state["claims"] == module.FIXED_CATALOG_SOURCE_STATE_CLAIMS
+    trusted_evidence = policy["trusted_evidence_binding"]
+    assert trusted_evidence["implemented"] is True
+    assert trusted_evidence["claims"] == module.TRUSTED_EVIDENCE_CLAIMS
+    assert trusted_evidence["output"]["public_fields"] == list(
+        module.TRUSTED_EVIDENCE_PUBLIC_FIELDS
+    )
     transform = policy["transform_contract"]
     assert transform["retained_column_policy_status"] == (
         "complete_sha256_pinned_343_columns"
@@ -383,7 +389,7 @@ def test_preflight_refuses_before_connector(
         called = True
 
     with pytest.raises(
-        module.SanitizerFailure, match="activation.trusted_binding_unimplemented"
+        module.SanitizerFailure, match="activation.sanitizer_executor_unimplemented"
     ):
         module.preflight(target_binding, connector)
     assert called is False
@@ -500,7 +506,7 @@ def test_binding_api_accepts_only_written_receipt_and_no_overrides(
     ):
         module.SanitizerTargetBinding()
     with pytest.raises(
-        module.SanitizerFailure, match="activation.trusted_binding_unimplemented"
+        module.SanitizerFailure, match="activation.sanitizer_executor_unimplemented"
     ):
         module.build_sanitizer_target_binder()
 
@@ -790,6 +796,6 @@ def test_cli_outputs_only_bounded_contract_status(
     result = json.loads(capsys.readouterr().out)
     assert result == {
         "schema_version": 1,
-        "errors": ["activation.trusted_binding_unimplemented"],
+        "errors": ["activation.sanitizer_executor_unimplemented"],
         "pass": False,
     }

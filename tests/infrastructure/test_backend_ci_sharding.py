@@ -25,6 +25,7 @@ SHARDS = (
     "infrastructure-sanitizer-source-state-authority",
     "infrastructure-sanitizer-source-state-context",
     "infrastructure-sanitizer-source-state-integrity",
+    "infrastructure-sanitizer-runtime",
     "infrastructure-restore",
     "integration",
 )
@@ -80,6 +81,7 @@ RESTORE_RECEIPT_PATHS = frozenset(
         f"{CONTROLLER_BASE}_production_authority.py",
     )
 )
+SANITIZER_RUNTIME_SELECTOR = "tests/infrastructure/test_staging_restore_sanitizer_*.py"
 
 
 def _infrastructure_shard(path: Path) -> str:
@@ -94,6 +96,8 @@ def _infrastructure_shard(path: Path) -> str:
             return "unassigned"
         if path == Path(SANITIZER_FOUNDATION_SELECTOR):
             return "infrastructure-sanitizer-foundation"
+        if path.match("test_staging_restore_sanitizer_*.py"):
+            return "infrastructure-sanitizer-runtime"
         if path in RECEIPT_IO_PATHS:
             return "infrastructure-receipt-io"
         if path in RESTORE_RECEIPT_PATHS:
@@ -192,10 +196,14 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "infrastructure-sanitizer-source-state-integrity": (
             f"uv run pytest {SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR} --verbosity=2"
         ),
+        "infrastructure-sanitizer-runtime": (
+            f"uv run pytest {SANITIZER_RUNTIME_SELECTOR} --verbosity=2"
+        ),
         "infrastructure-restore": (
             f"restore_tests=({RESTORE_GLOB})\n"
             "\tdedicated_restore_tests=("
-            f"{SANITIZER_FOUNDATION_SELECTOR} {SANITIZER_SOURCE_STATE_GLOB})\n"
+            f"{SANITIZER_FOUNDATION_SELECTOR} {SANITIZER_SOURCE_STATE_GLOB} "
+            f"{SANITIZER_RUNTIME_SELECTOR})\n"
             '\trestore_tests=("${(@)restore_tests:|dedicated_restore_tests}")\n'
             '\tuv run pytest "${restore_tests[@]}" '
             f"{RESTORE_RECEIPT_SELECTOR} --verbosity=2"
@@ -227,6 +235,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_source_state_integrity_start = source.index(
         "py_test-ci-infrastructure-sanitizer-source-state-integrity:"
     )
+    infrastructure_sanitizer_runtime_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-runtime:"
+    )
     infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
     application_recipe = source[application_start:infrastructure_general_start]
     integration_start = source.index("py_test-ci-integration:")
@@ -251,7 +262,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_source_state_context_start:infrastructure_sanitizer_source_state_integrity_start
     ]
     infrastructure_sanitizer_source_state_integrity_recipe = source[
-        infrastructure_sanitizer_source_state_integrity_start:infrastructure_restore_start
+        infrastructure_sanitizer_source_state_integrity_start:infrastructure_sanitizer_runtime_start
+    ]
+    infrastructure_sanitizer_runtime_recipe = source[
+        infrastructure_sanitizer_runtime_start:infrastructure_restore_start
     ]
     infrastructure_restore_recipe = source[
         infrastructure_restore_start:integration_start
@@ -272,6 +286,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_source_state_integrity_recipe
     )
+    assert "--ignore-glob=" not in infrastructure_sanitizer_runtime_recipe
     assert "--ignore-glob=" not in infrastructure_restore_recipe
     assert ":|dedicated_restore_tests" in infrastructure_restore_recipe
     assert ":#" not in infrastructure_restore_recipe
@@ -363,6 +378,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "unassigned",
         ),
         (
+            Path("tests/infrastructure/test_staging_restore_sanitizer_evidence.py"),
+            "infrastructure-sanitizer-runtime",
+        ),
+        (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_consumer.py"),
             "unassigned",
         ),
@@ -449,6 +468,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
         "zsh",
         "zsh",
         "zsh",

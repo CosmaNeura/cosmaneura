@@ -139,7 +139,7 @@ py_js-build:
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
 
-# CI runs these ten selectors on isolated runners. Keep the selectors explicit
+# CI runs these eleven selectors on isolated runners. Keep the selectors explicit
 # so every Python test belongs to exactly one shard and `py_test` remains the
 # single combined local/CI-compatible entry point. Application and integration
 # tests both require built web assets; only integration requires browser routing.
@@ -192,10 +192,15 @@ py_test-ci-infrastructure-sanitizer-source-state-integrity:
 	uv run pytest tests/infrastructure/test_staging_restore_fixed_catalog_source_state_integrity.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
+py_test-ci-infrastructure-sanitizer-runtime:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-runtime is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_*.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
 py_test-ci-infrastructure-restore:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-restore is CI-only" >&2; exit 1; }
 	restore_tests=(tests/infrastructure/test_staging_restore_*.py)
-	dedicated_restore_tests=(tests/infrastructure/test_staging_restore_sanitizer.py tests/infrastructure/test_staging_restore_fixed_catalog_source_state*.py)
+	dedicated_restore_tests=(tests/infrastructure/test_staging_restore_sanitizer.py tests/infrastructure/test_staging_restore_fixed_catalog_source_state*.py tests/infrastructure/test_staging_restore_sanitizer_*.py)
 	restore_tests=("${(@)restore_tests:|dedicated_restore_tests}")
 	uv run pytest "${restore_tests[@]}" tests/infrastructure/test_staging_controller_receipt_v2_{isolation_inventory,private_reader,production_authority}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 

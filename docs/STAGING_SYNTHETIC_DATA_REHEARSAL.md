@@ -268,14 +268,14 @@ results, lookalikes, subclasses, and caller-selected fields or time all fail
 closed. `validate_target_url` requires that sealed binding and derives host,
 database, and role from it.
 
-This is an in-process input binding, not activation. The canonical policy still
-pins `trusted_evidence_binding_implemented=false`, permits no database connection
-or SQL mutation, and leaves executable, workflow, and live-provider flags false.
-Preflight validates the seal and refuses before a PostgreSQL driver or connector
-can run. See the [receipt-v2 sanitizer-binding flight plan](flight-plans/2026-09-06-staging-controller-receipt-v2-sanitizer-binding.md).
+This is an in-process input binding, not activation. The canonical policy
+permits no database connection or SQL mutation and leaves executable, workflow,
+runtime, sanitizer-authority, and live-provider flags false. Preflight validates
+the seal and refuses before a PostgreSQL driver or connector can run. See the
+[receipt-v2 sanitizer-binding flight plan](flight-plans/2026-09-06-staging-controller-receipt-v2-sanitizer-binding.md).
 
-Activation remains blocked on authenticated server-scope evidence and execution,
-not on reconstructing target identity from a legacy receipt. The
+Activation remains blocked on execution, not on reconstructing target identity
+from a legacy receipt. The
 [fixed-catalog source-state binder](flight-plans/2026-09-06-staging-restore-fixed-catalog-source-state.md)
 now authenticates the exact `pre` inventory receipt and privately binds built-in
 counts and source-state HMACs for the five fixed-catalog tables. It exposes no
@@ -284,6 +284,20 @@ activation is now blocked on proving the post-sanitization payload projection;
 its PK/FK identifiers still cannot use generic transforms. Clerk values,
 email/domain joins, dependent digests, TypeID text references, and rotated
 access-code verifiers likewise require one proven semantic mapping.
+
+The dormant trusted-evidence join now accepts only that exact sealed
+fixed-catalog source state and the final exact sealed
+`staging_restore_safe_submit.RestoreEvidenceBinding`. It requires byte-for-byte
+canonical equality with the controller intent's retained evidence record and
+cross-binds the complete source/workflow/run/restore context plus every
+inventory, server-scope, server-authentication, provider, attestation, and
+manifest digest. The evidence record's expiry remains the historical
+safe-submit deadline; a private non-regressing whole-second UTC clock must still
+find the controller target binding fresh. The resulting authority retains both
+ancestors in process and cannot be serialized. It authenticates the evidence
+and server scope but grants no connection, provider, runtime, sanitizer,
+mutation, executable, or workflow authority. See the
+[trusted-evidence flight plan](flight-plans/2026-09-06-staging-sanitizer-trusted-evidence.md).
 
 A future executor must keep guarded append-only tables empty, reject unexpected `ON TRUNCATE` triggers, and prove its isolated-copy `TRUNCATE`/reinsert permissions and rollback behavior; this does not preserve append-only semantics. It must use serializable transactions, `synchronous_commit=on`, bounded timeouts, an `alembic_version` lock, a pre-commit session recheck, and fresh-connection post-commit verification. Any ambiguous outcome is isolated and cleanup-only.
 
