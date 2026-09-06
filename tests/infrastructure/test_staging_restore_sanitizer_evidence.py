@@ -185,6 +185,8 @@ def test_real_chain_joins_final_evidence_after_historical_expiry(
         *binding.PUBLIC_FIELDS,
         *binding.CLAIMS,
         "_fixed_catalog_source_state",
+        "_fixed_catalog_source_state_type",
+        "_fixed_catalog_source_state_seal",
         "_restore_evidence_binding",
         "_evidence_record_bytes",
         "_sanitizer_policy_bytes",

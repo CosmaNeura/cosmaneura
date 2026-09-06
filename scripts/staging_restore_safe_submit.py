@@ -24,7 +24,6 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime, parsedate_to_datetime
 from pathlib import Path
@@ -33,9 +32,13 @@ from typing import Any, Callable, Mapping, NoReturn, Protocol
 
 try:
     from scripts import staging_restore_runtime_adapters as runtime_adapters
+    from scripts import (
+        staging_restore_sanitizer_evidence_authority as evidence_authority,
+    )
     from scripts import validate_staging_restore_runtime_binding as runtime_binding
 except ModuleNotFoundError:  # pragma: no cover - direct script import fallback
     import staging_restore_runtime_adapters as runtime_adapters
+    import staging_restore_sanitizer_evidence_authority as evidence_authority
     import validate_staging_restore_runtime_binding as runtime_binding
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1371,54 +1374,8 @@ class AzureBlobMarkerStore:
         _fail("marker_list_bound_exceeded")
 
 
-_RESTORE_EVIDENCE_BINDING_SEAL = object()
-
-
-@dataclass(frozen=True, slots=True, init=False, repr=False)
-class RestoreEvidenceBinding:
-    """Composite-verifier output, not proof against hostile in-process code."""
-
-    schema_version: int
-    binding_policy_id: str
-    evidence_manifest_policy_id: str
-    evidence_manifest_policy_sha256: str
-    manifest_id: str
-    manifest_file_sha256: str
-    bundle_index_sha256: str
-    evidence_set_sha256: str
-    source_sha: str
-    candidate_sha: str
-    source_server_resource_id: str
-    source_database_name: str
-    approved_restore_time: datetime
-    observed_at: datetime
-    expires_at: datetime
-    candidate_approval_pr_number: int
-    candidate_protected_master_sha: str
-    candidate_schema_revision: str
-    candidate_receipt_sha256: str
-    inventory_receipt_sha256: str
-    quiescence_receipt_sha256: str
-    server_scope_receipt_sha256: str
-    repository: str
-    protected_ref: str
-    workflow_path: str
-    workflow_sha: str
-    run_id: str
-    run_attempt: str
-    event_name: str
-    signer_issuer: str
-    signer_subject: str
-    attestation_receipt_sha256: str
-    provider_receipt_sha256: str
-    server_scope_authentication_receipt_sha256: str
-    _binding_seal: object = dataclass_field(repr=False, compare=False)
-
-    def _is_module_minted_binding(self) -> bool:
-        return (
-            type(self) is RestoreEvidenceBinding
-            and getattr(self, "_binding_seal", None) is _RESTORE_EVIDENCE_BINDING_SEAL
-        )
+RestoreEvidenceBinding = evidence_authority.RestoreEvidenceBinding
+_RESTORE_EVIDENCE_BINDING_SEAL = evidence_authority._RESTORE_EVIDENCE_BINDING_SEAL  # noqa: SLF001
 
 
 @dataclass(frozen=True, slots=True)

@@ -25,7 +25,8 @@ SHARDS = (
     "infrastructure-sanitizer-source-state-authority",
     "infrastructure-sanitizer-source-state-context",
     "infrastructure-sanitizer-source-state-integrity",
-    "infrastructure-sanitizer-runtime",
+    "infrastructure-sanitizer-evidence",
+    "infrastructure-sanitizer-executor",
     "infrastructure-restore",
     "integration",
 )
@@ -81,7 +82,17 @@ RESTORE_RECEIPT_PATHS = frozenset(
         f"{CONTROLLER_BASE}_production_authority.py",
     )
 )
-SANITIZER_RUNTIME_SELECTOR = "tests/infrastructure/test_staging_restore_sanitizer_*.py"
+SANITIZER_RUNTIME_GLOB = "tests/infrastructure/test_staging_restore_sanitizer_*.py"
+SANITIZER_EVIDENCE_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_sanitizer_evidence.py"
+)
+SANITIZER_EXECUTOR_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_sanitizer_executor.py"
+)
+SANITIZER_RUNTIME_SELECTORS = (
+    SANITIZER_EVIDENCE_SELECTOR,
+    SANITIZER_EXECUTOR_SELECTOR,
+)
 
 
 def _infrastructure_shard(path: Path) -> str:
@@ -96,8 +107,12 @@ def _infrastructure_shard(path: Path) -> str:
             return "unassigned"
         if path == Path(SANITIZER_FOUNDATION_SELECTOR):
             return "infrastructure-sanitizer-foundation"
-        if path.match("test_staging_restore_sanitizer_*.py"):
-            return "infrastructure-sanitizer-runtime"
+        if path == Path(SANITIZER_EVIDENCE_SELECTOR):
+            return "infrastructure-sanitizer-evidence"
+        if path == Path(SANITIZER_EXECUTOR_SELECTOR):
+            return "infrastructure-sanitizer-executor"
+        if path.name.startswith("test_staging_restore_sanitizer_"):
+            return "unassigned"
         if path in RECEIPT_IO_PATHS:
             return "infrastructure-receipt-io"
         if path in RESTORE_RECEIPT_PATHS:
@@ -196,14 +211,17 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "infrastructure-sanitizer-source-state-integrity": (
             f"uv run pytest {SANITIZER_SOURCE_STATE_INTEGRITY_SELECTOR} --verbosity=2"
         ),
-        "infrastructure-sanitizer-runtime": (
-            f"uv run pytest {SANITIZER_RUNTIME_SELECTOR} --verbosity=2"
+        "infrastructure-sanitizer-evidence": (
+            f"uv run pytest {SANITIZER_EVIDENCE_SELECTOR} --verbosity=2"
+        ),
+        "infrastructure-sanitizer-executor": (
+            f"uv run pytest {SANITIZER_EXECUTOR_SELECTOR} --verbosity=2"
         ),
         "infrastructure-restore": (
             f"restore_tests=({RESTORE_GLOB})\n"
             "\tdedicated_restore_tests=("
             f"{SANITIZER_FOUNDATION_SELECTOR} {SANITIZER_SOURCE_STATE_GLOB} "
-            f"{SANITIZER_RUNTIME_SELECTOR})\n"
+            f"{SANITIZER_RUNTIME_GLOB})\n"
             '\trestore_tests=("${(@)restore_tests:|dedicated_restore_tests}")\n'
             '\tuv run pytest "${restore_tests[@]}" '
             f"{RESTORE_RECEIPT_SELECTOR} --verbosity=2"
@@ -235,8 +253,11 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_source_state_integrity_start = source.index(
         "py_test-ci-infrastructure-sanitizer-source-state-integrity:"
     )
-    infrastructure_sanitizer_runtime_start = source.index(
-        "py_test-ci-infrastructure-sanitizer-runtime:"
+    infrastructure_sanitizer_evidence_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-evidence:"
+    )
+    infrastructure_sanitizer_executor_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-executor:"
     )
     infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
     application_recipe = source[application_start:infrastructure_general_start]
@@ -262,10 +283,13 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_source_state_context_start:infrastructure_sanitizer_source_state_integrity_start
     ]
     infrastructure_sanitizer_source_state_integrity_recipe = source[
-        infrastructure_sanitizer_source_state_integrity_start:infrastructure_sanitizer_runtime_start
+        infrastructure_sanitizer_source_state_integrity_start:infrastructure_sanitizer_evidence_start
     ]
-    infrastructure_sanitizer_runtime_recipe = source[
-        infrastructure_sanitizer_runtime_start:infrastructure_restore_start
+    infrastructure_sanitizer_evidence_recipe = source[
+        infrastructure_sanitizer_evidence_start:infrastructure_sanitizer_executor_start
+    ]
+    infrastructure_sanitizer_executor_recipe = source[
+        infrastructure_sanitizer_executor_start:infrastructure_restore_start
     ]
     infrastructure_restore_recipe = source[
         infrastructure_restore_start:integration_start
@@ -286,7 +310,8 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_source_state_integrity_recipe
     )
-    assert "--ignore-glob=" not in infrastructure_sanitizer_runtime_recipe
+    assert "--ignore-glob=" not in infrastructure_sanitizer_evidence_recipe
+    assert "--ignore-glob=" not in infrastructure_sanitizer_executor_recipe
     assert "--ignore-glob=" not in infrastructure_restore_recipe
     assert ":|dedicated_restore_tests" in infrastructure_restore_recipe
     assert ":#" not in infrastructure_restore_recipe
@@ -379,7 +404,15 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         (
             Path("tests/infrastructure/test_staging_restore_sanitizer_evidence.py"),
-            "infrastructure-sanitizer-runtime",
+            "infrastructure-sanitizer-evidence",
+        ),
+        (
+            Path("tests/infrastructure/test_staging_restore_sanitizer_executor.py"),
+            "infrastructure-sanitizer-executor",
+        ),
+        (
+            Path("tests/infrastructure/test_staging_restore_sanitizer_future.py"),
+            "unassigned",
         ),
         (
             Path("tests/infrastructure/test_staging_controller_receipt_v2_consumer.py"),
@@ -454,6 +487,23 @@ def test_source_state_shards_partition_all_36_collected_cases_once() -> None:
     assert set(authority) | set(context) | set(integrity) == set(family)
 
 
+def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
+    evidence = _collect_nodeids(SANITIZER_EVIDENCE_SELECTOR)
+    executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
+    family = _collect_nodeids(*SANITIZER_RUNTIME_SELECTORS)
+
+    assert evidence
+    assert executor
+    assert len(evidence) == 29
+    assert len(executor) == 21
+    assert len(family) == 50
+    assert len(evidence) == len(set(evidence))
+    assert len(executor) == len(set(executor))
+    assert len(family) == len(set(family))
+    assert set(evidence).isdisjoint(executor)
+    assert set(evidence) | set(executor) == set(family)
+
+
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
 def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> None:
     jobs = _workflow(path)["jobs"]
@@ -468,6 +518,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
         "zsh",
         "zsh",
         "zsh",
