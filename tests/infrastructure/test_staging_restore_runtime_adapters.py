@@ -947,6 +947,7 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
         "AzureSourceObservationProvider",
         "DigestPinnedGitHubCliVerifier",
     )
+    arm_path = "observe_staging_controller_receipt_v2_arm.py"
     executable_paths = [
         *Path(adapters.attestation.ROOT).joinpath("scripts").glob("*.py"),
         *Path(adapters.attestation.ROOT).joinpath("scripts").glob("*.sh"),
@@ -1004,7 +1005,7 @@ def test_adapters_are_wired_only_in_dormant_executor_factory() -> None:
                 for symbol in adapter_symbols
                 if symbol != "receive_staging_broker_launch_receipt"
             )
-        elif path.name == "staging_restore_safe_submit.py":
+        elif path.name in {"staging_restore_safe_submit.py", arm_path}:
             forbidden_symbols = tuple(
                 symbol
                 for symbol in adapter_symbols
