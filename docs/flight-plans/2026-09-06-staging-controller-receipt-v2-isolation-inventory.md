@@ -4,8 +4,8 @@ Date: 2026-09-06
 
 Risk: **Tier 2 — dormant security-boundary observation authority**
 
-Stacked parent: isolation-semantics candidate
-`2c1a6130347068d8913408823b77c6fd13c4137b`.
+Protected parent: merged isolation-semantics checkpoint
+`29e13d51c3c7b4c7c20721637940e2cdfba6038a`.
 
 ## Outcome and boundaries
 
