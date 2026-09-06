@@ -15,7 +15,24 @@ WORKFLOWS = (
     ROOT / ".github/workflows/build_and_publish_manual.yml",
     ROOT / ".github/workflows/deploy_staging_candidate.yml",
 )
-SHARDS = ("application", "infrastructure", "integration")
+SHARDS = (
+    "application",
+    "infrastructure-general",
+    "infrastructure-controller",
+    "infrastructure-restore",
+    "integration",
+)
+CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
+RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
+
+
+def _infrastructure_shard(path: Path) -> str:
+    if path.parent == Path("tests/infrastructure"):
+        if path.name.startswith("test_staging_controller_receipt_v2"):
+            return "infrastructure-controller"
+        if path.name.startswith("test_staging_restore_"):
+            return "infrastructure-restore"
+    return "infrastructure-general"
 
 
 def _workflow(path: Path) -> dict[str, Any]:
@@ -50,7 +67,13 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "\t\t--ignore=tests/infrastructure \\\n"
             "\t\t--ignore=tests/integration \\\n"
         ),
-        "infrastructure": "uv run pytest tests/infrastructure --verbosity=2",
+        "infrastructure-general": (
+            "uv run pytest tests/infrastructure --verbosity=2 \\\n"
+            f"\t\t--ignore-glob='{CONTROLLER_GLOB}' \\\n"
+            f"\t\t--ignore-glob='{RESTORE_GLOB}' \\\n"
+        ),
+        "infrastructure-controller": (f"uv run pytest {CONTROLLER_GLOB} --verbosity=2"),
+        "infrastructure-restore": f"uv run pytest {RESTORE_GLOB} --verbosity=2",
         "integration": "uv run pytest tests/integration --verbosity=2",
     }
     for shard, command in expected_commands.items():
@@ -59,14 +82,32 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         assert command in source
 
     application_start = source.index("py_test-ci-application:")
-    infrastructure_start = source.index("py_test-ci-infrastructure:")
-    application_recipe = source[application_start:infrastructure_start]
+    infrastructure_general_start = source.index("py_test-ci-infrastructure-general:")
+    infrastructure_controller_start = source.index(
+        "py_test-ci-infrastructure-controller:"
+    )
+    infrastructure_restore_start = source.index("py_test-ci-infrastructure-restore:")
+    application_recipe = source[application_start:infrastructure_general_start]
     integration_start = source.index("py_test-ci-integration:")
     integration_end = source.index("\n# run tests with", integration_start)
     integration_recipe = source[integration_start:integration_end]
+    infrastructure_general_recipe = source[
+        infrastructure_general_start:infrastructure_controller_start
+    ]
+    infrastructure_controller_recipe = source[
+        infrastructure_controller_start:infrastructure_restore_start
+    ]
+    infrastructure_restore_recipe = source[
+        infrastructure_restore_start:integration_start
+    ]
+    infrastructure_recipes = source[infrastructure_general_start:integration_start]
     shard_recipes = source[application_start:integration_end]
     for recipe in (application_recipe, integration_recipe):
         assert "just py_js-build" in recipe
+    assert "just py_js-build" not in infrastructure_recipes
+    assert infrastructure_general_recipe.count("--ignore-glob=") == 2
+    assert "--ignore-glob=" not in infrastructure_controller_recipe
+    assert "--ignore-glob=" not in infrastructure_restore_recipe
     assert "playwright install chromium --only-shell" not in application_recipe
     assert "localias" not in application_recipe.lower()
     assert "playwright install chromium --only-shell" not in integration_recipe
@@ -77,14 +118,23 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         for pattern in ("test_*.py", "*_test.py")
         for path in (ROOT / "tests").rglob(pattern)
     }
+    infrastructure_files = {
+        path for path in test_files if path.parts[1] == "infrastructure"
+    }
     selected = {
-        "infrastructure": {
-            path for path in test_files if path.parts[1] == "infrastructure"
-        },
-        "integration": {path for path in test_files if path.parts[1] == "integration"},
+        shard: {
+            path
+            for path in infrastructure_files
+            if _infrastructure_shard(path) == shard
+        }
+        for shard in SHARDS
+        if shard.startswith("infrastructure-")
+    }
+    selected["integration"] = {
+        path for path in test_files if path.parts[1] == "integration"
     }
     selected["application"] = (
-        test_files - selected["infrastructure"] - selected["integration"]
+        test_files - infrastructure_files - selected["integration"]
     )
 
     assert all(selected.values())
@@ -92,6 +142,33 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     for left_index, left in enumerate(SHARDS):
         for right in SHARDS[left_index + 1 :]:
             assert selected[left].isdisjoint(selected[right])
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_shard"),
+    [
+        (
+            Path("tests/infrastructure/test_staging_controller_receipt_v2_builder.py"),
+            "infrastructure-controller",
+        ),
+        (
+            Path("tests/infrastructure/test_staging_controller_receipt_v2_writer.py"),
+            "infrastructure-controller",
+        ),
+        (
+            Path("tests/infrastructure/test_staging_restore_sanitizer.py"),
+            "infrastructure-restore",
+        ),
+        (
+            Path("tests/infrastructure/test_future_platform_contract.py"),
+            "infrastructure-general",
+        ),
+    ],
+)
+def test_future_semantic_test_families_route_without_file_allowlists(
+    path: Path, expected_shard: str
+) -> None:
+    assert _infrastructure_shard(path) == expected_shard
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
@@ -102,10 +179,14 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     aggregator = jobs["app"]
 
     assert quality["name"] in {"Backend quality", "Candidate backend quality"}
+    assert quality["timeout-minutes"] == 20
+    assert tests["timeout-minutes"] == 20
     assert tests["strategy"]["fail-fast"] is False
     matrix = tests["strategy"]["matrix"]["include"]
     assert [entry["shard"] for entry in matrix] == list(SHARDS)
     assert [entry["apt-packages"] for entry in matrix] == [
+        "zsh",
+        "zsh",
         "zsh",
         "zsh",
         "zsh libnss3-tools",
@@ -170,6 +251,7 @@ def test_backend_workers_are_parallel_isolated_and_fail_closed(path: Path) -> No
     )
     assert aggregator["needs"] == ["backend-quality", "backend-tests"]
     assert aggregator["if"] == "${{ always() }}"
+    assert aggregator["timeout-minutes"] == 5
     assert "continue-on-error" not in quality
     assert "continue-on-error" not in tests
     assert "continue-on-error" not in aggregator
@@ -238,6 +320,8 @@ def test_shards_do_not_weaken_or_recombine_coverage() -> None:
     ]
     assert "--cov-append" not in shard_source
     assert "xdist" not in shard_source
+    assert "--deselect" not in shard_source
+    assert " -k " not in shard_source
 
     for path in WORKFLOWS:
         tests = _workflow(path)["jobs"]["backend-tests"]
