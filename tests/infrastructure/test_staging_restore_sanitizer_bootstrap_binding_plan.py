@@ -63,8 +63,17 @@ def _planner(*times: datetime) -> bootstrap.SanitizerBootstrapBindingPlanner:
     )
 
 
-def _make(real_chain: RealChain) -> bootstrap.SanitizerBootstrapBindingPlan:
-    return _planner().plan(connection_plan=_connection_plan(real_chain))
+@pytest.fixture(scope="module")
+def retained_connection_plan(
+    real_chain: RealChain,
+) -> connection.SanitizerPrivilegedGlobalConnectionPlan:
+    return _connection_plan(real_chain)
+
+
+def _make(
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+) -> bootstrap.SanitizerBootstrapBindingPlan:
+    return _planner().plan(connection_plan=retained_connection_plan)
 
 
 def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
@@ -124,8 +133,10 @@ def test_bootstrap_design_is_separate_ephemeral_and_teardown_bound() -> None:
     assert lifecycle["retry_pooling_or_ambiguous_outcome_permitted"] is False
 
 
-def test_real_chain_mints_only_redacted_binding_metadata(real_chain: RealChain) -> None:
-    retained = _connection_plan(real_chain)
+def test_real_chain_mints_only_redacted_binding_metadata(
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+) -> None:
+    retained = retained_connection_plan
     reads: list[datetime] = []
 
     def clock() -> datetime:
@@ -183,8 +194,10 @@ def test_real_chain_mints_only_redacted_binding_metadata(real_chain: RealChain) 
         assert not hasattr(result, forbidden)
 
 
-def test_binding_digest_is_domain_separated_and_exact(real_chain: RealChain) -> None:
-    retained = _connection_plan(real_chain)
+def test_binding_digest_is_domain_separated_and_exact(
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+) -> None:
+    retained = retained_connection_plan
     material, target = bootstrap._binding_material(retained, now=NOW)
     result = _planner().plan(connection_plan=retained)
     assert target is retained._target_role_plan
@@ -200,9 +213,9 @@ def test_binding_digest_is_domain_separated_and_exact(real_chain: RealChain) -> 
 
 
 def test_api_accepts_only_one_keyword_only_exact_connection_plan(
-    real_chain: RealChain,
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
 ) -> None:
-    retained = _connection_plan(real_chain)
+    retained = retained_connection_plan
     parameters = inspect.signature(
         bootstrap.SanitizerBootstrapBindingPlanner.plan
     ).parameters
@@ -231,9 +244,9 @@ def test_api_accepts_only_one_keyword_only_exact_connection_plan(
 
 
 def test_connection_plan_identity_and_nested_ancestry_are_retained(
-    real_chain: RealChain,
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
 ) -> None:
-    retained = _connection_plan(real_chain)
+    retained = retained_connection_plan
     result = _planner().plan(connection_plan=retained)
     duplicate = object.__new__(connection.SanitizerPrivilegedGlobalConnectionPlan)
     for name in retained.__slots__:
@@ -253,9 +266,10 @@ def test_connection_plan_identity_and_nested_ancestry_are_retained(
     ),
 )
 def test_clock_requires_exact_whole_second_utc(
-    real_chain: RealChain, invalid: datetime
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    invalid: datetime,
 ) -> None:
-    retained = _connection_plan(real_chain)
+    retained = retained_connection_plan
     with pytest.raises(
         bootstrap.SanitizerBootstrapBindingPlanFailure,
         match="bootstrap_binding_plan.clock_invalid",
@@ -264,9 +278,9 @@ def test_clock_requires_exact_whole_second_utc(
 
 
 def test_clock_regression_expiry_and_between_read_mutation_refuse(
-    real_chain: RealChain,
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
 ) -> None:
-    retained = _connection_plan(real_chain)
+    retained = retained_connection_plan
     with pytest.raises(
         bootstrap.SanitizerBootstrapBindingPlanFailure,
         match="bootstrap_binding_plan.clock_regressed",
@@ -304,9 +318,9 @@ def test_clock_regression_expiry_and_between_read_mutation_refuse(
 
 
 def test_output_is_immutable_nonserializable_and_tamper_evident(
-    real_chain: RealChain,
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
 ) -> None:
-    result = _make(real_chain)
+    result = _make(retained_connection_plan)
     assert repr(result) == "<SanitizerBootstrapBindingPlan sealed metadata-only>"
     for operation in (
         lambda: copy.copy(result),
@@ -443,9 +457,10 @@ def test_public_factory_remains_terminal() -> None:
 
 
 def test_unexpected_failures_are_content_free_and_return_no_partial_plan(
-    real_chain: RealChain, monkeypatch: pytest.MonkeyPatch
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    retained = _connection_plan(real_chain)
+    retained = retained_connection_plan
 
     def fail(*_args: Any, **_kwargs: Any) -> tuple[dict[str, Any], Any]:
         raise RuntimeError("postgresql://role:secret@private/database")
