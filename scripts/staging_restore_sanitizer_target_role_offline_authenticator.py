@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 # pyright: reportAttributeAccessIssue=false
-"""Authenticate the target-role catalog partition without external effects.
-
-The public factory remains terminal.  A later reviewed adapter may construct the
-offline authenticator and pass it the identical in-process observation emitted
-by the dormant target-role database observer.
-"""
+"""Authenticate the target-role catalog partition without external effects."""
 
 from __future__ import annotations
 
@@ -19,18 +14,10 @@ from pathlib import Path
 from typing import Any, NoReturn, TypeAlias
 
 try:
-    from scripts import (
-        staging_restore_sanitizer_database_capability as capability,
-    )
-    from scripts import (
-        staging_restore_sanitizer_target_role_database_observer as observer,
-    )
-    from scripts import (
-        staging_restore_sanitizer_target_role_observation_frames as frames,
-    )
-    from scripts import (
-        staging_restore_sanitizer_target_role_observation_plan as plan,
-    )
+    import scripts.staging_restore_sanitizer_database_capability as capability
+    import scripts.staging_restore_sanitizer_target_role_database_observer as observer
+    import scripts.staging_restore_sanitizer_target_role_observation_frames as frames
+    import scripts.staging_restore_sanitizer_target_role_observation_plan as plan
 except ModuleNotFoundError:  # Direct `python scripts/...` compatibility.
     import staging_restore_sanitizer_database_capability as capability
     import staging_restore_sanitizer_target_role_database_observer as observer

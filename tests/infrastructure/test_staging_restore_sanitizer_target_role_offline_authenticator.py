@@ -15,16 +15,10 @@ from typing import Any, Callable, cast
 
 import pytest
 
+import scripts.staging_restore_sanitizer_target_role_database_observer as observer
+import scripts.staging_restore_sanitizer_target_role_observation_frames as observation_frames
+import scripts.staging_restore_sanitizer_target_role_offline_authenticator as authenticator
 from scripts import staging_restore_sanitizer_database_capability as capability
-from scripts import (
-    staging_restore_sanitizer_target_role_database_observer as observer,
-)
-from scripts import (
-    staging_restore_sanitizer_target_role_observation_frames as observation_frames,
-)
-from scripts import (
-    staging_restore_sanitizer_target_role_offline_authenticator as authenticator,
-)
 
 from tests.infrastructure import (
     test_staging_restore_sanitizer_target_role_observation_plan as plan_helpers,

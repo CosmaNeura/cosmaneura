@@ -225,6 +225,8 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-observer
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-runtime
+            apt-packages: zsh
           - shard: infrastructure-sanitizer-observer-integrity
             apt-packages: zsh
           - shard: infrastructure-sanitizer-data-contract-executor
