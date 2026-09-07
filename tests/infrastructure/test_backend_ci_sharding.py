@@ -624,11 +624,11 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert data_contract_executor
     assert len(evidence) == 29
     assert len(executor) == 21
-    assert len(transaction_plan) == 21
+    assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 181
+    assert len(family) == 189
     assert len(evidence) == len(set(evidence))
     assert len(executor) == len(set(executor))
     assert len(transaction_plan) == len(set(transaction_plan))
