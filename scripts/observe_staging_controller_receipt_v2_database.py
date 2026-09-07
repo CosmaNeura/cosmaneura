@@ -47,6 +47,7 @@ POLICY_PATH = (
 POLICY_SHA256 = "66dd80c22dd9f21021ec0c4cf604af5ec6afc5fb5d53bd8e946b72abcf8f43bb"
 MAXIMUM_POLICY_BYTES = 64 * 1024
 POSTGRES_OAUTH_RESOURCE = "https://ossrdbms-aad.database.windows.net"
+DEFAULT_WALL_CLOCK_DEADLINE = adapters._wall_clock_deadline
 AZURE_POSTGRES_HOST_RE = re.compile(
     r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.postgres\.database\.azure\.com$"
 )
