@@ -115,6 +115,10 @@ SANITIZER_TRANSACTION_PLAN_SELECTOR = (
 SANITIZER_DATABASE_CAPABILITY_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_database_capability.py"
 )
+SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR = (
+    "tests/infrastructure/"
+    "test_staging_restore_sanitizer_target_role_observation_plan.py"
+)
 SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_data_contract_executor.py"
 )
@@ -126,6 +130,7 @@ SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_EVIDENCE_SELECTOR,
     SANITIZER_DATABASE_CAPABILITY_SELECTOR,
     SANITIZER_EXECUTOR_SELECTOR,
+    SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR,
     SANITIZER_TRANSACTION_PLAN_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
     SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
@@ -152,6 +157,7 @@ def _infrastructure_shard(path: Path) -> str:
             (
                 SANITIZER_DATABASE_CAPABILITY_SELECTOR,
                 SANITIZER_EXECUTOR_SELECTOR,
+                SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR,
                 SANITIZER_TRANSACTION_PLAN_SELECTOR,
             ),
         ):
@@ -284,7 +290,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         "infrastructure-sanitizer-executor": (
             "uv run pytest tests/infrastructure/"
-            "test_staging_restore_sanitizer_{database_capability,executor,transaction_plan}.py --verbosity=2"
+            "test_staging_restore_sanitizer_{database_capability,executor,target_role_observation_plan,transaction_plan}.py --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
@@ -518,6 +524,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-executor",
         ),
         (
+            Path(SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR),
+            "infrastructure-sanitizer-executor",
+        ),
+        (
             Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
             "infrastructure-sanitizer-data-contract-executor",
         ),
@@ -626,6 +636,9 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     evidence = _collect_nodeids(SANITIZER_EVIDENCE_SELECTOR)
     database_capability = _collect_nodeids(SANITIZER_DATABASE_CAPABILITY_SELECTOR)
+    target_role_observation_plan = _collect_nodeids(
+        SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR
+    )
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     transaction_plan = _collect_nodeids(SANITIZER_TRANSACTION_PLAN_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
@@ -639,14 +652,16 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert data_contract_executor
     assert len(evidence) == 29
     assert len(database_capability) == 97
+    assert len(target_role_observation_plan) == 27
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 286
+    assert len(family) == 313
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
+    assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
     assert len(executor) == len(set(executor))
     assert len(transaction_plan) == len(set(transaction_plan))
     assert len(data_contract_executor) == len(set(data_contract_executor))
@@ -659,6 +674,15 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert set(database_capability).isdisjoint(data_contract_executor)
     assert set(database_capability).isdisjoint(source_snapshot)
     assert set(database_capability).isdisjoint(post_projection)
+    assert set(target_role_observation_plan).isdisjoint(
+        set(evidence)
+        | set(database_capability)
+        | set(executor)
+        | set(transaction_plan)
+        | set(data_contract_executor)
+        | set(source_snapshot)
+        | set(post_projection)
+    )
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
     assert set(executor).isdisjoint(data_contract_executor)
@@ -684,9 +708,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     )
     assert set(evidence) | set(database_capability) | set(executor) | set(
         transaction_plan
-    ) | set(data_contract_executor) | set(source_snapshot) | set(
-        post_projection
-    ) == set(family)
+    ) | set(target_role_observation_plan) | set(data_contract_executor) | set(
+        source_snapshot
+    ) | set(post_projection) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
