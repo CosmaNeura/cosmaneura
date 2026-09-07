@@ -35,8 +35,7 @@ __all__ = ("real_chain",)
 
 ROOT = observer.ROOT
 CONTRACT = (
-    ROOT
-    / "contracts/staging-rehearsal/v1/"
+    ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-target-role-database-observer-contract.json"
 )
 SCRIPT = ROOT / "scripts/staging_restore_sanitizer_target_role_database_observer.py"
@@ -66,7 +65,9 @@ class Column:
 class PgConn:
     ssl_in_use = True
 
-    def __init__(self, *, protocol: bytes = b"TLSv1.3", cipher: bytes = b"TLS_AES_256_GCM_SHA384") -> None:
+    def __init__(
+        self, *, protocol: bytes = b"TLSv1.3", cipher: bytes = b"TLS_AES_256_GCM_SHA384"
+    ) -> None:
         self.protocol = protocol
         self.cipher = cipher
 
@@ -225,9 +226,7 @@ def _case(
         )
     plan_value, connection_plan = _PLAN_CACHE[cache_key]
     query_contract = grammar.load_target_role_query_grammar_contract()
-    templates = {
-        item["frame"]: item for item in query_contract["grammar"]["templates"]
-    }
+    templates = {item["frame"]: item for item in query_contract["grammar"]["templates"]}
     statements, _raw = grammar._read_templates()
     raw_frames = _replace_session(frame_helpers._raw_frames(), connection_plan)
     rows = {name: list(values) for name, values in raw_frames}
@@ -291,9 +290,10 @@ def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
     assert contract["status"]["observation_authority_implemented"] is True
     assert contract["status"]["live_database_calls_enabled"] is False
     assert contract["status"]["activation_ready"] is False
-    assert "target_entra_authentication_and_role_provisioning_unimplemented" in contract[
-        "status"
-    ]["activation_blockers"]
+    assert (
+        "target_entra_authentication_and_role_provisioning_unimplemented"
+        in contract["status"]["activation_blockers"]
+    )
     with pytest.raises(Failure, match=observer.ACTIVATION_FAILURE):
         observer.load_target_role_database_observer_contract(executable=True)
 
@@ -315,7 +315,9 @@ def test_exact_one_shot_managed_identity_connection_executes_and_seals(
     assert result.query_count == 13
     assert result.observed_at > result._plan.planned_at
     assert result.row_count == sum(len(value) for value in case["rows"].values())
-    assert all(getattr(result, name) is value for name, value in observer.CLAIMS.items())
+    assert all(
+        getattr(result, name) is value for name, value in observer.CLAIMS.items()
+    )
 
     assert len(case["identity"].calls) == 1
     request, timeout = case["identity"].calls[0]
@@ -522,7 +524,9 @@ def test_transport_and_cleanup_failures_are_bounded(
         "close_failure": failure == "close",
     }
     case = _case(monkeypatch, real_chain, connection_changes=changes)
-    expected = "query_failed" if failure in {"execute", "cursor_close"} else "cleanup_failed"
+    expected = (
+        "query_failed" if failure in {"execute", "cursor_close"} else "cleanup_failed"
+    )
     with pytest.raises(Failure, match=expected) as caught:
         _observe(case)
     _assert_sanitized(caught.value)
@@ -571,4 +575,4 @@ def test_contract_mutation_and_source_regressions_refuse() -> None:
     assert source.count("connection_string") == 1
     assert "cursor.execute(statement, prepare=False)" in source
     assert 'parameters["password"] = ""' in source
-    assert "token = \"\"" in source
+    assert 'token = ""' in source

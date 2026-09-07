@@ -27,7 +27,6 @@ from typing import Any, NoReturn, cast
 try:
     from scripts import observe_staging_controller_receipt_v2_database as database
     from scripts import read_staging_runtime_record_material as runtime_ingress
-    from scripts import staging_restore_runtime_adapters as runtime_adapters
     from scripts import (
         staging_restore_sanitizer_target_role_observation_frames as frames,
     )
@@ -41,7 +40,6 @@ try:
 except ModuleNotFoundError:  # Direct `python scripts/...` compatibility.
     import observe_staging_controller_receipt_v2_database as database
     import read_staging_runtime_record_material as runtime_ingress
-    import staging_restore_runtime_adapters as runtime_adapters
     import staging_restore_sanitizer_target_role_observation_frames as frames
     import staging_restore_sanitizer_target_role_observation_plan as observation_plan
     import staging_restore_sanitizer_target_role_observer_contract as observer_envelope
@@ -50,17 +48,28 @@ except ModuleNotFoundError:  # Direct `python scripts/...` compatibility.
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = (
-    ROOT
-    / "contracts/staging-rehearsal/v1/"
+    ROOT / "contracts/staging-rehearsal/v1/"
     "restore-sanitizer-target-role-database-observer-contract.json"
 )
 CONTRACT_SHA256 = "b361317a20d450372eadacd7bee18eec7d1a58686df3ac212283836d347ebe67"
-OBSERVER_ENVELOPE_SHA256 = "acf34a80c63b0b103147ccd574195c11ebde16357a24bccf935030bca0f80fad"
-OBSERVATION_PLAN_SHA256 = "d341d653195b9b3d3d941304205f801d952e3195cd0eefafd0e9d6a9131a0dbb"
-QUERY_GRAMMAR_SHA256 = "8f1c4831c4766942778e5be24149a779ba0cd84081d03c11ed21463aabc3d1fe"
-OBSERVATION_FRAMES_SHA256 = "7326d189125f1b01646a0de221eee59ddace31ff353573e8f7186bf77009162b"
-DATABASE_OBSERVATION_SHA256 = "66dd80c22dd9f21021ec0c4cf604af5ec6afc5fb5d53bd8e946b72abcf8f43bb"
-ACTIVATION_FAILURE = "activation.sanitizer_target_role_offline_authenticator_unimplemented"
+OBSERVER_ENVELOPE_SHA256 = (
+    "acf34a80c63b0b103147ccd574195c11ebde16357a24bccf935030bca0f80fad"
+)
+OBSERVATION_PLAN_SHA256 = (
+    "d341d653195b9b3d3d941304205f801d952e3195cd0eefafd0e9d6a9131a0dbb"
+)
+QUERY_GRAMMAR_SHA256 = (
+    "8f1c4831c4766942778e5be24149a779ba0cd84081d03c11ed21463aabc3d1fe"
+)
+OBSERVATION_FRAMES_SHA256 = (
+    "7326d189125f1b01646a0de221eee59ddace31ff353573e8f7186bf77009162b"
+)
+DATABASE_OBSERVATION_SHA256 = (
+    "66dd80c22dd9f21021ec0c4cf604af5ec6afc5fb5d53bd8e946b72abcf8f43bb"
+)
+ACTIVATION_FAILURE = (
+    "activation.sanitizer_target_role_offline_authenticator_unimplemented"
+)
 OBSERVATION_KIND = "sealed-sanitizer-target-role-database-observation-v1"
 MAXIMUM_CONTRACT_BYTES = 64 * 1024
 POSTGRES_OAUTH_RESOURCE = "https://ossrdbms-aad.database.windows.net"
@@ -190,7 +199,9 @@ def _validate_contract(document: Mapping[str, Any]) -> None:
         plan_contract = observation_plan.load_target_role_observation_plan_contract()
         grammar_contract = grammar.load_target_role_query_grammar_contract()
         frames_contract = frames.load_target_role_observation_frames_contract()
-        database_policy = database.load_controller_receipt_v2_database_observation_policy()
+        database_policy = (
+            database.load_controller_receipt_v2_database_observation_policy()
+        )
         connection = document["connection"]
         transaction = document["transaction"]
         execution = document["query_execution"]
@@ -386,7 +397,9 @@ def validate_target_role_database_observer_contract(
     template, _raw = _read_contract()
     try:
         canonical = _canonical(contract)
-        document = _parse(canonical, expected_sha256=hashlib.sha256(canonical).hexdigest())
+        document = _parse(
+            canonical, expected_sha256=hashlib.sha256(canonical).hexdigest()
+        )
         if not hmac.compare_digest(_canonical(document), _canonical(template)):
             _fail("target_role_database_observer.contract_invalid")
         _validate_contract(document)
@@ -517,10 +530,7 @@ def _guard_projection(value: object, seen: set[int]) -> object:
     return [
         type_name,
         identity,
-        *(
-            [name, _guard_projection(getattr(value, name), seen)]
-            for name in names
-        ),
+        *([name, _guard_projection(getattr(value, name), seen)] for name in names),
     ]
 
 
@@ -580,15 +590,14 @@ def _derive_connection_plan(
             or network["peer_address"] != hostaddr
             or target["target_fqdn"] != target_binding.target_fqdn
             or target["database_name"] != target_binding.database_name
-            or target["approved_database_role"]
-            != target_binding.approved_database_role
+            or target["approved_database_role"] != target_binding.approved_database_role
             or target["port"] != 5432
             or not database.AZURE_POSTGRES_HOST_RE.fullmatch(target["target_fqdn"])
             or not database.POSTGRES_IDENTIFIER_RE.fullmatch(target["database_name"])
             or not database.POSTGRES_IDENTIFIER_RE.fullmatch(
                 target["approved_database_role"]
             )
-            or runtime_adapters.UUID_RE.fullmatch(
+            or database.content.UUID_RE.fullmatch(
                 identity["provision_job_uami_client_id"]
             )
             is None
@@ -1057,10 +1066,12 @@ class ManagedIdentitySanitizerTargetRoleDatabaseObserver:
         clock: Callable[[], datetime],
         identity_opener: Any | None = None,
         connect: Callable[..., Any] = _default_connect,
-        socket_inspector: Callable[[Any], tuple[str, int, str]] = database._socket_addresses,  # noqa: SLF001
+        socket_inspector: Callable[
+            [Any], tuple[str, int, str]
+        ] = database._socket_addresses,  # noqa: SLF001
         epoch_clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
-        deadline_factory: Callable[[int], Any] = runtime_adapters._wall_clock_deadline,  # noqa: SLF001
+        deadline_factory: Callable[[int], Any] = database.DEFAULT_WALL_CLOCK_DEADLINE,
     ) -> ManagedIdentitySanitizerTargetRoleDatabaseObserver:
         if (
             cls is not ManagedIdentitySanitizerTargetRoleDatabaseObserver
@@ -1143,7 +1154,9 @@ class ManagedIdentitySanitizerTargetRoleDatabaseObserver:
             database._reject_libpq_environment()  # noqa: SLF001
         except Exception:
             _fail("target_role_database_observer.environment_override")
-        identity_opener = self._identity_opener or runtime_ingress._default_identity_opener()  # noqa: SLF001
+        identity_opener = (
+            self._identity_opener or runtime_ingress._default_identity_opener()
+        )  # noqa: SLF001
         token = ""
         connection: Any = None
         cleanup_failed = False
