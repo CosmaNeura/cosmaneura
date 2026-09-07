@@ -295,7 +295,40 @@ py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract:
 [script]
 py_test-ci-infrastructure-sanitizer-bootstrap-binding:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_contract_is_hash_pinned_closed_world_and_dormant \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_bootstrap_design_is_separate_ephemeral_and_teardown_bound \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_real_chain_mints_only_redacted_binding_metadata \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_api_accepts_only_one_keyword_only_exact_connection_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_clock_requires_exact_whole_second_utc \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_security_relevant_contract_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_module_has_no_database_network_provider_or_process_surface \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_public_factory_remains_terminal \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-digest:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-digest is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_binding_digest_is_domain_separated_and_exact --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-ancestry is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_connection_plan_identity_and_nested_ancestry_are_retained --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-state:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-state is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_clock_regression_expiry_and_between_read_mutation_refuse --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-output:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-output is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_output_is_immutable_nonserializable_and_tamper_evident \
+		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-observer-integrity:

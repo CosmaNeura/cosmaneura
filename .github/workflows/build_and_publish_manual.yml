@@ -252,6 +252,14 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-bootstrap-binding
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-digest
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-ancestry
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-output
+            apt-packages: zsh
           - shard: infrastructure-sanitizer-observer-integrity
             apt-packages: zsh
           - shard: infrastructure-sanitizer-data-contract-executor
