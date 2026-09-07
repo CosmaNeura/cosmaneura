@@ -325,7 +325,17 @@ py_test-ci-infrastructure-sanitizer-bootstrap-binding-state:
 [script]
 py_test-ci-infrastructure-sanitizer-bootstrap-binding-output:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-output is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_output_is_immutable_nonserializable_and_tamper_evident --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_output_refuses_serialization_and_direct_construction --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-duplicate:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-duplicate is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_duplicated_output_cannot_authenticate --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-tamper:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-tamper is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_mutated_output_cannot_authenticate --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure:

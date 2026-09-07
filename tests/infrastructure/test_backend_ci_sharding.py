@@ -40,6 +40,8 @@ SHARDS = (
     "infrastructure-sanitizer-bootstrap-binding-ancestry",
     "infrastructure-sanitizer-bootstrap-binding-state",
     "infrastructure-sanitizer-bootstrap-binding-output",
+    "infrastructure-sanitizer-bootstrap-binding-duplicate",
+    "infrastructure-sanitizer-bootstrap-binding-tamper",
     "infrastructure-sanitizer-bootstrap-binding-failure",
     "infrastructure-sanitizer-observer-integrity",
     "infrastructure-sanitizer-data-contract-executor",
@@ -61,6 +63,8 @@ FILE_SHARDS = tuple(
         "infrastructure-sanitizer-bootstrap-binding-ancestry",
         "infrastructure-sanitizer-bootstrap-binding-state",
         "infrastructure-sanitizer-bootstrap-binding-output",
+        "infrastructure-sanitizer-bootstrap-binding-duplicate",
+        "infrastructure-sanitizer-bootstrap-binding-tamper",
         "infrastructure-sanitizer-bootstrap-binding-failure",
     }
 )
@@ -254,7 +258,13 @@ SANITIZER_BOOTSTRAP_BINDING_STATE_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_clock_regression_expiry_and_between_read_mutation_refuse",
 )
 SANITIZER_BOOTSTRAP_BINDING_OUTPUT_SELECTORS = (
-    f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_output_is_immutable_nonserializable_and_tamper_evident",
+    f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_output_refuses_serialization_and_direct_construction",
+)
+SANITIZER_BOOTSTRAP_BINDING_DUPLICATE_SELECTORS = (
+    f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_duplicated_output_cannot_authenticate",
+)
+SANITIZER_BOOTSTRAP_BINDING_TAMPER_SELECTORS = (
+    f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_mutated_output_cannot_authenticate",
 )
 SANITIZER_BOOTSTRAP_BINDING_FAILURE_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_unexpected_failures_are_content_free_and_return_no_partial_plan",
@@ -536,6 +546,12 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         "infrastructure-sanitizer-bootstrap-binding-output": (
             f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_OUTPUT_SELECTORS[0]} --verbosity=2"
         ),
+        "infrastructure-sanitizer-bootstrap-binding-duplicate": (
+            f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_DUPLICATE_SELECTORS[0]} --verbosity=2"
+        ),
+        "infrastructure-sanitizer-bootstrap-binding-tamper": (
+            f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_TAMPER_SELECTORS[0]} --verbosity=2"
+        ),
         "infrastructure-sanitizer-bootstrap-binding-failure": (
             f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_FAILURE_SELECTORS[0]} --verbosity=2"
         ),
@@ -630,6 +646,12 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_bootstrap_binding_output_start = source.index(
         "py_test-ci-infrastructure-sanitizer-bootstrap-binding-output:"
     )
+    infrastructure_sanitizer_bootstrap_binding_duplicate_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-bootstrap-binding-duplicate:"
+    )
+    infrastructure_sanitizer_bootstrap_binding_tamper_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-bootstrap-binding-tamper:"
+    )
     infrastructure_sanitizer_bootstrap_binding_failure_start = source.index(
         "py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure:"
     )
@@ -711,7 +733,13 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_bootstrap_binding_state_start:infrastructure_sanitizer_bootstrap_binding_output_start
     ]
     infrastructure_sanitizer_bootstrap_binding_output_recipe = source[
-        infrastructure_sanitizer_bootstrap_binding_output_start:infrastructure_sanitizer_bootstrap_binding_failure_start
+        infrastructure_sanitizer_bootstrap_binding_output_start:infrastructure_sanitizer_bootstrap_binding_duplicate_start
+    ]
+    infrastructure_sanitizer_bootstrap_binding_duplicate_recipe = source[
+        infrastructure_sanitizer_bootstrap_binding_duplicate_start:infrastructure_sanitizer_bootstrap_binding_tamper_start
+    ]
+    infrastructure_sanitizer_bootstrap_binding_tamper_recipe = source[
+        infrastructure_sanitizer_bootstrap_binding_tamper_start:infrastructure_sanitizer_bootstrap_binding_failure_start
     ]
     infrastructure_sanitizer_bootstrap_binding_failure_recipe = source[
         infrastructure_sanitizer_bootstrap_binding_failure_start:infrastructure_sanitizer_observer_integrity_start
@@ -778,6 +806,13 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     )
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_bootstrap_binding_output_recipe
+    )
+    assert (
+        "--ignore-glob="
+        not in infrastructure_sanitizer_bootstrap_binding_duplicate_recipe
+    )
+    assert (
+        "--ignore-glob=" not in infrastructure_sanitizer_bootstrap_binding_tamper_recipe
     )
     assert (
         "--ignore-glob="
@@ -1032,7 +1067,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_233_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -1058,6 +1093,12 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     )
     bootstrap_binding_output = _collect_nodeids(
         *SANITIZER_BOOTSTRAP_BINDING_OUTPUT_SELECTORS
+    )
+    bootstrap_binding_duplicate = _collect_nodeids(
+        *SANITIZER_BOOTSTRAP_BINDING_DUPLICATE_SELECTORS
+    )
+    bootstrap_binding_tamper = _collect_nodeids(
+        *SANITIZER_BOOTSTRAP_BINDING_TAMPER_SELECTORS
     )
     bootstrap_binding_failure = _collect_nodeids(
         *SANITIZER_BOOTSTRAP_BINDING_FAILURE_SELECTORS
@@ -1093,6 +1134,8 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
         bootstrap_binding_ancestry,
         bootstrap_binding_state,
         bootstrap_binding_output,
+        bootstrap_binding_duplicate,
+        bootstrap_binding_tamper,
         bootstrap_binding_failure,
         integrity,
     )
@@ -1102,6 +1145,8 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
         bootstrap_binding_ancestry,
         bootstrap_binding_state,
         bootstrap_binding_output,
+        bootstrap_binding_duplicate,
+        bootstrap_binding_tamper,
         bootstrap_binding_failure,
     )
 
@@ -1118,10 +1163,12 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     assert len(bootstrap_binding_ancestry) == 1
     assert len(bootstrap_binding_state) == 1
     assert len(bootstrap_binding_output) == 1
+    assert len(bootstrap_binding_duplicate) == 1
+    assert len(bootstrap_binding_tamper) == 1
     assert len(bootstrap_binding_failure) == 1
-    assert len(bootstrap_binding_family) == 25
+    assert len(bootstrap_binding_family) == 27
     assert len(integrity) == 39
-    assert len(family) == 231
+    assert len(family) == 233
     assert all(len(group) == len(set(group)) for group in groups)
     assert len(bootstrap_binding_family) == len(set(bootstrap_binding_family))
     assert len(family) == len(set(family))
@@ -1191,13 +1238,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(privileged_global_query_grammar) == 25
     assert len(privileged_global_observation_frames) == 11
     assert len(privileged_global_connection_plan) == 24
-    assert len(bootstrap_binding_plan) == 25
+    assert len(bootstrap_binding_plan) == 27
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 517
+    assert len(family) == 519
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
