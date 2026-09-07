@@ -73,6 +73,10 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-executor
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-integrity
+            apt-packages: zsh
           - shard: infrastructure-sanitizer-data-contract-executor
             apt-packages: zsh
           - shard: infrastructure-sanitizer-source-snapshot
