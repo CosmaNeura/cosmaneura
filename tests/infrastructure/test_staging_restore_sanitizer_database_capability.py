@@ -104,6 +104,9 @@ def test_closed_world_pre_schema_catalog_and_partition_are_exact() -> None:
     required_empty = sorted(
         name for name in application if tables[name]["disposition"] == "required_empty"
     )
+    rewrite_value_types = {
+        column[1] for table in rewrite for column in tables[table]["columns"]
+    }
     pinned = document["schema"]["table_sets"]
 
     assert excluded == ["practice_invitation", "public_legal_acceptance"]
@@ -130,6 +133,12 @@ def test_closed_world_pre_schema_catalog_and_partition_are_exact() -> None:
     assert set(transaction_plan["transaction"]["inserts"]["table_order"]) == set(
         rewrite
     )
+    assert rewrite_value_types == capability._REWRITE_VALUE_TYPES  # noqa: SLF001
+    assert inventory["database"]["reject_large_objects"] is True
+    assert {
+        name: profile["schema_descriptor"]["counts"][name]
+        for name in ("routines", "types", "default_privileges")
+    } == {"routines": 11, "types": 154, "default_privileges": 0}
     assert document["schema"]["descriptor"] == {
         "format": profile["schema_descriptor"]["format"],
         "sha256": profile["schema_descriptor"]["sha256"],
@@ -158,7 +167,28 @@ def test_exact_least_privilege_role_and_transaction_posture() -> None:
         "allowed_targets": [],
         "escalation_permitted": False,
     }
-    assert not any(role["ownership"].values())
+    ownership = role["ownership"]
+    assert ownership["any_database_or_shared_object_ownership_permitted"] is False
+    assert ownership["named_lists_are_diagnostics_not_exhaustive_boundary"] is True
+    assert all(
+        value == []
+        for name, value in ownership.items()
+        if name
+        not in {
+            "any_database_or_shared_object_ownership_permitted",
+            "named_lists_are_diagnostics_not_exhaustive_boundary",
+        }
+    )
+    assert role["role_settings"] == {
+        "global": [],
+        "database_specific": [],
+        "permitted": False,
+    }
+
+    assert privileges["database"]["direct_connect_grant_required"] is True
+    assert privileges["database"]["public_role_privileges_permitted"] is False
+    assert privileges["schemas"]["public"]["direct_usage_grant_required"] is True
+    assert privileges["schemas"]["public"]["public_role_privileges_permitted"] is False
 
     table_privileges = privileges["tables"]
     assert _resolve_table_sources(
@@ -176,12 +206,26 @@ def test_exact_least_privilege_role_and_transaction_posture() -> None:
         table_privileges["public_role_effective_privileges_included_in_verification"]
         is True
     )
+    assert table_privileges["public_role_table_privileges_permitted"] is False
     assert table_privileges["unlisted_table_privileges_permitted"] is False
     assert table_privileges["grant_options_permitted"] is False
+    assert table_privileges["column_grants"] == {
+        "any_column_acl_entry_permitted": False,
+        "effective_privileges_must_derive_only_from_exact_table_privileges": True,
+        "grant_options_permitted": False,
+        "insert": [],
+        "references": [],
+        "select": [],
+        "update": [],
+    }
     for name in ("update", "delete", "references", "trigger"):
         assert table_privileges[name] == {"expected_table_count": 0, "tables": []}
     assert privileges["sequences"] == {
+        "direct_grants_permitted": False,
+        "effective_privileges_must_match_exactly": True,
         "grant_options_permitted": False,
+        "public_role_effective_privileges_included_in_verification": True,
+        "public_role_privileges_permitted": False,
         "select": [],
         "update": [],
         "usage": [],
@@ -197,6 +241,110 @@ def test_exact_least_privilege_role_and_transaction_posture() -> None:
         "set_role_permitted": False,
         "synchronous_commit": transaction["synchronous_commit"],
     }
+
+
+def test_every_postgresql_privilege_class_is_closed_and_public_aware() -> None:
+    document = _document()
+    privileges = document["privileges"]
+    scope = privileges["scope"]
+
+    assert scope == {
+        "all_grant_options_permitted": False,
+        "non_system_schemas_must_match_exactly": True,
+        "postgresql_major_version": 16,
+        "public_role_acl_sources_included_for_every_object_class": True,
+        "system_objects": {
+            "builtin_default_acl_baseline_out_of_scope": True,
+            "explicit_grants_to_runtime_role_permitted": False,
+            "nondefault_public_acl_deltas_permitted": False,
+            "privilege_escalation_paths_permitted": False,
+            "system_object_ownership_permitted": False,
+        },
+        "user_object_schemas": ["public"],
+    }
+    routines = privileges["routines"]["public_schema"]
+    assert routines["observed_schema_routine_count"] == 11
+    assert routines["execute"] == {"expected_routine_count": 0, "routines": []}
+    types = privileges["types"]["public_schema"]
+    assert types["observed_schema_type_count"] == 154
+    assert types["rewrite_value_custom_types"] == list(
+        capability._REWRITE_CUSTOM_TYPES  # noqa: SLF001
+    )
+    assert types["usage"] == {"expected_type_count": 0, "types": []}
+    assert types["future_adapter_must_prove_rewrite_without_type_usage_grants"] is True
+
+    for policy in (routines, types):
+        assert policy["direct_grants_permitted"] is False
+        assert policy["effective_privileges_must_match_exactly"] is True
+        assert policy["public_role_privileges_permitted"] is False
+        assert (
+            policy["public_role_effective_privileges_included_in_verification"] is True
+        )
+        assert policy["grant_options_permitted"] is False
+    usage_scopes = {
+        "languages": "user-defined-non-system-languages",
+        "foreign_data_wrappers": "user-defined-non-system-foreign-data-wrappers",
+        "foreign_servers": "user-defined-non-system-foreign-servers",
+    }
+    for name, object_scope in usage_scopes.items():
+        assert privileges[name] == {
+            "direct_grants_permitted": False,
+            "effective_privileges_must_match_exactly": True,
+            "expected_usage_count": 0,
+            "grant_options_permitted": False,
+            "object_scope": object_scope,
+            "public_role_effective_privileges_included_in_verification": True,
+            "public_role_privileges_permitted": False,
+            "usage": [],
+        }
+    assert privileges["tablespaces"]["object_scope"] == (
+        "user-defined-non-system-tablespaces"
+    )
+    assert privileges["tablespaces"]["create"] == []
+    assert privileges["parameters"]["set"] == []
+    assert privileges["parameters"]["alter_system"] == []
+    assert (
+        privileges["parameters"][
+            "ordinary_user_settable_session_parameters_remain_postgresql_baseline"
+        ]
+        is True
+    )
+    assert privileges["parameters"]["effective_alter_system_permitted"] is False
+    assert privileges["user_mappings"] == {
+        "entries": [],
+        "runtime_role_mapping_permitted": False,
+    }
+    assert privileges["large_objects"]["required_source_and_target_count"] == 0
+    assert privileges["large_objects"]["select"] == []
+    assert privileges["large_objects"]["update"] == []
+    assert privileges["default_privileges"]["entries"] == []
+    assert (
+        privileges["default_privileges"][
+            "existing_object_public_routine_execute_and_type_usage_must_be_reconciled"
+        ]
+        is True
+    )
+    assert (
+        privileges["default_privileges"][
+            "future_user_object_creation_during_capability_window_permitted"
+        ]
+        is False
+    )
+    assert (
+        privileges["default_privileges"][
+            "implicit_public_defaults_cannot_materialize_during_capability_window"
+        ]
+        is True
+    )
+    assert (
+        privileges["other_authority"][
+            "any_database_or_shared_object_ownership_permitted"
+        ]
+        is False
+    )
+    assert document["verification"]["must_authenticate"] == list(
+        capability._VERIFICATION_REQUIREMENTS  # noqa: SLF001
+    )
 
 
 def test_only_provision_job_identity_is_the_future_database_principal() -> None:
@@ -279,9 +427,33 @@ def test_forbidden_identity_substitutions_are_rejected(replacement: str) -> None
         ("role_posture.allowed_outbound_memberships", ["azure_pg_admin"]),
         ("role_posture.allowed_inbound_members", ["another_role"]),
         ("role_posture.set_role.allowed_targets", ["azure_pg_admin"]),
+        ("role_posture.role_settings.global", ["search_path=attacker"]),
+        (
+            "role_posture.ownership.any_database_or_shared_object_ownership_permitted",
+            True,
+        ),
+        ("privileges.database.public_role_privileges_permitted", True),
+        ("privileges.schemas.public.public_role_privileges_permitted", True),
         ("privileges.tables.insert.expected_table_count", 20),
         ("privileges.tables.update.tables", ["patient"]),
         ("privileges.tables.grant_options_permitted", True),
+        ("privileges.tables.column_grants.select", ["patient.email"]),
+        ("privileges.routines.public_schema.execute.routines", ["typeid_parse(text)"]),
+        ("privileges.types.public_schema.usage.types", ["doctorrole"]),
+        ("privileges.languages.usage", ["plpgsql"]),
+        ("privileges.tablespaces.create", ["pg_default"]),
+        ("privileges.parameters.set", ["session_replication_role"]),
+        ("privileges.parameters.alter_system", ["shared_preload_libraries"]),
+        ("privileges.foreign_data_wrappers.usage", ["postgres_fdw"]),
+        ("privileges.foreign_servers.usage", ["attacker_server"]),
+        ("privileges.user_mappings.entries", ["attacker_server"]),
+        ("privileges.large_objects.select", [1]),
+        ("privileges.default_privileges.entries", ["PUBLIC=EXECUTE"]),
+        ("privileges.other_authority.extension_ownership_permitted", True),
+        (
+            "privileges.scope.system_objects.nondefault_public_acl_deltas_permitted",
+            True,
+        ),
         ("privileges.transaction_compatibility.set_role_permitted", True),
         ("provisioning.runtime_identity_may_bootstrap", True),
         ("verification.live_database_calls_enabled", True),

@@ -13,9 +13,86 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-database-capability-contract.json"
 )
-CONTRACT_SHA256 = "3987523185399cb472fa30eaf4bde999bf5066c2b2e9e4b377bdec34561a6cef"
+CONTRACT_SHA256 = "d103d401c64a190c8bebede57b25a81dbff4dfd7113ad051058e93b69254f40b"
 ACTIVATION_FAILURE = "activation.database_role_state_authenticator_unimplemented"
 MAXIMUM_DOCUMENT_BYTES = 2 * 1024 * 1024
+
+_REWRITE_VALUE_TYPES = frozenset(
+    {
+        "boolean",
+        "character varying",
+        "character varying(10)",
+        "character varying(120)",
+        "character varying(16)",
+        "character varying(160)",
+        "character varying(2048)",
+        "character varying(253)",
+        "character varying(255)",
+        "character varying(32)",
+        "character varying(40)",
+        "character varying(512)",
+        "character varying(64)",
+        "character varying(80)",
+        "doctorrole",
+        "double precision",
+        "integer",
+        "json",
+        "jsonb",
+        "planordering",
+        "pronounstyle",
+        "subjectivesource",
+        "terminology",
+        "text",
+        "timestamp with time zone",
+        "timestamp without time zone",
+        "uuid",
+    }
+)
+_REWRITE_CUSTOM_TYPES = (
+    "doctorrole",
+    "planordering",
+    "pronounstyle",
+    "subjectivesource",
+    "terminology",
+)
+_BOOTSTRAP_SCOPE = (
+    "create-or-map-exact-database-role",
+    "set-exact-role-posture",
+    "install-exact-direct-database-schema-and-table-grants",
+    "revoke-disallowed-public-existing-object-privileges",
+    "remove-nondefault-system-acl-deltas-and-role-settings",
+    "verify-exact-role-and-privilege-state",
+)
+_VERIFICATION_REQUIREMENTS = (
+    "exact-database-role-name",
+    "exact-provision-job-uami-mapping",
+    "role-flags-and-connection-limit",
+    "null-password-state",
+    "empty-outbound-memberships",
+    "empty-inbound-members",
+    "set-role-escalation-unavailable",
+    "empty-ownership-sets",
+    "no-database-or-shared-object-ownership-dependencies",
+    "exact-direct-and-effective-database-and-schema-privileges",
+    "exact-direct-and-effective-table-privileges",
+    "empty-explicit-column-acls",
+    "column-effective-privileges-derived-only-from-exact-table-privileges",
+    "empty-sequence-privileges",
+    "empty-public-schema-routine-execute-privileges",
+    "empty-public-schema-type-usage-privileges",
+    "empty-language-usage-privileges",
+    "empty-tablespace-create-privileges",
+    "empty-parameter-set-and-alter-system-privileges",
+    "empty-foreign-data-wrapper-and-server-usage-privileges",
+    "empty-user-mappings",
+    "no-large-objects-or-large-object-privileges",
+    "empty-default-privilege-entries-and-no-future-user-object-creation",
+    "empty-role-settings",
+    "empty-publication-subscription-extension-and-event-trigger-authority",
+    "all-grant-options-absent",
+    "system-object-explicit-and-public-acl-deltas-absent",
+    "public-role-acl-sources-included-for-every-object-class",
+)
 
 _CONTRACTS = ROOT / "contracts/staging-rehearsal/v1"
 _UPSTREAM_SPECS = {
@@ -162,6 +239,12 @@ def _validate_catalog(contract: dict[str, Any], documents: dict[str, Any]) -> No
         insert_order = transaction_plan["transaction"]["inserts"]["table_order"]
         transaction_schema = transaction_plan["schema"]
         schema = contract["schema"]
+        descriptor_counts = profile["schema_descriptor"]["counts"]
+        rewrite_value_types = {
+            column[1]
+            for table in rewrite
+            for column in inventory_tables[table]["columns"]
+        }
     except (KeyError, TypeError):
         _fail()
 
@@ -183,7 +266,14 @@ def _validate_catalog(contract: dict[str, Any], documents: dict[str, Any]) -> No
         or len(insert_order) != 19
         or set(insert_order) != partitions[0]
         or database.get("sequences") != []
+        or database.get("reject_large_objects") is not True
         or data_contract.get("source_profile") != "pre"
+        or rewrite_value_types != _REWRITE_VALUE_TYPES
+        or {
+            name: descriptor_counts.get(name)
+            for name in ("routines", "types", "default_privileges")
+        }
+        != {"routines": 11, "types": 154, "default_privileges": 0}
         or transaction_schema.get("application_table_count") != 62
         or transaction_schema.get("rewrite_table_count") != 19
         or transaction_schema.get("discard_table_count") != 10
@@ -300,7 +390,44 @@ def _validate_identity_and_role(
             "allowed_targets": [],
             "escalation_permitted": False,
         }
-        or any(role.get("ownership", {}).values())
+        or set(role.get("ownership", {}))
+        != {
+            "any_database_or_shared_object_ownership_permitted",
+            "databases",
+            "extensions",
+            "foreign_data_wrappers",
+            "foreign_servers",
+            "languages",
+            "large_objects",
+            "publications",
+            "routines",
+            "schemas",
+            "sequences",
+            "subscriptions",
+            "tables",
+            "tablespaces",
+            "types",
+            "named_lists_are_diagnostics_not_exhaustive_boundary",
+        }
+        or role.get("ownership", {}).get(
+            "any_database_or_shared_object_ownership_permitted"
+        )
+        is not False
+        or role.get("ownership", {}).get(
+            "named_lists_are_diagnostics_not_exhaustive_boundary"
+        )
+        is not True
+        or any(
+            value != []
+            for name, value in role.get("ownership", {}).items()
+            if name
+            not in {
+                "any_database_or_shared_object_ownership_permitted",
+                "named_lists_are_diagnostics_not_exhaustive_boundary",
+            }
+        )
+        or role.get("role_settings")
+        != {"global": [], "database_specific": [], "permitted": False}
     ):
         _fail()
 
@@ -308,11 +435,20 @@ def _validate_identity_and_role(
 def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) -> None:
     inventory = documents["synthetic_inventory"]
     transaction = documents["transaction_plan"]["transaction"]
-    privileges = contract.get("privileges", {})
     expected_tables = {
+        "column_grants": {
+            "select": [],
+            "insert": [],
+            "update": [],
+            "references": [],
+            "grant_options_permitted": False,
+            "any_column_acl_entry_permitted": False,
+            "effective_privileges_must_derive_only_from_exact_table_privileges": True,
+        },
         "direct_grants_required": True,
         "effective_privileges_must_match_exactly": True,
         "public_role_effective_privileges_included_in_verification": True,
+        "public_role_table_privileges_permitted": False,
         "unlisted_table_privileges_permitted": False,
         "grant_options_permitted": False,
         "select": {
@@ -335,34 +471,174 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             for name in ("update", "delete", "references", "trigger")
         },
     }
-    if (
-        privileges.get("database")
-        != {
+    empty_usage = {
+        "usage": [],
+        "expected_usage_count": 0,
+        "direct_grants_permitted": False,
+        "effective_privileges_must_match_exactly": True,
+        "public_role_privileges_permitted": False,
+        "public_role_effective_privileges_included_in_verification": True,
+        "grant_options_permitted": False,
+    }
+    expected_privileges = {
+        "scope": {
+            "postgresql_major_version": 16,
+            "user_object_schemas": ["public"],
+            "non_system_schemas_must_match_exactly": True,
+            "public_role_acl_sources_included_for_every_object_class": True,
+            "all_grant_options_permitted": False,
+            "system_objects": {
+                "builtin_default_acl_baseline_out_of_scope": True,
+                "explicit_grants_to_runtime_role_permitted": False,
+                "nondefault_public_acl_deltas_permitted": False,
+                "system_object_ownership_permitted": False,
+                "privilege_escalation_paths_permitted": False,
+            },
+        },
+        "database": {
             "name": inventory["database"]["expected_name"],
             "connect": True,
             "create": False,
             "temporary": False,
+            "direct_connect_grant_required": True,
             "effective_privileges_must_match_exactly": True,
-        }
-        or privileges.get("schemas")
-        != {
+            "public_role_privileges_permitted": False,
+            "public_role_effective_privileges_included_in_verification": True,
+            "grant_options_permitted": False,
+        },
+        "schemas": {
             "public": {
                 "usage": True,
                 "create": False,
+                "direct_usage_grant_required": True,
                 "effective_privileges_must_match_exactly": True,
+                "public_role_privileges_permitted": False,
+                "public_role_effective_privileges_included_in_verification": True,
+                "grant_options_permitted": False,
             }
-        }
-        or privileges.get("tables") != expected_tables
-        or privileges.get("sequences")
-        != {
+        },
+        "tables": expected_tables,
+        "sequences": {
             "usage": [],
             "select": [],
             "update": [],
+            "direct_grants_permitted": False,
+            "effective_privileges_must_match_exactly": True,
+            "public_role_privileges_permitted": False,
+            "public_role_effective_privileges_included_in_verification": True,
             "grant_options_permitted": False,
-        }
-        or any(privileges.get("other_authority", {}).values())
-        or privileges.get("transaction_compatibility")
-        != {
+        },
+        "routines": {
+            "public_schema": {
+                "observed_schema_routine_count": 11,
+                "execute": {"expected_routine_count": 0, "routines": []},
+                "direct_grants_permitted": False,
+                "effective_privileges_must_match_exactly": True,
+                "public_role_privileges_permitted": False,
+                "public_role_effective_privileges_included_in_verification": True,
+                "grant_options_permitted": False,
+                "unlisted_routine_privileges_permitted": False,
+            }
+        },
+        "types": {
+            "public_schema": {
+                "observed_schema_type_count": 154,
+                "rewrite_value_custom_types": list(_REWRITE_CUSTOM_TYPES),
+                "usage": {"expected_type_count": 0, "types": []},
+                "direct_grants_permitted": False,
+                "effective_privileges_must_match_exactly": True,
+                "public_role_privileges_permitted": False,
+                "public_role_effective_privileges_included_in_verification": True,
+                "grant_options_permitted": False,
+                "unlisted_type_privileges_permitted": False,
+                "future_adapter_must_prove_rewrite_without_type_usage_grants": True,
+            }
+        },
+        "languages": {
+            **empty_usage,
+            "object_scope": "user-defined-non-system-languages",
+        },
+        "foreign_data_wrappers": {
+            **empty_usage,
+            "object_scope": "user-defined-non-system-foreign-data-wrappers",
+        },
+        "foreign_servers": {
+            **empty_usage,
+            "object_scope": "user-defined-non-system-foreign-servers",
+        },
+        "tablespaces": {
+            "object_scope": "user-defined-non-system-tablespaces",
+            "create": [],
+            "expected_create_count": 0,
+            "direct_grants_permitted": False,
+            "effective_privileges_must_match_exactly": True,
+            "public_role_privileges_permitted": False,
+            "public_role_effective_privileges_included_in_verification": True,
+            "grant_options_permitted": False,
+        },
+        "parameters": {
+            "set": [],
+            "alter_system": [],
+            "explicit_parameter_acl_entries_must_match_exactly": True,
+            "public_role_acl_entries_included_in_verification": True,
+            "grant_options_permitted": False,
+            "effective_alter_system_permitted": False,
+            "ordinary_user_settable_session_parameters_remain_postgresql_baseline": True,
+        },
+        "user_mappings": {
+            "entries": [],
+            "runtime_role_mapping_permitted": False,
+        },
+        "large_objects": {
+            "required_source_and_target_count": 0,
+            "select": [],
+            "update": [],
+            "direct_grants_permitted": False,
+            "effective_privileges_must_match_exactly": True,
+            "public_role_privileges_permitted": False,
+            "public_role_effective_privileges_included_in_verification": True,
+            "grant_options_permitted": False,
+        },
+        "default_privileges": {
+            "entries": [],
+            "explicit_default_privilege_entries_must_be_empty": True,
+            "all_owners_and_global_and_public_schema_entries_included": True,
+            "public_role_entries_included": True,
+            "existing_object_public_routine_execute_and_type_usage_must_be_reconciled": True,
+            "future_user_object_creation_during_capability_window_permitted": False,
+            "implicit_public_defaults_cannot_materialize_during_capability_window": True,
+        },
+        "other_authority": dict.fromkeys(
+            {
+                "column_security_label_mutation_permitted",
+                "create_extension_permitted",
+                "any_database_or_shared_object_ownership_permitted",
+                "database_ownership_permitted",
+                "ddl_permitted",
+                "default_privileges_permitted",
+                "event_trigger_ownership_permitted",
+                "extension_ownership_permitted",
+                "foreign_data_wrapper_ownership_permitted",
+                "foreign_server_ownership_permitted",
+                "language_ownership_permitted",
+                "large_object_ownership_permitted",
+                "migration_permitted",
+                "publication_ownership_permitted",
+                "relation_ownership_permitted",
+                "role_settings_permitted",
+                "routine_ownership_permitted",
+                "schema_ownership_permitted",
+                "security_definer_creation_permitted",
+                "security_label_authority_permitted",
+                "subscription_ownership_permitted",
+                "tablespace_ownership_permitted",
+                "type_ownership_permitted",
+                "unlisted_owner_bearing_object_classes_permitted",
+                "user_mapping_permitted",
+            },
+            False,
+        ),
+        "transaction_compatibility": {
             "isolation": transaction["isolation"],
             "read_only": transaction["read_only"],
             "autocommit": transaction["autocommit"],
@@ -371,7 +647,10 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "control_table_write_privilege_permitted": False,
             "select_privilege_compatible_control_table_lock_required": True,
             "set_role_permitted": False,
-        }
+        },
+    }
+    if (
+        contract.get("privileges") != expected_privileges
         or transaction.get("ddl_permitted") is not False
         or transaction.get("migration_permitted") is not False
     ):
@@ -413,9 +692,16 @@ def _validate_dormancy(contract: dict[str, Any]) -> None:
         or provisioning.get("runtime_identity_may_bootstrap") is not False
         or provisioning.get("runtime_identity_may_create_alter_drop_or_grant_roles")
         is not False
+        or provisioning.get("bootstrap_scope_must_be_limited_to")
+        != list(_BOOTSTRAP_SCOPE)
+        or provisioning.get("bootstrap_session_must_end_before_runtime_execution")
+        is not True
+        or provisioning.get("bootstrap_credentials_retained_by_runtime") is not False
+        or provisioning.get("bootstrap_authority_retention_permitted") is not False
         or provisioning.get("teardown_required") is not True
         or provisioning.get("teardown_implementation_selected") is not False
         or verification.get("implemented") is not False
+        or verification.get("must_authenticate") != list(_VERIFICATION_REQUIREMENTS)
         or verification.get(
             "caller_supplied_role_identity_privilege_or_catalog_facts_permitted"
         )

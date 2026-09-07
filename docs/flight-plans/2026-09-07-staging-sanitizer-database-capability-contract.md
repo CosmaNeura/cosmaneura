@@ -15,6 +15,15 @@ privileges, including `PUBLIC`, must eventually be authenticated rather than
 inferred from grant text. The exact role alias and authenticated managed-
 identity identifiers remain placeholders.
 
+The closed-world boundary also rejects direct column ACLs; callable public-
+schema routines; user-type, language, tablespace, parameter, foreign-data,
+user-mapping, large-object, and default-privilege grants; all grant options;
+role settings; and every database or shared-object ownership dependency.
+PostgreSQL-owned built-in defaults are explicitly outside the user-object
+allowlist, but explicit runtime-role grants and nondefault `PUBLIC` ACL deltas
+on system objects are forbidden. Existing `PUBLIC` privileges on user objects
+must be reconciled; future object creation remains impossible.
+
 The validator is pure and offline. It pins the current controller,
 database-observation, runtime, sanitizer, transaction-plan, schema, inventory,
 and data-contract inputs; derives the exact table partitions; rejects identity
