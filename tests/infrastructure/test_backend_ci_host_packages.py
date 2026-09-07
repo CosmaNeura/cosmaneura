@@ -75,5 +75,5 @@ def test_backend_ci_installs_only_each_shards_required_host_dependencies() -> No
     # Every shard needs zsh for `just`; only integration needs certutil from
     # libnss3-tools for Localias. Poppler and ffmpeg remain runtime/opt-in deps.
     assert quality_apt_package_lines == ["apt-packages: zsh"]
-    assert tests.count("apt-packages: zsh\n") == 21
+    assert tests.count("apt-packages: zsh\n") == 22
     assert tests.count("apt-packages: zsh libnss3-tools") == 1
