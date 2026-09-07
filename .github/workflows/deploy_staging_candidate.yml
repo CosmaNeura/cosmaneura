@@ -231,6 +231,10 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-observer-connection-plan
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-state
+            apt-packages: zsh
+          - shard: infrastructure-sanitizer-observer-connection-plan-contract
+            apt-packages: zsh
           - shard: infrastructure-sanitizer-bootstrap-binding
             apt-packages: zsh
           - shard: infrastructure-sanitizer-observer-integrity
