@@ -272,6 +272,12 @@ py_test-ci-infrastructure-sanitizer-observer-connection-plan-state:
 	uv run pytest \
 		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_clock_requires_exact_whole_second_utc \
 		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_clock_regression_expiry_and_between_read_mutation_refuse \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-connection-plan-output:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan-output is CI-only" >&2; exit 1; }
+	uv run pytest \
 		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_output_is_redacted_nonserializable_and_tamper_evident \
 		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
 		--verbosity=2 {{PYTEST_COV_PARAMS}}

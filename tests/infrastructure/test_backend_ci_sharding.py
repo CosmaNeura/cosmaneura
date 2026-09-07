@@ -33,6 +33,7 @@ SHARDS = (
     "infrastructure-sanitizer-observer-output",
     "infrastructure-sanitizer-observer-connection-plan",
     "infrastructure-sanitizer-observer-connection-plan-state",
+    "infrastructure-sanitizer-observer-connection-plan-output",
     "infrastructure-sanitizer-observer-connection-plan-contract",
     "infrastructure-sanitizer-bootstrap-binding",
     "infrastructure-sanitizer-observer-integrity",
@@ -49,6 +50,7 @@ FILE_SHARDS = tuple(
         "infrastructure-sanitizer-evidence-integrity",
         "infrastructure-sanitizer-observer-output",
         "infrastructure-sanitizer-observer-connection-plan-state",
+        "infrastructure-sanitizer-observer-connection-plan-output",
         "infrastructure-sanitizer-observer-connection-plan-contract",
     }
 )
@@ -210,6 +212,8 @@ SANITIZER_OBSERVER_CONNECTION_PLAN_SELECTORS = (
 SANITIZER_OBSERVER_CONNECTION_PLAN_STATE_SELECTORS = (
     f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_clock_requires_exact_whole_second_utc",
     f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_clock_regression_expiry_and_between_read_mutation_refuse",
+)
+SANITIZER_OBSERVER_CONNECTION_PLAN_OUTPUT_SELECTORS = (
     f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_output_is_redacted_nonserializable_and_tamper_evident",
     f"{SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR}::test_unexpected_failures_are_content_free_and_return_no_partial_plan",
 )
@@ -461,6 +465,14 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             )
             + "\t\t--verbosity=2"
         ),
+        "infrastructure-sanitizer-observer-connection-plan-output": (
+            "uv run pytest \\\n"
+            + "".join(
+                f"\t\t{selector} \\\n"
+                for selector in SANITIZER_OBSERVER_CONNECTION_PLAN_OUTPUT_SELECTORS
+            )
+            + "\t\t--verbosity=2"
+        ),
         "infrastructure-sanitizer-observer-connection-plan-contract": (
             "uv run pytest \\\n"
             + "".join(
@@ -542,6 +554,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_observer_connection_plan_state_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-connection-plan-state:"
     )
+    infrastructure_sanitizer_observer_connection_plan_output_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-connection-plan-output:"
+    )
     infrastructure_sanitizer_observer_connection_plan_contract_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract:"
     )
@@ -605,7 +620,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_observer_connection_plan_start:infrastructure_sanitizer_observer_connection_plan_state_start
     ]
     infrastructure_sanitizer_observer_connection_plan_state_recipe = source[
-        infrastructure_sanitizer_observer_connection_plan_state_start:infrastructure_sanitizer_observer_connection_plan_contract_start
+        infrastructure_sanitizer_observer_connection_plan_state_start:infrastructure_sanitizer_observer_connection_plan_output_start
+    ]
+    infrastructure_sanitizer_observer_connection_plan_output_recipe = source[
+        infrastructure_sanitizer_observer_connection_plan_output_start:infrastructure_sanitizer_observer_connection_plan_contract_start
     ]
     infrastructure_sanitizer_observer_connection_plan_contract_recipe = source[
         infrastructure_sanitizer_observer_connection_plan_contract_start:infrastructure_sanitizer_bootstrap_binding_start
@@ -653,6 +671,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert (
         "--ignore-glob="
         not in infrastructure_sanitizer_observer_connection_plan_state_recipe
+    )
+    assert (
+        "--ignore-glob="
+        not in infrastructure_sanitizer_observer_connection_plan_output_recipe
     )
     assert (
         "--ignore-glob="
@@ -916,6 +938,9 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     connection_plan_state = _collect_nodeids(
         *SANITIZER_OBSERVER_CONNECTION_PLAN_STATE_SELECTORS
     )
+    connection_plan_output = _collect_nodeids(
+        *SANITIZER_OBSERVER_CONNECTION_PLAN_OUTPUT_SELECTORS
+    )
     connection_plan_contract = _collect_nodeids(
         *SANITIZER_OBSERVER_CONNECTION_PLAN_CONTRACT_SELECTORS
     )
@@ -940,6 +965,7 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     assert output
     assert connection_plan
     assert connection_plan_state
+    assert connection_plan_output
     assert connection_plan_contract
     assert bootstrap_binding
     assert integrity
@@ -947,7 +973,8 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     assert len(runtime) == 18
     assert len(output) == 1
     assert len(connection_plan) == 5
-    assert len(connection_plan_state) == 6
+    assert len(connection_plan_state) == 4
+    assert len(connection_plan_output) == 2
     assert len(connection_plan_contract) == 13
     assert len(bootstrap_binding) == 25
     assert len(integrity) == 39
@@ -957,6 +984,7 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     assert len(output) == len(set(output))
     assert len(connection_plan) == len(set(connection_plan))
     assert len(connection_plan_state) == len(set(connection_plan_state))
+    assert len(connection_plan_output) == len(set(connection_plan_output))
     assert len(connection_plan_contract) == len(set(connection_plan_contract))
     assert len(bootstrap_binding) == len(set(bootstrap_binding))
     assert len(integrity) == len(set(integrity))
@@ -966,34 +994,42 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     assert set(primary).isdisjoint(integrity)
     assert set(primary).isdisjoint(connection_plan)
     assert set(primary).isdisjoint(connection_plan_state)
+    assert set(primary).isdisjoint(connection_plan_output)
     assert set(primary).isdisjoint(connection_plan_contract)
     assert set(primary).isdisjoint(bootstrap_binding)
     assert set(runtime).isdisjoint(output)
     assert set(runtime).isdisjoint(connection_plan)
     assert set(runtime).isdisjoint(connection_plan_state)
+    assert set(runtime).isdisjoint(connection_plan_output)
     assert set(runtime).isdisjoint(connection_plan_contract)
     assert set(runtime).isdisjoint(bootstrap_binding)
     assert set(runtime).isdisjoint(integrity)
     assert set(output).isdisjoint(connection_plan)
     assert set(output).isdisjoint(connection_plan_state)
+    assert set(output).isdisjoint(connection_plan_output)
     assert set(output).isdisjoint(connection_plan_contract)
     assert set(output).isdisjoint(bootstrap_binding)
     assert set(output).isdisjoint(integrity)
     assert set(connection_plan).isdisjoint(integrity)
     assert set(connection_plan).isdisjoint(connection_plan_state)
+    assert set(connection_plan).isdisjoint(connection_plan_output)
     assert set(connection_plan).isdisjoint(connection_plan_contract)
     assert set(connection_plan).isdisjoint(bootstrap_binding)
+    assert set(connection_plan_state).isdisjoint(connection_plan_output)
     assert set(connection_plan_state).isdisjoint(connection_plan_contract)
     assert set(connection_plan_state).isdisjoint(bootstrap_binding)
     assert set(connection_plan_state).isdisjoint(integrity)
+    assert set(connection_plan_output).isdisjoint(connection_plan_contract)
+    assert set(connection_plan_output).isdisjoint(bootstrap_binding)
+    assert set(connection_plan_output).isdisjoint(integrity)
     assert set(connection_plan_contract).isdisjoint(bootstrap_binding)
     assert set(connection_plan_contract).isdisjoint(integrity)
     assert set(bootstrap_binding).isdisjoint(integrity)
     assert set(primary) | set(runtime) | set(output) | set(connection_plan) | set(
         connection_plan_state
-    ) | set(connection_plan_contract) | set(bootstrap_binding) | set(
-        integrity
-    ) == set(family)
+    ) | set(connection_plan_output) | set(connection_plan_contract) | set(
+        bootstrap_binding
+    ) | set(integrity) == set(family)
 
 
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
