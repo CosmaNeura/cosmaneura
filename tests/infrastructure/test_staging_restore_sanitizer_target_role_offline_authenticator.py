@@ -91,7 +91,6 @@ def _valid_frames(
     relation_oids = {
         name: 10_000 + index for index, name in enumerate(sorted(application | control))
     }
-
     schema_rows = _with_acls(
         (2_200, "public", OWNER_OID, OWNER_NAME),
         (
@@ -101,7 +100,6 @@ def _valid_frames(
         ),
         (True, False),
     )
-
     relation_rows: list[tuple[object, ...]] = []
     relation_privileges = (
         "DELETE",
@@ -146,7 +144,6 @@ def _valid_frames(
                 effective,
             )
         )
-
     routine_rows = tuple(
         _with_acls(
             (
@@ -163,7 +160,6 @@ def _valid_frames(
         )[0]
         for index in range(11)
     )
-
     type_policy = policy["privileges"]["types"]["public_schema"]
     enum_names = frozenset(type_policy["acl_manageable_custom_enums"]["types"])
     type_specs: list[
@@ -220,7 +216,6 @@ def _valid_frames(
                 (effective_usage,),
             )
         )
-
     language_rows = _with_acls(
         (40_000, "plpgsql", True, True, OWNER_OID, OWNER_NAME),
         ((OWNER_OID, OWNER_NAME, "USAGE", True),),
@@ -688,7 +683,6 @@ def test_future_expiry_regression_and_between_read_mutation_refuse(
         )
     with pytest.raises(Failure, match="target_expired"):
         _worker(lambda: observation.expires_at).authenticate(observation=observation)
-
     moments = iter((NOW, NOW - timedelta(seconds=1)))
     with pytest.raises(Failure, match="clock_regressed"):
         _worker(lambda: next(moments)).authenticate(observation=observation)

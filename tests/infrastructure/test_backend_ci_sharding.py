@@ -37,13 +37,7 @@ SHARDS = (
     "integration",
 )
 FILE_SHARDS = tuple(
-    shard
-    for shard in SHARDS
-    if shard
-    not in {
-        "infrastructure-sanitizer-evidence-integrity",
-        "infrastructure-sanitizer-observer-integrity",
-    }
+    shard for shard in SHARDS if shard != "infrastructure-sanitizer-evidence-integrity"
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
@@ -160,13 +154,16 @@ SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_module_has_no_database_network_provider_or_process_surface",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_public_factory_remains_terminal_before_observer_access",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_unexpected_failures_are_content_free_and_return_no_partial_plan",
+    f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_real_chain_mints_only_a_sealed_metadata_plan",
     SANITIZER_TARGET_ROLE_OBSERVER_CONTRACT_SELECTOR,
     SANITIZER_TARGET_ROLE_QUERY_GRAMMAR_SELECTOR,
     SANITIZER_TARGET_ROLE_OBSERVATION_FRAMES_SELECTOR,
 )
-SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
-    f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_real_chain_mints_only_a_sealed_metadata_plan",
+SANITIZER_OBSERVER_RUNTIME_SELECTORS = (
+    SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_output_is_sealed_redacted_nonserializable_and_tamper_evident",
+)
+SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
     SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
 )
 SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR = (
@@ -226,14 +223,10 @@ def _infrastructure_shard(path: Path) -> str:
             ),
         ):
             return "infrastructure-sanitizer-observer"
-        if path in map(
-            Path,
-            (
-                SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
-                SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
-            ),
-        ):
+        if path == Path(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR):
             return "infrastructure-sanitizer-observer-runtime"
+        if path == Path(SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR):
+            return "infrastructure-sanitizer-observer-integrity"
         if path == Path(SANITIZER_SOURCE_SNAPSHOT_SELECTOR):
             return "infrastructure-sanitizer-source-snapshot"
         if path in map(
@@ -373,15 +366,15 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             + "\t\t--verbosity=2"
         ),
         "infrastructure-sanitizer-observer-runtime": (
-            f"uv run pytest {SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR} --verbosity=2"
-        ),
-        "infrastructure-sanitizer-observer-integrity": (
             "uv run pytest \\\n"
             + "".join(
                 f"\t\t{selector} \\\n"
-                for selector in SANITIZER_OBSERVER_INTEGRITY_SELECTORS
+                for selector in SANITIZER_OBSERVER_RUNTIME_SELECTORS
             )
             + "\t\t--verbosity=2"
+        ),
+        "infrastructure-sanitizer-observer-integrity": (
+            f"uv run pytest {SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR} --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
@@ -657,7 +650,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         (
             Path(SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR),
-            "infrastructure-sanitizer-observer-runtime",
+            "infrastructure-sanitizer-observer-integrity",
         ),
         (
             Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
@@ -767,7 +760,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
 
 def test_sanitizer_observer_shards_partition_all_122_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
-    runtime = _collect_nodeids(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR)
+    runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     integrity = _collect_nodeids(*SANITIZER_OBSERVER_INTEGRITY_SELECTORS)
     family = _collect_nodeids(
         SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR,
@@ -781,9 +774,9 @@ def test_sanitizer_observer_shards_partition_all_122_collected_cases_once() -> N
     assert primary
     assert runtime
     assert integrity
-    assert len(primary) == 63
-    assert len(runtime) == 18
-    assert len(integrity) == 41
+    assert len(primary) == 64
+    assert len(runtime) == 19
+    assert len(integrity) == 39
     assert len(family) == 122
     assert len(primary) == len(set(primary))
     assert len(runtime) == len(set(runtime))
