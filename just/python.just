@@ -239,6 +239,7 @@ py_test-ci-infrastructure-sanitizer-observer:
 		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_frames.py \
 		tests/infrastructure/test_staging_restore_sanitizer_target_role_database_observer.py \
 		tests/infrastructure/test_staging_restore_sanitizer_target_role_offline_authenticator.py \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_observer_contract.py \
 		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
