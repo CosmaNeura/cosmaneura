@@ -30,6 +30,7 @@ SHARDS = (
     "infrastructure-sanitizer-executor",
     "infrastructure-sanitizer-observer",
     "infrastructure-sanitizer-observer-runtime",
+    "infrastructure-sanitizer-observer-output",
     "infrastructure-sanitizer-observer-integrity",
     "infrastructure-sanitizer-data-contract-executor",
     "infrastructure-sanitizer-source-snapshot",
@@ -37,7 +38,13 @@ SHARDS = (
     "integration",
 )
 FILE_SHARDS = tuple(
-    shard for shard in SHARDS if shard != "infrastructure-sanitizer-evidence-integrity"
+    shard
+    for shard in SHARDS
+    if shard
+    not in {
+        "infrastructure-sanitizer-evidence-integrity",
+        "infrastructure-sanitizer-observer-output",
+    }
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
@@ -161,6 +168,8 @@ SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
 )
 SANITIZER_OBSERVER_RUNTIME_SELECTORS = (
     SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
+)
+SANITIZER_OBSERVER_OUTPUT_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_output_is_sealed_redacted_nonserializable_and_tamper_evident",
 )
 SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
@@ -366,15 +375,13 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             + "\t\t--verbosity=2"
         ),
         "infrastructure-sanitizer-observer-runtime": (
-            "uv run pytest \\\n"
-            + "".join(
-                f"\t\t{selector} \\\n"
-                for selector in SANITIZER_OBSERVER_RUNTIME_SELECTORS
-            )
-            + "\t\t--verbosity=2"
+            f"uv run pytest {SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR} --verbosity=2"
+        ),
+        "infrastructure-sanitizer-observer-output": (
+            f"uv run pytest {SANITIZER_OBSERVER_OUTPUT_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-observer-integrity": (
-            f"uv run pytest {SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR} --verbosity=2"
+            f"uv run pytest {SANITIZER_OBSERVER_INTEGRITY_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
@@ -434,6 +441,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_observer_runtime_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-runtime:"
     )
+    infrastructure_sanitizer_observer_output_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-output:"
+    )
     infrastructure_sanitizer_observer_integrity_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-integrity:"
     )
@@ -482,7 +492,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_observer_start:infrastructure_sanitizer_observer_runtime_start
     ]
     infrastructure_sanitizer_observer_runtime_recipe = source[
-        infrastructure_sanitizer_observer_runtime_start:infrastructure_sanitizer_observer_integrity_start
+        infrastructure_sanitizer_observer_runtime_start:infrastructure_sanitizer_observer_output_start
+    ]
+    infrastructure_sanitizer_observer_output_recipe = source[
+        infrastructure_sanitizer_observer_output_start:infrastructure_sanitizer_observer_integrity_start
     ]
     infrastructure_sanitizer_observer_integrity_recipe = source[
         infrastructure_sanitizer_observer_integrity_start:infrastructure_sanitizer_data_contract_executor_start
@@ -517,6 +530,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert "--ignore-glob=" not in infrastructure_sanitizer_executor_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_runtime_recipe
+    assert "--ignore-glob=" not in infrastructure_sanitizer_observer_output_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_integrity_recipe
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_data_contract_executor_recipe
@@ -761,6 +775,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
 def test_sanitizer_observer_shards_partition_all_122_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
+    output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
     integrity = _collect_nodeids(*SANITIZER_OBSERVER_INTEGRITY_SELECTORS)
     family = _collect_nodeids(
         SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR,
@@ -773,19 +788,25 @@ def test_sanitizer_observer_shards_partition_all_122_collected_cases_once() -> N
 
     assert primary
     assert runtime
+    assert output
     assert integrity
     assert len(primary) == 64
-    assert len(runtime) == 19
+    assert len(runtime) == 18
+    assert len(output) == 1
     assert len(integrity) == 39
     assert len(family) == 122
     assert len(primary) == len(set(primary))
     assert len(runtime) == len(set(runtime))
+    assert len(output) == len(set(output))
     assert len(integrity) == len(set(integrity))
     assert len(family) == len(set(family))
     assert set(primary).isdisjoint(runtime)
+    assert set(primary).isdisjoint(output)
     assert set(primary).isdisjoint(integrity)
+    assert set(runtime).isdisjoint(output)
     assert set(runtime).isdisjoint(integrity)
-    assert set(primary) | set(runtime) | set(integrity) == set(family)
+    assert set(output).isdisjoint(integrity)
+    assert set(primary) | set(runtime) | set(output) | set(integrity) == set(family)
 
 
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
