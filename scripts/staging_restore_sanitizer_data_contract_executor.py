@@ -37,13 +37,14 @@ DATA_CONTRACT_SHA256 = (
     "f1c0c7dce56cd2aa42647578940f807186d8e888b70c66da9aa64aa7402b1360"
 )
 SOURCE_SNAPSHOT_CONTRACT_SHA256 = (
-    "9836fdfac650c24c9407d9b12e3a1a8a21b1430e515a07ebbee236e46df5bd3c"
+    "26d6e802fde2f32560e6e12111bf01a457307e36374324061145da69dd6dbe91"
 )
 HMAC_DOMAIN = "cosmaneura:staging-restore-sanitizer:v1"
 MINIMUM_KEY_BYTES = 32
 MAXIMUM_KEY_BYTES = 4096
 INVENTORY_HMAC_KEY_VERSION = "staging-inventory-hmac-v1"
 CANDIDATE_PROOF_DOMAIN = "candidate_dataset.source_snapshot_v1.proof"
+CANDIDATE_COPY_DOMAIN = "fixed-catalog:candidate-copy"
 UUID7_EPOCH_START_MS = 1_577_836_800_000
 UUID7_EPOCH_SPAN_MS = 315_576_000_000
 ACCESS_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -452,6 +453,43 @@ def _copy_snapshot_json(value: Any) -> Any:
     _fail("data_contract_executor.source_invalid")
 
 
+def _copy_candidate_value(value: Any) -> Any:
+    kind = type(value)
+    if kind is _FrozenMap:
+        items = value._items
+        if type(items) is not tuple or any(
+            type(item) is not tuple or len(item) != 2 or type(item[0]) is not str
+            for item in items
+        ):
+            _fail("data_contract_executor.candidate_invalid")
+        return _FrozenMap(
+            tuple((name, _copy_candidate_value(item)) for name, item in items)
+        )
+    if kind is tuple:
+        return tuple(_copy_candidate_value(item) for item in value)
+    if kind is uuid.UUID:
+        return uuid.UUID(int=value.int)
+    if kind is datetime:
+        return datetime(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+            tzinfo=value.tzinfo,
+            fold=value.fold,
+        )
+    if kind is date:
+        return date(value.year, value.month, value.day)
+    if value is None or kind in {bool, int, str}:
+        return value
+    if kind is float and math.isfinite(value):
+        return value
+    _fail("data_contract_executor.candidate_invalid")
+
+
 def _is_frozen(value: Any) -> bool:
     kind = type(value)
     if value is None or kind in {bool, int, float, str, uuid.UUID, date}:
@@ -649,6 +687,84 @@ class SanitizerCandidateDataset:
             del self, table_name
             _fail("data_contract_executor.output_invalid")
         return tuple({name: _thaw(item) for name, item in row.items()} for row in rows)
+
+
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class _VerifiedFixedCatalogCandidateCopy:
+    _tables: tuple[tuple[str, tuple[_FrozenMap, ...]], ...] = dataclass_field(
+        repr=False
+    )
+    _authenticated_evidence: evidence_authority.AuthenticatedSanitizerEvidence = (
+        dataclass_field(repr=False)
+    )
+    _candidate_identity: int = dataclass_field(repr=False)
+    _candidate_type_identity: int = dataclass_field(repr=False)
+    _candidate_seal_identity: int = dataclass_field(repr=False)
+    _candidate_proof_sha256: str = dataclass_field(repr=False)
+    _candidate_contract_sha256: str = dataclass_field(repr=False)
+    _source_snapshot_identity: int = dataclass_field(repr=False)
+    _source_snapshot_type_identity: int = dataclass_field(repr=False)
+    _source_snapshot_seal_identity: int = dataclass_field(repr=False)
+    _source_snapshot_proof_sha256: str = dataclass_field(repr=False)
+    _source_snapshot_contract_sha256: str = dataclass_field(repr=False)
+    _transform_key_version: str = dataclass_field(repr=False)
+    _transformed_at: datetime = dataclass_field(repr=False)
+    _proof_sha256: str = dataclass_field(repr=False)
+    _seal: object = dataclass_field(repr=False, compare=False)
+
+    def __init__(self) -> None:
+        _fail("data_contract_executor.output_invalid")
+
+    def __repr__(self) -> str:
+        return "<_VerifiedFixedCatalogCandidateCopy sealed sensitive>"
+
+    def __reduce__(self) -> NoReturn:
+        del self
+        _fail("data_contract_executor.output_invalid")
+
+    def __reduce_ex__(self, protocol: object) -> NoReturn:
+        del self, protocol
+        _fail("data_contract_executor.output_invalid")
+
+
+_FIXED_CATALOG_COPY_SEAL = object()
+
+
+def _fixed_catalog_copy_proof(
+    value: _VerifiedFixedCatalogCandidateCopy, key: bytes
+) -> str:
+    material = _canonical(
+        (
+            ("copy_identity", id(value)),
+            ("candidate_identity", value._candidate_identity),
+            ("candidate_type_identity", value._candidate_type_identity),
+            ("candidate_seal_identity", value._candidate_seal_identity),
+            ("candidate_proof_sha256", value._candidate_proof_sha256),
+            ("candidate_contract_sha256", value._candidate_contract_sha256),
+            ("source_snapshot_identity", value._source_snapshot_identity),
+            ("source_snapshot_type_identity", value._source_snapshot_type_identity),
+            ("source_snapshot_seal_identity", value._source_snapshot_seal_identity),
+            ("source_snapshot_proof_sha256", value._source_snapshot_proof_sha256),
+            (
+                "source_snapshot_contract_sha256",
+                value._source_snapshot_contract_sha256,
+            ),
+            ("evidence_identity", id(value._authenticated_evidence)),
+            ("evidence_type_identity", id(type(value._authenticated_evidence))),
+            (
+                "evidence_seal_identity",
+                id(value._authenticated_evidence._seal),  # noqa: SLF001
+            ),
+            (
+                "evidence_proof_sha256",
+                value._authenticated_evidence._proof_sha256,  # noqa: SLF001
+            ),
+            ("transform_key_version", value._transform_key_version),
+            ("transformed_at", value._transformed_at),
+            ("tables", value._tables),
+        )
+    )
+    return _hmac_digest(key, CANDIDATE_COPY_DOMAIN, material).hex()
 
 
 def _candidate_proof(
@@ -1603,6 +1719,177 @@ class SanitizerDataContractExecutor:
             )
         ):
             _fail("data_contract_executor.candidate_invalid")
+
+    def _copy_verified_fixed_catalog_for_post_projection(
+        self,
+        candidate: SanitizerCandidateDataset,
+        *,
+        now: datetime,
+    ) -> _VerifiedFixedCatalogCandidateCopy:
+        if (
+            type(self) is not SanitizerDataContractExecutor
+            or type(candidate) is not SanitizerCandidateDataset
+            or type(now) is not datetime
+            or now.tzinfo is not UTC
+            or now.utcoffset() != _ZERO
+            or now.microsecond != 0
+            or now.fold != 0
+        ):
+            _fail("data_contract_executor.candidate_invalid")
+        self._verify_candidate(candidate)
+        if candidate.transformed_at > now:
+            _fail("data_contract_executor.candidate_invalid")
+        self._reauthenticate(candidate._authenticated_evidence, now)
+        identity = id(candidate)
+        tables = candidate._tables
+        evidence = candidate._authenticated_evidence
+        proof = candidate._proof_sha256
+        contract = candidate._contract_sha256
+        source_lineage = (
+            candidate._source_snapshot_identity,
+            candidate._source_snapshot_type_identity,
+            candidate._source_snapshot_seal_identity,
+            candidate._source_snapshot_proof_sha256,
+            candidate._source_snapshot_contract_sha256,
+        )
+        transformed_at = candidate.transformed_at
+        key_version = candidate.transform_key_version
+        copied_tables = tuple(
+            (
+                table,
+                tuple(cast(_FrozenMap, _copy_candidate_value(row)) for row in rows),
+            )
+            for table, rows in tables
+            if table in FIXED_CATALOG_TABLES
+        )
+        copied = object.__new__(_VerifiedFixedCatalogCandidateCopy)
+        object.__setattr__(copied, "_tables", copied_tables)
+        object.__setattr__(copied, "_authenticated_evidence", evidence)
+        object.__setattr__(copied, "_candidate_identity", identity)
+        object.__setattr__(
+            copied, "_candidate_type_identity", id(SanitizerCandidateDataset)
+        )
+        object.__setattr__(copied, "_candidate_seal_identity", id(_CANDIDATE_SEAL))
+        object.__setattr__(copied, "_candidate_proof_sha256", proof)
+        object.__setattr__(copied, "_candidate_contract_sha256", contract)
+        object.__setattr__(copied, "_source_snapshot_identity", source_lineage[0])
+        object.__setattr__(copied, "_source_snapshot_type_identity", source_lineage[1])
+        object.__setattr__(copied, "_source_snapshot_seal_identity", source_lineage[2])
+        object.__setattr__(copied, "_source_snapshot_proof_sha256", source_lineage[3])
+        object.__setattr__(
+            copied, "_source_snapshot_contract_sha256", source_lineage[4]
+        )
+        object.__setattr__(copied, "_transform_key_version", key_version)
+        object.__setattr__(copied, "_transformed_at", transformed_at)
+        object.__setattr__(copied, "_seal", _FIXED_CATALOG_COPY_SEAL)
+        object.__setattr__(
+            copied, "_proof_sha256", _fixed_catalog_copy_proof(copied, self._key)
+        )
+        if (
+            id(candidate) != identity
+            or candidate._seal is not _CANDIDATE_SEAL
+            or candidate._tables is not tables
+            or candidate._authenticated_evidence is not evidence
+            or candidate._proof_sha256 != proof
+            or candidate._contract_sha256 != contract
+            or candidate.transformed_at is not transformed_at
+            or candidate.transform_key_version != key_version
+            or (
+                candidate._source_snapshot_identity,
+                candidate._source_snapshot_type_identity,
+                candidate._source_snapshot_seal_identity,
+                candidate._source_snapshot_proof_sha256,
+                candidate._source_snapshot_contract_sha256,
+            )
+            != source_lineage
+        ):
+            _fail("data_contract_executor.candidate_invalid")
+        self._verify_candidate(candidate)
+        self._validate_verified_fixed_catalog_copy_at_current_time(copied, now=now)
+        return copied
+
+    def _validate_verified_fixed_catalog_copy_at_current_time(
+        self,
+        value: _VerifiedFixedCatalogCandidateCopy,
+        *,
+        now: datetime,
+    ) -> None:
+        if (
+            type(self) is not SanitizerDataContractExecutor
+            or type(value) is not _VerifiedFixedCatalogCandidateCopy
+            or value._seal is not _FIXED_CATALOG_COPY_SEAL
+            or type(now) is not datetime
+            or now.tzinfo is not UTC
+            or now.utcoffset() != _ZERO
+            or now.microsecond != 0
+            or now.fold != 0
+            or type(value._tables) is not tuple
+            or any(
+                type(item) is not tuple
+                or len(item) != 2
+                or type(item[0]) is not str
+                or type(item[1]) is not tuple
+                or any(
+                    type(row) is not _FrozenMap or not _is_frozen(row)
+                    for row in item[1]
+                )
+                for item in value._tables
+            )
+            or tuple(item[0] for item in value._tables)
+            != tuple(sorted(FIXED_CATALOG_TABLES))
+            or type(value._authenticated_evidence)
+            is not evidence_authority.AuthenticatedSanitizerEvidence
+            or value._authenticated_evidence._seal  # noqa: SLF001
+            is not evidence_authority._EVIDENCE_SEAL  # noqa: SLF001
+            or type(value._authenticated_evidence._proof_sha256)  # noqa: SLF001
+            is not str
+            or re.fullmatch(  # noqa: SLF001
+                r"[0-9a-f]{64}", value._authenticated_evidence._proof_sha256
+            )
+            is None
+            or any(
+                type(item) is not int or item <= 0
+                for item in (
+                    value._candidate_identity,
+                    value._candidate_type_identity,
+                    value._candidate_seal_identity,
+                    value._source_snapshot_identity,
+                    value._source_snapshot_type_identity,
+                    value._source_snapshot_seal_identity,
+                )
+            )
+            or any(
+                type(item) is not str or re.fullmatch(r"[0-9a-f]{64}", item) is None
+                for item in (
+                    value._candidate_proof_sha256,
+                    value._candidate_contract_sha256,
+                    value._source_snapshot_proof_sha256,
+                    value._source_snapshot_contract_sha256,
+                    value._proof_sha256,
+                )
+            )
+            or value._candidate_contract_sha256 != DATA_CONTRACT_SHA256
+            or value._candidate_type_identity != id(SanitizerCandidateDataset)
+            or value._candidate_seal_identity != id(_CANDIDATE_SEAL)
+            or value._source_snapshot_contract_sha256 != SOURCE_SNAPSHOT_CONTRACT_SHA256
+            or value._source_snapshot_type_identity
+            != id(source_snapshot.AuthenticatedSanitizerSourceSnapshot)
+            or value._source_snapshot_seal_identity
+            != id(source_snapshot._SNAPSHOT_SEAL)  # noqa: SLF001
+            or type(value._transform_key_version) is not str
+            or value._transform_key_version != self._key_version
+            or type(value._transformed_at) is not datetime
+            or value._transformed_at.tzinfo is not UTC
+            or value._transformed_at.utcoffset() != _ZERO
+            or value._transformed_at.microsecond != 0
+            or value._transformed_at.fold != 0
+            or value._transformed_at > now
+            or not hmac.compare_digest(
+                value._proof_sha256, _fixed_catalog_copy_proof(value, self._key)
+            )
+        ):
+            _fail("data_contract_executor.candidate_invalid")
+        self._reauthenticate(value._authenticated_evidence, now)
 
     def validate_candidate(self, candidate: SanitizerCandidateDataset) -> None:
         code = "data_contract_executor.configuration_invalid"
