@@ -44,7 +44,6 @@ FILE_SHARDS = tuple(
     not in {
         "infrastructure-sanitizer-evidence-integrity",
         "infrastructure-sanitizer-observer-output",
-        "infrastructure-sanitizer-observer-integrity",
     }
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
@@ -145,6 +144,10 @@ SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR = (
     "tests/infrastructure/"
     "test_staging_restore_sanitizer_target_role_database_observer.py"
 )
+SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR = (
+    "tests/infrastructure/"
+    "test_staging_restore_sanitizer_target_role_offline_authenticator.py"
+)
 SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_contract_is_hash_pinned_closed_world_partitioned_and_dormant",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_plan_api_accepts_only_two_keyword_only_exact_sealed_inputs",
@@ -158,15 +161,19 @@ SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_module_has_no_database_network_provider_or_process_surface",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_public_factory_remains_terminal_before_observer_access",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_unexpected_failures_are_content_free_and_return_no_partial_plan",
+    f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_real_chain_mints_only_a_sealed_metadata_plan",
     SANITIZER_TARGET_ROLE_OBSERVER_CONTRACT_SELECTOR,
     SANITIZER_TARGET_ROLE_QUERY_GRAMMAR_SELECTOR,
     SANITIZER_TARGET_ROLE_OBSERVATION_FRAMES_SELECTOR,
 )
-SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
-    f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_real_chain_mints_only_a_sealed_metadata_plan",
+SANITIZER_OBSERVER_RUNTIME_SELECTORS = (
+    SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
 )
 SANITIZER_OBSERVER_OUTPUT_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_output_is_sealed_redacted_nonserializable_and_tamper_evident",
+)
+SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
+    SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
 )
 SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_data_contract_executor.py"
@@ -184,6 +191,7 @@ SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_TARGET_ROLE_QUERY_GRAMMAR_SELECTOR,
     SANITIZER_TARGET_ROLE_OBSERVATION_FRAMES_SELECTOR,
     SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
+    SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
     SANITIZER_TRANSACTION_PLAN_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
     SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
@@ -226,6 +234,8 @@ def _infrastructure_shard(path: Path) -> str:
             return "infrastructure-sanitizer-observer"
         if path == Path(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR):
             return "infrastructure-sanitizer-observer-runtime"
+        if path == Path(SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR):
+            return "infrastructure-sanitizer-observer-integrity"
         if path == Path(SANITIZER_SOURCE_SNAPSHOT_SELECTOR):
             return "infrastructure-sanitizer-source-snapshot"
         if path in map(
@@ -653,6 +663,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-observer-runtime",
         ),
         (
+            Path(SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR),
+            "infrastructure-sanitizer-observer-integrity",
+        ),
+        (
             Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
             "infrastructure-sanitizer-data-contract-executor",
         ),
@@ -758,9 +772,9 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_83_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_122_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
-    database = _collect_nodeids(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR)
+    runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
     integrity = _collect_nodeids(*SANITIZER_OBSERVER_INTEGRITY_SELECTORS)
     family = _collect_nodeids(
@@ -769,29 +783,30 @@ def test_sanitizer_observer_shards_partition_all_83_collected_cases_once() -> No
         SANITIZER_TARGET_ROLE_QUERY_GRAMMAR_SELECTOR,
         SANITIZER_TARGET_ROLE_OBSERVATION_FRAMES_SELECTOR,
         SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
+        SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
     )
 
     assert primary
-    assert database
+    assert runtime
     assert output
     assert integrity
-    assert len(primary) == 63
-    assert len(database) == 18
+    assert len(primary) == 64
+    assert len(runtime) == 18
     assert len(output) == 1
-    assert len(integrity) == 1
-    assert len(family) == 83
+    assert len(integrity) == 39
+    assert len(family) == 122
     assert len(primary) == len(set(primary))
-    assert len(database) == len(set(database))
+    assert len(runtime) == len(set(runtime))
     assert len(output) == len(set(output))
     assert len(integrity) == len(set(integrity))
     assert len(family) == len(set(family))
-    assert set(primary).isdisjoint(database)
+    assert set(primary).isdisjoint(runtime)
     assert set(primary).isdisjoint(output)
     assert set(primary).isdisjoint(integrity)
-    assert set(database).isdisjoint(output)
-    assert set(database).isdisjoint(integrity)
+    assert set(runtime).isdisjoint(output)
+    assert set(runtime).isdisjoint(integrity)
     assert set(output).isdisjoint(integrity)
-    assert set(primary) | set(database) | set(output) | set(integrity) == set(family)
+    assert set(primary) | set(runtime) | set(output) | set(integrity) == set(family)
 
 
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
@@ -812,6 +827,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     target_role_database_observer = _collect_nodeids(
         SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR
     )
+    target_role_offline_authenticator = _collect_nodeids(
+        SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR
+    )
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     transaction_plan = _collect_nodeids(SANITIZER_TRANSACTION_PLAN_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
@@ -830,12 +848,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(target_role_query_grammar) == 9
     assert len(target_role_observation_frames) == 10
     assert len(target_role_database_observer) == 18
+    assert len(target_role_offline_authenticator) == 39
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 369
+    assert len(family) == 408
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
@@ -845,6 +864,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
         set(target_role_observation_frames)
     )
     assert len(target_role_database_observer) == len(set(target_role_database_observer))
+    assert len(target_role_offline_authenticator) == len(
+        set(target_role_offline_authenticator)
+    )
     assert len(executor) == len(set(executor))
     assert len(transaction_plan) == len(set(transaction_plan))
     assert len(data_contract_executor) == len(set(data_contract_executor))
@@ -912,6 +934,20 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
         | set(source_snapshot)
         | set(post_projection)
     )
+    assert set(target_role_offline_authenticator).isdisjoint(
+        set(evidence)
+        | set(database_capability)
+        | set(executor)
+        | set(target_role_observation_plan)
+        | set(target_role_observer_contract)
+        | set(target_role_query_grammar)
+        | set(target_role_observation_frames)
+        | set(target_role_database_observer)
+        | set(transaction_plan)
+        | set(data_contract_executor)
+        | set(source_snapshot)
+        | set(post_projection)
+    )
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
     assert set(executor).isdisjoint(data_contract_executor)
@@ -940,8 +976,10 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     ) | set(target_role_observation_plan) | set(target_role_observer_contract) | set(
         target_role_query_grammar
     ) | set(target_role_observation_frames) | set(target_role_database_observer) | set(
-        data_contract_executor
-    ) | set(source_snapshot) | set(post_projection) == set(family)
+        target_role_offline_authenticator
+    ) | set(data_contract_executor) | set(source_snapshot) | set(
+        post_projection
+    ) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
