@@ -31,6 +31,7 @@ SHARDS = (
     "infrastructure-sanitizer-observer",
     "infrastructure-sanitizer-observer-runtime",
     "infrastructure-sanitizer-observer-output",
+    "infrastructure-sanitizer-observer-connection-plan",
     "infrastructure-sanitizer-observer-integrity",
     "infrastructure-sanitizer-data-contract-executor",
     "infrastructure-sanitizer-source-snapshot",
@@ -38,7 +39,13 @@ SHARDS = (
     "integration",
 )
 FILE_SHARDS = tuple(
-    shard for shard in SHARDS if shard != "infrastructure-sanitizer-evidence-integrity"
+    shard
+    for shard in SHARDS
+    if shard
+    not in {
+        "infrastructure-sanitizer-evidence-integrity",
+        "infrastructure-sanitizer-observer-output",
+    }
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
 RESTORE_GLOB = "tests/infrastructure/test_staging_restore_*.py"
@@ -184,6 +191,8 @@ SANITIZER_OBSERVER_RUNTIME_SELECTORS = (
 )
 SANITIZER_OBSERVER_OUTPUT_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_output_is_sealed_redacted_nonserializable_and_tamper_evident",
+)
+SANITIZER_OBSERVER_CONNECTION_PLAN_SELECTORS = (
     SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR,
 )
 SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
@@ -256,7 +265,7 @@ def _infrastructure_shard(path: Path) -> str:
         if path == Path(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR):
             return "infrastructure-sanitizer-observer-runtime"
         if path == Path(SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR):
-            return "infrastructure-sanitizer-observer-output"
+            return "infrastructure-sanitizer-observer-connection-plan"
         if path == Path(SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR):
             return "infrastructure-sanitizer-observer-integrity"
         if path == Path(SANITIZER_SOURCE_SNAPSHOT_SELECTOR):
@@ -408,6 +417,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             )
             + "\t\t--verbosity=2"
         ),
+        "infrastructure-sanitizer-observer-connection-plan": (
+            f"uv run pytest {SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR} --verbosity=2"
+        ),
         "infrastructure-sanitizer-observer-integrity": (
             f"uv run pytest {SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR} --verbosity=2"
         ),
@@ -472,6 +484,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_observer_output_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-output:"
     )
+    infrastructure_sanitizer_observer_connection_plan_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-connection-plan:"
+    )
     infrastructure_sanitizer_observer_integrity_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-integrity:"
     )
@@ -523,7 +538,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_observer_runtime_start:infrastructure_sanitizer_observer_output_start
     ]
     infrastructure_sanitizer_observer_output_recipe = source[
-        infrastructure_sanitizer_observer_output_start:infrastructure_sanitizer_observer_integrity_start
+        infrastructure_sanitizer_observer_output_start:infrastructure_sanitizer_observer_connection_plan_start
+    ]
+    infrastructure_sanitizer_observer_connection_plan_recipe = source[
+        infrastructure_sanitizer_observer_connection_plan_start:infrastructure_sanitizer_observer_integrity_start
     ]
     infrastructure_sanitizer_observer_integrity_recipe = source[
         infrastructure_sanitizer_observer_integrity_start:infrastructure_sanitizer_data_contract_executor_start
@@ -559,6 +577,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_runtime_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_output_recipe
+    assert (
+        "--ignore-glob=" not in infrastructure_sanitizer_observer_connection_plan_recipe
+    )
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_integrity_recipe
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_data_contract_executor_recipe
@@ -696,7 +717,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         (
             Path(SANITIZER_PRIVILEGED_GLOBAL_CONNECTION_PLAN_SELECTOR),
-            "infrastructure-sanitizer-observer-output",
+            "infrastructure-sanitizer-observer-connection-plan",
         ),
         (
             Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
@@ -808,6 +829,7 @@ def test_sanitizer_observer_shards_partition_all_206_collected_cases_once() -> N
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
+    connection_plan = _collect_nodeids(*SANITIZER_OBSERVER_CONNECTION_PLAN_SELECTORS)
     integrity = _collect_nodeids(*SANITIZER_OBSERVER_INTEGRITY_SELECTORS)
     family = _collect_nodeids(
         SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR,
@@ -825,24 +847,33 @@ def test_sanitizer_observer_shards_partition_all_206_collected_cases_once() -> N
     assert primary
     assert runtime
     assert output
+    assert connection_plan
     assert integrity
     assert len(primary) == 124
     assert len(runtime) == 18
-    assert len(output) == 25
+    assert len(output) == 1
+    assert len(connection_plan) == 24
     assert len(integrity) == 39
     assert len(family) == 206
     assert len(primary) == len(set(primary))
     assert len(runtime) == len(set(runtime))
     assert len(output) == len(set(output))
+    assert len(connection_plan) == len(set(connection_plan))
     assert len(integrity) == len(set(integrity))
     assert len(family) == len(set(family))
     assert set(primary).isdisjoint(runtime)
     assert set(primary).isdisjoint(output)
     assert set(primary).isdisjoint(integrity)
+    assert set(primary).isdisjoint(connection_plan)
     assert set(runtime).isdisjoint(output)
+    assert set(runtime).isdisjoint(connection_plan)
     assert set(runtime).isdisjoint(integrity)
+    assert set(output).isdisjoint(connection_plan)
     assert set(output).isdisjoint(integrity)
-    assert set(primary) | set(runtime) | set(output) | set(integrity) == set(family)
+    assert set(connection_plan).isdisjoint(integrity)
+    assert set(primary) | set(runtime) | set(output) | set(connection_plan) | set(
+        integrity
+    ) == set(family)
 
 
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
