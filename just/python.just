@@ -139,7 +139,7 @@ py_js-build:
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
 
-# CI runs these fourteen selectors on isolated runners. Keep the selectors explicit
+# CI runs these fifteen selectors on isolated runners. Keep the selectors explicit
 # so every Python test belongs to exactly one shard and `py_test` remains the
 # single combined local/CI-compatible entry point. Application and integration
 # tests both require built web assets; only integration requires browser routing.
@@ -216,12 +216,17 @@ py_test-ci-infrastructure-sanitizer-evidence-integrity:
 [script]
 py_test-ci-infrastructure-sanitizer-executor:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-executor is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_executor.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{executor,transaction_plan}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-data-contract-executor:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-data-contract-executor is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{data_contract_executor,fixed_catalog_post_projection,source_snapshot}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{data_contract_executor,fixed_catalog_post_projection}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-source-snapshot:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-source-snapshot is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_source_snapshot.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-restore:
