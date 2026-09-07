@@ -45,25 +45,12 @@ ACTIVATION_FAILURE = (
 MAXIMUM_CONTRACT_BYTES = 128 * 1024
 _ZERO = timedelta(0)
 _AUTHORITY_SEAL = object()
-
-_POSITIVE_CLAIMS = {
-    "target_role_database_observation_authenticated": True,
-    "target_role_requirement_partition_authenticated": True,
-    "database_role_name_authenticated": True,
-    "role_posture_authenticated": True,
-    "database_object_privileges_authenticated": True,
-    "public_acl_sources_observed": True,
-    "all_target_and_public_grant_options_absent": True,
-}
+_POSITIVE_CLAIMS = dict.fromkeys(
+    "target_role_database_observation_authenticated target_role_requirement_partition_authenticated database_role_name_authenticated role_posture_authenticated database_object_privileges_authenticated public_acl_sources_observed all_target_and_public_grant_options_absent".split(),
+    True,
+)
 _NEGATIVE_CLAIMS = dict.fromkeys(
-    "database_connection_authority database_mutation_authority "
-    "database_role_state_authenticated effective_session_settings_authenticated "
-    "evidence_publication_authority password_authentication_absence_proven "
-    "post_provision_schema_descriptor_authenticated "
-    "privileged_global_requirements_authenticated provider_calls_permitted "
-    "provider_facts_authenticated provision_job_identity_bound runtime_authority "
-    "sanitizer_authority server_wide_authorization_stability_authenticated "
-    "transaction_committed workflow_integrated write_path_effects_authenticated".split(),
+    "database_connection_authority database_mutation_authority database_role_state_authenticated effective_session_settings_authenticated evidence_publication_authority password_authentication_absence_proven post_provision_schema_descriptor_authenticated privileged_global_requirements_authenticated provider_calls_permitted provider_facts_authenticated provision_job_identity_bound runtime_authority sanitizer_authority server_wide_authorization_stability_authenticated transaction_committed workflow_integrated write_path_effects_authenticated".split(),
     False,
 )
 CLAIMS = {**_POSITIVE_CLAIMS, **_NEGATIVE_CLAIMS}

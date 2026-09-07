@@ -42,13 +42,7 @@ SCRIPT = ROOT / "scripts/staging_restore_sanitizer_target_role_database_observer
 TOKEN = "target-role-observer-token"
 LOCAL_ADDRESS = "10.76.0.40"
 Failure = observer.SanitizerTargetRoleDatabaseObserverFailure
-_PLAN_CACHE: dict[
-    int,
-    tuple[
-        Any,
-        observer._ConnectionPlan,
-    ],
-] = {}
+_PLAN_CACHE: dict[int, tuple[Any, observer._ConnectionPlan]] = {}
 
 
 @contextmanager
@@ -280,6 +274,15 @@ def _assert_sanitized(error: BaseException) -> None:
     assert error.__context__ is None
 
 
+def _isolate_database_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Trust the plan unit boundary; dedicated tests retain full authentication."""
+    monkeypatch.setattr(
+        plan_helpers.plan.SanitizerTargetRoleObservationPlan,
+        "_is_authenticated",
+        lambda _self: True,
+    )
+
+
 def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
     assert hashlib.sha256(CONTRACT.read_bytes()).hexdigest() == observer.CONTRACT_SHA256
     contract = observer.load_target_role_database_observer_contract()
@@ -386,6 +389,7 @@ def test_description_tls_and_socket_mismatches_fail_closed(
     addresses: tuple[str, int, str] | None,
     code: str,
 ) -> None:
+    _isolate_database_failure(monkeypatch)
     case = _case(
         monkeypatch,
         real_chain,
@@ -401,6 +405,8 @@ def test_description_tls_and_socket_mismatches_fail_closed(
 def test_identity_role_and_row_bounds_fail_without_leaking(
     monkeypatch: pytest.MonkeyPatch, real_chain: RealChain
 ) -> None:
+    _isolate_database_failure(monkeypatch)
+
     def wrong_role(rows: dict[str, list[tuple[object, ...]]]) -> None:
         row = list(rows["session_and_role"][0])
         row[2] = "attacker"
@@ -451,6 +457,7 @@ def test_identity_and_connection_failures_are_bounded(
     failure: str,
     code: str,
 ) -> None:
+    _isolate_database_failure(monkeypatch)
     case = _case(
         monkeypatch,
         real_chain,
@@ -517,6 +524,7 @@ def test_final_deadline_is_checked_after_output_authentication(
 def test_transport_and_cleanup_failures_are_bounded(
     monkeypatch: pytest.MonkeyPatch, real_chain: RealChain, failure: str
 ) -> None:
+    _isolate_database_failure(monkeypatch)
     changes = {
         "execute_failure": failure == "execute",
         "cursor_close_failure": failure == "cursor_close",
