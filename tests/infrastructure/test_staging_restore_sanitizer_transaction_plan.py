@@ -110,6 +110,31 @@ def result(artifacts: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(planner=planner, value=value)
 
 
+def _clone_slots(value: Any, **changes: Any) -> Any:
+    copied = object.__new__(type(value))
+    for name in type(value).__slots__:
+        object.__setattr__(copied, name, getattr(value, name))
+    for name, item in changes.items():
+        object.__setattr__(copied, name, item)
+    return copied
+
+
+def _operations(value: Any) -> tuple[Any, ...]:
+    return (value._truncate, *value._inserts)  # noqa: SLF001
+
+
+def _handoff(result: SimpleNamespace) -> Any:
+    return result.planner._copy_verified_plan_for_execution_handoff(  # noqa: SLF001
+        result.value
+    )
+
+
+def _validate_handoff(result: SimpleNamespace, value: Any, now: datetime) -> None:
+    result.planner._validate_verified_plan_execution_handoff_at_current_time(  # noqa: SLF001
+        value, now=now
+    )
+
+
 def test_exact_structured_plan_and_claims(
     result: SimpleNamespace, artifacts: SimpleNamespace
 ) -> None:
@@ -217,6 +242,26 @@ def test_contract_is_hash_pinned_closed_world_and_planning_only() -> None:
         document["authentication"]["candidate_copy_domain"]
         == executor.CANDIDATE_TRANSACTION_COPY_DOMAIN
     )
+    handoff = document["execution_handoff"]
+    assert handoff["kind"] == "sealed-verified-transaction-plan-execution-handoff-v1"
+    assert all(
+        handoff[name] is True
+        for name in "implemented producer_owned exact_type_and_process_local_seal_required fresh_operation_objects_required deep_copied_nested_operation_values_required post_projection_authority_retained evidence_ancestry_retained_transitively authenticated_target_context_retained_transitively start_and_end_plan_reauthentication_required current_time_handoff_validation_required".split()
+    )
+    assert all(
+        handoff[name] is False
+        for name in "original_plan_retained original_operations_retained additional_or_caller_supplied_target_role_runtime_configuration_retained credentials_retained connectors_retained sql_text_retained callbacks_retained hmac_keys_retained".split()
+    )
+    assert handoff["authority"] == plan._NEGATIVE_CLAIMS  # noqa: SLF001
+    assert document["authentication"]["execution_handoff_copy_key"] == "transform_key"
+    assert (
+        document["authentication"]["execution_handoff_copy_domain"]
+        == plan.TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN
+    )
+    assert (
+        document["authentication"]["constant_time_execution_handoff_proof_comparison"]
+        is True
+    )
     assert (
         len(
             {
@@ -227,9 +272,10 @@ def test_contract_is_hash_pinned_closed_world_and_planning_only() -> None:
                 projection.AUTHORITY_DOMAIN,
                 plan.OPERATION_PROJECTION_DOMAIN,
                 plan.AUTHORITY_DOMAIN,
+                plan.TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN,
             }
         )
-        == 7
+        == 8
     )
 
 
@@ -486,3 +532,311 @@ def test_planner_has_no_candidate_introspection_or_execution_surface() -> None:
         "|"
     )
     assert not any(token in value for token in forbidden for value in strings)
+
+
+def test_execution_handoff_is_a_deep_nonaliased_exact_plan_copy(
+    result: SimpleNamespace,
+) -> None:
+    original, copied = result.value, _handoff(result)
+    _validate_handoff(result, copied, PREFLIGHT_AT)
+    assert type(copied) is plan._VerifiedTransactionPlanExecutionHandoff  # noqa: SLF001
+    assert copied.copied_at == PREFLIGHT_AT
+    public = (
+        *plan._PUBLIC_FIXED,
+        "planned_insert_row_count",
+        "transform_key_version",
+        "planned_at",
+    )  # noqa: SLF001
+    assert all(getattr(copied, name) == getattr(original, name) for name in public)
+    assert copied._authenticated_post_projection is (  # noqa: SLF001
+        original._authenticated_post_projection  # noqa: SLF001
+    )
+    lineage = "_candidate_dataset_identity _candidate_dataset_proof_sha256 _candidate_dataset_contract_sha256 _candidate_copy_proof_sha256 _source_snapshot_identity _source_snapshot_proof_sha256 _source_snapshot_contract_sha256 _operation_projection_sha256 _contract_sha256".split()
+    assert tuple(getattr(copied, name) for name in lineage) == tuple(
+        getattr(original, name) for name in lineage
+    )
+    original_operations, copied_operations = _operations(original), _operations(copied)
+    assert plan._operation_material(copied._truncate, copied._inserts) == (  # noqa: SLF001
+        plan._operation_material(original._truncate, original._inserts)  # noqa: SLF001
+    )
+    assert len(original_operations) == len(copied_operations) == 20
+    assert all(
+        copied_operation is not original_operation
+        for original_operation, copied_operation in zip(
+            original_operations, copied_operations, strict=True
+        )
+    )
+    expected_metadata = (
+        id(original),
+        id(type(original)),
+        id(original._seal),  # noqa: SLF001
+        original._proof_sha256,  # noqa: SLF001
+        tuple(id(item) for item in original_operations),
+        tuple(id(type(item)) for item in original_operations),
+        tuple(id(item._seal) for item in original_operations),  # noqa: SLF001
+    )
+    metadata = "_transaction_plan_identity _transaction_plan_type_identity _transaction_plan_seal_identity _transaction_plan_proof_sha256 _transaction_plan_operation_identities _transaction_plan_operation_type_identities _transaction_plan_operation_seal_identities".split()
+    assert tuple(getattr(copied, name) for name in metadata) == expected_metadata
+    original_map = next(
+        item
+        for operation in original._inserts  # noqa: SLF001
+        for row in operation._values  # noqa: SLF001
+        for item in row
+        if type(item) is executor._FrozenMap  # noqa: SLF001
+    )
+    copied_map = next(
+        item
+        for operation in copied._inserts  # noqa: SLF001
+        for row in operation._values  # noqa: SLF001
+        for item in row
+        if type(item) is executor._FrozenMap  # noqa: SLF001
+    )
+    assert copied_map == original_map and copied_map is not original_map
+
+
+def test_execution_handoff_is_opaque_exact_and_nonserializable(
+    result: SimpleNamespace,
+) -> None:
+    copied = _handoff(result)
+    rendered = repr(copied)
+    assert "sealed" in rendered and "person@example" not in rendered
+    with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+        plan._VerifiedTransactionPlanExecutionHandoff()  # noqa: SLF001
+    with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+        pickle.dumps(copied)
+    with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+        copied.unapproved = True
+
+    class HandoffSubclass(plan._VerifiedTransactionPlanExecutionHandoff):  # noqa: SLF001
+        pass
+
+    forged = object.__new__(HandoffSubclass)
+    with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+        _validate_handoff(result, forged, PREFLIGHT_AT)
+
+
+def test_execution_handoff_rejects_scalar_proof_domain_and_operation_tampering(
+    result: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copied = _handoff(result)
+    first_insert = copied._inserts[0]  # noqa: SLF001
+    for owner, field, replacement in (
+        (copied, "planned_insert_row_count", copied.planned_insert_row_count + 1),
+        (copied, "_proof_sha256", "0" * 64),
+        (first_insert, "_whole_table_batch", False),
+    ):
+        original = getattr(owner, field)
+        object.__setattr__(owner, field, replacement)
+        try:
+            with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+                _validate_handoff(result, copied, PREFLIGHT_AT)
+        finally:
+            object.__setattr__(owner, field, original)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            plan,
+            "TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN",
+            plan.AUTHORITY_DOMAIN,
+        )
+        with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+            _validate_handoff(result, copied, PREFLIGHT_AT)
+
+
+def test_execution_handoff_rejects_valid_plan_substitution_and_input_mutation(
+    result: SimpleNamespace,
+    artifacts: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    other = _planner().prepare(
+        authenticated_post_projection=artifacts.authority,
+        sanitizer_candidate=artifacts.candidate,
+    )
+    copied = _handoff(result)
+    other_operations = _operations(other)
+    replacements = {
+        "_transaction_plan_identity": id(other),
+        "_transaction_plan_proof_sha256": other._proof_sha256,  # noqa: SLF001
+        "_transaction_plan_operation_identities": tuple(
+            id(item) for item in other_operations
+        ),
+    }
+    originals = {name: getattr(copied, name) for name in replacements}
+    try:
+        for name, item in replacements.items():
+            object.__setattr__(copied, name, item)
+        with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+            _validate_handoff(result, copied, PREFLIGHT_AT)
+    finally:
+        for name, item in originals.items():
+            object.__setattr__(copied, name, item)
+
+    planner_type = plan.SanitizerSerializableTransactionPlanner
+    copy_method = planner_type._copy_operations_for_execution_handoff
+
+    def mutate_proof(self: Any, value: Any) -> Any:
+        operations = copy_method(self, value)
+        object.__setattr__(value, "_proof_sha256", "0" * 64)
+        return operations
+
+    def replace_equal_operation(self: Any, value: Any) -> Any:
+        operations = copy_method(self, value)
+        equal_insert = _clone_slots(value._inserts[0])  # noqa: SLF001
+        object.__setattr__(value, "_inserts", (equal_insert, *value._inserts[1:]))  # noqa: SLF001
+        return operations
+
+    original = result.value._proof_sha256, result.value._inserts  # noqa: SLF001
+    for mutation in (mutate_proof, replace_equal_operation):
+        with monkeypatch.context() as scoped:
+            scoped.setattr(planner_type, copy_method.__name__, mutation)
+            try:
+                with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+                    _handoff(result)
+            finally:
+                object.__setattr__(result.value, "_proof_sha256", original[0])
+                object.__setattr__(result.value, "_inserts", original[1])
+
+
+def test_execution_handoff_rejects_copy_only_nested_value_mutation(
+    result: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    planner_type = plan.SanitizerSerializableTransactionPlanner
+    copy_method = planner_type._copy_operations_for_execution_handoff
+    changed = [False]
+
+    def corrupt_copy(self: Any, value: Any) -> Any:
+        truncate, inserts = copy_method(self, value)
+        for operation in inserts:
+            for row_index, row in enumerate(operation._values):  # noqa: SLF001
+                for value_index, item in enumerate(row):
+                    if type(item) is executor._FrozenMap:  # noqa: SLF001
+                        replacement = executor._FrozenMap(  # noqa: SLF001
+                            (*item._items, ("copy_only", "tampered"))  # noqa: SLF001
+                        )
+                        new_row = (
+                            *row[:value_index],
+                            replacement,
+                            *row[value_index + 1 :],
+                        )
+                        new_values = (
+                            *operation._values[:row_index],  # noqa: SLF001
+                            new_row,
+                            *operation._values[row_index + 1 :],  # noqa: SLF001
+                        )
+                        object.__setattr__(operation, "_values", new_values)
+                        changed[0] = True
+                        return truncate, inserts
+        raise AssertionError("fixture has no nested frozen value")
+
+    monkeypatch.setattr(
+        planner_type,
+        "_copy_operations_for_execution_handoff",
+        corrupt_copy,
+    )
+    with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+        _handoff(result)
+    assert changed == [True]
+
+
+def test_execution_handoff_rejects_clock_regression_expiry_and_invalid_shape(
+    result: SimpleNamespace,
+) -> None:
+    copied = _handoff(result)
+    with pytest.raises(FAILURE, match="^transaction_plan.clock_invalid$"):
+        _validate_handoff(result, copied, datetime(2026, 9, 5))
+    with pytest.raises(FAILURE, match="^transaction_plan.clock_regressed$"):
+        _validate_handoff(result, copied, PREFLIGHT_AT - timedelta(seconds=1))
+    with pytest.raises(FAILURE, match="^transaction_plan.target_expired$"):
+        _validate_handoff(result, copied, PREFLIGHT_AT + timedelta(days=1))
+    with pytest.raises(FAILURE, match="^transaction_plan.clock_regressed$"):
+        _planner(
+            PREFLIGHT_AT,
+            PREFLIGHT_AT - timedelta(seconds=1),
+        )._copy_verified_plan_for_execution_handoff(result.value)  # noqa: SLF001
+    with pytest.raises(FAILURE, match="^transaction_plan.target_expired$"):
+        _planner(
+            PREFLIGHT_AT,
+            PREFLIGHT_AT,
+            PREFLIGHT_AT + timedelta(days=1),
+        )._copy_verified_plan_for_execution_handoff(result.value)  # noqa: SLF001
+    calls, original_proof = [0], result.value._proof_sha256  # noqa: SLF001
+
+    def mutate_at_final_clock() -> datetime:
+        calls[0] += 1
+        if calls[0] == 3:
+            object.__setattr__(result.value, "_proof_sha256", "0" * 64)
+        return PREFLIGHT_AT
+
+    try:
+        with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+            _planner(
+                clock=mutate_at_final_clock
+            )._copy_verified_plan_for_execution_handoff(  # noqa: SLF001
+                result.value
+            )
+    finally:
+        object.__setattr__(result.value, "_proof_sha256", original_proof)
+    assert calls == [3]
+
+
+def test_execution_handoff_rejects_hostile_shapes_without_callbacks(
+    result: SimpleNamespace,
+) -> None:
+    callbacks: list[str] = []
+
+    class HostileTuple(tuple[Any, ...]):
+        def __iter__(self) -> Any:
+            callbacks.append("iterated")
+            raise AssertionError
+
+    class HostileStr(str):
+        def __eq__(self, other: object) -> bool:
+            del other
+            callbacks.append("compared")
+            raise AssertionError
+
+        def __ne__(self, other: object) -> bool:
+            del other
+            callbacks.append("compared")
+            raise AssertionError
+
+    class HostilePlan:
+        def __getattr__(self, name: str) -> Any:
+            callbacks.append(name)
+            raise AssertionError
+
+    copied = _handoff(result)
+    for field, replacement in (
+        ("_inserts", HostileTuple(copied._inserts)),  # noqa: SLF001
+        (
+            "_transaction_plan_proof_sha256",
+            HostileStr(copied._transaction_plan_proof_sha256),  # noqa: SLF001
+        ),
+    ):
+        original = getattr(copied, field)
+        object.__setattr__(copied, field, replacement)
+        try:
+            with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+                _validate_handoff(result, copied, PREFLIGHT_AT)
+        finally:
+            object.__setattr__(copied, field, original)
+    with pytest.raises(FAILURE, match="^transaction_plan.output_invalid$"):
+        result.planner._copy_verified_plan_for_execution_handoff(  # type: ignore[arg-type]  # noqa: SLF001
+            HostilePlan()
+        )
+    assert callbacks == []
+
+
+def test_execution_handoff_retains_no_direct_execution_config_or_sensitive_inputs(
+    result: SimpleNamespace,
+) -> None:
+    copied = _handoff(result)
+    slots = set(type(copied).__slots__)
+    assert not hasattr(copied, "__dict__")
+    forbidden = "_transaction_plan _plan _candidate _candidate_dataset _candidate_copy _source_snapshot _inventory_hmac_key _transform_key _key _dsn _sql _connector _connection _callback _clock _target _target_binding _role _database_role _runtime".split()
+    assert slots.isdisjoint(forbidden)
+    assert copied._authenticated_post_projection is not None  # noqa: SLF001
+    assert all(
+        getattr(copied, name) is False
+        for name in "database_connection_authority database_mutation_authority executable runtime_authority transaction_executed workflow_integrated".split()
+    )

@@ -36,7 +36,7 @@ POST_PROJECTION_CONTRACT_SHA256 = (
     "88d0f564ec52a060dd30b308a9d669173a078acd2c1ba7ee06744301a5c89f6f"
 )
 TRANSACTION_PLAN_CONTRACT_SHA256 = (
-    "37410f7ec560aa49f8eb708023d5fcc1170fd27f82441bdf611171e4b30e643a"
+    "374fefc36125a3c5e74d54e4fd67b8b92c229c256aaed6fca19ef4b13b172732"
 )
 ACTIVATION_FAILURE = "activation.data_contract_executor_unimplemented"
 SCHEMA_PROFILE = "pre"
@@ -48,6 +48,9 @@ APPLICATION_TABLE_COUNT, REWRITE_TABLE_COUNT, REWRITE_COLUMN_COUNT = 62, 19, 204
 DISCARD_TABLE_COUNT, DISCARD_COLUMN_COUNT, REQUIRED_EMPTY_TABLE_COUNT = 10, 139, 33
 OPERATION_PROJECTION_DOMAIN = "transaction-plan:operation-projection"
 AUTHORITY_DOMAIN = "transaction-plan:authority"
+TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN = (
+    "transaction-plan:execution-handoff-copy"
+)
 INSERT_TABLE_ORDER = (
     "authority_actor",
     "authority_person",
@@ -105,11 +108,23 @@ _PUBLIC_FIXED = {
     **_POSITIVE_CLAIMS,
     **_NEGATIVE_CLAIMS,
 }
+_PLAN_PUBLIC_NAMES = (
+    *_PUBLIC_FIXED,
+    "planned_insert_row_count",
+    "transform_key_version",
+    "planned_at",
+)
+_HANDOFF_PUBLIC_NAMES = (*_PLAN_PUBLIC_NAMES, "copied_at")
 _FAILURE_CODES = frozenset(
     f"transaction_plan.{suffix}"
     for suffix in "authority_invalid candidate_invalid clock_invalid clock_regressed configuration_invalid output_invalid policy_invalid target_expired".split()
 )
-_TRUNCATE_SEAL, _INSERT_SEAL, _PLAN_SEAL = object(), object(), object()
+_TRUNCATE_SEAL, _INSERT_SEAL, _PLAN_SEAL, _EXECUTION_HANDOFF_SEAL = (
+    object(),
+    object(),
+    object(),
+    object(),
+)
 
 
 class SanitizerTransactionPlanFailure(RuntimeError):
@@ -196,7 +211,12 @@ def _canonical(value: Any) -> bytes:
 def _digest(key: bytes, domain: str, value: bytes) -> str:
     if (
         type(key) is not bytes
-        or domain not in {OPERATION_PROJECTION_DOMAIN, AUTHORITY_DOMAIN}
+        or domain
+        not in {
+            OPERATION_PROJECTION_DOMAIN,
+            AUTHORITY_DOMAIN,
+            TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN,
+        }
         or type(value) is not bytes
     ):
         _fail("transaction_plan.configuration_invalid")
@@ -348,6 +368,64 @@ class AuthenticatedSanitizerTransactionPlan(_Opaque):
     _seal: object
 
 
+class _VerifiedTransactionPlanExecutionHandoff(_Opaque):
+    __slots__ = (
+        *_PUBLIC_FIXED,
+        "planned_insert_row_count",
+        "transform_key_version",
+        "planned_at",
+        "copied_at",
+        "_truncate",
+        "_inserts",
+        "_authenticated_post_projection",
+        "_candidate_dataset_identity",
+        "_candidate_dataset_proof_sha256",
+        "_candidate_dataset_contract_sha256",
+        "_candidate_copy_proof_sha256",
+        "_source_snapshot_identity",
+        "_source_snapshot_proof_sha256",
+        "_source_snapshot_contract_sha256",
+        "_operation_projection_sha256",
+        "_contract_sha256",
+        "_transaction_plan_identity",
+        "_transaction_plan_type_identity",
+        "_transaction_plan_seal_identity",
+        "_transaction_plan_proof_sha256",
+        "_transaction_plan_operation_identities",
+        "_transaction_plan_operation_type_identities",
+        "_transaction_plan_operation_seal_identities",
+        "_proof_sha256",
+        "_seal",
+    )
+    planned_insert_row_count: int
+    transform_key_version: str
+    planned_at: datetime
+    copied_at: datetime
+    _truncate: _TruncatePlanOperation
+    _inserts: tuple[_InsertPlanOperation, ...]
+    _authenticated_post_projection: (
+        post_projection.AuthenticatedFixedCatalogPostProjection
+    )
+    _candidate_dataset_identity: int
+    _candidate_dataset_proof_sha256: str
+    _candidate_dataset_contract_sha256: str
+    _candidate_copy_proof_sha256: str
+    _source_snapshot_identity: int
+    _source_snapshot_proof_sha256: str
+    _source_snapshot_contract_sha256: str
+    _operation_projection_sha256: str
+    _contract_sha256: str
+    _transaction_plan_identity: int
+    _transaction_plan_type_identity: int
+    _transaction_plan_seal_identity: int
+    _transaction_plan_proof_sha256: str
+    _transaction_plan_operation_identities: tuple[int, ...]
+    _transaction_plan_operation_type_identities: tuple[int, ...]
+    _transaction_plan_operation_seal_identities: tuple[int, ...]
+    _proof_sha256: str
+    _seal: object
+
+
 def _set(value: object, **fields: Any) -> None:
     for name, item in fields.items():
         object.__setattr__(value, name, item)
@@ -382,15 +460,7 @@ def _operation_material(
 
 def _authority_material(value: AuthenticatedSanitizerTransactionPlan) -> bytes:
     authority = value._authenticated_post_projection
-    public = tuple(
-        (name, getattr(value, name))
-        for name in (
-            *_PUBLIC_FIXED,
-            "planned_insert_row_count",
-            "transform_key_version",
-            "planned_at",
-        )
-    )
+    public = tuple((name, getattr(value, name)) for name in _PLAN_PUBLIC_NAMES)
     return _canonical(
         (
             ("plan_identity", id(value)),
@@ -423,6 +493,156 @@ def _authority_material(value: AuthenticatedSanitizerTransactionPlan) -> bytes:
                 ),
             ),
             ("operation_projection_sha256", value._operation_projection_sha256),
+        )
+    )
+
+
+def _plan_authority_material_from_handoff(
+    value: _VerifiedTransactionPlanExecutionHandoff,
+) -> bytes:
+    authority = value._authenticated_post_projection
+    public = tuple((name, getattr(value, name)) for name in _PLAN_PUBLIC_NAMES)
+    return _canonical(
+        (
+            ("plan_identity", value._transaction_plan_identity),
+            ("contract_sha256", value._contract_sha256),
+            ("public", public),
+            (
+                "post_projection",
+                (
+                    id(authority),
+                    id(type(authority)),
+                    id(authority._seal),
+                    authority._proof_sha256,
+                ),
+            ),  # noqa: SLF001
+            (
+                "candidate",
+                (
+                    value._candidate_dataset_identity,
+                    value._candidate_dataset_proof_sha256,
+                    value._candidate_dataset_contract_sha256,
+                    value._candidate_copy_proof_sha256,
+                ),
+            ),
+            (
+                "source",
+                (
+                    value._source_snapshot_identity,
+                    value._source_snapshot_proof_sha256,
+                    value._source_snapshot_contract_sha256,
+                ),
+            ),
+            ("operation_projection_sha256", value._operation_projection_sha256),
+        )
+    )
+
+
+def _operation_identities(
+    truncate: _TruncatePlanOperation, inserts: tuple[_InsertPlanOperation, ...]
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    operations = (truncate, *inserts)
+    return (
+        tuple(id(item) for item in operations),
+        tuple(id(type(item)) for item in operations),
+        tuple(id(item._seal) for item in operations),
+    )
+
+
+def _transaction_plan_copy_source_material(
+    value: AuthenticatedSanitizerTransactionPlan,
+) -> bytes:
+    identities, type_identities, seal_identities = _operation_identities(
+        value._truncate, value._inserts
+    )
+    return _canonical(
+        (
+            ("plan_identity", id(value)),
+            ("plan_type_identity", id(type(value))),
+            ("plan_seal_identity", id(value._seal)),
+            ("plan_proof_sha256", value._proof_sha256),
+            (
+                "plan_authority_material_sha256",
+                hashlib.sha256(_authority_material(value)).hexdigest(),
+            ),
+            ("operation_identities", identities),
+            ("operation_type_identities", type_identities),
+            ("operation_seal_identities", seal_identities),
+            ("operations", _operation_material(value._truncate, value._inserts)),
+        )
+    )
+
+
+def _execution_handoff_material(
+    value: _VerifiedTransactionPlanExecutionHandoff,
+) -> bytes:
+    authority = value._authenticated_post_projection
+    identities, type_identities, seal_identities = _operation_identities(
+        value._truncate, value._inserts
+    )
+    public = tuple((name, getattr(value, name)) for name in _HANDOFF_PUBLIC_NAMES)
+    return _canonical(
+        (
+            (
+                "handoff",
+                (id(value), id(type(value)), id(value._seal)),
+            ),
+            ("contract_sha256", value._contract_sha256),
+            ("public", public),
+            (
+                "transaction_plan",
+                (
+                    value._transaction_plan_identity,
+                    value._transaction_plan_type_identity,
+                    value._transaction_plan_seal_identity,
+                    value._transaction_plan_proof_sha256,
+                    value._transaction_plan_operation_identities,
+                    value._transaction_plan_operation_type_identities,
+                    value._transaction_plan_operation_seal_identities,
+                    _plan_authority_material_from_handoff(value).decode("utf-8"),
+                ),
+            ),
+            (
+                "post_projection",
+                (
+                    id(authority),
+                    id(type(authority)),
+                    id(authority._seal),
+                    authority._proof_sha256,
+                    post_projection._authority_material(authority).decode("utf-8"),  # noqa: SLF001
+                    id(authority._authenticated_evidence),  # noqa: SLF001
+                    id(type(authority._authenticated_evidence)),  # noqa: SLF001
+                    id(authority._authenticated_evidence._seal),  # noqa: SLF001
+                    authority._authenticated_evidence._proof_sha256,  # noqa: SLF001
+                ),
+            ),
+            (
+                "candidate",
+                (
+                    value._candidate_dataset_identity,
+                    value._candidate_dataset_proof_sha256,
+                    value._candidate_dataset_contract_sha256,
+                    value._candidate_copy_proof_sha256,
+                ),
+            ),
+            (
+                "source",
+                (
+                    value._source_snapshot_identity,
+                    value._source_snapshot_proof_sha256,
+                    value._source_snapshot_contract_sha256,
+                ),
+            ),
+            ("operation_projection_sha256", value._operation_projection_sha256),
+            (
+                "copied_operations",
+                (
+                    identities,
+                    type_identities,
+                    seal_identities,
+                    _operation_material(value._truncate, value._inserts),
+                ),
+            ),
         )
     )
 
@@ -622,6 +842,18 @@ class SanitizerSerializableTransactionPlanner:
             "commit_operation_permitted": False,
             "rollback_operation_permitted": False,
         }
+        execution_handoff = {
+            "kind": "sealed-verified-transaction-plan-execution-handoff-v1",
+            **dict.fromkeys(
+                "implemented producer_owned exact_type_and_process_local_seal_required fresh_operation_objects_required deep_copied_nested_operation_values_required post_projection_authority_retained evidence_ancestry_retained_transitively authenticated_target_context_retained_transitively start_and_end_plan_reauthentication_required current_time_handoff_validation_required".split(),
+                True,
+            ),
+            **dict.fromkeys(
+                "original_plan_retained original_operations_retained additional_or_caller_supplied_target_role_runtime_configuration_retained credentials_retained connectors_retained sql_text_retained callbacks_retained hmac_keys_retained".split(),
+                False,
+            ),
+            "authority": _NEGATIVE_CLAIMS,
+        }
         future = sanitizer.get("execution_contract", {}).get(
             "future_transaction_requirements", {}
         )
@@ -658,6 +890,7 @@ class SanitizerSerializableTransactionPlanner:
             or contract.get("upstream") != upstream
             or contract.get("schema") != schema
             or contract.get("transaction") != transaction
+            or contract.get("execution_handoff") != execution_handoff
             or contract.get("claims") != {**_POSITIVE_CLAIMS, **_NEGATIVE_CLAIMS}
             or contract.get("status", {}).get("planning_only") is not True
             or contract.get("status", {}).get(
@@ -676,6 +909,14 @@ class SanitizerSerializableTransactionPlanner:
             != OPERATION_PROJECTION_DOMAIN
             or contract.get("authentication", {}).get("authority_domain")
             != AUTHORITY_DOMAIN
+            or contract.get("authentication", {}).get("execution_handoff_copy_key")
+            != "transform_key"
+            or contract.get("authentication", {}).get("execution_handoff_copy_domain")
+            != TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN
+            or contract.get("authentication", {}).get(
+                "constant_time_execution_handoff_proof_comparison"
+            )
+            is not True
             or len(
                 {
                     data_executor.CANDIDATE_PROOF_DOMAIN,
@@ -685,9 +926,10 @@ class SanitizerSerializableTransactionPlanner:
                     post_projection.AUTHORITY_DOMAIN,
                     OPERATION_PROJECTION_DOMAIN,
                     AUTHORITY_DOMAIN,
+                    TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN,
                 }
             )
-            != 7
+            != 8
             or sanitizer.get("execution_contract", {}).get("implemented") is not False
             or future.get("isolation") != "serializable"
             or future.get("synchronous_commit") != "on"
@@ -888,19 +1130,27 @@ class SanitizerSerializableTransactionPlanner:
         if (
             type(truncate) is not _TruncatePlanOperation
             or truncate._seal is not _TRUNCATE_SEAL
+            or type(truncate._tables) is not tuple
+            or any(type(item) is not str for item in truncate._tables)
             or truncate._tables != self._pre_tables
+            or type(truncate._cascade) is not bool
             or truncate._cascade is not False
+            or type(truncate._restart_identity) is not bool
             or truncate._restart_identity is not False
+            or type(truncate._triggers_disabled) is not bool
             or truncate._triggers_disabled is not False
             or type(inserts) is not tuple
             or len(inserts) != REWRITE_TABLE_COUNT
             or any(type(item) is not _InsertPlanOperation for item in inserts)
+            or any(type(item._table) is not str for item in inserts)
             or tuple(item._table for item in inserts) != INSERT_TABLE_ORDER
         ):
             _fail("transaction_plan.output_invalid")
         for item in inserts:
             if (
                 item._seal is not _INSERT_SEAL
+                or type(item._columns) is not tuple
+                or any(type(column) is not str for column in item._columns)
                 or item._columns != columns[item._table]
                 or type(item._values) is not tuple
                 or any(
@@ -909,7 +1159,9 @@ class SanitizerSerializableTransactionPlanner:
                     or not all(data_executor._is_frozen(value) for value in row)
                     for row in item._values
                 )
+                or type(item._whole_table_batch) is not bool
                 or item._whole_table_batch is not True
+                or type(item._on_conflict_permitted) is not bool
                 or item._on_conflict_permitted is not False
             ):  # noqa: SLF001
                 _fail("transaction_plan.output_invalid")
@@ -929,6 +1181,332 @@ class SanitizerSerializableTransactionPlanner:
             ("operations", _operation_material(truncate, inserts)),
         )
         return _digest(self._key, OPERATION_PROJECTION_DOMAIN, _canonical(material))
+
+    def _copy_operations_for_execution_handoff(
+        self, value: AuthenticatedSanitizerTransactionPlan
+    ) -> tuple[_TruncatePlanOperation, tuple[_InsertPlanOperation, ...]]:
+        if (
+            type(self) is not SanitizerSerializableTransactionPlanner
+            or type(value) is not AuthenticatedSanitizerTransactionPlan
+        ):
+            _fail("transaction_plan.output_invalid")
+        self._validate_operations(value._truncate, value._inserts)
+        try:
+            truncate = object.__new__(_TruncatePlanOperation)
+            _set(
+                truncate,
+                _tables=tuple(name for name in value._truncate._tables),
+                _cascade=value._truncate._cascade,
+                _restart_identity=value._truncate._restart_identity,
+                _triggers_disabled=value._truncate._triggers_disabled,
+                _seal=_TRUNCATE_SEAL,
+            )
+            inserts = []
+            for source in value._inserts:
+                operation = object.__new__(_InsertPlanOperation)
+                _set(
+                    operation,
+                    _table=source._table,
+                    _columns=tuple(column for column in source._columns),
+                    _values=tuple(
+                        tuple(
+                            data_executor._copy_candidate_value(item)  # noqa: SLF001
+                            for item in row
+                        )
+                        for row in source._values
+                    ),
+                    _whole_table_batch=source._whole_table_batch,
+                    _on_conflict_permitted=source._on_conflict_permitted,
+                    _seal=_INSERT_SEAL,
+                )
+                inserts.append(operation)
+        except SanitizerTransactionPlanFailure:
+            raise
+        except Exception:
+            _fail("transaction_plan.output_invalid")
+        result = truncate, tuple(inserts)
+        self._validate_operations(*result)
+        original_operations = (value._truncate, *value._inserts)
+        copied_operations = (result[0], *result[1])
+        if len({id(item) for item in copied_operations}) != len(
+            copied_operations
+        ) or any(
+            copied is original
+            for copied, original in zip(
+                copied_operations, original_operations, strict=True
+            )
+        ):
+            _fail("transaction_plan.output_invalid")
+        return result
+
+    def _copy_verified_plan_for_execution_handoff(
+        self, value: AuthenticatedSanitizerTransactionPlan
+    ) -> _VerifiedTransactionPlanExecutionHandoff:
+        code = "transaction_plan.output_invalid"
+        if type(self) is SanitizerSerializableTransactionPlanner:
+            try:
+                return self._copy_plan_execution_handoff(value)
+            except Exception as error:
+                code = _bounded_code(error, code)
+        del self, value
+        _fail(code)
+
+    def _copy_plan_execution_handoff(
+        self, value: AuthenticatedSanitizerTransactionPlan
+    ) -> _VerifiedTransactionPlanExecutionHandoff:
+        if (
+            type(self) is not SanitizerSerializableTransactionPlanner
+            or type(value) is not AuthenticatedSanitizerTransactionPlan
+        ):
+            _fail("transaction_plan.output_invalid")
+        first_at = self._read_clock()
+        self._validate(value, first_at)
+        source_material = _transaction_plan_copy_source_material(value)
+        operation_identities = _operation_identities(value._truncate, value._inserts)
+        public = {name: getattr(value, name) for name in _PLAN_PUBLIC_NAMES}
+        authority = value._authenticated_post_projection
+        lineage = (
+            value._candidate_dataset_identity,
+            value._candidate_dataset_proof_sha256,
+            value._candidate_dataset_contract_sha256,
+            value._candidate_copy_proof_sha256,
+            value._source_snapshot_identity,
+            value._source_snapshot_proof_sha256,
+            value._source_snapshot_contract_sha256,
+            value._operation_projection_sha256,
+            value._contract_sha256,
+            value._proof_sha256,
+        )
+        plan_metadata = (id(value), id(type(value)), id(value._seal))
+        copied_operations = self._copy_operations_for_execution_handoff(value)
+        copied_at = self._read_clock()
+        self._validate(value, copied_at)
+        if not hmac.compare_digest(
+            source_material, _transaction_plan_copy_source_material(value)
+        ):
+            _fail("transaction_plan.output_invalid")
+        copied_projection = self._projection(
+            authority._proof_sha256,
+            lineage[1],
+            *copied_operations,
+        )  # noqa: SLF001
+        if not hmac.compare_digest(lineage[7], copied_projection):
+            _fail("transaction_plan.output_invalid")
+        handoff = object.__new__(_VerifiedTransactionPlanExecutionHandoff)
+        _set(
+            handoff,
+            **public,
+            copied_at=copied_at,
+            _truncate=copied_operations[0],
+            _inserts=copied_operations[1],
+            _authenticated_post_projection=authority,
+            _candidate_dataset_identity=lineage[0],
+            _candidate_dataset_proof_sha256=lineage[1],
+            _candidate_dataset_contract_sha256=lineage[2],
+            _candidate_copy_proof_sha256=lineage[3],
+            _source_snapshot_identity=lineage[4],
+            _source_snapshot_proof_sha256=lineage[5],
+            _source_snapshot_contract_sha256=lineage[6],
+            _operation_projection_sha256=lineage[7],
+            _contract_sha256=lineage[8],
+            _transaction_plan_identity=plan_metadata[0],
+            _transaction_plan_type_identity=plan_metadata[1],
+            _transaction_plan_seal_identity=plan_metadata[2],
+            _transaction_plan_proof_sha256=lineage[9],
+            _transaction_plan_operation_identities=operation_identities[0],
+            _transaction_plan_operation_type_identities=operation_identities[1],
+            _transaction_plan_operation_seal_identities=operation_identities[2],
+            _seal=_EXECUTION_HANDOFF_SEAL,
+        )
+        object.__setattr__(
+            handoff,
+            "_proof_sha256",
+            _digest(
+                self._key,
+                TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN,
+                _execution_handoff_material(handoff),
+            ),
+        )
+        finalized_at = self._read_clock()
+        self._validate(value, finalized_at)
+        if not hmac.compare_digest(
+            source_material, _transaction_plan_copy_source_material(value)
+        ):
+            _fail("transaction_plan.output_invalid")
+        self._validate_verified_plan_execution_handoff_at_current_time(
+            handoff, now=finalized_at
+        )
+        return handoff
+
+    def _validate_verified_plan_execution_handoff_at_current_time(
+        self,
+        value: _VerifiedTransactionPlanExecutionHandoff,
+        *,
+        now: datetime,
+    ) -> None:
+        code = "transaction_plan.output_invalid"
+        if type(self) is SanitizerSerializableTransactionPlanner:
+            try:
+                self._validate_execution_handoff(value, now=now)
+                return
+            except Exception as error:
+                code = _bounded_code(error, code)
+        del self, value, now
+        _fail(code)
+
+    def _validate_execution_handoff(
+        self,
+        value: _VerifiedTransactionPlanExecutionHandoff,
+        *,
+        now: datetime,
+    ) -> None:
+        if (
+            type(self) is not SanitizerSerializableTransactionPlanner
+            or type(value) is not _VerifiedTransactionPlanExecutionHandoff
+            or value._seal is not _EXECUTION_HANDOFF_SEAL
+        ):
+            _fail("transaction_plan.output_invalid")
+        if (
+            type(now) is not datetime
+            or now.tzinfo is not UTC
+            or now.utcoffset() != _ZERO
+            or now.microsecond
+            or now.fold
+        ):
+            _fail("transaction_plan.clock_invalid")
+        if (
+            type(value.planned_at) is not datetime
+            or value.planned_at.tzinfo is not UTC
+            or value.planned_at.utcoffset() != _ZERO
+            or value.planned_at.microsecond
+            or value.planned_at.fold
+            or type(value.copied_at) is not datetime
+            or value.copied_at.tzinfo is not UTC
+            or value.copied_at.utcoffset() != _ZERO
+            or value.copied_at.microsecond
+            or value.copied_at.fold
+            or value.planned_at > value.copied_at
+        ):
+            _fail("transaction_plan.output_invalid")
+        if value.copied_at > now:
+            _fail("transaction_plan.clock_regressed")
+        authority = value._authenticated_post_projection
+        if (
+            type(authority)
+            is not post_projection.AuthenticatedFixedCatalogPostProjection
+            or authority._seal is not post_projection._AUTHORITY_SEAL
+        ):
+            _fail("transaction_plan.output_invalid")
+        self._post_authenticator._validate(authority, now)  # noqa: SLF001
+        expected = {**_PUBLIC_FIXED, "transform_key_version": self._key_version}
+        identity_groups = (
+            value._transaction_plan_operation_identities,
+            value._transaction_plan_operation_type_identities,
+            value._transaction_plan_operation_seal_identities,
+        )
+        operation_count = 1 + REWRITE_TABLE_COUNT
+        expected_type_identities = (id(_TruncatePlanOperation),) + (
+            id(_InsertPlanOperation),
+        ) * REWRITE_TABLE_COUNT
+        expected_seal_identities = (id(_TRUNCATE_SEAL),) + (
+            id(_INSERT_SEAL),
+        ) * REWRITE_TABLE_COUNT
+        if (
+            any(
+                type(getattr(value, name)) is not type(item)
+                or getattr(value, name) != item
+                for name, item in expected.items()
+            )
+            or type(value.planned_insert_row_count) is not int
+            or value.planned_insert_row_count < 0
+            or any(
+                type(item) is not int or item <= 0
+                for item in (
+                    value._candidate_dataset_identity,
+                    value._source_snapshot_identity,
+                    value._transaction_plan_identity,
+                    value._transaction_plan_type_identity,
+                    value._transaction_plan_seal_identity,
+                )
+            )
+            or any(
+                type(group) is not tuple
+                or len(group) != operation_count
+                or any(type(item) is not int or item <= 0 for item in group)
+                for group in identity_groups
+            )
+            or len(set(value._transaction_plan_operation_identities)) != operation_count
+            or value._transaction_plan_type_identity
+            != id(AuthenticatedSanitizerTransactionPlan)
+            or value._transaction_plan_seal_identity != id(_PLAN_SEAL)
+            or value._transaction_plan_operation_type_identities
+            != expected_type_identities
+            or value._transaction_plan_operation_seal_identities
+            != expected_seal_identities
+            or any(
+                type(item) is not str or _HEX_256_RE.fullmatch(item) is None
+                for item in (
+                    value._candidate_dataset_proof_sha256,
+                    value._candidate_dataset_contract_sha256,
+                    value._candidate_copy_proof_sha256,
+                    value._source_snapshot_proof_sha256,
+                    value._source_snapshot_contract_sha256,
+                    value._operation_projection_sha256,
+                    value._contract_sha256,
+                    value._transaction_plan_proof_sha256,
+                    value._proof_sha256,
+                )
+            )
+            or value._candidate_dataset_contract_sha256 != DATA_CONTRACT_SHA256
+            or value._source_snapshot_contract_sha256 != SOURCE_SNAPSHOT_CONTRACT_SHA256
+            or value._contract_sha256 != TRANSACTION_PLAN_CONTRACT_SHA256
+            or value._candidate_dataset_identity
+            != authority._candidate_dataset_identity
+            or not hmac.compare_digest(
+                value._candidate_dataset_proof_sha256,
+                authority._candidate_dataset_proof_sha256,
+            )
+            or value._source_snapshot_identity != authority._source_snapshot_identity
+            or not hmac.compare_digest(
+                value._source_snapshot_proof_sha256,
+                authority._source_snapshot_proof_sha256,
+            )
+        ):  # noqa: SLF001
+            _fail("transaction_plan.output_invalid")
+        self._validate_operations(value._truncate, value._inserts)
+        copied_identities = _operation_identities(value._truncate, value._inserts)
+        plan_material = _plan_authority_material_from_handoff(value)
+        projection = self._projection(
+            authority._proof_sha256,
+            value._candidate_dataset_proof_sha256,
+            value._truncate,
+            value._inserts,
+        )  # noqa: SLF001
+        if (
+            len(set(copied_identities[0])) != operation_count
+            or any(
+                item in value._transaction_plan_operation_identities
+                for item in copied_identities[0]
+            )
+            or copied_identities[1] != expected_type_identities
+            or copied_identities[2] != expected_seal_identities
+            or value.planned_insert_row_count
+            != sum(len(item._values) for item in value._inserts)
+            or not hmac.compare_digest(value._operation_projection_sha256, projection)
+            or not hmac.compare_digest(
+                value._transaction_plan_proof_sha256,
+                _digest(self._key, AUTHORITY_DOMAIN, plan_material),
+            )
+            or not hmac.compare_digest(
+                value._proof_sha256,
+                _digest(
+                    self._key,
+                    TRANSACTION_PLAN_EXECUTION_HANDOFF_COPY_DOMAIN,
+                    _execution_handoff_material(value),
+                ),
+            )
+        ):
+            _fail("transaction_plan.output_invalid")
 
     def prepare(
         self,
