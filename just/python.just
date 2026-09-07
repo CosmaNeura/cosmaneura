@@ -139,7 +139,7 @@ py_js-build:
 
 PYTEST_COV_PARAMS := "--cov --cov-report=html:${TEST_RESULTS_DIRECTORY}/htmlcov --cov-report=term"
 
-# CI runs these fifteen selectors on isolated runners. Keep the selectors explicit
+# CI runs these explicit selectors on isolated runners. Keep every boundary explicit
 # so every Python test belongs to exactly one shard and `py_test` remains the
 # single combined local/CI-compatible entry point. Application and integration
 # tests both require built web assets; only integration requires browser routing.
@@ -258,7 +258,33 @@ py_test-ci-infrastructure-sanitizer-observer-output:
 [script]
 py_test-ci-infrastructure-sanitizer-observer-connection-plan:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_contract_is_hash_pinned_closed_world_and_dormant \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_connection_strategy_is_exact_bounded_and_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_real_chain_mints_only_sealed_public_metadata \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_plan_api_accepts_only_one_keyword_only_exact_sealed_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_target_plan_identity_and_nested_lineage_are_retained \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-connection-plan-state:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan-state is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_clock_requires_exact_whole_second_utc \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_clock_regression_expiry_and_between_read_mutation_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_output_is_redacted_nonserializable_and_tamper_evident \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-connection-plan-contract is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_security_relevant_contract_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_module_has_no_database_network_provider_or_process_surface \
+		tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py::test_public_factory_remains_terminal \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-observer-integrity:
