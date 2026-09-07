@@ -312,9 +312,12 @@ def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
     assert not contract["output"]["private_unkeyed_process_local_witness_retained"]
     assert not any(contract["claims"][name] for name in snapshot._NEGATIVE_CLAIMS)  # noqa: SLF001
     assert contract["status"]["executor_consumption_implemented"] is True
+    assert (
+        contract["status"]["fixed_catalog_post_projection_authentication_implemented"]
+        is True
+    )
     assert contract["status"]["activation_blockers"] == [
-        "fixed_catalog_post_projection_authentication_unimplemented",
-        "transaction_adapter_unimplemented",
+        "transaction_adapter_unimplemented"
     ]
     assert contract["executor_consumption"] == {
         "kind": "private-exact-immutable-copy-v1",

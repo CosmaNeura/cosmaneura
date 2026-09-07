@@ -114,11 +114,13 @@ SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR = (
 SANITIZER_SOURCE_SNAPSHOT_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_source_snapshot.py"
 )
+SANITIZER_POST_PROJECTION_SELECTOR = "tests/infrastructure/test_staging_restore_sanitizer_fixed_catalog_post_projection.py"
 SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_EVIDENCE_SELECTOR,
     SANITIZER_EXECUTOR_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
     SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
+    SANITIZER_POST_PROJECTION_SELECTOR,
 )
 
 
@@ -143,6 +145,7 @@ def _infrastructure_shard(path: Path) -> str:
             (
                 SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
                 SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
+                SANITIZER_POST_PROJECTION_SELECTOR,
             ),
         ):
             return "infrastructure-sanitizer-data-contract-executor"
@@ -267,7 +270,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
-            "test_staging_restore_sanitizer_{data_contract_executor,source_snapshot}.py --verbosity=2"
+            "test_staging_restore_sanitizer_{data_contract_executor,fixed_catalog_post_projection,source_snapshot}.py --verbosity=2"
         ),
         "infrastructure-restore": (
             f"restore_tests=({RESTORE_GLOB})\n"
@@ -487,6 +490,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-data-contract-executor",
         ),
         (
+            Path(SANITIZER_POST_PROJECTION_SELECTOR),
+            "infrastructure-sanitizer-data-contract-executor",
+        ),
+        (
             Path("tests/infrastructure/test_staging_restore_sanitizer_future.py"),
             "unassigned",
         ),
@@ -585,6 +592,7 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
     source_snapshot = _collect_nodeids(SANITIZER_SOURCE_SNAPSHOT_SELECTOR)
+    post_projection = _collect_nodeids(SANITIZER_POST_PROJECTION_SELECTOR)
     family = _collect_nodeids(*SANITIZER_RUNTIME_SELECTORS)
 
     assert evidence
@@ -594,11 +602,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(executor) == 21
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
-    assert len(family) == 125
+    assert len(post_projection) == 35
+    assert len(family) == 160
     assert len(evidence) == len(set(evidence))
     assert len(executor) == len(set(executor))
     assert len(data_contract_executor) == len(set(data_contract_executor))
     assert len(source_snapshot) == len(set(source_snapshot))
+    assert len(post_projection) == len(set(post_projection))
     assert len(family) == len(set(family))
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
@@ -606,9 +616,15 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert set(source_snapshot).isdisjoint(
         set(evidence) | set(executor) | set(data_contract_executor)
     )
+    assert set(post_projection).isdisjoint(
+        set(evidence)
+        | set(executor)
+        | set(data_contract_executor)
+        | set(source_snapshot)
+    )
     assert set(evidence) | set(executor) | set(data_contract_executor) | set(
         source_snapshot
-    ) == set(family)
+    ) | set(post_projection) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)

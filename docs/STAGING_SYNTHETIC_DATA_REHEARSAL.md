@@ -317,6 +317,8 @@ A dormant adapter-free engine now implements the complete pinned in-memory trans
 
 A dormant [source-snapshot authenticator](flight-plans/2026-09-06-staging-sanitizer-source-snapshot.md) now verifies exact ordered row bytes against every pre-inventory state/identity HMAC before strict decoding, proves required-empty tables from the inventory domain, and retains only sealed typed rows plus keyed fragment proofs. Its [snapshot-to-executor binding](flight-plans/2026-09-06-staging-sanitizer-snapshot-executor-binding.md) removes caller-supplied row mappings: the transformer consumes only a keyed, deep-copied handoff from the exact sealed snapshot and its candidate retains no unsanitized source rows. Neither component has a row reader, database adapter, or live authority, and public preflight still refuses before I/O.
 
+The dormant [fixed-catalog post-projection authenticator](flight-plans/2026-09-06-staging-sanitizer-fixed-catalog-post-projection.md) independently proves that all five catalogs and all 46 columns match the source-derived expected projection after identifier transformation. Its sealed output retains only evidence and scalar lineage; transaction and live-execution authority remain absent.
+
 Evidence remains aggregate counts/HMACs and bounded pass/fail codes; small groups and per-table counts are omitted. The contract does not prove erasure from server-wide PITR, global roles, backups, replicas, or logs.
 
 The provision launch-material seam now has a dormant one-shot reader for the

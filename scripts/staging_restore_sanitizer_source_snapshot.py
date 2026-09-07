@@ -26,7 +26,7 @@ INVENTORY_POLICY_SHA256 = (
     "daaf7fc72c9e44dd5b9ae3467e39bb137697868a2beba848d48681ff0141886b"
 )
 SOURCE_SNAPSHOT_CONTRACT_SHA256 = (
-    "9836fdfac650c24c9407d9b12e3a1a8a21b1430e515a07ebbee236e46df5bd3c"
+    "26d6e802fde2f32560e6e12111bf01a457307e36374324061145da69dd6dbe91"
 )
 ACTIVATION_FAILURE = "activation.data_contract_executor_unimplemented"
 INVENTORY_POLICY_ID = "cosmaneura-staging-synthetic-inventory-v1"
