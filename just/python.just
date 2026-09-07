@@ -216,7 +216,34 @@ py_test-ci-infrastructure-sanitizer-evidence-integrity:
 [script]
 py_test-ci-infrastructure-sanitizer-executor:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-executor is CI-only" >&2; exit 1; }
-	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{database_capability,executor,target_role_observation_plan,transaction_plan}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_{database_capability,executor,transaction_plan}.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_contract_is_hash_pinned_closed_world_partitioned_and_dormant \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_plan_api_accepts_only_two_keyword_only_exact_sealed_inputs \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_database_observation_must_be_identical_retained_ancestor \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_tampered_target_observation_and_retained_ancestry_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_placeholder_target_values_cannot_enable_planning \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_clock_requires_exact_whole_second_utc \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_clock_regression_expiry_and_between_read_mutation_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_security_relevant_contract_mutations_fail_closed \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_unknown_missing_duplicate_nonfinite_and_malformed_contracts_refuse \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_module_has_no_database_network_provider_or_process_surface \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_public_factory_remains_terminal_before_observer_access \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observer_contract.py \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-observer-integrity:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-integrity is CI-only" >&2; exit 1; }
+	uv run pytest \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_real_chain_mints_only_a_sealed_metadata_plan \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_output_is_sealed_redacted_nonserializable_and_tamper_evident \
+		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-data-contract-executor:
