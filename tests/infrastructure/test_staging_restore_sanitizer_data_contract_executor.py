@@ -3,16 +3,17 @@ from __future__ import annotations
 import ast
 import copy
 import hashlib
+import inspect
 import json
 import pickle
 import subprocess
 import sys
 import uuid
 from collections.abc import Callable
-from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
-from types import MappingProxyType
-from typing import Any
+from types import MappingProxyType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 import typeid
@@ -21,13 +22,24 @@ from typeid import TypeID
 from scripts import staging_restore_sanitizer as sanitizer
 from scripts import staging_restore_sanitizer_data_contract_executor as executor
 from scripts import staging_restore_sanitizer_executor as public_executor
+from scripts import staging_restore_sanitizer_source_snapshot as source_snapshot
 from scripts import staging_synthetic_inventory as inventory
 
 from tests.infrastructure.test_staging_restore_sanitizer_executor import (
     real_case as case,
 )
+from tests.infrastructure.test_staging_restore_sanitizer_source_snapshot import (
+    KEY as INVENTORY_KEY,
+)
+from tests.infrastructure.test_staging_restore_sanitizer_source_snapshot import (
+    _authenticate as authenticate_source_snapshot,
+)
+from tests.infrastructure.test_staging_restore_sanitizer_source_snapshot import (
+    authenticated_case as snapshot_case,
+)
 
 real_case = case
+source_snapshot_case = snapshot_case
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/staging_restore_sanitizer_data_contract_executor.py"
@@ -35,6 +47,7 @@ CONTRACTS = ROOT / "contracts/staging-rehearsal/v1"
 POLICY = CONTRACTS / "restore-sanitizer-policy.json"
 INVENTORY_POLICY = CONTRACTS / "synthetic-data-policy.json"
 DATA_CONTRACT = CONTRACTS / "restore-sanitizer-data-contract.json"
+SOURCE_SNAPSHOT_CONTRACT = CONTRACTS / "restore-sanitizer-source-snapshot-contract.json"
 SITE_PACKAGES = Path(typeid.__file__ or "").parents[1]
 KEY = bytes(range(32))
 OTHER_KEY = bytes(reversed(range(32)))
@@ -45,14 +58,22 @@ OTHER_ID = uuid.UUID("01890f4c-7b00-7000-8000-000000000002")
 FAILURE = executor.SanitizerDataContractExecutorFailure
 
 
-def _engine(key: bytes = KEY, clock: Callable[[], datetime] | None = None) -> Any:
+def _engine(
+    key: bytes = KEY,
+    clock: Callable[[], datetime] | None = None,
+    *,
+    inventory_key: bytes = INVENTORY_KEY,
+) -> Any:
     return executor.SanitizerDataContractExecutor._from_reviewed_configuration(
         clock=clock or (lambda: PREFLIGHT_AT),
         transform_key=key,
         transform_key_version=KEY_VERSION,
+        inventory_hmac_key=inventory_key,
+        inventory_hmac_key_version=inventory.SUPPORTED_HMAC_KEY_VERSION,
         sanitizer_policy_bytes=POLICY.read_bytes(),
         inventory_policy_bytes=INVENTORY_POLICY.read_bytes(),
         data_contract_bytes=DATA_CONTRACT.read_bytes(),
+        source_snapshot_contract_bytes=SOURCE_SNAPSHOT_CONTRACT.read_bytes(),
     )
 
 
@@ -122,14 +143,60 @@ def _tables(candidate: Any) -> dict[str, tuple[Any, ...]]:
     return {name: candidate._rows_for_table(name) for name, _rows in candidate._tables}
 
 
+def _snapshot_value(value: Any) -> Any:
+    if type(value) is dict:
+        return source_snapshot._FrozenMap(  # noqa: SLF001
+            tuple((name, _snapshot_value(item)) for name, item in value.items())
+        )
+    if type(value) in {list, tuple}:
+        return tuple(_snapshot_value(item) for item in value)
+    return value
+
+
+def _snapshot_from_rows(
+    case: Any,
+    rows: dict[str, tuple[dict[str, Any], ...]],
+    *,
+    inventory_key: bytes = INVENTORY_KEY,
+) -> Any:
+    tables = tuple(
+        (
+            table_name,
+            tuple(_snapshot_value(row) for row in rows[table_name]),
+        )
+        for table_name in sorted(rows)
+    )
+    proofs = tuple(
+        (
+            table_name,
+            tuple(
+                hashlib.sha256(f"{table_name}:{index}".encode()).hexdigest()
+                for index, _row in enumerate(table_rows)
+            ),
+        )
+        for table_name, table_rows in tables
+    )
+    return source_snapshot._mint_snapshot(  # noqa: SLF001
+        key=inventory_key,
+        evidence=case.authenticated,
+        tables=tables,
+        fragment_proofs=proofs,
+        authenticated_at=PREFLIGHT_AT,
+    )
+
+
 def _transformed(
-    real_case: Any,
+    snapshot_case: Any,
     key: bytes = KEY,
     rows: dict[str, tuple[dict[str, Any], ...]] | None = None,
 ) -> executor.SanitizerCandidateDataset:
+    authenticated = (
+        snapshot_case.authenticated_source_snapshot
+        if rows is None
+        else _snapshot_from_rows(snapshot_case, rows)
+    )
     return _engine(key).transform(
-        authenticated_sanitizer_evidence=real_case.authenticated,
-        source_rows=rows or _source_rows(),
+        authenticated_source_snapshot=authenticated,
     )
 
 
@@ -147,14 +214,33 @@ def _candidate_refuses(candidate: Any, engine: Any = None) -> None:
         (engine or _engine()).validate_candidate(candidate)
 
 
+def _module_trace(error: BaseException) -> str:
+    rendered, seen = [], set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        frame = current.__traceback__
+        while frame is not None:
+            if frame.tb_frame.f_globals.get("__name__") == executor.__name__:
+                rendered.append(repr(frame.tb_frame.f_locals))
+            frame = frame.tb_next
+        current = current.__cause__ or current.__context__
+    return "".join(rendered)
+
+
 @pytest.fixture
-def fast_case(real_case: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+def fast_case(source_snapshot_case: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(
         executor.SanitizerDataContractExecutor,
         "_reauthenticate",
         lambda self, evidence, now: None,
     )
-    return real_case
+    return SimpleNamespace(
+        authenticated=source_snapshot_case.authenticated,
+        authenticated_source_snapshot=authenticate_source_snapshot(
+            source_snapshot_case
+        ),
+    )
 
 
 def test_exact_contract_coverage_and_every_action_dispatch(fast_case: Any) -> None:
@@ -270,28 +356,77 @@ def test_golden_identity_email_domain_join_and_access_outputs(fast_case: Any) ->
 
 
 def test_engine_reauthenticates_at_start_final_and_candidate_validation(
-    real_case: Any, monkeypatch: pytest.MonkeyPatch
+    source_snapshot_case: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     later = PREFLIGHT_AT + timedelta(seconds=1)
     latest = PREFLIGHT_AT + timedelta(seconds=2)
     times = iter((PREFLIGHT_AT, later, latest))
     seen: list[datetime] = []
+    snapshot_seen: list[tuple[Any, datetime, object]] = []
+    original_copy = source_snapshot._copy_verified_tables_for_executor  # noqa: SLF001
+
+    def observe_copy(value: Any, *, now: datetime, inventory_hmac_key: object) -> Any:
+        snapshot_seen.append((value, now, inventory_hmac_key))
+        return original_copy(value, now=now, inventory_hmac_key=inventory_hmac_key)
 
     def observe(self: Any, value: Any, now: datetime) -> None:
         assert type(self) is executor.SanitizerDataContractExecutor
-        assert value is real_case.authenticated
+        assert value is source_snapshot_case.authenticated
         seen.append(now)
 
     monkeypatch.setattr(
         executor.SanitizerDataContractExecutor, "_reauthenticate", observe
     )
+    monkeypatch.setattr(
+        source_snapshot, "_copy_verified_tables_for_executor", observe_copy
+    )
     engine = _engine(clock=lambda: next(times))
+    authenticated_source_snapshot = authenticate_source_snapshot(source_snapshot_case)
     candidate = engine.transform(
-        authenticated_sanitizer_evidence=real_case.authenticated,
-        source_rows=_source_rows(),
+        authenticated_source_snapshot=authenticated_source_snapshot,
     )
     engine.validate_candidate(candidate)
     assert seen == [PREFLIGHT_AT, later, latest]
+    assert snapshot_seen == [
+        (authenticated_source_snapshot, PREFLIGHT_AT, INVENTORY_KEY),
+        (authenticated_source_snapshot, later, INVENTORY_KEY),
+    ]
+
+
+def test_candidate_is_verified_after_the_validation_clock_callback(
+    fast_case: Any,
+) -> None:
+    candidate = _transformed(fast_case)
+
+    def mutate_candidate() -> datetime:
+        object.__setattr__(
+            candidate, "source_row_count", candidate.source_row_count + 1
+        )
+        return PREFLIGHT_AT
+
+    with pytest.raises(FAILURE, match="^data_contract_executor.candidate_invalid$"):
+        _engine(clock=mutate_candidate).validate_candidate(candidate)
+
+
+def test_inventory_and_transform_keys_have_separate_roles(
+    fast_case: Any, source_snapshot_case: Any
+) -> None:
+    with pytest.raises(FAILURE, match="^data_contract_executor.source_invalid$"):
+        _engine(inventory_key=OTHER_KEY).transform(
+            authenticated_source_snapshot=fast_case.authenticated_source_snapshot
+        )
+    baseline = _transformed(fast_case)
+    other_transform = _transformed(fast_case, OTHER_KEY)
+    assert baseline._tables != other_transform._tables
+    assert baseline._proof_sha256 != other_transform._proof_sha256
+    _candidate_refuses(baseline, _engine(OTHER_KEY))
+    same_key_snapshot = _snapshot_from_rows(
+        source_snapshot_case, _source_rows(), inventory_key=KEY
+    )
+    same_key_candidate = _engine(inventory_key=KEY).transform(
+        authenticated_source_snapshot=same_key_snapshot
+    )
+    _engine(inventory_key=KEY).validate_candidate(same_key_candidate)
 
 
 def test_determinism_domain_separation_and_fixed_payload_preservation(
@@ -314,7 +449,11 @@ def test_determinism_domain_separation_and_fixed_payload_preservation(
     ordered_candidate = _transformed(fast_case, rows=ordered_rows)
     reversed_candidate = _transformed(fast_case, rows=reversed_rows)
     assert ordered_candidate._tables == reversed_candidate._tables
-    assert ordered_candidate._proof_sha256 == reversed_candidate._proof_sha256
+    assert (
+        ordered_candidate._source_snapshot_proof_sha256
+        != reversed_candidate._source_snapshot_proof_sha256
+    )
+    assert ordered_candidate._proof_sha256 != reversed_candidate._proof_sha256
     mapped_ids = {
         first_tables[table][0]["id"]
         for table in json.loads(DATA_CONTRACT.read_bytes())["row_actions"][
@@ -353,12 +492,12 @@ def test_determinism_domain_separation_and_fixed_payload_preservation(
 
 def test_nullability_json_immutability_and_false_authority(fast_case: Any) -> None:
     source = _source_rows()
-    offset_time = datetime(
-        2026, 1, 1, 22, 4, 5, tzinfo=timezone(timedelta(hours=-5)), fold=1
-    )
-    naive_time = datetime(2026, 1, 2, 3, 4, 5, fold=1)
+    canonical_time = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    naive_time = datetime(2026, 1, 2, 3, 4, 5)
     source["appointment"][0]["external_id"] = None
-    source["appointment"][0].update(created_at=offset_time, appointment_date=naive_time)
+    source["appointment"][0].update(
+        created_at=canonical_time, appointment_date=naive_time
+    )
     ordered_candidate = _transformed(fast_case, rows=source)
     fields = source["doctor_note_schema"][0]["fields"]
     source["doctor_note_schema"][0]["fields"] = dict(reversed(fields.items()))
@@ -368,13 +507,9 @@ def test_nullability_json_immutability_and_false_authority(fast_case: Any) -> No
     normalized = tables["appointment"][0]["created_at"]
     assert normalized == datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
     normalized_naive = tables["appointment"][0]["appointment_date"]
-    assert (
-        normalized.tzinfo is UTC
-        and normalized.fold == 0
-        and normalized is not offset_time
-    )
+    assert normalized.tzinfo is UTC and normalized.fold == 0
     assert normalized_naive == naive_time and normalized_naive.fold == 0
-    assert normalized_naive.tzinfo is None and normalized_naive is not naive_time
+    assert normalized_naive.tzinfo is None
     clock_time = PREFLIGHT_AT.replace(tzinfo=timezone(timedelta(0), "custom"), fold=1)
     trusted = executor._trusted_utc(lambda: clock_time)  # noqa: SLF001
     assert trusted == PREFLIGHT_AT and trusted.tzinfo is UTC and trusted.fold == 0
@@ -390,12 +525,38 @@ def test_nullability_json_immutability_and_false_authority(fast_case: Any) -> No
     assert candidate.table_count == 29
 
 
+def test_candidate_rejects_nonexact_nested_pairs_without_callbacks(
+    fast_case: Any,
+) -> None:
+    candidate = _transformed(fast_case)
+    rows = dict(candidate._tables)["doctor_note_schema"]  # noqa: SLF001
+    row = cast(executor._FrozenMap, rows[0])  # noqa: SLF001
+    nested = next(item[1] for item in row._items if item[0] == "fields")  # noqa: SLF001
+    assert type(nested) is executor._FrozenMap  # noqa: SLF001
+    callbacks: list[str] = []
+
+    class CallbackTuple(tuple[Any, ...]):
+        def __iter__(self) -> Any:
+            callbacks.append("iterated")
+            return super().__iter__()
+
+    original_items = nested._items  # noqa: SLF001
+    object.__setattr__(
+        nested, "_items", (CallbackTuple(original_items[0]), *original_items[1:])
+    )
+    try:
+        with pytest.raises(FAILURE, match="^data_contract_executor.candidate_invalid$"):
+            _engine().validate_candidate(candidate)
+        assert callbacks == []
+    finally:
+        object.__setattr__(nested, "_items", original_items)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
         lambda rows: rows.pop("appointment"),
         lambda rows: rows.update({"unexpected": tuple()}),
-        lambda rows: rows.update({"appointment": list(rows["appointment"])}),
         lambda rows: rows["appointment"][0].pop("created_at"),
         lambda rows: rows["appointment"][0].update({"unexpected": "value"}),
         lambda rows: rows["appointment"][0].update({"id": str(SOURCE_ID)}),
@@ -453,6 +614,20 @@ def test_mixed_key_and_forged_candidates_refuse(fast_case: Any) -> None:
     )
     for name in "table_count rewrite_table_count discard_table_count source_row_count candidate_row_count".split():
         _candidate_refuses(_clone(candidate, **{name: float(getattr(candidate, name))}))
+    for name, item in (
+        ("_source_snapshot_contract_sha256", "0" * 64),
+        ("_source_snapshot_proof_sha256", "0" * 64),
+        ("_source_snapshot_identity", candidate._source_snapshot_identity + 1),
+        (
+            "_source_snapshot_type_identity",
+            candidate._source_snapshot_type_identity + 1,
+        ),
+        (
+            "_source_snapshot_seal_identity",
+            candidate._source_snapshot_seal_identity + 1,
+        ),
+    ):
+        _candidate_refuses(_clone(candidate, **{name: item}))
     for table_name, nested in (("appointment", None), ("doctor_note_schema", "fields")):
         forged = _clone(candidate)
         tables = dict(forged._tables)
@@ -490,6 +665,15 @@ def test_mixed_key_and_forged_candidates_refuse(fast_case: Any) -> None:
     )
     object.__setattr__(candidate, "_authenticated_evidence", later)
     _candidate_refuses(candidate, engine)
+    callbacks: list[str] = []
+
+    class CallbackTuple(tuple[Any, ...]):
+        def __iter__(self) -> Any:
+            callbacks.append("iterated")
+            return super().__iter__()
+
+    _candidate_refuses(_clone(candidate, _tables=CallbackTuple(candidate._tables)))
+    assert callbacks == []
 
 
 def test_repr_pickle_errors_and_logs_never_disclose_rows_or_keys(
@@ -513,7 +697,50 @@ def test_repr_pickle_errors_and_logs_never_disclose_rows_or_keys(
             pickle.dumps(value)
 
 
-def test_configuration_is_exact_and_public_constructors_refuse() -> None:
+def test_public_failure_tracebacks_do_not_retain_keys_rows_or_inputs(
+    fast_case: Any,
+) -> None:
+    secret_row = "TRACE_SECRET_ROW_DO_NOT_RETAIN"
+    secret_key = b"TRACE_SECRET_KEY_DO_NOT_RETAIN".ljust(32, b"!")
+    rows = _source_rows()
+    rows["appointment"][0]["id"] = secret_row
+    invalid_snapshot = _snapshot_from_rows(fast_case, rows)
+    candidate = _transformed(fast_case)
+
+    def capture(call: Any) -> None:
+        with pytest.raises(FAILURE) as raised:
+            call()
+        retained = _module_trace(raised.value)
+        assert not any(
+            token in retained
+            for token in (secret_row, "TRACE_SECRET_KEY_DO_NOT_RETAIN", "example.com")
+        )
+
+    capture(
+        lambda: executor.SanitizerDataContractExecutor._from_reviewed_configuration(
+            clock=lambda: PREFLIGHT_AT,
+            transform_key=secret_key,
+            transform_key_version=KEY_VERSION,
+            inventory_hmac_key=INVENTORY_KEY,
+            inventory_hmac_key_version=inventory.SUPPORTED_HMAC_KEY_VERSION,
+            sanitizer_policy_bytes=POLICY.read_bytes(),
+            inventory_policy_bytes=INVENTORY_POLICY.read_bytes(),
+            data_contract_bytes=DATA_CONTRACT.read_bytes(),
+            source_snapshot_contract_bytes=secret_row.encode(),
+        )
+    )
+    capture(
+        lambda: _engine(secret_key).transform(
+            authenticated_source_snapshot=invalid_snapshot
+        )
+    )
+    forged = _clone(candidate, _proof_sha256=secret_row)
+    capture(lambda: _engine(secret_key).validate_candidate(forged))
+
+
+def test_configuration_is_exact_and_public_constructors_refuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     for constructor in (
         executor.SanitizerDataContractExecutor,
         executor.SanitizerCandidateDataset,
@@ -527,9 +754,182 @@ def test_configuration_is_exact_and_public_constructors_refuse() -> None:
             clock=lambda: PREFLIGHT_AT,
             transform_key=KEY,
             transform_key_version=KEY_VERSION,
+            inventory_hmac_key=INVENTORY_KEY,
+            inventory_hmac_key_version=inventory.SUPPORTED_HMAC_KEY_VERSION,
             sanitizer_policy_bytes=POLICY.read_bytes(),
             inventory_policy_bytes=INVENTORY_POLICY.read_bytes(),
             data_contract_bytes=bytes(changed),
+            source_snapshot_contract_bytes=SOURCE_SNAPSHOT_CONTRACT.read_bytes(),
+        )
+    snapshot_contract = json.loads(SOURCE_SNAPSHOT_CONTRACT.read_bytes())
+    assert (
+        hashlib.sha256(SOURCE_SNAPSHOT_CONTRACT.read_bytes()).hexdigest()
+        == source_snapshot.SOURCE_SNAPSHOT_CONTRACT_SHA256
+        == executor.SOURCE_SNAPSHOT_CONTRACT_SHA256
+    )
+    assert snapshot_contract["status"]["executor_consumption_implemented"] is True
+    assert (
+        snapshot_contract["executor_consumption"]
+        == executor._SOURCE_SNAPSHOT_CONSUMPTION_CONTRACT  # noqa: SLF001
+    )
+    monkeypatch.setattr(source_snapshot, "SOURCE_SNAPSHOT_CONTRACT_SHA256", "0" * 64)
+    with pytest.raises(FAILURE, match="data_contract_executor.policy_invalid"):
+        _engine()
+
+
+def test_transform_accepts_only_the_authenticated_snapshot(
+    fast_case: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parameters = inspect.signature(
+        executor.SanitizerDataContractExecutor.transform
+    ).parameters
+    assert tuple(parameters) == ("self", "authenticated_source_snapshot")
+    assert (
+        parameters["authenticated_source_snapshot"].kind
+        is inspect.Parameter.KEYWORD_ONLY
+    )
+    engine = _engine()
+    with pytest.raises(TypeError):
+        engine.transform(  # type: ignore[call-arg]
+            authenticated_sanitizer_evidence=fast_case.authenticated,
+            source_rows=_source_rows(),
+        )
+    candidate = engine.transform(
+        authenticated_source_snapshot=fast_case.authenticated_source_snapshot
+    )
+    assert candidate._authenticated_evidence is fast_case.authenticated
+    assert not hasattr(candidate, "_authenticated_source_snapshot")
+    assert candidate._source_snapshot_identity == id(
+        fast_case.authenticated_source_snapshot
+    )
+    assert (
+        candidate._source_snapshot_proof_sha256
+        == fast_case.authenticated_source_snapshot._proof_sha256
+    )
+    callbacks: list[str] = []
+
+    class CallbackSnapshot:
+        def __getattr__(self, name: str) -> Any:
+            callbacks.append(name)
+            raise AttributeError(name)
+
+    with pytest.raises(FAILURE, match="^data_contract_executor.source_invalid$"):
+        engine.transform(authenticated_source_snapshot=CallbackSnapshot())  # type: ignore[arg-type]
+    assert callbacks == []
+
+    class CallbackExecutor(executor.SanitizerDataContractExecutor):
+        @classmethod
+        def _build_from_reviewed_configuration(cls, **kwargs: Any) -> Any:
+            del cls, kwargs
+            callbacks.append("built")
+
+        def _transform(self, **kwargs: Any) -> Any:
+            del self, kwargs
+            callbacks.append("transformed")
+
+        def _validate_candidate(self, candidate: Any) -> None:
+            del self, candidate
+            callbacks.append("validated")
+
+    with pytest.raises(FAILURE, match="^data_contract_executor.configuration_invalid$"):
+        CallbackExecutor._from_reviewed_configuration(
+            clock=lambda: PREFLIGHT_AT,
+            transform_key=KEY,
+            transform_key_version=KEY_VERSION,
+            inventory_hmac_key=INVENTORY_KEY,
+            inventory_hmac_key_version=inventory.SUPPORTED_HMAC_KEY_VERSION,
+            sanitizer_policy_bytes=POLICY.read_bytes(),
+            inventory_policy_bytes=INVENTORY_POLICY.read_bytes(),
+            data_contract_bytes=DATA_CONTRACT.read_bytes(),
+            source_snapshot_contract_bytes=SOURCE_SNAPSHOT_CONTRACT.read_bytes(),
+        )
+    callback_executor = object.__new__(CallbackExecutor)
+    with pytest.raises(FAILURE, match="^data_contract_executor.configuration_invalid$"):
+        callback_executor.transform(
+            authenticated_source_snapshot=fast_case.authenticated_source_snapshot
+        )
+    with pytest.raises(FAILURE, match="^data_contract_executor.configuration_invalid$"):
+        callback_executor.validate_candidate(candidate)
+    assert callbacks == []
+
+    other_rows = _source_rows()
+    other_rows["doctor"][0]["email"] = "other-doctor@example.test"
+    replacement = _snapshot_from_rows(fast_case, other_rows)
+    source_values = iter((fast_case.authenticated_source_snapshot, replacement))
+    original_copy = source_snapshot._copy_verified_tables_for_executor  # noqa: SLF001
+
+    def swap_copy(_value: Any, *, now: datetime, inventory_hmac_key: object) -> Any:
+        return original_copy(
+            next(source_values), now=now, inventory_hmac_key=inventory_hmac_key
+        )
+
+    monkeypatch.setattr(
+        source_snapshot, "_copy_verified_tables_for_executor", swap_copy
+    )
+    with pytest.raises(FAILURE, match="^data_contract_executor.source_invalid$"):
+        engine.transform(
+            authenticated_source_snapshot=fast_case.authenticated_source_snapshot
+        )
+
+    replacement_copy = original_copy(
+        replacement,
+        now=PREFLIGHT_AT,
+        inventory_hmac_key=INVENTORY_KEY,
+    )
+    monkeypatch.setattr(
+        source_snapshot,
+        "_copy_verified_tables_for_executor",
+        lambda *_args, **_kwargs: replacement_copy,
+    )
+    with pytest.raises(FAILURE, match="^data_contract_executor.source_invalid$"):
+        engine.transform(
+            authenticated_source_snapshot=fast_case.authenticated_source_snapshot
+        )
+
+    class CallbackValue:
+        def __eq__(self, other: object) -> bool:
+            del other
+            callbacks.append("compared")
+            return False
+
+        def __ne__(self, other: object) -> bool:
+            del other
+            callbacks.append("compared")
+            return True
+
+    original_contract = fast_case.authenticated_source_snapshot._contract_sha256
+    object.__setattr__(
+        fast_case.authenticated_source_snapshot,
+        "_contract_sha256",
+        CallbackValue(),
+    )
+    try:
+        with pytest.raises(FAILURE, match="^data_contract_executor.source_invalid$"):
+            engine.transform(
+                authenticated_source_snapshot=fast_case.authenticated_source_snapshot
+            )
+        assert callbacks == []
+    finally:
+        object.__setattr__(
+            fast_case.authenticated_source_snapshot,
+            "_contract_sha256",
+            original_contract,
+        )
+
+    corrupted_copy = original_copy(
+        fast_case.authenticated_source_snapshot,
+        now=PREFLIGHT_AT,
+        inventory_hmac_key=INVENTORY_KEY,
+    )
+    object.__setattr__(corrupted_copy, "_proof_sha256", "0" * 64)
+    monkeypatch.setattr(
+        source_snapshot,
+        "_copy_verified_tables_for_executor",
+        lambda *_args, **_kwargs: corrupted_copy,
+    )
+    with pytest.raises(FAILURE, match="^data_contract_executor.source_invalid$"):
+        engine.transform(
+            authenticated_source_snapshot=fast_case.authenticated_source_snapshot
         )
 
 
@@ -547,10 +947,10 @@ def test_configuration_is_deeply_immutable(fast_case: Any) -> None:
 
 
 def test_transform_has_no_filesystem_reauthentication(
-    real_case: Any, monkeypatch: pytest.MonkeyPatch
+    source_snapshot_case: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     engine = _engine()
-    rows = _source_rows()
+    authenticated_source_snapshot = authenticate_source_snapshot(source_snapshot_case)
 
     def refuse(*args: Any, **kwargs: Any) -> Any:
         del args, kwargs
@@ -560,35 +960,28 @@ def test_transform_has_no_filesystem_reauthentication(
     monkeypatch.setattr(
         executor.evidence_authority, "_reauthenticate_at_current_time", refuse
     )
-    authenticated = real_case.authenticated
-    kwargs = dict(authenticated_sanitizer_evidence=authenticated, source_rows=rows)
+    authenticated = source_snapshot_case.authenticated
+    kwargs = dict(authenticated_source_snapshot=authenticated_source_snapshot)
     source = authenticated._fixed_catalog_source_state
-    built = real_case.target._written_receipt._built_receipt
+    target = source._target_binding
+    built = target._written_receipt._built_receipt
     receipt = built._isolation_inventory._database_observation._production_authority._launch_material.authenticated_receipt
     mapping_subtype = type("MappingSubtype", (dict,), {})
-    armed = False
-
-    def mutate(_zone: Any, _value: Any) -> timedelta:
-        if armed:
-            monkeypatch.setitem(receipt.runtime_reference, "unexpected", True)
-        return timedelta(0)
-
-    zone = type("Z", (tzinfo,), dict(utcoffset=mutate, dst=lambda *_: timedelta(0)))()
-    rows["appointment"][0]["created_at"] = PREFLIGHT_AT.replace(tzinfo=zone)
     candidate = engine.transform(**kwargs)
     engine.validate_candidate(candidate)
     assert dict(candidate._tables)["appointment"][0]["created_at"].tzinfo is UTC
     with pytest.raises(FAILURE, match="data_contract_executor.target_expired"):
-        engine._reauthenticate(authenticated, real_case.target.expires_at)
-    source_noncanonical = source.authenticated_at.replace(tzinfo=zone, fold=1)
-    noncanonical = authenticated.authenticated_at.replace(tzinfo=zone, fold=1)
-    assert noncanonical == authenticated.authenticated_at
+        engine._reauthenticate(authenticated, target.expires_at)
     for owner, name, tampered in (
         (built, "submission_bytes", b"{}"),
         (built, "_isolation_inventory", object()),
         (receipt, "runtime_reference", mapping_subtype(receipt.runtime_reference)),
-        (source, "authenticated_at", source_noncanonical),
-        (authenticated, "authenticated_at", noncanonical),
+        (source, "authenticated_at", source.authenticated_at - timedelta(seconds=1)),
+        (
+            authenticated,
+            "authenticated_at",
+            authenticated.authenticated_at - timedelta(seconds=1),
+        ),
     ):
         original = getattr(owner, name)
         object.__setattr__(owner, name, tampered)
@@ -597,10 +990,6 @@ def test_transform_has_no_filesystem_reauthentication(
                 engine.transform(**kwargs)
         finally:
             object.__setattr__(owner, name, original)
-
-    armed = True
-    with pytest.raises(FAILURE):
-        engine.transform(**kwargs)
 
 
 def test_public_preflight_remains_terminally_unimplemented(real_case: Any) -> None:
@@ -660,6 +1049,15 @@ print(json.dumps(sorted(name for name in sys.modules if name in scripts or any(n
             sanitizer.CANONICAL_DATA_CONTRACT_SHA256,
             executor.DATA_CONTRACT_SHA256,
         ),
+        (
+            SOURCE_SNAPSHOT_CONTRACT,
+            source_snapshot.SOURCE_SNAPSHOT_CONTRACT_SHA256,
+            executor.SOURCE_SNAPSHOT_CONTRACT_SHA256,
+        ),
     ):
         assert hashlib.sha256(path.read_bytes()).hexdigest() == expected == pinned
     assert executor.HMAC_DOMAIN == sanitizer.HMAC_DOMAIN
+    assert executor.CANDIDATE_PROOF_DOMAIN == (
+        "candidate_dataset.source_snapshot_v1.proof"
+    )
+    assert "candidate_dataset.proof" not in SCRIPT.read_text()
