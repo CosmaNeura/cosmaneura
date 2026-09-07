@@ -242,6 +242,27 @@ def test_tampered_target_observation_and_retained_ancestry_refuse(
 
 
 @pytest.mark.parametrize(
+    "field",
+    (
+        "target_fqdn",
+        "target_postgres_server_id",
+        "database_name",
+        "approved_database_role",
+    ),
+)
+def test_placeholder_target_values_cannot_enable_planning(
+    real_chain: RealChain, field: str
+) -> None:
+    target, observation = _inputs(real_chain)
+    original = getattr(target, field)
+    try:
+        object.__setattr__(target, field, f"CONFIGURE_EXACT_{field.upper()}")
+        _reject(target, observation)
+    finally:
+        object.__setattr__(target, field, original)
+
+
+@pytest.mark.parametrize(
     "invalid",
     (
         datetime(2026, 9, 5, 12),
