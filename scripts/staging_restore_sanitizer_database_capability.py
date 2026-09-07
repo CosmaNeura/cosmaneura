@@ -13,7 +13,7 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-database-capability-contract.json"
 )
-CONTRACT_SHA256 = "d103d401c64a190c8bebede57b25a81dbff4dfd7113ad051058e93b69254f40b"
+CONTRACT_SHA256 = "496af89e754c0521e350650509bba52edb29847ed7ebb0bfed60ee550cb9ed49"
 ACTIVATION_FAILURE = "activation.database_role_state_authenticator_unimplemented"
 MAXIMUM_DOCUMENT_BYTES = 2 * 1024 * 1024
 
@@ -55,12 +55,48 @@ _REWRITE_CUSTOM_TYPES = (
     "subjectivesource",
     "terminology",
 )
+_APPLICATION_CUSTOM_TYPES = (
+    "confidenceband",
+    "cpsrole",
+    "doctorrole",
+    "labpanelsource",
+    "labpanelstatus",
+    "medicationkind",
+    "medicationsource",
+    "medicationstatus",
+    "planordering",
+    "pronounstyle",
+    "subjectivesource",
+    "terminology",
+    "videoprovider",
+    "zoommeetingstatus",
+)
+_ADVISORY_LOCK_KEY_SOURCE = "cosmaneura:staging:sanitizer-ddl-exclusion:v1"
+_ADVISORY_LOCK_KEY_SHA256 = (
+    "369cd78e91d8f0507a5d72aa89df02f240b7f4bbb4d97f3030625aea41bb02a3"
+)
+_ADVISORY_LOCK_KEY_PARTS = (916248462, -1848053680)
+_ACTIVATION_BLOCKERS = (
+    "exact_database_role_unselected",
+    "provision_job_identity_exact_ids_unpinned",
+    "bootstrap_authority_unselected",
+    "database_role_provisioning_unimplemented",
+    "cross_database_role_confinement_unimplemented",
+    "server_database_catalog_stability_unimplemented",
+    "effective_session_timeout_values_unselected",
+    "effective_session_settings_authenticator_unimplemented",
+    "database_migration_exclusion_cooperation_unimplemented",
+    "database_role_state_authenticator_unimplemented",
+    "runtime_integration_unimplemented",
+)
 _BOOTSTRAP_SCOPE = (
     "create-or-map-exact-database-role",
     "set-exact-role-posture",
+    "reconcile-connect-create-and-temporary-acls-across-every-server-database",
     "install-exact-direct-database-schema-and-table-grants",
     "revoke-disallowed-public-existing-object-privileges",
-    "remove-nondefault-system-acl-deltas-and-role-settings",
+    "remove-nondefault-system-acl-deltas-and-applicable-role-and-database-settings",
+    "verify-fixed-advisory-lock-cooperation-across-every-migration-path",
     "verify-exact-role-and-privilege-state",
 )
 _VERIFICATION_REQUIREMENTS = (
@@ -73,21 +109,32 @@ _VERIFICATION_REQUIREMENTS = (
     "set-role-escalation-unavailable",
     "empty-ownership-sets",
     "no-database-or-shared-object-ownership-dependencies",
-    "exact-direct-and-effective-database-and-schema-privileges",
+    "closed-world-every-pg-database-entry-and-datallowconn",
+    "exact-direct-public-membership-and-effective-database-privileges",
+    "target-only-effective-connect-and-no-create-or-temporary-anywhere",
+    "server-database-catalog-stability-across-observation-and-execution",
+    "exact-direct-and-effective-schema-privileges",
     "exact-direct-and-effective-table-privileges",
     "empty-explicit-column-acls",
     "column-effective-privileges-derived-only-from-exact-table-privileges",
     "empty-sequence-privileges",
     "empty-public-schema-routine-execute-privileges",
-    "empty-public-schema-type-usage-privileges",
+    "exact-fourteen-acl-manageable-custom-enum-types",
+    "empty-acl-and-effective-usage-for-acl-manageable-custom-enums",
+    "postgresql16-intrinsic-relation-row-and-row-array-usage-baseline",
+    "postgresql16-enum-array-usage-derived-from-element-enum-acl",
     "empty-language-usage-privileges",
     "empty-tablespace-create-privileges",
     "empty-parameter-set-and-alter-system-privileges",
     "empty-foreign-data-wrapper-and-server-usage-privileges",
     "empty-user-mappings",
     "no-large-objects-or-large-object-privileges",
-    "empty-default-privilege-entries-and-no-future-user-object-creation",
-    "empty-role-settings",
+    "all-pg-db-role-setting-source-rows-including-setrole-zero",
+    "all-effective-session-setting-sources-and-exact-safe-values",
+    "session-replication-role-origin",
+    "shared-session-advisory-lock-cooperation-across-every-migration-path-and-sanitizer",
+    "revision-and-schema-revalidated-under-held-exclusive-ddl-window",
+    "empty-default-privilege-entries-and-no-future-user-object-creation-under-exclusive-ddl-window",
     "empty-publication-subscription-extension-and-event-trigger-authority",
     "all-grant-options-absent",
     "system-object-explicit-and-public-acl-deltas-absent",
@@ -245,6 +292,11 @@ def _validate_catalog(contract: dict[str, Any], documents: dict[str, Any]) -> No
             for table in rewrite
             for column in inventory_tables[table]["columns"]
         }
+        application_value_types = {
+            column[1]
+            for table in application
+            for column in inventory_tables[table]["columns"]
+        }
     except (KeyError, TypeError):
         _fail()
 
@@ -269,6 +321,7 @@ def _validate_catalog(contract: dict[str, Any], documents: dict[str, Any]) -> No
         or database.get("reject_large_objects") is not True
         or data_contract.get("source_profile") != "pre"
         or rewrite_value_types != _REWRITE_VALUE_TYPES
+        or not set(_APPLICATION_CUSTOM_TYPES).issubset(application_value_types)
         or {
             name: descriptor_counts.get(name)
             for name in ("routines", "types", "default_privileges")
@@ -354,6 +407,62 @@ def _validate_identity_and_role(
             "any-scribe-identity",
         ],
     }
+    expected_role_settings = {
+        "caller_or_environment_overrides_permitted": False,
+        "expected_role_owned_entries": [],
+        "permitted": False,
+        "pg_db_role_setting": {
+            "catalog": "pg_catalog.pg_db_role_setting",
+            "closed_world_source_rows_required": True,
+            "observation_implemented": False,
+            "observed_rows": [],
+            "expected_empty_scopes": {
+                "database_all_roles": [],
+                "role_and_database": [],
+                "role_global": [],
+            },
+            "source_scopes_required": [
+                "role-global:setdatabase=0,setrole=runtime-role-oid",
+                "database-wide:setdatabase=target-database-oid,setrole=0",
+                "role-and-database:setdatabase=target-database-oid,setrole=runtime-role-oid",
+            ],
+            "setrole_zero_database_wide_rows_included": True,
+            "unknown_or_unobserved_rows_permitted": False,
+        },
+        "effective_session": {
+            "all_effective_settings_must_match_authenticated_baseline": True,
+            "observation_implemented": False,
+            "required_exact_values": {
+                "default_transaction_isolation": "serializable",
+                "default_transaction_read_only": "off",
+                "row_security": "on",
+                "search_path": "pg_catalog",
+                "session_replication_role": "origin",
+                "synchronous_commit": "on",
+                "transaction_isolation": "serializable",
+                "transaction_read_only": "off",
+            },
+            "required_exact_timeout_values": {
+                "idle_in_transaction_session_timeout": (
+                    "CONFIGURE_EXACT_SANITIZER_IDLE_TRANSACTION_TIMEOUT"
+                ),
+                "lock_timeout": "CONFIGURE_EXACT_SANITIZER_LOCK_TIMEOUT",
+                "statement_timeout": "CONFIGURE_EXACT_SANITIZER_STATEMENT_TIMEOUT",
+            },
+            "adapter_owned_session_commands_only": True,
+            "controller_read_only_observer_settings_are_execution_proof": False,
+            "server_startup_and_system_sources_included": True,
+            "source_precedence_must_include": [
+                "server-startup-and-system-configuration",
+                "database-wide-pg-db-role-setting",
+                "role-global-pg-db-role-setting",
+                "role-and-database-pg-db-role-setting",
+                "connection-startup-options",
+                "adapter-session-commands",
+            ],
+            "unknown_or_unobserved_effective_settings_permitted": False,
+        },
+    }
     role = contract.get("role_posture", {})
     if (
         contract.get("identity_binding") != expected_identity
@@ -426,8 +535,7 @@ def _validate_identity_and_role(
                 "named_lists_are_diagnostics_not_exhaustive_boundary",
             }
         )
-        or role.get("role_settings")
-        != {"global": [], "database_specific": [], "permitted": False}
+        or role.get("role_settings") != expected_role_settings
     ):
         _fail()
 
@@ -435,6 +543,16 @@ def _validate_identity_and_role(
 def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) -> None:
     inventory = documents["synthetic_inventory"]
     transaction = documents["transaction_plan"]["transaction"]
+    advisory_key_digest = hashlib.sha256(_ADVISORY_LOCK_KEY_SOURCE.encode()).digest()
+    if (
+        advisory_key_digest.hex() != _ADVISORY_LOCK_KEY_SHA256
+        or tuple(
+            int.from_bytes(advisory_key_digest[offset : offset + 4], "big", signed=True)
+            for offset in (0, 4)
+        )
+        != _ADVISORY_LOCK_KEY_PARTS
+    ):
+        _fail()
     expected_tables = {
         "column_grants": {
             "select": [],
@@ -495,16 +613,104 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
                 "privilege_escalation_paths_permitted": False,
             },
         },
-        "database": {
-            "name": inventory["database"]["expected_name"],
-            "connect": True,
-            "create": False,
-            "temporary": False,
-            "direct_connect_grant_required": True,
+        "databases": {
+            "catalog": "pg_catalog.pg_database",
+            "closed_world_enumeration_required": True,
+            "observation_implemented": False,
+            "observed_entries": [],
+            "entry_identity_fields": ["oid", "datname"],
+            "required_entry_fields": [
+                "oid",
+                "datname",
+                "datallowconn",
+                "runtime_role_is_owner",
+                "direct_connect",
+                "direct_create",
+                "direct_temporary",
+                "public_connect",
+                "public_create",
+                "public_temporary",
+                "membership_connect",
+                "membership_create",
+                "membership_temporary",
+                "effective_connect",
+                "effective_create",
+                "effective_temporary",
+            ],
+            "acl_sources_required": [
+                "direct-runtime-role",
+                "PUBLIC",
+                "inherited-role-memberships",
+                "database-ownership",
+            ],
             "effective_privileges_must_match_exactly": True,
-            "public_role_privileges_permitted": False,
-            "public_role_effective_privileges_included_in_verification": True,
             "grant_options_permitted": False,
+            "implicit_acl_defaults_must_be_expanded": True,
+            "templates_and_disallowed_connection_databases_included": True,
+            "unknown_or_unobserved_databases_permitted": False,
+            "target_must_appear_exactly_once": True,
+            "runtime_role_database_ownership_permitted": False,
+            "catalog_stability": {
+                "required": True,
+                "mechanism_selected": False,
+                "implementation_authenticated": False,
+                "server_wide_coordination_required": True,
+                "every_database_creation_path_must_cooperate": True,
+                "target_database_advisory_lock_is_sufficient": False,
+                "database_creation_during_authenticated_window_permitted": False,
+                "unknown_catalog_change_permitted": False,
+            },
+            "target": {
+                "name": inventory["database"]["expected_name"],
+                "datallowconn_required": True,
+                "runtime_role_is_owner": False,
+                "direct_privileges": {
+                    "connect": True,
+                    "create": False,
+                    "temporary": False,
+                },
+                "public_privileges": {
+                    "connect": False,
+                    "create": False,
+                    "temporary": False,
+                },
+                "membership_privileges": {
+                    "connect": False,
+                    "create": False,
+                    "temporary": False,
+                },
+                "effective_privileges": {
+                    "connect": True,
+                    "create": False,
+                    "temporary": False,
+                },
+            },
+            "non_target": {
+                "every_observed_entry_except_target": True,
+                "datallowconn_must_be_recorded": True,
+                "runtime_role_is_owner": False,
+                "existing_runtime_role_session_count_required": 0,
+                "direct_privileges": {
+                    "connect": False,
+                    "create": False,
+                    "temporary": False,
+                },
+                "public_privileges": {
+                    "connect": False,
+                    "create": False,
+                    "temporary": False,
+                },
+                "membership_privileges": {
+                    "connect": False,
+                    "create": False,
+                    "temporary": False,
+                },
+                "effective_privileges": {
+                    "connect": False,
+                    "create": False,
+                    "temporary": False,
+                },
+            },
         },
         "schemas": {
             "public": {
@@ -544,14 +750,51 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "public_schema": {
                 "observed_schema_type_count": 154,
                 "rewrite_value_custom_types": list(_REWRITE_CUSTOM_TYPES),
-                "usage": {"expected_type_count": 0, "types": []},
-                "direct_grants_permitted": False,
-                "effective_privileges_must_match_exactly": True,
-                "public_role_privileges_permitted": False,
-                "public_role_effective_privileges_included_in_verification": True,
-                "grant_options_permitted": False,
+                "acl_manageable_custom_enums": {
+                    "types": list(_APPLICATION_CUSTOM_TYPES),
+                    "expected_type_count": 14,
+                    "usage": [],
+                    "direct_grants_permitted": False,
+                    "effective_privileges_must_match_exactly": True,
+                    "public_role_privileges_permitted": False,
+                    "public_role_effective_privileges_included_in_verification": True,
+                    "grant_options_permitted": False,
+                },
+                "relation_row_types": {
+                    "expected_type_count": 63,
+                    "relation_name_sources": [
+                        "schema.table_sets.application.tables",
+                        "schema.table_sets.control.tables",
+                    ],
+                    "independently_acl_manageable": False,
+                    "acl_mutation_must_not_be_used_to_establish_boundary": True,
+                    "effective_zero_usage_required": False,
+                    "has_type_privilege_usage_is_intrinsic": True,
+                },
+                "generated_array_types": {
+                    "expected_type_count": 77,
+                    "exact_name_rule": "underscore-prefixed-element-type-name",
+                    "independently_acl_manageable": False,
+                    "acl_mutation_supported": False,
+                    "enum_element_arrays": {
+                        "expected_type_count": 14,
+                        "element_type_source": (
+                            "privileges.types.public_schema."
+                            "acl_manageable_custom_enums.types"
+                        ),
+                        "effective_usage_must_equal_element_type_effective_usage": True,
+                    },
+                    "relation_row_element_arrays": {
+                        "expected_type_count": 63,
+                        "element_type_source": (
+                            "privileges.types.public_schema.relation_row_types"
+                        ),
+                        "has_type_privilege_usage_is_intrinsic": True,
+                    },
+                },
+                "catalog_partition_is_exact_disjoint_and_exhaustive": True,
+                "unlisted_type_categories_permitted": False,
                 "unlisted_type_privileges_permitted": False,
-                "future_adapter_must_prove_rewrite_without_type_usage_grants": True,
             }
         },
         "languages": {
@@ -607,6 +850,10 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "existing_object_public_routine_execute_and_type_usage_must_be_reconciled": True,
             "future_user_object_creation_during_capability_window_permitted": False,
             "implicit_public_defaults_cannot_materialize_during_capability_window": True,
+            "requires_authenticated_exclusive_ddl_window": True,
+            "exclusive_ddl_window_source": (
+                "privileges.transaction_compatibility.exclusive_ddl_window"
+            ),
         },
         "other_authority": dict.fromkeys(
             {
@@ -643,10 +890,31 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "read_only": transaction["read_only"],
             "autocommit": transaction["autocommit"],
             "synchronous_commit": transaction["synchronous_commit"],
-            "control_table_lock_and_revision_revalidation_required": True,
             "control_table_write_privilege_permitted": False,
-            "select_privilege_compatible_control_table_lock_required": True,
             "set_role_permitted": False,
+            "exclusive_ddl_window": {
+                "protocol": "postgresql-session-level-advisory-lock-v1",
+                "key_source_utf8": _ADVISORY_LOCK_KEY_SOURCE,
+                "key_source_sha256": f"sha256:{_ADVISORY_LOCK_KEY_SHA256}",
+                "signed_int32_key_parts": list(_ADVISORY_LOCK_KEY_PARTS),
+                "participants_required": [
+                    "every-schema-migration-path",
+                    "sanitizer-transaction-adapter",
+                ],
+                "blocking_acquisition_required": True,
+                "dedicated_session_required": True,
+                "connection_pooling_permitted": False,
+                "acquire_before_serializable_transaction": True,
+                "revision_and_schema_revalidation_after_lock_before_mutation": True,
+                "retain_same_session_lock_through_commit_or_rollback": True,
+                "unlock_and_close_session_required": True,
+                "fail_closed_if_lock_state_uncertain": True,
+                "access_share_lock_is_exclusion_proof": False,
+                "protects_default_acl_and_no_future_object_assumptions": True,
+                "all_migration_paths_cooperate": False,
+                "sanitizer_adapter_cooperates": False,
+                "implementation_authenticated": False,
+            },
         },
     }
     if (
@@ -669,15 +937,7 @@ def _validate_dormancy(contract: dict[str, Any]) -> None:
         or contract.get("closed_world") is not True
         or contract.get("activation_ready") is not False
         or contract.get("public_activation_failure") != ACTIVATION_FAILURE
-        or contract.get("activation_blockers")
-        != [
-            "exact_database_role_unselected",
-            "provision_job_identity_exact_ids_unpinned",
-            "bootstrap_authority_unselected",
-            "database_role_provisioning_unimplemented",
-            "database_role_state_authenticator_unimplemented",
-            "runtime_integration_unimplemented",
-        ]
+        or contract.get("activation_blockers") != list(_ACTIVATION_BLOCKERS)
         or status.get("contract_only") is not True
         or any(
             value is not False

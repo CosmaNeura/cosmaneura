@@ -179,14 +179,69 @@ def test_exact_least_privilege_role_and_transaction_posture() -> None:
             "named_lists_are_diagnostics_not_exhaustive_boundary",
         }
     )
-    assert role["role_settings"] == {
-        "global": [],
-        "database_specific": [],
-        "permitted": False,
+    role_settings = role["role_settings"]
+    assert role_settings["permitted"] is False
+    assert role_settings["caller_or_environment_overrides_permitted"] is False
+    assert role_settings["expected_role_owned_entries"] == []
+    assert role_settings["pg_db_role_setting"]["expected_empty_scopes"] == {
+        "database_all_roles": [],
+        "role_and_database": [],
+        "role_global": [],
+    }
+    assert (
+        role_settings["pg_db_role_setting"]["setrole_zero_database_wide_rows_included"]
+        is True
+    )
+    assert role_settings["effective_session"]["required_exact_values"] == {
+        "default_transaction_isolation": "serializable",
+        "default_transaction_read_only": "off",
+        "row_security": "on",
+        "search_path": "pg_catalog",
+        "session_replication_role": "origin",
+        "synchronous_commit": "on",
+        "transaction_isolation": "serializable",
+        "transaction_read_only": "off",
     }
 
-    assert privileges["database"]["direct_connect_grant_required"] is True
-    assert privileges["database"]["public_role_privileges_permitted"] is False
+    databases = privileges["databases"]
+    assert databases["closed_world_enumeration_required"] is True
+    assert databases["unknown_or_unobserved_databases_permitted"] is False
+    assert databases["target"]["direct_privileges"] == {
+        "connect": True,
+        "create": False,
+        "temporary": False,
+    }
+    assert databases["target"]["public_privileges"] == {
+        "connect": False,
+        "create": False,
+        "temporary": False,
+    }
+    assert databases["target"]["effective_privileges"] == {
+        "connect": True,
+        "create": False,
+        "temporary": False,
+    }
+    for source in (
+        "direct_privileges",
+        "public_privileges",
+        "membership_privileges",
+        "effective_privileges",
+    ):
+        assert databases["non_target"][source] == {
+            "connect": False,
+            "create": False,
+            "temporary": False,
+        }
+    assert databases["catalog_stability"] == {
+        "database_creation_during_authenticated_window_permitted": False,
+        "every_database_creation_path_must_cooperate": True,
+        "implementation_authenticated": False,
+        "mechanism_selected": False,
+        "required": True,
+        "server_wide_coordination_required": True,
+        "target_database_advisory_lock_is_sufficient": False,
+        "unknown_catalog_change_permitted": False,
+    }
     assert privileges["schemas"]["public"]["direct_usage_grant_required"] is True
     assert privileges["schemas"]["public"]["public_role_privileges_permitted"] is False
 
@@ -233,11 +288,34 @@ def test_exact_least_privilege_role_and_transaction_posture() -> None:
     assert not any(privileges["other_authority"].values())
     assert privileges["transaction_compatibility"] == {
         "autocommit": transaction["autocommit"],
-        "control_table_lock_and_revision_revalidation_required": True,
         "control_table_write_privilege_permitted": False,
+        "exclusive_ddl_window": {
+            "access_share_lock_is_exclusion_proof": False,
+            "acquire_before_serializable_transaction": True,
+            "all_migration_paths_cooperate": False,
+            "blocking_acquisition_required": True,
+            "connection_pooling_permitted": False,
+            "dedicated_session_required": True,
+            "fail_closed_if_lock_state_uncertain": True,
+            "implementation_authenticated": False,
+            "key_source_sha256": (
+                "sha256:369cd78e91d8f0507a5d72aa89df02f240b7f4bbb4d97f3030625aea41bb02a3"
+            ),
+            "key_source_utf8": "cosmaneura:staging:sanitizer-ddl-exclusion:v1",
+            "participants_required": [
+                "every-schema-migration-path",
+                "sanitizer-transaction-adapter",
+            ],
+            "protocol": "postgresql-session-level-advisory-lock-v1",
+            "protects_default_acl_and_no_future_object_assumptions": True,
+            "revision_and_schema_revalidation_after_lock_before_mutation": True,
+            "retain_same_session_lock_through_commit_or_rollback": True,
+            "sanitizer_adapter_cooperates": False,
+            "signed_int32_key_parts": [916248462, -1848053680],
+            "unlock_and_close_session_required": True,
+        },
         "isolation": transaction["isolation"],
         "read_only": transaction["read_only"],
-        "select_privilege_compatible_control_table_lock_required": True,
         "set_role_permitted": False,
         "synchronous_commit": transaction["synchronous_commit"],
     }
@@ -270,10 +348,39 @@ def test_every_postgresql_privilege_class_is_closed_and_public_aware() -> None:
     assert types["rewrite_value_custom_types"] == list(
         capability._REWRITE_CUSTOM_TYPES  # noqa: SLF001
     )
-    assert types["usage"] == {"expected_type_count": 0, "types": []}
-    assert types["future_adapter_must_prove_rewrite_without_type_usage_grants"] is True
+    enums = types["acl_manageable_custom_enums"]
+    assert enums["expected_type_count"] == 14
+    assert enums["types"] == list(capability._APPLICATION_CUSTOM_TYPES)  # noqa: SLF001
+    assert enums["usage"] == []
+    assert set(types["rewrite_value_custom_types"]).issubset(enums["types"])
+    relation_rows = types["relation_row_types"]
+    assert relation_rows["expected_type_count"] == 63
+    assert relation_rows["relation_name_sources"] == [
+        "schema.table_sets.application.tables",
+        "schema.table_sets.control.tables",
+    ]
+    generated_arrays = types["generated_array_types"]
+    assert generated_arrays["expected_type_count"] == 77
+    assert generated_arrays["exact_name_rule"] == (
+        "underscore-prefixed-element-type-name"
+    )
+    assert generated_arrays["enum_element_arrays"] == {
+        "effective_usage_must_equal_element_type_effective_usage": True,
+        "element_type_source": (
+            "privileges.types.public_schema.acl_manageable_custom_enums.types"
+        ),
+        "expected_type_count": 14,
+    }
+    assert generated_arrays["relation_row_element_arrays"] == {
+        "element_type_source": "privileges.types.public_schema.relation_row_types",
+        "expected_type_count": 63,
+        "has_type_privilege_usage_is_intrinsic": True,
+    }
+    assert 14 + 63 + 77 == types["observed_schema_type_count"]
+    assert types["catalog_partition_is_exact_disjoint_and_exhaustive"] is True
+    assert types["unlisted_type_categories_permitted"] is False
 
-    for policy in (routines, types):
+    for policy in (routines, enums):
         assert policy["direct_grants_permitted"] is False
         assert policy["effective_privileges_must_match_exactly"] is True
         assert policy["public_role_privileges_permitted"] is False
@@ -281,6 +388,12 @@ def test_every_postgresql_privilege_class_is_closed_and_public_aware() -> None:
             policy["public_role_effective_privileges_included_in_verification"] is True
         )
         assert policy["grant_options_permitted"] is False
+    assert relation_rows["independently_acl_manageable"] is False
+    assert relation_rows["acl_mutation_must_not_be_used_to_establish_boundary"] is True
+    assert relation_rows["effective_zero_usage_required"] is False
+    assert relation_rows["has_type_privilege_usage_is_intrinsic"] is True
+    assert generated_arrays["independently_acl_manageable"] is False
+    assert generated_arrays["acl_mutation_supported"] is False
     usage_scopes = {
         "languages": "user-defined-non-system-languages",
         "foreign_data_wrappers": "user-defined-non-system-foreign-data-wrappers",
@@ -392,6 +505,151 @@ def test_only_provision_job_identity_is_the_future_database_principal() -> None:
 
 
 @pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (
+            "privileges.types.public_schema.acl_manageable_custom_enums.types",
+            ["doctorrole"],
+        ),
+        (
+            "privileges.types.public_schema.acl_manageable_custom_enums.usage",
+            ["doctorrole"],
+        ),
+        ("privileges.types.public_schema.relation_row_types.expected_type_count", 62),
+        (
+            "privileges.types.public_schema.relation_row_types.effective_zero_usage_required",
+            True,
+        ),
+        (
+            "privileges.types.public_schema.generated_array_types.expected_type_count",
+            76,
+        ),
+        (
+            "privileges.types.public_schema.generated_array_types.acl_mutation_supported",
+            True,
+        ),
+        (
+            "privileges.types.public_schema.generated_array_types.enum_element_arrays.effective_usage_must_equal_element_type_effective_usage",
+            False,
+        ),
+        ("privileges.databases.closed_world_enumeration_required", False),
+        (
+            "privileges.databases.templates_and_disallowed_connection_databases_included",
+            False,
+        ),
+        ("privileges.databases.implicit_acl_defaults_must_be_expanded", False),
+        ("privileges.databases.non_target.public_privileges.connect", True),
+        ("privileges.databases.non_target.effective_privileges.connect", True),
+        (
+            "privileges.databases.non_target.existing_runtime_role_session_count_required",
+            1,
+        ),
+        (
+            "privileges.databases.catalog_stability.target_database_advisory_lock_is_sufficient",
+            True,
+        ),
+        ("privileges.databases.catalog_stability.mechanism_selected", True),
+        (
+            "privileges.transaction_compatibility.exclusive_ddl_window.access_share_lock_is_exclusion_proof",
+            True,
+        ),
+        (
+            "privileges.transaction_compatibility.exclusive_ddl_window.participants_required",
+            ["sanitizer-transaction-adapter"],
+        ),
+        (
+            "privileges.transaction_compatibility.exclusive_ddl_window.acquire_before_serializable_transaction",
+            False,
+        ),
+        (
+            "privileges.transaction_compatibility.exclusive_ddl_window.retain_same_session_lock_through_commit_or_rollback",
+            False,
+        ),
+        (
+            "privileges.default_privileges.requires_authenticated_exclusive_ddl_window",
+            False,
+        ),
+    ],
+)
+def test_privilege_semantic_mutations_fail_without_template_comparison(
+    path: str, replacement: Any
+) -> None:
+    document = _document()
+    _set_path(document, path, replacement)
+
+    with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+        capability._validate_privileges(  # noqa: SLF001
+            document,
+            capability._load_upstreams(),  # noqa: SLF001
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        (
+            "role_posture.role_settings.pg_db_role_setting.source_scopes_required",
+            ["role-global:setdatabase=0,setrole=runtime-role-oid"],
+        ),
+        (
+            "role_posture.role_settings.pg_db_role_setting.setrole_zero_database_wide_rows_included",
+            False,
+        ),
+        (
+            "role_posture.role_settings.pg_db_role_setting.expected_empty_scopes.database_all_roles",
+            ["session_replication_role=replica"],
+        ),
+        (
+            "role_posture.role_settings.effective_session.required_exact_values.session_replication_role",
+            "replica",
+        ),
+        (
+            "role_posture.role_settings.effective_session.source_precedence_must_include",
+            ["adapter-session-commands"],
+        ),
+        (
+            "role_posture.role_settings.effective_session.controller_read_only_observer_settings_are_execution_proof",
+            True,
+        ),
+    ],
+)
+def test_setting_semantic_mutations_fail_without_template_comparison(
+    path: str, replacement: Any
+) -> None:
+    document = _document()
+    _set_path(document, path, replacement)
+
+    with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+        capability._validate_identity_and_role(  # noqa: SLF001
+            document,
+            capability._load_upstreams(),  # noqa: SLF001
+        )
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement"),
+    [
+        ("claims.cross_database_role_confinement_authenticated", True),
+        ("claims.server_database_catalog_stability_authenticated", True),
+        ("claims.effective_session_settings_authenticated", True),
+        ("claims.database_migration_exclusion_authenticated", True),
+        ("status.cross_database_role_confinement_implemented", True),
+        ("status.server_database_catalog_stability_implemented", True),
+        ("status.effective_session_settings_authenticator_implemented", True),
+        ("status.database_migration_exclusion_cooperation_implemented", True),
+    ],
+)
+def test_new_capabilities_remain_dormant_without_template_comparison(
+    path: str, replacement: Any
+) -> None:
+    document = _document()
+    _set_path(document, path, replacement)
+
+    with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+        capability._validate_dormancy(document)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
     "replacement",
     [
         "restore_runtime_binding.identities.jobs.cleanup",
@@ -427,19 +685,25 @@ def test_forbidden_identity_substitutions_are_rejected(replacement: str) -> None
         ("role_posture.allowed_outbound_memberships", ["azure_pg_admin"]),
         ("role_posture.allowed_inbound_members", ["another_role"]),
         ("role_posture.set_role.allowed_targets", ["azure_pg_admin"]),
-        ("role_posture.role_settings.global", ["search_path=attacker"]),
+        (
+            "role_posture.role_settings.expected_role_owned_entries",
+            ["search_path=attacker"],
+        ),
         (
             "role_posture.ownership.any_database_or_shared_object_ownership_permitted",
             True,
         ),
-        ("privileges.database.public_role_privileges_permitted", True),
+        ("privileges.databases.target.public_privileges.connect", True),
         ("privileges.schemas.public.public_role_privileges_permitted", True),
         ("privileges.tables.insert.expected_table_count", 20),
         ("privileges.tables.update.tables", ["patient"]),
         ("privileges.tables.grant_options_permitted", True),
         ("privileges.tables.column_grants.select", ["patient.email"]),
         ("privileges.routines.public_schema.execute.routines", ["typeid_parse(text)"]),
-        ("privileges.types.public_schema.usage.types", ["doctorrole"]),
+        (
+            "privileges.types.public_schema.acl_manageable_custom_enums.usage",
+            ["doctorrole"],
+        ),
         ("privileges.languages.usage", ["plpgsql"]),
         ("privileges.tablespaces.create", ["pg_default"]),
         ("privileges.parameters.set", ["session_replication_role"]),
