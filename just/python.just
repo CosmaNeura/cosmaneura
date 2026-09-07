@@ -261,6 +261,11 @@ py_test-ci-infrastructure-sanitizer-observer-connection-plan:
 	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_privileged_global_connection_plan.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
 py_test-ci-infrastructure-sanitizer-observer-integrity:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-integrity is CI-only" >&2; exit 1; }
 	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_target_role_offline_authenticator.py --verbosity=2 {{PYTEST_COV_PARAMS}}
