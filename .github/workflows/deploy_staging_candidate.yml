@@ -247,6 +247,8 @@ jobs:
             apt-packages: zsh
           - shard: infrastructure-sanitizer-bootstrap-binding-output
             apt-packages: zsh
+          - shard: infrastructure-sanitizer-bootstrap-binding-failure
+            apt-packages: zsh
           - shard: infrastructure-sanitizer-observer-integrity
             apt-packages: zsh
           - shard: infrastructure-sanitizer-data-contract-executor

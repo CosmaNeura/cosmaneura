@@ -40,6 +40,7 @@ SHARDS = (
     "infrastructure-sanitizer-bootstrap-binding-ancestry",
     "infrastructure-sanitizer-bootstrap-binding-state",
     "infrastructure-sanitizer-bootstrap-binding-output",
+    "infrastructure-sanitizer-bootstrap-binding-failure",
     "infrastructure-sanitizer-observer-integrity",
     "infrastructure-sanitizer-data-contract-executor",
     "infrastructure-sanitizer-source-snapshot",
@@ -60,6 +61,7 @@ FILE_SHARDS = tuple(
         "infrastructure-sanitizer-bootstrap-binding-ancestry",
         "infrastructure-sanitizer-bootstrap-binding-state",
         "infrastructure-sanitizer-bootstrap-binding-output",
+        "infrastructure-sanitizer-bootstrap-binding-failure",
     }
 )
 CONTROLLER_GLOB = "tests/infrastructure/test_staging_controller_receipt_v2*.py"
@@ -253,6 +255,8 @@ SANITIZER_BOOTSTRAP_BINDING_STATE_SELECTORS = (
 )
 SANITIZER_BOOTSTRAP_BINDING_OUTPUT_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_output_is_immutable_nonserializable_and_tamper_evident",
+)
+SANITIZER_BOOTSTRAP_BINDING_FAILURE_SELECTORS = (
     f"{SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR}::test_unexpected_failures_are_content_free_and_return_no_partial_plan",
 )
 SANITIZER_OBSERVER_INTEGRITY_SELECTORS = (
@@ -530,12 +534,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_STATE_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-bootstrap-binding-output": (
-            "uv run pytest \\\n"
-            + "".join(
-                f"\t\t{selector} \\\n"
-                for selector in SANITIZER_BOOTSTRAP_BINDING_OUTPUT_SELECTORS
-            )
-            + "\t\t--verbosity=2"
+            f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_OUTPUT_SELECTORS[0]} --verbosity=2"
+        ),
+        "infrastructure-sanitizer-bootstrap-binding-failure": (
+            f"uv run pytest {SANITIZER_BOOTSTRAP_BINDING_FAILURE_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-observer-integrity": (
             f"uv run pytest {SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR} --verbosity=2"
@@ -628,6 +630,9 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_bootstrap_binding_output_start = source.index(
         "py_test-ci-infrastructure-sanitizer-bootstrap-binding-output:"
     )
+    infrastructure_sanitizer_bootstrap_binding_failure_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure:"
+    )
     infrastructure_sanitizer_observer_integrity_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-integrity:"
     )
@@ -706,7 +711,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_bootstrap_binding_state_start:infrastructure_sanitizer_bootstrap_binding_output_start
     ]
     infrastructure_sanitizer_bootstrap_binding_output_recipe = source[
-        infrastructure_sanitizer_bootstrap_binding_output_start:infrastructure_sanitizer_observer_integrity_start
+        infrastructure_sanitizer_bootstrap_binding_output_start:infrastructure_sanitizer_bootstrap_binding_failure_start
+    ]
+    infrastructure_sanitizer_bootstrap_binding_failure_recipe = source[
+        infrastructure_sanitizer_bootstrap_binding_failure_start:infrastructure_sanitizer_observer_integrity_start
     ]
     infrastructure_sanitizer_observer_integrity_recipe = source[
         infrastructure_sanitizer_observer_integrity_start:infrastructure_sanitizer_data_contract_executor_start
@@ -770,6 +778,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     )
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_bootstrap_binding_output_recipe
+    )
+    assert (
+        "--ignore-glob="
+        not in infrastructure_sanitizer_bootstrap_binding_failure_recipe
     )
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_integrity_recipe
     assert (
@@ -1047,6 +1059,9 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     bootstrap_binding_output = _collect_nodeids(
         *SANITIZER_BOOTSTRAP_BINDING_OUTPUT_SELECTORS
     )
+    bootstrap_binding_failure = _collect_nodeids(
+        *SANITIZER_BOOTSTRAP_BINDING_FAILURE_SELECTORS
+    )
     bootstrap_binding_family = _collect_nodeids(
         SANITIZER_BOOTSTRAP_BINDING_PLAN_SELECTOR
     )
@@ -1078,6 +1093,7 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
         bootstrap_binding_ancestry,
         bootstrap_binding_state,
         bootstrap_binding_output,
+        bootstrap_binding_failure,
         integrity,
     )
     bootstrap_groups = (
@@ -1086,6 +1102,7 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
         bootstrap_binding_ancestry,
         bootstrap_binding_state,
         bootstrap_binding_output,
+        bootstrap_binding_failure,
     )
 
     assert all(groups)
@@ -1100,7 +1117,8 @@ def test_sanitizer_observer_shards_partition_all_231_collected_cases_once() -> N
     assert len(bootstrap_binding_digest) == 1
     assert len(bootstrap_binding_ancestry) == 1
     assert len(bootstrap_binding_state) == 1
-    assert len(bootstrap_binding_output) == 2
+    assert len(bootstrap_binding_output) == 1
+    assert len(bootstrap_binding_failure) == 1
     assert len(bootstrap_binding_family) == 25
     assert len(integrity) == 39
     assert len(family) == 231

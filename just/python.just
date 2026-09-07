@@ -325,10 +325,12 @@ py_test-ci-infrastructure-sanitizer-bootstrap-binding-state:
 [script]
 py_test-ci-infrastructure-sanitizer-bootstrap-binding-output:
 	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-output is CI-only" >&2; exit 1; }
-	uv run pytest \
-		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_output_is_immutable_nonserializable_and_tamper_evident \
-		tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
-		--verbosity=2 {{PYTEST_COV_PARAMS}}
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_output_is_immutable_nonserializable_and_tamper_evident --verbosity=2 {{PYTEST_COV_PARAMS}}
+
+[script]
+py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-bootstrap-binding-failure is CI-only" >&2; exit 1; }
+	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_bootstrap_binding_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
 py_test-ci-infrastructure-sanitizer-observer-integrity:
