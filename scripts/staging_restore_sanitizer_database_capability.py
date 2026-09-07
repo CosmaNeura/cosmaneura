@@ -13,7 +13,7 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-database-capability-contract.json"
 )
-CONTRACT_SHA256 = "496af89e754c0521e350650509bba52edb29847ed7ebb0bfed60ee550cb9ed49"
+CONTRACT_SHA256 = "4ca2fa9a3f09118002853de7b7a54b681850d4d346c7e795d205dbf448e203e5"
 ACTIVATION_FAILURE = "activation.database_role_state_authenticator_unimplemented"
 MAXIMUM_DOCUMENT_BYTES = 2 * 1024 * 1024
 
@@ -76,16 +76,39 @@ _ADVISORY_LOCK_KEY_SHA256 = (
     "369cd78e91d8f0507a5d72aa89df02f240b7f4bbb4d97f3030625aea41bb02a3"
 )
 _ADVISORY_LOCK_KEY_PARTS = (916248462, -1848053680)
+_AUTHORITY_MUTATOR_CLASSES = tuple(
+    (
+        "bootstrap-and-admin-grant-revoke alter-role-membership alter-role-attributes "
+        "role-ownership-reassignment "
+        "database-schema-and-shared-object-create-alter-drop-including-migrations-and-ad-hoc-ddl "
+        "role-and-database-setting-set-reset server-and-startup-configuration-mutation "
+        "database-create-drop-rename-allowconn-owner-acl "
+        "schema-owner-acl table-owner-acl column-acl sequence-owner-acl routine-owner-acl "
+        "type-owner-acl language-owner-acl tablespace-owner-acl parameter-acl-and-alter-system "
+        "foreign-data-wrapper-owner-acl foreign-server-owner-acl user-mapping-create-alter-drop "
+        "large-object-owner-acl default-acl entra-database-role-mapping"
+    ).split()
+)
+_FINAL_AUTHENTICATION_SCOPE = tuple(
+    (
+        "database-role-flags-password-memberships-and-ownership entra-to-database-role-mapping "
+        "every-database-row-allowconn-owner-acl-and-effective-privileges "
+        "schema-table-column-sequence-routine-type-language-and-tablespace-authority "
+        "parameter-foreign-data-user-mapping-large-object-and-default-acl-authority "
+        "role-database-and-effective-session-settings schema-descriptor-and-firing-trigger-set"
+    ).split()
+)
 _ACTIVATION_BLOCKERS = (
     "exact_database_role_unselected",
     "provision_job_identity_exact_ids_unpinned",
     "bootstrap_authority_unselected",
     "database_role_provisioning_unimplemented",
     "cross_database_role_confinement_unimplemented",
-    "server_database_catalog_stability_unimplemented",
+    "server_wide_authorization_stability_unimplemented",
     "effective_session_timeout_values_unselected",
     "effective_session_settings_authenticator_unimplemented",
     "database_migration_exclusion_cooperation_unimplemented",
+    "firing_trigger_set_authenticator_unimplemented",
     "database_role_state_authenticator_unimplemented",
     "runtime_integration_unimplemented",
 )
@@ -112,9 +135,10 @@ _VERIFICATION_REQUIREMENTS = (
     "closed-world-every-pg-database-entry-and-datallowconn",
     "exact-direct-public-membership-and-effective-database-privileges",
     "target-only-effective-connect-and-no-create-or-temporary-anywhere",
-    "server-database-catalog-stability-across-observation-and-execution",
+    "server-wide-authorization-state-freeze-from-final-observation-through-transaction",
     "exact-direct-and-effective-schema-privileges",
     "exact-direct-and-effective-table-privileges",
+    "schema-descriptor-bound-firing-trigger-set-under-held-stability-windows",
     "empty-explicit-column-acls",
     "column-effective-privileges-derived-only-from-exact-table-privileges",
     "empty-sequence-privileges",
@@ -584,6 +608,36 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "table_set_sources": ["schema.table_sets.rewrite.tables"],
             "expected_table_count": 19,
         },
+        "firing_triggers": {
+            "allowed_set_source": "schema.descriptor.sha256",
+            "authentication_implemented": False,
+            "exact_allowed_set_and_definitions_must_match_authenticated_schema_descriptor": True,
+            "revalidation_windows_required": [
+                "privileges.server_wide_authorization_stability",
+                "privileges.transaction_compatibility.exclusive_ddl_window",
+            ],
+            "routine_execute_revocation_is_trigger_suppression": False,
+            "unlisted_or_changed_trigger_may_fire": False,
+            "user_insert_triggers_on_rewrite_tables": {
+                "expected_trigger_count": 0,
+                "table_set_source": "schema.table_sets.rewrite.tables",
+                "triggers": [],
+            },
+            "user_truncate_triggers_on_truncate_tables": {
+                "expected_trigger_count": 0,
+                "table_set_source": "schema.table_sets.application.tables",
+                "triggers": [],
+            },
+            "internal_triggers": {
+                "exact_set_and_definitions_must_match_authenticated_schema_descriptor": True,
+                "trigger_functions_must_authenticate": [
+                    "security-definer-flag",
+                    "owner",
+                    "proconfig",
+                    "definition",
+                ],
+            },
+        },
         **{
             name: {"tables": [], "expected_table_count": 0}
             for name in ("update", "delete", "references", "trigger")
@@ -650,16 +704,9 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "unknown_or_unobserved_databases_permitted": False,
             "target_must_appear_exactly_once": True,
             "runtime_role_database_ownership_permitted": False,
-            "catalog_stability": {
-                "required": True,
-                "mechanism_selected": False,
-                "implementation_authenticated": False,
-                "server_wide_coordination_required": True,
-                "every_database_creation_path_must_cooperate": True,
-                "target_database_advisory_lock_is_sufficient": False,
-                "database_creation_during_authenticated_window_permitted": False,
-                "unknown_catalog_change_permitted": False,
-            },
+            "authorization_stability_source": (
+                "privileges.server_wide_authorization_stability"
+            ),
             "target": {
                 "name": inventory["database"]["expected_name"],
                 "datallowconn_required": True,
@@ -711,6 +758,32 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
                     "temporary": False,
                 },
             },
+        },
+        "server_wide_authorization_stability": {
+            "kind": "authenticated-server-wide-external-lease-or-freeze-v1",
+            "required": True,
+            "mechanism_selected": False,
+            "implementation_authenticated": False,
+            "lease_key_source": "authenticated-server-identity",
+            "external_fencing_required": True,
+            "closed_world_mutator_scope": True,
+            "authority_mutator_classes": list(_AUTHORITY_MUTATOR_CLASSES),
+            "unknown_or_uncovered_authority_mutator_permitted": False,
+            "mutators_must_acquire_before_authority_mutation": True,
+            "sanitizer_must_acquire_before_final_closed_world_observation": True,
+            "final_observation_scope": list(_FINAL_AUTHENTICATION_SCOPE),
+            "final_observation_and_revalidation_under_held_window": True,
+            "reauthenticate_every_capability_fact_while_held": True,
+            "mutation_may_begin_only_after_final_revalidation_is_accepted": True,
+            "retain_through_sanitizer_commit_or_rollback": True,
+            "retain_through_database_connection_close": True,
+            "validate_current_lease_and_fence_immediately_before_commit": True,
+            "release_only_after_sanitizer_commit_or_rollback_and_connection_close": True,
+            "rollback_on_loss_or_uncertainty": True,
+            "fail_closed_if_acquisition_retention_revalidation_or_release_is_uncertain": True,
+            "server_wide_external_lease_or_freeze_required": True,
+            "target_database_advisory_lock_is_sufficient": False,
+            "serializable_transaction_is_sufficient": False,
         },
         "schemas": {
             "public": {
@@ -853,6 +926,9 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "requires_authenticated_exclusive_ddl_window": True,
             "exclusive_ddl_window_source": (
                 "privileges.transaction_compatibility.exclusive_ddl_window"
+            ),
+            "server_wide_authorization_stability_source": (
+                "privileges.server_wide_authorization_stability"
             ),
         },
         "other_authority": dict.fromkeys(

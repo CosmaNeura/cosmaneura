@@ -22,9 +22,6 @@ INVENTORY = CONTRACTS / "synthetic-data-policy.json"
 DATA_CONTRACT = CONTRACTS / "restore-sanitizer-data-contract.json"
 TRANSACTION_PLAN = CONTRACTS / "restore-sanitizer-transaction-plan-contract.json"
 CONTROLLER = CONTRACTS / "controller-receipt-v2-policy.json"
-DATABASE_OBSERVATION = (
-    CONTRACTS / "controller-receipt-v2-database-observation-policy.json"
-)
 RUNTIME_BINDING = CONTRACTS / "restore-runtime-binding-policy.json"
 FAILURE = capability.SanitizerDatabaseCapabilityFailure
 
@@ -145,180 +142,83 @@ def test_closed_world_pre_schema_catalog_and_partition_are_exact() -> None:
     }
 
 
-def test_exact_least_privilege_role_and_transaction_posture() -> None:
+def test_exact_database_table_and_transaction_posture() -> None:
     document = _document()
-    observation = _document(DATABASE_OBSERVATION)
     transaction = _document(TRANSACTION_PLAN)["transaction"]
-    role = document["role_posture"]
     privileges = document["privileges"]
     table_sets = document["schema"]["table_sets"]
-
-    assert (
-        role["required_flags"]
-        == observation["observation"]["queries"]["role"]["required_flags"]
-    )
-    assert role["required_connection_limit"] == 1
-    assert role["required_password_state"] == "null"
-    assert role["password_authentication_permitted"] is False
-    assert role["allowed_outbound_memberships"] == []
-    assert role["allowed_inbound_members"] == []
-    assert role["set_role"] == {
-        "mode": "direct-grants-no-role-switch",
-        "allowed_targets": [],
-        "escalation_permitted": False,
-    }
-    ownership = role["ownership"]
-    assert ownership["any_database_or_shared_object_ownership_permitted"] is False
-    assert ownership["named_lists_are_diagnostics_not_exhaustive_boundary"] is True
-    assert all(
-        value == []
-        for name, value in ownership.items()
-        if name
-        not in {
-            "any_database_or_shared_object_ownership_permitted",
-            "named_lists_are_diagnostics_not_exhaustive_boundary",
-        }
-    )
-    role_settings = role["role_settings"]
-    assert role_settings["permitted"] is False
-    assert role_settings["caller_or_environment_overrides_permitted"] is False
-    assert role_settings["expected_role_owned_entries"] == []
-    assert role_settings["pg_db_role_setting"]["expected_empty_scopes"] == {
-        "database_all_roles": [],
-        "role_and_database": [],
-        "role_global": [],
-    }
-    assert (
-        role_settings["pg_db_role_setting"]["setrole_zero_database_wide_rows_included"]
-        is True
-    )
-    assert role_settings["effective_session"]["required_exact_values"] == {
-        "default_transaction_isolation": "serializable",
-        "default_transaction_read_only": "off",
-        "row_security": "on",
-        "search_path": "pg_catalog",
-        "session_replication_role": "origin",
-        "synchronous_commit": "on",
-        "transaction_isolation": "serializable",
-        "transaction_read_only": "off",
-    }
 
     databases = privileges["databases"]
     assert databases["closed_world_enumeration_required"] is True
     assert databases["unknown_or_unobserved_databases_permitted"] is False
-    assert databases["target"]["direct_privileges"] == {
-        "connect": True,
-        "create": False,
-        "temporary": False,
-    }
-    assert databases["target"]["public_privileges"] == {
-        "connect": False,
-        "create": False,
-        "temporary": False,
-    }
-    assert databases["target"]["effective_privileges"] == {
-        "connect": True,
-        "create": False,
-        "temporary": False,
-    }
-    for source in (
-        "direct_privileges",
-        "public_privileges",
-        "membership_privileges",
-        "effective_privileges",
-    ):
-        assert databases["non_target"][source] == {
-            "connect": False,
-            "create": False,
-            "temporary": False,
-        }
-    assert databases["catalog_stability"] == {
-        "database_creation_during_authenticated_window_permitted": False,
-        "every_database_creation_path_must_cooperate": True,
-        "implementation_authenticated": False,
-        "mechanism_selected": False,
-        "required": True,
-        "server_wide_coordination_required": True,
-        "target_database_advisory_lock_is_sufficient": False,
-        "unknown_catalog_change_permitted": False,
-    }
-    assert privileges["schemas"]["public"]["direct_usage_grant_required"] is True
-    assert privileges["schemas"]["public"]["public_role_privileges_permitted"] is False
+    assert (
+        databases["authorization_stability_source"]
+        == "privileges.server_wide_authorization_stability"
+    )
 
-    table_privileges = privileges["tables"]
+    tables = privileges["tables"]
     assert _resolve_table_sources(
-        document, table_privileges["select"]["table_set_sources"]
+        document, tables["select"]["table_set_sources"]
     ) == set(table_sets["application"]["tables"]) | {"alembic_version"}
     assert _resolve_table_sources(
-        document, table_privileges["truncate"]["table_set_sources"]
+        document, tables["truncate"]["table_set_sources"]
     ) == set(table_sets["application"]["tables"])
     assert _resolve_table_sources(
-        document, table_privileges["insert"]["table_set_sources"]
+        document, tables["insert"]["table_set_sources"]
     ) == set(table_sets["rewrite"]["tables"])
-    assert table_privileges["direct_grants_required"] is True
-    assert table_privileges["effective_privileges_must_match_exactly"] is True
+    assert not any(privileges["other_authority"].values())
     assert (
-        table_privileges["public_role_effective_privileges_included_in_verification"]
+        privileges["transaction_compatibility"]["isolation"] == transaction["isolation"]
+    )
+    assert (
+        privileges["transaction_compatibility"][
+            "control_table_write_privilege_permitted"
+        ]
+        is False
+    )
+    advisory = privileges["transaction_compatibility"]["exclusive_ddl_window"]
+    assert advisory["protocol"] == "postgresql-session-level-advisory-lock-v1"
+    assert advisory["signed_int32_key_parts"] == [916248462, -1848053680]
+    assert advisory["all_migration_paths_cooperate"] is False
+
+    stability = privileges["server_wide_authorization_stability"]
+    assert stability["authority_mutator_classes"] == list(
+        capability._AUTHORITY_MUTATOR_CLASSES
+    )  # noqa: SLF001
+    assert stability["final_observation_scope"] == list(
+        capability._FINAL_AUTHENTICATION_SCOPE
+    )  # noqa: SLF001
+    assert (
+        stability["sanitizer_must_acquire_before_final_closed_world_observation"]
         is True
     )
-    assert table_privileges["public_role_table_privileges_permitted"] is False
-    assert table_privileges["unlisted_table_privileges_permitted"] is False
-    assert table_privileges["grant_options_permitted"] is False
-    assert table_privileges["column_grants"] == {
-        "any_column_acl_entry_permitted": False,
-        "effective_privileges_must_derive_only_from_exact_table_privileges": True,
-        "grant_options_permitted": False,
-        "insert": [],
-        "references": [],
-        "select": [],
-        "update": [],
-    }
-    for name in ("update", "delete", "references", "trigger"):
-        assert table_privileges[name] == {"expected_table_count": 0, "tables": []}
-    assert privileges["sequences"] == {
-        "direct_grants_permitted": False,
-        "effective_privileges_must_match_exactly": True,
-        "grant_options_permitted": False,
-        "public_role_effective_privileges_included_in_verification": True,
-        "public_role_privileges_permitted": False,
-        "select": [],
-        "update": [],
-        "usage": [],
-    }
-    assert not any(privileges["other_authority"].values())
-    assert privileges["transaction_compatibility"] == {
-        "autocommit": transaction["autocommit"],
-        "control_table_write_privilege_permitted": False,
-        "exclusive_ddl_window": {
-            "access_share_lock_is_exclusion_proof": False,
-            "acquire_before_serializable_transaction": True,
-            "all_migration_paths_cooperate": False,
-            "blocking_acquisition_required": True,
-            "connection_pooling_permitted": False,
-            "dedicated_session_required": True,
-            "fail_closed_if_lock_state_uncertain": True,
-            "implementation_authenticated": False,
-            "key_source_sha256": (
-                "sha256:369cd78e91d8f0507a5d72aa89df02f240b7f4bbb4d97f3030625aea41bb02a3"
-            ),
-            "key_source_utf8": "cosmaneura:staging:sanitizer-ddl-exclusion:v1",
-            "participants_required": [
-                "every-schema-migration-path",
-                "sanitizer-transaction-adapter",
-            ],
-            "protocol": "postgresql-session-level-advisory-lock-v1",
-            "protects_default_acl_and_no_future_object_assumptions": True,
-            "revision_and_schema_revalidation_after_lock_before_mutation": True,
-            "retain_same_session_lock_through_commit_or_rollback": True,
-            "sanitizer_adapter_cooperates": False,
-            "signed_int32_key_parts": [916248462, -1848053680],
-            "unlock_and_close_session_required": True,
-        },
-        "isolation": transaction["isolation"],
-        "read_only": transaction["read_only"],
-        "set_role_permitted": False,
-        "synchronous_commit": transaction["synchronous_commit"],
-    }
+    assert stability["retain_through_database_connection_close"] is True
+    assert (
+        stability["validate_current_lease_and_fence_immediately_before_commit"] is True
+    )
+    assert stability["rollback_on_loss_or_uncertainty"] is True
+    assert (
+        stability["mechanism_selected"]
+        is stability["implementation_authenticated"]
+        is False
+    )
+
+    firing = tables["firing_triggers"]
+    assert firing["allowed_set_source"] == "schema.descriptor.sha256"
+    assert firing["routine_execute_revocation_is_trigger_suppression"] is False
+    assert (
+        firing["user_insert_triggers_on_rewrite_tables"]["expected_trigger_count"] == 0
+    )
+    assert (
+        firing["user_truncate_triggers_on_truncate_tables"]["expected_trigger_count"]
+        == 0
+    )
+    assert firing["internal_triggers"]["trigger_functions_must_authenticate"] == [
+        "security-definer-flag",
+        "owner",
+        "proconfig",
+        "definition",
+    ]
 
 
 def test_every_postgresql_privilege_class_is_closed_and_public_aware() -> None:
@@ -545,11 +445,6 @@ def test_only_provision_job_identity_is_the_future_database_principal() -> None:
             1,
         ),
         (
-            "privileges.databases.catalog_stability.target_database_advisory_lock_is_sufficient",
-            True,
-        ),
-        ("privileges.databases.catalog_stability.mechanism_selected", True),
-        (
             "privileges.transaction_compatibility.exclusive_ddl_window.access_share_lock_is_exclusion_proof",
             True,
         ),
@@ -582,6 +477,47 @@ def test_privilege_semantic_mutations_fail_without_template_comparison(
             document,
             capability._load_upstreams(),  # noqa: SLF001
         )
+
+
+def test_server_wide_stability_mutations_fail_without_template_comparison() -> None:
+    prefix = "privileges.server_wide_authorization_stability"
+    mutations = (
+        ("mechanism_selected", True),
+        ("external_fencing_required", False),
+        ("lease_key_source", "target-database"),
+        ("authority_mutator_classes", []),
+        ("mutators_must_acquire_before_authority_mutation", False),
+        ("sanitizer_must_acquire_before_final_closed_world_observation", False),
+        ("reauthenticate_every_capability_fact_while_held", False),
+        ("retain_through_database_connection_close", False),
+        ("validate_current_lease_and_fence_immediately_before_commit", False),
+        ("rollback_on_loss_or_uncertainty", False),
+        ("release_only_after_sanitizer_commit_or_rollback_and_connection_close", False),
+        ("target_database_advisory_lock_is_sufficient", True),
+    )
+    for field, replacement in mutations:
+        document = _document()
+        _set_path(document, f"{prefix}.{field}", replacement)
+        with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+            capability._validate_privileges(document, capability._load_upstreams())  # noqa: SLF001
+
+
+def test_firing_trigger_mutations_fail_without_template_comparison() -> None:
+    prefix = "privileges.tables.firing_triggers"
+    mutations = (
+        ("allowed_set_source", "untrusted"),
+        ("routine_execute_revocation_is_trigger_suppression", True),
+        ("user_insert_triggers_on_rewrite_tables.expected_trigger_count", 1),
+        ("user_truncate_triggers_on_truncate_tables.expected_trigger_count", 1),
+        ("internal_triggers.trigger_functions_must_authenticate", ["definition"]),
+        ("revalidation_windows_required", []),
+        ("unlisted_or_changed_trigger_may_fire", True),
+    )
+    for field, replacement in mutations:
+        document = _document()
+        _set_path(document, f"{prefix}.{field}", replacement)
+        with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+            capability._validate_privileges(document, capability._load_upstreams())  # noqa: SLF001
 
 
 @pytest.mark.parametrize(
@@ -630,12 +566,12 @@ def test_setting_semantic_mutations_fail_without_template_comparison(
     ("path", "replacement"),
     [
         ("claims.cross_database_role_confinement_authenticated", True),
-        ("claims.server_database_catalog_stability_authenticated", True),
-        ("claims.effective_session_settings_authenticated", True),
+        ("claims.server_wide_authorization_stability_authenticated", True),
+        ("claims.firing_trigger_set_authenticated", True),
         ("claims.database_migration_exclusion_authenticated", True),
         ("status.cross_database_role_confinement_implemented", True),
-        ("status.server_database_catalog_stability_implemented", True),
-        ("status.effective_session_settings_authenticator_implemented", True),
+        ("status.server_wide_authorization_stability_implemented", True),
+        ("status.firing_trigger_set_authenticator_implemented", True),
         ("status.database_migration_exclusion_cooperation_implemented", True),
     ],
 )

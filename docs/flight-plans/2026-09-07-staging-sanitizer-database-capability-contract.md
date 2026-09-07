@@ -1,70 +1,46 @@
 # Staging sanitizer database-capability contract
 
-Tier 2, based on exact protected `master`
-`20bfe16dc6604530ffc973547e39c3362863ec20`. This dormant slice defines and
-offline-validates the least-privilege PostgreSQL capability boundary required
-by a future sanitizer transaction adapter. It does not select, provision,
-authenticate, bind, or use a live database role.
+Tier 2, based on protected `master` `20bfe16dc6604530ffc973547e39c3362863ec20`.
+This dormant, offline-only slice defines no live role, connection, provider call, or mutation.
 
-The contract permits a future dedicated provision-job login only: no role memberships or
-`SET ROLE`; no ownership or DDL; schema `USAGE` without `CREATE`; direct `SELECT` on the
-closed application catalog and `alembic_version`; direct `TRUNCATE` on it; and direct
-`INSERT` only on rewrite tables. The future observer must enumerate every
-`pg_database` row, including templates and databases with `datallowconn=false`,
-and authenticate direct, membership, ownership, `PUBLIC`, and effective ACL
-sources. Only `staging` may have effective `CONNECT`; no database may grant
-effective `CREATE` or `TEMP`, no non-target session may remain, and no database
-may be created inside the capability window. The exact role alias and managed-
-identity identifiers remain placeholders, and cross-database confinement is
-explicitly unimplemented.
+A future dedicated provision-job login has no memberships, `SET ROLE`, ownership, or DDL.
+It receives schema `USAGE`, exact table `SELECT`/`TRUNCATE`/`INSERT`, and no
+control-table write. Every `pg_database` row—including templates and
+`datallowconn=false` entries—and every direct, membership, ownership, `PUBLIC`, and
+effective ACL source must be authenticated. Only `staging` may have effective `CONNECT`;
+no database may grant effective `CREATE` or `TEMP`, and no non-target session may remain.
 
-The 154 public-schema types are an exact PostgreSQL 16 partition: 14 named,
-ACL-manageable application enums; 63 relation row types; and 77 generated array
-types. Zero direct, effective, and `PUBLIC` `USAGE` applies only to the 14 enum
-bases. The 14 enum-derived arrays mirror their element enums' effective usage;
-the 63 relation-row-derived arrays share their row types' intrinsic usability.
-Neither array group is independently ACL-manageable, and relation-row ACL
-mutation is never treated as a boundary. The closed-world boundary also rejects
-direct column ACLs; callable public-schema routines; language, tablespace,
-parameter, foreign-data, user-mapping, large-object, and
-default-privilege grants; all grant options; and every ownership dependency.
-PostgreSQL-owned built-in defaults remain outside the user-object allowlist,
-but explicit runtime-role grants and nondefault `PUBLIC` ACL deltas on system
-objects are forbidden.
+The 154 public-schema types are exactly 14 ACL-manageable enums, 63 relation row types,
+and 77 arrays. Zero direct/effective/`PUBLIC` `USAGE` applies only to the enums.
+Enum arrays mirror element usage; relation-row arrays share intrinsic row-type usability.
+Arrays are not independently ACL-manageable, and row-type ACL mutation is not a boundary.
 
-Every applicable `pg_db_role_setting` source is in scope, including database-
-wide `setrole=0`, role-global, and role-plus-database settings. Server/startup configuration,
-connection options, and adapter commands must also be authenticated. The eventual session must
-prove `session_replication_role=origin`, `row_security=on`,
-`search_path=pg_catalog`, writable `SERIALIZABLE` transaction characteristics,
-and `synchronous_commit=on`; exact bounded timeouts remain unselected and are
-an activation blocker. The controller's separate read-only observation session
-is not execution proof.
+All applicable `pg_db_role_setting` rows—including database-wide `setrole=0`—plus
+server/startup, connection, and adapter settings are in scope. The future execution
+session must prove `session_replication_role=origin`, `row_security=on`,
+`search_path=pg_catalog`, writable `SERIALIZABLE`, and `synchronous_commit=on`.
+Exact bounded timeouts remain unselected and blocking.
 
-Migration exclusion uses one fixed PostgreSQL session-level advisory-lock
-protocol and key. Every migration writer and the sanitizer must acquire it on a
-dedicated session before the sanitizer starts its `SERIALIZABLE` transaction.
-The sanitizer then revalidates revision and schema, retains the same session
-lock through commit or rollback, and unlocks and closes the session. This
-authenticated target-database DDL window protects the no-future-object and
-implicit-default-ACL assumptions. It cannot prevent server-level `CREATE
-DATABASE`, so catalog stability requires separate, unselected server-wide
-coordination. `SELECT` on `alembic_version` remains read-only: an `ACCESS SHARE` lock
-is expressly not treated as writer exclusion. Migration cooperation and the
-adapter are both unimplemented, so the contract remains dormant.
+Authorization TOCTOU protection requires an externally fenced, server-ID-keyed lease or
+freeze covering all database/schema/shared-object DDL (including migrations and ad-hoc
+DDL), role/database setting resets, server/startup configuration, mapping, ownership,
+ACL, and default-ACL mutators. Mutators acquire it first; the sanitizer
+acquires it before final identity/role/ACL/settings/catalog authentication, reauthenticates
+all capability facts while held, retains it through commit or rollback and connection
+close, validates the fence immediately before commit, and rolls back on loss or doubt.
+This server-wide mechanism is unselected, unauthenticated, and an activation blocker.
 
-The validator is pure and offline. It pins the current controller,
-database-observation, runtime, sanitizer, transaction-plan, schema, inventory,
-and data-contract inputs; derives the exact table partitions; rejects identity
-substitutions and capability broadening; and proves every live, runtime,
-connection, mutation, workflow, and activation claim remains false. Activation
-terminates at `database_role_state_authenticator_unimplemented`.
+A separate fixed session advisory lock coordinates every target-database migration path
+with the sanitizer. It is acquired before the `SERIALIZABLE` transaction, held through
+commit or rollback, and followed by unlock/session close. It cannot fence server-wide
+authority or `CREATE DATABASE`; `ACCESS SHARE` is not writer exclusion.
 
-Later slices require review and founder decisions for the direct-login model,
-exact role alias and timeouts, bootstrap teardown, cluster-wide database ACLs,
-effective-setting observation, and migration cooperation. The sanitizer never
-gains control-table write authority merely to manufacture a lock.
+The schema-descriptor revalidation binds the exact firing-trigger set under both windows.
+The 19 rewrite tables permit no user `INSERT` triggers and the 62 truncate tables no
+user `TRUNCATE` triggers. Internal triggers and their functions' `SECURITY DEFINER`
+flag, owner, `proconfig`, and definition must match. Revoking routine `EXECUTE` is not
+treated as trigger suppression.
 
-This slice performs no database, network, provider, environment, workflow,
-deployment, schema, role, grant, or data mutation. Recovery is a code-only
-revert; there is no external state to restore.
+The pinned validator remains pure and offline; every live, runtime, connection, mutation,
+workflow, stability, and trigger-authentication claim stays false. Activation terminates
+at `database_role_state_authenticator_unimplemented`. Recovery is a code-only revert.
