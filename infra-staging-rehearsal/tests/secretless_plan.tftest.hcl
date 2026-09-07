@@ -104,7 +104,7 @@ run "default_is_dormant" {
   }
 
   assert {
-    condition     = length(azurerm_user_assigned_identity.dispatcher) == 0 && length(azurerm_user_assigned_identity.job) == 0 && length(azurerm_federated_identity_credential.dispatcher) == 0
+    condition     = length(azurerm_user_assigned_identity.dispatcher) == 0 && length(azurerm_user_assigned_identity.job) == 0 && length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 0 && length(azurerm_federated_identity_credential.dispatcher) == 0
     error_message = "The default plan must not create dispatcher, job, or federated identities"
   }
 
@@ -129,7 +129,7 @@ run "default_is_dormant" {
   }
 
   assert {
-    condition     = output.marker_store_binding == null && length(output.restore_identity_bindings) == 0
+    condition     = output.marker_store_binding == null && length(output.restore_identity_bindings) == 0 && output.sanitizer_bootstrap_identity_foundation == null
     error_message = "Default-off outputs must not imply live marker or identity bindings"
   }
 
@@ -184,7 +184,7 @@ run "reversible_control_plane" {
   }
 
   assert {
-    condition     = azurerm_federated_identity_credential.dispatcher["provision"].subject == "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision" && azurerm_federated_identity_credential.dispatcher["cleanup"].subject == "repo:CosmaNeura/cosmaneura:environment:staging-restore-cleanup" && length(azurerm_user_assigned_identity.job) == 2
+    condition     = azurerm_federated_identity_credential.dispatcher["provision"].subject == "repo:CosmaNeura/cosmaneura:environment:staging-restore-provision" && azurerm_federated_identity_credential.dispatcher["cleanup"].subject == "repo:CosmaNeura/cosmaneura:environment:staging-restore-cleanup" && length(azurerm_user_assigned_identity.job) == 2 && length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 0 && output.sanitizer_bootstrap_identity_foundation == null
     error_message = "Only dispatcher UAMIs may trust the exact GitHub environment subjects; separate job UAMIs must exist without FICs"
   }
 
@@ -206,6 +206,75 @@ run "reversible_control_plane" {
   assert {
     condition     = azurerm_role_assignment.marker_provision_cleanup[0].role_definition_id == azurerm_role_definition.marker_reader[0].role_definition_resource_id
     error_message = "The dormant provision_cleanup assignment must retain marker-reader authority"
+  }
+}
+
+run "bootstrap_identity_requires_exact_plan_approval" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane = true
+    target_cidr_inventory_revalidated    = true
+    control_cidr_inventory_revalidated   = true
+    enable_sanitizer_bootstrap_identity  = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "bootstrap_identity_approval_cannot_be_stale" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    sanitizer_bootstrap_identity_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "bootstrap_identity_requires_lifecycle_metadata" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_sanitizer_bootstrap_identity        = true
+    sanitizer_bootstrap_identity_plan_approved = true
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "approved_bootstrap_identity_foundation" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_sanitizer_bootstrap_identity        = true
+    sanitizer_bootstrap_identity_plan_approved = true
+    sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
+    sanitizer_bootstrap_cleanup_not_after      = "2026-09-08T04:00:00Z"
+  }
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 1 && azurerm_user_assigned_identity.sanitizer_bootstrap[0].name == "cosmaneura-staging-restore-bootstrap-job" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].resource_group_name == azurerm_resource_group.control[0].name && azurerm_user_assigned_identity.sanitizer_bootstrap[0].location == "eastus" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["rehearsal-id"] == "abcdef123456" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] == "2026-09-08T04:00:00Z"
+    error_message = "The approved rung must create exactly the named East US bootstrap UAMI in the isolated control group"
+  }
+
+  assert {
+    condition     = length(azurerm_user_assigned_identity.job) == 2 && length(azurerm_federated_identity_credential.dispatcher) == 2 && length(azurerm_role_assignment.control_reader) == 2 && length(azurerm_role_assignment.source_reader) == 1 && length(azurerm_role_assignment.target_provisioner) == 1 && length(azurerm_role_assignment.target_cleanup) == 1 && length(azurerm_role_assignment.marker_read) == 2 && length(azurerm_role_assignment.marker_provision_cleanup) == 1 && length(azurerm_role_assignment.marker_create) == 0
+    error_message = "Creating the bootstrap identity must not widen federation, runtime job identities, or any role-assignment set"
+  }
+
+  assert {
+    condition     = output.sanitizer_bootstrap_identity_foundation.name == "cosmaneura-staging-restore-bootstrap-job" && output.sanitizer_bootstrap_identity_foundation.lifecycle == "ephemeral" && output.sanitizer_bootstrap_identity_foundation.rehearsal_id == "abcdef123456" && output.sanitizer_bootstrap_identity_foundation.cleanup_not_after == "2026-09-08T04:00:00Z" && length(output.sanitizer_bootstrap_identity_foundation.federated_credential_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.role_assignment_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.attached_job_resource_ids) == 0 && !output.sanitizer_bootstrap_identity_foundation.exact_ids_authenticated && !output.sanitizer_bootstrap_identity_foundation.single_use_job_bound && !output.sanitizer_bootstrap_identity_foundation.provider_authority_bound && !output.sanitizer_bootstrap_identity_foundation.database_authority_bound && !output.sanitizer_bootstrap_identity_foundation.workflow_binding_implemented
+    error_message = "The bootstrap output must remain explicit non-authoritative desired-state metadata"
   }
 }
 

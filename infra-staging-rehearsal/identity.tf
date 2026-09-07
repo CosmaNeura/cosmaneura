@@ -20,6 +20,8 @@ locals {
       name = "cosmaneura-staging-restore-cleanup-job"
     }
   }
+
+  sanitizer_bootstrap_identity_name = "cosmaneura-staging-restore-bootstrap-job"
 }
 
 resource "azurerm_user_assigned_identity" "dispatcher" {
@@ -50,4 +52,26 @@ resource "azurerm_user_assigned_identity" "job" {
   resource_group_name = azurerm_resource_group.control[0].name
   location            = azurerm_resource_group.control[0].location
   tags                = var.tags
+}
+
+# This identity is deliberately outside restore_job_identities: it is not a
+# persistent runtime identity and receives no role assignment or federation in
+# this root. A reviewed rehearsal may create it for the bounded bootstrap
+# lifecycle; later slices must authenticate its exact IDs, attach it only to a
+# single-use job, and prove all authority and attachment absent before removal.
+resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
+  count = (
+    var.deploy_staging_restore_control_plane &&
+    var.enable_sanitizer_bootstrap_identity
+  ) ? 1 : 0
+
+  name                = local.sanitizer_bootstrap_identity_name
+  resource_group_name = azurerm_resource_group.control[0].name
+  location            = azurerm_resource_group.control[0].location
+  tags = merge(var.tags, {
+    purpose           = "staging-restore-sanitizer-bootstrap"
+    lifecycle         = "ephemeral"
+    rehearsal-id      = coalesce(var.sanitizer_bootstrap_rehearsal_id, "unconfigured")
+    cleanup-not-after = coalesce(var.sanitizer_bootstrap_cleanup_not_after, "unconfigured")
+  })
 }

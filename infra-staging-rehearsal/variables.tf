@@ -50,6 +50,42 @@ variable "private_executor_network_plan_approved" {
   default     = false
 }
 
+variable "enable_sanitizer_bootstrap_identity" {
+  description = "Create the otherwise authority-free, unfederated sanitizer bootstrap UAMI for one reviewed rehearsal lifecycle."
+  type        = bool
+  default     = false
+}
+
+variable "sanitizer_bootstrap_identity_plan_approved" {
+  description = "Action-time approval that the exact saved plan creates only the reviewed bootstrap UAMI and grants or attaches no authority."
+  type        = bool
+  default     = false
+}
+
+variable "sanitizer_bootstrap_rehearsal_id" {
+  description = "Exact non-PHI rehearsal identifier tagged onto the ephemeral bootstrap UAMI."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.sanitizer_bootstrap_rehearsal_id == null || can(regex("^[0-9a-f]{12}$", var.sanitizer_bootstrap_rehearsal_id))
+    error_message = "sanitizer_bootstrap_rehearsal_id must be null or exactly 12 lowercase hexadecimal characters"
+  }
+}
+
+variable "sanitizer_bootstrap_cleanup_not_after" {
+  description = "Whole-second UTC cleanup deadline tagged onto the ephemeral bootstrap UAMI."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.sanitizer_bootstrap_cleanup_not_after == null || can(regex("^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", var.sanitizer_bootstrap_cleanup_not_after))
+    error_message = "sanitizer_bootstrap_cleanup_not_after must be null or whole-second UTC"
+  }
+}
+
 variable "enable_marker_create_assignments" {
   description = "Assign marker-create roles to unfederated job UAMIs only after live provider-fidelity testing proves the exact minimum data actions."
   type        = bool

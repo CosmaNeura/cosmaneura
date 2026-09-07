@@ -1,0 +1,9 @@
+# Staging sanitizer bootstrap identity foundation
+
+This Tier 2 slice is stacked on exact bootstrap-binding-plan commit `c7f0c730f77f86c13809558daed58ed60d10410b`. It models one separately approved, default-off user-assigned managed identity named `cosmaneura-staging-restore-bootstrap-job` in the isolated rehearsal control group. It creates no resource unless both the enable and exact-plan-approval switches are true and the plan supplies an exact 12-character rehearsal ID plus a whole-second UTC cleanup deadline. Those two values become non-PHI resource tags for orphan detection and must both be absent while the identity is disabled.
+
+The identity is deliberately outside the persistent provision and cleanup job-identity map. This slice adds no federated credential, RBAC assignment, Container Apps environment or job, compute attachment, token acquisition, provider or database call, PostgreSQL administrator, workflow binding, runtime authority, sanitizer authority, or production change. Its non-secret output reports desired-state identifiers while keeping exact-ID authentication and every authority or attachment claim false.
+
+A future reviewed rung must authenticate the live resource, prove there are no federated credentials or role assignments, and attach it only to a single-use bootstrap job. The later bootstrap lifecycle must hold external stability authority from the first provider mutation through final administrator-absence readback, close the database session before teardown, prove all job and database authority absent, and only then remove this identity. Turning the Terraform switch off does not substitute for those proofs.
+
+Recovery before any apply is a code-only revert. After an approved apply, recovery is a separately reviewed plan that first authenticates absence of all federation, RBAC, job attachment, PostgreSQL administrator, and active execution state, then removes only this exact identity. No agent executes that plan.
