@@ -13,7 +13,5 @@ The output is immutable, non-copyable, non-pickleable, non-JSON-serializable, ta
 Activation remains blocked on the exact target database role and job identity, target Entra authentication and role provisioning, the offline authenticator, privileged global observation, stability authorities, post-provision descriptor selection, and the final adapter join.
 
 Database-observer contract SHA-256: `sha256:b361317a20d450372eadacd7bee18eec7d1a58686df3ac212283836d347ebe67`.
-
 Upstream observation-frames contract SHA-256: `sha256:7326d189125f1b01646a0de221eee59ddace31ff353573e8f7186bf77009162b`.
-
 Recovery is a code-only revert. No external state is created.
