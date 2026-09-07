@@ -317,7 +317,7 @@ def test_clock_regression_expiry_and_between_read_mutation_refuse(
         object.__setattr__(retained, "connection_plan_sha256", original)
 
 
-def test_output_is_immutable_nonserializable_and_tamper_evident(
+def test_output_refuses_serialization_and_direct_construction(
     retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
 ) -> None:
     result = _make(retained_connection_plan)
@@ -338,10 +338,21 @@ def test_output_is_immutable_nonserializable_and_tamper_evident(
     ):
         bootstrap.SanitizerBootstrapBindingPlan()
 
+
+def test_duplicated_output_cannot_authenticate(
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+) -> None:
+    result = _make(retained_connection_plan)
     duplicate = object.__new__(bootstrap.SanitizerBootstrapBindingPlan)
     for name in result.__slots__:
         object.__setattr__(duplicate, name, getattr(result, name))
     assert duplicate._is_authenticated() is False
+
+
+def test_mutated_output_cannot_authenticate(
+    retained_connection_plan: connection.SanitizerPrivilegedGlobalConnectionPlan,
+) -> None:
+    result = _make(retained_connection_plan)
     object.__setattr__(result, "bootstrap_identity_bound", True)
     assert result._is_authenticated() is False
 
