@@ -25,9 +25,6 @@ from tests.infrastructure import (
 )
 from tests.infrastructure import test_staging_controller_receipt_v2 as content_helpers
 from tests.infrastructure import test_staging_synthetic_inventory as inventory_helpers
-from tests.infrastructure.test_staging_restore_sanitizer_data_contract_executor import (
-    _source_rows,
-)
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts/staging_restore_sanitizer_source_snapshot.py"
@@ -58,6 +55,67 @@ def _json_bytes(value: Any) -> bytes:
     return json.dumps(
         _wire(value), ensure_ascii=False, allow_nan=False, separators=(",", ":")
     ).encode("utf-8")
+
+
+def _value(data_type: str) -> Any:
+    values = {
+        "uuid": uuid.UUID("01890f4c-7b00-7000-8000-000000000001"),
+        "integer": 1,
+        "bigint": 1,
+        "boolean": False,
+        "double precision": 1.5,
+        "date": date(2026, 1, 2),
+        "timestamp with time zone": datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC),
+        "timestamp without time zone": datetime(2026, 1, 2, 3, 4, 5),
+        "json": {"nested": ["approved", 1, True, None], "second": "kept"},
+        "jsonb": {"nested": ["approved", 1, True, None], "second": "kept"},
+        "doctorrole": "normal",
+        "planordering": "patient_then_doctor",
+        "pronounstyle": "infer_from_transcript",
+        "subjectivesource": "patient_only",
+        "terminology": "doctor_patient",
+    }
+    return values.get(data_type, "value")
+
+
+def _source_rows() -> dict[str, tuple[dict[str, Any], ...]]:
+    schemas = _schemas()
+    rows = {
+        table_name: (
+            {name: _value(data_type) for name, data_type, _required in spec["columns"]},
+        )
+        for table_name, spec in schemas.items()
+        if spec["disposition"] != "required_empty"
+    }
+    rows["authority_actor_external_identity"][0].update(
+        issuer="https://clerk.example.invalid", subject="user_same-identity"
+    )
+    rows["authority_person_binding"][0].update(
+        binding_kind="provider_record",
+        binding_ref="appointment_01h47mryr0e008000000000001",
+    )
+    rows["doctor"][0].update(
+        api_key=None, clerk_id="user_same-identity", email="person@example.com"
+    )
+    sandbox = dict(adapter="athena", environment="preview", synthetic_only=True)
+    sandbox["practice_ref"] = "195900"
+    for name in ("ehr_sandbox_patient_designation", "ehr_sandbox_record_mapping"):
+        rows[name][0].update(sandbox)
+    rows["practice"][0].update(email_domain="example.com", join_code="OLDCODE12345")
+    rows["provider_organization"][0].update(
+        access_code_salt="a" * 32,
+        access_code_digest="b" * 64,
+        email_domain="example.com",
+    )
+    rows["synthetic_preview_appointment_fixture"][0].update(
+        fixture_version="synthetic_preview_labs_v1", synthetic_only=True
+    )
+    rows["practice"][0].update(
+        dict.fromkeys(
+            "stripe_customer_id stripe_subscription_id subscription_status stripe_last_event_created_at stripe_last_event_id stripe_checkout_session_id stripe_checkout_session_url stripe_checkout_session_expires_at stripe_quantity_sync_target stripe_quantity_sync_error stripe_quantity_synced_at".split()
+        )
+    )
+    return rows
 
 
 def _schemas() -> dict[str, dict[str, Any]]:
@@ -253,7 +311,24 @@ def test_contract_is_hash_pinned_closed_world_and_dormant() -> None:
     assert not contract["output"]["raw_frames_retained"]
     assert not contract["output"]["private_unkeyed_process_local_witness_retained"]
     assert not any(contract["claims"][name] for name in snapshot._NEGATIVE_CLAIMS)  # noqa: SLF001
-    assert contract["status"]["executor_consumption_implemented"] is False
+    assert contract["status"]["executor_consumption_implemented"] is True
+    assert contract["status"]["activation_blockers"] == [
+        "fixed_catalog_post_projection_authentication_unimplemented",
+        "transaction_adapter_unimplemented",
+    ]
+    assert contract["executor_consumption"] == {
+        "kind": "private-exact-immutable-copy-v1",
+        "inventory_hmac_key_required": True,
+        "proof_recomputed_over_exact_copy": True,
+        "keyed_copy_proof_retained": True,
+        "copy_proof_domain": "source-snapshot:executor-copy",
+        "copy_proof_binds_copy_and_source_identity": True,
+        "exact_evidence_identity_preserved": True,
+        "caller_supplied_raw_mappings_permitted": False,
+        "thawed_dict_or_list_handoff_permitted": False,
+        "callbacks_permitted": False,
+        "io_permitted": False,
+    }
 
 
 def test_exact_frames_authenticate_to_sealed_typed_immutable_rows(
@@ -280,6 +355,193 @@ def test_exact_frames_authenticate_to_sealed_typed_immutable_rows(
     assert "sensitive" in repr(result) and "example.com" not in repr(result)
     with pytest.raises((AttributeError, TypeError)):
         result.source_row_count = 0
+
+
+def test_private_executor_copy_is_opaque_deep_and_proved_over_its_exact_rows(
+    authenticated_case: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _authenticate(authenticated_case)
+    seen = []
+    original_proof = snapshot._proof  # noqa: SLF001
+
+    def observe(*args: Any, **kwargs: Any) -> str:
+        tables = args[2] if args else kwargs["tables"]
+        seen.append(tables)
+        return original_proof(*args, **kwargs)
+
+    monkeypatch.setattr(snapshot, "_proof", observe)
+    copied = snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+        result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+    )
+    assert type(copied) is snapshot._VerifiedSourceSnapshotCopy  # noqa: SLF001
+    assert copied._seal is snapshot._VERIFIED_COPY_SEAL  # noqa: SLF001
+    assert copied._authenticated_evidence is authenticated_case.authenticated  # noqa: SLF001
+    assert copied._tables == result._tables  # noqa: SLF001
+    assert copied._tables is not result._tables  # noqa: SLF001
+    assert [item is result._tables for item in seen] == [True, False, True]  # noqa: SLF001
+    assert seen[1] is copied._tables  # noqa: SLF001
+
+    def walk(value: Any) -> Iterator[Any]:
+        yield value
+        if type(value) is tuple:
+            for item in value:
+                yield from walk(item)
+        elif type(value) is snapshot._FrozenMap:  # noqa: SLF001
+            yield from walk(value._items)  # noqa: SLF001
+
+    assert not any(
+        type(item) in {dict, list, set, bytearray}
+        for item in walk(copied._tables)  # noqa: SLF001
+    )
+    original = dict(result._tables)["doctor_note_schema"][0]  # noqa: SLF001
+    duplicate = dict(copied._tables)["doctor_note_schema"][0]  # noqa: SLF001
+    assert type(duplicate) is snapshot._FrozenMap and duplicate is not original  # noqa: SLF001
+    assert duplicate["fields"] is not original["fields"]
+    source_appointment = dict(result._tables)["appointment"][0]  # noqa: SLF001
+    copied_appointment = dict(copied._tables)["appointment"][0]  # noqa: SLF001
+    assert copied_appointment["id"] == source_appointment["id"]
+    assert copied_appointment["id"] is not source_appointment["id"]
+    assert copied_appointment["created_at"] is not source_appointment["created_at"]
+    assert not hasattr(copied, "_rows_for_table")
+    assert not hasattr(copied, "_raw_fragment_proofs")
+    assert not hasattr(copied, "_key")
+    assert "sensitive" in repr(copied) and "example.com" not in repr(copied)
+    with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+        snapshot._VerifiedSourceSnapshotCopy()  # noqa: SLF001
+    with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+        pickle.dumps(copied)
+    snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+        copied, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+    )
+
+
+def test_private_executor_copy_keyed_proof_rejects_clone_and_tampering(
+    authenticated_case: SimpleNamespace,
+) -> None:
+    result = _authenticate(authenticated_case)
+    copied = snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+        result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+    )
+    for key in (None, b"x" * 32):
+        with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+            snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+                copied, now=SNAPSHOT_AT, inventory_hmac_key=key
+            )
+    cloned = _clone(copied)
+    with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+        snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+            cloned, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+        )
+    row = copied._tables[0][1][0]  # noqa: SLF001
+    original_items = row._items  # noqa: SLF001
+    object.__setattr__(
+        row,
+        "_items",
+        ((original_items[0][0], uuid.UUID(int=2)), *original_items[1:]),
+    )
+    try:
+        with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+            snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+                copied, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+            )
+    finally:
+        object.__setattr__(row, "_items", original_items)
+
+
+def test_private_executor_copy_rejects_mutation_between_validation_and_copy(
+    authenticated_case: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _authenticate(authenticated_case)
+    row = result._tables[0][1][0]  # noqa: SLF001
+    original_items = row._items  # noqa: SLF001
+    original_copy = snapshot._copy_frozen_value  # noqa: SLF001
+    armed = True
+
+    def interleave(value: Any) -> Any:
+        nonlocal armed
+        if value is row and armed:
+            armed = False
+            object.__setattr__(
+                row,
+                "_items",
+                ((original_items[0][0], uuid.UUID(int=2)), *original_items[1:]),
+            )
+        return original_copy(value)
+
+    monkeypatch.setattr(snapshot, "_copy_frozen_value", interleave)
+    try:
+        with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+            snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+                result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+            )
+    finally:
+        object.__setattr__(row, "_items", original_items)
+
+
+def test_private_executor_copy_proof_rejects_corrupted_copy_only(
+    authenticated_case: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    result = _authenticate(authenticated_case)
+    row = result._tables[0][1][0]  # noqa: SLF001
+    original_copy = snapshot._copy_frozen_value  # noqa: SLF001
+    armed = True
+
+    def corrupt(value: Any) -> Any:
+        nonlocal armed
+        copied = original_copy(value)
+        if value is row and armed:
+            armed = False
+            items = copied._items  # noqa: SLF001
+            object.__setattr__(
+                copied,
+                "_items",
+                ((items[0][0], uuid.UUID(int=2)), *items[1:]),
+            )
+        return copied
+
+    monkeypatch.setattr(snapshot, "_copy_frozen_value", corrupt)
+    with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+        snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+            result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+        )
+    _revalidate(result)
+
+
+@pytest.mark.parametrize(
+    ("name", "replacement"),
+    [
+        ("_seal", object()),
+        ("_contract_sha256", "0" * 64),
+        ("_proof_sha256", "0" * 64),
+        ("source_snapshot_authenticated", False),
+    ],
+)
+def test_private_executor_copy_requires_source_unchanged_across_both_checks(
+    authenticated_case: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    replacement: Any,
+) -> None:
+    result = _authenticate(authenticated_case)
+    original = getattr(result, name)
+    original_copy = snapshot._copy_frozen_value  # noqa: SLF001
+    armed = True
+
+    def interleave(value: Any) -> Any:
+        nonlocal armed
+        if armed:
+            armed = False
+            object.__setattr__(result, name, replacement)
+        return original_copy(value)
+
+    monkeypatch.setattr(snapshot, "_copy_frozen_value", interleave)
+    try:
+        with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+            snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+                result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+            )
+    finally:
+        object.__setattr__(result, name, original)
 
 
 def test_keyed_revalidation_detects_replay_wrong_key_and_retained_tampering(
@@ -326,6 +588,102 @@ def test_keyed_revalidation_detects_replay_wrong_key_and_retained_tampering(
     object.__setattr__(result, "_authenticated_evidence", replacement)
     with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
         _revalidate(result)
+
+
+def test_revalidation_rejects_nonexact_pairs_without_invoking_callbacks(
+    authenticated_case: SimpleNamespace,
+) -> None:
+    callbacks: list[str] = []
+
+    class CallbackSnapshot:
+        def __getattr__(self, name: str) -> Any:
+            callbacks.append(name)
+            raise AttributeError(name)
+
+    with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+        snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+            cast(Any, CallbackSnapshot()), now=SNAPSHOT_AT, inventory_hmac_key=KEY
+        )
+    assert callbacks == []
+
+    result = _authenticate(authenticated_case)
+
+    class CallbackTuple(tuple[Any, ...]):
+        def __iter__(self) -> Iterator[Any]:
+            callbacks.append("iterated")
+            return super().__iter__()
+
+    class CallbackValue:
+        def __eq__(self, other: object) -> bool:
+            del other
+            callbacks.append("compared")
+            return False
+
+        def __ne__(self, other: object) -> bool:
+            del other
+            callbacks.append("compared")
+            return True
+
+    row = result._tables[0][1][0]  # noqa: SLF001
+    original_items = row._items  # noqa: SLF001
+    object.__setattr__(
+        row, "_items", (CallbackTuple(original_items[0]), *original_items[1:])
+    )
+    try:
+        with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+            _revalidate(result)
+        assert callbacks == []
+    finally:
+        object.__setattr__(row, "_items", original_items)
+
+    original_fragments = result._raw_fragment_proofs  # noqa: SLF001
+    object.__setattr__(
+        result,
+        "_raw_fragment_proofs",
+        (CallbackTuple(original_fragments[0]), *original_fragments[1:]),
+    )
+    try:
+        with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+            _revalidate(result)
+        assert callbacks == []
+    finally:
+        object.__setattr__(result, "_raw_fragment_proofs", original_fragments)
+
+    for name in ("_contract_sha256", "source_snapshot_authenticated"):
+        original = getattr(result, name)
+        object.__setattr__(result, name, CallbackValue())
+        try:
+            with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+                _revalidate(result)
+            assert callbacks == []
+        finally:
+            object.__setattr__(result, name, original)
+
+    copied = snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+        result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+    )
+    object.__setattr__(copied, "_source_contract_sha256", CallbackValue())
+    with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+        snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+            copied, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+        )
+    assert callbacks == []
+    object.__setattr__(
+        copied, "_source_contract_sha256", snapshot.SOURCE_SNAPSHOT_CONTRACT_SHA256
+    )
+
+    original_tables = copied._tables  # noqa: SLF001
+    object.__setattr__(
+        copied, "_tables", (CallbackTuple(original_tables[0]), *original_tables[1:])
+    )
+    try:
+        with pytest.raises(FAILURE, match="^source_snapshot.output_invalid$"):
+            snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+                copied, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+            )
+        assert callbacks == []
+    finally:
+        object.__setattr__(copied, "_tables", original_tables)
 
 
 def test_raw_hmac_is_verified_before_json_parse(
@@ -506,6 +864,13 @@ def test_authenticate_snapshot_revalidation_and_preflight_never_read_files(
         ordered_table_frames=authenticated_case.frames,
     )
     _revalidate(result)
+    copied = snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+        result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+    )
+    snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+        copied, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+    )
+    assert copied._authenticated_evidence is authenticated_case.authenticated  # noqa: SLF001
     with pytest.raises(FAILURE, match=f"^{snapshot.ACTIVATION_FAILURE}$"):
         preflight.preflight(
             authenticated_sanitizer_evidence=authenticated_case.authenticated
@@ -514,6 +879,7 @@ def test_authenticate_snapshot_revalidation_and_preflight_never_read_files(
 
 def test_failure_tracebacks_do_not_retain_module_owned_keys_frames_or_rows(
     authenticated_case: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secret_frame = b"RAW_SECRET_FRAME"
     secret_key = b"TRACE_KEY_MATERIAL".ljust(32, b"!")
@@ -548,12 +914,34 @@ def test_failure_tracebacks_do_not_retain_module_owned_keys_frames_or_rows(
         )
     )
     result = _authenticate(authenticated_case)
+    capture(
+        lambda: snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+            result, now=SNAPSHOT_AT, inventory_hmac_key=secret_key
+        )
+    )
+    copied = snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+        result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+    )
     for call in (
         lambda: _revalidate(result, secret_key),
+        lambda: snapshot._validate_verified_copy_at_current_time(  # noqa: SLF001
+            copied, now=SNAPSHOT_AT, inventory_hmac_key=secret_key
+        ),
         lambda: result._rows_for_table(secret_frame.decode()),  # noqa: SLF001
         lambda: pickle.dumps(result),
+        lambda: pickle.dumps(copied),
     ):
         capture(call)
+
+    def fail_after_copy(**_kwargs: Any) -> str:
+        raise RuntimeError("forced after-copy failure")
+
+    monkeypatch.setattr(snapshot, "_verified_copy_proof", fail_after_copy)
+    capture(
+        lambda: snapshot._copy_verified_tables_for_executor(  # noqa: SLF001
+            result, now=SNAPSHOT_AT, inventory_hmac_key=KEY
+        )
+    )
 
 
 def test_aggregate_row_limit_fails_before_visiting_frame_bytes(

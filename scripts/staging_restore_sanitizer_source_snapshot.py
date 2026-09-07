@@ -26,7 +26,7 @@ INVENTORY_POLICY_SHA256 = (
     "daaf7fc72c9e44dd5b9ae3467e39bb137697868a2beba848d48681ff0141886b"
 )
 SOURCE_SNAPSHOT_CONTRACT_SHA256 = (
-    "bd90ff0fca53e5dfe74532bdec986b06db3c93a3e5acef3144c2128c4b27bd16"
+    "9836fdfac650c24c9407d9b12e3a1a8a21b1430e515a07ebbee236e46df5bd3c"
 )
 ACTIVATION_FAILURE = "activation.data_contract_executor_unimplemented"
 INVENTORY_POLICY_ID = "cosmaneura-staging-synthetic-inventory-v1"
@@ -102,6 +102,7 @@ _NEGATIVE_CLAIMS = MappingProxyType(
     )
 )
 _SNAPSHOT_SEAL = object()
+_VERIFIED_COPY_SEAL = object()
 _EVIDENCE_FAILURE_MAP = MappingProxyType(
     {
         "sanitizer_evidence.clock_invalid": "source_snapshot.clock_invalid",
@@ -629,6 +630,35 @@ def _proof(
     return _inventory_digest(key, "source-snapshot:proof", (material,))
 
 
+def _verified_copy_proof(
+    *,
+    key: bytes,
+    copy_identity: int,
+    source_snapshot_identity: int,
+    source_snapshot_proof_sha256: str,
+    source_contract_sha256: str,
+    evidence: evidence_authority.AuthenticatedSanitizerEvidence,
+    tables: FrozenTables,
+) -> str:
+    material = _canonical(
+        _pack(
+            {
+                "copy_identity": copy_identity,
+                "evidence_identity": id(evidence),
+                "evidence_proof_sha256": evidence._proof_sha256,  # noqa: SLF001
+                "evidence_seal_identity": id(evidence._seal),  # noqa: SLF001
+                "evidence_type_identity": id(type(evidence)),
+                "source_contract_sha256": source_contract_sha256,
+                "source_snapshot_identity": source_snapshot_identity,
+                "source_snapshot_proof_sha256": source_snapshot_proof_sha256,
+                "tables": tables,
+            }
+        ),
+        "source_snapshot.output_invalid",
+    )
+    return _inventory_digest(key, "source-snapshot:executor-copy", (material,))
+
+
 def _thaw(value: Any) -> Any:
     if type(value) is _FrozenMap:
         return {name: _thaw(item) for name, item in value._items}
@@ -648,11 +678,16 @@ def _is_frozen(value: Any) -> bool:
     if kind is tuple:
         return all(_is_frozen(item) for item in value)
     if kind is _FrozenMap and type(value._items) is tuple:
-        names = tuple(name for name, _item in value._items)
+        if any(
+            type(item) is not tuple or len(item) != 2 or type(item[0]) is not str
+            for item in value._items
+        ):
+            return False
+        names = tuple(item[0] for item in value._items)
         return (
             len(names) == len(set(names))
-            and all(type(name) is str and _safe_string(name) for name in names)
-            and all(_is_frozen(item) for _name, item in value._items)
+            and all(_safe_string(name) for name in names)
+            and all(_is_frozen(item[1]) for item in value._items)
         )
     return False
 
@@ -747,6 +782,33 @@ class AuthenticatedSanitizerSourceSnapshot:
             _fail(code)
 
 
+@dataclass(frozen=True, slots=True, init=False, repr=False)
+class _VerifiedSourceSnapshotCopy:
+    _tables: FrozenTables = dataclass_field(repr=False)
+    _authenticated_evidence: evidence_authority.AuthenticatedSanitizerEvidence = (
+        dataclass_field(repr=False)
+    )
+    _source_snapshot_identity: int = dataclass_field(repr=False)
+    _source_snapshot_proof_sha256: str = dataclass_field(repr=False)
+    _source_contract_sha256: str = dataclass_field(repr=False)
+    _proof_sha256: str = dataclass_field(repr=False)
+    _seal: object = dataclass_field(repr=False, compare=False)
+
+    def __init__(self) -> None:
+        _fail("source_snapshot.output_invalid")
+
+    def __repr__(self) -> str:
+        return "<_VerifiedSourceSnapshotCopy sealed sensitive>"
+
+    def __reduce__(self) -> NoReturn:
+        del self
+        _fail("source_snapshot.output_invalid")
+
+    def __reduce_ex__(self, protocol: object) -> NoReturn:
+        del self, protocol
+        _fail("source_snapshot.output_invalid")
+
+
 def _validate_retained_snapshot_at_current_time(
     value: AuthenticatedSanitizerSourceSnapshot,
     *,
@@ -822,25 +884,27 @@ def _retained_snapshot_failure(
             or tuple(name for name, _rows in value._tables) != _RETAINED_TABLE_NAMES
             or len({name for name, _rows in value._tables}) != RETAINED_TABLE_COUNT
             or type(value._raw_fragment_proofs) is not tuple
-            or tuple(name for name, _proofs in value._raw_fragment_proofs)
+            or any(
+                type(item) is not tuple
+                or len(item) != 2
+                or type(item[0]) is not str
+                or type(item[1]) is not tuple
+                for item in value._raw_fragment_proofs
+            )
+            or tuple(item[0] for item in value._raw_fragment_proofs)
             != tuple(name for name, _rows in value._tables)
             or any(
-                type(proofs) is not tuple
-                or len(proofs) != len(dict(value._tables)[name])
+                len(item[1]) != len(dict(value._tables)[item[0]])
                 or any(
                     type(proof) is not str or _HEX_256_RE.fullmatch(proof) is None
-                    for proof in proofs
+                    for proof in item[1]
                 )
-                for name, proofs in value._raw_fragment_proofs
+                for item in value._raw_fragment_proofs
             )
             or type(value._proof_sha256) is not str
             or _HEX_256_RE.fullmatch(value._proof_sha256) is None
+            or type(value._contract_sha256) is not str
             or value._contract_sha256 != SOURCE_SNAPSHOT_CONTRACT_SHA256
-        ):
-            _fail("source_snapshot.output_invalid")
-        public = _snapshot_public(evidence, value._tables, value.authenticated_at)
-        if (
-            any(getattr(value, name) != item for name, item in public.items())
             or any(
                 getattr(value, name) is not item
                 for name, item in _POSITIVE_CLAIMS.items()
@@ -849,17 +913,21 @@ def _retained_snapshot_failure(
                 getattr(value, name) is not item
                 for name, item in _NEGATIVE_CLAIMS.items()
             )
-            or not hmac.compare_digest(
-                value._proof_sha256,
-                _proof(
-                    inventory_hmac_key,
-                    public,
-                    value._tables,
-                    value._raw_fragment_proofs,
-                    evidence,
-                    id(value),
-                ),
-            )
+        ):
+            _fail("source_snapshot.output_invalid")
+        public = _snapshot_public(evidence, value._tables, value.authenticated_at)
+        if any(
+            getattr(value, name) != item for name, item in public.items()
+        ) or not hmac.compare_digest(
+            value._proof_sha256,
+            _proof(
+                inventory_hmac_key,
+                public,
+                value._tables,
+                value._raw_fragment_proofs,
+                evidence,
+                id(value),
+            ),
         ):
             _fail("source_snapshot.output_invalid")
     except SanitizerSourceSnapshotFailure as error:
@@ -869,6 +937,240 @@ def _retained_snapshot_failure(
     except Exception:
         return "source_snapshot.output_invalid"
     return None
+
+
+def _copy_frozen_value(value: Any) -> Any:
+    kind = type(value)
+    if kind is _FrozenMap:
+        return _FrozenMap(
+            tuple((name, _copy_frozen_value(item)) for name, item in value._items)
+        )
+    if kind is tuple:
+        return tuple(_copy_frozen_value(item) for item in value)
+    if kind is uuid.UUID:
+        return uuid.UUID(int=value.int)
+    if kind is datetime:
+        return datetime(
+            value.year,
+            value.month,
+            value.day,
+            value.hour,
+            value.minute,
+            value.second,
+            value.microsecond,
+            tzinfo=value.tzinfo,
+            fold=value.fold,
+        )
+    if kind is date:
+        return date(value.year, value.month, value.day)
+    if _is_frozen(value):
+        return value
+    _fail("source_snapshot.output_invalid")
+
+
+def _verified_copy_failure(
+    value: AuthenticatedSanitizerSourceSnapshot,
+    *,
+    now: datetime,
+    inventory_hmac_key: object,
+) -> tuple[_VerifiedSourceSnapshotCopy | None, str | None]:
+    try:
+        if (
+            type(value) is not AuthenticatedSanitizerSourceSnapshot
+            or type(inventory_hmac_key) is not bytes
+        ):
+            _fail("source_snapshot.output_invalid")
+        source_identity = id(value)
+        source_tables = value._tables
+        source_fragments = value._raw_fragment_proofs
+        evidence = value._authenticated_evidence
+        authenticated_at = value.authenticated_at
+        source_proof = value._proof_sha256
+        source_contract = value._contract_sha256
+        source_seal = value._seal
+        code = _retained_snapshot_failure(
+            value, now=now, inventory_hmac_key=inventory_hmac_key
+        )
+        if (
+            code is not None
+            or id(value) != source_identity
+            or value._tables is not source_tables
+            or value._raw_fragment_proofs is not source_fragments
+            or value._authenticated_evidence is not evidence
+            or value.authenticated_at is not authenticated_at
+            or not hmac.compare_digest(value._proof_sha256, source_proof)
+            or value._contract_sha256 != source_contract
+            or value._seal is not source_seal
+        ):
+            _fail(code or "source_snapshot.output_invalid")
+        tables = tuple(
+            (name, tuple(_copy_frozen_value(row) for row in rows))
+            for name, rows in source_tables
+        )
+        fragments = tuple((name, tuple(proofs)) for name, proofs in source_fragments)
+        public = _snapshot_public(evidence, tables, authenticated_at)
+        if (
+            value._tables is not source_tables
+            or value._raw_fragment_proofs is not source_fragments
+            or value._authenticated_evidence is not evidence
+            or not hmac.compare_digest(value._proof_sha256, source_proof)
+            or any(getattr(value, name) != item for name, item in public.items())
+            or not hmac.compare_digest(
+                source_proof,
+                _proof(
+                    inventory_hmac_key,
+                    public,
+                    tables,
+                    fragments,
+                    evidence,
+                    id(value),
+                ),
+            )
+        ):
+            _fail("source_snapshot.output_invalid")
+        code = _retained_snapshot_failure(
+            value, now=now, inventory_hmac_key=inventory_hmac_key
+        )
+        if (
+            code is not None
+            or id(value) != source_identity
+            or value._tables is not source_tables
+            or value._raw_fragment_proofs is not source_fragments
+            or value._authenticated_evidence is not evidence
+            or value.authenticated_at is not authenticated_at
+            or not hmac.compare_digest(value._proof_sha256, source_proof)
+            or value._contract_sha256 != source_contract
+            or value._seal is not source_seal
+        ):
+            _fail(code or "source_snapshot.output_invalid")
+        copied = object.__new__(_VerifiedSourceSnapshotCopy)
+        object.__setattr__(copied, "_tables", tables)
+        object.__setattr__(copied, "_authenticated_evidence", evidence)
+        object.__setattr__(copied, "_source_snapshot_identity", source_identity)
+        object.__setattr__(copied, "_source_snapshot_proof_sha256", source_proof)
+        object.__setattr__(copied, "_source_contract_sha256", source_contract)
+        object.__setattr__(
+            copied,
+            "_proof_sha256",
+            _verified_copy_proof(
+                key=inventory_hmac_key,
+                copy_identity=id(copied),
+                source_snapshot_identity=source_identity,
+                source_snapshot_proof_sha256=source_proof,
+                source_contract_sha256=source_contract,
+                evidence=evidence,
+                tables=tables,
+            ),
+        )
+        object.__setattr__(copied, "_seal", _VERIFIED_COPY_SEAL)
+        if (
+            _verified_copy_validation_failure(
+                copied, now=now, inventory_hmac_key=inventory_hmac_key
+            )
+            is not None
+        ):
+            _fail("source_snapshot.output_invalid")
+        return copied, None
+    except SanitizerSourceSnapshotFailure as error:
+        return None, _bounded_code(error)
+    except evidence_authority.SanitizerEvidenceFailure as error:
+        return None, _bounded_code(error)
+    except Exception:
+        return None, "source_snapshot.output_invalid"
+
+
+def _verified_copy_validation_failure(
+    value: _VerifiedSourceSnapshotCopy,
+    *,
+    now: datetime,
+    inventory_hmac_key: object,
+) -> str | None:
+    try:
+        if (
+            type(now) is not datetime
+            or now.tzinfo is not UTC
+            or now.utcoffset() != _ZERO
+            or now.microsecond != 0
+            or now.fold != 0
+            or type(value) is not _VerifiedSourceSnapshotCopy
+            or value._seal is not _VERIFIED_COPY_SEAL
+            or type(inventory_hmac_key) is not bytes
+            or not MINIMUM_KEY_BYTES <= len(inventory_hmac_key) <= MAXIMUM_KEY_BYTES
+            or type(value._tables) is not tuple
+            or len(value._tables) != RETAINED_TABLE_COUNT
+            or any(
+                type(item) is not tuple
+                or len(item) != 2
+                or type(item[0]) is not str
+                or type(item[1]) is not tuple
+                or any(
+                    type(row) is not _FrozenMap or not _is_frozen(row)
+                    for row in item[1]
+                )
+                for item in value._tables
+            )
+            or tuple(item[0] for item in value._tables) != _RETAINED_TABLE_NAMES
+            or type(value._source_snapshot_identity) is not int
+            or value._source_snapshot_identity <= 0
+            or type(value._source_snapshot_proof_sha256) is not str
+            or _HEX_256_RE.fullmatch(value._source_snapshot_proof_sha256) is None
+            or type(value._source_contract_sha256) is not str
+            or value._source_contract_sha256 != SOURCE_SNAPSHOT_CONTRACT_SHA256
+            or type(value._proof_sha256) is not str
+            or _HEX_256_RE.fullmatch(value._proof_sha256) is None
+        ):
+            _fail("source_snapshot.output_invalid")
+        evidence = value._authenticated_evidence
+        _validate_retained_evidence(evidence, now=now)
+        if not hmac.compare_digest(
+            value._proof_sha256,
+            _verified_copy_proof(
+                key=inventory_hmac_key,
+                copy_identity=id(value),
+                source_snapshot_identity=value._source_snapshot_identity,
+                source_snapshot_proof_sha256=value._source_snapshot_proof_sha256,
+                source_contract_sha256=value._source_contract_sha256,
+                evidence=evidence,
+                tables=value._tables,
+            ),
+        ):
+            _fail("source_snapshot.output_invalid")
+    except SanitizerSourceSnapshotFailure as error:
+        return _bounded_code(error)
+    except evidence_authority.SanitizerEvidenceFailure as error:
+        return _bounded_code(error)
+    except Exception:
+        return "source_snapshot.output_invalid"
+    return None
+
+
+def _copy_verified_tables_for_executor(
+    value: AuthenticatedSanitizerSourceSnapshot,
+    *,
+    now: datetime,
+    inventory_hmac_key: object = None,
+) -> _VerifiedSourceSnapshotCopy:
+    copied, code = _verified_copy_failure(
+        value, now=now, inventory_hmac_key=inventory_hmac_key
+    )
+    if code is not None or copied is None:
+        del value, now, inventory_hmac_key, copied
+        _fail(code or "source_snapshot.output_invalid")
+    return copied
+
+
+def _validate_verified_copy_at_current_time(
+    value: _VerifiedSourceSnapshotCopy,
+    *,
+    now: datetime,
+    inventory_hmac_key: object = None,
+) -> None:
+    code = _verified_copy_validation_failure(
+        value, now=now, inventory_hmac_key=inventory_hmac_key
+    )
+    if code is not None:
+        del value, now, inventory_hmac_key
+        _fail(code)
 
 
 def _mint_snapshot(
