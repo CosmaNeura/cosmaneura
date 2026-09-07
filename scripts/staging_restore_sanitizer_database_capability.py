@@ -13,7 +13,7 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-database-capability-contract.json"
 )
-CONTRACT_SHA256 = "c776764647e3209cb793f62fbb5e768845dd3d7625d93f5da37fad72ce83b762"
+CONTRACT_SHA256 = "40684569cbf34d80e144565db73b6f1e81505eb4509c9403797fc0a1114eb98d"
 ACTIVATION_FAILURE = "activation.database_role_state_authenticator_unimplemented"
 MAXIMUM_DOCUMENT_BYTES = 2 * 1024 * 1024
 
@@ -95,7 +95,7 @@ _FINAL_AUTHENTICATION_SCOPE = tuple(
         "every-database-row-allowconn-owner-acl-and-effective-privileges "
         "schema-table-column-sequence-routine-type-language-and-tablespace-authority "
         "parameter-foreign-data-user-mapping-large-object-and-default-acl-authority "
-        "role-database-and-effective-session-settings schema-descriptor-and-all-write-path-effects"
+        "role-database-and-effective-session-settings post-provision-schema-descriptor-and-all-write-path-effects"
     ).split()
 )
 _ADMISSION_WRITER_CLASSES = tuple(
@@ -124,6 +124,7 @@ _ACTIVATION_BLOCKERS = (
     "provision_job_identity_exact_ids_unpinned",
     "bootstrap_authority_unselected",
     "database_role_provisioning_unimplemented",
+    "post_provision_schema_descriptor_unselected",
     "cross_database_role_confinement_unimplemented",
     "server_wide_authorization_stability_unimplemented",
     "effective_session_timeout_values_unselected",
@@ -179,7 +180,7 @@ _VERIFICATION_REQUIREMENTS = (
     "all-effective-session-setting-sources-and-exact-safe-values",
     "session-replication-role-origin",
     "shared-session-advisory-lock-cooperation-across-every-migration-path-and-sanitizer",
-    "revision-and-schema-revalidated-under-held-exclusive-ddl-window",
+    "revision-and-post-provision-schema-descriptor-revalidated-under-held-windows",
     "empty-default-privilege-entries-and-no-future-user-object-creation-under-exclusive-ddl-window",
     "empty-publication-subscription-extension-and-event-trigger-authority",
     "all-grant-options-absent",
@@ -389,14 +390,11 @@ def _validate_catalog(contract: dict[str, Any], documents: dict[str, Any]) -> No
         "sequences": {"count": 0, "names": []},
     }
     expected_descriptor = profile["schema_descriptor"]
+    expected_descriptor_contract = {"format": expected_descriptor.get("format"), "authorization_sensitive": True, "pre_provision": {"sha256": expected_descriptor.get("sha256"), "source": "synthetic_inventory.profiles.pre.schema_descriptor", "source_only": True, "includes_authorizations_and_default_privileges": True, "post_provision_revalidation_permitted": False}, "post_provision_descriptor_selected": False, "post_provision_observation_implemented": False, "post_provision": {"sha256": "CONFIGURE_EXACT_POST_PROVISION_SCHEMA_DESCRIPTOR_SHA256", "required_for_final_authentication": True, "deterministic_full_descriptor_required": True, "generation_source": "future-exact-role-and-acl-provisioning-output", "generate_and_pin_after_role_and_acl_selection": True, "includes_authorizations_and_default_privileges": True, "pre_provision_sha256_substitution_permitted": False, "revalidation_windows_required": "privileges.server_wide_authorization_stability privileges.transaction_compatibility.exclusive_ddl_window".split(), "revalidate_after_advisory_lock_before_mutation": True, "revalidate_immediately_before_commit": True}}  # fmt: skip
     if (
         schema.get("profile") != "pre"
         or schema.get("revision") != profile.get("revision")
-        or schema.get("descriptor")
-        != {
-            "format": expected_descriptor.get("format"),
-            "sha256": expected_descriptor.get("sha256"),
-        }
+        or schema.get("descriptor") != expected_descriptor_contract
         or schema.get("namespace") != database.get("schema")
         or schema.get("allowed_non_system_schemas")
         != database.get("allowed_non_system_schemas")
@@ -642,8 +640,8 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "revalidation_windows_required": "privileges.server_wide_authorization_stability privileges.transaction_compatibility.exclusive_ddl_window".split(),
             "routine_execute_revocation_is_trigger_suppression": False,
             "user_triggers": {
-                "allowed_set_source": "schema.descriptor.sha256",
-                "exact_allowed_set_and_definitions_must_match_authenticated_schema_descriptor": True,
+                "allowed_set_source": "schema.descriptor.post_provision.sha256",
+                "exact_allowed_set_and_definitions_must_match_authenticated_post_provision_schema_descriptor": True,
                 "unlisted_or_changed_trigger_may_fire": False,
                 "user_insert_triggers_on_rewrite_tables": {
                     "expected_trigger_count": 0,
@@ -882,7 +880,7 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
                 "partition_and_inheritance_routing": "privileges.write_path_effects.partition_routing",
                 "logical_subscription_and_apply_worker_writers": "privileges.write_path_effects.logical_writers_and_egress",
                 "publication_and_replication_slot_egress": "privileges.write_path_effects.logical_writers_and_egress",
-                "relation_kind_table_access_method_and_foreign_table_server_mapping": "schema.descriptor.sha256",
+                "relation_kind_table_access_method_and_foreign_table_server_mapping": "schema.descriptor.post_provision.sha256",
                 "expression_dependency_closure": "privileges.write_path_effects.expression_dependency_closure",
                 "connection_and_writer_admission": "privileges.write_path_effects.competing_sessions.admission_fence",
                 "large_object_creation": "privileges.write_path_effects.execution_surface.large_object_safety",
@@ -1142,7 +1140,7 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
                 "dedicated_session_required": True,
                 "connection_pooling_permitted": False,
                 "acquire_before_serializable_transaction": True,
-                "revision_and_schema_revalidation_after_lock_before_mutation": True,
+                "revision_and_post_provision_schema_descriptor_revalidation_after_lock_before_mutation": True,
                 "retain_same_session_lock_through_commit_or_rollback": True,
                 "unlock_and_close_session_required": True,
                 "fail_closed_if_lock_state_uncertain": True,

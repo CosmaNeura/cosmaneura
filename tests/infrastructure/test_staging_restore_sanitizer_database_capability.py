@@ -87,7 +87,8 @@ def test_exact_contract_and_upstream_hashes_are_pinned() -> None:
         }
 
 
-def test_closed_world_pre_schema_catalog_and_partition_are_exact() -> None:
+# fmt: off
+def test_pre_descriptor_is_source_only_and_post_provision_evidence_is_required() -> None:
     document = _document()
     inventory = _document(INVENTORY)
     data_contract = _document(DATA_CONTRACT)
@@ -102,10 +103,17 @@ def test_closed_world_pre_schema_catalog_and_partition_are_exact() -> None:
         column[1] for table in rewrite for column in tables[table]["columns"]
     }
     assert rewrite_types == capability._REWRITE_VALUE_TYPES  # noqa: SLF001
-    assert document["schema"]["descriptor"] == {
-        "format": profile["schema_descriptor"]["format"],
-        "sha256": profile["schema_descriptor"]["sha256"],
-    }
+    descriptor = document["schema"]["descriptor"]
+    assert descriptor["pre_provision"]["sha256"] == profile["schema_descriptor"]["sha256"]
+    assert descriptor["pre_provision"]["source_only"] is True
+    assert descriptor["post_provision_descriptor_selected"] is False
+    assert descriptor["post_provision_observation_implemented"] is False
+    for field, replacement in (("post_provision.sha256", profile["schema_descriptor"]["sha256"]), ("post_provision", {}), ("pre_provision.post_provision_revalidation_permitted", True)):
+        mutated = _document()
+        _set_path(mutated, f"schema.descriptor.{field}", replacement)
+        with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+            capability._validate_catalog(mutated, capability._load_upstreams())  # noqa: SLF001
+# fmt: on
 
 
 def test_exact_database_table_and_transaction_posture() -> None:
@@ -139,7 +147,10 @@ def test_exact_database_table_and_transaction_posture() -> None:
         is False
     )
     firing = tables["firing_triggers"]
-    assert firing["user_triggers"]["allowed_set_source"] == "schema.descriptor.sha256"
+    assert (
+        firing["user_triggers"]["allowed_set_source"]
+        == "schema.descriptor.post_provision.sha256"
+    )
     assert firing["internal_triggers"]["schema_descriptor_source_permitted"] is False
     assert tables["firing_rules"]["exact_non_view_rule_count"] == 0
     sessions = privileges["write_path_effects"]["competing_sessions"]
@@ -333,12 +344,12 @@ def test_firing_trigger_mutations_fail_without_template_comparison() -> None:
     # fmt: off
     prefix = "privileges.tables.firing_triggers"
     mutations = (
-        ("user_triggers.allowed_set_source", "untrusted"),
+        ("user_triggers.allowed_set_source", "schema.descriptor.pre_provision.sha256"),
         ("routine_execute_revocation_is_trigger_suppression", True),
         ("user_triggers.user_insert_triggers_on_rewrite_tables.expected_trigger_count", 1),
         ("user_triggers.user_truncate_triggers_on_truncate_tables.expected_trigger_count", 1),
         ("internal_triggers.schema_descriptor_source_permitted", True),
-        ("internal_triggers.allowed_set_source", "schema.descriptor.sha256"),
+        ("internal_triggers.allowed_set_source", "schema.descriptor.pre_provision.sha256"),
         ("internal_triggers.must_observe", []),
         ("revalidation_windows_required", []),
         ("user_triggers.unlisted_or_changed_trigger_may_fire", True),
@@ -365,7 +376,7 @@ def test_firing_trigger_mutations_fail_without_template_comparison() -> None:
     prefix = "privileges.write_path_effects"
     for field, replacement in (
         ("unknown_or_unobserved_effect_permitted", True),
-        ("surface_sources.relation_kind_table_access_method_and_foreign_table_server_mapping", "untrusted"),
+        ("surface_sources.relation_kind_table_access_method_and_foreign_table_server_mapping", "schema.descriptor.pre_provision.sha256"),
         ("partition_routing.redirection_permitted", True),
         ("logical_writers_and_egress.subscriptions", ["attacker_subscription"]),
         ("logical_writers_and_egress.publications", ["egress"]),
