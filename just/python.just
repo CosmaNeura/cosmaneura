@@ -240,8 +240,8 @@ py_test-ci-infrastructure-sanitizer-observer:
 		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
-py_test-ci-infrastructure-sanitizer-observer-database:
-	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-database is CI-only" >&2; exit 1; }
+py_test-ci-infrastructure-sanitizer-observer-runtime:
+	[[ "${CI:-}" == "true" ]] || { echo "py_test-ci-infrastructure-sanitizer-observer-runtime is CI-only" >&2; exit 1; }
 	uv run pytest tests/infrastructure/test_staging_restore_sanitizer_target_role_database_observer.py --verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]

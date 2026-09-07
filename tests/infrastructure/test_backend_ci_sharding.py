@@ -29,7 +29,7 @@ SHARDS = (
     "infrastructure-sanitizer-evidence-integrity",
     "infrastructure-sanitizer-executor",
     "infrastructure-sanitizer-observer",
-    "infrastructure-sanitizer-observer-database",
+    "infrastructure-sanitizer-observer-runtime",
     "infrastructure-sanitizer-observer-integrity",
     "infrastructure-sanitizer-data-contract-executor",
     "infrastructure-sanitizer-source-snapshot",
@@ -221,7 +221,7 @@ def _infrastructure_shard(path: Path) -> str:
         ):
             return "infrastructure-sanitizer-observer"
         if path == Path(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR):
-            return "infrastructure-sanitizer-observer-database"
+            return "infrastructure-sanitizer-observer-runtime"
         if path == Path(SANITIZER_SOURCE_SNAPSHOT_SELECTOR):
             return "infrastructure-sanitizer-source-snapshot"
         if path in map(
@@ -360,7 +360,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             )
             + "\t\t--verbosity=2"
         ),
-        "infrastructure-sanitizer-observer-database": (
+        "infrastructure-sanitizer-observer-runtime": (
             f"uv run pytest {SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR} --verbosity=2"
         ),
         "infrastructure-sanitizer-observer-integrity": (
@@ -426,8 +426,8 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     infrastructure_sanitizer_observer_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer:"
     )
-    infrastructure_sanitizer_observer_database_start = source.index(
-        "py_test-ci-infrastructure-sanitizer-observer-database:"
+    infrastructure_sanitizer_observer_runtime_start = source.index(
+        "py_test-ci-infrastructure-sanitizer-observer-runtime:"
     )
     infrastructure_sanitizer_observer_integrity_start = source.index(
         "py_test-ci-infrastructure-sanitizer-observer-integrity:"
@@ -474,10 +474,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         infrastructure_sanitizer_executor_start:infrastructure_sanitizer_observer_start
     ]
     infrastructure_sanitizer_observer_recipe = source[
-        infrastructure_sanitizer_observer_start:infrastructure_sanitizer_observer_database_start
+        infrastructure_sanitizer_observer_start:infrastructure_sanitizer_observer_runtime_start
     ]
-    infrastructure_sanitizer_observer_database_recipe = source[
-        infrastructure_sanitizer_observer_database_start:infrastructure_sanitizer_observer_integrity_start
+    infrastructure_sanitizer_observer_runtime_recipe = source[
+        infrastructure_sanitizer_observer_runtime_start:infrastructure_sanitizer_observer_integrity_start
     ]
     infrastructure_sanitizer_observer_integrity_recipe = source[
         infrastructure_sanitizer_observer_integrity_start:infrastructure_sanitizer_data_contract_executor_start
@@ -511,7 +511,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
     assert "--ignore-glob=" not in infrastructure_sanitizer_evidence_integrity_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_executor_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_recipe
-    assert "--ignore-glob=" not in infrastructure_sanitizer_observer_database_recipe
+    assert "--ignore-glob=" not in infrastructure_sanitizer_observer_runtime_recipe
     assert "--ignore-glob=" not in infrastructure_sanitizer_observer_integrity_recipe
     assert (
         "--ignore-glob=" not in infrastructure_sanitizer_data_contract_executor_recipe
@@ -641,7 +641,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         (
             Path(SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR),
-            "infrastructure-sanitizer-observer-database",
+            "infrastructure-sanitizer-observer-runtime",
         ),
         (
             Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
