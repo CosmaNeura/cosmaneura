@@ -112,6 +112,9 @@ SANITIZER_EXECUTOR_SELECTOR = (
 SANITIZER_TRANSACTION_PLAN_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_transaction_plan.py"
 )
+SANITIZER_DATABASE_CAPABILITY_SELECTOR = (
+    "tests/infrastructure/test_staging_restore_sanitizer_database_capability.py"
+)
 SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR = (
     "tests/infrastructure/test_staging_restore_sanitizer_data_contract_executor.py"
 )
@@ -121,6 +124,7 @@ SANITIZER_SOURCE_SNAPSHOT_SELECTOR = (
 SANITIZER_POST_PROJECTION_SELECTOR = "tests/infrastructure/test_staging_restore_sanitizer_fixed_catalog_post_projection.py"
 SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_EVIDENCE_SELECTOR,
+    SANITIZER_DATABASE_CAPABILITY_SELECTOR,
     SANITIZER_EXECUTOR_SELECTOR,
     SANITIZER_TRANSACTION_PLAN_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
@@ -144,7 +148,12 @@ def _infrastructure_shard(path: Path) -> str:
         if path == Path(SANITIZER_EVIDENCE_SELECTOR):
             return "infrastructure-sanitizer-evidence"
         if path in map(
-            Path, (SANITIZER_EXECUTOR_SELECTOR, SANITIZER_TRANSACTION_PLAN_SELECTOR)
+            Path,
+            (
+                SANITIZER_DATABASE_CAPABILITY_SELECTOR,
+                SANITIZER_EXECUTOR_SELECTOR,
+                SANITIZER_TRANSACTION_PLAN_SELECTOR,
+            ),
         ):
             return "infrastructure-sanitizer-executor"
         if path == Path(SANITIZER_SOURCE_SNAPSHOT_SELECTOR):
@@ -275,7 +284,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
         ),
         "infrastructure-sanitizer-executor": (
             "uv run pytest tests/infrastructure/"
-            "test_staging_restore_sanitizer_{executor,transaction_plan}.py --verbosity=2"
+            "test_staging_restore_sanitizer_{database_capability,executor,transaction_plan}.py --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
@@ -505,6 +514,10 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             "infrastructure-sanitizer-executor",
         ),
         (
+            Path(SANITIZER_DATABASE_CAPABILITY_SELECTOR),
+            "infrastructure-sanitizer-executor",
+        ),
+        (
             Path(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR),
             "infrastructure-sanitizer-data-contract-executor",
         ),
@@ -612,6 +625,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
 
 def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     evidence = _collect_nodeids(SANITIZER_EVIDENCE_SELECTOR)
+    database_capability = _collect_nodeids(SANITIZER_DATABASE_CAPABILITY_SELECTOR)
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     transaction_plan = _collect_nodeids(SANITIZER_TRANSACTION_PLAN_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
@@ -620,43 +634,59 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     family = _collect_nodeids(*SANITIZER_RUNTIME_SELECTORS)
 
     assert evidence
+    assert database_capability
     assert executor
     assert data_contract_executor
     assert len(evidence) == 29
+    assert len(database_capability) == 44
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 189
+    assert len(family) == 233
     assert len(evidence) == len(set(evidence))
+    assert len(database_capability) == len(set(database_capability))
     assert len(executor) == len(set(executor))
     assert len(transaction_plan) == len(set(transaction_plan))
     assert len(data_contract_executor) == len(set(data_contract_executor))
     assert len(source_snapshot) == len(set(source_snapshot))
     assert len(post_projection) == len(set(post_projection))
     assert len(family) == len(set(family))
+    assert set(evidence).isdisjoint(database_capability)
+    assert set(database_capability).isdisjoint(executor)
+    assert set(database_capability).isdisjoint(transaction_plan)
+    assert set(database_capability).isdisjoint(data_contract_executor)
+    assert set(database_capability).isdisjoint(source_snapshot)
+    assert set(database_capability).isdisjoint(post_projection)
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
     assert set(executor).isdisjoint(data_contract_executor)
     assert set(transaction_plan).isdisjoint(
-        set(evidence) | set(executor) | set(data_contract_executor)
+        set(evidence)
+        | set(database_capability)
+        | set(executor)
+        | set(data_contract_executor)
     )
     assert set(source_snapshot).isdisjoint(
         set(evidence)
+        | set(database_capability)
         | set(executor)
         | set(transaction_plan)
         | set(data_contract_executor)
     )
     assert set(post_projection).isdisjoint(
         set(evidence)
+        | set(database_capability)
         | set(executor)
         | set(data_contract_executor)
         | set(source_snapshot)
     )
-    assert set(evidence) | set(executor) | set(transaction_plan) | set(
-        data_contract_executor
-    ) | set(source_snapshot) | set(post_projection) == set(family)
+    assert set(evidence) | set(database_capability) | set(executor) | set(
+        transaction_plan
+    ) | set(data_contract_executor) | set(source_snapshot) | set(
+        post_projection
+    ) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
