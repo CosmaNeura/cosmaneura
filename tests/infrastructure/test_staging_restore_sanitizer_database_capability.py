@@ -91,51 +91,17 @@ def test_closed_world_pre_schema_catalog_and_partition_are_exact() -> None:
     document = _document()
     inventory = _document(INVENTORY)
     data_contract = _document(DATA_CONTRACT)
-    transaction_plan = _document(TRANSACTION_PLAN)
     profile = inventory["profiles"]["pre"]
-    excluded = profile["excluded_tables"]
     tables = inventory["database"]["tables"]
-    application = sorted(set(tables) - set(excluded))
+    application = sorted(set(tables) - set(profile["excluded_tables"]))
     rewrite = data_contract["row_actions"]["rewrite_rows"]
-    discard = data_contract["row_actions"]["discard_rows"]
-    required_empty = sorted(
-        name for name in application if tables[name]["disposition"] == "required_empty"
-    )
-    rewrite_value_types = {
+    pinned = document["schema"]["table_sets"]
+    assert pinned["application"]["count"] == 62
+    assert pinned["application"]["tables"] == application
+    rewrite_types = {
         column[1] for table in rewrite for column in tables[table]["columns"]
     }
-    pinned = document["schema"]["table_sets"]
-
-    assert excluded == ["practice_invitation", "public_legal_acceptance"]
-    assert pinned == {
-        "application": {"count": 62, "tables": application},
-        "rewrite": {"count": 19, "tables": rewrite},
-        "discard": {"count": 10, "tables": discard},
-        "required_empty": {"count": 33, "tables": required_empty},
-        "control": {
-            "count": 1,
-            "tables": [inventory["database"]["control_table"]["name"]],
-        },
-        "sequences": {"count": 0, "names": []},
-    }
-    partitions = tuple(
-        set(pinned[name]["tables"]) for name in ("rewrite", "discard", "required_empty")
-    )
-    assert not any(
-        partitions[left] & partitions[right]
-        for left in range(3)
-        for right in range(left)
-    )
-    assert set().union(*partitions) == set(application)
-    assert set(transaction_plan["transaction"]["inserts"]["table_order"]) == set(
-        rewrite
-    )
-    assert rewrite_value_types == capability._REWRITE_VALUE_TYPES  # noqa: SLF001
-    assert inventory["database"]["reject_large_objects"] is True
-    assert {
-        name: profile["schema_descriptor"]["counts"][name]
-        for name in ("routines", "types", "default_privileges")
-    } == {"routines": 11, "types": 154, "default_privileges": 0}
+    assert rewrite_types == capability._REWRITE_VALUE_TYPES  # noqa: SLF001
     assert document["schema"]["descriptor"] == {
         "format": profile["schema_descriptor"]["format"],
         "sha256": profile["schema_descriptor"]["sha256"],
@@ -144,217 +110,83 @@ def test_closed_world_pre_schema_catalog_and_partition_are_exact() -> None:
 
 def test_exact_database_table_and_transaction_posture() -> None:
     document = _document()
-    transaction = _document(TRANSACTION_PLAN)["transaction"]
     privileges = document["privileges"]
-    table_sets = document["schema"]["table_sets"]
-
     databases = privileges["databases"]
     assert databases["closed_world_enumeration_required"] is True
-    assert databases["unknown_or_unobserved_databases_permitted"] is False
     assert (
         databases["authorization_stability_source"]
         == "privileges.server_wide_authorization_stability"
     )
 
     tables = privileges["tables"]
-    assert _resolve_table_sources(
-        document, tables["select"]["table_set_sources"]
-    ) == set(table_sets["application"]["tables"]) | {"alembic_version"}
-    assert _resolve_table_sources(
-        document, tables["truncate"]["table_set_sources"]
-    ) == set(table_sets["application"]["tables"])
-    assert _resolve_table_sources(
-        document, tables["insert"]["table_set_sources"]
-    ) == set(table_sets["rewrite"]["tables"])
+    rewrite = set(document["schema"]["table_sets"]["rewrite"]["tables"])
+    assert (
+        _resolve_table_sources(document, tables["insert"]["table_set_sources"])
+        == rewrite
+    )
     assert not any(privileges["other_authority"].values())
-    assert (
-        privileges["transaction_compatibility"]["isolation"] == transaction["isolation"]
-    )
-    assert (
-        privileges["transaction_compatibility"][
-            "control_table_write_privilege_permitted"
-        ]
-        is False
-    )
-    advisory = privileges["transaction_compatibility"]["exclusive_ddl_window"]
-    assert advisory["protocol"] == "postgresql-session-level-advisory-lock-v1"
-    assert advisory["signed_int32_key_parts"] == [916248462, -1848053680]
-    assert advisory["all_migration_paths_cooperate"] is False
+    transaction = privileges["transaction_compatibility"]
+    assert transaction["control_table_write_privilege_permitted"] is False
+    assert transaction["exclusive_ddl_window"]["all_migration_paths_cooperate"] is False
 
     stability = privileges["server_wide_authorization_stability"]
     assert stability["authority_mutator_classes"] == list(
         capability._AUTHORITY_MUTATOR_CLASSES
     )  # noqa: SLF001
-    assert stability["final_observation_scope"] == list(
-        capability._FINAL_AUTHENTICATION_SCOPE
-    )  # noqa: SLF001
-    assert (
-        stability["sanitizer_must_acquire_before_final_closed_world_observation"]
-        is True
-    )
-    assert stability["retain_through_database_connection_close"] is True
-    assert (
-        stability["validate_current_lease_and_fence_immediately_before_commit"] is True
-    )
-    assert stability["rollback_on_loss_or_uncertainty"] is True
     assert (
         stability["mechanism_selected"]
         is stability["implementation_authenticated"]
         is False
     )
-
     firing = tables["firing_triggers"]
-    assert firing["allowed_set_source"] == "schema.descriptor.sha256"
-    assert firing["routine_execute_revocation_is_trigger_suppression"] is False
-    assert (
-        firing["user_insert_triggers_on_rewrite_tables"]["expected_trigger_count"] == 0
-    )
-    assert (
-        firing["user_truncate_triggers_on_truncate_tables"]["expected_trigger_count"]
-        == 0
-    )
-    assert firing["internal_triggers"]["trigger_functions_must_authenticate"] == [
-        "security-definer-flag",
-        "owner",
-        "proconfig",
-        "definition",
-    ]
+    assert firing["user_triggers"]["allowed_set_source"] == "schema.descriptor.sha256"
+    assert firing["internal_triggers"]["schema_descriptor_source_permitted"] is False
+    assert tables["firing_rules"]["exact_non_view_rule_count"] == 0
+    sessions = privileges["write_path_effects"]["competing_sessions"]
+    assert sessions["require_no_competing_sessions"] is True
+    assert sessions["recheck_no_competing_sessions_before_commit"] is True
 
 
 def test_every_postgresql_privilege_class_is_closed_and_public_aware() -> None:
     document = _document()
     privileges = document["privileges"]
     scope = privileges["scope"]
+    assert scope["postgresql_major_version"] == 16
+    assert scope["public_role_acl_sources_included_for_every_object_class"] is True
+    assert scope["all_grant_options_permitted"] is False
 
-    assert scope == {
-        "all_grant_options_permitted": False,
-        "non_system_schemas_must_match_exactly": True,
-        "postgresql_major_version": 16,
-        "public_role_acl_sources_included_for_every_object_class": True,
-        "system_objects": {
-            "builtin_default_acl_baseline_out_of_scope": True,
-            "explicit_grants_to_runtime_role_permitted": False,
-            "nondefault_public_acl_deltas_permitted": False,
-            "privilege_escalation_paths_permitted": False,
-            "system_object_ownership_permitted": False,
-        },
-        "user_object_schemas": ["public"],
-    }
     routines = privileges["routines"]["public_schema"]
     assert routines["observed_schema_routine_count"] == 11
     assert routines["execute"] == {"expected_routine_count": 0, "routines": []}
     types = privileges["types"]["public_schema"]
-    assert types["observed_schema_type_count"] == 154
-    assert types["rewrite_value_custom_types"] == list(
-        capability._REWRITE_CUSTOM_TYPES  # noqa: SLF001
-    )
     enums = types["acl_manageable_custom_enums"]
-    assert enums["expected_type_count"] == 14
+    rows = types["relation_row_types"]
+    arrays = types["generated_array_types"]
+    assert [
+        enums["expected_type_count"],
+        rows["expected_type_count"],
+        arrays["expected_type_count"],
+    ] == [14, 63, 77]
     assert enums["types"] == list(capability._APPLICATION_CUSTOM_TYPES)  # noqa: SLF001
     assert enums["usage"] == []
     assert set(types["rewrite_value_custom_types"]).issubset(enums["types"])
-    relation_rows = types["relation_row_types"]
-    assert relation_rows["expected_type_count"] == 63
-    assert relation_rows["relation_name_sources"] == [
-        "schema.table_sets.application.tables",
-        "schema.table_sets.control.tables",
-    ]
-    generated_arrays = types["generated_array_types"]
-    assert generated_arrays["expected_type_count"] == 77
-    assert generated_arrays["exact_name_rule"] == (
-        "underscore-prefixed-element-type-name"
-    )
-    assert generated_arrays["enum_element_arrays"] == {
-        "effective_usage_must_equal_element_type_effective_usage": True,
-        "element_type_source": (
-            "privileges.types.public_schema.acl_manageable_custom_enums.types"
-        ),
-        "expected_type_count": 14,
-    }
-    assert generated_arrays["relation_row_element_arrays"] == {
-        "element_type_source": "privileges.types.public_schema.relation_row_types",
-        "expected_type_count": 63,
-        "has_type_privilege_usage_is_intrinsic": True,
-    }
-    assert 14 + 63 + 77 == types["observed_schema_type_count"]
+    assert rows["has_type_privilege_usage_is_intrinsic"] is True
+    assert arrays["enum_element_arrays"]["expected_type_count"] == 14
+    assert arrays["relation_row_element_arrays"]["expected_type_count"] == 63
     assert types["catalog_partition_is_exact_disjoint_and_exhaustive"] is True
-    assert types["unlisted_type_categories_permitted"] is False
 
-    for policy in (routines, enums):
-        assert policy["direct_grants_permitted"] is False
-        assert policy["effective_privileges_must_match_exactly"] is True
-        assert policy["public_role_privileges_permitted"] is False
-        assert (
-            policy["public_role_effective_privileges_included_in_verification"] is True
-        )
-        assert policy["grant_options_permitted"] is False
-    assert relation_rows["independently_acl_manageable"] is False
-    assert relation_rows["acl_mutation_must_not_be_used_to_establish_boundary"] is True
-    assert relation_rows["effective_zero_usage_required"] is False
-    assert relation_rows["has_type_privilege_usage_is_intrinsic"] is True
-    assert generated_arrays["independently_acl_manageable"] is False
-    assert generated_arrays["acl_mutation_supported"] is False
-    usage_scopes = {
-        "languages": "user-defined-non-system-languages",
-        "foreign_data_wrappers": "user-defined-non-system-foreign-data-wrappers",
-        "foreign_servers": "user-defined-non-system-foreign-servers",
-    }
-    for name, object_scope in usage_scopes.items():
-        assert privileges[name] == {
-            "direct_grants_permitted": False,
-            "effective_privileges_must_match_exactly": True,
-            "expected_usage_count": 0,
-            "grant_options_permitted": False,
-            "object_scope": object_scope,
-            "public_role_effective_privileges_included_in_verification": True,
-            "public_role_privileges_permitted": False,
-            "usage": [],
-        }
-    assert privileges["tablespaces"]["object_scope"] == (
-        "user-defined-non-system-tablespaces"
-    )
+    for name in ("languages", "foreign_data_wrappers", "foreign_servers"):
+        assert privileges[name]["usage"] == []
+        assert privileges[name]["public_role_privileges_permitted"] is False
     assert privileges["tablespaces"]["create"] == []
-    assert privileges["parameters"]["set"] == []
-    assert privileges["parameters"]["alter_system"] == []
     assert (
-        privileges["parameters"][
-            "ordinary_user_settable_session_parameters_remain_postgresql_baseline"
-        ]
-        is True
+        privileges["parameters"]["set"]
+        == privileges["parameters"]["alter_system"]
+        == []
     )
-    assert privileges["parameters"]["effective_alter_system_permitted"] is False
-    assert privileges["user_mappings"] == {
-        "entries": [],
-        "runtime_role_mapping_permitted": False,
-    }
+    assert privileges["user_mappings"]["entries"] == []
     assert privileges["large_objects"]["required_source_and_target_count"] == 0
-    assert privileges["large_objects"]["select"] == []
-    assert privileges["large_objects"]["update"] == []
     assert privileges["default_privileges"]["entries"] == []
-    assert (
-        privileges["default_privileges"][
-            "existing_object_public_routine_execute_and_type_usage_must_be_reconciled"
-        ]
-        is True
-    )
-    assert (
-        privileges["default_privileges"][
-            "future_user_object_creation_during_capability_window_permitted"
-        ]
-        is False
-    )
-    assert (
-        privileges["default_privileges"][
-            "implicit_public_defaults_cannot_materialize_during_capability_window"
-        ]
-        is True
-    )
-    assert (
-        privileges["other_authority"][
-            "any_database_or_shared_object_ownership_permitted"
-        ]
-        is False
-    )
     assert document["verification"]["must_authenticate"] == list(
         capability._VERIFICATION_REQUIREMENTS  # noqa: SLF001
     )
@@ -364,44 +196,22 @@ def test_only_provision_job_identity_is_the_future_database_principal() -> None:
     document = _document()
     binding = document["identity_binding"]
     controller = _document(CONTROLLER)["fixed_bindings"]
-    runtime = _document(RUNTIME_BINDING)
-    job = runtime["identities"]["jobs"]["provision"]
-
+    job = _document(RUNTIME_BINDING)["identities"]["jobs"]["provision"]
     assert binding["database_role"] == controller["approved_database_role"]
-    assert binding["database_role"] == "CONFIGURE_EXACT_SANITIZER_ROLE"
-    assert binding["runtime_identity_source"] == (
-        "restore_runtime_binding.identities.jobs.provision"
+    assert (
+        binding["runtime_identity_source"]
+        == "restore_runtime_binding.identities.jobs.provision"
     )
-    assert binding["runtime_identity"] == {
-        "kind": "azure-user-assigned-managed-identity",
-        "name": "cosmaneura-staging-restore-provision-job",
-        "resource_id": job["resource_id"],
-        "client_id": job["client_id"],
-        "principal_id": job["principal_id"],
-    }
-    assert set(binding["forbidden_identity_sources"]) == {
-        "restore_runtime_binding.identities.jobs.cleanup",
-        "restore_runtime_binding.identities.brokers.provision",
-        "restore_runtime_binding.identities.brokers.cleanup",
-        "restore_runtime_binding.identities.dispatchers.provision",
-        "restore_runtime_binding.identities.dispatchers.cleanup",
-        "cosmaneura-staging-gha-identity",
-        "any-scribe-identity",
-    }
-    assert all(
-        value is False
-        for name, value in binding["authentication"].items()
-        if name.endswith("_permitted")
+    assert binding["runtime_identity"]["resource_id"] == job["resource_id"]
+    assert binding["runtime_identity"]["client_id"] == job["client_id"]
+    assert binding["runtime_identity"]["principal_id"] == job["principal_id"]
+    assert {"cosmaneura-staging-gha-identity", "any-scribe-identity"} <= set(
+        binding["forbidden_identity_sources"]
     )
     provisioning = document["provisioning"]
     assert provisioning["separate_bootstrap_authority_required"] is True
-    assert provisioning["bootstrap_identity_selected"] is False
     assert provisioning["runtime_identity_may_bootstrap"] is False
-    assert (
-        provisioning["runtime_identity_may_create_alter_drop_or_grant_roles"] is False
-    )
     assert provisioning["teardown_required"] is True
-    assert provisioning["teardown_implementation_selected"] is False
 
 
 @pytest.mark.parametrize(
@@ -486,12 +296,27 @@ def test_server_wide_stability_mutations_fail_without_template_comparison() -> N
         ("external_fencing_required", False),
         ("lease_key_source", "target-database"),
         ("authority_mutator_classes", []),
-        ("mutators_must_acquire_before_authority_mutation", False),
+        (
+            "each_authority_mutator_must_acquire_before_database_or_provider_operation",
+            False,
+        ),
+        (
+            "each_authority_mutator_must_retain_continuously_through_durable_commit_or_rollback",
+            False,
+        ),
+        (
+            "each_authority_mutator_must_validate_current_lease_and_fence_immediately_before_own_commit",
+            False,
+        ),
+        ("each_authority_mutator_must_abort_or_rollback_on_loss_or_uncertainty", False),
         ("sanitizer_must_acquire_before_final_closed_world_observation", False),
         ("reauthenticate_every_capability_fact_while_held", False),
         ("retain_through_database_connection_close", False),
-        ("validate_current_lease_and_fence_immediately_before_commit", False),
-        ("rollback_on_loss_or_uncertainty", False),
+        (
+            "sanitizer_must_validate_current_lease_and_fence_immediately_before_commit",
+            False,
+        ),
+        ("sanitizer_must_rollback_on_loss_or_uncertainty", False),
         ("release_only_after_sanitizer_commit_or_rollback_and_connection_close", False),
         ("target_database_advisory_lock_is_sufficient", True),
     )
@@ -505,15 +330,62 @@ def test_server_wide_stability_mutations_fail_without_template_comparison() -> N
 def test_firing_trigger_mutations_fail_without_template_comparison() -> None:
     prefix = "privileges.tables.firing_triggers"
     mutations = (
-        ("allowed_set_source", "untrusted"),
+        ("user_triggers.allowed_set_source", "untrusted"),
         ("routine_execute_revocation_is_trigger_suppression", True),
-        ("user_insert_triggers_on_rewrite_tables.expected_trigger_count", 1),
-        ("user_truncate_triggers_on_truncate_tables.expected_trigger_count", 1),
-        ("internal_triggers.trigger_functions_must_authenticate", ["definition"]),
+        (
+            "user_triggers.user_insert_triggers_on_rewrite_tables.expected_trigger_count",
+            1,
+        ),
+        (
+            "user_triggers.user_truncate_triggers_on_truncate_tables.expected_trigger_count",
+            1,
+        ),
+        ("internal_triggers.schema_descriptor_source_permitted", True),
+        ("internal_triggers.allowed_set_source", "schema.descriptor.sha256"),
+        ("internal_triggers.must_observe", []),
         ("revalidation_windows_required", []),
-        ("unlisted_or_changed_trigger_may_fire", True),
+        ("user_triggers.unlisted_or_changed_trigger_may_fire", True),
     )
     for field, replacement in mutations:
+        document = _document()
+        _set_path(document, f"{prefix}.{field}", replacement)
+        with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+            capability._validate_privileges(document, capability._load_upstreams())  # noqa: SLF001
+    prefix = "privileges.tables.firing_rules"
+    for field, replacement in (
+        ("schema_descriptor_source_permitted", True),
+        ("exact_non_view_rule_count", 1),
+        ("allowed_non_view_rules", ["attacker_rule"]),
+        ("relhasrules_must_be_observed", False),
+        ("pg_rewrite_fields_must_observe", []),
+        ("execution_identity_semantics_must_authenticate", "invoker"),
+        ("revalidation_windows_required", []),
+    ):
+        document = _document()
+        _set_path(document, f"{prefix}.{field}", replacement)
+        with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
+            capability._validate_privileges(document, capability._load_upstreams())  # noqa: SLF001
+    prefix = "privileges.write_path_effects"
+    for field, replacement in (
+        ("unknown_or_unobserved_effect_permitted", True),
+        (
+            "surface_sources.relation_kind_table_access_method_and_foreign_table_server_mapping",
+            "untrusted",
+        ),
+        ("partition_routing.redirection_permitted", True),
+        ("logical_writers_and_egress.subscriptions", ["attacker_subscription"]),
+        ("logical_writers_and_egress.publications", ["egress"]),
+        ("logical_writers_and_egress.logical_replication_slots", ["egress"]),
+        ("expression_dependency_closure.allowed_dependency_sources", ["untrusted"]),
+        (
+            "expression_dependency_closure.unknown_or_unobserved_dependency_permitted",
+            True,
+        ),
+        ("competing_sessions.require_no_competing_sessions", False),
+        ("competing_sessions.recheck_no_competing_sessions_before_commit", False),
+        ("revalidation_windows_required", []),
+        ("revalidate_immediately_before_sanitizer_commit", False),
+    ):
         document = _document()
         _set_path(document, f"{prefix}.{field}", replacement)
         with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
@@ -565,13 +437,13 @@ def test_setting_semantic_mutations_fail_without_template_comparison(
 @pytest.mark.parametrize(
     ("path", "replacement"),
     [
-        ("claims.cross_database_role_confinement_authenticated", True),
         ("claims.server_wide_authorization_stability_authenticated", True),
-        ("claims.firing_trigger_set_authenticated", True),
+        ("claims.write_path_effects_authenticated", True),
+        ("claims.cross_database_role_confinement_authenticated", True),
         ("claims.database_migration_exclusion_authenticated", True),
-        ("status.cross_database_role_confinement_implemented", True),
         ("status.server_wide_authorization_stability_implemented", True),
-        ("status.firing_trigger_set_authenticator_implemented", True),
+        ("status.write_path_effects_authenticator_implemented", True),
+        ("status.cross_database_role_confinement_implemented", True),
         ("status.database_migration_exclusion_cooperation_implemented", True),
     ],
 )

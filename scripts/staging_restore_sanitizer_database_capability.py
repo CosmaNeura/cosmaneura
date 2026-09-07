@@ -13,7 +13,7 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-database-capability-contract.json"
 )
-CONTRACT_SHA256 = "4ca2fa9a3f09118002853de7b7a54b681850d4d346c7e795d205dbf448e203e5"
+CONTRACT_SHA256 = "9136a2607421b348a1fbc555e7b37768fde12c4ffab3e88ec8e90229e64543aa"
 ACTIVATION_FAILURE = "activation.database_role_state_authenticator_unimplemented"
 MAXIMUM_DOCUMENT_BYTES = 2 * 1024 * 1024
 
@@ -95,7 +95,7 @@ _FINAL_AUTHENTICATION_SCOPE = tuple(
         "every-database-row-allowconn-owner-acl-and-effective-privileges "
         "schema-table-column-sequence-routine-type-language-and-tablespace-authority "
         "parameter-foreign-data-user-mapping-large-object-and-default-acl-authority "
-        "role-database-and-effective-session-settings schema-descriptor-and-firing-trigger-set"
+        "role-database-and-effective-session-settings schema-descriptor-and-all-write-path-effects"
     ).split()
 )
 _ACTIVATION_BLOCKERS = (
@@ -108,7 +108,7 @@ _ACTIVATION_BLOCKERS = (
     "effective_session_timeout_values_unselected",
     "effective_session_settings_authenticator_unimplemented",
     "database_migration_exclusion_cooperation_unimplemented",
-    "firing_trigger_set_authenticator_unimplemented",
+    "write_path_effects_authenticator_unimplemented",
     "database_role_state_authenticator_unimplemented",
     "runtime_integration_unimplemented",
 )
@@ -138,7 +138,7 @@ _VERIFICATION_REQUIREMENTS = (
     "server-wide-authorization-state-freeze-from-final-observation-through-transaction",
     "exact-direct-and-effective-schema-privileges",
     "exact-direct-and-effective-table-privileges",
-    "schema-descriptor-bound-firing-trigger-set-under-held-stability-windows",
+    "closed-world-write-path-effects-and-no-competing-sessions-under-held-stability-windows",
     "empty-explicit-column-acls",
     "column-effective-privileges-derived-only-from-exact-table-privileges",
     "empty-sequence-privileges",
@@ -566,6 +566,7 @@ def _validate_identity_and_role(
 
 def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) -> None:
     inventory = documents["synthetic_inventory"]
+    sanitizer = documents["sanitizer"]
     transaction = documents["transaction_plan"]["transaction"]
     advisory_key_digest = hashlib.sha256(_ADVISORY_LOCK_KEY_SOURCE.encode()).digest()
     if (
@@ -609,34 +610,90 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "expected_table_count": 19,
         },
         "firing_triggers": {
-            "allowed_set_source": "schema.descriptor.sha256",
             "authentication_implemented": False,
-            "exact_allowed_set_and_definitions_must_match_authenticated_schema_descriptor": True,
             "revalidation_windows_required": [
                 "privileges.server_wide_authorization_stability",
                 "privileges.transaction_compatibility.exclusive_ddl_window",
             ],
             "routine_execute_revocation_is_trigger_suppression": False,
-            "unlisted_or_changed_trigger_may_fire": False,
-            "user_insert_triggers_on_rewrite_tables": {
-                "expected_trigger_count": 0,
-                "table_set_source": "schema.table_sets.rewrite.tables",
-                "triggers": [],
-            },
-            "user_truncate_triggers_on_truncate_tables": {
-                "expected_trigger_count": 0,
-                "table_set_source": "schema.table_sets.application.tables",
-                "triggers": [],
+            "user_triggers": {
+                "allowed_set_source": "schema.descriptor.sha256",
+                "exact_allowed_set_and_definitions_must_match_authenticated_schema_descriptor": True,
+                "unlisted_or_changed_trigger_may_fire": False,
+                "user_insert_triggers_on_rewrite_tables": {
+                    "expected_trigger_count": 0,
+                    "table_set_source": "schema.table_sets.rewrite.tables",
+                    "triggers": [],
+                },
+                "user_truncate_triggers_on_truncate_tables": {
+                    "expected_trigger_count": 0,
+                    "table_set_source": "schema.table_sets.application.tables",
+                    "triggers": [],
+                },
             },
             "internal_triggers": {
-                "exact_set_and_definitions_must_match_authenticated_schema_descriptor": True,
-                "trigger_functions_must_authenticate": [
-                    "security-definer-flag",
-                    "owner",
-                    "proconfig",
-                    "definition",
+                "observation_source": (
+                    "future-closed-world-database-trigger-and-constraint-catalog-observation"
+                ),
+                "allowed_set_source": (
+                    "future-exact-authenticated-constraint-catalog-observation"
+                ),
+                "observation_implemented": False,
+                "authentication_implemented": False,
+                "schema_descriptor_source_permitted": False,
+                "exact_set_required": True,
+                "every_observed_internal_trigger_must_link_to_exactly_one_expected_constraint": True,
+                "every_expected_constraint_trigger_cardinality_event_timing_and_function_identity_must_match": True,
+                "missing_extra_or_unlinked_internal_triggers_permitted": False,
+                "oid_values_are_linkage_only_not_portable_expected_identities": True,
+                "built_in_trigger_function_body_authenticated": False,
+                "built_in_trigger_function_properties_source": (
+                    "pinned-postgresql-16-system-catalog-baseline"
+                ),
+                "must_observe": [
+                    "trigger-name-and-relation-identity",
+                    "trigger-oid-and-constraint-oid-linkage",
+                    "tgtype-event-and-timing",
+                    "tgenabled-and-effective-firing-state",
+                    "pg-get-triggerdef",
+                    "constraint-identity-linkage-and-definition",
+                    "trigger-function-oid-linkage-schema-and-name",
+                    "trigger-function-owner",
+                    "trigger-function-security-definer-flag",
+                    "trigger-function-proconfig",
+                    "trigger-function-language-kind-volatility-parallel-and-leakproof",
                 ],
             },
+        },
+        "firing_rules": {
+            "observation_source": (
+                "future-closed-world-pg-rewrite-and-relation-catalog-observation"
+            ),
+            "observation_implemented": False,
+            "authentication_implemented": False,
+            "schema_descriptor_source_permitted": False,
+            "target_table_set_source": "schema.table_sets.rewrite.tables",
+            "exact_non_view_rule_count": 0,
+            "allowed_non_view_rules": [],
+            "view_return_rules_out_of_scope": True,
+            "relhasrules_must_be_observed": True,
+            "pg_rewrite_fields_must_observe": [
+                "rule-oid-and-name",
+                "relation-identity",
+                "ev-type",
+                "ev-enabled",
+                "is-instead",
+                "ev-action",
+                "ev-qual",
+            ],
+            "execution_identity_semantics_must_authenticate": (
+                "rule-actions-execute-as-table-owner-no-independent-rule-owner"
+            ),
+            "revalidation_windows_required": [
+                "privileges.server_wide_authorization_stability",
+                "privileges.transaction_compatibility.exclusive_ddl_window",
+            ],
+            "unknown_or_unobserved_non_view_rule_permitted": False,
         },
         **{
             name: {"tables": [], "expected_table_count": 0}
@@ -769,7 +826,10 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "closed_world_mutator_scope": True,
             "authority_mutator_classes": list(_AUTHORITY_MUTATOR_CLASSES),
             "unknown_or_uncovered_authority_mutator_permitted": False,
-            "mutators_must_acquire_before_authority_mutation": True,
+            "each_authority_mutator_must_acquire_before_database_or_provider_operation": True,
+            "each_authority_mutator_must_retain_continuously_through_durable_commit_or_rollback": True,
+            "each_authority_mutator_must_validate_current_lease_and_fence_immediately_before_own_commit": True,
+            "each_authority_mutator_must_abort_or_rollback_on_loss_or_uncertainty": True,
             "sanitizer_must_acquire_before_final_closed_world_observation": True,
             "final_observation_scope": list(_FINAL_AUTHENTICATION_SCOPE),
             "final_observation_and_revalidation_under_held_window": True,
@@ -777,13 +837,110 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "mutation_may_begin_only_after_final_revalidation_is_accepted": True,
             "retain_through_sanitizer_commit_or_rollback": True,
             "retain_through_database_connection_close": True,
-            "validate_current_lease_and_fence_immediately_before_commit": True,
+            "sanitizer_must_validate_current_lease_and_fence_immediately_before_commit": True,
             "release_only_after_sanitizer_commit_or_rollback_and_connection_close": True,
-            "rollback_on_loss_or_uncertainty": True,
+            "sanitizer_must_rollback_on_loss_or_uncertainty": True,
             "fail_closed_if_acquisition_retention_revalidation_or_release_is_uncertain": True,
             "server_wide_external_lease_or_freeze_required": True,
             "target_database_advisory_lock_is_sufficient": False,
             "serializable_transaction_is_sufficient": False,
+        },
+        "write_path_effects": {
+            "authentication_implemented": False,
+            "exact_allowed_effects_required": True,
+            "unknown_or_unobserved_effect_permitted": False,
+            "surface_sources": {
+                "rewrite_rules": "privileges.tables.firing_rules",
+                "user_trigger_firing": (
+                    "privileges.tables.firing_triggers.user_triggers"
+                ),
+                "internal_trigger_firing": (
+                    "privileges.tables.firing_triggers.internal_triggers"
+                ),
+                "partition_and_inheritance_routing": (
+                    "privileges.write_path_effects.partition_routing"
+                ),
+                "logical_subscription_and_apply_worker_writers": (
+                    "privileges.write_path_effects.logical_writers_and_egress"
+                ),
+                "publication_and_replication_slot_egress": (
+                    "privileges.write_path_effects.logical_writers_and_egress"
+                ),
+                "relation_kind_table_access_method_and_foreign_table_server_mapping": (
+                    "schema.descriptor.sha256"
+                ),
+                "expression_dependency_closure": (
+                    "privileges.write_path_effects.expression_dependency_closure"
+                ),
+            },
+            "partition_routing": {
+                "observation_source": (
+                    "future-closed-world-pg-inherits-and-partition-catalog-observation"
+                ),
+                "observation_implemented": False,
+                "expected_routing_edge_count": 0,
+                "pg_inherits_edges": [],
+                "redirection_permitted": False,
+                "unknown_or_unobserved_routing_permitted": False,
+            },
+            "logical_writers_and_egress": {
+                "observation_source": (
+                    "future-closed-world-logical-replication-catalog-and-worker-observation"
+                ),
+                "observation_implemented": False,
+                "subscriptions": [],
+                "apply_workers": [],
+                "publications": [],
+                "logical_replication_slots": [],
+                "unknown_or_unobserved_writer_or_egress_permitted": False,
+            },
+            "expression_dependency_closure": {
+                "observation_source": (
+                    "future-closed-world-expression-dependency-catalog-observation"
+                ),
+                "observation_implemented": False,
+                "classes": [
+                    "column-defaults",
+                    "generated-columns",
+                    "check-constraints",
+                    "exclusion-constraints",
+                    "index-expressions-and-predicates",
+                    "row-level-security-policies",
+                    "types",
+                    "casts",
+                    "operators",
+                    "operator-classes",
+                    "collations",
+                ],
+                "allowed_dependency_sources": [
+                    "pinned-public-schema-routines",
+                    "trusted-pinned-postgresql-16-built-ins",
+                ],
+                "exact_transitive_closure_required": True,
+                "unknown_or_unobserved_dependency_permitted": False,
+            },
+            "competing_sessions": {
+                "requirement_source": (
+                    "sanitizer_policy.target.require_no_competing_sessions"
+                ),
+                "require_no_competing_sessions": sanitizer["target"][
+                    "require_no_competing_sessions"
+                ],
+                "recheck_source": (
+                    "sanitizer_policy.execution_contract.future_transaction_requirements."
+                    "recheck_no_competing_sessions_before_commit"
+                ),
+                "recheck_no_competing_sessions_before_commit": sanitizer[
+                    "execution_contract"
+                ]["future_transaction_requirements"][
+                    "recheck_no_competing_sessions_before_commit"
+                ],
+            },
+            "revalidation_windows_required": [
+                "privileges.server_wide_authorization_stability",
+                "privileges.transaction_compatibility.exclusive_ddl_window",
+            ],
+            "revalidate_immediately_before_sanitizer_commit": True,
         },
         "schemas": {
             "public": {
