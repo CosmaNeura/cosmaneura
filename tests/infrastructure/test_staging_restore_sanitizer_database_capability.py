@@ -145,6 +145,8 @@ def test_exact_database_table_and_transaction_posture() -> None:
     sessions = privileges["write_path_effects"]["competing_sessions"]
     assert sessions["require_no_competing_sessions"] is True
     assert sessions["recheck_no_competing_sessions_before_commit"] is True
+    assert sessions["fresh_connection_post_commit_verification"] is True
+    assert sessions["admission_fence"]["mechanism_selected"] is False
 
 
 def test_every_postgresql_privilege_class_is_closed_and_public_aware() -> None:
@@ -328,18 +330,13 @@ def test_server_wide_stability_mutations_fail_without_template_comparison() -> N
 
 
 def test_firing_trigger_mutations_fail_without_template_comparison() -> None:
+    # fmt: off
     prefix = "privileges.tables.firing_triggers"
     mutations = (
         ("user_triggers.allowed_set_source", "untrusted"),
         ("routine_execute_revocation_is_trigger_suppression", True),
-        (
-            "user_triggers.user_insert_triggers_on_rewrite_tables.expected_trigger_count",
-            1,
-        ),
-        (
-            "user_triggers.user_truncate_triggers_on_truncate_tables.expected_trigger_count",
-            1,
-        ),
+        ("user_triggers.user_insert_triggers_on_rewrite_tables.expected_trigger_count", 1),
+        ("user_triggers.user_truncate_triggers_on_truncate_tables.expected_trigger_count", 1),
         ("internal_triggers.schema_descriptor_source_permitted", True),
         ("internal_triggers.allowed_set_source", "schema.descriptor.sha256"),
         ("internal_triggers.must_observe", []),
@@ -368,21 +365,38 @@ def test_firing_trigger_mutations_fail_without_template_comparison() -> None:
     prefix = "privileges.write_path_effects"
     for field, replacement in (
         ("unknown_or_unobserved_effect_permitted", True),
-        (
-            "surface_sources.relation_kind_table_access_method_and_foreign_table_server_mapping",
-            "untrusted",
-        ),
+        ("surface_sources.relation_kind_table_access_method_and_foreign_table_server_mapping", "untrusted"),
         ("partition_routing.redirection_permitted", True),
         ("logical_writers_and_egress.subscriptions", ["attacker_subscription"]),
         ("logical_writers_and_egress.publications", ["egress"]),
         ("logical_writers_and_egress.logical_replication_slots", ["egress"]),
         ("expression_dependency_closure.allowed_dependency_sources", ["untrusted"]),
-        (
-            "expression_dependency_closure.unknown_or_unobserved_dependency_permitted",
-            True,
-        ),
+        ("expression_dependency_closure.unknown_or_unobserved_dependency_permitted", True),
+        ("expression_dependency_closure.side_effectful_dependency_permitted", True),
         ("competing_sessions.require_no_competing_sessions", False),
         ("competing_sessions.recheck_no_competing_sessions_before_commit", False),
+        ("competing_sessions.fresh_connection_post_commit_verification", False),
+        ("competing_sessions.admission_fence.mechanism_selected", True),
+        ("competing_sessions.admission_fence.enforcement_authority_selected", True),
+        ("competing_sessions.admission_fence.denied_writer_classes", []),
+        ("competing_sessions.admission_fence.runtime_role_can_alter_or_bypass_fence", True),
+        ("competing_sessions.admission_fence.unknown_or_uncontrolled_writer_permitted", True),
+        ("competing_sessions.admission_fence.admitted_connection_sequence", []),
+        ("competing_sessions.admission_fence.validate_immediately_after_sanitizer_commit_before_connection_close", False),
+        ("competing_sessions.admission_fence.fresh_verifier_reobserves_admitted_and_competing_sets_before_and_after_verification", False),
+        ("execution_surface.adapter_owned_fixed_statement_grammar.implemented", True),
+        ("execution_surface.adapter_owned_fixed_statement_grammar.template_or_ast_digests_selected", True),
+        ("execution_surface.adapter_owned_fixed_statement_grammar.allowed_statement_classes", []),
+        ("execution_surface.adapter_owned_fixed_statement_grammar.caller_sql_identifiers_function_calls_or_fragments_permitted", True),
+        ("execution_surface.adapter_owned_fixed_statement_grammar.forbidden_statement_or_entry_point_classes", []),
+        ("execution_surface.adapter_owned_fixed_statement_grammar.ordered_protocol_phases", []),
+        ("execution_surface.large_object_safety.exact_effective_postgresql16_public_execute_creation_entry_points", []),
+        ("execution_surface.large_object_safety.complete_oid_and_owner_visibility_required", False),
+        ("execution_surface.large_object_safety.precommit_immediate_observation.runtime_owned_large_object_count", 1),
+        ("execution_surface.large_object_safety.fresh_postcommit_verification.large_object_count", 1),
+        ("execution_surface.prepared_transaction_safety.effective_max_prepared_transactions", "1"),
+        ("execution_surface.prepared_transaction_safety.precommit_immediate_prepared_xact_count", 1),
+        ("execution_surface.prepared_transaction_safety.fresh_postcommit_prepared_xact_count", 1),
         ("revalidation_windows_required", []),
         ("revalidate_immediately_before_sanitizer_commit", False),
     ):
@@ -390,37 +404,22 @@ def test_firing_trigger_mutations_fail_without_template_comparison() -> None:
         _set_path(document, f"{prefix}.{field}", replacement)
         with pytest.raises(FAILURE, match="^database_capability.contract_invalid$"):
             capability._validate_privileges(document, capability._load_upstreams())  # noqa: SLF001
+    # fmt: on
 
 
+# fmt: off
 @pytest.mark.parametrize(
     ("path", "replacement"),
     [
-        (
-            "role_posture.role_settings.pg_db_role_setting.source_scopes_required",
-            ["role-global:setdatabase=0,setrole=runtime-role-oid"],
-        ),
-        (
-            "role_posture.role_settings.pg_db_role_setting.setrole_zero_database_wide_rows_included",
-            False,
-        ),
-        (
-            "role_posture.role_settings.pg_db_role_setting.expected_empty_scopes.database_all_roles",
-            ["session_replication_role=replica"],
-        ),
-        (
-            "role_posture.role_settings.effective_session.required_exact_values.session_replication_role",
-            "replica",
-        ),
-        (
-            "role_posture.role_settings.effective_session.source_precedence_must_include",
-            ["adapter-session-commands"],
-        ),
-        (
-            "role_posture.role_settings.effective_session.controller_read_only_observer_settings_are_execution_proof",
-            True,
-        ),
+        ("role_posture.role_settings.pg_db_role_setting.source_scopes_required", ["role-global:setdatabase=0,setrole=runtime-role-oid"]),
+        ("role_posture.role_settings.pg_db_role_setting.setrole_zero_database_wide_rows_included", False),
+        ("role_posture.role_settings.pg_db_role_setting.expected_empty_scopes.database_all_roles", ["session_replication_role=replica"]),
+        ("role_posture.role_settings.effective_session.required_exact_values.session_replication_role", "replica"),
+        ("role_posture.role_settings.effective_session.source_precedence_must_include", ["adapter-session-commands"]),
+        ("role_posture.role_settings.effective_session.required_exact_values.max_prepared_transactions", "1"),
     ],
 )
+# fmt: on
 def test_setting_semantic_mutations_fail_without_template_comparison(
     path: str, replacement: Any
 ) -> None:

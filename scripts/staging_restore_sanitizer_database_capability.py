@@ -13,7 +13,7 @@ CONTRACT_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-database-capability-contract.json"
 )
-CONTRACT_SHA256 = "9136a2607421b348a1fbc555e7b37768fde12c4ffab3e88ec8e90229e64543aa"
+CONTRACT_SHA256 = "c776764647e3209cb793f62fbb5e768845dd3d7625d93f5da37fad72ce83b762"
 ACTIVATION_FAILURE = "activation.database_role_state_authenticator_unimplemented"
 MAXIMUM_DOCUMENT_BYTES = 2 * 1024 * 1024
 
@@ -98,6 +98,27 @@ _FINAL_AUTHENTICATION_SCOPE = tuple(
         "role-database-and-effective-session-settings schema-descriptor-and-all-write-path-effects"
     ).split()
 )
+_ADMISSION_WRITER_CLASSES = tuple(
+    "ordinary-dml-connections concurrent-jobs logical-and-background-writers "
+    "owner-and-admin-writers provider-controlled-writers authority-and-configuration-mutators".split()
+)
+_ALLOWED_EXECUTION_STATEMENT_CLASSES = tuple(
+    "begin-serializable fixed-adapter-session-settings fixed-capability-authentication-selects "
+    "fixed-session-advisory-lock-acquire-release lock-and-read-exact-control-row "
+    "truncate-exact-transaction-plan-table-set parameterized-insert-exact-transaction-plan-operations "
+    "commit-or-rollback-current-transaction fresh-postcommit-verification-selects".split()
+)
+_FORBIDDEN_EXECUTION_ENTRY_POINTS = tuple(
+    "unlisted-select call do copy ddl lo-create-lo-creat-lo-from-bytea-and-any-large-object-mutation "
+    "pg-logical-emit-message pg-notify-listen-and-unlisten prepare-transaction-commit-prepared-and-rollback-prepared "
+    "unlisted-advisory-lock-operations unlisted-guc-set-reset-set-config-operations".split()
+)
+_EXECUTION_PROTOCOL_PHASES = tuple(
+    "acquire-and-drain-external-admission-fence acquire-target-advisory-lock-before-transaction "
+    "begin-serializable apply-fixed-settings-and-final-authentication lock-and-read-control-row "
+    "execute-exact-truncate-and-parameterized-inserts immediate-precommit-revalidation commit-or-rollback "
+    "validate-fence-close-sanitizer-and-handoff fresh-verification-close-verifier-and-release-fence".split()
+)
 _ACTIVATION_BLOCKERS = (
     "exact_database_role_unselected",
     "provision_job_identity_exact_ids_unpinned",
@@ -152,7 +173,8 @@ _VERIFICATION_REQUIREMENTS = (
     "empty-parameter-set-and-alter-system-privileges",
     "empty-foreign-data-wrapper-and-server-usage-privileges",
     "empty-user-mappings",
-    "no-large-objects-or-large-object-privileges",
+    "zero-large-objects-and-fixed-grammar-confinement-of-ambient-large-object-routines",
+    "zero-prepared-transactions-and-max-prepared-transactions-zero",
     "all-pg-db-role-setting-source-rows-including-setrole-zero",
     "all-effective-session-setting-sources-and-exact-safe-values",
     "session-replication-role-origin",
@@ -459,6 +481,7 @@ def _validate_identity_and_role(
             "required_exact_values": {
                 "default_transaction_isolation": "serializable",
                 "default_transaction_read_only": "off",
+                "max_prepared_transactions": "0",
                 "row_security": "on",
                 "search_path": "pg_catalog",
                 "session_replication_role": "origin",
@@ -568,6 +591,11 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
     inventory = documents["synthetic_inventory"]
     sanitizer = documents["sanitizer"]
     transaction = documents["transaction_plan"]["transaction"]
+    future = sanitizer["execution_contract"]["future_transaction_requirements"]
+    admission_fence = {"kind": "authenticated-continuous-data-writer-admission-fence-v1", **dict.fromkeys("required owner_admin_and_provider_paths_must_participate external_to_target_database_session_required covers_server_wide_authority_mutator_classes drain_and_deny_every_other_connection_or_data_writer same_fence_instance_required controlled_handoff_required original_sanitizer_connection_must_close_before_verifier_admission exact_sanitizer_must_acquire_before_final_closed_world_observation validate_immediately_before_sanitizer_commit validate_immediately_after_sanitizer_commit_before_connection_close verifier_validates_before_and_after_fresh_verification fresh_verifier_reobserves_admitted_and_competing_sets_before_and_after_verification release_only_after_fresh_verifier_close_and_handoff_completion fail_closed_on_loss_uncertainty_or_uncontrolled_admission".split(), True), **dict.fromkeys("mechanism_selected authentication_implemented enforcement_authority_selected runtime_role_can_alter_or_bypass_fence unknown_or_uncontrolled_writer_permitted".split(), False), "enforcement_binding_sources": "authenticated-server-identity privileges.databases.target.name identity_binding.runtime_identity identity_binding.database_role".split(), "denied_writer_classes": list(_ADMISSION_WRITER_CLASSES), "authority_mutator_classes_source": "privileges.server_wide_authorization_stability.authority_mutator_classes", "admitted_connection_sequence": "exact-sanitizer-connection exact-fresh-postcommit-verifier-connection".split(), "retain_continuously_through": "sanitizer-commit-or-rollback immediate-postcommit-fence-validation original-sanitizer-connection-close controlled-sanitizer-to-verifier-handoff exact-fresh-postcommit-verification fresh-verifier-connection-close".split()}  # fmt: skip
+    statement_grammar = {**dict.fromkeys("allowed_statements_exactly_derived_from_sources fixed_select_ast_and_result_shapes_must_be_pinned fixed_advisory_function_signatures_and_key_must_be_pinned fixed_guc_names_values_and_contexts_must_be_pinned ordinary_commit_or_rollback_only".split(), True), **dict.fromkeys("implemented template_or_ast_digests_selected caller_sql_identifiers_function_calls_or_fragments_permitted connection_or_cursor_escape_permitted unlisted_statement_or_function_permitted".split(), False), "sealed_mutation_operation_source": "transaction_plan.execution_handoff", "transaction_invariant_source": "transaction_plan.transaction", "fixed_protocol_template_source": "future-adapter-owned-exact-ast-template-digests", "template_or_ast_digests": [], "allowed_statement_classes": list(_ALLOWED_EXECUTION_STATEMENT_CLASSES), "ordered_protocol_phases": list(_EXECUTION_PROTOCOL_PHASES), "advisory_protocol_source": "privileges.transaction_compatibility.exclusive_ddl_window", "guc_protocol_source": "role_posture.role_settings.effective_session", "forbidden_statement_or_entry_point_classes": list(_FORBIDDEN_EXECUTION_ENTRY_POINTS)}  # fmt: skip
+    large_object_safety = {**dict.fromkeys("ambient_system_baseline_explicitly_acknowledged complete_oid_and_owner_visibility_required zero_metadata_rows_proves_no_large_object_pages same_admission_fence_and_exact_runtime_role_binding_required not_an_exhaustive_list_of_public_executable_large_object_routines".split(), True), **dict.fromkeys("creation_or_mutation_permitted observation_implemented".split(), False), "authoritative_catalog_source": "pg_catalog.pg_largeobject_metadata", "exact_effective_postgresql16_public_execute_creation_entry_points": [{"routine": name, "privilege": "EXECUTE"} for name in ("pg_catalog.lo_creat(integer)", "pg_catalog.lo_create(oid)", "pg_catalog.lo_from_bytea(oid,bytea)")], "precommit_immediate_observation": {"required": True, "large_object_count": 0, "runtime_owned_large_object_count": 0}, "fresh_postcommit_verification": {"required": True, "fresh_connection_required": True, "large_object_count": 0, "runtime_owned_large_object_count": 0}}  # fmt: skip
+    prepared_transaction_safety = {**dict.fromkeys("complete_server_wide_visibility_required same_admission_fence_required fresh_postcommit_connection_required".split(), True), **dict.fromkeys("observation_implemented prepare_commit_or_rollback_prepared_permitted".split(), False), "effective_max_prepared_transactions": "0", "max_prepared_transactions_setting": {"source": "pg_catalog.pg_settings", "context": "postmaster", "pending_restart": False, "setting": "0"}, "pg_prepared_xacts_source": "pg_catalog.pg_prepared_xacts", "precommit_immediate_prepared_xact_count": 0, "fresh_postcommit_prepared_xact_count": 0}  # fmt: skip
     advisory_key_digest = hashlib.sha256(_ADVISORY_LOCK_KEY_SOURCE.encode()).digest()
     if (
         advisory_key_digest.hex() != _ADVISORY_LOCK_KEY_SHA256
@@ -611,10 +639,7 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
         },
         "firing_triggers": {
             "authentication_implemented": False,
-            "revalidation_windows_required": [
-                "privileges.server_wide_authorization_stability",
-                "privileges.transaction_compatibility.exclusive_ddl_window",
-            ],
+            "revalidation_windows_required": "privileges.server_wide_authorization_stability privileges.transaction_compatibility.exclusive_ddl_window".split(),
             "routine_execute_revocation_is_trigger_suppression": False,
             "user_triggers": {
                 "allowed_set_source": "schema.descriptor.sha256",
@@ -845,38 +870,26 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "target_database_advisory_lock_is_sufficient": False,
             "serializable_transaction_is_sufficient": False,
         },
+        # fmt: off
         "write_path_effects": {
             "authentication_implemented": False,
             "exact_allowed_effects_required": True,
             "unknown_or_unobserved_effect_permitted": False,
             "surface_sources": {
                 "rewrite_rules": "privileges.tables.firing_rules",
-                "user_trigger_firing": (
-                    "privileges.tables.firing_triggers.user_triggers"
-                ),
-                "internal_trigger_firing": (
-                    "privileges.tables.firing_triggers.internal_triggers"
-                ),
-                "partition_and_inheritance_routing": (
-                    "privileges.write_path_effects.partition_routing"
-                ),
-                "logical_subscription_and_apply_worker_writers": (
-                    "privileges.write_path_effects.logical_writers_and_egress"
-                ),
-                "publication_and_replication_slot_egress": (
-                    "privileges.write_path_effects.logical_writers_and_egress"
-                ),
-                "relation_kind_table_access_method_and_foreign_table_server_mapping": (
-                    "schema.descriptor.sha256"
-                ),
-                "expression_dependency_closure": (
-                    "privileges.write_path_effects.expression_dependency_closure"
-                ),
+                "user_trigger_firing": "privileges.tables.firing_triggers.user_triggers",
+                "internal_trigger_firing": "privileges.tables.firing_triggers.internal_triggers",
+                "partition_and_inheritance_routing": "privileges.write_path_effects.partition_routing",
+                "logical_subscription_and_apply_worker_writers": "privileges.write_path_effects.logical_writers_and_egress",
+                "publication_and_replication_slot_egress": "privileges.write_path_effects.logical_writers_and_egress",
+                "relation_kind_table_access_method_and_foreign_table_server_mapping": "schema.descriptor.sha256",
+                "expression_dependency_closure": "privileges.write_path_effects.expression_dependency_closure",
+                "connection_and_writer_admission": "privileges.write_path_effects.competing_sessions.admission_fence",
+                "large_object_creation": "privileges.write_path_effects.execution_surface.large_object_safety",
+                "prepared_transactions": "privileges.write_path_effects.execution_surface.prepared_transaction_safety",
             },
             "partition_routing": {
-                "observation_source": (
-                    "future-closed-world-pg-inherits-and-partition-catalog-observation"
-                ),
+                "observation_source": "future-closed-world-pg-inherits-and-partition-catalog-observation",
                 "observation_implemented": False,
                 "expected_routing_edge_count": 0,
                 "pg_inherits_edges": [],
@@ -884,9 +897,7 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
                 "unknown_or_unobserved_routing_permitted": False,
             },
             "logical_writers_and_egress": {
-                "observation_source": (
-                    "future-closed-world-logical-replication-catalog-and-worker-observation"
-                ),
+                "observation_source": "future-closed-world-logical-replication-catalog-and-worker-observation",
                 "observation_implemented": False,
                 "subscriptions": [],
                 "apply_workers": [],
@@ -895,46 +906,35 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
                 "unknown_or_unobserved_writer_or_egress_permitted": False,
             },
             "expression_dependency_closure": {
-                "observation_source": (
-                    "future-closed-world-expression-dependency-catalog-observation"
-                ),
+                "observation_source": "future-closed-world-expression-dependency-catalog-observation",
                 "observation_implemented": False,
-                "classes": [
-                    "column-defaults",
-                    "generated-columns",
-                    "check-constraints",
-                    "exclusion-constraints",
-                    "index-expressions-and-predicates",
-                    "row-level-security-policies",
-                    "types",
-                    "casts",
-                    "operators",
-                    "operator-classes",
-                    "collations",
-                ],
-                "allowed_dependency_sources": [
-                    "pinned-public-schema-routines",
-                    "trusted-pinned-postgresql-16-built-ins",
-                ],
+                "classes": "column-defaults generated-columns check-constraints exclusion-constraints index-expressions-and-predicates row-level-security-policies types casts operators operator-classes collations".split(),
+                "allowed_dependency_sources": "authenticated-side-effect-free-pinned-public-schema-routines authenticated-side-effect-free-pinned-postgresql-16-built-ins".split(),
+                "exact_callable_allowlist_required": True,
+                "side_effectful_dependency_permitted": False,
                 "exact_transitive_closure_required": True,
                 "unknown_or_unobserved_dependency_permitted": False,
             },
             "competing_sessions": {
-                "requirement_source": (
-                    "sanitizer_policy.target.require_no_competing_sessions"
-                ),
+                "requirement_source": "sanitizer_policy.target.require_no_competing_sessions",
                 "require_no_competing_sessions": sanitizer["target"][
                     "require_no_competing_sessions"
                 ],
-                "recheck_source": (
-                    "sanitizer_policy.execution_contract.future_transaction_requirements."
-                    "recheck_no_competing_sessions_before_commit"
-                ),
-                "recheck_no_competing_sessions_before_commit": sanitizer[
-                    "execution_contract"
-                ]["future_transaction_requirements"][
+                "recheck_source": "sanitizer_policy.execution_contract.future_transaction_requirements.recheck_no_competing_sessions_before_commit",
+                "recheck_no_competing_sessions_before_commit": future[
                     "recheck_no_competing_sessions_before_commit"
                 ],
+                "fresh_verification_source": "sanitizer_policy.execution_contract.future_transaction_requirements.fresh_connection_post_commit_verification",
+                "fresh_connection_post_commit_verification": future[
+                    "fresh_connection_post_commit_verification"
+                ],
+                "admission_fence": admission_fence,
+            },
+            "execution_surface": {
+                "implemented": False,
+                "adapter_owned_fixed_statement_grammar": statement_grammar,
+                "large_object_safety": large_object_safety,
+                "prepared_transaction_safety": prepared_transaction_safety,
             },
             "revalidation_windows_required": [
                 "privileges.server_wide_authorization_stability",
@@ -942,6 +942,7 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             ],
             "revalidate_immediately_before_sanitizer_commit": True,
         },
+        # fmt: on
         "schemas": {
             "public": {
                 "usage": True,
@@ -1071,6 +1072,9 @@ def _validate_privileges(contract: dict[str, Any], documents: dict[str, Any]) ->
             "public_role_privileges_permitted": False,
             "public_role_effective_privileges_included_in_verification": True,
             "grant_options_permitted": False,
+            "execution_surface_source": (
+                "privileges.write_path_effects.execution_surface.large_object_safety"
+            ),
         },
         "default_privileges": {
             "entries": [],
