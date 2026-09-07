@@ -236,6 +236,7 @@ py_test-ci-infrastructure-sanitizer-observer:
 		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_plan.py::test_unexpected_failures_are_content_free_and_return_no_partial_plan \
 		tests/infrastructure/test_staging_restore_sanitizer_target_role_observer_contract.py \
 		tests/infrastructure/test_staging_restore_sanitizer_target_role_query_grammar.py \
+		tests/infrastructure/test_staging_restore_sanitizer_target_role_observation_frames.py \
 		--verbosity=2 {{PYTEST_COV_PARAMS}}
 
 [script]
