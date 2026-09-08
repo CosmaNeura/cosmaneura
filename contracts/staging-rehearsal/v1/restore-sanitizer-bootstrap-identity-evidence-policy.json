@@ -127,6 +127,7 @@
     "private_fields": [
       "_identity",
       "_evidence_digests",
+      "_proof_sha256",
       "_seal"
     ],
     "copy_pickle_json_serialization_or_mutation_permitted": false,

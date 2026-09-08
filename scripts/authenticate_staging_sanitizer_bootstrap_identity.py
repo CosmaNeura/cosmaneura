@@ -27,7 +27,7 @@ POLICY_PATH = (
     ROOT
     / "contracts/staging-rehearsal/v1/restore-sanitizer-bootstrap-identity-evidence-policy.json"
 )
-POLICY_SHA256 = "13773efa3237cead12ee73c363fa4486b7e0eec8175a201c8be74192ae2e6c20"
+POLICY_SHA256 = "0a811508de1c92237a5f77a61717a7f7697176e0e782669afdf09c2779ea74e0"
 MAXIMUM_POLICY_BYTES = 64 * 1024
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -83,7 +83,8 @@ PUBLIC_FIELDS = (
     "expires_at",
     *CLAIMS,
 )
-PRIVATE_FIELDS = ("_identity", "_evidence_digests", "_seal")
+PRIVATE_FIELDS = ("_identity", "_evidence_digests", "_proof_sha256", "_seal")
+PROVENANCE_DOMAIN = "cosmaneura:staging:sanitizer-bootstrap-identity-evidence:v1"
 _SEAL = object()
 
 
@@ -964,6 +965,7 @@ class AuthenticatedBootstrapIdentityEvidence:
     executable: bool
     _identity: tuple[tuple[str, str], ...] = dataclass_field(repr=False)
     _evidence_digests: tuple[tuple[str, str], ...] = dataclass_field(repr=False)
+    _proof_sha256: str = dataclass_field(repr=False)
     _seal: object = dataclass_field(repr=False, compare=False)
 
     def __init__(self) -> None:
@@ -995,6 +997,7 @@ class AuthenticatedBootstrapIdentityEvidence:
                 or self.policy_sha256 != f"sha256:{POLICY_SHA256}"
                 or type(self._identity) is not tuple
                 or type(self._evidence_digests) is not tuple
+                or not _verify_provenance(self)
                 or identity != expected_material["identity"]
                 or self.foundation_source_commit
                 != expected_material["foundation_source_commit"]
@@ -1024,12 +1027,12 @@ class AuthenticatedBootstrapIdentityEvidence:
             return False
 
 
-def _authenticate_with_policy(
+def _validated_candidate(
     *,
     policy: Mapping[str, Any],
     evidence_directory: Path,
     clock: Callable[[], datetime],
-) -> AuthenticatedBootstrapIdentityEvidence:
+) -> tuple[AuthenticatedBootstrapIdentityEvidence, datetime]:
     document = _validate_policy(policy)
     if not isinstance(evidence_directory, Path) or not evidence_directory.is_absolute():
         _fail("bootstrap_identity_evidence.directory_invalid")
@@ -1094,13 +1097,45 @@ def _authenticate_with_policy(
         **CLAIMS,
         "_identity": tuple(material["identity"].items()),
         "_evidence_digests": tuple(evidence_digests.items()),
+        "_proof_sha256": "",
         "_seal": _SEAL,
     }
     for name, value in values.items():
         object.__setattr__(result, name, value)
-    if not result._is_authenticated(now=after):
-        _fail("bootstrap_identity_evidence.output_invalid")
-    return result
+    return result, after
+
+
+def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
+    key = os.urandom(32)
+
+    def proof(value: AuthenticatedBootstrapIdentityEvidence) -> str:
+        material = _canonical(
+            {
+                "domain": PROVENANCE_DOMAIN,
+                "object_identity": id(value),
+                "identity_binding_sha256": value.identity_binding_sha256,
+                "authenticated_at": value.authenticated_at.strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
+                "expires_at": value.expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+        )
+        return hmac.new(key, material, hashlib.sha256).hexdigest()
+
+    def verify(value: AuthenticatedBootstrapIdentityEvidence) -> bool:
+        return hmac.compare_digest(value._proof_sha256, proof(value))
+
+    def authenticate(**kwargs: Any) -> AuthenticatedBootstrapIdentityEvidence:
+        value, authenticated_at = _validated_candidate(**kwargs)
+        object.__setattr__(value, "_proof_sha256", proof(value))
+        if not value._is_authenticated(now=authenticated_at):
+            _fail("bootstrap_identity_evidence.output_invalid")
+        return value
+
+    return authenticate, verify
+
+
+_authenticate_with_policy, _verify_provenance = _build_provenance()
 
 
 def authenticate_bootstrap_identity_evidence(

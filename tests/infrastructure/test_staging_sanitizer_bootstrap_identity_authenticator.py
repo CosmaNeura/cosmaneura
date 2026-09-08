@@ -572,6 +572,10 @@ def test_sealed_result_refuses_copy_pickle_and_tampering(tmp_path: Path) -> None
     ):
         with pytest.raises(auth.BootstrapIdentityEvidenceFailure):
             operation()
+    duplicate = object.__new__(auth.AuthenticatedBootstrapIdentityEvidence)
+    for name in result.__slots__:
+        object.__setattr__(duplicate, name, getattr(result, name))
+    assert duplicate._is_authenticated(now=NOW) is False
     for field, value in (
         ("identity_binding_sha256", f"sha256:{'0' * 64}"),
         ("expires_at", result.expires_at + timedelta(hours=1)),

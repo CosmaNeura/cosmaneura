@@ -30,10 +30,10 @@ jobs. Azure resource IDs are compared case-insensitively.
 A successful process-local result proves only that the reviewed retrospective
 evidence and exact identity IDs are pinned. It intentionally keeps current
 live-state authentication, single-use job binding, provider/database
-authority, workflow integration, and execution false. The sealed result is
-immutable, non-copyable, non-pickleable, and publicly exposes only a binding
-digest and non-authoritative metadata—not raw evidence or exact identity
-values.
+authority, workflow integration, and execution false. An object-bound MAC with
+a closure-held process key rejects synthesized or copied results. The public
+projection exposes only a binding digest and non-authoritative metadata—not raw
+evidence or exact identity values.
 
 The authenticator rechecks a whole-second UTC clock before and after all file
 reads and refuses at or after `2026-09-08T17:40:01Z`. Its result cannot extend
