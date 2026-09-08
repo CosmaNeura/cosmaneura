@@ -980,7 +980,7 @@ class AuthenticatedBootstrapIdentityEvidence:
     def __reduce_ex__(self, _protocol: SupportsIndex) -> NoReturn:
         _fail("bootstrap_identity_evidence.output_invalid")
 
-    def _is_authenticated(self, *, now: datetime | None = None) -> bool:
+    def _is_authenticated(self) -> bool:
         try:
             policy = load_bootstrap_identity_evidence_policy()
             expected_expiry = _parse_utc(
@@ -997,6 +997,7 @@ class AuthenticatedBootstrapIdentityEvidence:
                 or self.policy_sha256 != f"sha256:{POLICY_SHA256}"
                 or type(self._identity) is not tuple
                 or type(self._evidence_digests) is not tuple
+                or self._evidence_digests != tuple(policy["evidence"]["files"].items())
                 or not _verify_provenance(self)
                 or identity != expected_material["identity"]
                 or self.foundation_source_commit
@@ -1019,7 +1020,7 @@ class AuthenticatedBootstrapIdentityEvidence:
                 return False
             if self.identity_binding_sha256 != _digest(_canonical(expected_material)):
                 return False
-            checked = _trusted_now(_utc_now if now is None else lambda: now)
+            checked = _trusted_now(_utc_now)
             if checked < self.authenticated_at or checked >= self.expires_at:
                 return False
             return True
@@ -1107,6 +1108,7 @@ def _validated_candidate(
 
 def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
     key = os.urandom(32)
+    issued: dict[int, object] = {}
 
     def proof(value: AuthenticatedBootstrapIdentityEvidence) -> str:
         material = _canonical(
@@ -1123,19 +1125,28 @@ def _build_provenance() -> tuple[Callable[..., Any], Callable[..., bool]]:
         return hmac.new(key, material, hashlib.sha256).hexdigest()
 
     def verify(value: AuthenticatedBootstrapIdentityEvidence) -> bool:
-        return hmac.compare_digest(value._proof_sha256, proof(value))
+        return issued.get(id(value)) is value and hmac.compare_digest(
+            value._proof_sha256, proof(value)
+        )
 
-    def authenticate(**kwargs: Any) -> AuthenticatedBootstrapIdentityEvidence:
-        value, authenticated_at = _validated_candidate(**kwargs)
+    def authenticate(
+        *, evidence_directory: Path
+    ) -> AuthenticatedBootstrapIdentityEvidence:
+        policy, _raw = _read_policy()
+        value, _authenticated_at = _validated_candidate(
+            policy=policy, evidence_directory=evidence_directory, clock=_utc_now
+        )
         object.__setattr__(value, "_proof_sha256", proof(value))
-        if not value._is_authenticated(now=authenticated_at):
+        issued[id(value)] = value
+        if not value._is_authenticated():
+            issued.pop(id(value), None)
             _fail("bootstrap_identity_evidence.output_invalid")
         return value
 
     return authenticate, verify
 
 
-_authenticate_with_policy, _verify_provenance = _build_provenance()
+_authenticate_exact_evidence, _verify_provenance = _build_provenance()
 
 
 def authenticate_bootstrap_identity_evidence(
@@ -1143,16 +1154,11 @@ def authenticate_bootstrap_identity_evidence(
 ) -> AuthenticatedBootstrapIdentityEvidence:
     """Authenticate the exact checked-in evidence set before its hard expiry."""
 
-    policy, _raw = _read_policy()
-    return _authenticate_with_policy(
-        policy=policy,
-        evidence_directory=evidence_directory,
-        clock=_utc_now,
-    )
+    return _authenticate_exact_evidence(evidence_directory=evidence_directory)
 
 
 def _public_projection(value: AuthenticatedBootstrapIdentityEvidence) -> dict[str, Any]:
-    if not value._is_authenticated(now=_utc_now()):
+    if not value._is_authenticated():
         _fail("bootstrap_identity_evidence.output_invalid")
     return {
         name: (

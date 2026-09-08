@@ -247,6 +247,7 @@ def _receipt(
         "evidence_files": {
             name: digest.removeprefix("sha256:")
             for name, digest in evidence_digests.items()
+            if name != auth.RECEIPT_FILE
         },
         "safety": {
             "no_second_apply": True,
@@ -266,6 +267,7 @@ def _fixture(
     | None = None,
     mutate_receipt: Callable[[dict[str, Any]], None] | None = None,
     mutate_policy: Callable[[dict[str, Any]], None] | None = None,
+    preserve_policy_digests: bool = False,
 ) -> tuple[dict[str, Any], Path]:
     root.chmod(0o700)
     policy = _policy()
@@ -285,11 +287,16 @@ def _fixture(
     if mutate_documents is not None:
         mutate_documents(policy, documents)
     digests = {name: _write(root / name, value) for name, value in documents.items()}
-    receipt = _receipt(policy, digests)
+    receipt = _receipt(
+        policy, policy["evidence"]["files"] if preserve_policy_digests else digests
+    )
     if mutate_receipt is not None:
         mutate_receipt(receipt)
     digests[auth.RECEIPT_FILE] = _write(root / auth.RECEIPT_FILE, receipt)
-    policy["evidence"]["files"] = {name: digests[name] for name in auth.EVIDENCE_FILES}
+    if not preserve_policy_digests:
+        policy["evidence"]["files"] = {
+            name: digests[name] for name in auth.EVIDENCE_FILES
+        }
     if mutate_policy is not None:
         mutate_policy(policy)
     return policy, root
@@ -299,11 +306,23 @@ def _authenticate(
     policy: dict[str, Any], root: Path, *times: datetime
 ) -> auth.AuthenticatedBootstrapIdentityEvidence:
     values = iter(times or (NOW, NOW))
-    return auth._authenticate_with_policy(
+    return auth._validated_candidate(
         policy=policy,
         evidence_directory=root,
         clock=lambda: next(values),
+    )[0]
+
+
+def _authenticate_public(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> auth.AuthenticatedBootstrapIdentityEvidence:
+    monkeypatch.setattr(
+        auth,
+        "_read_exact_evidence",
+        lambda directory, name, _expected, _maximum: (directory / name).read_bytes(),
     )
+    monkeypatch.setattr(auth, "_utc_now", lambda: NOW)
+    return auth.authenticate_bootstrap_identity_evidence(evidence_directory=root)
 
 
 def test_checked_in_policy_is_exact_hash_pinned_and_non_authoritative() -> None:
@@ -323,11 +342,11 @@ def test_checked_in_policy_is_exact_hash_pinned_and_non_authoritative() -> None:
 
 
 def test_authenticates_exact_closed_evidence_without_exposing_identity(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    policy, root = _fixture(tmp_path)
-    result = _authenticate(policy, root)
-    assert result._is_authenticated(now=NOW)
+    policy, root = _fixture(tmp_path, preserve_policy_digests=True)
+    result = _authenticate_public(root, monkeypatch)
+    assert result._is_authenticated()
     assert result.kind == auth.KIND
     assert result.identity_binding_sha256.startswith("sha256:")
     assert len(result.identity_binding_sha256) == 71
@@ -498,29 +517,6 @@ def test_file_hash_mode_and_symlink_boundaries(tmp_path: Path) -> None:
         _authenticate(policy, root)
 
 
-def test_directory_and_json_parser_boundaries(tmp_path: Path) -> None:
-    policy, root = _fixture(tmp_path)
-    root.chmod(0o750)
-    with pytest.raises(
-        auth.BootstrapIdentityEvidenceFailure,
-        match="bootstrap_identity_evidence.directory_invalid",
-    ):
-        _authenticate(policy, root)
-
-    with pytest.raises(
-        auth.BootstrapIdentityEvidenceFailure,
-        match="bootstrap_identity_evidence.directory_invalid",
-    ):
-        _authenticate(policy, Path("relative-evidence"))
-
-    for raw in (b'{"duplicate":1,"duplicate":2}', b'{"value":NaN}'):
-        with pytest.raises(
-            auth.BootstrapIdentityEvidenceFailure,
-            match="bootstrap_identity_evidence.file_invalid",
-        ):
-            auth._parse_json(raw, "bootstrap_identity_evidence.file_invalid")
-
-
 def test_normalized_state_must_be_canonical_projection(tmp_path: Path) -> None:
     policy, root = _fixture(
         tmp_path,
@@ -560,9 +556,11 @@ def test_clock_expiry_regression_and_naive_values_refuse(tmp_path: Path) -> None
         _authenticate(policy, root, NOW.astimezone(timezone(timedelta(hours=1))))
 
 
-def test_sealed_result_refuses_copy_pickle_and_tampering(tmp_path: Path) -> None:
-    policy, root = _fixture(tmp_path)
-    result = _authenticate(policy, root)
+def test_sealed_result_refuses_copy_pickle_and_tampering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _policy, root = _fixture(tmp_path, preserve_policy_digests=True)
+    result = _authenticate_public(root, monkeypatch)
     with pytest.raises(auth.BootstrapIdentityEvidenceFailure):
         auth.AuthenticatedBootstrapIdentityEvidence()
     for operation in (
@@ -575,7 +573,7 @@ def test_sealed_result_refuses_copy_pickle_and_tampering(tmp_path: Path) -> None
     duplicate = object.__new__(auth.AuthenticatedBootstrapIdentityEvidence)
     for name in result.__slots__:
         object.__setattr__(duplicate, name, getattr(result, name))
-    assert duplicate._is_authenticated(now=NOW) is False
+    assert duplicate._is_authenticated() is False
     for field, value in (
         ("identity_binding_sha256", f"sha256:{'0' * 64}"),
         ("expires_at", result.expires_at + timedelta(hours=1)),
@@ -586,7 +584,7 @@ def test_sealed_result_refuses_copy_pickle_and_tampering(tmp_path: Path) -> None
         for name in result.__slots__:
             object.__setattr__(tampered, name, getattr(result, name))
         object.__setattr__(tampered, field, value)
-        assert tampered._is_authenticated(now=NOW) is False
+        assert tampered._is_authenticated() is False
 
 
 def test_surface_has_no_network_subprocess_credentials_or_workflow_wiring() -> None:

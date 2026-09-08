@@ -31,7 +31,7 @@ A successful process-local result proves only that the reviewed retrospective
 evidence and exact identity IDs are pinned. It intentionally keeps current
 live-state authentication, single-use job binding, provider/database
 authority, workflow integration, and execution false. An object-bound MAC with
-a closure-held process key rejects synthesized or copied results. The public
+a closure-held process key and strong issuance registry rejects forged results. The public
 projection exposes only a binding digest and non-authoritative metadata—not raw
 evidence or exact identity values.
 
