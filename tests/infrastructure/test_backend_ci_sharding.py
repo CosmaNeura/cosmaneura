@@ -152,6 +152,10 @@ SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR = (
     "tests/infrastructure/"
     "test_staging_restore_sanitizer_privileged_global_observer_contract.py"
 )
+SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR = (
+    "tests/infrastructure/"
+    "test_staging_restore_sanitizer_privileged_global_query_grammar.py"
+)
 SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_contract_is_hash_pinned_closed_world_partitioned_and_dormant",
     f"{SANITIZER_TARGET_ROLE_OBSERVATION_PLAN_SELECTOR}::test_plan_api_accepts_only_two_keyword_only_exact_sealed_inputs",
@@ -170,6 +174,7 @@ SANITIZER_OBSERVER_PRIMARY_SELECTORS = (
     SANITIZER_TARGET_ROLE_QUERY_GRAMMAR_SELECTOR,
     SANITIZER_TARGET_ROLE_OBSERVATION_FRAMES_SELECTOR,
     SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR,
+    SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR,
 )
 SANITIZER_OBSERVER_RUNTIME_SELECTORS = (
     SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
@@ -198,6 +203,7 @@ SANITIZER_RUNTIME_SELECTORS = (
     SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
     SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
     SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR,
+    SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR,
     SANITIZER_TRANSACTION_PLAN_SELECTOR,
     SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR,
     SANITIZER_SOURCE_SNAPSHOT_SELECTOR,
@@ -236,6 +242,7 @@ def _infrastructure_shard(path: Path) -> str:
                 SANITIZER_TARGET_ROLE_QUERY_GRAMMAR_SELECTOR,
                 SANITIZER_TARGET_ROLE_OBSERVATION_FRAMES_SELECTOR,
                 SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR,
+                SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR,
             ),
         ):
             return "infrastructure-sanitizer-observer"
@@ -779,7 +786,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_146_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_171_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -792,17 +799,18 @@ def test_sanitizer_observer_shards_partition_all_146_collected_cases_once() -> N
         SANITIZER_TARGET_ROLE_DATABASE_OBSERVER_SELECTOR,
         SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR,
         SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR,
+        SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR,
     )
 
     assert primary
     assert runtime
     assert output
     assert integrity
-    assert len(primary) == 88
+    assert len(primary) == 113
     assert len(runtime) == 18
     assert len(output) == 1
     assert len(integrity) == 39
-    assert len(family) == 146
+    assert len(family) == 171
     assert len(primary) == len(set(primary))
     assert len(runtime) == len(set(runtime))
     assert len(output) == len(set(output))
@@ -841,6 +849,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     privileged_global_observer_contract = _collect_nodeids(
         SANITIZER_PRIVILEGED_GLOBAL_OBSERVER_CONTRACT_SELECTOR
     )
+    privileged_global_query_grammar = _collect_nodeids(
+        SANITIZER_PRIVILEGED_GLOBAL_QUERY_GRAMMAR_SELECTOR
+    )
     executor = _collect_nodeids(SANITIZER_EXECUTOR_SELECTOR)
     transaction_plan = _collect_nodeids(SANITIZER_TRANSACTION_PLAN_SELECTOR)
     data_contract_executor = _collect_nodeids(SANITIZER_DATA_CONTRACT_EXECUTOR_SELECTOR)
@@ -861,12 +872,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(target_role_database_observer) == 18
     assert len(target_role_offline_authenticator) == 39
     assert len(privileged_global_observer_contract) == 24
+    assert len(privileged_global_query_grammar) == 25
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 432
+    assert len(family) == 457
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
@@ -881,6 +893,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     )
     assert len(privileged_global_observer_contract) == len(
         set(privileged_global_observer_contract)
+    )
+    assert len(privileged_global_query_grammar) == len(
+        set(privileged_global_query_grammar)
     )
     assert len(executor) == len(set(executor))
     assert len(transaction_plan) == len(set(transaction_plan))
@@ -978,6 +993,9 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
         | set(source_snapshot)
         | set(post_projection)
     )
+    assert set(privileged_global_query_grammar).isdisjoint(
+        set(family) - set(privileged_global_query_grammar)
+    )
     assert set(evidence).isdisjoint(executor)
     assert set(evidence).isdisjoint(data_contract_executor)
     assert set(executor).isdisjoint(data_contract_executor)
@@ -1007,9 +1025,11 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
         target_role_query_grammar
     ) | set(target_role_observation_frames) | set(target_role_database_observer) | set(
         target_role_offline_authenticator
-    ) | set(privileged_global_observer_contract) | set(data_contract_executor) | set(
-        source_snapshot
-    ) | set(post_projection) == set(family)
+    ) | set(privileged_global_observer_contract) | set(
+        privileged_global_query_grammar
+    ) | set(data_contract_executor) | set(source_snapshot) | set(
+        post_projection
+    ) == set(family)
 
 
 @pytest.mark.parametrize("path", WORKFLOWS, ids=lambda path: path.name)
