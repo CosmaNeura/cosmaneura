@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
 
@@ -58,61 +57,6 @@ def test_checkout_reader_rejects_writable_or_linked_source(tmp_path: Path) -> No
         runtime.read_checkout_file(link, label="source")
 
 
-def test_environment_removes_credential_network_and_tool_overrides(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    tmp_path.chmod(0o700)
-    for name in (
-        "ARM_CLIENT_SECRET",
-        "AZURE_CONFIG_DIR",
-        "TF_CLI_ARGS",
-        "TOFU_CLI_CONFIG_FILE",
-        "GIT_CONFIG_COUNT",
-        "HTTPS_PROXY",
-        "http_proxy",
-        "SSL_CERT_FILE",
-        "REQUESTS_CA_BUNDLE",
-    ):
-        monkeypatch.setenv(name, "untrusted")
-    environment = runtime.isolated_environment(
-        runtime_root=tmp_path, data_dir=tmp_path / "tofu-data"
-    )
-    assert not any(
-        name.upper() in {key.upper() for key in environment}
-        for name in (
-            "ARM_CLIENT_SECRET",
-            "AZURE_CONFIG_DIR",
-            "TF_CLI_ARGS",
-            "TOFU_CLI_CONFIG_FILE",
-            "GIT_CONFIG_COUNT",
-            "HTTPS_PROXY",
-            "http_proxy",
-            "SSL_CERT_FILE",
-            "REQUESTS_CA_BUNDLE",
-        )
-    )
-    assert environment["TF_DATA_DIR"] == str(tmp_path / "tofu-data")
-    assert environment["TF_CLI_CONFIG_FILE"] == os.devnull
-    assert set(environment) == {
-        "PATH",
-        "LANG",
-        "LC_ALL",
-        "CHECKPOINT_DISABLE",
-        "GIT_CONFIG_GLOBAL",
-        "GIT_CONFIG_NOSYSTEM",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_TERMINAL_PROMPT",
-        "TF_CLI_CONFIG_FILE",
-        "TF_DATA_DIR",
-        "TF_IN_AUTOMATION",
-        "HOME",
-        "XDG_CACHE_HOME",
-        "XDG_CONFIG_HOME",
-        "XDG_DATA_HOME",
-        "TMPDIR",
-    }
-
-
 def test_copy_pinned_executable_creates_private_exact_runtime(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.write_bytes(b"#!/bin/sh\nprintf trusted")
@@ -163,6 +107,29 @@ def test_materialized_source_is_private_and_exact(tmp_path: Path) -> None:
     assert not (tmp_path / "bad").exists()
 
 
+def test_materialized_source_cleans_published_tree_when_parent_sync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tmp_path.chmod(0o700)
+    source = tmp_path / "source"
+    original_fsync = runtime.os.fsync
+    calls = 0
+
+    def fail_parent_sync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise OSError("simulated parent sync failure")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(runtime.os, "fsync", fail_parent_sync)
+    with pytest.raises(runtime.OfflineRuntimeError, match="could not be materialized"):
+        runtime.materialize_source(source, {"main.tf": b"reviewed"})
+
+    assert not source.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_runtime_tree_is_private_and_has_one_executable(tmp_path: Path) -> None:
     tmp_path.chmod(0o700)
     package = tmp_path / "package"
@@ -176,55 +143,3 @@ def test_runtime_tree_is_private_and_has_one_executable(tmp_path: Path) -> None:
     assert stat.S_IMODE(package.stat().st_mode) == 0o700
     assert stat.S_IMODE(executable.stat().st_mode) == 0o500
     assert stat.S_IMODE((package / "README").stat().st_mode) == 0o400
-
-
-def test_offline_process_is_bounded_and_uses_isolated_runtime(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    tmp_path.chmod(0o700)
-    shell_source = tmp_path / "source-tool"
-    shell_source.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = big ]; then i=0; while [ $i -lt 100 ]; do '
-        'printf xxxxxxxxxx; i=$((i+1)); done; else printf %s "$TF_DATA_DIR"; fi\n'
-    )
-    shell_source.chmod(0o500)
-    private = tmp_path / "runtime"
-    private.mkdir(mode=0o700)
-    executable = runtime.copy_pinned_executable(
-        shell_source,
-        private / "tool",
-        expected=runtime.executable_sha256(shell_source, label="shell"),
-        label="shell",
-    )
-    digest = runtime.executable_sha256(executable, label="shell")
-    monkeypatch.setattr(runtime, "_offline_command", lambda arguments: list(arguments))
-    result = runtime.run_offline_process(
-        [str(executable), "environment"],
-        runtime_root=private,
-        expected_executable_sha256=digest,
-        cwd=private,
-        timeout_seconds=5,
-        data_dir=private / "tofu-data",
-    )
-    assert result.returncode == 0
-    assert result.stdout.strip() == str(private / "tofu-data").encode()
-
-    with pytest.raises(runtime.OfflineRuntimeError, match="exceeded limit"):
-        runtime.run_offline_process(
-            [str(executable), "big"],
-            runtime_root=private,
-            expected_executable_sha256=digest,
-            cwd=private,
-            timeout_seconds=5,
-            data_dir=private / "tofu-data",
-            max_output_bytes=10,
-        )
-
-
-def test_offline_process_requires_enforced_platform_sandbox(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(runtime.platform, "system", lambda: "Linux")
-    with pytest.raises(runtime.OfflineRuntimeError, match="requires Darwin"):
-        runtime._offline_command(["/private/tool"])

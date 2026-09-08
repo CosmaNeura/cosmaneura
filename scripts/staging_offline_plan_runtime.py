@@ -1,27 +1,18 @@
-"""Fail-closed local I/O and process helpers for offline plan verification."""
+"""Fail-closed local I/O helpers for offline plan verification."""
 
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
-import platform
-import selectors
 import shutil
-import signal
 import stat
-import subprocess
 import tempfile
-import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 MAX_FILE_BYTES = 128 * 1024 * 1024
-MAX_PROCESS_OUTPUT_BYTES = 8 * 1024 * 1024
-SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
-NETWORK_DENY_PROFILE = "(version 1)(allow default)(deny network*)"
 
 
 class OfflineRuntimeError(ValueError):
@@ -226,157 +217,6 @@ def read_checkout_file(
         os.close(parent)
 
 
-def isolated_environment(*, runtime_root: Path, data_dir: Path) -> dict[str, str]:
-    require_private_directory(runtime_root, label="private runtime root")
-    directories = {
-        "HOME": runtime_root / "home",
-        "XDG_CACHE_HOME": runtime_root / "cache",
-        "XDG_CONFIG_HOME": runtime_root / "config",
-        "XDG_DATA_HOME": runtime_root / "data-home",
-        "TMPDIR": runtime_root / "tmp",
-    }
-    for path in directories.values():
-        path.mkdir(mode=0o700, exist_ok=True)
-        require_private_directory(path, label="private runtime environment directory")
-    return {
-        "PATH": "/usr/bin:/bin",
-        "LANG": "C",
-        "LC_ALL": "C",
-        "CHECKPOINT_DISABLE": "1",
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_NO_REPLACE_OBJECTS": "1",
-        "GIT_TERMINAL_PROMPT": "0",
-        "TF_CLI_CONFIG_FILE": os.devnull,
-        "TF_DATA_DIR": str(data_dir),
-        "TF_IN_AUTOMATION": "1",
-        **{name: str(path) for name, path in directories.items()},
-    }
-
-
-def _offline_command(arguments: Sequence[str]) -> list[str]:
-    if platform.system() != "Darwin":
-        raise OfflineRuntimeError("offline process isolation requires Darwin")
-    try:
-        metadata = SANDBOX_EXEC.stat()
-    except OSError as exc:
-        raise OfflineRuntimeError(
-            "the network sandbox executable is unavailable"
-        ) from exc
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != 0
-        or stat.S_IMODE(metadata.st_mode) & 0o022
-    ):
-        raise OfflineRuntimeError("the network sandbox executable is not trusted")
-    return [str(SANDBOX_EXEC), "-p", NETWORK_DENY_PROFILE, *arguments]
-
-
-def _validate_pass_fds(pass_fds: Sequence[int], *, maximum_bytes: int) -> None:
-    for descriptor in pass_fds:
-        try:
-            metadata = os.fstat(descriptor)
-            access_mode = fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE
-        except OSError as exc:
-            raise OfflineRuntimeError(
-                "offline subprocess descriptor is invalid"
-            ) from exc
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_nlink not in {0, 1}
-            or not 0 < metadata.st_size <= maximum_bytes
-            or access_mode != os.O_RDONLY
-        ):
-            raise OfflineRuntimeError(
-                "offline subprocess descriptor is not read-only data"
-            )
-
-
-def run_offline_process(
-    arguments: Sequence[str],
-    *,
-    runtime_root: Path,
-    expected_executable_sha256: str,
-    cwd: Path,
-    timeout_seconds: float,
-    pass_fds: Sequence[int] = (),
-    max_output_bytes: int = MAX_PROCESS_OUTPUT_BYTES,
-    data_dir: Path,
-) -> subprocess.CompletedProcess[bytes]:
-    if not arguments:
-        raise OfflineRuntimeError("offline command is missing")
-    executable = Path(arguments[0])
-    verify_private_executable(
-        executable, expected=expected_executable_sha256, label="offline tool"
-    )
-    _validate_pass_fds(pass_fds, maximum_bytes=MAX_FILE_BYTES)
-    sandboxed_arguments = _offline_command(arguments)
-    try:
-        process = subprocess.Popen(
-            sandboxed_arguments,
-            cwd=cwd,
-            env=isolated_environment(runtime_root=runtime_root, data_dir=data_dir),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            pass_fds=tuple(pass_fds),
-            umask=0o077,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        raise OfflineRuntimeError("required local command did not start") from exc
-    assert process.stdout is not None and process.stderr is not None
-    streams: dict[int, list[bytes]] = {
-        process.stdout.fileno(): [],
-        process.stderr.fileno(): [],
-    }
-    selector = selectors.DefaultSelector()
-    for stream in (process.stdout, process.stderr):
-        selector.register(stream, selectors.EVENT_READ, stream.fileno())
-    deadline = time.monotonic() + timeout_seconds
-    total = 0
-    try:
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise OfflineRuntimeError("required local command timed out")
-            for key, _ in selector.select(min(remaining, 0.5)):
-                chunk = os.read(key.fd, 64 * 1024)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    continue
-                total += len(chunk)
-                if total > max_output_bytes:
-                    raise OfflineRuntimeError(
-                        "required local command output exceeded limit"
-                    )
-                streams[key.data].append(chunk)
-        returncode = process.wait(timeout=max(0.1, deadline - time.monotonic()))
-    except (OSError, subprocess.TimeoutExpired, OfflineRuntimeError) as exc:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.stdout.close()
-        process.stderr.close()
-        process.wait()
-        if isinstance(exc, OfflineRuntimeError):
-            raise
-        raise OfflineRuntimeError("required local command did not complete") from exc
-    finally:
-        selector.close()
-    stdout = b"".join(streams[process.stdout.fileno()])
-    stderr = b"".join(streams[process.stderr.fileno()])
-    process.stdout.close()
-    process.stderr.close()
-    verify_private_executable(
-        executable, expected=expected_executable_sha256, label="offline tool"
-    )
-    return subprocess.CompletedProcess(list(arguments), returncode, stdout, stderr)
-
-
 def _resolve_executable_source(path: Path, *, label: str) -> Path:
     try:
         resolved = path.resolve(strict=True)
@@ -512,6 +352,7 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
     parent = open_private_directory(directory.parent, label="decoder source parent")
     temporary: Path | None = None
     target: int | None = None
+    published = False
     try:
         temporary = Path(
             tempfile.mkdtemp(prefix=f".{directory.name}-", dir=directory.parent)
@@ -537,9 +378,12 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
         os.close(target)
         target = None
         os.rename(temporary.name, directory.name, src_dir_fd=parent, dst_dir_fd=parent)
-        os.fsync(parent)
+        published = True
         temporary = None
+        os.fsync(parent)
     except (OSError, OfflineRuntimeError) as exc:
+        if published:
+            shutil.rmtree(directory, ignore_errors=True)
         if isinstance(exc, OfflineRuntimeError):
             raise
         raise OfflineRuntimeError("decoder source could not be materialized") from exc
@@ -547,7 +391,7 @@ def materialize_source(directory: Path, files: Mapping[str, bytes]) -> None:
         if target is not None:
             os.close(target)
         if temporary is not None:
-            shutil.rmtree(temporary)
+            shutil.rmtree(temporary, ignore_errors=True)
         os.close(parent)
 
 
