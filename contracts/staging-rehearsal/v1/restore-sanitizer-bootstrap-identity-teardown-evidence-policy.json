@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "policy_id": "cosmaneura-staging-sanitizer-bootstrap-identity-teardown-evidence-v1",
+  "closed_world": true,
+  "source": {
+    "repository": "CosmaNeura/cosmaneura",
+    "protected_ref": "refs/heads/master",
+    "source_commit": "8c5e32e1197e83892c0487be2e259d621d276324",
+    "applied_plan_sha256": "sha256:92b33a41dbd999c1d9228d92dbbfb284eba6f6dc608315046a53e6ed2d489206",
+    "decoded_plan_sha256": "sha256:c3805f1ac5418b39f51c612d6acb0e063b64d14a03a04d9173e40e448105f66c",
+    "plan_review_request_sha256": "sha256:e7e0bc4e3f2cf61204b3e08532e88cfd2c96dcb8069dede1ab1d1cc001a99df4",
+    "plan_review_response_id": "resp_01581d8f8ac6e1ba006aa0484906c48193a3c807c883c520dd",
+    "plan_review_response_sha256": "sha256:8ae1dc87f04be9653a269d4aa7b7756c643b6ca37bc2c7627376eb8b45de0f7c",
+    "plan_review_verdict": "APPROVED FOR FOUNDER APPLY"
+  },
+  "target": {
+    "subscription_id": "bab2a709-1fcb-4c87-a9fc-802f7477ec13",
+    "tenant_id": "d51754d0-bba5-4810-820e-afac542844d6",
+    "resource_group": "cosmaneura-staging-rehearsal-control",
+    "identity_name": "cosmaneura-staging-restore-bootstrap-job",
+    "identity_resource_id": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging-rehearsal-control/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-staging-restore-bootstrap-job",
+    "client_id": "1d494ade-7391-479b-b860-c0b13ef98c34",
+    "principal_id": "10e9110b-9a64-4961-9210-06ab05b4e5ab",
+    "rehearsal_id": "21506aaeec3c"
+  },
+  "evidence": {
+    "acceptance_mode": "exact-hash-pinned-independent-post-apply-review",
+    "caller_selects_directory_not_content": true,
+    "regular_owner_only_files_required": true,
+    "symlinks_or_hardlinks_permitted": false,
+    "exact_directory_entries_required": true,
+    "maximum_file_bytes": 1048576,
+    "files": {
+      "post-apply-verification-v3.json": "sha256:3987fdeff5304ecd456bf0a6a024cb9e15748378e9e8b0a50d845b0838c4c4bb",
+      "post-apply-isolated.tfstate": "sha256:7b37223c4f46bcc32e2b3a8d59df9889b3dc194a94309abfd94ee5286826dae8",
+      "post-apply-review-request-v4.json": "sha256:ce5091fccdc7098fb5011bb993a1775e4243f9ac19561bc8285512dd06c30f11",
+      "post-apply-review-response-v4.json": "sha256:7d01ca2fcb117cf4ad26137bdb6f5262c90fc918e37d4c6604c23870a3a53603"
+    }
+  },
+  "cleanup": {
+    "cleanup_not_after": "2026-09-08T17:40:01Z",
+    "evidence_started_at": "2026-09-08T17:42:35Z",
+    "evidence_completed_at": "2026-09-08T17:42:44Z",
+    "started_overrun_seconds": 154,
+    "completed_overrun_seconds": 163,
+    "cleanup_target_met": false,
+    "cleanup_target_overrun_disclosed": true,
+    "overrun_is_not_current_authority_proof": true
+  },
+  "state": {
+    "backend_key": "staging-sanitizer-bootstrap-identity.tfstate",
+    "opentofu_version": "1.12.5",
+    "lineage": "a0c8b939-2fb2-0604-3e70-d925aeee5950",
+    "pre_apply_serial": 2,
+    "post_apply_serial": 3,
+    "exact_resource_addresses": [
+      "managed.terraform_data.activation_guard"
+    ],
+    "exact_output_keys": [
+      "sanitizer_bootstrap_identity_teardown",
+      "state_boundary"
+    ],
+    "exact_passing_check_addresses": [
+      "terraform_data.activation_guard",
+      "var.sanitizer_bootstrap_rehearsal_id",
+      "var.sanitizer_bootstrap_lifetime_hours",
+      "var.sanitizer_bootstrap_teardown_rehearsal_id",
+      "var.sanitizer_bootstrap_teardown_evidence_sha256"
+    ],
+    "teardown_evidence_sha256": "sha256:2dbd5f913d2c1ed565939fd6203461cbe93593d48fef9916031f3e1ead0c78c9"
+  },
+  "authority": {
+    "identity_count": 0,
+    "direct_or_inherited_role_assignment_count": 0,
+    "subscription_container_apps_job_count": 6,
+    "bootstrap_identity_job_attachment_count": 0,
+    "subscription_postgres_server_count": 5,
+    "entra_enabled_postgres_server_count": 1,
+    "entra_enabled_postgres_server_id": "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-scheduling-development/providers/Microsoft.DBforPostgreSQL/flexibleServers/cosmaneura-scheduling-dev-pg",
+    "bootstrap_identity_postgres_administrator_count": 0
+  },
+  "independent_review": {
+    "model": "codex-auto-review",
+    "request_file": "post-apply-review-request-v4.json",
+    "request_sha256": "sha256:ce5091fccdc7098fb5011bb993a1775e4243f9ac19561bc8285512dd06c30f11",
+    "request_input_sha256": "sha256:ee3902adbfcf68df52e14d0c2e2581287899f37f5ed0aa5bfcdab5be10416041",
+    "binding_id": "sha256:9327ce96f4c2e8631bd9c570d04faf64fa8481efa498cab37b40a52f4e123095",
+    "maximum_output_tokens": 20000,
+    "content_filter_end_offset": 53234,
+    "response_file": "post-apply-review-response-v4.json",
+    "response_id": "resp_03523e3973d13b5f006aa0708f1c508193bb230fa1f162fb91",
+    "response_sha256": "sha256:7d01ca2fcb117cf4ad26137bdb6f5262c90fc918e37d4c6604c23870a3a53603",
+    "verdict": "POST-APPLY VERIFIED"
+  },
+  "claims": {
+    "retrospective_teardown_evidence_authenticated": true,
+    "bootstrap_identity_absence_authenticated": true,
+    "bootstrap_direct_and_inherited_rbac_absence_authenticated": true,
+    "bootstrap_job_attachment_absence_authenticated": true,
+    "bootstrap_database_authority_absence_authenticated": true,
+    "bootstrap_state_tombstone_authenticated": true,
+    "cleanup_target_met": false,
+    "cleanup_target_overrun_disclosed": true,
+    "current_live_state_authenticated": false,
+    "bootstrap_identity_creation_authority": false,
+    "bootstrap_identity_attachment_authority": false,
+    "provider_mutation_authority": false,
+    "database_mutation_authority": false,
+    "workflow_integrated": false,
+    "executable": false
+  },
+  "output": {
+    "kind": "sealed-authenticated-staging-sanitizer-bootstrap-identity-teardown-evidence-v1",
+    "public_fields": [
+      "kind",
+      "teardown_binding_sha256",
+      "policy_sha256",
+      "source_commit",
+      "applied_plan_sha256",
+      "review_response_id",
+      "rehearsal_id",
+      "authenticated_at",
+      "evidence_completed_at",
+      "cleanup_overrun_seconds",
+      "retrospective_teardown_evidence_authenticated",
+      "bootstrap_identity_absence_authenticated",
+      "bootstrap_direct_and_inherited_rbac_absence_authenticated",
+      "bootstrap_job_attachment_absence_authenticated",
+      "bootstrap_database_authority_absence_authenticated",
+      "bootstrap_state_tombstone_authenticated",
+      "cleanup_target_met",
+      "cleanup_target_overrun_disclosed",
+      "current_live_state_authenticated",
+      "bootstrap_identity_creation_authority",
+      "bootstrap_identity_attachment_authority",
+      "provider_mutation_authority",
+      "database_mutation_authority",
+      "workflow_integrated",
+      "executable"
+    ],
+    "private_fields": [
+      "_target",
+      "_evidence_digests",
+      "_proof_sha256",
+      "_seal"
+    ],
+    "raw_identity_or_provider_values_public": false,
+    "copy_pickle_json_serialization_or_mutation_permitted": false
+  },
+  "status": {
+    "authenticator_implemented": true,
+    "retrospective_teardown_authenticated": true,
+    "current_live_state_authenticated": false,
+    "bootstrap_identity_recreation_authorized": false,
+    "bootstrap_job_attachment_implemented": false,
+    "bootstrap_control_plane_adapter_implemented": false,
+    "bootstrap_database_provisioner_implemented": false,
+    "provider_calls_permitted": false,
+    "database_calls_permitted": false,
+    "workflow_integrated": false,
+    "executable": false,
+    "activation_ready": false,
+    "public_activation_failure": "activation.sanitizer_bootstrap_job_attachment_unavailable"
+  }
+}
