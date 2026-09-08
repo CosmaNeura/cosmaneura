@@ -355,6 +355,15 @@ def test_mutated_output_cannot_authenticate(
     result = _make(retained_connection_plan)
     object.__setattr__(result, "bootstrap_identity_bound", True)
     assert result._is_authenticated() is False
+    object.__setattr__(result, "bootstrap_identity_bound", False)
+    assert result._is_authenticated() is True
+
+    class EqualitySpoof:
+        def __eq__(self, other: object) -> bool:
+            return other is False
+
+    object.__setattr__(result, "bootstrap_identity_bound", EqualitySpoof())
+    assert result._is_authenticated() is False
 
 
 @pytest.mark.parametrize(
