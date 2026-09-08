@@ -46,3 +46,7 @@ tofu -chdir=infra-staging-sanitizer-bootstrap-identity test -test-directory=test
 No workflow in this slice plans against live state or applies this root. A live
 plan must use the checked-in backend, be saved, and receive independent
 exact-SHA and exact-plan review before a founder-operated apply.
+
+The follow-on verifier is offline and non-authoritative. From a clean checkout at the exact reviewed `origin/master`, place the saved plan in an owner-controlled `0700` directory with mode `0400`, then run `python scripts/validate_staging_sanitizer_bootstrap_identity_plan.py --saved-plan <absolute-plan> --provider-package-dir <absolute-registry.opentofu.org/hashicorp/azurerm/4.73.0/darwin_arm64> --expected-saved-plan-sha256 <sha256> --expected-source-commit <full-sha> --expected-state-lineage <uuid> --expected-state-serial <positive-integer>`.
+
+It never runs `tofu init`; it requires the complete lockfile-H1-constrained package and reviewed Darwin arm64 executable digests, then invokes only `tofu version -json` and `tofu show -json` in default-deny sandboxes. It emits `apply_authorized=false`; founder-controlled backend capture, live readback, review, and apply remain separate.
