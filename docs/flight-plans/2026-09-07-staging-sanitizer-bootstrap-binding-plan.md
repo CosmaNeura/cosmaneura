@@ -10,6 +10,6 @@ The planner consumes only the exact sealed privileged-global connection plan. It
 
 The only positive claims are connection-plan authentication, exact database-role selection, provision-job identity binding, and bootstrap-mechanism selection. Bootstrap identity binding, provider calls, database calls, mutation authority, workflow integration, activation readiness, and execution all remain false. Public construction remains terminal at `activation.sanitizer_bootstrap_identity_unavailable`.
 
-Bootstrap-binding contract SHA-256: `sha256:88b3ea9e5ca800ddfc50f10a8d83b4372c9239953877d1b52d2865d561dbdcff`.
+Bootstrap-binding contract SHA-256: `sha256:bec46b28d75e2b19c2ab4fbdf5412d846252b14d0bb62d0b15ab729342810926`.
 
 Recovery is a code-only revert. No external state is created.

@@ -5,7 +5,7 @@
   "upstream_policies": {
     "privileged_global_connection_plan": {
       "policy_id": "cosmaneura-staging-sanitizer-privileged-global-connection-plan-v1",
-      "sha256": "sha256:86d3e4ddb0bafffa41438b8f360b84e3ac4a7864604e7372f26e3d6078a15aac"
+      "sha256": "sha256:d7bd6ef34b63a4dd281101ea23b8855b101bb4154e172199c3bf90f0e592dde4"
     },
     "target_role_observation_plan": {
       "policy_id": "cosmaneura-staging-sanitizer-target-role-database-observation-plan-v1",
