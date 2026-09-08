@@ -793,7 +793,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_182_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_183_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -814,11 +814,11 @@ def test_sanitizer_observer_shards_partition_all_182_collected_cases_once() -> N
     assert runtime
     assert output
     assert integrity
-    assert len(primary) == 124
+    assert len(primary) == 125
     assert len(runtime) == 18
     assert len(output) == 1
     assert len(integrity) == 39
-    assert len(family) == 182
+    assert len(family) == 183
     assert len(primary) == len(set(primary))
     assert len(runtime) == len(set(runtime))
     assert len(output) == len(set(output))
@@ -884,13 +884,13 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(target_role_offline_authenticator) == 39
     assert len(privileged_global_observer_contract) == 24
     assert len(privileged_global_query_grammar) == 25
-    assert len(privileged_global_observation_frames) == 11
+    assert len(privileged_global_observation_frames) == 12
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 468
+    assert len(family) == 469
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
