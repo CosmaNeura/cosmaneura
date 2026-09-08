@@ -891,6 +891,36 @@ class AuthenticatedBootstrapIdentityTeardownEvidence:
 
     __slots__ = (*PUBLIC_FIELDS, *PRIVATE_FIELDS)
 
+    kind: str
+    teardown_binding_sha256: str
+    policy_sha256: str
+    source_commit: str
+    applied_plan_sha256: str
+    review_response_id: str
+    rehearsal_id: str
+    authenticated_at: datetime
+    evidence_completed_at: datetime
+    cleanup_overrun_seconds: int
+    retrospective_teardown_evidence_authenticated: bool
+    bootstrap_identity_absence_authenticated: bool
+    bootstrap_direct_and_inherited_rbac_absence_authenticated: bool
+    bootstrap_job_attachment_absence_authenticated: bool
+    bootstrap_database_authority_absence_authenticated: bool
+    bootstrap_state_tombstone_authenticated: bool
+    cleanup_target_met: bool
+    cleanup_target_overrun_disclosed: bool
+    current_live_state_authenticated: bool
+    bootstrap_identity_creation_authority: bool
+    bootstrap_identity_attachment_authority: bool
+    provider_mutation_authority: bool
+    database_mutation_authority: bool
+    workflow_integrated: bool
+    executable: bool
+    _target: tuple[tuple[str, str], ...]
+    _evidence_digests: tuple[tuple[str, str], ...]
+    _proof_sha256: str
+    _seal: object
+
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         _fail("bootstrap_identity_teardown_evidence.output_invalid")
 
