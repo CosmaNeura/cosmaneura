@@ -1,14 +1,14 @@
 locals {
-  approved_subscription_id    = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
-  approved_tenant_id          = "d51754d0-bba5-4810-820e-afac542844d6"
-  subscription_scope          = "/subscriptions/${local.approved_subscription_id}"
-  control_resource_group_name = "cosmaneura-staging-rehearsal-control"
-  control_location            = "eastus"
-  bootstrap_identity_name     = "cosmaneura-staging-restore-bootstrap-job"
-  bootstrap_cleanup_not_after = var.sanitizer_bootstrap_lifetime_hours == null ? null : timeadd(
-    plantimestamp(),
-    format("%dh", var.sanitizer_bootstrap_lifetime_hours),
-  )
+  approved_subscription_id          = "bab2a709-1fcb-4c87-a9fc-802f7477ec13"
+  approved_tenant_id                = "d51754d0-bba5-4810-820e-afac542844d6"
+  subscription_scope                = "/subscriptions/${local.approved_subscription_id}"
+  control_resource_group_name       = "cosmaneura-staging-rehearsal-control"
+  control_location                  = "eastus"
+  bootstrap_identity_name           = "cosmaneura-staging-restore-bootstrap-job"
+  bootstrap_identity_resource_id    = "${local.subscription_scope}/resourceGroups/${local.control_resource_group_name}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${local.bootstrap_identity_name}"
+  bootstrap_rehearsal_id            = "21506aaeec3c"
+  bootstrap_cleanup_not_after       = "2026-09-08T17:40:01Z"
+  approved_teardown_evidence_sha256 = "sha256:2dbd5f913d2c1ed565939fd6203461cbe93593d48fef9916031f3e1ead0c78c9"
   base_tags = {
     environment         = "staging"
     managed-by          = "opentofu"
@@ -16,67 +16,79 @@ locals {
     data-classification = "non-phi-control-metadata"
   }
 
-  any_bootstrap_input = (
-    var.enable_sanitizer_bootstrap_identity ||
-    var.sanitizer_bootstrap_identity_plan_approved ||
-    var.sanitizer_bootstrap_rehearsal_id != null ||
-    var.sanitizer_bootstrap_lifetime_hours != null
-  )
 }
 
-# Reading the exact existing group prevents this isolated root from creating or
-# owning the shared rehearsal-control group.
+# This root is now teardown-only. Keeping both the data source and managed
+# identity at count zero makes recreation impossible from this source.
 data "azurerm_resource_group" "control" {
-  count = var.enable_sanitizer_bootstrap_identity ? 1 : 0
+  count = 0
   name  = local.control_resource_group_name
 }
 
 resource "terraform_data" "activation_guard" {
-  count = local.any_bootstrap_input ? 1 : 0
+  # Keep an explicit state tombstone. A default plan fails closed instead of
+  # silently planning the identity deletion.
+  count = 1
 
   input = {
-    enabled             = var.enable_sanitizer_bootstrap_identity
-    exact_plan_approved = var.sanitizer_bootstrap_identity_plan_approved
-    rehearsal_id        = var.sanitizer_bootstrap_rehearsal_id
-    lifetime_hours      = var.sanitizer_bootstrap_lifetime_hours
-    cleanup_not_after   = local.bootstrap_cleanup_not_after
+    mode                     = "teardown-only"
+    teardown_authorized      = var.authorize_sanitizer_bootstrap_identity_teardown
+    rehearsal_id             = var.sanitizer_bootstrap_teardown_rehearsal_id
+    teardown_evidence_sha256 = var.sanitizer_bootstrap_teardown_evidence_sha256
+    identity_resource_id     = local.bootstrap_identity_resource_id
+    cleanup_not_after        = local.bootstrap_cleanup_not_after
   }
 
-  # The immutable plan-derived deadline changes on every new enabled plan.
-  # Replacing this guard therefore makes the UAMI replacement-only after its
-  # first creation; the UAMI's prevent_destroy then rejects deadline refreshes.
   triggers_replace = {
-    rehearsal_id      = var.sanitizer_bootstrap_rehearsal_id
-    lifetime_hours    = var.sanitizer_bootstrap_lifetime_hours
+    # Preserve the exact creation-time values already stored at serial 2 so
+    # the guard updates in place instead of being replaced during teardown.
+    rehearsal_id      = local.bootstrap_rehearsal_id
+    lifetime_hours    = 6
     cleanup_not_after = local.bootstrap_cleanup_not_after
   }
 
   lifecycle {
-    precondition {
-      condition = (
-        var.enable_sanitizer_bootstrap_identity ==
-        var.sanitizer_bootstrap_identity_plan_approved
-      )
-      error_message = "The bootstrap identity and exact saved-plan approval must be enabled or disabled together"
-    }
+    # A blanket `tofu destroy` must remain impossible. The reviewed normal plan
+    # removes only the count-zero UAMI and preserves this state tombstone.
+    prevent_destroy = true
 
     precondition {
-      condition = var.enable_sanitizer_bootstrap_identity ? (
-        var.sanitizer_bootstrap_rehearsal_id != null &&
-        var.sanitizer_bootstrap_lifetime_hours != null
-        ) : (
+      condition = (
+        var.enable_sanitizer_bootstrap_identity == false &&
+        var.sanitizer_bootstrap_identity_plan_approved == false &&
         var.sanitizer_bootstrap_rehearsal_id == null &&
         var.sanitizer_bootstrap_lifetime_hours == null
       )
-      error_message = "Bootstrap lifecycle metadata must be present exactly when the identity is enabled"
+      error_message = "This source is teardown-only and cannot create, replace, or extend a bootstrap identity"
+    }
+
+    precondition {
+      condition = var.authorize_sanitizer_bootstrap_identity_teardown ? (
+        var.sanitizer_bootstrap_teardown_rehearsal_id == local.bootstrap_rehearsal_id &&
+        var.sanitizer_bootstrap_teardown_evidence_sha256 == local.approved_teardown_evidence_sha256
+        ) : (
+        var.sanitizer_bootstrap_teardown_rehearsal_id == null &&
+        var.sanitizer_bootstrap_teardown_evidence_sha256 == null
+      )
+      error_message = "Teardown requires the exact reviewed rehearsal and live-readback evidence digest"
+    }
+
+    precondition {
+      condition     = var.authorize_sanitizer_bootstrap_identity_teardown
+      error_message = "The default plan is blocked; explicitly authorize the exact reviewed teardown"
     }
   }
 }
 
-# This is the only Azure resource in this state. It receives no federation,
-# role assignment, job attachment, provider authority, or database authority.
+# The prior source created exactly this UAMI. Count zero is intentional and
+# one-way: a separately reviewed source change is required before any future
+# bootstrap identity can be created.
 resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
-  count = var.enable_sanitizer_bootstrap_identity ? 1 : 0
+  count = 0
+
+  # Keep every targeted plan coupled to the teardown authorization guard. This
+  # prevents `-target` from bypassing the exact rehearsal/evidence checks.
+  depends_on = [terraform_data.activation_guard]
 
   name                = local.bootstrap_identity_name
   resource_group_name = data.azurerm_resource_group.control[0].name
@@ -87,36 +99,4 @@ resource "azurerm_user_assigned_identity" "sanitizer_bootstrap" {
     cleanup-not-after = coalesce(local.bootstrap_cleanup_not_after, "unconfigured")
   })
 
-  depends_on = [terraform_data.activation_guard]
-
-  lifecycle {
-    # A later teardown slice must first authenticate that every temporary
-    # attachment and authority is absent, then deliberately change this guard.
-    prevent_destroy = true
-    replace_triggered_by = [
-      terraform_data.activation_guard[0],
-    ]
-
-    precondition {
-      condition = lower(data.azurerm_resource_group.control[0].id) == lower(
-        "${local.subscription_scope}/resourceGroups/${local.control_resource_group_name}"
-      )
-      error_message = "The bootstrap UAMI may use only the exact staging rehearsal control resource group"
-    }
-
-    precondition {
-      condition     = lower(data.azurerm_resource_group.control[0].location) == local.control_location
-      error_message = "The existing staging rehearsal control resource group must remain in East US"
-    }
-
-    # timestamp() is unknown during plan and is reevaluated immediately before
-    # this resource is created, so an expired saved plan cannot create the UAMI.
-    precondition {
-      condition = try(
-        timecmp(local.bootstrap_cleanup_not_after, timestamp()) > 0,
-        false,
-      )
-      error_message = "A saved bootstrap identity plan cannot be applied after its cleanup deadline"
-    }
-  }
 }

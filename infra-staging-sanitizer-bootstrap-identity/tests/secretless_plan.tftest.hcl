@@ -17,95 +17,13 @@ mock_provider "azurerm" {
   }
 }
 
-run "default_is_dormant" {
+run "default_plan_refuses_without_explicit_teardown" {
   command = plan
-
-  assert {
-    condition     = length(terraform_data.activation_guard) == 0 && length(data.azurerm_resource_group.control) == 0 && length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 0
-    error_message = "The default plan must not read or create any bootstrap resource"
-  }
-
-  assert {
-    condition     = output.sanitizer_bootstrap_identity_foundation == null && output.state_boundary.key == "staging-sanitizer-bootstrap-identity.tfstate"
-    error_message = "The dormant output must expose only the isolated state boundary"
-  }
-}
-
-run "identity_requires_exact_plan_approval" {
-  command = plan
-
-  variables {
-    enable_sanitizer_bootstrap_identity = true
-    sanitizer_bootstrap_rehearsal_id    = "abcdef123456"
-    sanitizer_bootstrap_lifetime_hours  = 6
-  }
 
   expect_failures = [terraform_data.activation_guard[0]]
 }
 
-run "approval_requires_enable_switch" {
-  command = plan
-
-  variables {
-    sanitizer_bootstrap_identity_plan_approved = true
-  }
-
-  expect_failures = [terraform_data.activation_guard[0]]
-}
-
-run "identity_rejects_excessive_lifetime" {
-  command = plan
-
-  variables {
-    sanitizer_bootstrap_lifetime_hours = 25
-  }
-
-  expect_failures = [var.sanitizer_bootstrap_lifetime_hours]
-}
-
-run "identity_rejects_zero_lifetime" {
-  command = plan
-
-  variables {
-    sanitizer_bootstrap_lifetime_hours = 0
-  }
-
-  expect_failures = [var.sanitizer_bootstrap_lifetime_hours]
-}
-
-run "identity_rejects_fractional_lifetime" {
-  command = plan
-
-  variables {
-    sanitizer_bootstrap_lifetime_hours = 1.5
-  }
-
-  expect_failures = [var.sanitizer_bootstrap_lifetime_hours]
-}
-
-run "identity_requires_lifecycle_metadata" {
-  command = plan
-
-  variables {
-    enable_sanitizer_bootstrap_identity        = true
-    sanitizer_bootstrap_identity_plan_approved = true
-  }
-
-  expect_failures = [terraform_data.activation_guard[0]]
-}
-
-run "dormant_root_rejects_lifecycle_metadata" {
-  command = plan
-
-  variables {
-    sanitizer_bootstrap_rehearsal_id   = "abcdef123456"
-    sanitizer_bootstrap_lifetime_hours = 6
-  }
-
-  expect_failures = [terraform_data.activation_guard[0]]
-}
-
-run "identity_rejects_wrong_control_group_location" {
+run "creation_controls_are_permanently_disabled" {
   command = plan
 
   variables {
@@ -115,67 +33,79 @@ run "identity_rejects_wrong_control_group_location" {
     sanitizer_bootstrap_lifetime_hours         = 6
   }
 
-  override_data {
-    target = data.azurerm_resource_group.control
-    values = {
-      id       = "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging-rehearsal-control"
-      location = "westus"
-      tags     = {}
-    }
-  }
-
-  expect_failures = [azurerm_user_assigned_identity.sanitizer_bootstrap[0]]
+  expect_failures = [terraform_data.activation_guard[0]]
 }
 
-run "identity_rejects_wrong_subscription_scope" {
+run "teardown_requires_complete_binding" {
   command = plan
 
   variables {
-    enable_sanitizer_bootstrap_identity        = true
-    sanitizer_bootstrap_identity_plan_approved = true
-    sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
-    sanitizer_bootstrap_lifetime_hours         = 6
+    authorize_sanitizer_bootstrap_identity_teardown = true
   }
 
-  override_data {
-    target = data.azurerm_resource_group.control
-    values = {
-      id       = "/subscriptions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/resourceGroups/cosmaneura-staging-rehearsal-control"
-      location = "eastus"
-      tags     = {}
-    }
-  }
-
-  expect_failures = [azurerm_user_assigned_identity.sanitizer_bootstrap[0]]
+  expect_failures = [terraform_data.activation_guard[0]]
 }
 
-run "approved_identity_foundation" {
+run "teardown_rejects_wrong_rehearsal" {
   command = plan
 
   variables {
-    enable_sanitizer_bootstrap_identity        = true
-    sanitizer_bootstrap_identity_plan_approved = true
-    sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
-    sanitizer_bootstrap_lifetime_hours         = 6
+    authorize_sanitizer_bootstrap_identity_teardown = true
+    sanitizer_bootstrap_teardown_rehearsal_id       = "abcdef123456"
+    sanitizer_bootstrap_teardown_evidence_sha256    = "sha256:2dbd5f913d2c1ed565939fd6203461cbe93593d48fef9916031f3e1ead0c78c9"
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "teardown_rejects_wrong_evidence" {
+  command = plan
+
+  variables {
+    authorize_sanitizer_bootstrap_identity_teardown = true
+    sanitizer_bootstrap_teardown_rehearsal_id       = "21506aaeec3c"
+    sanitizer_bootstrap_teardown_evidence_sha256    = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "teardown_rejects_malformed_evidence_digest" {
+  command = plan
+
+  variables {
+    sanitizer_bootstrap_teardown_evidence_sha256 = "2dbd5f913d2c1ed565939fd6203461cbe93593d48fef9916031f3e1ead0c78c9"
+  }
+
+  expect_failures = [var.sanitizer_bootstrap_teardown_evidence_sha256]
+}
+
+run "exact_reviewed_teardown_is_source_level_one_way" {
+  command = plan
+
+  variables {
+    authorize_sanitizer_bootstrap_identity_teardown = true
+    sanitizer_bootstrap_teardown_rehearsal_id       = "21506aaeec3c"
+    sanitizer_bootstrap_teardown_evidence_sha256    = "sha256:2dbd5f913d2c1ed565939fd6203461cbe93593d48fef9916031f3e1ead0c78c9"
   }
 
   assert {
-    condition     = length(terraform_data.activation_guard) == 1 && length(data.azurerm_resource_group.control) == 1 && length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 1
-    error_message = "The approved root must contain one guard, one exact resource-group read, and one Azure resource"
+    condition     = length(terraform_data.activation_guard) == 1 && length(data.azurerm_resource_group.control) == 0 && length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 0
+    error_message = "The exact teardown plan must retain one tombstone and contain no data read or creatable Azure identity"
   }
 
   assert {
-    condition     = terraform_data.activation_guard[0].triggers_replace.rehearsal_id == "abcdef123456" && terraform_data.activation_guard[0].triggers_replace.lifetime_hours == 6 && terraform_data.activation_guard[0].triggers_replace.cleanup_not_after == timeadd(plantimestamp(), "6h")
-    error_message = "Lifecycle metadata must be replacement-only and bound to the exact plan timestamp"
+    condition     = terraform_data.activation_guard[0].input.mode == "teardown-only" && terraform_data.activation_guard[0].input.teardown_authorized && terraform_data.activation_guard[0].input.rehearsal_id == "21506aaeec3c" && terraform_data.activation_guard[0].input.teardown_evidence_sha256 == "sha256:2dbd5f913d2c1ed565939fd6203461cbe93593d48fef9916031f3e1ead0c78c9"
+    error_message = "The teardown tombstone must bind the exact independently reviewed evidence"
   }
 
   assert {
-    condition     = azurerm_user_assigned_identity.sanitizer_bootstrap[0].name == "cosmaneura-staging-restore-bootstrap-job" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].resource_group_name == "cosmaneura-staging-rehearsal-control" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].location == "eastus" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["rehearsal-id"] == "abcdef123456" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] == timeadd(plantimestamp(), "6h")
-    error_message = "The approved plan must create exactly the named East US UAMI with bounded orphan-detection tags"
+    condition     = terraform_data.activation_guard[0].triggers_replace.rehearsal_id == "21506aaeec3c" && terraform_data.activation_guard[0].triggers_replace.lifetime_hours == 6 && terraform_data.activation_guard[0].triggers_replace.cleanup_not_after == "2026-09-08T17:40:01Z"
+    error_message = "The guard must preserve its exact serial-2 replacement triggers and update in place"
   }
 
   assert {
-    condition     = output.sanitizer_bootstrap_identity_foundation.name == "cosmaneura-staging-restore-bootstrap-job" && output.sanitizer_bootstrap_identity_foundation.lifecycle == "ephemeral" && output.sanitizer_bootstrap_identity_foundation.rehearsal_id == "abcdef123456" && output.sanitizer_bootstrap_identity_foundation.cleanup_not_after == azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] && length(output.sanitizer_bootstrap_identity_foundation.federated_credential_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.role_assignment_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.attached_job_resource_ids) == 0 && !output.sanitizer_bootstrap_identity_foundation.exact_ids_authenticated && !output.sanitizer_bootstrap_identity_foundation.single_use_job_bound && !output.sanitizer_bootstrap_identity_foundation.provider_authority_bound && !output.sanitizer_bootstrap_identity_foundation.database_authority_bound && !output.sanitizer_bootstrap_identity_foundation.workflow_binding_implemented && output.sanitizer_bootstrap_identity_foundation.destruction_protected
-    error_message = "The output must remain explicit non-authoritative, destruction-protected desired-state metadata"
+    condition     = output.sanitizer_bootstrap_identity_foundation == null && output.sanitizer_bootstrap_identity_teardown.identity_resource_id == "/subscriptions/bab2a709-1fcb-4c87-a9fc-802f7477ec13/resourceGroups/cosmaneura-staging-rehearsal-control/providers/Microsoft.ManagedIdentity/userAssignedIdentities/cosmaneura-staging-restore-bootstrap-job" && output.sanitizer_bootstrap_identity_teardown.founder_apply_required && !output.sanitizer_bootstrap_identity_teardown.apply_authorized
+    error_message = "The output must remain a non-authoritative exact teardown tombstone"
   }
 }
