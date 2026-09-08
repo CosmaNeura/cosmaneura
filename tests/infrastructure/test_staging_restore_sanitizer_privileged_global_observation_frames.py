@@ -195,12 +195,19 @@ def test_output_is_immutable_nonserializable_and_tamper_evident() -> None:
 def test_section_frame_and_database_container_shapes_are_closed() -> None:
     raw = _raw_bundle()
     hostile_iterator_called = False
+    hostile_label_equality_called = False
 
     class Hostile:
         def __iter__(self) -> Any:
             nonlocal hostile_iterator_called
             hostile_iterator_called = True
             raise RuntimeError("must not run")
+
+    class HostileLabel(str):
+        def __eq__(self, other: object) -> bool:
+            nonlocal hostile_label_equality_called
+            hostile_label_equality_called = True
+            raise RuntimeError("must not compare")
 
     server = raw[0][1]
     databases = raw[1][1]
@@ -213,6 +220,8 @@ def test_section_frame_and_database_container_shapes_are_closed() -> None:
         (("server_once", (server[1], server[0], *server[2:])), raw[1]),
         (raw[0], ("per_database", ([*databases],))),
         (raw[0], ("per_database", ((100, "database", list(databases[0][2])),))),
+        ((HostileLabel("server_once"), server), raw[1]),
+        (raw[0], (HostileLabel("per_database"), databases)),
         Hostile(),
     )
     for changed in variants:
@@ -222,6 +231,7 @@ def test_section_frame_and_database_container_shapes_are_closed() -> None:
         ):
             observation_frames._decode_privileged_global_observation_frames(changed)
     assert hostile_iterator_called is False
+    assert hostile_label_equality_called is False
 
 
 def test_database_keys_are_exact_unique_and_bounded() -> None:
@@ -343,12 +353,20 @@ def test_duplicate_rows_and_per_frame_bounds_refuse() -> None:
         observation_frames._decode_privileged_global_observation_frames(too_large)
 
 
-def test_total_query_row_and_output_bounds_are_enforced() -> None:
+def test_total_role_query_row_and_output_bounds_are_enforced() -> None:
     raw = _raw_bundle()
     grammar = query_grammar.load_privileged_global_query_grammar_contract()
 
     changed = copy.deepcopy(grammar)
     changed["resource_bounds"]["maximum_rows_total"] = 1
+    with pytest.raises(
+        observation_frames.SanitizerPrivilegedGlobalObservationFramesFailure,
+        match="privileged_global_observation_frames.bounds_invalid",
+    ):
+        observation_frames._decode_bundle(raw, grammar=changed)
+
+    changed = copy.deepcopy(grammar)
+    changed["resource_bounds"]["maximum_roles"] = 1
     with pytest.raises(
         observation_frames.SanitizerPrivilegedGlobalObservationFramesFailure,
         match="privileged_global_observation_frames.bounds_invalid",
@@ -363,6 +381,44 @@ def test_total_query_row_and_output_bounds_are_enforced() -> None:
     ):
         observation_frames._decode_bundle(raw, grammar=changed)
 
+
+def test_global_budgets_refuse_before_excess_decoding_or_final_canonicalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _raw_bundle()
+    grammar = query_grammar.load_privileged_global_query_grammar_contract()
+
+    decoded_scalar_calls = 0
+    original_decode_scalar = observation_frames._decode_scalar
+
+    def tracked_decode_scalar(
+        value: object, *, logical_type: str, nullable: bool
+    ) -> observation_frames.Scalar:
+        nonlocal decoded_scalar_calls
+        decoded_scalar_calls += 1
+        return original_decode_scalar(
+            value, logical_type=logical_type, nullable=nullable
+        )
+
+    monkeypatch.setattr(observation_frames, "_decode_scalar", tracked_decode_scalar)
+    changed = copy.deepcopy(grammar)
+    changed["resource_bounds"]["maximum_rows_total"] = 1
+    with pytest.raises(
+        observation_frames.SanitizerPrivilegedGlobalObservationFramesFailure,
+        match="privileged_global_observation_frames.bounds_invalid",
+    ):
+        observation_frames._decode_bundle(raw, grammar=changed)
+    assert decoded_scalar_calls == len(grammar["grammar"]["frames"][0]["exact_columns"])
+
+    monkeypatch.setattr(observation_frames, "_decode_scalar", original_decode_scalar)
+    canonical_inputs: list[object] = []
+    original_canonical = observation_frames._canonical
+
+    def tracked_canonical(value: object) -> bytes:
+        canonical_inputs.append(value)
+        return original_canonical(value)
+
+    monkeypatch.setattr(observation_frames, "_canonical", tracked_canonical)
     changed = copy.deepcopy(grammar)
     changed["resource_bounds"]["maximum_output_bytes"] = 1
     with pytest.raises(
@@ -370,6 +426,10 @@ def test_total_query_row_and_output_bounds_are_enforced() -> None:
         match="privileged_global_observation_frames.bounds_invalid",
     ):
         observation_frames._decode_bundle(raw, grammar=changed)
+    assert not any(
+        type(value) is dict and set(value) == {"server_once", "per_database"}
+        for value in canonical_inputs
+    )
 
 
 def test_contract_drift_and_unexpected_failures_are_content_free(

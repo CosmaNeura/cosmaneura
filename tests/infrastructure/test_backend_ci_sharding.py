@@ -474,7 +474,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             + "\t\t--verbosity=2"
         ),
         "infrastructure-sanitizer-observer-integrity": (
-            f"uv run pytest {SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR} --verbosity=2"
+            f"uv run pytest {SANITIZER_OBSERVER_INTEGRITY_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
@@ -908,7 +908,7 @@ def test_sanitizer_evidence_shards_partition_all_29_collected_cases_once() -> No
     assert set(primary) | set(integrity) == set(family)
 
 
-def test_sanitizer_observer_shards_partition_all_206_collected_cases_once() -> None:
+def test_sanitizer_observer_shards_partition_all_207_collected_cases_once() -> None:
     primary = _collect_nodeids(*SANITIZER_OBSERVER_PRIMARY_SELECTORS)
     runtime = _collect_nodeids(*SANITIZER_OBSERVER_RUNTIME_SELECTORS)
     output = _collect_nodeids(*SANITIZER_OBSERVER_OUTPUT_SELECTORS)
@@ -944,7 +944,7 @@ def test_sanitizer_observer_shards_partition_all_206_collected_cases_once() -> N
     assert connection_plan_output
     assert connection_plan_contract
     assert integrity
-    assert len(primary) == 124
+    assert len(primary) == 125
     assert len(runtime) == 18
     assert len(output) == 1
     assert len(connection_plan) == 5
@@ -952,7 +952,7 @@ def test_sanitizer_observer_shards_partition_all_206_collected_cases_once() -> N
     assert len(connection_plan_output) == 2
     assert len(connection_plan_contract) == 13
     assert len(integrity) == 39
-    assert len(family) == 206
+    assert len(family) == 207
     assert len(primary) == len(set(primary))
     assert len(runtime) == len(set(runtime))
     assert len(output) == len(set(output))
@@ -1051,14 +1051,14 @@ def test_sanitizer_runtime_shards_partition_the_complete_family_once() -> None:
     assert len(target_role_offline_authenticator) == 39
     assert len(privileged_global_observer_contract) == 24
     assert len(privileged_global_query_grammar) == 25
-    assert len(privileged_global_observation_frames) == 11
+    assert len(privileged_global_observation_frames) == 12
     assert len(privileged_global_connection_plan) == 24
     assert len(executor) == 21
     assert len(transaction_plan) == 29
     assert len(data_contract_executor) == 32
     assert len(source_snapshot) == 43
     assert len(post_projection) == 35
-    assert len(family) == 492
+    assert len(family) == 493
     assert len(evidence) == len(set(evidence))
     assert len(database_capability) == len(set(database_capability))
     assert len(target_role_observation_plan) == len(set(target_role_observation_plan))
