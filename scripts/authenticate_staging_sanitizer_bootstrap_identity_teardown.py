@@ -827,6 +827,17 @@ def _build_provenance(
     new_value = object.__new__
     key = random_bytes(32)
     value_type = AuthenticatedBootstrapIdentityTeardownEvidence
+    registry_type = weakref.WeakKeyDictionary
+    registry_get = type_read_attr(registry_type, "get")
+    registry_set = type_read_attr(registry_type, "__setitem__")
+    registry_pop = type_read_attr(registry_type, "pop")
+    registry_clear = type_read_attr(registry_type, "clear")
+    guarded_registry_attributes = (
+        ("get", registry_get),
+        ("__setitem__", registry_set),
+        ("pop", registry_pop),
+        ("clear", registry_clear),
+    )
     slot_descriptors = tuple_type(
         (name, type_read_attr(value_type, name))
         for name in (*public_fields, *private_fields)
@@ -843,13 +854,16 @@ def _build_provenance(
     issued: weakref.WeakKeyDictionary[
         AuthenticatedBootstrapIdentityTeardownEvidence,
         tuple[int, bytes, tuple[tuple[str, Any], ...]],
-    ] = weakref.WeakKeyDictionary()
+    ] = registry_type()
 
     def class_shape_intact() -> bool:
         try:
             return all_true(
                 type_read_attr(value_type, name) is expected
                 for name, expected in guarded_class_attributes
+            ) and all_true(
+                type_read_attr(registry_type, name) is expected
+                for name, expected in guarded_registry_attributes
             )
         except base_error:
             return False
@@ -875,7 +889,7 @@ def _build_provenance(
 
     def reset_after_fork() -> None:
         nonlocal key
-        issued.clear()
+        registry_clear(issued)
         key = random_bytes(32)
 
     register_at_fork(after_in_child=reset_after_fork)
@@ -938,6 +952,7 @@ def _build_provenance(
     def proof(
         value: AuthenticatedBootstrapIdentityTeardownEvidence,
         expected_snapshot: bytes,
+        public_projection: tuple[tuple[str, Any], ...],
     ) -> str:
         material = canonical(
             {
@@ -945,6 +960,7 @@ def _build_provenance(
                 "pid": process_id(),
                 "object_identity": identity(value),
                 "snapshot_sha256": sha256(expected_snapshot).hexdigest(),
+                "public_projection": public_projection,
                 "seal_identity": identity(seal),
             }
         )
@@ -960,10 +976,10 @@ def _build_provenance(
                 or read_slot(value, "_seal") is not seal
             ):
                 return None
-            record = issued.get(value)
+            record = registry_get(issued, value)
             if record is None:
                 return None
-            issued_pid, expected_snapshot, _public_projection = record
+            issued_pid, expected_snapshot, public_projection = record
             current_snapshot = snapshot(value)
             if (
                 issued_pid == process_id()
@@ -971,7 +987,7 @@ def _build_provenance(
                 and type_of(read_slot(value, "_proof_sha256")) is scalar_types[0]
                 and compare_digest(
                     read_slot(value, "_proof_sha256"),
-                    proof(value, expected_snapshot),
+                    proof(value, expected_snapshot, public_projection),
                 )
             ):
                 return record
@@ -1047,10 +1063,16 @@ def _build_provenance(
             )
             for name in public_fields
         )
-        write_slot(value, "_proof_sha256", proof(value, expected_snapshot))
-        issued[value] = (process_id(), expected_snapshot, public_projection)
+        write_slot(
+            value,
+            "_proof_sha256",
+            proof(value, expected_snapshot, public_projection),
+        )
+        registry_set(
+            issued, value, (process_id(), expected_snapshot, public_projection)
+        )
         if not is_authenticated(value):
-            issued.pop(value, None)
+            registry_pop(issued, value, None)
             fail("bootstrap_identity_teardown_evidence.output_invalid")
         return value
 

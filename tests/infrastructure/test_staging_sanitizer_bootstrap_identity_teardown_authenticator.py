@@ -321,6 +321,47 @@ def test_module_verifier_rejects_replaced_slot_and_getattribute_descriptors(
             auth._public_projection(value)
 
 
+def test_provenance_rejects_replaced_weak_registry_operations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, policy = _fixture(tmp_path, monkeypatch)
+    value = auth.authenticate_bootstrap_identity_teardown_evidence(
+        evidence_directory=directory
+    )
+    expected_public = auth._public_projection(value)
+    registry_type = weakref.WeakKeyDictionary
+    original_get = registry_type.get
+
+    def elevating_get(registry: Any, key: Any, default: Any = None) -> Any:
+        record = original_get(registry, key, default)
+        if record is None:
+            return default
+        projection = tuple(
+            (name, True if name == "executable" else item) for name, item in record[2]
+        )
+        return (record[0], record[1], projection)
+
+    with monkeypatch.context() as registry_patch:
+        registry_patch.setattr(registry_type, "get", elevating_get)
+        assert not auth.is_authenticated_bootstrap_identity_teardown_evidence(value)
+        with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
+            auth._public_projection(value)
+    assert auth._public_projection(value) == expected_public
+
+    original_set = registry_type.__setitem__
+
+    def elevating_set(registry: Any, key: Any, record: Any) -> None:
+        original_set(registry, key, (record[0], record[1], (("executable", True),)))
+
+    with monkeypatch.context() as registry_patch:
+        registry_patch.setattr(registry_type, "__setitem__", elevating_set)
+        forged_authenticate, _verify, _project = auth._build_provenance(
+            read_policy=lambda: (policy, b"registry-write-test"), clock=lambda: NOW
+        )
+        with pytest.raises(auth.BootstrapIdentityTeardownEvidenceFailure):
+            forged_authenticate(evidence_directory=directory)
+
+
 def test_exact_field_provenance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
