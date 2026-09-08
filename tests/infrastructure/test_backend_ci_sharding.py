@@ -402,7 +402,7 @@ def test_ci_recipes_are_explicit_disjoint_and_exhaustive() -> None:
             f"uv run pytest {SANITIZER_OBSERVER_OUTPUT_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-observer-integrity": (
-            f"uv run pytest {SANITIZER_TARGET_ROLE_OFFLINE_AUTHENTICATOR_SELECTOR} --verbosity=2"
+            f"uv run pytest {SANITIZER_OBSERVER_INTEGRITY_SELECTORS[0]} --verbosity=2"
         ),
         "infrastructure-sanitizer-data-contract-executor": (
             "uv run pytest tests/infrastructure/"
