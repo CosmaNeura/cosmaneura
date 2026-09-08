@@ -46,3 +46,22 @@ tofu -chdir=infra-staging-sanitizer-bootstrap-identity test -test-directory=test
 No workflow in this slice plans against live state or applies this root. A live
 plan must use the checked-in backend, be saved, and receive independent
 exact-SHA and exact-plan review before a founder-operated apply.
+
+The follow-on verifier is deliberately offline and non-authoritative. From a
+clean checkout at the exact reviewed `origin/master` commit, place the saved
+plan in an owner-controlled `0700` directory, set the plan file to `0400`, and
+run:
+
+```sh
+python scripts/validate_staging_sanitizer_bootstrap_identity_plan.py \
+  --saved-plan /absolute/path/bootstrap.tfplan \
+  --expected-saved-plan-sha256 '<64 lowercase hex>' \
+  --expected-source-commit '<40 lowercase hex>' \
+  --expected-state-lineage '<reviewed UUID>' \
+  --expected-state-serial '<reviewed positive integer>'
+```
+
+It installs the pinned decoder with `-backend=false`, invokes only `tofu show
+-json`, and emits `apply_authorized=false`. It neither creates a plan nor reads,
+initializes, locks, or changes the live backend. Separate founder-controlled
+state capture, live resource readback, review, and apply gates remain required.
