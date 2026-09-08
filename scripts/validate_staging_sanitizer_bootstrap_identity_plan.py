@@ -1036,13 +1036,12 @@ def _validate_plan(
     if (
         plan.get("format_version") != EXPECTED_FORMAT_VERSION
         or plan.get("terraform_version") != EXPECTED_TOFU_VERSION
-        or plan.get("applyable") is not True
-        or plan.get("complete") is not True
         or plan.get("errored") is not False
     ):
-        raise BootstrapPlanError(
-            "plan format, version, completeness, or success status is invalid"
-        )
+        raise BootstrapPlanError("plan format, version, or success status is invalid")
+    for optional_field in ("applyable", "complete"):
+        if optional_field in plan and plan[optional_field] is not True:
+            raise BootstrapPlanError(f"plan reports {optional_field}=false")
     for name in ("resource_drift", "deferred_changes", "action_invocations"):
         if plan.get(name) not in (None, []):
             raise BootstrapPlanError(f"plan contains unexpected {name}")

@@ -503,8 +503,10 @@ def test_embedded_states_must_be_exact_empty_then_read_only_refresh() -> None:
             ].update(value="false"),
             "must both be true",
         ),
-        (lambda plan: plan.update(applyable=False), "completeness"),
-        (lambda plan: plan.update(complete=False), "completeness"),
+        (lambda plan: plan.update(applyable=False), "applyable=false"),
+        (lambda plan: plan.update(applyable=None), "applyable=false"),
+        (lambda plan: plan.update(complete=False), "complete=false"),
+        (lambda plan: plan.update(complete=None), "complete=false"),
         (
             lambda plan: plan["variables"]["sanitizer_bootstrap_lifetime_hours"].update(
                 value="25"
@@ -559,6 +561,14 @@ def test_security_relevant_plan_mutations_refuse(mutation: Any, message: str) ->
 
     with pytest.raises(validator.BootstrapPlanError, match=message):
         _validate(plan=plan)
+
+
+def test_pinned_opentofu_json_may_omit_applyable_and_complete() -> None:
+    plan = _valid_plan()
+    del plan["applyable"]
+    del plan["complete"]
+
+    assert _validate(plan=plan)["pass"] is True
 
 
 def test_prior_state_shape_is_closed() -> None:
