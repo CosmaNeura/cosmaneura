@@ -222,7 +222,7 @@ run "bootstrap_identity_requires_exact_plan_approval" {
   expect_failures = [terraform_data.activation_guard[0]]
 }
 
-run "bootstrap_identity_approval_cannot_be_stale" {
+run "bootstrap_identity_approval_requires_enable_switch" {
   command = plan
 
   variables {
@@ -233,6 +233,16 @@ run "bootstrap_identity_approval_cannot_be_stale" {
   }
 
   expect_failures = [terraform_data.activation_guard[0]]
+}
+
+run "bootstrap_identity_rejects_invalid_cleanup_timestamp" {
+  command = plan
+
+  variables {
+    sanitizer_bootstrap_cleanup_not_after = "2026-99-99T99:99:99Z"
+  }
+
+  expect_failures = [var.sanitizer_bootstrap_cleanup_not_after]
 }
 
 run "bootstrap_identity_requires_lifecycle_metadata" {
@@ -249,6 +259,22 @@ run "bootstrap_identity_requires_lifecycle_metadata" {
   expect_failures = [terraform_data.activation_guard[0]]
 }
 
+run "bootstrap_identity_rejects_expired_cleanup_deadline" {
+  command = plan
+
+  variables {
+    deploy_staging_restore_control_plane       = true
+    target_cidr_inventory_revalidated          = true
+    control_cidr_inventory_revalidated         = true
+    enable_sanitizer_bootstrap_identity        = true
+    sanitizer_bootstrap_identity_plan_approved = true
+    sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
+    sanitizer_bootstrap_cleanup_not_after      = "2020-01-01T00:00:00Z"
+  }
+
+  expect_failures = [terraform_data.activation_guard[0]]
+}
+
 run "approved_bootstrap_identity_foundation" {
   command = plan
 
@@ -259,11 +285,11 @@ run "approved_bootstrap_identity_foundation" {
     enable_sanitizer_bootstrap_identity        = true
     sanitizer_bootstrap_identity_plan_approved = true
     sanitizer_bootstrap_rehearsal_id           = "abcdef123456"
-    sanitizer_bootstrap_cleanup_not_after      = "2026-09-08T04:00:00Z"
+    sanitizer_bootstrap_cleanup_not_after      = "2099-01-01T00:00:00Z"
   }
 
   assert {
-    condition     = length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 1 && azurerm_user_assigned_identity.sanitizer_bootstrap[0].name == "cosmaneura-staging-restore-bootstrap-job" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].resource_group_name == azurerm_resource_group.control[0].name && azurerm_user_assigned_identity.sanitizer_bootstrap[0].location == "eastus" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["rehearsal-id"] == "abcdef123456" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"] == "2026-09-08T04:00:00Z"
+    condition     = length(azurerm_user_assigned_identity.sanitizer_bootstrap) == 1 && azurerm_user_assigned_identity.sanitizer_bootstrap[0].name == "cosmaneura-staging-restore-bootstrap-job" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].resource_group_name == azurerm_resource_group.control[0].name && azurerm_user_assigned_identity.sanitizer_bootstrap[0].location == "eastus" && azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["rehearsal-id"] == "abcdef123456" && timecmp(azurerm_user_assigned_identity.sanitizer_bootstrap[0].tags["cleanup-not-after"], plantimestamp()) > 0
     error_message = "The approved rung must create exactly the named East US bootstrap UAMI in the isolated control group"
   }
 
@@ -273,7 +299,7 @@ run "approved_bootstrap_identity_foundation" {
   }
 
   assert {
-    condition     = output.sanitizer_bootstrap_identity_foundation.name == "cosmaneura-staging-restore-bootstrap-job" && output.sanitizer_bootstrap_identity_foundation.lifecycle == "ephemeral" && output.sanitizer_bootstrap_identity_foundation.rehearsal_id == "abcdef123456" && output.sanitizer_bootstrap_identity_foundation.cleanup_not_after == "2026-09-08T04:00:00Z" && length(output.sanitizer_bootstrap_identity_foundation.federated_credential_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.role_assignment_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.attached_job_resource_ids) == 0 && !output.sanitizer_bootstrap_identity_foundation.exact_ids_authenticated && !output.sanitizer_bootstrap_identity_foundation.single_use_job_bound && !output.sanitizer_bootstrap_identity_foundation.provider_authority_bound && !output.sanitizer_bootstrap_identity_foundation.database_authority_bound && !output.sanitizer_bootstrap_identity_foundation.workflow_binding_implemented
+    condition     = output.sanitizer_bootstrap_identity_foundation.name == "cosmaneura-staging-restore-bootstrap-job" && output.sanitizer_bootstrap_identity_foundation.lifecycle == "ephemeral" && output.sanitizer_bootstrap_identity_foundation.rehearsal_id == "abcdef123456" && output.sanitizer_bootstrap_identity_foundation.cleanup_not_after == "2099-01-01T00:00:00Z" && length(output.sanitizer_bootstrap_identity_foundation.federated_credential_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.role_assignment_ids) == 0 && length(output.sanitizer_bootstrap_identity_foundation.attached_job_resource_ids) == 0 && !output.sanitizer_bootstrap_identity_foundation.exact_ids_authenticated && !output.sanitizer_bootstrap_identity_foundation.single_use_job_bound && !output.sanitizer_bootstrap_identity_foundation.provider_authority_bound && !output.sanitizer_bootstrap_identity_foundation.database_authority_bound && !output.sanitizer_bootstrap_identity_foundation.workflow_binding_implemented
     error_message = "The bootstrap output must remain explicit non-authoritative desired-state metadata"
   }
 }

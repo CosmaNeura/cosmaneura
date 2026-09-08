@@ -49,9 +49,11 @@ member of the persistent provision/cleanup job identity map and is created only
 when both `enable_sanitizer_bootstrap_identity=true` and
 `sanitizer_bootstrap_identity_plan_approved=true` are present in the same
 reviewed plan. Either switch without the other fails closed. A 12-character
-rehearsal ID and whole-second UTC cleanup deadline are required with the
-identity and become resource tags for orphan detection. Both lifecycle values
-must be absent while the identity is disabled. The exact name is
+rehearsal ID and valid whole-second UTC cleanup deadline are required with the
+identity and become resource tags for orphan detection. The deadline must be
+future-dated both when the plan is created and when the saved plan is applied;
+an expired plan fails before resource creation. Both lifecycle values must be
+absent while the identity is disabled. The exact name is
 `cosmaneura-staging-restore-bootstrap-job` in the isolated control group.
 
 This rung creates only the UAMI. It adds no federated credential, role

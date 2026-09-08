@@ -139,6 +139,22 @@ resource "terraform_data" "activation_guard" {
     }
 
     precondition {
+      condition = var.enable_sanitizer_bootstrap_identity ? try(
+        timecmp(var.sanitizer_bootstrap_cleanup_not_after, plantimestamp()) > 0,
+        false,
+      ) : true
+      error_message = "The bootstrap identity cleanup deadline must be later than the exact plan timestamp"
+    }
+
+    precondition {
+      condition = var.enable_sanitizer_bootstrap_identity ? try(
+        timecmp(var.sanitizer_bootstrap_cleanup_not_after, timestamp()) > 0,
+        false,
+      ) : true
+      error_message = "A saved bootstrap identity plan cannot be applied after its cleanup deadline"
+    }
+
+    precondition {
       condition = (
         !var.enable_marker_create_assignments ||
         (

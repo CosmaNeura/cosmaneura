@@ -81,8 +81,11 @@ variable "sanitizer_bootstrap_cleanup_not_after" {
   nullable    = true
 
   validation {
-    condition     = var.sanitizer_bootstrap_cleanup_not_after == null || can(regex("^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", var.sanitizer_bootstrap_cleanup_not_after))
-    error_message = "sanitizer_bootstrap_cleanup_not_after must be null or whole-second UTC"
+    condition = var.sanitizer_bootstrap_cleanup_not_after == null || (
+      can(regex("^20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", var.sanitizer_bootstrap_cleanup_not_after)) &&
+      can(timecmp(var.sanitizer_bootstrap_cleanup_not_after, var.sanitizer_bootstrap_cleanup_not_after))
+    )
+    error_message = "sanitizer_bootstrap_cleanup_not_after must be null or a valid whole-second UTC timestamp"
   }
 }
 
