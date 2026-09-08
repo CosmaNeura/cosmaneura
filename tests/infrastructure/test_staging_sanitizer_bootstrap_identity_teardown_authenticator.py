@@ -632,6 +632,13 @@ def test_provenance_is_closure_bound_against_module_global_mutation(
         "hmac",
         SimpleNamespace(new=real_hmac.new, compare_digest=lambda *_args: True),
     )
+    read_attr = getattr
+    monkeypatch.setattr(
+        auth,
+        "getattr",
+        lambda item, name: False if name == "executable" else read_attr(item, name),
+        raising=False,
+    )
     assert value._is_authenticated()
     object.__setattr__(value, "executable", True)
     assert not value._is_authenticated()

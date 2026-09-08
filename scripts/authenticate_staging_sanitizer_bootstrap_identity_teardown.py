@@ -692,6 +692,10 @@ def _build_provenance(
     datetime_type = datetime
     utc = UTC
     zero_offset = timedelta(0)
+    type_of, read_attr, identity, pair_length, any_true = type, getattr, id, len, any
+    tuple_type, scalar_types = tuple, (str, bool, int)
+    type_error, value_error, base_error = TypeError, ValueError, Exception
+    new_value, set_value = object.__new__, object.__setattr__
     key = random_bytes(32)
     value_type = AuthenticatedBootstrapIdentityTeardownEvidence
     issued: weakref.WeakKeyDictionary[
@@ -699,38 +703,41 @@ def _build_provenance(
     ] = weakref.WeakKeyDictionary()
 
     def snapshot(value: AuthenticatedBootstrapIdentityTeardownEvidence) -> bytes:
-        if type(value) is not value_type:
-            raise TypeError
+        if type_of(value) is not value_type:
+            raise type_error
 
         encoded_public: list[dict[str, Any]] = []
         for name in public_fields:
-            item = getattr(value, name)
-            if type(item) is datetime_type:
+            item = read_attr(value, name)
+            if type_of(item) is datetime_type:
                 if (
                     item.tzinfo is not utc
                     or item.utcoffset() != zero_offset
                     or item.microsecond
                     or item.fold
                 ):
-                    raise ValueError
+                    raise value_error
                 encoded = {
                     "type": "utc-datetime-seconds",
                     "value": item.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 }
-            elif type(item) in (str, bool, int):
-                encoded = {"type": type(item).__name__, "value": item}
+            elif type_of(item) in scalar_types:
+                encoded = {"type": type_of(item).__name__, "value": item}
             else:
-                raise TypeError
+                raise type_error
             encoded_public.append({"name": name, **encoded})
 
         def exact_pairs(name: str, value: object) -> dict[str, Any]:
-            if type(value) is not tuple or any(
-                type(pair) is not tuple
-                or len(pair) != 2
-                or any(type(part) is not str for part in pair)
+            if type_of(value) is not tuple_type:
+                raise type_error
+            if any_true(
+                type_of(pair) is not tuple_type
+                or pair_length(pair) != 2
+                or type_of(pair[0]) is not scalar_types[0]
+                or type_of(pair[1]) is not scalar_types[0]
                 for pair in value
             ):
-                raise TypeError
+                raise type_error
             return {"name": name, "type": "ordered-string-pairs", "value": value}
 
         return canonical(
@@ -742,7 +749,7 @@ def _build_provenance(
                     {
                         "name": "_seal",
                         "type": "object-identity",
-                        "value": id(value._seal),
+                        "value": identity(value._seal),
                     },
                 ],
             }
@@ -756,9 +763,9 @@ def _build_provenance(
             {
                 "domain": provenance_domain,
                 "pid": process_id(),
-                "object_identity": id(value),
+                "object_identity": identity(value),
                 "snapshot_sha256": sha256(expected_snapshot).hexdigest(),
-                "seal_identity": id(seal),
+                "seal_identity": identity(seal),
             }
         )
         return hmac_new(key, material, sha256).hexdigest()
@@ -773,18 +780,20 @@ def _build_provenance(
             return (
                 issued_pid == process_id()
                 and compare_digest(current_snapshot, expected_snapshot)
-                and type(value._proof_sha256) is str
+                and type_of(value._proof_sha256) is scalar_types[0]
                 and compare_digest(value._proof_sha256, proof(value, expected_snapshot))
             )
-        except Exception:
+        except base_error:
             return False
 
     def is_authenticated(
         value: AuthenticatedBootstrapIdentityTeardownEvidence,
     ) -> bool:
         try:
-            return type(value) is value_type and value._seal is seal and verify(value)
-        except Exception:
+            return (
+                type_of(value) is value_type and value._seal is seal and verify(value)
+            )
+        except base_error:
             return False
 
     def authenticate(
@@ -809,7 +818,7 @@ def _build_provenance(
             claims=claims,
             public_fields=public_fields,
         )
-        value = object.__new__(value_type)
+        value = new_value(value_type)
         values = {
             **public,
             "_target": target,
@@ -817,12 +826,12 @@ def _build_provenance(
             "_proof_sha256": "",
             "_seal": seal,
         }
-        if tuple(values) != (*public_fields, *private_fields):
+        if tuple_type(values) != (*public_fields, *private_fields):
             fail("bootstrap_identity_teardown_evidence.output_invalid")
         for name, item in values.items():
-            object.__setattr__(value, name, item)
+            set_value(value, name, item)
         expected_snapshot = snapshot(value)
-        object.__setattr__(value, "_proof_sha256", proof(value, expected_snapshot))
+        set_value(value, "_proof_sha256", proof(value, expected_snapshot))
         issued[value] = (process_id(), expected_snapshot)
         if not is_authenticated(value):
             issued.pop(value, None)
